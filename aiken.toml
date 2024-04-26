@@ -1,0 +1,19 @@
+name = "logicalmechanism/private-wallet"
+version = "0.1.0"
+license = "Apache-2.0"
+description = "Aiken contracts for project 'logicalmechanism/private-wallet'"
+
+[repository]
+user = "logicalmechanism"
+project = "private-wallet"
+platform = "github"
+
+[[dependencies]]
+name = "logicalmechanism/stdlib"
+version = "plutus-v3"
+source = "github"
+
+[[dependencies]]
+name = "logicalmechanism/assist"
+version = "plutus-v3"
+source = "github"

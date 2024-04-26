@@ -1,0 +1,1 @@
+/home/logic/Documents/Work/LogicalMechanism/testnet-node/node-sancho/8.10.0-pre/bin/cardano-cli

@@ -1,0 +1,15 @@
+# Aiken compilation artifacts
+artifacts/
+# Aiken's project working directory
+build/
+# Aiken's default documentation export
+docs/
+plutus_*.json
+rand_*.txt
+copy.plutus.json
+plutus.json
+papers/
+contracts/
+hashes/
+aiken.lock
+grind_pid.sh

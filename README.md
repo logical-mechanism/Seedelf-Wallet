@@ -107,3 +107,9 @@ The wallet is just a smart contract. It is bound by the cpu and memory units of 
 Two attacks are known to break the privacy of this implementation. The first attack comes from picking a bad `d` value. A small `d` value may be able to be brute-forced. The brute-force attack is circumvented by selecting a `d` value on the order of $2^{256}$. The second attack comes from not properly destroying the `d` value information after the transaction. The `d` value is considered toxic waste in this context. If the `d` values are known for some users then it becomes trivial to invert the registry into the original form and lose all privacy.
 
 Privacy is preserved as long as `d` is large and destroyed after use.
+
+## Happy Path Testing Scripts
+
+These contracts require PlutusV3.
+
+- TODO
