@@ -48,7 +48,7 @@ Below is a quick overview of the stealth wallet contract using the BLS12-381 cur
 
 `Generator`: An element of the curve that will produce more elements of the curve with scaler multiplication.
 
-`G1`: The base g1 generator from the original implementation of the BLS12-381.
+`G1`: The base g1 generator..
 
 `Public Key`: The public key element of the curve, this information is known publicly.
 
@@ -104,9 +104,9 @@ The wallet is just a smart contract. It is bound by the cpu and memory units of 
 
 ### De-Anonymizing Attacks
 
-Two attacks are known to break the privacy of this implementation. The first attack comes from picking a bad `d` value. A small `d` value may be able to be brute-forced. The brute-force attack is circumvented by selecting a `d` value on the order of $2^{256}$. The second attack comes from not properly destroying the `d` value information after the transaction. The `d` value is considered toxic waste in this context. If the `d` values are known for some users then it becomes trivial to invert the registry into the original form and lose all privacy.
+Two attacks are known to break the privacy of this implementation. The first attack comes from picking a bad d value. A small d value may be able to be brute-forced. The brute-force attack is circumvented by selecting a d value on the order of $2^{256}$. The second attack comes from not properly destroying the d value information after the transaction. The d value is considered toxic waste in this context. If the d values are known for some users then it becomes trivial to invert the registry into the original form and lose all privacy.
 
-Privacy is preserved as long as `d` is large and destroyed after use.
+Privacy is preserved as long as d is large and destroyed after use.
 
 ## Happy Path Testing Scripts
 
