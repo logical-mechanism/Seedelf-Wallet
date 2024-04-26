@@ -4,7 +4,7 @@ set -e
 # SET UP VARS HERE
 source .env
 
-# cip 68 contract
+# wallet contract
 wallet_script_path="../contracts/wallet_contract.plutus"
 wallet_script_address=$(${cli} address build --payment-script-file ${wallet_script_path} ${network})
 

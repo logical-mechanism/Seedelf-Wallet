@@ -67,6 +67,7 @@ do
     echo SIZE ${SIZE}
     echo $(stat -c %s ${contract})
 
+    # this is broke
     FEE=$(${cli} conway transaction calculate-min-fee \
         --tx-body-file ./tmp/tx.draft \
         --protocol-params-file ./tmp/protocol.json \
