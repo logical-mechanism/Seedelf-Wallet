@@ -12,9 +12,9 @@ use private_wallet/types/zk.{Register, ZK}
 /// should be compressed g1 elements but they can also be compressed integers.
 ///
 /// ```aiken
-/// spending.fiat_shamir_transform(gb, grb, ub)
+/// spending.fiat_shamir_heuristic(gb, grb, ub)
 /// ```
-pub fn fiat_shamir_transform(
+pub fn fiat_shamir_heuristic(
   // compressed g element
   gb: ByteArray,
   // compressed g^r element
@@ -31,11 +31,11 @@ pub fn fiat_shamir_transform(
 }
 
 test empty_fiat_shamir_transform() {
-  fiat_shamir_transform(#"", #"", #"") == #"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+  fiat_shamir_heuristic(#"", #"", #"") == #"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
 }
 
 test real_fiat_shamir_transform() {
-  fiat_shamir_transform(
+  fiat_shamir_heuristic(
     #"86f0c64bd433568dd92751f0bee97feaaeee6f3c2144b210be68d2bc85253b1994703caf7f8361ccf246fef52c0ad859",
     #"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
     #"a2cbc5c3c72a7bc9047971345df392a67279d2f32082891976d913c699885c3ff9a90a8ea942bef4729cf93f526521e4",
@@ -44,7 +44,7 @@ test real_fiat_shamir_transform() {
 
 /// A variation of a Schnorr signature. Prove knowledge of the secret value x
 /// without revealing the value in the process. This uses g^z = g^r * u^c, 
-/// where z = r + c*x and u = g^x. This function uses the Fiat-Shamir transform
+/// where z = r + c*x and u = g^x. This function uses the Fiat-Shamir heuristic
 /// for non-interactivity.
 ///
 /// ```aiken
@@ -68,7 +68,7 @@ pub fn d_log(datum: Register, redeemer: ZK) -> Bool {
   //
   // use the fiat-shamir transform to calculate c then convert it to an integer
   let cb: ByteArray =
-    fiat_shamir_transform(datum.alpha, redeemer.g_r, datum.beta)
+    fiat_shamir_heuristic(datum.alpha, redeemer.g_r, datum.beta)
   let c: Int = builtin.bytearray_to_integer(True, cb)
   //
   // the u^c computation: u^c = (g^x)^c = g^(x * c)
@@ -100,7 +100,7 @@ test d_log_256_bit_secret() {
   let g_r: G1Element = builtin.bls12_381_g1_scalar_mul(r, g)
   // the challenge number using a fiat shamir transform
   let cb: ByteArray =
-    fiat_shamir_transform(
+    fiat_shamir_heuristic(
       a0.alpha,
       g_r |> builtin.bls12_381_g1_compress,
       a0.beta,
@@ -140,7 +140,7 @@ test can_unlock_after_rerandomizing() {
   let g_r: G1Element = builtin.bls12_381_g1_scalar_mul(r, g)
   // the challenge number using a fiat shamir transform
   let cb: ByteArray =
-    fiat_shamir_transform(
+    fiat_shamir_heuristic(
       a1.alpha,
       g_r |> builtin.bls12_381_g1_compress,
       a1.beta,
@@ -213,7 +213,7 @@ test many_unlocks() {
   let g_r: G1Element = builtin.bls12_381_g1_scalar_mul(r, g)
   // the challenge number using a fiat shamir transform
   let cb: ByteArray =
-    fiat_shamir_transform(
+    fiat_shamir_heuristic(
       a1.alpha,
       g_r |> builtin.bls12_381_g1_compress,
       a1.beta,

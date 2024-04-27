@@ -11,7 +11,7 @@ pub type Register {
 }
 
 /// The zero knowledge elements required for the proof. The c value will be
-/// computed using the Fiat-Shamir transform.
+/// computed using the Fiat-Shamir heuristic.
 pub type ZK {
   // this is z = r + c*x
   z: ByteArray,

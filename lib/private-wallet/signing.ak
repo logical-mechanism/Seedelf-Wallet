@@ -111,3 +111,34 @@ test rerandomized_good_verify() {
     ZK { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
   verify(m, datum, redeemer)
 }
+
+test bad_verify() fail {
+  // some secret x 
+  let x: Int =
+    86478456268645743314319142250097583782656584143510069178425111699273215020899
+  // the datum register using the g1 generator and the public value for x
+  let datum: Register =
+    Register {
+      alpha: bls.g1() |> builtin.bls12_381_g1_compress,
+      beta: bls.pk(x) |> builtin.bls12_381_g1_compress,
+    }
+  // this message to sign
+  let m: ByteArray = #"acab"
+  // a random number
+  let r: Int =
+    44421586105950619360037151099874190412588687312032470042646096642156420779682
+  let g: G1Element = builtin.bls12_381_g1_uncompress(datum.alpha)
+  let g_r: G1Element = builtin.bls12_381_g1_scalar_mul(r, g)
+  let grb: ByteArray = g_r |> builtin.bls12_381_g1_compress
+  // hash the message
+  let h: ByteArray = hash.sha3_256(m)
+  // construct the e integer
+  let eb: ByteArray = hash.sha3_256(bytearray.concat(h, grb))
+  let e: Int = builtin.bytearray_to_integer(True, eb)
+  // calculate z
+  let z: Int = r + x * e
+  // build zk data
+  let redeemer: ZK =
+    ZK { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
+  verify(#"beef", datum, redeemer)
+}

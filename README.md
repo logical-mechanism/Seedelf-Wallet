@@ -66,9 +66,7 @@ $$
 g^{z} = g^r u^c
 $$
 
-Where $z = r + cx$ and $u = g^{x}$. The current implementation uses the Fiat-Shamir transform for non-interactivity.
-
-
+Where $z = r + cx$ and $u = g^{x}$. The current implementation uses the Fiat-Shamir heuristic for non-interactivity.
 
 ### Spendability Proof
 
@@ -102,11 +100,19 @@ In the contract, there will be many UTxOs with unique registries. A user can alw
 
 The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet.
 
+Sending funds requires a correct and equal d value applied to both elements of the registry. Incorrectly applied d values will be stuck inside the contract as seen in the example below.
+
+$$
+(g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } d \neq d'
+$$
+
+This registry would become unspendable.
+
 ### De-Anonymizing Attacks
 
 Two attacks are known to break the privacy of this implementation. The first attack comes from picking a bad d value. A small d value may be able to be brute-forced. The brute-force attack is circumvented by selecting a d value on the order of $2^{256}$. The second attack comes from not properly destroying the d value information after the transaction. The d value is considered toxic waste in this context. If the d values are known for some users then it becomes trivial to invert the registry into the original form and lose all privacy.
 
-Privacy is preserved as long as d is large and destroyed after use.
+Privacy is preserved as long as d is large and destroyed after use. This type of wallet can not be staked.
 
 ## Happy Path Testing Scripts
 

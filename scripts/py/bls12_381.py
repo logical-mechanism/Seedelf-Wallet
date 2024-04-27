@@ -83,7 +83,7 @@ def z(r: int, c: int, x: int) -> int:
     return r + c * x
 
 
-def fiat_shamir_transform(gb, grb, ub):
+def fiat_shamir_heuristic(gb, grb, ub):
     concatenated_bytes = gb + grb + ub
     hash_result = hashlib.sha3_256(concatenated_bytes.encode()).digest().hex()
     return hash_result
@@ -95,7 +95,7 @@ def create_dlog_zk(x: int, g: str) -> None:
     ri = rng()
     grb = new_g1(g, ri)
     ub = new_g1(g, x)
-    cb = fiat_shamir_transform(gb, grb, ub)
+    cb = fiat_shamir_heuristic(gb, grb, ub)
     # random c, change to fiat shamir later
     ci = int(cb, 16)
     # compute z
@@ -133,5 +133,5 @@ if __name__ == "__main__":
     # print('gx', gx)
     # print('gxx', gxx)
     # print(create_token())
-    outcome = fiat_shamir_transform("", "", "") == "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+    outcome = fiat_shamir_heuristic("", "", "") == "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
     print(outcome)
