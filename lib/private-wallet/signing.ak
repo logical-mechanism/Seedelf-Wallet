@@ -16,7 +16,7 @@ use private_wallet/types/zk.{Register, ZK}
 /// ```
 pub fn verify(m: ByteArray, datum: Register, redeemer: ZK) -> Bool {
   //
-  // hash the message and produce the challenge value
+  // hash the message and produce the challenge value e
   let h: ByteArray = hash.sha3_256(m)
   let eb: ByteArray = hash.sha3_256(bytearray.concat(h, redeemer.g_r))
   let e: Int = builtin.bytearray_to_integer(True, eb)

@@ -23,18 +23,6 @@ use private_wallet/xor.{xor}
 // are allowed to be customized. This allows an address to be have a
 // personalized touch while still maintaining privacy.
 //
-// 5eed0e1f | personal | XX | txid
-// 8 for prefix, 30 for personal, 2 for index, txid is leftover at 24
-//
-// Some names wont be able to convert but they can still be displayed.
-// 5eed0e1f00000acab00000018732122c62aea887cd16d743c3045e524f019aea
-// username: 00000acab00000018732122c62aea8
-//
-// Some do convert and can be displayed correctly.
-// 5eed0e1f5b416e6369656e744b72616b656e5d016ad73d1216555b07ad5a449ff2
-// username: 5b416e6369656e744b72616b656e5d
-// username: [AncientKraken]
-//
 fn create_token_name(
   txid: TxHash,
   idx: Int,

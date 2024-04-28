@@ -36,7 +36,9 @@ echo -e "\033[1;33m Wallet Contract Hash: $(cat hashes/wallet.hash) \033[0m"
 # end of build
 echo -e "\033[1;32m\nBuilding Complete! \033[0m"
 
-
+###############################################################################
+######### THIS WILL BE REMOVED WHEN AIKEN MOVES TO V3 #########################
+###############################################################################
 echo -e "\033[1;34m\nV3 HACK! \033[0m"
 jq \
 '.type="PlutusScriptV3"' \
