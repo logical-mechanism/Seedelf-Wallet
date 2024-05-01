@@ -29,12 +29,11 @@ pub fn encrypt(msg: ByteArray, scaler: Int, datum: Register) -> CypherText {
   c
 }
 
-pub fn decrypt(cypher: CypherText, secret_key: Int) -> ByteArray {
+pub fn decrypt(cypher: CypherText, cypher_key: ByteArray) -> ByteArray {
   // convert the cypher text elements
-  let c1: G1Element = builtin.bls12_381_g1_uncompress(cypher.c1)
   let c2: G1Element = builtin.bls12_381_g1_uncompress(cypher.c2)
   // multiply c1 by the secret key
-  let s: G1Element = builtin.bls12_381_g1_scalar_mul(secret_key, c1)
+  let s: G1Element = builtin.bls12_381_g1_uncompress(cypher_key)
   //
   // Find the inverse of the s point
   let neg_s: G1Element = builtin.bls12_381_g1_neg(s)
@@ -69,7 +68,12 @@ test encrypt_then_decrypt() {
   // encrypt the secret msg
   let cypher_text: CypherText = encrypt(secret_msg, scaler, datum)
   // now decrypt the message
-  let decrypted_msg: ByteArray = decrypt(cypher_text, x)
+  let c1: G1Element = builtin.bls12_381_g1_uncompress(cypher_text.c1)
+  // this would be done off chain to keep x private
+  let cypher_key: ByteArray =
+    builtin.bls12_381_g1_scalar_mul(x, c1)
+      |> builtin.bls12_381_g1_compress
+  let decrypted_msg: ByteArray = decrypt(cypher_text, cypher_key)
   //
   // Still can get the real msg from the point
   decrypted_msg == secret_msg
