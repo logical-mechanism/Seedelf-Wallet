@@ -1,10 +1,11 @@
 import qrcode
+import words
 
 
-def create_qr_code(data, file_path='qr_code.png'):
+def create(data, file_path='qr_code.png'):
     """
     Takes an integer and creates a QR code image from it.
-
+d
     Parameters:
     - data (int): The integer to be converted into a QR code.
 
@@ -25,5 +26,7 @@ def create_qr_code(data, file_path='qr_code.png'):
 
 
 if __name__ == "__main__":
-    x = 86478456268645743314319142250097583782656584143510069178425111699273215020899
-    create_qr_code(x)
+    m = words.generate_bip39_mnemonic()
+    print(m)
+    i = words.mnemonic_to_int(m)
+    create(i)
