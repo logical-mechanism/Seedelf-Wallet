@@ -13,8 +13,8 @@
 ////
 
 use aiken/transaction.{ScriptContext, Spend}
-use private_wallet/spending
-use private_wallet/types/zk.{Register, ZK}
+use seedelf/spending
+use seedelf/types/zk.{Register, ZK}
 
 validator {
   fn params(datum: Register, redeemer: ZK, context: ScriptContext) -> Bool {

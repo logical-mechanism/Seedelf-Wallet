@@ -16,7 +16,7 @@ use assist/find
 use assist/minting
 use assist/prefixes
 use assist/types/hashes.{TxHash}
-use private_wallet/xor.{xor}
+use seedelf/xor.{xor}
 
 // Allows creating a personalized random token name. Each address has a 
 // username of sorts. After the 5eed0e1f prefix the next 30 characters

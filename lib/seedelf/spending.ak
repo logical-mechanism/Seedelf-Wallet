@@ -4,8 +4,8 @@
 use aiken/builtin
 use aiken/bytearray
 use aiken/hash
-use private_wallet/bls12_381 as bls
-use private_wallet/types/zk.{Register, ZK}
+use seedelf/bls12_381 as bls
+use seedelf/types/zk.{Register, ZK}
 
 /// A bytearray of a value for the challenge c. This process should act like a
 /// random oracle providing a large challenge value for the user. The inputs

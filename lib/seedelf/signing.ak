@@ -4,8 +4,8 @@
 use aiken/builtin
 use aiken/bytearray
 use aiken/hash
-use private_wallet/bls12_381 as bls
-use private_wallet/types/zk.{Register, ZK}
+use seedelf/bls12_381 as bls
+use seedelf/types/zk.{Register, ZK}
 
 /// A variation of a Fiat-Shamir signature scheme. Sign some message m using
 /// a secret key but without revealing the value in the process. This uses 
