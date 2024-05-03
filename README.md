@@ -104,7 +104,7 @@ $$
 (g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } d \neq d'
 $$
 
-This registry would become unspendable.
+This registry would become unspendable, resulting in lost funds for both Bob and Alice.
 
 ### De-Anonymizing Attacks
 
@@ -118,12 +118,40 @@ These contracts require PlutusV3 and the Conway era. The happy paths follow Alic
 
 ### Creating A Seed Elf
 
-- TODO
+Use `01_createAddressUTxO` to create a seed elf from either Alice or Bob. This will produce a file inside a folder called `addrs`. This file is a simple way to store the secret value x and the original registry values.
+
+An example seed elf file is shown below.
+```json
+{
+    "a": "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+    "b": "a2e4786cbc52f9e2f5266ed7fcabe88e01ba92e652c8be79b994c522724bba015ccdd038f42aa03f907a0f6ffe16fc4c",
+    "secret": 6626762640525735488664943722689229887125200532629070040776184331198666927087
+}
+```
+
+Be sure to keep it safe!
 
 ### Removing Funds
 
-- TODO
+Removing funds is a simple process. Given a secret value x, search the UTxO set for all registies that satify the condition that $(g', u') \rightarrow (g')^{x} = u'$ which do not contain your seed elf token. The seed elf UTxO may be removed but typically it is left inside the contract for location purposes. Each UTxO that a user wishes to spend requires a ZK proof to spend it, as shown below.
+
+
+```rust
+pub type ZK {
+  // this is z = r + c*x, where x is the secret
+  z: ByteArray,
+  // this is the g^r compressed G1Element, where g is the registry generator
+  g_r: ByteArray,
+}
+```
+
+These ZK element combined with a registry is the only required knowledge to spend a UTxO. The spent UTxOs can be sent to any non seed elf wallet or can be recombined into a new UTxO inside the seed elf wallet with a new re-randomzied registry.
 
 ### Sending Funds
 
-- TODO
+Sending funds works very similarly to removing funds but the funds are sent to a re-randomized regsitry given by finding the registry on some other seed elf token. Bob could gire-randomized UTxOs to Bob's new re-randomized registry. This act should perserve privacy. An outside user should only see random UTxOs being collected and sent to a new random registry. The link between Alice and Bob should remain hidden.
+
+
+### Non-Mixablility
+
+Spendability is always in the hands of the original owner. If two UTxOs are being spent then it is safe to assume it is the same owner because if two users spent UTxOs together inside of a single transaction then there would be no way to ensure funds are not lost. If Alice and Bob are working together then either Alice or Bob has the chance of losing funds. In mixers this does not exist as the spendability is arbitrary thus the mixing probably exists. This is not the case inside the seed elf wallet.
