@@ -4,10 +4,9 @@
 
 ## What is Seed Elf?
 
-**Seed Elf** is a token identifier to locate primary addresses inside the stealth wallet contract. The token allows the creation of a personalized random token name so that each address can have a username. A seed elf allows an address to be personalized touch while maintaining privacy.
+**Seed Elf** is a token identifier used to locate the primary address of a user inside the stealth wallet contract. A seed elf allows a stealth address to have a personalized touch while maintaining privacy.
 
-Its main purpose is for ease of locating a primary address. User A can ask user B to send funds to their seed elf. User B can find the UTxO that holds the seed elf and will use that registry and a random integer to generate a new private address for user A.
-
+Its main purpose is for the ease of locating a primary address. User Alice can ask Bob to send funds to their seed elf. Bob can find the UTxO that holds the seed elf and will use that registry and a random integer to generate a new UTxO for Alice.
 
 ```
 5eed0e1f | personal | XX | txid
@@ -17,7 +16,6 @@ Its main purpose is for ease of locating a primary address. User A can ask user 
 Not all personal tags will be able to be converted into ASCII.
 
 For example, the personal tag below can't convert to ASCII but it can still be displayed in hex.
-
 
 ```
 seed elf: 5eed0e1f00000acab00000018732122c62aea887cd16d743c3045e524f019aea
@@ -37,7 +35,7 @@ username: 5b416e6369656e744b72616b656e5d
 display name: [AncientKraken]
 ```
 
-The stealth wallet contract is token agnostic, allowing any NFT  to be the locator token. We suggested using a seed elf.
+The stealth wallet contract is token agnostic, allowing any NFT to be the locator token. We suggest using a seed elf.
 
 ## What is a Stealth Wallet?
 
@@ -116,6 +114,16 @@ Privacy is preserved as long as d is large and destroyed after use. This type of
 
 ## Happy Path Testing Scripts
 
-These contracts require PlutusV3.
+These contracts require PlutusV3 and the Conway era. The happy paths follow Alice and Bob as they interact with their seed elf wallets. The scripts will allow each user to create seed elfs, send tokens to another seed elf, and remove their tokens. The happy path has very basic functionality but it does serve as an example as how a seed elf wallet would work. In a real production environment, this type of contract would have to be integrated natively at the wallet level.
+
+### Creating A Seed Elf
+
+- TODO
+
+### Removing Funds
+
+- TODO
+
+### Sending Funds
 
 - TODO
