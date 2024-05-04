@@ -17,7 +17,7 @@ if [[ $# -eq 0 ]] ; then
 fi
 
 token_file_name="${1}.json"
-echo $token_file_name
+echo -e "\033[0;32m\nFinding Balance For ${1}\n\033[0m"
 
 # get script utxo
 echo -e "\033[0;36m Gathering wallet UTxO Information  \033[0m"
@@ -33,13 +33,18 @@ fi
 
 secret_key=$(python -c "import json; print(json.load(open('addrs/${token_file_name}'))['secret'])")
 
-echo Secret Key: ${secret_key}
+echo -e "\033[0;33m\nSecret Key: ${secret_key}\n\033[0m"
 
 python3 -c "
 import sys;
 sys.path.append('../py/');
 import find;
+import value;
 u = find.utxos(${secret_key}, '${policy_id}', '${1}');
+print('UTxO Information:\n')
 for utxo in u:
     print(utxo, u[utxo])
+m = value.combine(u)
+print('\nTotal Value:\n')
+print(m)
 "

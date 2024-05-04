@@ -5,20 +5,16 @@ set -e
 source ../.env
 
 # get params
-${cli} query protocol-parameters ${network} --out-file ../tmp/protocol.json
+${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
 
 # user
 user="user-1"
 user_address=$(cat ../wallets/${user}-wallet/payment.addr)
-user_pkh=$(${cli} address key-hash --payment-verification-key-file ../wallets/${user}-wallet/payment.vkey)
+user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/${user}-wallet/payment.vkey)
 
 # walletscript
 wallet_script_path="../../contracts/wallet_contract.plutus"
-wallet_script_address=$(${cli} address build --payment-script-file ${wallet_script_path} ${network})
-
-# collat
-collat_address=$(cat ../wallets/collat-wallet/payment.addr)
-collat_pkh=$(${cli} address key-hash --payment-verification-key-file ../wallets/collat-wallet/payment.vkey)
+wallet_script_address=$(${cli} conway address build --payment-script-file ${wallet_script_path} ${network})
 
 if [[ $# -ne 2 ]] ; then
     echo -e "\n \033[0;31m Please Supply A Token Name and Amount \033[0m \n"
@@ -46,7 +42,7 @@ echo "Wallet: "${wallet_script_out}
 
 # get script utxo
 echo -e "\033[0;36m Gathering wallet UTxO Information  \033[0m"
-${cli} query utxo \
+${cli} conway query utxo \
     --address ${wallet_script_address} \
     ${network} \
     --out-file ../tmp/script_utxo.json
@@ -63,11 +59,11 @@ import find;
 find.address('${policy_id}', '${1}');
 "
 #
-exit
+# exit
 #
 # get user utxo
 echo -e "\033[0;36m Gathering UTxO Information  \033[0m"
-${cli} query utxo \
+${cli} conway query utxo \
     ${network} \
     --address ${user_address} \
     --out-file ../tmp/user_utxo.json
@@ -82,8 +78,7 @@ TXIN=$(jq -r --arg alltxin "" 'keys[] | . + $alltxin + " --tx-in"' ../tmp/user_u
 user_tx_in=${TXIN::-8}
 
 echo -e "\033[0;36m Building Tx \033[0m"
-FEE=$(${cli} transaction build \
-    --conway-era \
+FEE=$(${cli} conway transaction build \
     --out-file ../tmp/tx.draft \
     --change-address ${user_address} \
     --tx-in ${user_tx_in} \
@@ -100,7 +95,7 @@ echo -e "\033[1;32m Fee: \033[0m" $FEE
 # exit
 #
 echo -e "\033[0;36m Signing \033[0m"
-${cli} transaction sign \
+${cli} conway transaction sign \
     --signing-key-file ../wallets/${user}-wallet/payment.skey \
     --signing-key-file ../wallets/collat-wallet/payment.skey \
     --tx-body-file ../tmp/tx.draft \
@@ -110,7 +105,7 @@ ${cli} transaction sign \
 # exit
 #
 echo -e "\033[0;36m Submitting \033[0m"
-${cli} transaction submit \
+${cli} conway transaction submit \
     ${network} \
     --tx-file ../tmp/tx.signed
 
