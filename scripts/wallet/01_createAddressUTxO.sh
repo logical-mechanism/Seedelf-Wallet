@@ -133,7 +133,7 @@ FEE=$(${cli} conway transaction build \
     --required-signer-hash ${collat_pkh} \
     --mint="${mint_token}" \
     --mint-tx-in-reference="${pointer_ref_utxo}#1" \
-    --mint-plutus-script-v2 \
+    --mint-plutus-script-v3 \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
     --policy-id="${policy_id}" \
     ${network})
