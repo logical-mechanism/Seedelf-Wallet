@@ -16,7 +16,10 @@ use aiken/transaction.{ScriptContext, Spend}
 use seedelf/spending
 use seedelf/types/zk.{Register, ZK}
 
-validator {
+validator(
+  // this allows a custom policy id to be grinded out
+  _random_string: ByteArray,
+) {
   fn params(datum: Register, redeemer: ZK, context: ScriptContext) -> Bool {
     expect Spend(_) = context.purpose
     spending.d_log(datum, redeemer)?

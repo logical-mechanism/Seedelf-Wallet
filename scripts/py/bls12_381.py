@@ -7,7 +7,7 @@ import secrets
 from py_ecc.bls import G2ProofOfPossession as bls
 # from py_ecc.bls12_381.bls12_381_curve import multiply
 from py_ecc.bls.g2_primitives import G1_to_pubkey, pubkey_to_G1
-from py_ecc.optimized_bls12_381 import multiply
+from py_ecc.optimized_bls12_381 import add, multiply
 
 # security parameter; how many bits are used in x, r, c, etc
 sec_param = 254
@@ -113,6 +113,7 @@ def create_dlog_zk(x: int, g: str, u: str, file_name: str = 'wallet-redeemer.jso
     # hex the result
     zi = z(ri, ci, x)
     zb = hexify(zi)
+    print('Is ZK Proof Valid?', verify_dlog_zk(g, u, grb, ci, zi))
     redeemer = {
         "constructor": 0,
         "fields": [
@@ -130,6 +131,16 @@ def create_dlog_zk(x: int, g: str, u: str, file_name: str = 'wallet-redeemer.jso
     file_path = os.path.join(script_dir, '../data/wallet/' + file_name)
     with open(file_path, 'w') as file:
         json.dump(redeemer, file, indent=2)
+
+
+def verify_dlog_zk(g, u, grb, c, z) -> bool:
+    g1 = hex_to_g1(g)
+    u1 = hex_to_g1(u)
+    g_z = multiply_g1_element(g1, z)
+    g_r = hex_to_g1(grb)
+    u_c = multiply_g1_element(u1, c)
+    rhs = add(g_r, u_c)
+    return G1_to_pubkey(g_z).hex() == G1_to_pubkey(rhs).hex()
 
 
 if __name__ == "__main__":

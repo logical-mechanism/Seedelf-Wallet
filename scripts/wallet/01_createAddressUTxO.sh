@@ -76,11 +76,12 @@ c = bls.create_token();
 bls.write_token_to_file(c, 'addrs/', '${pointer_name}')
 "
 
+token_file_name="${pointer_name}.json"
+echo -e "\033[0;33m\nCreating Seed Elf: $pointer_name\n\033[0m"
+
 jq --arg variable "$(jq -r '.a' ./addrs/${token_file_name})" '.fields[0].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
 jq --arg variable "$(jq -r '.b' ./addrs/${token_file_name})" '.fields[1].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
 
-token_file_name="${pointer_name}.json"
-echo Creating Seed Elf: $token_file_name
 
 # the minting script policy
 # policy_id=$(${cli} conway transaction policyid --script-file ../../contracts/pointer_contract.plutus)
@@ -132,7 +133,7 @@ FEE=$(${cli} conway transaction build \
     --required-signer-hash ${collat_pkh} \
     --mint="${mint_token}" \
     --mint-tx-in-reference="${pointer_ref_utxo}#1" \
-    --mint-plutus-script-v3 \
+    --mint-plutus-script-v2 \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
     --policy-id="${policy_id}" \
     ${network})

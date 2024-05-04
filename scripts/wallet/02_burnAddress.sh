@@ -84,7 +84,7 @@ print(u)
 ")
 echo Address UTxO: ${wallet_tx_in}
 #
-# exit
+exit
 #
 # get user utxo
 echo -e "\033[0;36m Gathering UTxO Information  \033[0m"
