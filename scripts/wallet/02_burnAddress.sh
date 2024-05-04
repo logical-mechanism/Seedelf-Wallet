@@ -28,11 +28,11 @@ policy_id=$(cat ../../hashes/pointer.hash)
 
 if [[ $# -eq 0 ]] ; then
     echo -e "\n \033[0;31m Please Supply A Token Name \033[0m \n";
-    exit
+    exit;
 fi
 
 token_file_name="${1}.json"
-echo $token_file_name
+echo -e "\033[0;33m\nBurning Seed Elf: ${1}\n\033[0m"
 
 # get script utxo
 echo -e "\033[0;36m Gathering wallet UTxO Information  \033[0m"
@@ -47,8 +47,7 @@ if [ "${TXNS}" -eq "0" ]; then
 fi
 
 secret_key=$(python -c "import json; print(json.load(open('addrs/${token_file_name}'))['secret'])")
-
-echo Secret Key: ${secret_key}
+echo -e "\033[0;33m\nSecret Key: ${secret_key}\n\033[0m"
 
 generator=$(python3 -c "
 import sys;

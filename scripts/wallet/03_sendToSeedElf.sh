@@ -34,6 +34,8 @@ if [[ $2 -lt 2000000 ]] ; then
     exit 1
 fi
 
+echo -e "\033[0;33m\nSending Funds To Seed Elf: ${1}\n\033[0m"
+
 # the minting script policy
 policy_id=$(cat ../../hashes/pointer.hash)
 
@@ -49,7 +51,7 @@ ${cli} conway query utxo \
 TXNS=$(jq length ../tmp/script_utxo.json)
 if [ "${TXNS}" -eq "0" ]; then
    echo -e "\n \033[0;31m NO UTxOs Found At ${wallet_script_address} \033[0m \n";
-.   exit;
+   exit;
 fi
 
 python3 -c "
