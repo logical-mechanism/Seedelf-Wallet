@@ -1,10 +1,13 @@
+import binascii
 import hashlib
 import json
 import os
 import secrets
 
 from py_ecc.bls import G2ProofOfPossession as bls
+# from py_ecc.bls12_381.bls12_381_curve import multiply
 from py_ecc.bls.g2_primitives import G1_to_pubkey, pubkey_to_G1
+from py_ecc.bls.point_compression import compress_G1
 from py_ecc.optimized_bls12_381 import multiply
 
 # security parameter; how many bits are used in x, r, c, etc
@@ -39,15 +42,23 @@ def multiply_g1_element(g1_element, scalar):
 
 
 def new_g1(g, x):
-    return G1_to_pubkey(multiply_g1_element(hex_to_g1(g), x)).hex()
+    g1 = hex_to_g1(g)
+    sg1 = multiply_g1_element(g1, x)
+    return G1_to_pubkey(sg1).hex()
 
 
 def check(g, x, u):
-    return G1_to_pubkey(multiply_g1_element(hex_to_g1(g), x)).hex() == u
+    g1 = hex_to_g1(g)
+    sg1 = multiply_g1_element(g1, x)
+    return G1_to_pubkey(sg1).hex() == u
 
 
 def rng(length: int = sec_param) -> int:
-    return secrets.randbits(length)
+    n = secrets.randbits(length)
+    field_order = 52435875175126190479447740508185965837690552500527637822603658699938581184513
+    if n > field_order:
+        rng(length)
+    return n
 
 
 def pk(sk):
@@ -85,17 +96,18 @@ def z(r: int, c: int, x: int) -> int:
 
 def fiat_shamir_heuristic(gb, grb, ub):
     concatenated_bytes = gb + grb + ub
-    hash_result = hashlib.sha3_256(concatenated_bytes.encode()).digest().hex()
+    unhexed_bytes = binascii.unhexlify(concatenated_bytes)
+    hash_result = hashlib.sha3_256(unhexed_bytes).digest().hex()
     return hash_result
 
 
-def create_dlog_zk(x: int, g: str) -> None:
+def create_dlog_zk(x: int, g: str, u: str, file_name: str = 'wallet-redeemer.json') -> None:
     # random r
-    gb = g.hex()
     ri = rng()
     grb = new_g1(g, ri)
-    ub = new_g1(g, x)
-    cb = fiat_shamir_heuristic(gb, grb, ub)
+    #
+    cb = fiat_shamir_heuristic(g, grb, u)
+    # print('cb', cb)
     # random c, change to fiat shamir later
     ci = int(cb, 16)
     # compute z
@@ -113,25 +125,20 @@ def create_dlog_zk(x: int, g: str) -> None:
             }
         ]
     }
-
     script_dir = os.path.dirname(__file__)
     # Construct the path to the file relative to the script location
     # Correcting the path and filename typo
-    file_path = os.path.join(script_dir, '../data/wallet/wallet-redeemer.json')
+    file_path = os.path.join(script_dir, '../data/wallet/' + file_name)
     with open(file_path, 'w') as file:
         json.dump(redeemer, file, indent=2)
 
 
 if __name__ == "__main__":
-    # g = pk(1)
-    # gx = pk(44203)
-
-    # gxx = G1_to_pubkey(multiply_g1_element(hex_to_g1(g), 44203)).hex()
-    # # print(hex_to_g1(pk(2)))
-    # # print(g1_point_to_hex(hex_to_g1(pk(1))))
-    # print('g', g)
-    # print('gx', gx)
-    # print('gxx', gxx)
-    # print(create_token())
     outcome = fiat_shamir_heuristic("", "", "") == "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+    print(outcome)
+
+    outcome = fiat_shamir_heuristic(
+        "86f0c64bd433568dd92751f0bee97feaaeee6f3c2144b210be68d2bc85253b1994703caf7f8361ccf246fef52c0ad859",
+        "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+        "a2cbc5c3c72a7bc9047971345df392a67279d2f32082891976d913c699885c3ff9a90a8ea942bef4729cf93f526521e4") == "524fb8209e14641b3202adcab15bddae592b83fafc34d74abb79b572bd883930"
     print(outcome)

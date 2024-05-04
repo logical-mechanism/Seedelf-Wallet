@@ -34,12 +34,20 @@ test empty_fiat_shamir_transform() {
   fiat_shamir_heuristic(#"", #"", #"") == #"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
 }
 
-test real_fiat_shamir_transform() {
+test real_fiat_shamir_transform1() {
   fiat_shamir_heuristic(
     #"86f0c64bd433568dd92751f0bee97feaaeee6f3c2144b210be68d2bc85253b1994703caf7f8361ccf246fef52c0ad859",
     #"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
     #"a2cbc5c3c72a7bc9047971345df392a67279d2f32082891976d913c699885c3ff9a90a8ea942bef4729cf93f526521e4",
   ) == #"524fb8209e14641b3202adcab15bddae592b83fafc34d74abb79b572bd883930"
+}
+
+test real_fiat_shamir_transform2() {
+  fiat_shamir_heuristic(
+    #"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+    #"81b223cea171a87feba9b7749a2df7601c5a75ae01155fadc124a2ac49099a514cf1e7d9cdc769dceab14a95bd6cb0bd",
+    #"a09d99e02f7200526dc55ef722cc171e7aa14fc732614c02ac58d59d7026a7eb18d8798f6928ea2b513f3a4feb0c94d1",
+  ) == #"9e65076c75a39793e533284ff153f70540b933391d48ffe4268b785dba3bf564"
 }
 
 /// A variation of a Schnorr signature. Prove knowledge of the secret value x

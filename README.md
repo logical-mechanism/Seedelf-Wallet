@@ -108,7 +108,7 @@ This registry would become unspendable, resulting in lost funds for both Bob and
 
 ### De-Anonymizing Attacks
 
-Two attacks are known to break the privacy of this implementation. The first attack comes from picking a bad d value. A small d value may be able to be brute-forced. The brute-force attack is circumvented by selecting a d value on the order of $2^{256}$. The second attack comes from not properly destroying the d value information after the transaction. The d value is considered toxic waste in this context. If the d values are known for some users then it becomes trivial to invert the registry into the original form and lose all privacy.
+Two attacks are known to break the privacy of this implementation. The first attack comes from picking a bad d value. A small d value may be able to be brute-forced. The brute-force attack is circumvented by selecting a d value on the order of $2^{254}$. The second attack comes from not properly destroying the d value information after the transaction. The d value is considered toxic waste in this context. If the d values are known for some users then it becomes trivial to invert the registry into the original form and lose all privacy.
 
 Privacy is preserved as long as d is large and destroyed after use. This type of wallet can not be staked.
 
@@ -154,4 +154,4 @@ Sending funds works very similarly to removing funds but the funds are sent to a
 
 ### Non-Mixablility
 
-Spendability is always in the hands of the original owner. If two UTxOs are being spent then it is safe to assume it is the same owner because if two users spent UTxOs together inside of a single transaction then there would be no way to ensure funds are not lost. If Alice and Bob are working together then either Alice or Bob has the chance of losing funds. In mixers this does not exist as the spendability is arbitrary thus the mixing probably exists. This is not the case inside the seed elf wallet.
+Spendability is always in the hands of the original owner. If two UTxOs are being spent then it is safe to assume it is the same owner because if two users spent UTxOs together inside of a single transaction then there would be no way to ensure funds are not lost or stolen by one of the parties. If Alice and Bob are working together then either Alice or Bob has the chance of losing funds. In mixers this does not exist as the spendability is arbitrary thus the mixing probably exists. This is not the case inside the seed elf wallet.

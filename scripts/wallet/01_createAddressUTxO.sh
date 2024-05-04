@@ -76,11 +76,11 @@ c = bls.create_token();
 bls.write_token_to_file(c, 'addrs/', '${pointer_name}')
 "
 
-token_file_name="${pointer_name}.json"
-echo $token_file_name
-
 jq --arg variable "$(jq -r '.a' ./addrs/${token_file_name})" '.fields[0].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
 jq --arg variable "$(jq -r '.b' ./addrs/${token_file_name})" '.fields[1].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
+
+token_file_name="${pointer_name}.json"
+echo Creating Seed Elf: $token_file_name
 
 # the minting script policy
 # policy_id=$(${cli} conway transaction policyid --script-file ../../contracts/pointer_contract.plutus)
@@ -103,8 +103,6 @@ wallet_script_out="${wallet_script_address} + ${required_lovelace} + ${mint_toke
 echo "Wallet: "${wallet_script_out}
 #
 # exit
-#
-
 #
 # collat info
 echo -e "\033[0;36m Gathering Collateral UTxO Information  \033[0m"
@@ -144,7 +142,7 @@ IFS=' ' read -ra FEE <<< "${VALUE[1]}"
 FEE=${FEE[1]}
 echo -e "\033[1;32m Fee: \033[0m" $FEE
 #
-exit
+# exit
 #
 echo -e "\033[0;36m Signing \033[0m"
 ${cli} conway transaction sign \

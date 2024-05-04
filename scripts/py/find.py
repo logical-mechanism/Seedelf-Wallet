@@ -39,18 +39,20 @@ def utxos(x: int, pid: str, tkn) -> str:
     # Example usage
     filename = '../tmp/script_utxo.json'
     data = read_data_from_file(filename)
-    owned_utxos = []
+    owned_utxos = {}
     # find all utxos whose secret is x
     for d in data:
         g = data[d]['inlineDatum']['fields'][0]['bytes']
         u = data[d]['inlineDatum']['fields'][1]['bytes']
-        if check(g, x, u):
+        if g == "":
+            continue
+        if check(g, x, u) is True:
             # but not the address ones
             try:
                 data[d]['value'][pid][tkn]
                 continue
             except KeyError:
-                owned_utxos.append(d)
+                owned_utxos[d] = data[d]['value']
     return owned_utxos
 
 
@@ -70,7 +72,7 @@ def address_utxo(pid: str, tkn: str) -> str:
     return None
 
 
-def address_generator(pid: str, tkn: str) -> str:
+def generator(pid: str, tkn: str) -> str:
     # Example usage
     filename = '../tmp/script_utxo.json'
     data = read_data_from_file(filename)
@@ -81,6 +83,22 @@ def address_generator(pid: str, tkn: str) -> str:
             if token_amt == 1:
                 g = data[d]['inlineDatum']['fields'][0]['bytes']
                 return g
+        except KeyError:
+            continue
+    return None
+
+
+def public(pid: str, tkn: str) -> str:
+    # Example usage
+    filename = '../tmp/script_utxo.json'
+    data = read_data_from_file(filename)
+    # find all utxos whose secret is x
+    for d in data:
+        try:
+            token_amt = data[d]['value'][pid][tkn]
+            if token_amt == 1:
+                u = data[d]['inlineDatum']['fields'][1]['bytes']
+                return u
         except KeyError:
             continue
     return None
