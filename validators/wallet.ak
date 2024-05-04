@@ -17,7 +17,7 @@ use seedelf/spending
 use seedelf/types/zk.{Register, ZK}
 
 validator(
-  // this allows a custom policy id to be grinded out
+  // this allows many wallet contracts to exist
   _random_string: ByteArray,
 ) {
   fn params(datum: Register, redeemer: ZK, context: ScriptContext) -> Bool {
