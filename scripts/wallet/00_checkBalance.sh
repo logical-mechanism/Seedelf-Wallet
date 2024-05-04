@@ -28,7 +28,7 @@ ${cli} conway query utxo \
 TXNS=$(jq length ../tmp/script_utxo.json)
 if [ "${TXNS}" -eq "0" ]; then
    echo -e "\n \033[0;31m NO UTxOs Found At ${wallet_script_address} \033[0m \n";
-.   exit;
+   exit;
 fi
 
 secret_key=$(python -c "import json; print(json.load(open('addrs/${token_file_name}'))['secret'])")

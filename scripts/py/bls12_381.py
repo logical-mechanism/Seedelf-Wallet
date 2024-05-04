@@ -7,7 +7,6 @@ import secrets
 from py_ecc.bls import G2ProofOfPossession as bls
 # from py_ecc.bls12_381.bls12_381_curve import multiply
 from py_ecc.bls.g2_primitives import G1_to_pubkey, pubkey_to_G1
-from py_ecc.bls.point_compression import compress_G1
 from py_ecc.optimized_bls12_381 import multiply
 
 # security parameter; how many bits are used in x, r, c, etc
