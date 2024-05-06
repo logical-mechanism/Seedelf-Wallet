@@ -13,3 +13,4 @@ contracts/
 hashes/
 aiken.lock
 grind_pid.sh
+seed_elf_cli/
