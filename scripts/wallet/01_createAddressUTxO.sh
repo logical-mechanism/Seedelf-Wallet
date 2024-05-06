@@ -82,17 +82,8 @@ echo -e "\033[0;33m\nCreating Seed Elf: $pointer_name\n\033[0m"
 jq --arg variable "$(jq -r '.a' ./addrs/${token_file_name})" '.fields[0].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
 jq --arg variable "$(jq -r '.b' ./addrs/${token_file_name})" '.fields[1].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
 
-
 # the minting script policy
-# policy_id=$(${cli} conway transaction policyid --script-file ../../contracts/pointer_contract.plutus)
 policy_id=$(cat ../../hashes/pointer.hash)
-# policy_id=$"5dce53cc68d501d72ea396ac48ef4e5fc95c2ef3bff44df83a043548"
-
-# >>> hashlib.blake2b(bytes.fromhex(x), digest_size=28).digest().hex()
-# 'b5d1e4fb66f039b2218a27c46ef58c8cf7960085ec677b0ad4c754ab'
-# >>> hashlib.blake2b(x.encode(), digest_size=28).digest().hex()
-# 'f254b144ed69acad0cecdcda9bba5ee3c7ad3f3d884032c333942e4c'
-
 
 mint_token="1 ${policy_id}.${pointer_name}"
 required_lovelace=$(${cli} conway transaction calculate-min-required-utxo \
@@ -143,7 +134,7 @@ IFS=' ' read -ra FEE <<< "${VALUE[1]}"
 FEE=${FEE[1]}
 echo -e "\033[1;32m Fee: \033[0m" $FEE
 #
-# exit
+exit
 #
 echo -e "\033[0;36m Signing \033[0m"
 ${cli} conway transaction sign \

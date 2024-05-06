@@ -19,7 +19,7 @@ echo -e "\033[1;34m\nBuilding Contracts \033[0m"
 # keep the traces for testing if required
 aiken build --trace-level verbose --filter-traces all
 
-ran="03"
+ran="04"
 ran_cbor=$(python3 -c "import cbor2;hex_string='${ran}';data = bytes.fromhex(hex_string);encoded = cbor2.dumps(data);print(encoded.hex())")
 
 echo -e "\033[1;33m\nBuilding Pointer Contract \033[0m"

@@ -7,11 +7,11 @@ source .env
 # rm tmp/tx.signed || True
 
 # Addresses
-sender_path="wallets/user-2-wallet/"
+sender_path="wallets/reference-wallet/"
 sender_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat ${sender_path}payment.addr)
-receiver_address=$(cat wallets/reference-wallet/payment.addr)
-# receiver_address="addr_test1qp6wsmzsdmdkr0gttkhq0mmc9duc9py5s9fg4p3tgslmn9rk2l066zc3rvwttenwft9rcj238chmdvw4hx0j0e9q2w8srrzt52"
+# receiver_address=$(cat wallets/reference-wallet/payment.addr)
+receiver_address="addr_test1qp6wsmzsdmdkr0gttkhq0mmc9duc9py5s9fg4p3tgslmn9rk2l066zc3rvwttenwft9rcj238chmdvw4hx0j0e9q2w8srrzt52"
 # receiver_address="addr_test1vrew3fk26vrq3d25sanfl89r2ucrrp6dgk3tsntksm9pacgu662xn"
 
 # ENTER ASSISTS HERE
@@ -46,11 +46,11 @@ seller_tx_in=${TXIN::-8}
 echo -e "\033[0;36m Building Tx \033[0m"
 FEE=$(${cli} conway transaction build \
     --out-file tmp/tx.draft \
-    --change-address ${sender_address} \
+    --change-address ${receiver_address} \
     --tx-in ${seller_tx_in} \
-    --tx-out="${tokens_to_be_traded}" \
     ${network})
 
+    # --tx-out="${tokens_to_be_traded}" \
 IFS=':' read -ra VALUE <<< "${FEE}"
 IFS=' ' read -ra FEE <<< "${VALUE[1]}"
 FEE=${FEE[1]}
