@@ -4,6 +4,8 @@ set -e
 # SET UP VARS HERE
 source ../.env
 
+mkdir -p ./addrs
+
 # get params
 ${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
 
