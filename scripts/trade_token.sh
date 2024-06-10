@@ -7,7 +7,7 @@ source .env
 # rm tmp/tx.signed || True
 
 # Addresses
-sender_path="wallets/reference-wallet/"
+sender_path="wallets/user-1-wallet/"
 sender_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat wallets/reference-wallet/payment.addr)

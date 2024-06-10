@@ -49,6 +49,8 @@ alltxin=""
 TXIN=$(jq -r --arg alltxin "" 'keys[] | . + $alltxin + " --tx-in"' ../tmp/user_utxo.json)
 user_tx_in=${TXIN::-8}
 
+user_starting_lovelace=$(jq '[.[] | .value.lovelace] | add' ../tmp/user_utxo.json)
+
 echo "UTxO:" $user_tx_in
 first_utxo=$(jq -r 'keys[0]' ../tmp/user_utxo.json)
 string=${first_utxo}
@@ -88,12 +90,12 @@ jq --arg variable "$(jq -r '.b' ./addrs/${token_file_name})" '.fields[1].bytes=$
 policy_id=$(cat ../../hashes/pointer.hash)
 
 mint_token="1 ${policy_id}.${pointer_name}"
-required_lovelace=$(${cli} conway transaction calculate-min-required-utxo \
-    --protocol-params-file ../tmp/protocol.json \
-    --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
-    --tx-out="${wallet_script_address} + 5000000 + ${mint_token}" | tr -dc '0-9')
+# required_lovelace=$(${cli} conway transaction calculate-min-required-utxo \
+#     --protocol-params-file ../tmp/protocol.json \
+#     --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
+#     --tx-out="${wallet_script_address} + 5000000 + ${mint_token}" | tr -dc '0-9')
 
-wallet_script_out="${wallet_script_address} + ${required_lovelace} + ${mint_token}"
+wallet_script_out="${wallet_script_address} + ${user_starting_lovelace} + ${mint_token}"
 echo "Wallet: "${wallet_script_out}
 #
 # exit
@@ -114,10 +116,29 @@ collat_tx_in=$(jq -r 'keys[0]' ../tmp/collat_utxo.json)
 
 pointer_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-pointer_contract.plutus.signed)
 
+# echo -e "\033[0;36m Building Tx \033[0m"
+# FEE=$(${cli} conway transaction build \
+#     --out-file ../tmp/tx.draft \
+#     --change-address ${user_address} \
+#     --tx-in-collateral ${collat_tx_in} \
+#     --tx-in ${user_tx_in} \
+#     --tx-out="${wallet_script_out}" \
+#     --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
+#     --required-signer-hash ${user_pkh} \
+#     --required-signer-hash ${collat_pkh} \
+#     --mint="${mint_token}" \
+#     --mint-tx-in-reference="${pointer_ref_utxo}#1" \
+#     --mint-plutus-script-v3 \
+#     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
+#     --policy-id="${policy_id}" \
+#     ${network})
+
+# Build Raw test
+execution_unts="(0, 0)"
 echo -e "\033[0;36m Building Tx \033[0m"
-FEE=$(${cli} conway transaction build \
+${cli} conway transaction build-raw \
     --out-file ../tmp/tx.draft \
-    --change-address ${user_address} \
+    --protocol-params-file ../tmp/protocol.json \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
     --tx-out="${wallet_script_out}" \
@@ -128,15 +149,55 @@ FEE=$(${cli} conway transaction build \
     --mint-tx-in-reference="${pointer_ref_utxo}#1" \
     --mint-plutus-script-v3 \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
+    --mint-reference-tx-in-execution-units="${execution_unts}" \
     --policy-id="${policy_id}" \
-    ${network})
+    --fee 0
 
-IFS=':' read -ra VALUE <<< "${FEE}"
-IFS=' ' read -ra FEE <<< "${VALUE[1]}"
-FEE=${FEE[1]}
-echo -e "\033[1;32m Fee: \033[0m" $FEE
+cpu=550000000
+mem=2000000
+
+pointer_execution_unts="(${cpu}, ${mem})"
+pointer_computation_fee=$(echo "0.0000721*${cpu} + 0.0577*${mem}" | bc)
+pointer_computation_fee_int=$(printf "%.0f" "$pointer_computation_fee")
 #
-exit
+# exit
+#
+FEE=$(${cli} conway transaction calculate-min-fee --tx-body-file ../tmp/tx.draft ${network} --protocol-params-file ../tmp/protocol.json --reference-script-size 10000 --tx-in-count 3 --tx-out-count 3 --witness-count 2)
+fee=$(echo $FEE | rev | cut -c 9- | rev)
+
+total_fee=$((${fee} + ${pointer_computation_fee_int} + 250000))
+echo Tx Fee: $total_fee
+change_value=$((${user_starting_lovelace} - ${total_fee}))
+wallet_script_out="${wallet_script_address} + ${change_value} + ${mint_token}"
+echo "Without Fee: Wallet OUTPUT: "${wallet_script_out}
+
+#
+# exit
+#
+
+${cli} conway transaction build-raw \
+    --out-file ../tmp/tx.draft \
+    --protocol-params-file ../tmp/protocol.json \
+    --tx-in-collateral ${collat_tx_in} \
+    --tx-in ${user_tx_in} \
+    --tx-out="${wallet_script_out}" \
+    --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
+    --required-signer-hash ${user_pkh} \
+    --required-signer-hash ${collat_pkh} \
+    --mint="${mint_token}" \
+    --mint-tx-in-reference="${pointer_ref_utxo}#1" \
+    --mint-plutus-script-v3 \
+    --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
+    --mint-reference-tx-in-execution-units="${pointer_execution_unts}" \
+    --policy-id="${policy_id}" \
+    --fee ${total_fee}
+
+# IFS=':' read -ra VALUE <<< "${FEE}"
+# IFS=' ' read -ra FEE <<< "${VALUE[1]}"
+# FEE=${FEE[1]}
+# echo -e "\033[1;32m Fee: \033[0m" $FEE
+#
+# exit
 #
 echo -e "\033[0;36m Signing \033[0m"
 ${cli} conway transaction sign \

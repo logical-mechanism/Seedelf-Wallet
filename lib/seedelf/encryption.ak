@@ -100,5 +100,7 @@ test encrypt_then_decrypt() {
   //
   // Still can't get the real msg from the point but it does prove that Bob can
   // decrypt Alices encoded msg.
+  //
+  // need a way to map decrypted message to the plain text message
   decrypted_msg == secret_msg
 }
