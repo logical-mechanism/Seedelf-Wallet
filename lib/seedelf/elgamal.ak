@@ -7,17 +7,18 @@ use seedelf/bls12_381 as bls
 use seedelf/types/zk.{Register}
 
 pub type CypherText {
+  // encrypted point
   c1: ByteArray,
   c2: ByteArray,
+  // message hash
   h: ByteArray,
 }
 
 /// Encrypt a bls123-381 encoded message to some register using the ElGamal 
-/// encryption scheme. The return type is the two-pair cypher text. These two
-/// pieces of data make up the cypher to be passed to the owner of the regiser.
+/// encryption scheme. The return type is the CypherText type.
 ///
 /// ```aiken
-/// encryption.encrypt(msg, scaler, datum)
+/// elgamal.encryption(msg, scaler, datum)
 /// ```
 pub fn encryption(msg: ByteArray, scaler: Int, datum: Register) -> CypherText {
   //
@@ -47,11 +48,10 @@ pub fn encryption(msg: ByteArray, scaler: Int, datum: Register) -> CypherText {
   }
 }
 
-/// Decrypt a cypher text using a cypher key using the ElGamal encryption
-/// scheme. The return type is the bls12-381 encoded message.
+/// Prove that a user could decrypt a CypherText type using a cypher key.
 ///
 /// ```aiken
-/// encryption.decrypt(cypher_text, cypher_key)
+/// elgamal.decryption(cypher_text, cypher_key)
 /// ```
 pub fn decryption_proof(cypher_text: CypherText, cypher_key: ByteArray) -> Bool {
   // convert the cypher text elements
@@ -65,6 +65,7 @@ pub fn decryption_proof(cypher_text: CypherText, cypher_key: ByteArray) -> Bool 
   // decrypt the msg
   let m: G1Element = builtin.bls12_381_g1_add(c2, neg_s)
   let msg: ByteArray = m |> builtin.bls12_381_g1_compress
+  // it can't be the zero point and the hashes must equal
   and {
     !builtin.bls12_381_g1_equal(m, bls.zero),
     hash.sha3_256(msg) == cypher_text.h,
