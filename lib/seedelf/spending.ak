@@ -97,7 +97,7 @@ test d_log_256_bit_secret() {
   // the datum register using the g1 generator and the public value for x
   let a0: Register =
     Register {
-      alpha: bls.g1() |> builtin.bls12_381_g1_compress,
+      alpha: bls.g1 |> builtin.bls12_381_g1_compress,
       beta: bls.pk(x) |> builtin.bls12_381_g1_compress,
     }
   // a random number
@@ -132,7 +132,7 @@ test can_unlock_after_rerandomizing() {
   // the datum register
   let a0: Register =
     Register {
-      alpha: bls.g1() |> builtin.bls12_381_g1_compress,
+      alpha: bls.g1 |> builtin.bls12_381_g1_compress,
       beta: bls.pk(x) |> builtin.bls12_381_g1_compress,
     }
   // The re-randomizer number
@@ -173,7 +173,7 @@ test cant_spend_good_verify_msg() fail {
   // the datum register using the g1 generator and the public value for x
   let datum: Register =
     Register {
-      alpha: bls.g1() |> builtin.bls12_381_g1_compress,
+      alpha: bls.g1 |> builtin.bls12_381_g1_compress,
       beta: bls.pk(x) |> builtin.bls12_381_g1_compress,
     }
   // this message to sign
@@ -205,7 +205,7 @@ test many_unlocks() {
   // the datum register
   let a0: Register =
     Register {
-      alpha: bls.g1() |> builtin.bls12_381_g1_compress,
+      alpha: bls.g1 |> builtin.bls12_381_g1_compress,
       beta: bls.pk(x) |> builtin.bls12_381_g1_compress,
     }
   // The re-randomizer number

@@ -52,7 +52,7 @@ test good_verify() {
   // the datum register using the g1 generator and the public value for x
   let datum: Register =
     Register {
-      alpha: bls.g1() |> builtin.bls12_381_g1_compress,
+      alpha: bls.g1 |> builtin.bls12_381_g1_compress,
       beta: bls.pk(x) |> builtin.bls12_381_g1_compress,
     }
   // this message to sign
@@ -83,7 +83,7 @@ test rerandomized_good_verify() {
   // the datum register using the g1 generator and the public value for x
   let a0: Register =
     Register {
-      alpha: bls.g1() |> builtin.bls12_381_g1_compress,
+      alpha: bls.g1 |> builtin.bls12_381_g1_compress,
       beta: bls.pk(x) |> builtin.bls12_381_g1_compress,
     }
   // The re-randomizer number
@@ -119,7 +119,7 @@ test bad_verify() fail {
   // the datum register using the g1 generator and the public value for x
   let datum: Register =
     Register {
-      alpha: bls.g1() |> builtin.bls12_381_g1_compress,
+      alpha: bls.g1 |> builtin.bls12_381_g1_compress,
       beta: bls.pk(x) |> builtin.bls12_381_g1_compress,
     }
   // this message to sign
