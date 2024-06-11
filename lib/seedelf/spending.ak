@@ -4,8 +4,17 @@
 use aiken/builtin
 use aiken/bytearray
 use aiken/hash
-use seedelf/bls12_381 as bls
-use seedelf/types/zk.{Register, ZK}
+use seedelf/bls
+use seedelf/types/register.{Register}
+
+/// The zero knowledge elements required for the proof. The c value will be
+/// computed using the Fiat-Shamir heuristic.
+pub type SchnorrRedeemer {
+  // this is z = r + c*x
+  z: ByteArray,
+  // this is the g^r compressed G1Element
+  g_r: ByteArray,
+}
 
 /// A bytearray of a value for the challenge c. This process should act like a
 /// random oracle providing a large challenge value for the user. The inputs
@@ -58,7 +67,7 @@ test real_fiat_shamir_transform2() {
 /// ```aiken
 /// spending.d_log(datum, redeemer)
 /// ```
-pub fn d_log(datum: Register, redeemer: ZK) -> Bool {
+pub fn d_log(datum: Register, redeemer: SchnorrRedeemer) -> Bool {
   //
   // get the z integer from the redeemer
   let z: Int = builtin.bytearray_to_integer(True, redeemer.z)
@@ -117,15 +126,15 @@ test d_log_256_bit_secret() {
   // the z value
   let z: Int = r + c * x
   // build zk data
-  let zk: ZK =
-    ZK {
+  let zk: SchnorrRedeemer =
+    SchnorrRedeemer {
       z: builtin.integer_to_bytearray(True, 0, z),
       g_r: g_r |> builtin.bls12_381_g1_compress,
     }
   d_log(a0, zk)
 }
 
-test can_unlock_after_rerandomizing() {
+test can_unlock_after_rerandomize() {
   // some secret x
   let x: Int =
     86478456268645743314319142250097583782656584143510069178425111699273215020899
@@ -138,8 +147,8 @@ test can_unlock_after_rerandomizing() {
   // The re-randomizer number
   let d: Int =
     53767766789778895376051712452456827203944826866229066056242444673395870447090
-  // rerandomizing the a0 register
-  let a1: Register = zk.rerandomizing(a0, d)
+  // rerandomize the a0 register
+  let a1: Register = register.rerandomize(a0, d)
   // a random number
   let r: Int =
     44421586105950619360037151099874190412588687312032470042646096642156420779682
@@ -158,8 +167,8 @@ test can_unlock_after_rerandomizing() {
   // the z value
   let z: Int = r + c * x
   // build zk data
-  let zk: ZK =
-    ZK {
+  let zk: SchnorrRedeemer =
+    SchnorrRedeemer {
       z: builtin.integer_to_bytearray(True, 0, z),
       g_r: g_r |> builtin.bls12_381_g1_compress,
     }
@@ -192,8 +201,8 @@ test cant_spend_good_verify_msg() fail {
   // calculate z
   let z: Int = r + x * e
   // build zk data
-  let redeemer: ZK =
-    ZK { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
+  let redeemer: SchnorrRedeemer =
+    SchnorrRedeemer { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
   d_log(datum, redeemer)
 }
 
@@ -211,8 +220,8 @@ test many_unlocks() {
   // The re-randomizer number
   let d: Int =
     53767766789778895376051712452456827203944826866229066056242444673395870447090
-  // rerandomizing the a0 register
-  let a1: Register = zk.rerandomizing(a0, d)
+  // rerandomize the a0 register
+  let a1: Register = register.rerandomize(a0, d)
   // a random number
   let r: Int =
     44421586105950619360037151099874190412588687312032470042646096642156420779682
@@ -231,8 +240,8 @@ test many_unlocks() {
   // the z value
   let z: Int = r + c * x
   // build zk data
-  let zk: ZK =
-    ZK {
+  let zk: SchnorrRedeemer =
+    SchnorrRedeemer {
       z: builtin.integer_to_bytearray(True, 0, z),
       g_r: g_r |> builtin.bls12_381_g1_compress,
     }

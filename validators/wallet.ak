@@ -13,14 +13,18 @@
 ////
 
 use aiken/transaction.{ScriptContext, Spend}
-use seedelf/spending
-use seedelf/types/zk.{Register, ZK}
+use seedelf/spending.{SchnorrRedeemer}
+use seedelf/types/register.{Register}
 
 validator(
   // this allows many wallet contracts to exist
   _random_string: ByteArray,
 ) {
-  fn params(datum: Register, redeemer: ZK, context: ScriptContext) -> Bool {
+  fn params(
+    datum: Register,
+    redeemer: SchnorrRedeemer,
+    context: ScriptContext,
+  ) -> Bool {
     expect Spend(_) = context.purpose
     spending.d_log(datum, redeemer)?
   }

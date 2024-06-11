@@ -4,8 +4,16 @@
 use aiken/builtin
 use aiken/bytearray
 use aiken/hash
-use seedelf/bls12_381 as bls
-use seedelf/types/zk.{Register, ZK}
+use seedelf/bls
+use seedelf/types/register.{Register}
+
+/// The zero knowledge elements required for the proof.
+pub type FiatShamirRedeemer {
+  // this is z = r + c*x
+  z: ByteArray,
+  // this is the g^r compressed G1Element
+  g_r: ByteArray,
+}
 
 /// A variation of a Fiat-Shamir signature scheme. Sign some message m using
 /// a secret key but without revealing the value in the process. This uses 
@@ -14,7 +22,7 @@ use seedelf/types/zk.{Register, ZK}
 /// ```aiken
 /// signing.verify(msg, datum, redeemer)
 /// ```
-pub fn verify(m: ByteArray, datum: Register, redeemer: ZK) -> Bool {
+pub fn verify(m: ByteArray, datum: Register, redeemer: FiatShamirRedeemer) -> Bool {
   //
   // hash the message and produce the challenge value e
   let h: ByteArray = hash.sha3_256(m)
@@ -71,8 +79,8 @@ test good_verify() {
   // calculate z
   let z: Int = r + x * e
   // build zk data
-  let redeemer: ZK =
-    ZK { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
+  let redeemer: FiatShamirRedeemer =
+    FiatShamirRedeemer { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
   verify(m, datum, redeemer)
 }
 
@@ -89,8 +97,8 @@ test rerandomized_good_verify() {
   // The re-randomizer number
   let d: Int =
     53767766789778895376051712452456827203944826866229066056242444673395870447090
-  // rerandomizing the a0 register
-  let datum: Register = zk.rerandomizing(a0, d)
+  // rerandomize the a0 register
+  let datum: Register = register.rerandomize(a0, d)
   // this message to sign
   let m: ByteArray = #"acab"
   // a random number
@@ -107,8 +115,8 @@ test rerandomized_good_verify() {
   // calculate z
   let z: Int = r + x * e
   // build zk data
-  let redeemer: ZK =
-    ZK { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
+  let redeemer: FiatShamirRedeemer =
+    FiatShamirRedeemer { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
   verify(m, datum, redeemer)
 }
 
@@ -138,7 +146,7 @@ test bad_verify() fail {
   // calculate z
   let z: Int = r + x * e
   // build zk data
-  let redeemer: ZK =
-    ZK { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
+  let redeemer: FiatShamirRedeemer =
+    FiatShamirRedeemer { z: builtin.integer_to_bytearray(True, 0, z), g_r: grb }
   verify(#"beef", datum, redeemer)
 }

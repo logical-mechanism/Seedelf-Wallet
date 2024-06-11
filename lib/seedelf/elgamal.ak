@@ -3,8 +3,8 @@
 
 use aiken/builtin
 use aiken/hash
-use seedelf/bls12_381 as bls
-use seedelf/types/zk.{Register}
+use seedelf/bls
+use seedelf/types/register.{Register}
 
 pub type CypherText {
   // encrypted point
