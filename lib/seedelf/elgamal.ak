@@ -2,6 +2,7 @@
 ////
 
 use aiken/builtin
+use aiken/cbor
 use aiken/hash
 use seedelf/bls
 use seedelf/types/register.{Register}
@@ -183,4 +184,15 @@ test no_encryption_proof() fail {
   //
   // Prove that Bob could not decrypt the msg
   decryption_proof(cypher_text, cypher_key)
+}
+
+test is_a_point() {
+  let m: ByteArray =
+    #"80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000acab"
+  trace @"message"
+  trace cbor.diagnostic(m)
+  let c1: G1Element = builtin.bls12_381_g1_uncompress(m)
+  trace @"g1 element"
+  trace cbor.diagnostic(c1)
+  True
 }
