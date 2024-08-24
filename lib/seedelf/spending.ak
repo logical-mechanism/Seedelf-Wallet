@@ -2,8 +2,8 @@
 ////
 
 use aiken/builtin
-use aiken/bytearray
 use aiken/hash
+use aiken/primitive/bytearray
 use seedelf/bls
 use seedelf/types/register.{Register}
 
@@ -59,7 +59,7 @@ test real_fiat_shamir_transform2() {
   ) == #"9e65076c75a39793e533284ff153f70540b933391d48ffe4268b785dba3bf564"
 }
 
-/// A variation of a Schnorr signature. Prove knowledge of the secret value x
+/// A Schnorr signature. Prove knowledge of the secret value x
 /// without revealing the value in the process. This uses g^z = g^r * u^c, 
 /// where z = r + c*x and u = g^x. This function uses the Fiat-Shamir heuristic
 /// for non-interactivity.
@@ -303,22 +303,6 @@ test many_unlocks() {
     // 28
     d_log(a1, zk),
     // 29
-    d_log(a1, zk),
-    // 30
-    d_log(a1, zk),
-    // 31
-    d_log(a1, zk),
-    // 32
-    d_log(a1, zk),
-    // 33
-    d_log(a1, zk),
-    // 34
-    d_log(a1, zk),
-    // 35
-    d_log(a1, zk),
-    // 36
-    d_log(a1, zk),
-    // 37
     d_log(a1, zk),
   }
 }

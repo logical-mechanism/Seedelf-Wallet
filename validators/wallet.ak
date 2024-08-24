@@ -12,20 +12,13 @@
 //// the original (g, u) element.
 ////
 
-use aiken/transaction.{ScriptContext, Spend}
+use cardano/transaction.{ScriptContext, Spending}
 use seedelf/spending.{SchnorrRedeemer}
 use seedelf/types/register.{Register}
 
-validator(
-  // this allows many wallet contracts to exist
-  _random_string: ByteArray,
-) {
-  fn params(
-    datum: Register,
-    redeemer: SchnorrRedeemer,
-    context: ScriptContext,
-  ) -> Bool {
-    expect Spend(_) = context.purpose
+validator {
+  fn params(datum: Register, redeemer: SchnorrRedeemer, context: ScriptContext) {
+    expect Spending(_, _) = context.info
     spending.d_log(datum, redeemer)?
   }
 }

@@ -4,27 +4,12 @@ set -e
 # SET UP VARS HERE
 source .env
 
-# rm tmp/tx.signed || True
-
 # Addresses
-sender_path="wallets/user-1-wallet/"
+sender_path="wallets/reference-wallet/"
 sender_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat wallets/reference-wallet/payment.addr)
-receiver_address="addr_test1qp6wsmzsdmdkr0gttkhq0mmc9duc9py5s9fg4p3tgslmn9rk2l066zc3rvwttenwft9rcj238chmdvw4hx0j0e9q2w8srrzt52"
-# receiver_address="addr_test1vrew3fk26vrq3d25sanfl89r2ucrrp6dgk3tsntksm9pacgu662xn"
-
-# ENTER ASSISTS HERE
-assets="1 f97431da7b760ffda3f830734d44bea09d7238c801098304c1d2a59a.283232322900bc812bab23541dfb2ea4edbd35d0357ca1a04896b088cb5fbed7"
-
-min_utxo=$(${cli} conway transaction calculate-min-required-utxo \
-    --protocol-params-file tmp/protocol.json \
-    --tx-out="${receiver_address} + 5000000 + ${assets}" | tr -dc '0-9')
-
-# tokens_to_be_traded="${receiver_address} + ${min_utxo} + ${assets}"
-tokens_to_be_traded="${receiver_address} + 500000000"
-
-echo -e "\nTrading Tokens:\n" ${tokens_to_be_traded}
+receiver_address="addr_test1qrvnxkaylr4upwxfxctpxpcumj0fl6fdujdc72j8sgpraa9l4gu9er4t0w7udjvt2pqngddn6q4h8h3uv38p8p9cq82qav4lmp"
 #
 # exit
 #
@@ -50,7 +35,6 @@ FEE=$(${cli} conway transaction build \
     --tx-in ${seller_tx_in} \
     ${network})
 
-    # --tx-out="${tokens_to_be_traded}" \
 IFS=':' read -ra VALUE <<< "${FEE}"
 IFS=' ' read -ra FEE <<< "${VALUE[1]}"
 FEE=${FEE[1]}

@@ -33,3 +33,29 @@ test false_true_xor() {
 test true_false_xor() {
   xor(True, False) == True
 }
+
+test good_bracket_xor() {
+  xor(
+    {
+      let x = 2
+      x == 2
+    },
+    {
+      let y = 1
+      y == 2
+    },
+  ) == True
+}
+
+test bad_bracket_xor() {
+  xor(
+    {
+      let x = 2
+      x == 2
+    },
+    {
+      let y = 1
+      y == 1
+    },
+  ) == False
+}

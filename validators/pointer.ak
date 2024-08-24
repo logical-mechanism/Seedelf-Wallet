@@ -9,13 +9,13 @@
 //// to function properly.
 ////
 
-use aiken/bytearray
-use aiken/transaction.{Mint, ScriptContext, Transaction}
-use aiken/transaction/value.{AssetName, PolicyId}
+use aiken/primitive/bytearray
 use assist/find
 use assist/minting
 use assist/prefixes
 use assist/types/hashes.{TxHash}
+use cardano/assets.{AssetName, PolicyId}
+use cardano/transaction.{Minting, ScriptContext, Transaction}
 use seedelf/xor.{xor}
 
 // Allows creating a personalized random token name. Each address has a 
@@ -57,10 +57,10 @@ test realistic_token_name() {
 
 validator(
   // this allows a custom policy id to be grinded out
-  _random_string: ByteArray,
+  _random_string: Data,
 ) {
-  fn params(redeemer: ByteArray, context: ScriptContext) -> Bool {
-    expect Mint(currency_symbol) = context.purpose
+  fn params(redeemer: Data, context: ScriptContext) {
+    expect Minting(policy_id) = context.info
     //
     // Burn 1 by the seed prefix xor mint 1 with the token name.
     //
@@ -68,20 +68,21 @@ validator(
       {
         // you can burn a token with 5eed0e1f prefix
         let Transaction { mint, .. } = context.transaction
-        let minted_value: List<(PolicyId, AssetName, Int)> =
-          mint |> value.flatten()
-        minting.by_prefix(minted_value, currency_symbol, prefixes.seed, -1)?
+        let minted_assets: List<(PolicyId, AssetName, Int)> =
+          mint |> assets.flatten()
+        minting.by_prefix(minted_assets, policy_id, prefixes.seed, -1)?
       },
       {
         // or mint one
         let Transaction { inputs, mint, .. } = context.transaction
-        let minted_value: List<(PolicyId, AssetName, Int)> =
-          mint |> value.flatten()
+        let minted_assets: List<(PolicyId, AssetName, Int)> =
+          mint |> assets.flatten()
         let tx_hash: TxHash = find.first_input_txid(inputs)
         let index: Int = find.first_input_index(inputs)
+        expect personal_tag: ByteArray = redeemer
         let token_name: AssetName =
-          create_token_name(tx_hash, index, prefixes.seed, redeemer)
-        minting.exact(minted_value, currency_symbol, token_name, 1)?
+          create_token_name(tx_hash, index, prefixes.seed, personal_tag)
+        minting.exact(minted_assets, policy_id, token_name, 1)?
       },
     )
   }
