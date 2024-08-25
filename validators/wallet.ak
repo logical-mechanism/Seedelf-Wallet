@@ -17,8 +17,10 @@ use seedelf/spending.{SchnorrRedeemer}
 use seedelf/types/register.{Register}
 
 validator {
-  fn params(datum: Register, redeemer: SchnorrRedeemer, context: ScriptContext) {
+  fn params(datum: Data, redeemer: Data, context: ScriptContext) {
     expect Spending(_, _) = context.info
-    spending.d_log(datum, redeemer)?
+    expect register: Register = datum
+    expect proof: SchnorrRedeemer = redeemer
+    spending.schnorr_proof(register, proof)?
   }
 }
