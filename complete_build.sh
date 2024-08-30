@@ -21,8 +21,8 @@ aiken build --trace-level verbose --filter-traces all
 
 echo -e "\033[1;33m\nBuilding Contract \033[0m"
 aiken blueprint convert -v seedelf.wallet.spend > contracts/seedelf_contract.plutus
-cardano-cli conway transaction policyid --script-file contracts/seedelf_contract.plutus > hashes/wallet.hash
-echo -e "\033[1;33m Contract Hash: $(cat hashes/wallet.hash) \033[0m"
+cardano-cli conway transaction policyid --script-file contracts/seedelf_contract.plutus > hashes/seedelf.hash
+echo -e "\033[1;33m Contract Hash: $(cat hashes/seedelf.hash) \033[0m"
 
 # end of build
 echo -e "\033[1;32m\nBuilding Complete! \033[0m"

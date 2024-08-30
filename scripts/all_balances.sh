@@ -5,8 +5,8 @@ set -e
 source .env
 
 # wallet contract
-wallet_script_path="../contracts/wallet_contract.plutus"
-wallet_script_address=$(${cli} address build --payment-script-file ${wallet_script_path} ${network})
+seedelf_script_path="../contracts/seedelf_contract.plutus"
+seedelf_script_address=$(${cli} address build --payment-script-file ${seedelf_script_path} ${network})
 
 # get current parameters
 mkdir -p ./tmp
@@ -14,10 +14,10 @@ ${cli} conway query protocol-parameters ${network} --out-file ./tmp/protocol.jso
 ${cli} conway query tip ${network} | jq
 
 # wallet
-echo -e "\033[1;35m wallet Contract Address: \033[0m" 
-echo -e "\n \033[1;35m ${wallet_script_address} \033[0m \n";
-${cli} conway query utxo --address ${wallet_script_address} ${network}
-${cli} conway query utxo --address ${wallet_script_address} ${network} --out-file ./tmp/current_wallet.utxo
+echo -e "\033[1;35m Contract Address: \033[0m" 
+echo -e "\n \033[1;35m ${seedelf_script_address} \033[0m \n";
+${cli} conway query utxo --address ${seedelf_script_address} ${network}
+${cli} conway query utxo --address ${seedelf_script_address} ${network} --out-file ./tmp/current.utxo
 
 # Loop through each -wallet folder
 for wallet_folder in wallets/*-wallet; do
