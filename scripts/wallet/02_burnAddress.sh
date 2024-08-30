@@ -12,7 +12,7 @@ user="user-1"
 user_address=$(cat ../wallets/${user}-wallet/payment.addr)
 user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/${user}-wallet/payment.vkey)
 
-# wallet script
+# seedelf script
 seedelf_script_path="../../contracts/seedelf_contract.plutus"
 seedelf_script_address=$(${cli} conway address build --payment-script-file ${seedelf_script_path} ${network})
 

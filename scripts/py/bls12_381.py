@@ -56,7 +56,7 @@ def rng(length: int = sec_param) -> int:
     n = secrets.randbits(length)
     field_order = 52435875175126190479447740508185965837690552500527637822603658699938581184513
     if n > field_order:
-        rng(length)
+        return rng(length)
     return n
 
 

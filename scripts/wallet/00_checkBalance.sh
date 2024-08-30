@@ -4,12 +4,12 @@ set -e
 # SET UP VARS HERE
 source ../.env
 
-# wallet script
-wallet_script_path="../../contracts/wallet_contract.plutus"
-wallet_script_address=$(${cli} conway address build --payment-script-file ${wallet_script_path} ${network})
+# seedelf script
+seedelf_script_path="../../contracts/seedelf_contract.plutus"
+seedelf_script_address=$(${cli} conway address build --payment-script-file ${seedelf_script_path} ${network})
 
 # the minting script policy
-policy_id=$(cat ../../hashes/pointer.hash)
+policy_id=$(cat ../../hashes/seedelf.hash)
 
 if [[ $# -eq 0 ]] ; then
     echo -e "\n \033[0;31m Please Supply A Token Name \033[0m \n";
@@ -22,12 +22,12 @@ echo -e "\033[0;32m\nFinding Balance For ${1}\n\033[0m"
 # get script utxo
 echo -e "\033[0;36m Gathering wallet UTxO Information  \033[0m"
 ${cli} conway query utxo \
-    --address ${wallet_script_address} \
+    --address ${seedelf_script_address} \
     ${network} \
     --out-file ../tmp/script_utxo.json
 TXNS=$(jq length ../tmp/script_utxo.json)
 if [ "${TXNS}" -eq "0" ]; then
-   echo -e "\n \033[0;31m NO UTxOs Found At ${wallet_script_address} \033[0m \n";
+   echo -e "\n \033[0;31m NO UTxOs Found At ${seedelf_script_address} \033[0m \n";
    exit;
 fi
 
