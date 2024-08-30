@@ -12,19 +12,16 @@ user="user-1"
 user_address=$(cat ../wallets/${user}-wallet/payment.addr)
 user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/${user}-wallet/payment.vkey)
 
-# walletscript
-wallet_script_path="../../contracts/wallet_contract.plutus"
-wallet_script_address=$(${cli} conway address build --payment-script-file ${wallet_script_path} ${network})
+# wallet script
+seedelf_script_path="../../contracts/seedelf_contract.plutus"
+seedelf_script_address=$(${cli} conway address build --payment-script-file ${seedelf_script_path} ${network})
 
 # collat
 collat_address=$(cat ../wallets/collat-wallet/payment.addr)
 collat_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/collat-wallet/payment.vkey)
 
-# pointer script
-pointer_script_path="../../contracts/pointer_contract.plutus"
-
 # the minting script policy
-policy_id=$(cat ../../hashes/pointer.hash)
+policy_id=$(cat ../../hashes/seedelf.hash)
 
 if [[ $# -eq 0 ]] ; then
     echo -e "\n \033[0;31m Please Supply A Token Name \033[0m \n";
@@ -37,12 +34,12 @@ echo -e "\033[0;33m\nBurning Seed Elf: ${1}\n\033[0m"
 # get script utxo
 echo -e "\033[0;36m Gathering wallet UTxO Information  \033[0m"
 ${cli} conway query utxo \
-    --address ${wallet_script_address} \
+    --address ${seedelf_script_address} \
     ${network} \
     --out-file ../tmp/script_utxo.json
 TXNS=$(jq length ../tmp/script_utxo.json)
 if [ "${TXNS}" -eq "0" ]; then
-   echo -e "\n \033[0;31m NO UTxOs Found At ${wallet_script_address} \033[0m \n";
+   echo -e "\n \033[0;31m NO UTxOs Found At ${seedelf_script_address} \033[0m \n";
    exit;
 fi
 
@@ -118,11 +115,9 @@ fi
 collat_tx_in=$(jq -r 'keys[0]' ../tmp/collat_utxo.json)
 
 # script reference utxo
-wallet_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-wallet_contract.plutus.signed)
-pointer_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-pointer_contract.plutus.signed)
+script_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
 
-echo Wallet Reference UTxO: ${wallet_ref_utxo}
-echo Pointer Reference UTxO: ${pointer_ref_utxo}
+echo Reference UTxO: ${script_ref_utxo}
 
 mint_token="-1 ${policy_id}.${1}"
 echo Burning: ${mint_token}
@@ -136,14 +131,14 @@ FEE=$(${cli} conway transaction build \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
     --tx-in ${wallet_tx_in} \
-    --spending-tx-in-reference="${wallet_ref_utxo}#1" \
+    --spending-tx-in-reference="${script_ref_utxo}#1" \
     --spending-plutus-script-v3 \
     --spending-reference-tx-in-inline-datum-present \
     --spending-reference-tx-in-redeemer-file ../data/wallet/wallet-redeemer.json \
     --required-signer-hash ${user_pkh} \
     --required-signer-hash ${collat_pkh} \
     --mint="${mint_token}" \
-    --mint-tx-in-reference="${pointer_ref_utxo}#1" \
+    --mint-tx-in-reference="${script_ref_utxo}#1" \
     --mint-plutus-script-v3 \
     --policy-id="${policy_id}" \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
@@ -171,7 +166,7 @@ ${cli} conway transaction submit \
     ${network} \
     --tx-file ../tmp/tx.signed
 
-tx=$(cardano-cli transaction txid --tx-file ../tmp/tx.signed)
-echo "Tx Hash:" $tx
+tx=$(${cli} transaction txid --tx-file ../tmp/tx.signed)
+echo "TxId:" $tx
 
 rm addrs/${token_file_name}
