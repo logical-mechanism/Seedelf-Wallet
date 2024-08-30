@@ -2,7 +2,7 @@
 ////
 
 use aiken/builtin
-use aiken/hash
+use aiken/crypto
 use aiken/primitive/bytearray
 use seedelf/bls
 use seedelf/types/register.{Register}
@@ -36,7 +36,7 @@ pub fn fiat_shamir_heuristic(
   gb
     |> bytearray.concat(grb)
     |> bytearray.concat(ub)
-    |> hash.blake2b_256()
+    |> crypto.blake2b_256()
 }
 
 test empty_fiat_shamir_transform() {
@@ -210,9 +210,9 @@ test cant_spend_good_verify_msg() fail {
   let g_r: G1Element = builtin.bls12_381_g1_scalar_mul(r, g)
   let grb: ByteArray = g_r |> builtin.bls12_381_g1_compress
   // hash the message
-  let h: ByteArray = hash.sha3_256(m)
+  let h: ByteArray = crypto.sha3_256(m)
   // construct the e integer
-  let eb: ByteArray = hash.sha3_256(bytearray.concat(h, grb))
+  let eb: ByteArray = crypto.sha3_256(bytearray.concat(h, grb))
   let e: Int = builtin.bytearray_to_integer(True, eb)
   // calculate z
   let z: Int = r + x * e
@@ -301,12 +301,12 @@ test many_unlocks() {
 test cheapest_hash() {
   //
   // PASS [mem:    805, cpu:    1663641] cheapest_hash
-  // hash.sha3_256(#"") == #"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+  // crypto.sha3_256(#"") == #"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
   //
   // PASS [mem:    805, cpu:     434990] cheapest_hash
-  // hash.sha2_256(#"") == #"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  // crypto.sha2_256(#"") == #"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   //
   // PASS [mem:    805, cpu:     351411] cheapest_hash
-  hash.blake2b_256(#"") == #"0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8"
+  crypto.blake2b_256(#"") == #"0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8"
   //
 }
