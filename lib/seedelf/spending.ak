@@ -1,6 +1,3 @@
-////
-////
-
 use aiken/builtin
 use aiken/crypto
 use aiken/primitive/bytearray
@@ -21,7 +18,7 @@ pub type SchnorrRedeemer {
 /// should be compressed g1 elements but they can also be compressed integers.
 ///
 /// ```aiken
-/// spending.fiat_shamir_heuristic(gb, grb, ub)
+/// fiat_shamir_heuristic(gb, grb, ub)
 /// ```
 pub fn fiat_shamir_heuristic(
   // compressed g element
@@ -59,13 +56,13 @@ test real_fiat_shamir_transform2() {
   ) == #"f8624d457933fab54654902f296a22b15e4062da7bba8ae2ba0bc15dec4d096b"
 }
 
-/// A Schnorr signature. Prove knowledge of the secret value x
-/// without revealing the value in the process. This uses g^z = g^r * u^c, 
-/// where z = r + c*x and u = g^x. This function uses the Fiat-Shamir heuristic
-/// for non-interactivity.
+/// A Schnorr proof. Prove knowledge of the secret value x without revealing 
+/// the value in the process. The proof uses, in multiplicative form, 
+/// g^z = g^r * u^c, where z = r + c*x and u = g^x. This function uses the 
+/// Fiat-Shamir heuristic for non-interactivity.
 ///
 /// ```aiken
-/// spending.schnorr_proof(datum, redeemer)
+/// schnorr_proof(datum, redeemer)
 /// ```
 pub fn schnorr_proof(datum: Register, redeemer: SchnorrRedeemer) -> Bool {
   //
@@ -91,7 +88,7 @@ pub fn schnorr_proof(datum: Register, redeemer: SchnorrRedeemer) -> Bool {
   // the u^c computation: u^c = (g^x)^c = g^(x * c)
   let u_c: G1Element = builtin.bls12_381_g1_scalar_mul(c, u)
   //
-  // the product, g^r * u^c, becomes the sum, g_r + u_c, when using bls12-381
+  // the product, g^r * u^c, becomes the sum, g_r + u_c because bls12-381
   let rhs: G1Element = builtin.bls12_381_g1_add(g_r, u_c)
   //
   // check if equation: g^z = g^r * u^c -> g^z = rhs, is true
@@ -300,13 +297,13 @@ test many_unlocks() {
 
 test cheapest_hash() {
   //
-  // PASS [mem:    805, cpu:    1663641] cheapest_hash
+  // PASS [mem:    805, cpu:    1663641] cheap hash
   // crypto.sha3_256(#"") == #"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
   //
-  // PASS [mem:    805, cpu:     434990] cheapest_hash
+  // PASS [mem:    805, cpu:     434990] cheaper hash
   // crypto.sha2_256(#"") == #"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   //
-  // PASS [mem:    805, cpu:     351411] cheapest_hash
+  // PASS [mem:    805, cpu:     351411] cheapest hash
   crypto.blake2b_256(#"") == #"0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8"
   //
 }
