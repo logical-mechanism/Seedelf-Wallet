@@ -8,3 +8,8 @@ pub const g1 =
 pub fn pk(sk: Int) -> G1Element {
   builtin.bls12_381_g1_scalar_mul(sk, g1)
 }
+
+test pk_of_one_is_g1() {
+  let u: G1Element = pk(1)
+  u == g1
+}

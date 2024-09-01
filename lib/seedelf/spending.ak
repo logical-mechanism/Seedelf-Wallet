@@ -296,6 +296,8 @@ test many_unlocks() {
 }
 
 test cheapest_hash() {
+  // PASS [mem:    805, cpu:    2467639] expensive hash
+  // crypto.keccak_256(#"") == #"c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
   //
   // PASS [mem:    805, cpu:    1663641] cheap hash
   // crypto.sha3_256(#"") == #"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
