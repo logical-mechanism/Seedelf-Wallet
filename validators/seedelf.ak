@@ -42,6 +42,7 @@ validator wallet {
     when maybe_datum is {
       Some(datum) ->
         if datum is Register {
+          // correct data structures are only spendable with valid schnorr proofs
           spending.schnorr_proof(datum, redeemer)?
         } else {
           // incorrect data structures should be spendable
