@@ -9,7 +9,10 @@ ${cli} conway query protocol-parameters ${network} --out-file ./tmp/protocol.jso
 
 # Addresses
 reference_address=$(cat ./wallets/reference-wallet/payment.addr)
-script_reference_address=$(cat ./wallets/reference-wallet/payment.addr)
+
+# always false to hold script utxo
+always_false_script_path="../contracts/always_false_contract.plutus"
+script_reference_address=$(${cli} conway address build --payment-script-file ${always_false_script_path} ${network})
 
 echo -e "\033[0;35m\nGathering UTxO Information  \033[0m"
 ${cli} conway query utxo \
@@ -32,9 +35,13 @@ counter=0
 echo -e "\033[0;33m\nStart Building Tx Chain \033[0m"
 for contract in $(ls "../contracts"/* | sort -V)
 do
+
+    file_name=$(basename "$contract")
+    if [ "$file_name" == "always_false_contract.plutus" ]; then
+        continue
+    fi
     echo -e "\033[1;37m --------------------------------------------------------------------------------\033[0m"
     echo -e "\033[1;35m\n${contract}\033[0m" 
-    file_name=$(basename "$contract")
     # Increment the counter
     ((counter++)) || true
 
@@ -54,13 +61,15 @@ do
     --tx-out="${reference_address} + ${changeAmount}" \
     --tx-out="${script_reference_utxo}" \
     --tx-out-reference-script-file ${contract} \
-    --fee 900000
+    --fee 0
+
+    size=$(jq -r '.cborHex' ${contract} | awk '{print length($0)*4}')
 
     FEE=$(${cli} conway transaction calculate-min-fee \
         --tx-body-file ./tmp/tx.draft \
         --protocol-params-file ./tmp/protocol.json \
-        --reference-script-size 0 \
-        --witness-count 10)
+        --reference-script-size ${size} \
+        --witness-count 1)
     echo -e "\033[0;35mFEE: ${FEE} \033[0m"
     fee=$(echo $FEE | rev | cut -c 9- | rev)
 
@@ -92,6 +101,9 @@ echo -e "\033[1;37m ------------------------------------------------------------
 for contract in $(ls "../contracts"/* | sort -V)
 do
     file_name=$(basename "${contract}")
+    if [ "$file_name" == "always_false_contract.plutus" ]; then
+        continue
+    fi
     echo -e "\nSubmitting ${file_name}"
     # Perform operations on each file
     ${cli} conway transaction submit \
