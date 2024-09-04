@@ -1,5 +1,5 @@
 import type { NextPage } from "next";
-import NavBar from "@/components/NavBar";
+import NavBar from "@/components/nav-bar";
 
 const Home: NextPage = () => {
 

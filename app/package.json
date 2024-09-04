@@ -12,7 +12,9 @@
     "@meshsdk/core": "^1.7.1",
     "@meshsdk/mesh-csl": "^0.0.5",
     "@meshsdk/react": "^1.7.1",
+    "@noble/curves": "^1.6.0",
     "@tailwindcss/typography": "^0.5.15",
+    "blakejs": "^1.2.1",
     "next": "14.2.7",
     "react": "^18",
     "react-dom": "^18"

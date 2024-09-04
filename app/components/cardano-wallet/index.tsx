@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useWallet, useWalletList } from '@meshsdk/react';
-import { MenuItem } from './MenuItem'; // Adjust according to actual import paths
-import { WalletBalance } from './WalletBalance'; // Adjust according to actual import paths
+import { MenuItem } from './menu-item';
+import { WalletBalance } from './wallet-balance';
 
-// Define TypeScript interface for the component props
 interface CardanoWalletProps {
   label?: string;
-  onConnected?: () => void; // Updated to be a more specific function type
+  onConnected?: () => void;
   isDark?: boolean;
 }
 

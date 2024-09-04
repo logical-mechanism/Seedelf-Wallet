@@ -1,5 +1,4 @@
 import React from 'react';
-
 interface MenuItemProps {
   icon?: string;
   label: string;
