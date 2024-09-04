@@ -15,7 +15,7 @@ sec_param = 254
 
 def data_hash(data: dict) -> str:
     data_str = json.dumps(data, sort_keys=True)
-    return hashlib.sha256(data_str.encode()).hexdigest()
+    return hashlib.blake2b(data_str.encode(), digest_size=32).hexdigest()
 
 
 def hexify(n: int) -> str:
@@ -56,7 +56,7 @@ def rng(length: int = sec_param) -> int:
     n = secrets.randbits(length)
     field_order = 52435875175126190479447740508185965837690552500527637822603658699938581184513
     if n > field_order:
-        rng(length)
+        return rng(length)
     return n
 
 
@@ -93,19 +93,22 @@ def z(r: int, c: int, x: int) -> int:
     return r + c * x
 
 
-def fiat_shamir_heuristic(gb, grb, ub):
-    concatenated_bytes = gb + grb + ub
+def fiat_shamir_heuristic(gb, grb, ub, b):
+    concatenated_bytes = gb + grb + ub + b
+    print(concatenated_bytes)
     unhexed_bytes = binascii.unhexlify(concatenated_bytes)
-    hash_result = hashlib.sha3_256(unhexed_bytes).digest().hex()
+    hash_result = hashlib.blake2b(unhexed_bytes, digest_size=32).digest().hex()
     return hash_result
 
 
-def create_dlog_zk(x: int, g: str, u: str, file_name: str = 'wallet-redeemer.json') -> None:
+def create_dlog_zk(x: int, g: str, u: str, b: str, file_name: str = 'wallet-redeemer.json') -> None:
+    if len(b) % 2 == 1:
+        b = '0' + b
     # random r
     ri = rng()
     grb = new_g1(g, ri)
     #
-    cb = fiat_shamir_heuristic(g, grb, u)
+    cb = fiat_shamir_heuristic(g, grb, u, b)
     # print('cb', cb)
     # random c, change to fiat shamir later
     ci = int(cb, 16)
@@ -144,11 +147,11 @@ def verify_dlog_zk(g, u, grb, c, z) -> bool:
 
 
 if __name__ == "__main__":
-    outcome = fiat_shamir_heuristic("", "", "") == "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+    outcome = fiat_shamir_heuristic("", "", "") == "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8"
     print(outcome)
 
     outcome = fiat_shamir_heuristic(
         "86f0c64bd433568dd92751f0bee97feaaeee6f3c2144b210be68d2bc85253b1994703caf7f8361ccf246fef52c0ad859",
         "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
-        "a2cbc5c3c72a7bc9047971345df392a67279d2f32082891976d913c699885c3ff9a90a8ea942bef4729cf93f526521e4") == "524fb8209e14641b3202adcab15bddae592b83fafc34d74abb79b572bd883930"
+        "a2cbc5c3c72a7bc9047971345df392a67279d2f32082891976d913c699885c3ff9a90a8ea942bef4729cf93f526521e4") == "446cc50b0fb56f2b4ad46319e628566838622640baddd9b7df31f690b38c1410"
     print(outcome)

@@ -1,9 +1,9 @@
 /// An XOR statement between two booleans `a` and `b`. This is used to prevent
 /// burning and minting a token at the same time. It is either just burning OR
-/// just minting a token.
+/// minting a token, never both.
 ///
 /// ```aiken
-/// xor(a,b)
+/// xor(a, b)
 /// ```
 pub fn xor(a: Bool, b: Bool) -> Bool {
   and {
@@ -32,4 +32,30 @@ test false_true_xor() {
 
 test true_false_xor() {
   xor(True, False) == True
+}
+
+test good_bracket_xor() {
+  xor(
+    {
+      let x = 2
+      x == 2
+    },
+    {
+      let y = 1
+      y == 2
+    },
+  ) == True
+}
+
+test bad_bracket_xor() {
+  xor(
+    {
+      let x = 2
+      x == 2
+    },
+    {
+      let y = 1
+      y == 1
+    },
+  ) == False
 }

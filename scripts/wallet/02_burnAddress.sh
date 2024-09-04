@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 # SET UP VARS HERE
@@ -12,19 +12,16 @@ user="user-1"
 user_address=$(cat ../wallets/${user}-wallet/payment.addr)
 user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/${user}-wallet/payment.vkey)
 
-# walletscript
-wallet_script_path="../../contracts/wallet_contract.plutus"
-wallet_script_address=$(${cli} conway address build --payment-script-file ${wallet_script_path} ${network})
+# seedelf script
+seedelf_script_path="../../contracts/seedelf_contract.plutus"
+seedelf_script_address=$(${cli} conway address build --payment-script-file ${seedelf_script_path} ${network})
 
 # collat
 collat_address=$(cat ../wallets/collat-wallet/payment.addr)
 collat_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/collat-wallet/payment.vkey)
 
-# pointer script
-pointer_script_path="../../contracts/pointer_contract.plutus"
-
 # the minting script policy
-policy_id=$(cat ../../hashes/pointer.hash)
+policy_id=$(cat ../../hashes/seedelf.hash)
 
 if [[ $# -eq 0 ]] ; then
     echo -e "\n \033[0;31m Please Supply A Token Name \033[0m \n";
@@ -37,12 +34,12 @@ echo -e "\033[0;33m\nBurning Seed Elf: ${1}\n\033[0m"
 # get script utxo
 echo -e "\033[0;36m Gathering wallet UTxO Information  \033[0m"
 ${cli} conway query utxo \
-    --address ${wallet_script_address} \
+    --address ${seedelf_script_address} \
     ${network} \
     --out-file ../tmp/script_utxo.json
 TXNS=$(jq length ../tmp/script_utxo.json)
 if [ "${TXNS}" -eq "0" ]; then
-   echo -e "\n \033[0;31m NO UTxOs Found At ${wallet_script_address} \033[0m \n";
+   echo -e "\n \033[0;31m NO UTxOs Found At ${seedelf_script_address} \033[0m \n";
    exit;
 fi
 
@@ -67,11 +64,34 @@ print(g)
 ")
 echo Public: ${public}
 
+that_slot=$(python3 -c "
+from datetime import datetime, timedelta, timezone
+
+# Get current UTC time
+current_time = datetime.now(timezone.utc)
+# Add specified seconds
+future_time = current_time + timedelta(seconds=40)
+
+# Format and print in YYYY-MM-DDThh:mm:ssZ format
+formatted_time = future_time.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+print(formatted_time)
+")
+final_slot=$(${cli} conway query slot-number ${network} ${that_slot})
+echo "Invalid at Slot:" ${final_slot}
+${cli} conway query tip ${network} | jq .slot
+
+that_time=$(python3 -c "
+from datetime import datetime, timezone
+dt = datetime.strptime('${that_slot}', '%Y-%m-%dT%H:%M:%SZ')
+dt = dt.replace(tzinfo=timezone.utc)
+print(1000 * int(dt.timestamp()))
+")
+
 python3 -c "
 import sys;
 sys.path.append('../py/');
 import bls12_381;
-bls12_381.create_dlog_zk(${secret_key}, '${generator}', '${public}');
+bls12_381.create_dlog_zk(${secret_key}, '${generator}', '${public}', hex(${that_time})[2:]);
 "
 
 wallet_tx_in=$(python3 -c "
@@ -118,11 +138,9 @@ fi
 collat_tx_in=$(jq -r 'keys[0]' ../tmp/collat_utxo.json)
 
 # script reference utxo
-wallet_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-wallet_contract.plutus.signed)
-pointer_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-pointer_contract.plutus.signed)
+script_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
 
-echo Wallet Reference UTxO: ${wallet_ref_utxo}
-echo Pointer Reference UTxO: ${pointer_ref_utxo}
+echo Reference UTxO: ${script_ref_utxo}
 
 mint_token="-1 ${policy_id}.${1}"
 echo Burning: ${mint_token}
@@ -132,18 +150,19 @@ jq --arg variable "" '.bytes=$variable' ../data/pointer/pointer-redeemer.json | 
 echo -e "\033[0;36m Building Tx \033[0m"
 FEE=$(${cli} conway transaction build \
     --out-file ../tmp/tx.draft \
+    --invalid-hereafter ${final_slot} \
     --change-address ${user_address} \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
     --tx-in ${wallet_tx_in} \
-    --spending-tx-in-reference="${wallet_ref_utxo}#1" \
+    --spending-tx-in-reference="${script_ref_utxo}#1" \
     --spending-plutus-script-v3 \
     --spending-reference-tx-in-inline-datum-present \
     --spending-reference-tx-in-redeemer-file ../data/wallet/wallet-redeemer.json \
     --required-signer-hash ${user_pkh} \
     --required-signer-hash ${collat_pkh} \
     --mint="${mint_token}" \
-    --mint-tx-in-reference="${pointer_ref_utxo}#1" \
+    --mint-tx-in-reference="${script_ref_utxo}#1" \
     --mint-plutus-script-v3 \
     --policy-id="${policy_id}" \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
@@ -171,7 +190,5 @@ ${cli} conway transaction submit \
     ${network} \
     --tx-file ../tmp/tx.signed
 
-tx=$(cardano-cli transaction txid --tx-file ../tmp/tx.signed)
-echo "Tx Hash:" $tx
-
-rm addrs/${token_file_name}
+tx=$(${cli} transaction txid --tx-file ../tmp/tx.signed)
+echo "TxId:" $tx

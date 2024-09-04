@@ -1,1 +1,1 @@
-/home/logic/Documents/Work/LogicalMechanism/testnet-node/node-sancho/db-testnet/node.socket
+/home/logic/Documents/Work/LogicalMechanism/testnets/node-preprod/db-testnet/node.socket

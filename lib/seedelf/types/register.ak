@@ -1,6 +1,3 @@
-////
-////
-
 use aiken/builtin
 
 /// Alpha is the generator and beta is the public value. The pair forms the 
@@ -15,10 +12,10 @@ pub type Register {
 
 /// This simulates re-randomizing a register into a new one. It is used for
 /// testing purposes only. This function will be used in the off-chain as it
-/// is the method for creating a new private address for some user.
+/// is the method for creating a new private address for some register.
 ///
 /// ```aiken
-/// register.rerandomize(datum, scaler)
+/// rerandomize(register, random_scaler)
 /// ```
 pub fn rerandomize(datum: Register, rng: Int) -> Register {
   // get the (g, u) element in their uncompressed form

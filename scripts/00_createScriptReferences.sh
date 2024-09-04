@@ -38,8 +38,6 @@ do
     # Increment the counter
     ((counter++)) || true
 
-
-    
     # get the required lovelace
     min_utxo=$(${cli} conway transaction calculate-min-required-utxo \
     --protocol-params-file ./tmp/protocol.json \
@@ -48,7 +46,6 @@ do
     # build the utxo
     script_reference_utxo="${script_reference_address} + ${min_utxo}"
     echo -e "\033[0;32m\nCreating ${file_name} Script:\n" ${script_reference_utxo} " \033[0m"
-
 
     ${cli} conway transaction build-raw \
     --protocol-params-file ./tmp/protocol.json \
@@ -59,20 +56,11 @@ do
     --tx-out-reference-script-file ${contract} \
     --fee 900000
 
-    SIZE=$(${cli} conway query ref-script-size \
-        --tx-in ${ref_tx_in} \
-        ${network} \
-        --output-json | jq .refInputScriptSize
-        )
-    echo SIZE ${SIZE}
-    echo $(stat -c %s ${contract})
-
-    # this is broke
     FEE=$(${cli} conway transaction calculate-min-fee \
         --tx-body-file ./tmp/tx.draft \
         --protocol-params-file ./tmp/protocol.json \
-        --reference-script-size 2500 \
-        --witness-count 20)
+        --reference-script-size 0 \
+        --witness-count 10)
     echo -e "\033[0;35mFEE: ${FEE} \033[0m"
     fee=$(echo $FEE | rev | cut -c 9- | rev)
 
