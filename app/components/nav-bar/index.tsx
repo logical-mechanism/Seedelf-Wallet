@@ -1,4 +1,4 @@
-import { CardanoWallet } from './cardano-wallet';
+import { CardanoWallet } from "./cardano-wallet";
 
 
 const NavBar: React.FC = () => {
