@@ -10,7 +10,7 @@ mkdir -p ./addrs
 ${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
 
 # user
-user="user-2"
+user="user-1"
 user_address=$(cat ../wallets/${user}-wallet/payment.addr)
 user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/${user}-wallet/payment.vkey)
 

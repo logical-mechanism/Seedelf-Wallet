@@ -22,9 +22,11 @@
 //// to function properly.
 ////
 
+use aiken/interval.{Finite}
 use cardano/assets.{AssetName, PolicyId}
 use cardano/minting
 use cardano/transaction.{OutputReference, Transaction, TransactionId}
+use maths/routines
 use seedelf/spending.{SchnorrRedeemer}
 use seedelf/token_name
 use seedelf/types/register.{Register}
@@ -32,18 +34,25 @@ use seedelf/xor.{xor}
 use types/prefixes
 use validation/find
 
-validator wallet {
+validator contract(_random: ByteArray) {
   spend(
     maybe_datum: Option<Data>,
     redeemer: SchnorrRedeemer,
     _output_ref: OutputReference,
-    _transaction: Transaction,
+    transaction: Transaction,
   ) {
+    //
+    // Spend with Schnorr Proof if the datum is of type Register using the
+    // upper bound as a one-time pad for the Fiat-shamir transform.
+    //
     when maybe_datum is {
       Some(datum) ->
         if datum is Register {
           // correct data structures are only spendable with valid schnorr proofs
-          spending.schnorr_proof(datum, redeemer)?
+          let Transaction { validity_range, .. } = transaction
+          expect Finite(upper_bound) = validity_range.upper_bound.bound_type
+          let bound: ByteArray = routines.from_int(upper_bound)
+          spending.schnorr_proof(datum, redeemer, bound)?
         } else {
           // incorrect data structures should be spendable
           True
@@ -59,14 +68,14 @@ validator wallet {
     //
     xor(
       {
-        // you can burn a token with 5eed0e1f prefix
+        // you can burn a token with the 5eed0e1f prefix
         let Transaction { mint, .. } = transaction
         let minted_assets: List<(PolicyId, AssetName, Int)> =
           mint |> assets.flatten()
         minting.by_prefix(minted_assets, policy_id, prefixes.seed, -1)?
       },
       {
-        // or mint one
+        // or mint a token with the 5eed0e1f prefix
         let Transaction { inputs, mint, .. } = transaction
         let minted_assets: List<(PolicyId, AssetName, Int)> =
           mint |> assets.flatten()
@@ -79,7 +88,7 @@ validator wallet {
     )
   }
 
-  else(_ctx) {
+  else(_) {
     fail
   }
 }

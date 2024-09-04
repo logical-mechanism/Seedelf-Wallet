@@ -14,13 +14,17 @@ rm -fr build/ || true
 echo -e "\033[1;34m\nBuilding Contracts \033[0m"
 
 # remove all traces
-# aiken build --trace-level silent --filter-traces user-defined
+aiken build --trace-level silent --filter-traces user-defined
 
 # keep the traces for testing if required
-aiken build --trace-level verbose --filter-traces all
+# aiken build --trace-level verbose --filter-traces all
+
+ran="00"
+ran_cbor=$(python3 -c "import cbor2;hex_string='${ran}';data = bytes.fromhex(hex_string);encoded = cbor2.dumps(data);print(encoded.hex())")
 
 echo -e "\033[1;33m\nBuilding Contract \033[0m"
-aiken blueprint convert -v seedelf.wallet.spend > contracts/seedelf_contract.plutus
+aiken blueprint apply -o plutus.json -v seedelf.contract.spend "${ran_cbor}"
+aiken blueprint convert -v seedelf.contract.spend > contracts/seedelf_contract.plutus
 cardano-cli conway transaction policyid --script-file contracts/seedelf_contract.plutus > hashes/seedelf.hash
 echo -e "\033[1;33m Contract Hash: $(cat hashes/seedelf.hash) \033[0m"
 

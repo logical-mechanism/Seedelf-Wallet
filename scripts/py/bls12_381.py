@@ -93,19 +93,22 @@ def z(r: int, c: int, x: int) -> int:
     return r + c * x
 
 
-def fiat_shamir_heuristic(gb, grb, ub):
-    concatenated_bytes = gb + grb + ub
+def fiat_shamir_heuristic(gb, grb, ub, b):
+    concatenated_bytes = gb + grb + ub + b
+    print(concatenated_bytes)
     unhexed_bytes = binascii.unhexlify(concatenated_bytes)
     hash_result = hashlib.blake2b(unhexed_bytes, digest_size=32).digest().hex()
     return hash_result
 
 
-def create_dlog_zk(x: int, g: str, u: str, file_name: str = 'wallet-redeemer.json') -> None:
+def create_dlog_zk(x: int, g: str, u: str, b: str, file_name: str = 'wallet-redeemer.json') -> None:
+    if len(b) % 2 == 1:
+        b = '0' + b
     # random r
     ri = rng()
     grb = new_g1(g, ri)
     #
-    cb = fiat_shamir_heuristic(g, grb, u)
+    cb = fiat_shamir_heuristic(g, grb, u, b)
     # print('cb', cb)
     # random c, change to fiat shamir later
     ci = int(cb, 16)
