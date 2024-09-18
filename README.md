@@ -159,3 +159,9 @@ Sending funds works very similarly to removing funds but the funds are sent to a
 ### Non-Mixablility
 
 Spendability is always in the hands of the original owner. If two UTxOs are being spent then it is safe to assume it is the same owner because if two different users spent UTxOs together inside of a single transaction then there would be no way to ensure funds are not lost or stolen by one of the parties. If Alice and Bob are working together then either Alice or Bob has the chance of losing funds. Inside of real mixers the chance of losing funds does not exist as the spendability is arbitrary thus ensuring the mixing probably exists. This is not the case inside the seedelf wallet.
+
+## Defeating The Collateral Problem
+
+TODO
+
+Alturistic batcher run nodes over tor with an api that allows the tx body and a witness to be sent over. the batcher will verify the tx, witness the tx, assume and submit.
