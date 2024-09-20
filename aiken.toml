@@ -1,6 +1,6 @@
 name = "logical-mechanism/5eed0e1f"
 version = "0.1.0"
-compiler = "v1.1.2"
+compiler = "v1.1.3"
 plutus = "v3"
 license = "GPL-3.0-or-later"
 description = "Aiken contracts for project 'logicalmechanism/5eed0e1f'"

@@ -33,10 +33,5 @@ aiken blueprint convert -v always_false.contract.else > contracts/always_false_c
 cardano-cli conway transaction policyid --script-file contracts/always_false_contract.plutus > hashes/always_false.hash
 echo -e "\033[1;33m Always False Contract Hash: $(cat hashes/always_false.hash) \033[0m"
 
-aiken blueprint apply -o plutus.json -v provider.contract.spend "${ran_cbor}"
-aiken blueprint convert -v provider.contract.spend > contracts/provider_contract.plutus
-cardano-cli conway transaction policyid --script-file contracts/provider_contract.plutus > hashes/provider.hash
-echo -e "\033[1;33m provider Contract Hash: $(cat hashes/provider.hash) \033[0m"
-
 # end of build
 echo -e "\033[1;32m\nBuilding Complete! \033[0m"
