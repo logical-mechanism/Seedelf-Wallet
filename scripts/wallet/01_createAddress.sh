@@ -94,6 +94,8 @@ required_lovelace=$(${cli} conway transaction calculate-min-required-utxo \
 
 seedelf_script_out="${seedelf_script_address} + ${required_lovelace} + ${mint_token}"
 echo "SeedElf Output: "${seedelf_script_out}
+
+test_script_out="${seedelf_script_address} + ${required_lovelace}"
 #
 # exit
 #
@@ -110,32 +112,47 @@ if [ "${TXNS}" -eq "0" ]; then
    exit;
 fi
 collat_tx_in=$(jq -r 'keys[0]' ../tmp/collat_utxo.json)
-
+echo $collat_tx_in
 seedelf_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
+
+current_slot=$(${cli} conway query tip ${network} | jq .slot)
+final_slot=$((${current_slot} + 120))
 
 echo -e "\033[0;36m Building Tx \033[0m"
 FEE=$(${cli} conway transaction build \
     --out-file ../tmp/tx.draft \
     --change-address ${user_address} \
-    --tx-in-collateral ${collat_tx_in} \
+    --tx-in-collateral 1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f#0 \
     --tx-in ${user_tx_in} \
     --tx-out="${seedelf_script_out}" \
     --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
     --required-signer-hash ${user_pkh} \
-    --required-signer-hash ${collat_pkh} \
+    --required-signer-hash 7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4 \
     --mint="${mint_token}" \
     --mint-tx-in-reference="${seedelf_ref_utxo}#1" \
     --mint-plutus-script-v3 \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
     --policy-id="${policy_id}" \
+    --metadata-json-file ../data/pointer/metadata.json \
     ${network})
 
 IFS=':' read -ra VALUE <<< "${FEE}"
 IFS=' ' read -ra FEE <<< "${VALUE[1]}"
-FEE=${FEE[1]}
 echo -e "\033[1;32m Fee: \033[0m" $FEE
+
+cat ../tmp/tx.draft | jq -r '.cborHex'
 #
-# exit
+exit
+#
+# ${cli} conway transaction txid --tx-file ../tmp/tx.draft
+# echo -e "\033[0;36m Witness \033[0m"
+# ${cli} conway transaction witness \
+#     --tx-body-file ../tmp/tx.draft \
+#     --signing-key-file ../wallets/${user}-wallet/payment.skey \
+#     --out-file ../tmp/tx.witness \
+#     ${network}
+# #
+# # exit
 #
 echo -e "\033[0;36m Signing \033[0m"
 ${cli} conway transaction sign \
@@ -145,7 +162,9 @@ ${cli} conway transaction sign \
     --out-file ../tmp/tx.signed \
     ${network}
 #
-# exit
+tx=$(${cli} conway transaction txid --tx-file ../tmp/tx.signed)
+echo "TxId:" $tx
+exit
 #
 echo -e "\033[0;36m Submitting \033[0m"
 ${cli} conway transaction submit \

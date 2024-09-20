@@ -2,8 +2,12 @@ use aiken/crypto.{VerificationKeyHash}
 use cardano/transaction.{OutputReference, Transaction}
 use cardano/tx
 
-pub type BatcherDatum {
+pub type CollateralProdivderDatum {
+  // pkh for building the tx
   pkh: VerificationKeyHash,
+  // tx#idx for building the tx
+  utxo: ByteArray,
+  // the base url for the endpoint
   url: ByteArray,
 }
 
@@ -16,7 +20,7 @@ validator contract(_random: ByteArray) {
   ) {
     when maybe_datum is {
       Some(datum) ->
-        if datum is BatcherDatum {
+        if datum is CollateralProdivderDatum {
           // if batcher signs the tx then they can do whatever
           tx.verify_signature(transaction.extra_signatories, datum.pkh)
         } else {
