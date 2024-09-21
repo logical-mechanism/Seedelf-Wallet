@@ -21,10 +21,6 @@ seedelf_script_address=$(${cli} conway address build --payment-script-file ${see
 # the minting script policy
 policy_id=$(cat ../../hashes/seedelf.hash)
 
-# collat
-collat_address=$(cat ../wallets/collat-wallet/payment.addr)
-collat_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/collat-wallet/payment.vkey)
-
 # the personal tag in ascii
 if [[ $# -eq 0 ]] ; then
     echo -e "\n \033[0;31m Personal String Is Empty \033[0m \n"
@@ -100,34 +96,21 @@ test_script_out="${seedelf_script_address} + ${required_lovelace}"
 # exit
 #
 # collat info
-echo -e "\033[0;36m Gathering Collateral UTxO Information  \033[0m"
-${cli} conway query utxo \
-    ${network} \
-    --address ${collat_address} \
-    --out-file ../tmp/collat_utxo.json
-
-TXNS=$(jq length ../tmp/collat_utxo.json)
-if [ "${TXNS}" -eq "0" ]; then
-   echo -e "\n \033[0;31m NO UTxOs Found At ${collat_address} \033[0m \n";
-   exit;
-fi
-collat_tx_in=$(jq -r 'keys[0]' ../tmp/collat_utxo.json)
-echo $collat_tx_in
 seedelf_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
 
-current_slot=$(${cli} conway query tip ${network} | jq .slot)
-final_slot=$((${current_slot} + 120))
+collat_tx_in="1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f#0"
+collat_pkh="7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
 
 echo -e "\033[0;36m Building Tx \033[0m"
 FEE=$(${cli} conway transaction build \
     --out-file ../tmp/tx.draft \
     --change-address ${user_address} \
-    --tx-in-collateral 1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f#0 \
+    --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
     --tx-out="${seedelf_script_out}" \
     --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
     --required-signer-hash ${user_pkh} \
-    --required-signer-hash 7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4 \
+    --required-signer-hash ${collat_pkh} \
     --mint="${mint_token}" \
     --mint-tx-in-reference="${seedelf_ref_utxo}#1" \
     --mint-plutus-script-v3 \
@@ -139,32 +122,42 @@ FEE=$(${cli} conway transaction build \
 IFS=':' read -ra VALUE <<< "${FEE}"
 IFS=' ' read -ra FEE <<< "${VALUE[1]}"
 echo -e "\033[1;32m Fee: \033[0m" $FEE
-
-cat ../tmp/tx.draft | jq -r '.cborHex'
 #
-exit
+# exit
 #
-# ${cli} conway transaction txid --tx-file ../tmp/tx.draft
-# echo -e "\033[0;36m Witness \033[0m"
-# ${cli} conway transaction witness \
-#     --tx-body-file ../tmp/tx.draft \
-#     --signing-key-file ../wallets/${user}-wallet/payment.skey \
-#     --out-file ../tmp/tx.witness \
-#     ${network}
-# #
-# # exit
+echo -e "\033[0;36m Collat Witness \033[0m"
+tx_cbor=$(cat ../tmp/tx.draft | jq -r '.cborHex')
+collat_witness=$(curl -X POST https://www.giveme.my/preprod/collateral/ \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "tx_body": "'"${tx_cbor}"'"
+      }' | jq -r '.witness'
+)
+echo '{
+    "type": "TxWitness ConwayEra",
+    "description": "Key Witness ShelleyEra",
+    "cborHex": "'"${collat_witness}"'"
+}' > ../tmp/collat.witness
 #
-echo -e "\033[0;36m Signing \033[0m"
-${cli} conway transaction sign \
-    --signing-key-file ../wallets/${user}-wallet/payment.skey \
-    --signing-key-file ../wallets/collat-wallet/payment.skey \
+# exit
+#
+echo -e "\033[0;36m User Witness \033[0m"
+${cli} conway transaction witness \
     --tx-body-file ../tmp/tx.draft \
-    --out-file ../tmp/tx.signed \
+    --signing-key-file ../wallets/${user}-wallet/payment.skey \
+    --out-file ../tmp/tx.witness \
     ${network}
 #
-tx=$(${cli} conway transaction txid --tx-file ../tmp/tx.signed)
-echo "TxId:" $tx
-exit
+# exit
+#
+echo -e "\033[0;36m Assembling \033[0m"
+${cli} conway transaction assemble \
+    --tx-body-file ../tmp/tx.draft \
+    --witness-file ../tmp/tx.witness \
+    --witness-file ../tmp/collat.witness \
+    --out-file ../tmp/tx.signed
+#
+# exit
 #
 echo -e "\033[0;36m Submitting \033[0m"
 ${cli} conway transaction submit \

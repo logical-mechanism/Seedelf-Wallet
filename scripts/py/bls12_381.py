@@ -11,6 +11,7 @@ from py_ecc.optimized_bls12_381 import add, multiply
 
 # security parameter; how many bits are used in x, r, c, etc
 sec_param = 254
+field_order = 52435875175126190479447740508185965837690552500527637822603658699938581184513
 
 
 def data_hash(data: dict) -> str:
@@ -54,9 +55,8 @@ def check(g, x, u):
 
 def rng(length: int = sec_param) -> int:
     n = secrets.randbits(length)
-    field_order = 52435875175126190479447740508185965837690552500527637822603658699938581184513
     if n > field_order:
-        return rng(length)
+        return rng()
     return n
 
 
@@ -97,7 +97,7 @@ def fiat_shamir_heuristic(gb, grb, ub, b):
     concatenated_bytes = gb + grb + ub + b
     print(concatenated_bytes)
     unhexed_bytes = binascii.unhexlify(concatenated_bytes)
-    hash_result = hashlib.blake2b(unhexed_bytes, digest_size=32).digest().hex()
+    hash_result = hashlib.blake2b(unhexed_bytes, digest_size=28).digest().hex()
     return hash_result
 
 
@@ -114,7 +114,7 @@ def create_dlog_zk(x: int, g: str, u: str, b: str, file_name: str = 'wallet-rede
     ci = int(cb, 16)
     # compute z
     # hex the result
-    zi = z(ri, ci, x)
+    zi = z(ri, ci, x) % field_order
     zb = hexify(zi)
     print('Is ZK Proof Valid?', verify_dlog_zk(g, u, grb, ci, zi))
     redeemer = {
@@ -125,6 +125,9 @@ def create_dlog_zk(x: int, g: str, u: str, b: str, file_name: str = 'wallet-rede
             },
             {
                 "bytes": grb
+            },
+            {
+                "bytes": ""
             }
         ]
     }
@@ -147,11 +150,11 @@ def verify_dlog_zk(g, u, grb, c, z) -> bool:
 
 
 if __name__ == "__main__":
-    outcome = fiat_shamir_heuristic("", "", "") == "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8"
+    outcome = fiat_shamir_heuristic("", "", "", "") == "836cc68931c2e4e3e838602eca1902591d216837bafddfe6f0c8cb07"
     print(outcome)
 
-    outcome = fiat_shamir_heuristic(
-        "86f0c64bd433568dd92751f0bee97feaaeee6f3c2144b210be68d2bc85253b1994703caf7f8361ccf246fef52c0ad859",
-        "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
-        "a2cbc5c3c72a7bc9047971345df392a67279d2f32082891976d913c699885c3ff9a90a8ea942bef4729cf93f526521e4") == "446cc50b0fb56f2b4ad46319e628566838622640baddd9b7df31f690b38c1410"
-    print(outcome)
+    # outcome = fiat_shamir_heuristic(
+    #     "86f0c64bd433568dd92751f0bee97feaaeee6f3c2144b210be68d2bc85253b1994703caf7f8361ccf246fef52c0ad859",
+    #     "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+    #     "a2cbc5c3c72a7bc9047971345df392a67279d2f32082891976d913c699885c3ff9a90a8ea942bef4729cf93f526521e4") == "446cc50b0fb56f2b4ad46319e628566838622640baddd9b7df31f690b38c1410"
+    # print(outcome)

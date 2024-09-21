@@ -16,10 +16,6 @@ user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wal
 seedelf_script_path="../../contracts/seedelf_contract.plutus"
 seedelf_script_address=$(${cli} conway address build --payment-script-file ${seedelf_script_path} ${network})
 
-# collat
-collat_address=$(cat ../wallets/collat-wallet/payment.addr)
-collat_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/collat-wallet/payment.vkey)
-
 # the minting script policy
 policy_id=$(cat ../../hashes/seedelf.hash)
 
@@ -77,8 +73,6 @@ formatted_time = future_time.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
 print(formatted_time)
 ")
 final_slot=$(${cli} conway query slot-number ${network} ${that_slot})
-echo "Invalid at Slot:" ${final_slot}
-${cli} conway query tip ${network} | jq .slot
 
 that_time=$(python3 -c "
 from datetime import datetime, timezone
@@ -91,7 +85,7 @@ python3 -c "
 import sys;
 sys.path.append('../py/');
 import bls12_381;
-bls12_381.create_dlog_zk(${secret_key}, '${generator}', '${public}', hex(${that_time})[2:]);
+bls12_381.create_dlog_zk(${secret_key}, '${generator}', '${public}', '${user_pkh}');
 "
 
 wallet_tx_in=$(python3 -c "
@@ -123,20 +117,6 @@ user_tx_in=${TXIN::-8}
 
 echo FEE Payment UTxO: ${user_tx_in}
 
-# collat info
-echo -e "\033[0;36m Gathering Collateral UTxO Information  \033[0m"
-${cli} conway query utxo \
-    ${network} \
-    --address ${collat_address} \
-    --out-file ../tmp/collat_utxo.json
-
-TXNS=$(jq length ../tmp/collat_utxo.json)
-if [ "${TXNS}" -eq "0" ]; then
-   echo -e "\n \033[0;31m NO UTxOs Found At ${collat_address} \033[0m \n";
-   exit;
-fi
-collat_tx_in=$(jq -r 'keys[0]' ../tmp/collat_utxo.json)
-
 # script reference utxo
 script_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
 
@@ -147,10 +127,14 @@ echo Burning: ${mint_token}
 
 jq --arg variable "" '.bytes=$variable' ../data/pointer/pointer-redeemer.json | sponge ../data/pointer/pointer-redeemer.json
 
+jq --arg variable ${user_pkh} '.fields[2].bytes=$variable' ../data/wallet/wallet-redeemer.json | sponge ../data/wallet/wallet-redeemer.json
+
+collat_tx_in="1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f#0"
+collat_pkh="7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
+
 echo -e "\033[0;36m Building Tx \033[0m"
 FEE=$(${cli} conway transaction build \
     --out-file ../tmp/tx.draft \
-    --invalid-hereafter ${final_slot} \
     --change-address ${user_address} \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
@@ -170,18 +154,41 @@ FEE=$(${cli} conway transaction build \
 
 IFS=':' read -ra VALUE <<< "${FEE}"
 IFS=' ' read -ra FEE <<< "${VALUE[1]}"
-FEE=${FEE[1]}
 echo -e "\033[1;32m Fee: \033[0m" $FEE
 #
 # exit
 #
-echo -e "\033[0;36m Signing \033[0m"
-${cli} conway transaction sign \
-    --signing-key-file ../wallets/${user}-wallet/payment.skey \
-    --signing-key-file ../wallets/collat-wallet/payment.skey \
+echo -e "\033[0;36m Collat Witness \033[0m"
+tx_cbor=$(cat ../tmp/tx.draft | jq -r '.cborHex')
+collat_witness=$(curl -X POST https://www.giveme.my/preprod/collateral/ \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "tx_body": "'"${tx_cbor}"'"
+      }' | jq -r '.witness'
+)
+echo '{
+    "type": "TxWitness ConwayEra",
+    "description": "Key Witness ShelleyEra",
+    "cborHex": "'"${collat_witness}"'"
+}' > ../tmp/collat.witness
+#
+# exit
+#
+echo -e "\033[0;36m User Witness \033[0m"
+${cli} conway transaction witness \
     --tx-body-file ../tmp/tx.draft \
-    --out-file ../tmp/tx.signed \
+    --signing-key-file ../wallets/${user}-wallet/payment.skey \
+    --out-file ../tmp/tx.witness \
     ${network}
+#
+# exit
+#
+echo -e "\033[0;36m Assembling \033[0m"
+${cli} conway transaction assemble \
+    --tx-body-file ../tmp/tx.draft \
+    --witness-file ../tmp/tx.witness \
+    --witness-file ../tmp/collat.witness \
+    --out-file ../tmp/tx.signed
 #
 # exit
 #
