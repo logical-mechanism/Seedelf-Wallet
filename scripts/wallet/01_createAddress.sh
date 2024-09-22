@@ -9,8 +9,10 @@ mkdir -p ./addrs
 # get params
 ${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
 
+source ./query.sh
+
 # user
-user="user-1"
+user="user-2"
 user_address=$(cat ../wallets/${user}-wallet/payment.addr)
 user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/${user}-wallet/payment.vkey)
 
@@ -127,12 +129,9 @@ echo -e "\033[1;32m Fee: \033[0m" $FEE
 #
 echo -e "\033[0;36m Collat Witness \033[0m"
 tx_cbor=$(cat ../tmp/tx.draft | jq -r '.cborHex')
-collat_witness=$(curl -X POST https://www.giveme.my/preprod/collateral/ \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "tx_body": "'"${tx_cbor}"'"
-      }' | jq -r '.witness'
-)
+collat_witness=$(query_witness "$tx_cbor" "preprod")
+echo Witness: $collat_witness
+
 echo '{
     "type": "TxWitness ConwayEra",
     "description": "Key Witness ShelleyEra",

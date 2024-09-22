@@ -95,7 +95,6 @@ def z(r: int, c: int, x: int) -> int:
 
 def fiat_shamir_heuristic(gb, grb, ub, b):
     concatenated_bytes = gb + grb + ub + b
-    print(concatenated_bytes)
     unhexed_bytes = binascii.unhexlify(concatenated_bytes)
     hash_result = hashlib.blake2b(unhexed_bytes, digest_size=28).digest().hex()
     return hash_result

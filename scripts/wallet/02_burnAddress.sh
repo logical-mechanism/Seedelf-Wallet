@@ -4,6 +4,8 @@ set -e
 # SET UP VARS HERE
 source ../.env
 
+source ./query.sh
+
 # get params
 ${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
 
@@ -59,27 +61,6 @@ g = find.public('${policy_id}', '${1}');
 print(g)
 ")
 echo Public: ${public}
-
-that_slot=$(python3 -c "
-from datetime import datetime, timedelta, timezone
-
-# Get current UTC time
-current_time = datetime.now(timezone.utc)
-# Add specified seconds
-future_time = current_time + timedelta(seconds=40)
-
-# Format and print in YYYY-MM-DDThh:mm:ssZ format
-formatted_time = future_time.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
-print(formatted_time)
-")
-final_slot=$(${cli} conway query slot-number ${network} ${that_slot})
-
-that_time=$(python3 -c "
-from datetime import datetime, timezone
-dt = datetime.strptime('${that_slot}', '%Y-%m-%dT%H:%M:%SZ')
-dt = dt.replace(tzinfo=timezone.utc)
-print(1000 * int(dt.timestamp()))
-")
 
 python3 -c "
 import sys;
@@ -160,12 +141,8 @@ echo -e "\033[1;32m Fee: \033[0m" $FEE
 #
 echo -e "\033[0;36m Collat Witness \033[0m"
 tx_cbor=$(cat ../tmp/tx.draft | jq -r '.cborHex')
-collat_witness=$(curl -X POST https://www.giveme.my/preprod/collateral/ \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "tx_body": "'"${tx_cbor}"'"
-      }' | jq -r '.witness'
-)
+collat_witness=$(query_witness "$tx_cbor" "preprod")
+echo Witness: $collat_witness
 echo '{
     "type": "TxWitness ConwayEra",
     "description": "Key Witness ShelleyEra",
@@ -199,3 +176,5 @@ ${cli} conway transaction submit \
 
 tx=$(${cli} transaction txid --tx-file ../tmp/tx.signed)
 echo "TxId:" $tx
+
+rm addrs/${token_file_name}
