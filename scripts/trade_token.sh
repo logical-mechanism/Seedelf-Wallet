@@ -5,7 +5,7 @@ set -e
 source .env
 
 # Addresses
-sender_path="wallets/reference-wallet/"
+sender_path="wallets/user-1-wallet/"
 sender_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat wallets/reference-wallet/payment.addr)
@@ -37,7 +37,6 @@ FEE=$(${cli} conway transaction build \
 
 IFS=':' read -ra VALUE <<< "${FEE}"
 IFS=' ' read -ra FEE <<< "${VALUE[1]}"
-FEE=${FEE[1]}
 echo -e "\033[1;32m Fee: \033[0m" $FEE
 #
 # exit

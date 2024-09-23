@@ -1,6 +1,6 @@
 name = "logical-mechanism/5eed0e1f"
 version = "0.1.0"
-compiler = "v1.1.0"
+compiler = "v1.1.3"
 plutus = "v3"
 license = "GPL-3.0-or-later"
 description = "Aiken contracts for project 'logicalmechanism/5eed0e1f'"
@@ -12,12 +12,12 @@ platform = "github"
 
 [[dependencies]]
 name = "aiken-lang/stdlib"
-version = "v2.0.0"
+version = "v2.1.0"
 source = "github"
 
 [[dependencies]]
 name = "logical-mechanism/assist"
-version = "v0.5.0"
+version = "main"
 source = "github"
 
 [config]

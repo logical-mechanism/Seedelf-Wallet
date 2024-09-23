@@ -22,22 +22,32 @@
 //// to function properly.
 ////
 
-use aiken/interval.{Finite}
+use aiken/collection/list
+use aiken/crypto.{VerificationKeyHash}
 use cardano/assets.{AssetName, PolicyId}
 use cardano/minting
 use cardano/transaction.{OutputReference, Transaction, TransactionId}
-use maths/routines
-use seedelf/spending.{SchnorrRedeemer}
-use seedelf/token_name
-use seedelf/types/register.{Register}
+use cardano/value
 use seedelf/xor.{xor}
 use types/prefixes
+use types/registry.{Register}
 use validation/find
+
+/// The zero knowledge elements required for the proof. The c value will be
+/// computed using the Fiat-Shamir heuristic.
+pub type SeedElfRedeemer {
+  // this is z = r + c*x as a bytearray
+  z_b: ByteArray,
+  // this is the g^r compressed G1Element
+  g_r_b: ByteArray,
+  // one time use signature
+  sig: VerificationKeyHash,
+}
 
 validator contract(_random: ByteArray) {
   spend(
     maybe_datum: Option<Data>,
-    redeemer: SchnorrRedeemer,
+    redeemer: SeedElfRedeemer,
     _output_ref: OutputReference,
     transaction: Transaction,
   ) {
@@ -49,10 +59,13 @@ validator contract(_random: ByteArray) {
       Some(datum) ->
         if datum is Register {
           // correct data structures are only spendable with valid schnorr proofs
-          let Transaction { validity_range, .. } = transaction
-          expect Finite(upper_bound) = validity_range.upper_bound.bound_type
-          let bound: ByteArray = routines.from_int(upper_bound)
-          spending.schnorr_proof(datum, redeemer, bound)?
+          let Transaction { extra_signatories, .. } = transaction
+          and {
+            // zk proof to spend the utxo
+            registry.prove(datum, redeemer.z_b, redeemer.g_r_b, redeemer.sig)?,
+            // forces one time use from random key signature
+            list.has(extra_signatories, redeemer.sig)?,
+          }
         } else {
           // incorrect data structures should be spendable
           True
@@ -82,7 +95,7 @@ validator contract(_random: ByteArray) {
         let tx_hash: TransactionId = find.first_input_txid(inputs)
         let index: Int = find.first_input_index(inputs)
         let token_name: AssetName =
-          token_name.create(tx_hash, index, prefixes.seed, redeemer)
+          value.unique_token_name(tx_hash, index, prefixes.seed, redeemer)
         minting.exact(minted_assets, policy_id, token_name, 1)?
       },
     )

@@ -9,6 +9,8 @@ mkdir -p ./addrs
 # get params
 ${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
 
+source ./query.sh
+
 # user
 user="user-1"
 user_address=$(cat ../wallets/${user}-wallet/payment.addr)
@@ -20,10 +22,6 @@ seedelf_script_address=$(${cli} conway address build --payment-script-file ${see
 
 # the minting script policy
 policy_id=$(cat ../../hashes/seedelf.hash)
-
-# collat
-collat_address=$(cat ../wallets/collat-wallet/payment.addr)
-collat_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wallets/collat-wallet/payment.vkey)
 
 # the personal tag in ascii
 if [[ $# -eq 0 ]] ; then
@@ -94,24 +92,16 @@ required_lovelace=$(${cli} conway transaction calculate-min-required-utxo \
 
 seedelf_script_out="${seedelf_script_address} + ${required_lovelace} + ${mint_token}"
 echo "SeedElf Output: "${seedelf_script_out}
+
+test_script_out="${seedelf_script_address} + ${required_lovelace}"
 #
 # exit
 #
 # collat info
-echo -e "\033[0;36m Gathering Collateral UTxO Information  \033[0m"
-${cli} conway query utxo \
-    ${network} \
-    --address ${collat_address} \
-    --out-file ../tmp/collat_utxo.json
-
-TXNS=$(jq length ../tmp/collat_utxo.json)
-if [ "${TXNS}" -eq "0" ]; then
-   echo -e "\n \033[0;31m NO UTxOs Found At ${collat_address} \033[0m \n";
-   exit;
-fi
-collat_tx_in=$(jq -r 'keys[0]' ../tmp/collat_utxo.json)
-
 seedelf_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
+
+collat_tx_in="1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f#0"
+collat_pkh="7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
 
 echo -e "\033[0;36m Building Tx \033[0m"
 FEE=$(${cli} conway transaction build \
@@ -128,22 +118,43 @@ FEE=$(${cli} conway transaction build \
     --mint-plutus-script-v3 \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
     --policy-id="${policy_id}" \
+    --metadata-json-file ../data/pointer/metadata.json \
     ${network})
 
 IFS=':' read -ra VALUE <<< "${FEE}"
 IFS=' ' read -ra FEE <<< "${VALUE[1]}"
-FEE=${FEE[1]}
 echo -e "\033[1;32m Fee: \033[0m" $FEE
 #
 # exit
 #
-echo -e "\033[0;36m Signing \033[0m"
-${cli} conway transaction sign \
-    --signing-key-file ../wallets/${user}-wallet/payment.skey \
-    --signing-key-file ../wallets/collat-wallet/payment.skey \
+echo -e "\033[0;36m Collat Witness \033[0m"
+tx_cbor=$(cat ../tmp/tx.draft | jq -r '.cborHex')
+collat_witness=$(query_witness "$tx_cbor" "preprod")
+echo Witness: $collat_witness
+
+echo '{
+    "type": "TxWitness ConwayEra",
+    "description": "Key Witness ShelleyEra",
+    "cborHex": "'"${collat_witness}"'"
+}' > ../tmp/collat.witness
+#
+# exit
+#
+echo -e "\033[0;36m User Witness \033[0m"
+${cli} conway transaction witness \
     --tx-body-file ../tmp/tx.draft \
-    --out-file ../tmp/tx.signed \
+    --signing-key-file ../wallets/${user}-wallet/payment.skey \
+    --out-file ../tmp/tx.witness \
     ${network}
+#
+# exit
+#
+echo -e "\033[0;36m Assembling \033[0m"
+${cli} conway transaction assemble \
+    --tx-body-file ../tmp/tx.draft \
+    --witness-file ../tmp/tx.witness \
+    --witness-file ../tmp/collat.witness \
+    --out-file ../tmp/tx.signed
 #
 # exit
 #
