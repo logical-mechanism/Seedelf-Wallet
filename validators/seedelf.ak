@@ -24,14 +24,13 @@
 
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
+use aiken/primitive/bytearray
 use cardano/assets.{AssetName, PolicyId}
-use cardano/minting
 use cardano/transaction.{OutputReference, Transaction, TransactionId}
 use cardano/value
 use seedelf/xor.{xor}
 use types/prefixes
 use types/registry.{Register}
-use validation/find
 
 /// The zero knowledge elements required for the proof. The c value will be
 /// computed using the Fiat-Shamir heuristic.
@@ -51,20 +50,20 @@ validator contract(_random: ByteArray) {
     _output_ref: OutputReference,
     transaction: Transaction,
   ) {
-    //
-    // Spend with Schnorr Proof if the datum is of type Register using the
-    // upper bound as a one-time pad for the Fiat-shamir transform.
-    //
     when maybe_datum is {
       Some(datum) ->
         if datum is Register {
-          // correct data structures are only spendable with valid schnorr proofs
-          let Transaction { extra_signatories, .. } = transaction
+          //
+          // Spend with Schnorr Proof if the datum is of type Register using a
+          // random verification key hash as a one-time pad for the Fiat-Shamir
+          // transform. With the one-time pad, the funds could be respendable
+          // due to the tx being drop during a forking event.
+          //
           and {
             // zk proof to spend the utxo
             registry.prove(datum, redeemer.z_b, redeemer.g_r_b, redeemer.sig)?,
-            // forces one time use from random key signature
-            list.has(extra_signatories, redeemer.sig)?,
+            // forces one time use via a random key signature
+            list.has(transaction.extra_signatories, redeemer.sig)?,
           }
         } else {
           // incorrect data structures should be spendable
@@ -77,30 +76,51 @@ validator contract(_random: ByteArray) {
 
   mint(redeemer: ByteArray, policy_id: PolicyId, transaction: Transaction) {
     //
-    // Burn 1 by the seed prefix xor mint 1 with the token name.
+    // Burn one xor mint one.
     //
     xor(
       {
-        // you can burn a token with the 5eed0e1f prefix
-        let Transaction { mint, .. } = transaction
-        let minted_assets: List<(PolicyId, AssetName, Int)> =
-          mint |> assets.flatten()
-        minting.by_prefix(minted_assets, policy_id, prefixes.seed, -1)?
+        expect [(pid, tkn, amt)]: List<(PolicyId, AssetName, Int)> =
+          transaction.mint
+            |> assets.flatten()
+        //
+        // Must burn one nft with the 5eed0e1f prefix.
+        //
+        and {
+          policy_id == pid,
+          bytearray.take(tkn, 4) == prefixes.seed,
+          -1 == amt,
+        }
       },
       {
-        // or mint a token with the 5eed0e1f prefix
         let Transaction { inputs, mint, .. } = transaction
-        let minted_assets: List<(PolicyId, AssetName, Int)> =
-          mint |> assets.flatten()
-        let tx_hash: TransactionId = find.first_input_txid(inputs)
-        let index: Int = find.first_input_index(inputs)
+        expect [(pid, tkn, amt)]: List<(PolicyId, AssetName, Int)> =
+          mint
+            |> assets.flatten()
+        expect Some(input) = list.head(inputs)
+        let tx_hash: TransactionId = input.output_reference.transaction_id
+        let index: Int = input.output_reference.output_index
         let token_name: AssetName =
           value.unique_token_name(tx_hash, index, prefixes.seed, redeemer)
-        minting.exact(minted_assets, policy_id, token_name, 1)?
+        //
+        // Must be an nft with the unique token name.
+        //
+        and {
+          policy_id == pid,
+          token_name == tkn,
+          1 == amt,
+        }
       },
     )
   }
 
+  else(_) {
+    fail
+  }
+}
+
+// Use this contract to store the script reference UTxO so they have to exist
+validator always_false(_random: ByteArray) {
   else(_) {
     fail
   }

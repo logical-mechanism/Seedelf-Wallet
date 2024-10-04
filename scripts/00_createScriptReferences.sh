@@ -47,23 +47,25 @@ do
 
     # get the required lovelace
     min_utxo=$(${cli} conway transaction calculate-min-required-utxo \
-    --protocol-params-file ./tmp/protocol.json \
-    --tx-out-reference-script-file ${contract} \
-    --tx-out="${script_reference_address} + 1000000" | tr -dc '0-9')
+        --protocol-params-file ./tmp/protocol.json \
+        --tx-out-reference-script-file ${contract} \
+        --tx-out-inline-datum-value '"The Official Seedelf Wallet Script Reference UTxO"' \
+        --tx-out="${script_reference_address} + 1000000" | tr -dc '0-9')
     # build the utxo
     script_reference_utxo="${script_reference_address} + ${min_utxo}"
     echo -e "\033[0;32m\nCreating ${file_name} Script:\n" ${script_reference_utxo} " \033[0m"
 
     ${cli} conway transaction build-raw \
-    --protocol-params-file ./tmp/protocol.json \
-    --out-file ./tmp/tx.draft \
-    --tx-in ${ref_tx_in} \
-    --tx-out="${reference_address} + ${changeAmount}" \
-    --tx-out="${script_reference_utxo}" \
-    --tx-out-reference-script-file ${contract} \
-    --fee 0
+        --protocol-params-file ./tmp/protocol.json \
+        --out-file ./tmp/tx.draft \
+        --tx-in ${ref_tx_in} \
+        --tx-out="${reference_address} + ${changeAmount}" \
+        --tx-out="${script_reference_utxo}" \
+        --tx-out-reference-script-file ${contract} \
+        --tx-out-inline-datum-value '"The Official Seedelf Wallet Script Reference UTxO"' \
+        --fee 1000000
 
-    size=$(jq -r '.cborHex' ${contract} | awk '{print length($0)*4}')
+    size=$(jq -r '.cborHex' ${contract} | awk '{print length($0)}')
 
     FEE=$(${cli} conway transaction calculate-min-fee \
         --tx-body-file ./tmp/tx.draft \
@@ -82,6 +84,7 @@ do
         --tx-out="${reference_address} + ${changeAmount}" \
         --tx-out="${script_reference_utxo}" \
         --tx-out-reference-script-file ${contract} \
+        --tx-out-inline-datum-value '"The Official Seedelf Wallet Script Reference UTxO"' \
         --fee ${fee}
 
     ${cli} conway transaction sign \
@@ -90,9 +93,10 @@ do
         --out-file ./tmp/utxo-${file_name}.signed \
         ${network}
 
-    ref_tx_in=$(${cli} conway transaction txid --tx-body-file ./tmp/tx.draft)#0
+    tx_id=$(${cli} conway transaction txid --tx-body-file ./tmp/tx.draft)
+    ref_tx_in=${tx_id}#0
     echo 
-    echo -e "\033[0;36mNext UTxO: $ref_tx_in \033[0m"
+    echo -e "\033[0;36mScript Reference UTxO: ${tx_id}#0 \033[0m"
 
 done
 
