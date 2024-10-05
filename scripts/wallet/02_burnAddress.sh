@@ -18,6 +18,10 @@ user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wal
 seedelf_script_path="../../contracts/seedelf_contract.plutus"
 seedelf_script_address=$(${cli} conway address build --payment-script-file ${seedelf_script_path} ${network})
 
+# wallet script
+wallet_script_path="../../contracts/wallet_contract.plutus"
+wallet_script_address=$(${cli} conway address build --payment-script-file ${wallet_script_path} ${network})
+
 # the minting script policy
 policy_id=$(cat ../../hashes/seedelf.hash)
 
@@ -32,12 +36,12 @@ echo -e "\033[0;33m\nBurning Seed Elf: ${1}\n\033[0m"
 # get script utxo
 echo -e "\033[0;36m Gathering wallet UTxO Information  \033[0m"
 ${cli} conway query utxo \
-    --address ${seedelf_script_address} \
+    --address ${wallet_script_address} \
     ${network} \
     --out-file ../tmp/script_utxo.json
 TXNS=$(jq length ../tmp/script_utxo.json)
 if [ "${TXNS}" -eq "0" ]; then
-   echo -e "\n \033[0;31m NO UTxOs Found At ${seedelf_script_address} \033[0m \n";
+   echo -e "\n \033[0;31m NO UTxOs Found At ${wallet_script_address} \033[0m \n";
    exit;
 fi
 
@@ -99,9 +103,11 @@ user_tx_in=${TXIN::-8}
 echo FEE Payment UTxO: ${user_tx_in}
 
 # script reference utxo
-script_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
+seedelf_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
+wallet_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-wallet_contract.plutus.signed)
 
-echo Reference UTxO: ${script_ref_utxo}
+echo Reference UTxO: ${seedelf_ref_utxo}
+echo Reference UTxO: ${wallet_ref_utxo}
 
 mint_token="-1 ${policy_id}.${1}"
 echo Burning: ${mint_token}
@@ -120,14 +126,14 @@ FEE=$(${cli} conway transaction build \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
     --tx-in ${wallet_tx_in} \
-    --spending-tx-in-reference="${script_ref_utxo}#1" \
+    --spending-tx-in-reference="${wallet_ref_utxo}#1" \
     --spending-plutus-script-v3 \
     --spending-reference-tx-in-inline-datum-present \
     --spending-reference-tx-in-redeemer-file ../data/wallet/wallet-redeemer.json \
     --required-signer-hash ${user_pkh} \
     --required-signer-hash ${collat_pkh} \
     --mint="${mint_token}" \
-    --mint-tx-in-reference="${script_ref_utxo}#1" \
+    --mint-tx-in-reference="${seedelf_ref_utxo}#1" \
     --mint-plutus-script-v3 \
     --policy-id="${policy_id}" \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
