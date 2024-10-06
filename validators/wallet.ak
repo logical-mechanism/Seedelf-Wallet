@@ -18,9 +18,11 @@ use cardano/transaction.{OutputReference, Transaction}
 use types/registry.{Register}
 
 /// The zero knowledge elements required for the proof. The c value will be
-/// computed using the Fiat-Shamir heuristic.
-pub type SeedElfRedeemer {
-  // this is z = r + c*x as a bytearray
+/// computed using the Fiat-Shamir heuristic. The vkh is used as a one time
+/// pad for the proof to prevent rollback attacks.
+///
+pub type WalletRedeemer {
+  // this is z = r + c * x as a bytearray
   z_b: ByteArray,
   // this is the g^r compressed G1Element
   g_r_b: ByteArray,
@@ -31,7 +33,7 @@ pub type SeedElfRedeemer {
 validator contract(_random: ByteArray) {
   spend(
     maybe_datum: Option<Data>,
-    redeemer: SeedElfRedeemer,
+    redeemer: WalletRedeemer,
     _output_ref: OutputReference,
     transaction: Transaction,
   ) {
@@ -41,13 +43,13 @@ validator contract(_random: ByteArray) {
           //
           // Spend with Schnorr Proof if the datum is of type Register using a
           // random verification key hash as a one-time pad for the Fiat-Shamir
-          // transform. With the one-time pad, the funds could be respendable
-          // due to the tx being drop during a forking event.
+          // transform. Without the one-time pad, the funds could be respendable
+          // due to the tx being drop during a rollback event.
           //
           and {
             // zk proof to spend the utxo
             registry.prove(datum, redeemer.z_b, redeemer.g_r_b, redeemer.sig)?,
-            // forces one time use via a random key signature
+            // forces a one time pad via a random key signature
             list.has(transaction.extra_signatories, redeemer.sig)?,
           }
         } else {
