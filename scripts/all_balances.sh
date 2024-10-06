@@ -4,9 +4,9 @@ set -e
 # SET UP VARS HERE
 source .env
 
-# seedelf contract
-seedelf_script_path="../contracts/seedelf_contract.plutus"
-seedelf_script_address=$(${cli} address build --payment-script-file ${seedelf_script_path} ${network})
+# wallet contract
+wallet_script_path="../contracts/wallet_contract.plutus"
+wallet_script_address=$(${cli} address build --payment-script-file ${wallet_script_path} ${network})
 
 # always false to hold script utxo
 always_false_script_path="../contracts/always_false_contract.plutus"
@@ -18,10 +18,10 @@ ${cli} conway query protocol-parameters ${network} --out-file ./tmp/protocol.jso
 ${cli} conway query tip ${network} | jq
 
 # wallet
-echo -e "\033[1;35m Seedelf Contract Address: \033[0m" 
-echo -e "\n \033[1;35m ${seedelf_script_address} \033[0m \n";
-${cli} conway query utxo --address ${seedelf_script_address} ${network}
-${cli} conway query utxo --address ${seedelf_script_address} ${network} --out-file ./tmp/current.utxo
+echo -e "\033[1;35m wallet Contract Address: \033[0m" 
+echo -e "\n \033[1;35m ${wallet_script_address} \033[0m \n";
+${cli} conway query utxo --address ${wallet_script_address} ${network}
+${cli} conway query utxo --address ${wallet_script_address} ${network} --out-file ./tmp/current.utxo
 
 # wallet
 echo -e "\033[1;35m Script Reference UTxO: \033[0m" 

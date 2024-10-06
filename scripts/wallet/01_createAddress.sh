@@ -20,6 +20,10 @@ user_pkh=$(${cli} conway address key-hash --payment-verification-key-file ../wal
 seedelf_script_path="../../contracts/seedelf_contract.plutus"
 seedelf_script_address=$(${cli} conway address build --payment-script-file ${seedelf_script_path} ${network})
 
+# wallet script
+wallet_script_path="../../contracts/wallet_contract.plutus"
+wallet_script_address=$(${cli} conway address build --payment-script-file ${wallet_script_path} ${network})
+
 # the minting script policy
 policy_id=$(cat ../../hashes/seedelf.hash)
 
@@ -90,10 +94,9 @@ required_lovelace=$(${cli} conway transaction calculate-min-required-utxo \
     --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
     --tx-out="${seedelf_script_address} + 5000000 + ${mint_token}" | tr -dc '0-9')
 
-seedelf_script_out="${seedelf_script_address} + ${required_lovelace} + ${mint_token}"
-echo "SeedElf Output: "${seedelf_script_out}
+wallet_script_out="${wallet_script_address} + ${required_lovelace} + ${mint_token}"
+echo "Output: "${wallet_script_out}
 
-test_script_out="${seedelf_script_address} + ${required_lovelace}"
 #
 # exit
 #
@@ -109,7 +112,7 @@ FEE=$(${cli} conway transaction build \
     --change-address ${user_address} \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
-    --tx-out="${seedelf_script_out}" \
+    --tx-out="${wallet_script_out}" \
     --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
     --required-signer-hash ${user_pkh} \
     --required-signer-hash ${collat_pkh} \
