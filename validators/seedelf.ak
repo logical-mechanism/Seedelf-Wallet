@@ -4,8 +4,8 @@
 //// display the token name as their address then another user may locate the
 //// utxo that holds the nft and obtain the Register datum. This datum is then
 //// used to produce a private address for the user. A single user may have
-//// multiple pointer addresses and can delete them whenever by simply burning
-//// the pointer token. This is more convenience then mandatory for the wallet
+//// multiple 5eed0e1f addresses and can delete them whenever by simply burning
+//// the 5eed0e1f token. This is more convenience then mandatory for the wallet
 //// to function properly.
 ////
 
@@ -31,9 +31,9 @@ validator contract(_random: ByteArray) {
         // Must burn one nft with the 5eed0e1f prefix.
         //
         and {
-          policy_id == pid,
-          bytearray.take(tkn, 4) == prefixes.seed,
-          -1 == amt,
+          (policy_id == pid)?,
+          (bytearray.take(tkn, 4) == prefixes.seed)?,
+          (-1 == amt)?,
         }
       },
       {
@@ -47,12 +47,12 @@ validator contract(_random: ByteArray) {
         let token_name: AssetName =
           value.unique_token_name(tx_hash, index, prefixes.seed, redeemer)
         //
-        // Must be an nft with the unique token name.
+        // Must mint one nft with the 5eed0e1f prefix.
         //
         and {
-          policy_id == pid,
-          token_name == tkn,
-          1 == amt,
+          (policy_id == pid)?,
+          (token_name == tkn)?,
+          (1 == amt)?,
         }
       },
     )

@@ -3,13 +3,11 @@ set -e
 
 # SET UP VARS HERE
 source ../.env
-
-mkdir -p ./addrs
+source backend/venv/bin/activate
+source ./query.sh
 
 # get params
 ${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
-
-source ./query.sh
 
 # user
 user="user-1"
@@ -27,15 +25,65 @@ wallet_script_address=$(${cli} conway address build --payment-script-file ${wall
 # the minting script policy
 policy_id=$(cat ../../hashes/seedelf.hash)
 
-# the personal tag in ascii
 if [[ $# -eq 0 ]] ; then
-    echo -e "\n \033[0;31m Personal String Is Empty \033[0m \n"
-    msg=""
-else
-    msg=$(echo -n "${1}" | xxd -ps | tr -d '\n' | cut -c 1-30)
-    echo -e "\n \033[0;31m Personal String Is ${msg}\033[0m \n"
+    echo -e "\n \033[0;31m Please Supply A Token Name \033[0m \n";
+    exit;
 fi
 
+token_file_name="${1}.json"
+echo -e "\033[0;33m\nBurning Seed Elf: ${1}\n\033[0m"
+
+# get script utxo
+echo -e "\033[0;36m Gathering wallet UTxO Information  \033[0m"
+${cli} conway query utxo \
+    --address ${wallet_script_address} \
+    ${network} \
+    --out-file ../tmp/script_utxo.json
+TXNS=$(jq length ../tmp/script_utxo.json)
+if [ "${TXNS}" -eq "0" ]; then
+   echo -e "\n \033[0;31m NO UTxOs Found At ${wallet_script_address} \033[0m \n";
+   exit;
+fi
+
+secret_key=$(python -c "import json; print(json.load(open('addrs/${token_file_name}'))['secret'])")
+echo -e "\033[0;33m\nSecret Key: ${secret_key}\n\033[0m"
+
+generator=$(python3 -c "
+import sys;
+sys.path.append('../py/');
+import find;
+g = find.generator('${policy_id}', '${1}');
+print(g)
+")
+echo Generator: ${generator}
+
+public=$(python3 -c "
+import sys;
+sys.path.append('../py/');
+import find;
+g = find.public('${policy_id}', '${1}');
+print(g)
+")
+echo Public: ${public}
+
+python3 -c "
+import sys;
+sys.path.append('../py/');
+import bls12_381;
+bls12_381.create_dlog_zk(${secret_key}, '${generator}', '${public}', '${user_pkh}');
+"
+
+wallet_tx_in=$(python3 -c "
+import sys;
+sys.path.append('../py/');
+import find;
+u = find.address_utxo('${policy_id}', '${1}');
+print(u)
+")
+echo Address UTxO: ${wallet_tx_in}
+#
+# exit
+#
 # get user utxo
 echo -e "\033[0;36m Gathering UTxO Information  \033[0m"
 ${cli} conway query utxo \
@@ -52,56 +100,21 @@ alltxin=""
 TXIN=$(jq -r --arg alltxin "" 'keys[] | . + $alltxin + " --tx-in"' ../tmp/user_utxo.json)
 user_tx_in=${TXIN::-8}
 
-user_starting_lovelace=$(jq '[.[] | .value.lovelace] | add' ../tmp/user_utxo.json)
+echo FEE Payment UTxO: ${user_tx_in}
 
-echo "User UTxO:" $user_tx_in
-first_utxo=$(jq -r 'keys[0]' ../tmp/user_utxo.json)
-string=${first_utxo}
-IFS='#' read -ra array <<< "$string"
-
-# the ordering here for the first utxo is lexicographic
-prefix="5eed0e1f"
-# personalize this to whatever you want but the max hex length is 30 characters
-jq --arg variable "${msg}" '.bytes=$variable' ../data/pointer/pointer-redeemer.json | sponge ../data/pointer/pointer-redeemer.json
-
-# generate the token
-pointer_name=$(python3 -c "
-import sys;
-sys.path.append('../py/');
-from get_token_name import personal;
-t = personal('${array[0]}', ${array[1]}, '${prefix}', '${msg}');
-print(t)
-")
-
-# generate the random secret and build the datum
-python3 -c "
-import sys;
-sys.path.append('../py/');
-import bls12_381 as bls;
-c = bls.create_token();
-bls.write_token_to_file(c, 'addrs/', '${pointer_name}')
-"
-
-token_file_name="${pointer_name}.json"
-echo -e "\033[0;33m\nCreating Seed Elf: $pointer_name\n\033[0m"
-
-jq --arg variable "$(jq -r '.a' ./addrs/${token_file_name})" '.fields[0].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
-jq --arg variable "$(jq -r '.b' ./addrs/${token_file_name})" '.fields[1].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
-
-mint_token="1 ${policy_id}.${pointer_name}"
-required_lovelace=$(${cli} conway transaction calculate-min-required-utxo \
-    --protocol-params-file ../tmp/protocol.json \
-    --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
-    --tx-out="${seedelf_script_address} + 5000000 + ${mint_token}" | tr -dc '0-9')
-
-wallet_script_out="${wallet_script_address} + ${required_lovelace} + ${mint_token}"
-echo "Output: "${wallet_script_out}
-
-#
-# exit
-#
-# collat info
+# script reference utxo
 seedelf_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
+wallet_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-wallet_contract.plutus.signed)
+
+echo Reference UTxO: ${seedelf_ref_utxo}
+echo Reference UTxO: ${wallet_ref_utxo}
+
+mint_token="-1 ${policy_id}.${1}"
+echo Burning: ${mint_token}
+
+jq --arg variable "" '.bytes=$variable' ../data/pointer/pointer-redeemer.json | sponge ../data/pointer/pointer-redeemer.json
+
+jq --arg variable ${user_pkh} '.fields[2].bytes=$variable' ../data/wallet/wallet-redeemer.json | sponge ../data/wallet/wallet-redeemer.json
 
 collat_tx_in="1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f#0"
 collat_pkh="7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
@@ -112,16 +125,18 @@ FEE=$(${cli} conway transaction build \
     --change-address ${user_address} \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
-    --tx-out="${wallet_script_out}" \
-    --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
+    --tx-in ${wallet_tx_in} \
+    --spending-tx-in-reference="${wallet_ref_utxo}#1" \
+    --spending-plutus-script-v3 \
+    --spending-reference-tx-in-inline-datum-present \
+    --spending-reference-tx-in-redeemer-file ../data/wallet/wallet-redeemer.json \
     --required-signer-hash ${user_pkh} \
     --required-signer-hash ${collat_pkh} \
     --mint="${mint_token}" \
     --mint-tx-in-reference="${seedelf_ref_utxo}#1" \
     --mint-plutus-script-v3 \
-    --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
     --policy-id="${policy_id}" \
-    --metadata-json-file ../data/pointer/metadata.json \
+    --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
     ${network})
 
 IFS=':' read -ra VALUE <<< "${FEE}"
@@ -134,7 +149,6 @@ echo -e "\033[0;36m Collat Witness \033[0m"
 tx_cbor=$(cat ../tmp/tx.draft | jq -r '.cborHex')
 collat_witness=$(query_witness "$tx_cbor" "preprod")
 echo Witness: $collat_witness
-
 echo '{
     "type": "TxWitness ConwayEra",
     "description": "Key Witness ShelleyEra",
@@ -166,5 +180,7 @@ ${cli} conway transaction submit \
     ${network} \
     --tx-file ../tmp/tx.signed
 
-tx=$(${cli} conway transaction txid --tx-file ../tmp/tx.signed)
+tx=$(${cli} transaction txid --tx-file ../tmp/tx.signed)
 echo "TxId:" $tx
+
+rm addrs/${token_file_name}

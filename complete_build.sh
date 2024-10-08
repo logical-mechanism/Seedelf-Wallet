@@ -19,8 +19,8 @@ aiken build --trace-level silent --filter-traces user-defined
 # keep the traces for testing if required
 # aiken build --trace-level verbose --filter-traces all
 
-ran="07"
-ran_cbor=$(python3 -c "import cbor2;hex_string='${ran}';data = bytes.fromhex(hex_string);encoded = cbor2.dumps(data);print(encoded.hex())")
+ran="08"
+ran_cbor=$(python3 -c "import cbor2;encoded = cbor2.dumps(bytes.fromhex('${ran}'));print(encoded.hex())")
 
 echo -e "\033[1;33m\nBuilding Contract \033[0m"
 aiken blueprint apply -o plutus.json -v wallet.contract.spend "${ran_cbor}"
