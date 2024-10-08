@@ -53,7 +53,7 @@ def wallet_datum(a: str, b: str) -> dict:
     }
 
 
-def convert_address_file_to_wallet_datum(address_path: str, wallet_path: str, randomize: bool = False) -> None:
+def convert_address_file_to_wallet_datum(address_path: str, datum_path: str, randomize: bool = False) -> None:
     # Open the JSON file and load its contents
     with open(address_path, 'r') as file:
         data = json.load(file)
@@ -69,9 +69,17 @@ def convert_address_file_to_wallet_datum(address_path: str, wallet_path: str, ra
             data['a'], r), bls12_381.scale(data['b'], r)), sort_keys=True, indent=2)
 
     # Write the JSON data to the specified file path
-    with open(wallet_path, 'w+') as file:
+    with open(datum_path, 'w+') as file:
         file.write(json_data)
 
+
+def randomized_datum(a: str, b: str, datum_path: str) -> None:
+    r = bls12_381.rng()
+    json_data = json.dumps(wallet_datum(bls12_381.scale(a, r), bls12_381.scale(b, r)), sort_keys=True, indent=2)
+
+    # Write the JSON data to the specified file path
+    with open(datum_path, 'w+') as file:
+        file.write(json_data)
 
 def write_address_file(file_path: str) -> None:
     """

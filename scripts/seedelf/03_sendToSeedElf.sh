@@ -3,6 +3,7 @@ set -e
 
 # SET UP VARS HERE
 source ../.env
+source backend/venv/bin/activate
 
 # get params
 ${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
@@ -54,15 +55,19 @@ if [ "${TXNS}" -eq "0" ]; then
    exit;
 fi
 
+address_file_name="${1}.json"
+address_file_path="addrs/${address_file_name}"
+datum_file_path="../data/wallet/wallet-datum.json"
+
 python3 -c "
-import sys;
-sys.path.append('../py/');
-import find;
-find.address('${policy_id}', '${1}');
+from backend import wallet;
+wallet.convert_address_file_to_wallet_datum('${address_file_path}', '${datum_file_path}', randomize=True);
 "
+
 #
 # exit
 #
+
 # get user utxo
 echo -e "\033[0;36m Gathering UTxO Information  \033[0m"
 ${cli} conway query utxo \
@@ -85,7 +90,7 @@ FEE=$(${cli} conway transaction build \
     --change-address ${user_address} \
     --tx-in ${user_tx_in} \
     --tx-out="${wallet_script_out}" \
-    --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
+    --tx-out-inline-datum-file ${datum_file_path} \
     --required-signer-hash ${user_pkh} \
     ${network})
 
@@ -110,5 +115,5 @@ ${cli} conway transaction submit \
     ${network} \
     --tx-file ../tmp/tx.signed
 
-tx=$(cardano-cli transaction txid --tx-file ../tmp/tx.signed)
+tx=$(${cli} transaction txid --tx-file ../tmp/tx.signed)
 echo "Tx Hash:" $tx
