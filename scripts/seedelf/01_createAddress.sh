@@ -3,13 +3,13 @@ set -e
 
 # SET UP VARS HERE
 source ../.env
+source ./query.sh
+source backend/venv/bin/activate
 
 mkdir -p ./addrs
 
 # get params
 ${cli} conway query protocol-parameters ${network} --out-file ../tmp/protocol.json
-
-source ./query.sh
 
 # user
 user="user-1"
@@ -66,43 +66,41 @@ jq --arg variable "${msg}" '.bytes=$variable' ../data/pointer/pointer-redeemer.j
 
 # generate the token
 pointer_name=$(python3 -c "
-import sys;
-sys.path.append('../py/');
-from get_token_name import personal;
-t = personal('${array[0]}', ${array[1]}, '${prefix}', '${msg}');
+from backend import wallet;
+t = wallet.generate_seedelf_name('${array[0]}', ${array[1]}, '${prefix}', '${msg}');
 print(t)
 ")
 
 # generate the random secret and build the datum
+address_file_name="${pointer_name}.json"
+address_file_path="addrs/${address_file_name}"
 python3 -c "
-import sys;
-sys.path.append('../py/');
-import bls12_381 as bls;
-c = bls.create_token();
-bls.write_token_to_file(c, 'addrs/', '${pointer_name}')
+from backend import wallet;
+wallet.write_address_file('${address_file_path}')
 "
 
-token_file_name="${pointer_name}.json"
 echo -e "\033[0;33m\nCreating Seed Elf: $pointer_name\n\033[0m"
 
-jq --arg variable "$(jq -r '.a' ./addrs/${token_file_name})" '.fields[0].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
-jq --arg variable "$(jq -r '.b' ./addrs/${token_file_name})" '.fields[1].bytes=$variable' ../data/wallet/wallet-datum.json | sponge ../data/wallet/wallet-datum.json
+datum_file_path="../data/wallet/wallet-datum.json"
+python3 -c "
+from backend import wallet;
+wallet.convert_address_file_to_wallet_datum('${address_file_path}', '${datum_file_path}', randomize=False)
+"
 
 mint_token="1 ${policy_id}.${pointer_name}"
+
 required_lovelace=$(${cli} conway transaction calculate-min-required-utxo \
     --protocol-params-file ../tmp/protocol.json \
-    --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
+    --tx-out-inline-datum-file ${datum_file_path} \
     --tx-out="${seedelf_script_address} + 5000000 + ${mint_token}" | tr -dc '0-9')
 
 wallet_script_out="${wallet_script_address} + ${required_lovelace} + ${mint_token}"
 echo "Output: "${wallet_script_out}
 
-#
-# exit
-#
-# collat info
+# seedelf script reference
 seedelf_ref_utxo=$(${cli} conway transaction txid --tx-file ../tmp/utxo-seedelf_contract.plutus.signed)
 
+# collat info
 collat_tx_in="1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f#0"
 collat_pkh="7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
 
@@ -113,7 +111,7 @@ FEE=$(${cli} conway transaction build \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${user_tx_in} \
     --tx-out="${wallet_script_out}" \
-    --tx-out-inline-datum-file ../data/wallet/wallet-datum.json \
+    --tx-out-inline-datum-file ${datum_file_path} \
     --required-signer-hash ${user_pkh} \
     --required-signer-hash ${collat_pkh} \
     --mint="${mint_token}" \

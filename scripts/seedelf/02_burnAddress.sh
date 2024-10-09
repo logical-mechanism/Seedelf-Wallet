@@ -3,7 +3,7 @@ set -e
 
 # SET UP VARS HERE
 source ../.env
-
+source backend/venv/bin/activate
 source ./query.sh
 
 # get params
@@ -48,39 +48,26 @@ fi
 secret_key=$(python -c "import json; print(json.load(open('addrs/${token_file_name}'))['secret'])")
 echo -e "\033[0;33m\nSecret Key: ${secret_key}\n\033[0m"
 
-generator=$(python3 -c "
-import sys;
-sys.path.append('../py/');
-import find;
-g = find.generator('${policy_id}', '${1}');
-print(g)
+seedelf=$(python3 -c "
+from backend import find;
+s = find.seedelf('${policy_id}', '${1}');
+print(s)
 ")
+echo $seedelf | jq -r ''
+wallet_tx_in=$(echo $seedelf | jq -r 'keys[0]')
+echo Address UTxO: ${wallet_tx_in}
+
+generator=$(echo $seedelf | jq -r '.[].a')
 echo Generator: ${generator}
 
-public=$(python3 -c "
-import sys;
-sys.path.append('../py/');
-import find;
-g = find.public('${policy_id}', '${1}');
-print(g)
-")
+public=$(echo $seedelf | jq -r '.[].b')
 echo Public: ${public}
 
 python3 -c "
-import sys;
-sys.path.append('../py/');
-import bls12_381;
-bls12_381.create_dlog_zk(${secret_key}, '${generator}', '${public}', '${user_pkh}');
+from backend import wallet;
+wallet.create_proof(${secret_key}, '${generator}', '${public}', '${user_pkh}', '../data/wallet/wallet-redeemer.json')
 "
 
-wallet_tx_in=$(python3 -c "
-import sys;
-sys.path.append('../py/');
-import find;
-u = find.address_utxo('${policy_id}', '${1}');
-print(u)
-")
-echo Address UTxO: ${wallet_tx_in}
 #
 # exit
 #
