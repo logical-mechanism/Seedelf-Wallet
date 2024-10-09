@@ -124,6 +124,7 @@ execution_units="(0, 0)"
 
 echo -e "\033[0;36m Building Tx \033[0m"
 ${cli} conway transaction build-raw \
+    --protocol-params-file ../tmp/protocol.json \
     --out-file ../tmp/tx.draft \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${wallet_tx_in} \
@@ -180,6 +181,7 @@ change_output="${wallet_script_address} + $((${change_amount} - ${total_fee}))"
 echo "NEW Change Output:" ${change_output}
 
 ${cli} conway transaction build-raw \
+    --protocol-params-file ../tmp/protocol.json \
     --out-file ../tmp/tx.draft \
     --tx-in-collateral ${collat_tx_in} \
     --tx-in ${wallet_tx_in} \

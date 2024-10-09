@@ -13,6 +13,7 @@ reference_address=$(cat ./wallets/reference-wallet/payment.addr)
 # always false to hold script utxo
 always_false_script_path="../contracts/always_false_contract.plutus"
 script_reference_address=$(${cli} conway address build --payment-script-file ${always_false_script_path} ${network})
+script_reference_address=${reference_address}
 
 echo -e "\033[0;35m\nGathering UTxO Information  \033[0m"
 ${cli} conway query utxo \
@@ -45,13 +46,14 @@ do
     # Increment the counter
     ((counter++)) || true
 
+    datum="${file_name}"
     # get the required lovelace
     min_utxo=$(${cli} conway transaction calculate-min-required-utxo \
         --protocol-params-file ./tmp/protocol.json \
         --tx-out-reference-script-file ${contract} \
-        --tx-out-inline-datum-value '"The Official Seedelf Wallet Script Reference UTxO"' \
+        --tx-out-inline-datum-value "\"${datum}\"" \
         --tx-out="${script_reference_address} + 1000000" | tr -dc '0-9')
-    
+
     # build the utxo
     script_reference_utxo="${script_reference_address} + ${min_utxo}"
     echo -e "\033[0;32m\nCreating ${file_name} Script:\n" ${script_reference_utxo} " \033[0m"
@@ -63,10 +65,10 @@ do
         --tx-out="${reference_address} + ${changeAmount}" \
         --tx-out="${script_reference_utxo}" \
         --tx-out-reference-script-file ${contract} \
-        --tx-out-inline-datum-value '"The Official Seedelf Wallet Script Reference UTxO"' \
+        --tx-out-inline-datum-value "\"${datum}\"" \
         --fee 1000000
 
-    size=$(jq -r '.cborHex' ${contract} | awk '{print length($0)}')
+    size=$(jq -r '.cborHex' ${contract} | awk '{print length($0)*2}')
 
     FEE=$(${cli} conway transaction calculate-min-fee \
         --tx-body-file ./tmp/tx.draft \
@@ -85,7 +87,7 @@ do
         --tx-out="${reference_address} + ${changeAmount}" \
         --tx-out="${script_reference_utxo}" \
         --tx-out-reference-script-file ${contract} \
-        --tx-out-inline-datum-value '"The Official Seedelf Wallet Script Reference UTxO"' \
+        --tx-out-inline-datum-value "\"${datum}\"" \
         --fee ${fee}
 
     ${cli} conway transaction sign \
