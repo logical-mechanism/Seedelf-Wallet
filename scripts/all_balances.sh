@@ -25,6 +25,7 @@ ${cli} conway query utxo --address ${wallet_script_address} ${network} --out-fil
 
 # wallet
 echo -e "\033[1;35m Script Reference UTxO: \033[0m" 
+echo -e "\n \033[1;35m ${script_reference_address} \033[0m \n";
 ${cli} conway query utxo --address ${script_reference_address} ${network}
 
 # Loop through each -wallet folder
