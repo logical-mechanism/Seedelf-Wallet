@@ -139,7 +139,6 @@ Be sure to keep it safe!
 
 Removing funds is a simple process. Given a secret value x, search the UTxO set for all registies that satify the condition that $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ which do not contain your seedelf token. The seedelf UTxO may be removed but typically it is left inside the contract for location purposes. Each UTxO that a user wishes to spend requires a ZK proof to spend it, as shown below.
 
-
 ```rust
 pub type ZK {
   // this is z = r + c*x, where x is the secret
@@ -155,7 +154,6 @@ These ZK element combined with a registry is the only required knowledge to spen
 
 Sending funds works very similarly to removing funds but the funds are sent to a re-randomized regsitry given by finding the registry on some other seedelf token. Bob could gire-randomized UTxOs to Bob's new re-randomized registry. This act should perserve privacy. An outside user should only see random UTxOs being collected and sent to a new random registry. The link between Alice and Bob should remain hidden.
 
-
 ### Non-Mixablility
 
 Spendability is always in the hands of the original owner. If two UTxOs are being spent then it is safe to assume it is the same owner because if two different users spent UTxOs together inside of a single transaction then there would be no way to ensure funds are not lost or stolen by one of the parties. If Alice and Bob are working together then either Alice or Bob has the chance of losing funds. Inside of real mixers the chance of losing funds does not exist as the spendability is arbitrary thus ensuring the mixing probably exists. This is not the case inside the seedelf wallet.
@@ -164,4 +162,6 @@ Spendability is always in the hands of the original owner. If two UTxOs are bein
 
 TODO
 
-Alturistic batcher run nodes over tor with an api that allows the tx body and a witness to be sent over. the batcher will verify the tx, witness the tx, assume and submit.
+## The Seedelf Application
+
+TODO

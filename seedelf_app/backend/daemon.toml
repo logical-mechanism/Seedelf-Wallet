@@ -1,0 +1,25 @@
+[source]
+type = "N2N"
+address = [ "Tcp", "preprod-node.play.dev.cardano.org:3001",]
+magic = "preprod"
+min_depth = 2
+
+[sink]
+type = "Webhook"
+url = "http://localhost:44203/webhook"
+timeout = 60000
+error_policy = "Continue"
+
+[source.intersect]
+type = "Point"
+value = [ 72575459, "a64ddab26aea83ff2fcc7c2475edeace733904bf055f884a44656c44c4df5547",]
+
+[source.mapper]
+include_block_end_events = true
+include_transaction_details = true
+
+[sink.retry_policy]
+max_retries = 60
+backoff_unit = 20000
+backoff_factor = 2
+max_backoff = 100000
