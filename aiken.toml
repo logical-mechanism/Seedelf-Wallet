@@ -1,13 +1,13 @@
-name = "logical-mechanism/5eed0e1f"
+name = "logical-mechanism/Seedelf-Wallet"
 version = "0.1.0"
 compiler = "v1.1.5"
 plutus = "v3"
 license = "GPL-3.0-or-later"
-description = "Aiken contracts for project 'logicalmechanism/5eed0e1f'"
+description = "A Cardano Stealth Wallet"
 
 [repository]
 user = "logical-mechanism"
-project = "5eed0e1f"
+project = "Seedelf-Wallet"
 platform = "github"
 
 [[dependencies]]
