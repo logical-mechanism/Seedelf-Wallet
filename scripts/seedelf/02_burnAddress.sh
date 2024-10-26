@@ -53,7 +53,7 @@ from backend import find;
 s = find.seedelf('${policy_id}', '${1}');
 print(s)
 ")
-echo $seedelf | jq -r ''
+
 wallet_tx_in=$(echo $seedelf | jq -r 'keys[0]')
 echo Address UTxO: ${wallet_tx_in}
 
@@ -126,9 +126,7 @@ FEE=$(${cli} conway transaction build \
     --mint-reference-tx-in-redeemer-file ../data/pointer/pointer-redeemer.json \
     ${network})
 
-IFS=':' read -ra VALUE <<< "${FEE}"
-IFS=' ' read -ra FEE <<< "${VALUE[1]}"
-echo -e "\033[1;32m Fee: \033[0m" $FEE
+echo -e "\033[1;32m ${FEE} \033[0m"
 #
 # exit
 #

@@ -10,9 +10,7 @@ sender_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat ${sender_path}payment.addr)
 # receiver_address=$(cat wallets/reference-wallet/payment.addr)
 receiver_address="addr_test1qrvnxkaylr4upwxfxctpxpcumj0fl6fdujdc72j8sgpraa9l4gu9er4t0w7udjvt2pqngddn6q4h8h3uv38p8p9cq82qav4lmp"
-#
-# exit
-#
+
 echo -e "\033[0;36m Gathering UTxO Information  \033[0m"
 ${cli} conway query utxo \
     ${network} \
@@ -24,7 +22,6 @@ if [ "${TXNS}" -eq "0" ]; then
    echo -e "\n \033[0;31m NO UTxOs Found At ${sender_address} \033[0m \n";
    exit;
 fi
-alltxin=""
 TXIN=$(jq -r --arg alltxin "" 'keys[] | . + $alltxin + " --tx-in"' tmp/sender_utxo.json)
 seller_tx_in=${TXIN::-8}
 
@@ -41,7 +38,7 @@ echo -e "\033[1;32m Fee: \033[0m" $FEE
 #
 # exit
 #
-echo -e "\033[0;36m Signing \033[0m"
+echo -e "\033[0;36m Signing Tx \033[0m"
 ${cli} conway transaction sign \
     --signing-key-file ${sender_path}payment.skey \
     --tx-body-file tmp/tx.draft \
@@ -50,7 +47,7 @@ ${cli} conway transaction sign \
 #
 # exit
 #
-echo -e "\033[0;36m Submitting \033[0m"
+echo -e "\033[0;36m Submitting Tx \033[0m"
 ${cli} conway transaction submit \
     ${network} \
     --tx-file tmp/tx.signed

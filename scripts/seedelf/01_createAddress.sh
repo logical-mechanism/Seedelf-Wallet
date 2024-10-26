@@ -122,17 +122,12 @@ FEE=$(${cli} conway transaction build \
     --metadata-json-file ../data/pointer/metadata.json \
     ${network})
 
-IFS=':' read -ra VALUE <<< "${FEE}"
-IFS=' ' read -ra FEE <<< "${VALUE[1]}"
-echo -e "\033[1;32m Fee: \033[0m" $FEE
+echo -e "\033[1;32m ${FEE} \033[0m"
 #
 # exit
 #
 echo -e "\033[0;36m Collat Witness \033[0m"
 tx_cbor=$(cat ../tmp/tx.draft | jq -r '.cborHex')
-echo $tx_cbor
-tx=$(${cli} conway transaction txid --tx-body-file ../tmp/tx.draft)
-echo "TxId:" $tx
 collat_witness=$(query_witness "$tx_cbor" "preprod")
 echo Witness: $collat_witness
 
@@ -142,7 +137,7 @@ echo '{
     "cborHex": "'"${collat_witness}"'"
 }' > ../tmp/collat.witness
 #
-exit
+# exit
 #
 echo -e "\033[0;36m User Witness \033[0m"
 ${cli} conway transaction witness \
