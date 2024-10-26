@@ -13,7 +13,6 @@ reference_address=$(cat ./wallets/reference-wallet/payment.addr)
 # always false to hold script utxo
 always_false_script_path="../contracts/always_false_contract.plutus"
 script_reference_address=$(${cli} conway address build --payment-script-file ${always_false_script_path} ${network})
-script_reference_address=${reference_address}
 
 echo -e "\033[0;35m\nGathering UTxO Information  \033[0m"
 ${cli} conway query utxo \
@@ -26,12 +25,11 @@ if [ "${TXNS}" -eq "0" ]; then
    echo -e "\n \033[0;31m NO UTxOs Found At ${reference_address} \033[0m \n";
    exit;
 fi
-alltxin=""
 TXIN=$(jq -r --arg alltxin "" 'to_entries[] | select(.value.value | length < 2) | .key | . + $alltxin + " --tx-in"' ./tmp/reference_utxo.json)
 ref_tx_in=${TXIN::-8}
+
 changeAmount=$(jq '[.. | objects | .lovelace] | add' ./tmp/reference_utxo.json)
 
-counter=0
 # Loop through each file in the directory
 echo -e "\033[0;33m\nStart Building Tx Chain \033[0m"
 for contract in $(ls "../contracts"/* | sort -V)
@@ -43,8 +41,6 @@ do
     fi
     echo -e "\033[1;37m --------------------------------------------------------------------------------\033[0m"
     echo -e "\033[1;35m\n${contract}\033[0m" 
-    # Increment the counter
-    ((counter++)) || true
 
     datum="${file_name}"
     # get the required lovelace
