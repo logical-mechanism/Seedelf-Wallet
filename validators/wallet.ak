@@ -45,10 +45,10 @@ validator contract(_random: ByteArray) {
           //
           expect wallet_redeemer: WalletRedeemer = redeemer
           //
-          // Spend with Schnorr Proof if the datum is of type Register using a
+          // Spend with Schnorr proof if the datum is of type Register using a
           // random verification key hash as a one-time pad for the Fiat-Shamir
           // transform. Without the one-time pad, the funds could be respendable
-          // due to the tx being drop during a rollback event.
+          // due to the tx being dropped during a rollback event.
           //
           and {
             // zk proof to spend the utxo

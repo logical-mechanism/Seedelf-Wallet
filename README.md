@@ -1,10 +1,12 @@
 # Seedelf - A Cardano Stealth Wallet
 
+The seedelf wallet is stealth smart wallet that hides the receiver and spender using Schnorr proofs on the BLS12-381 curve.
+
 ## What is a Seedelf?
 
-**Seedelf** is a token identifier used to locate the primary address of a user inside the stealth wallet contract. A seedelf allows a stealth address to have a personalized touch while maintaining privacy.
+**Seedelf** is a token identifier used to locate the datum of a user inside the wallet contract. A seedelf allows the datum to have a personalized touch while maintaining privacy similar to how ADAHandle work but with a slight twist.
 
-Its main purpose is for the ease of locating a primary address. User Alice can ask Bob to send funds to their seedelf. Bob can find the UTxO that holds the seedelf and will use that registry and a random integer to generate a new UTxO for Alice.
+Its main purpose is for the ease of locating the datum for address generation. Alice can ask Bob to send funds to their seedelf. Bob can find the UTxO that holds the seedelf token and will use that registry and a random integer to generate a new address for Alice.
 
 Token name scheme:
 
@@ -36,11 +38,11 @@ username: 5b416e6369656e744b72616b656e5d
 display name: [AncientKraken]
 ```
 
-The stealth wallet contract is token agnostic, allowing any NFT to be the locator token. We suggest using a seedelf.
+The stealth wallet contract is token agnostic, allowing any NFT to be the locator token. We suggest using a seedelf token.
 
 ## What is a Stealth Wallet?
 
-Below is a quick overview of the stealth wallet contract using the BLS12-381 curve.
+Below is a quick overview of the wallet contract using the BLS12-381 curve.
 
 ### Terminology
 
@@ -88,8 +90,13 @@ From the outside viewer, the new registry appears random and can not be inverted
 #### Re-Randomization Spendability Proof
 
 $$
-(g^{z})^{d} = (g^{d})^{z} = (g^{d})^{r +c \cdot x} = g^{d \cdot r} g^{d \cdot x \cdot c} = (g^{r})^{d} (g^{x})^{d \cdot c} = (g^{r})^{d} (u^{c})^{d} \\
-g^{z} = g^{r} u^{c} \\ \blacksquare
+h \leftarrow g^{d} \\
+v \leftarrow u^{d} \\
+h^{z} = h^{r} v^{c} \\
+(g^{d})^{z} = (g^{d})^{r +c \cdot x} = (g^{d})^{r} (g^{x})^{d \cdot c} = (g^{d})^{r} (u^{d})^{c} \\
+(g^{z})^{d} = (g^{r})^{d} (u^{c})^{d} \\
+g^{z} = g^{r} u^{c} \\
+\blacksquare
 $$
 
 The proof of re-randomization reduces to proving the original Schnorr proof.
@@ -102,23 +109,23 @@ In the contract, there will be many UTxOs with unique registries. A user can alw
 
 The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet.
 
-Sending funds requires a correct and equal d value applied to both elements of the registry. Incorrectly applied d values will be stuck inside the contract as seen in the example below.
+Sending funds requires a correct and equal `d` value applied to both elements of the registry. Incorrectly applied `d` values will be stuck inside the contract as seen in the example below.
 
 $$
-(g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } d \neq d'
+(g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } `d` \neq d'
 $$
 
 This registry would become unspendable, resulting in lost funds for both Bob and Alice.
 
 ### De-Anonymizing Attacks
 
-Three attacks are known to break the privacy of this implementation. The first attack comes from picking a bad d value. A small d value may be able to be brute-forced. The brute-force attack is circumvented by selecting a d value on the order of $2^{254}$. The second attack comes from not properly destroying the d value information after the transaction. The d value is considered toxic waste in this context. If the d values are known for some users then it becomes trivial to invert the registry into the original form and lose all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the UTxO isn't anonymous to start with then it is known the entire time. This means that an outside user could track a wallet by simply watching which collaterals were used.
+Three attacks are known to break the privacy of this implementation. The first attack comes from picking a bad `d` value. A small `d` value may be able to be brute-forced. The brute-force attack is circumvented by selecting a `d` value on the order of $2^{254}$. The second attack comes from not properly destroying the `d` value information after the transaction. The `d` value is considered toxic waste in this context. If the `d` values are known for some users then it becomes trivial to track the registry into the original form and lose all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the UTxO isn't anonymous to start with then it is known the entire time. This means that an outside user could track a wallet by simply watching which collaterals were used.
 
-Privacy is preserved as long as d is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner.. This type of wallet can not be staked.
+Privacy is preserved as long as `d` is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner.. This type of wallet can not be staked.
 
 ## Happy Path Testing Scripts
 
-These contracts require PlutusV3 and the Conway era. The happy paths follow Alice and Bob as they interact with their seedelf wallets. The scripts will allow each user to create and delete seedelfs, send tokens to another seedelf, and remove their tokens. The happy path has very basic functionality but it does serve as an example as how a seedelf wallet would work.
+The happy paths follow Alice and Bob as they interact with their seedelf wallets. The scripts will allow each user to create and delete seedelfs, send tokens to another seedelf, and remove their tokens. The happy path has very basic functionality but it does serve as an example as how a seedelf wallet would work.
 
 ### Creating A seedelf
 
@@ -140,11 +147,17 @@ Be sure to keep it safe!
 Removing funds is a simple process. Given a secret value x, search the UTxO set for all registies that satify the condition that $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ which do not contain your seedelf token. The seedelf UTxO may be removed but typically it is left inside the contract for location purposes. Each UTxO that a user wishes to spend requires a ZK proof to spend it, as shown below.
 
 ```rust
-pub type ZK {
-  // this is z = r + c*x, where x is the secret
-  z: ByteArray,
-  // this is the g^r compressed G1Element, where g is the registry generator
-  g_r: ByteArray,
+/// The zero knowledge elements required for the proof. The c value will be
+/// computed using the Fiat-Shamir heuristic. The vkh is used as a one time
+/// pad for the proof to prevent rollback attacks.
+///
+pub type WalletRedeemer {
+  // this is z = r + c * x as a bytearray
+  z_b: ByteArray,
+  // this is the g^r compressed G1Element
+  g_r_b: ByteArray,
+  // one time use signature
+  sig: VerificationKeyHash,
 }
 ```
 

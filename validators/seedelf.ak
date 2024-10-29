@@ -1,12 +1,12 @@
 //// The minter is used to define a specific register in the wallet contract.
 //// Its an open policy for minting and burning but each token will always
-//// be unique. It use case is as a place holder for the address. A user can
+//// be unique. Its use case is as a place holder for the address. A user can
 //// display the token name as their address then another user may locate the
 //// utxo that holds the nft and obtain the Register datum. This datum is then
 //// used to produce a private address for the user. A single user may have
 //// multiple 5eed0e1f addresses and can delete them whenever by simply burning
 //// the 5eed0e1f token. This is more convenience then mandatory for the wallet
-//// to function properly.
+//// to function properly as any token may be used as the locator token.
 ////
 
 use aiken/collection/list
@@ -36,7 +36,7 @@ validator contract(_random: ByteArray) {
         and {
           // policy must match this pid
           (policy_id == pid)?,
-          // token name doesn't just use the prefix to match it
+          // token name doesn't matter, just use the prefix to match it
           (bytearray.take(tkn, 4) == prefixes.seed)?,
           // a single burn
           (-1 == amt)?,
@@ -55,10 +55,10 @@ validator contract(_random: ByteArray) {
             |> assets.flatten()
         // use the first input to create a unique token name using the seedelf prefix
         expect Some(input) = list.head(inputs)
-        let tx_hash: TransactionId = input.output_reference.transaction_id
-        let index: Int = input.output_reference.output_index
+        let id: TransactionId = input.output_reference.transaction_id
+        let idx: Int = input.output_reference.output_index
         let token_name: AssetName =
-          value.unique_token_name(tx_hash, index, prefixes.seed, personal_tag)
+          value.unique_token_name(id, idx, prefixes.seed, personal_tag)
         //
         // Must mint one nft with the 5eed0e1f prefix.
         //
