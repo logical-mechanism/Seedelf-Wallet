@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -e
 
-# create directories if dont exist
+# create directories if they dont exist
 mkdir -p contracts
 mkdir -p hashes
 
 # remove old files
 rm contracts/* || true
 rm hashes/* || true
+
+# delete the build folder all together
 rm -fr build/ || true
 
-# build out the entire script
+# compile the scripts with aiken build
 echo -e "\033[1;34m\nCompiling Contracts \033[0m"
 
 # remove all traces
@@ -19,9 +21,11 @@ aiken build --trace-level silent --filter-traces user-defined
 # keep the traces for testing if required
 # aiken build --trace-level verbose --filter-traces all
 
-ran="09"
+# some random string to make the contracts unique
+ran="acab"
 ran_cbor=$(python3 -c "import cbor2;encoded = cbor2.dumps(bytes.fromhex('${ran}'));print(encoded.hex())")
 
+# build and apply parameters to each contract
 echo -e "\033[1;37m\nBuilding Wallet Contract \033[0m"
 aiken blueprint apply -o plutus.json -v wallet.contract.spend "${ran_cbor}"
 aiken blueprint convert -v wallet.contract.spend > contracts/wallet_contract.plutus

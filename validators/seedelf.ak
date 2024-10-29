@@ -53,7 +53,9 @@ validator contract(_random: ByteArray) {
         expect [(pid, tkn, amt)]: List<(PolicyId, AssetName, Int)> =
           mint
             |> assets.flatten()
+        //
         // use the first input to create a unique token name using the seedelf prefix
+        //
         expect Some(input) = list.head(inputs)
         let id: TransactionId = input.output_reference.transaction_id
         let idx: Int = input.output_reference.output_index

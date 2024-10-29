@@ -24,9 +24,9 @@ use types/registry.{Register}
 pub type WalletRedeemer {
   // this is z = r + c * x as a bytearray
   z_b: ByteArray,
-  // this is the g^r compressed G1Element
+  // this is the g^r as a compressed G1Element
   g_r_b: ByteArray,
-  // one time use signature
+  // this vkh is used as a one time pad
   sig: VerificationKeyHash,
 }
 
@@ -63,12 +63,14 @@ validator contract(_random: ByteArray) {
           }
         } else {
           //
-          // incorrect data structures should be spendable 
+          // incorrect data structures should be spendable
+          // -- TODO
           //
           True
         }
       //
       // missing data structures should be spendable
+      // -- TODO
       //
       None -> True
     }
