@@ -44,10 +44,10 @@ function Header() {
 
   return (
     <header className={classes.header}>
-      <Container className={classes.inner}>
+      <Container className={classes.inner} >
         <SeedelfLogo />
-        <Space w="md" />
-        <Container fluid>
+        <Space w="lg" />
+        <Container style={{ width: '100%' }}>
           <Text size="md" style={{ textAlign: 'center', marginBottom: '6px' }}>
             {syncStatus.blocks_behind < 0 ? (
               'Loading...'
@@ -68,7 +68,7 @@ function Header() {
               />
             )}
         </Container>
-        <Space w="md" />
+        <Space w="lg" />
       </Container>
     </header>
   );

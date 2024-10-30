@@ -1,25 +1,35 @@
 import React from 'react';
-import { Container, Grid, Card, Text, Button } from '@mantine/core';
+import { Container, Tabs, Divider } from '@mantine/core';
 
 function Body() {
   return (
-    <Container fluid>
-      <Grid gutter="sm">
-        <Grid.Col span={2}>
-          <Card shadow="sm" padding="lg">
-            <Button fullWidth>Create Account</Button>
-            {/* Add content here */}
-          </Card>
-        </Grid.Col>
-        <Grid.Col span={10}>
-          <Card shadow="sm" padding="lg">
-            <Text size="lg" style={{ textAlign: 'center' }}>
-              Account View Here
-            </Text>
-            {/* Add content here */}
-          </Card>
-        </Grid.Col>
-      </Grid>
+    <Container>
+      <Divider />
+      <Tabs defaultValue="account" onChange={(value) => {console.log("Viewing", value)}}>
+        <Tabs.List grow>
+          <Tabs.Tab value="account" color="violet">
+            Account
+          </Tabs.Tab>
+          <Tabs.Tab value="send" ml="auto" color="blue">
+            Send
+          </Tabs.Tab>
+          <Tabs.Tab value="history" ml="auto" color="orange">
+            History
+          </Tabs.Tab>
+        </Tabs.List>
+
+        <Tabs.Panel value="account">
+          Show account here
+        </Tabs.Panel>
+
+        <Tabs.Panel value="send">
+          Send funds here
+        </Tabs.Panel>
+
+        <Tabs.Panel value="history">
+          show history here
+        </Tabs.Panel>
+      </Tabs>
     </Container>
   );
 }

@@ -2,7 +2,7 @@
 type = "N2N"
 address = [ "Tcp", "preprod-node.play.dev.cardano.org:3001",]
 magic = "preprod"
-min_depth = 2
+min_depth = 3
 
 [sink]
 type = "Webhook"
@@ -12,7 +12,7 @@ error_policy = "Continue"
 
 [source.intersect]
 type = "Point"
-value = [ 73665197, "c7b8578c49ae6e2b24d88846c3ab9abfd011b6fb839fad44e162e859d0b3c070",]
+value = [ 74560053, "4e201fabc813f32668fbb649cbee887bdcbee6242bae6603d660b67a4df68c7a",]
 
 [source.mapper]
 include_block_end_events = true

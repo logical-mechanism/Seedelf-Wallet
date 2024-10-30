@@ -3,26 +3,26 @@
 network: "--testnet-magic 1"
 #
 # Contract Addresses
-wallet_address: "addr_test1wpwqely5wqfwdu4em2yk3fvjmatppytezu7supdmx7u0x9sxcg43n"
+wallet_address: "addr_test1wpk2edu6248lqm3ecas82auzyvpsvs7vzv3tqtjvujtnxds9v3s2s"
 #
 # Address Holding Script References UTxOs
-reference_address: "addr_test1wzgq982y5q7e4twwmq8nkegnjuvwg50suv6a4c5je3me7uqq3t2ye"
+reference_address: "addr_test1wzu7drmul6s5g2w3v90kjywl9dd5vy34rhud0nr2f2zktvqc9k7h8"
 #
 # wallet and seedelf Contract Script Reference UTxOs
-wallet_ref_utxo: "95dd452d504ce2c959d8351946f9cd3733b0a1964a8ae469a42a419bdc662eee#1"
+wallet_ref_utxo: "6eb57b9de84eea4b5db704b1fa089d5b98d64e61b012a5d7aee4a9b97c1b7b82#1"
 wallet_lovelace: 3969510
 #
-seedelf_ref_utxo: "d49f3fe6d0f22141d61a067489bb6efcd3a74d01110c3eb1e6f2221d435bfbc8#1"
+seedelf_ref_utxo: "784b80854a79b00f48ace0138590edd1a65264760cebc781478a8f71102ec26f#1"
 seedelf_lovelace: 3659190
 #
 # The Seedelf Policy Id
-seedelf_policy: "ec0023109dc706d4f894e7b2a908fb715e3599dac3b51e3baa781876"
+seedelf_policy: "0e1ceea59a67ece12e067c747a3b8c900c0122beb93fc300f14f5a8b"
 #
 # Starting Block Information
-starting_block_number: 2760881
-starting_timestamp: 72575459
-starting_blockhash: "a64ddab26aea83ff2fcc7c2475edeace733904bf055f884a44656c44c4df5547"
-delay_depth: 2
+starting_block_number: 2834390
+starting_timestamp: 74560053
+starting_blockhash: "4e201fabc813f32668fbb649cbee887bdcbee6242bae6603d660b67a4df68c7a"
+delay_depth: 3
 #
 # Logging Parameters
 max_log_file_size: "5 MB"

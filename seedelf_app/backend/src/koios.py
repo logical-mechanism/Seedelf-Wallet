@@ -16,10 +16,12 @@ def get_protocol_params(network: str, file_path: str) -> dict:
     if response.status_code == 200:
         # Write the JSON response to the specified file path
         with open(file_path, 'w') as f:
-            json.dump(response.json(), f, indent=4)  # indent for pretty formatting
+            # indent for pretty formatting
+            json.dump(response.json(), f, indent=4)
         return response.json()  # return the JSON data if the request was successful
     else:
-        return f"Error: {response.status_code}, {response.text}"  # return the error details if request fails
+        # return the error details if request fails
+        return f"Error: {response.status_code}, {response.text}"
 
 
 def get_tip(network: str) -> list[dict]:
@@ -67,7 +69,8 @@ def get_credential_utxos(network: str, payment_credentials: list[str]) -> list[d
     if response.status_code == 200:
         return response.json()  # return the response as JSON
     else:
-        return f"Error: {response.status_code}, {response.text}"  # return error details
+        # return error details
+        return f"Error: {response.status_code}, {response.text}"
 
 
 def submit_transaction(network: str, file_path: str) -> str:
@@ -86,3 +89,45 @@ def submit_transaction(network: str, file_path: str) -> str:
         return "Transaction submitted successfully"
     else:
         return f"Error: {response.status_code}, {response.text}"
+
+
+def get_tx_info(network: str, tx_hashes: list[str]) -> dict:
+    prefix = "preprod" if "testnet" in network else "api"
+    url = f"https://{prefix}.koios.rest/api/v1/tx_info"
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
+    data = {
+        "_tx_hashes": tx_hashes,
+        "_inputs": True,
+        "_metadata": False,
+        "_assets": True,
+        "_withdrawals": False,
+        "_certs": False,
+        "_scripts": False,
+        "_bytecode": False
+    }
+
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return f"Error: {response.status_code}, {response.text}"
+
+
+def evaluate_transaction(network: str, tx_cbor: str):
+    prefix = "preprod" if "testnet" in network else "api"
+    url = f"https://{prefix}.koios.rest/api/v1/ogmios"
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
+    data = {
+        "jsonrpc": "2.0",
+        "method": "evaluateTransaction",
+        "params": {"transaction": {tx_cbor}},
+    }
+
+    response = requests.post(url, headers=headers, json=data)
+    return response.json()
