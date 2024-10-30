@@ -3,11 +3,12 @@ import multiprocessing
 import os
 import subprocess
 
-from api.sync import sync_bp
-from api.utxos import utxos_bp
 from flask import Flask, request
 from flask_cors import CORS
 from loguru import logger
+
+from api.sync import sync_bp
+from api.utxos import utxos_bp
 from src import yaml_file
 from src.daemon import create_toml_file
 from src.db_manager import DbManager
@@ -55,6 +56,9 @@ CORS(app, origins=['http://localhost:3000'])
 # Register the UTxOs blueprint
 app.register_blueprint(utxos_bp)
 app.register_blueprint(sync_bp)
+
+# Attach the db manager
+app.db_manager = db
 
 # Disable Flask's default logger
 log = logging.getLogger('werkzeug')

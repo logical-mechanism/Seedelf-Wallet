@@ -1,7 +1,16 @@
-from flask import Blueprint, request
+from flask import Blueprint, current_app, jsonify, request
 
 # Define a Blueprint for UTxO routes
 utxos_bp = Blueprint('utxos', __name__)
+
+
+@utxos_bp.route('/getSeedelfs', methods=['GET'])
+def get_seedelfs():
+    """do a readall on the seedelf db"""
+    db = current_app.db_manager  # Access DbManager instance from app context
+    return jsonify({
+        'seedelfs': db.seedelf.read_all()
+    }), 200
 
 
 @utxos_bp.route('/getUTxOs', methods=['POST'])
