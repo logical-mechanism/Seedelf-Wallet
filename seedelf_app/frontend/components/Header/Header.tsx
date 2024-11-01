@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Container, Text, Progress, Space } from '@mantine/core';
 import SeedelfLogo from './SeedelfLogo';
+import { CardanoWallet } from './CardanoWallet/CardanoWallet';
 import classes from './Header.module.css';
 
 function Header() {
@@ -45,6 +46,7 @@ function Header() {
   return (
     <header className={classes.header}>
       <Container className={classes.inner} >
+        <Space w="lg" />
         <SeedelfLogo />
         <Space w="lg" />
         <Container style={{ width: '100%' }}>
@@ -67,7 +69,9 @@ function Header() {
                 color={getGradientColor(parseFloat(syncStatus.sync_perc))}
               />
             )}
-        </Container>
+        </Container >
+        <Space w="lg" />
+        <CardanoWallet />
         <Space w="lg" />
       </Container>
     </header>

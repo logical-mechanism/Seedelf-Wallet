@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-
+import { useWallet } from '@meshsdk/react';
 import { Container, Text } from '@mantine/core';
 
 type Seedelf = {
@@ -11,6 +11,8 @@ type Seedelf = {
 function Account() {
   const [seedelfs, setSeedelfs] = useState<Seedelf[]>([]);
 
+  const { wallet, connected } = useWallet();
+
   useEffect(() => {
     const fetchSeedelfs = async () => {
       try {
@@ -19,7 +21,7 @@ function Account() {
         if (data.seedelfs) {
           setSeedelfs(data.seedelfs);
         }
-        
+
       } catch (error) {
         console.error('Error fetching sync status:', error);
       }
@@ -30,12 +32,14 @@ function Account() {
 
   return (
     <Container>
-      <Text>Account View</Text>
-      {seedelfs.length === 0 ? (
-        // We need to create a seedelf then
-        <Text>Empty List</Text>
+      {!connected ? (
+        // Show this when not connected
+        <Text>Please Connect A Wallet</Text>
+      ) : seedelfs.length === 0 ? (
+        // Show this when connected but no seedelfs are present
+        <Text>Need To Create Seedelf</Text>
       ) : (
-        // we  need to display the seedelf info
+        // Show the list when connected and there are seedelfs
         <ul>
           {seedelfs.map((item, index) => (
             <li key={index}>
