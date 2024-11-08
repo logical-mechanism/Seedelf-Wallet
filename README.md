@@ -98,7 +98,10 @@ v \leftarrow u^{d}
 $$
 
 $$
-h^{z} = h^{r} v^{c} \\
+h^{z} = h^{r} v^{c}
+$$
+
+$$
 (g^{d})^{z} = (g^{d})^{r +c \cdot x} = (g^{d})^{r} (g^{x})^{d \cdot c} = (g^{d})^{r} (u^{d})^{c} \\
 (g^{z})^{d} = (g^{r})^{d} (u^{c})^{d} \\
 g^{z} = g^{r} u^{c} \\
