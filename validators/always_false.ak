@@ -1,7 +1,12 @@
-//// Use this contract to store the script reference UTxO so they have to exist
+//// Use this contract to store script reference UTxOs so they exist forever.
+////
 
-validator contract(_random: ByteArray) {
+validator contract(_any: Data) {
+  //
+  // (\(\    
+  // ( -.-)   
+  // o_(")(")
   else(_) {
-    fail
+    fail @"I always fail :/"
   }
 }

@@ -1,0 +1,34 @@
+#
+# Network Information
+network: "--testnet-magic 1"
+#
+# Contract Addresses
+wallet_address: "addr_test1wpk2edu6248lqm3ecas82auzyvpsvs7vzv3tqtjvujtnxds9v3s2s"
+#
+# Address Holding Script References UTxOs
+reference_address: "addr_test1wzqrzagyulktkd8yfwfljg9mwg2wd38wtge4yl5l48tj7uctqsxrs"
+#
+# wallet and seedelf Contract Script Reference UTxOs
+wallet_ref_utxo: "e5a77b44af14ccb21e069b1410c5ae49fe44e717ec49efea907841ae890f1123#1"
+wallet_lovelace: 3723840
+#
+seedelf_ref_utxo: "e19ceca94799326295cc569b7afa168ad58cb4e5cdfb75d3816ccabc7db6d011#1"
+seedelf_lovelace: 3469550
+#
+# The Seedelf Policy Id
+seedelf_policy: "bd4cedf35ab0c42a860feea310933531588b47ae96e6074185431bd7"
+#
+# Starting Block Information
+starting_block_number: 2867363
+starting_timestamp: 75408855
+starting_blockhash: "47fe8c060510737ce683bac2db12553e0a1d35ab2d4570a48a594a9600d77011"
+delay_depth: 2
+#
+# Logging Parameters
+max_log_file_size: "5 MB"
+max_num_log_files: 1
+#
+# Available logging levels
+#
+# Options: DEBUG, INFO, SUCCESS, WARNING, ERROR, CRITICAL
+logging_level: "DEBUG"

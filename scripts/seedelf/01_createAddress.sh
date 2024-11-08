@@ -122,9 +122,7 @@ FEE=$(${cli} conway transaction build \
     --metadata-json-file ../data/pointer/metadata.json \
     ${network})
 
-IFS=':' read -ra VALUE <<< "${FEE}"
-IFS=' ' read -ra FEE <<< "${VALUE[1]}"
-echo -e "\033[1;32m Fee: \033[0m" $FEE
+echo -e "\033[1;32m ${FEE} \033[0m"
 #
 # exit
 #

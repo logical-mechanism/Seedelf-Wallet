@@ -24,39 +24,54 @@ use types/registry.{Register}
 pub type WalletRedeemer {
   // this is z = r + c * x as a bytearray
   z_b: ByteArray,
-  // this is the g^r compressed G1Element
+  // this is the g^r as a compressed G1Element
   g_r_b: ByteArray,
-  // one time use signature
-  sig: VerificationKeyHash,
+  // this vkh is used as a one time pad
+  vkh: VerificationKeyHash,
 }
 
 validator contract(_random: ByteArray) {
   spend(
     maybe_datum: Option<Data>,
-    redeemer: WalletRedeemer,
-    _output_ref: OutputReference,
+    redeemer: Data,
+    _output_reference: OutputReference,
     transaction: Transaction,
   ) {
     when maybe_datum is {
       Some(datum) ->
         if datum is Register {
           //
-          // Spend with Schnorr Proof if the datum is of type Register using a
+          // expect the redeemer to be the WalletRedeemer
+          //
+          expect wallet_redeemer: WalletRedeemer = redeemer
+          //
+          // Spend with Schnorr proof if the datum is of type Register using a
           // random verification key hash as a one-time pad for the Fiat-Shamir
           // transform. Without the one-time pad, the funds could be respendable
-          // due to the tx being drop during a rollback event.
+          // due to the tx being dropped during a rollback event.
           //
           and {
             // zk proof to spend the utxo
-            registry.prove(datum, redeemer.z_b, redeemer.g_r_b, redeemer.sig)?,
+            registry.prove(
+              datum,
+              wallet_redeemer.z_b,
+              wallet_redeemer.g_r_b,
+              wallet_redeemer.vkh,
+            )?,
             // forces a one time pad via a random key signature
-            list.has(transaction.extra_signatories, redeemer.sig)?,
+            list.has(transaction.extra_signatories, wallet_redeemer.vkh)?,
           }
         } else {
+          //
           // incorrect data structures should be spendable
+          // -- TODO
+          //
           True
         }
+      //
       // missing data structures should be spendable
+      // -- TODO
+      //
       None -> True
     }
   }

@@ -18,13 +18,14 @@ ${cli} conway query protocol-parameters ${network} --out-file ./tmp/protocol.jso
 ${cli} conway query tip ${network} | jq
 
 # wallet
-echo -e "\033[1;35m wallet Contract Address: \033[0m" 
+echo -e "\033[1;35m Wallet Contract Address: \033[0m" 
 echo -e "\n \033[1;35m ${wallet_script_address} \033[0m \n";
 ${cli} conway query utxo --address ${wallet_script_address} ${network}
 ${cli} conway query utxo --address ${wallet_script_address} ${network} --out-file ./tmp/script_utxo.json
 
 # wallet
-echo -e "\033[1;35m Script Reference UTxO: \033[0m" 
+echo -e "\033[1;35m Script Reference UTxOs: \033[0m" 
+echo -e "\n \033[1;35m ${script_reference_address} \033[0m \n";
 ${cli} conway query utxo --address ${script_reference_address} ${network}
 
 # Loop through each -wallet folder

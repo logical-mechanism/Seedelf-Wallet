@@ -9,9 +9,5 @@ rand_*.txt
 copy.plutus.json
 plutus.json
 papers/
-contracts/
-hashes/
 aiken.lock
 grind_pid.sh
-seed_elf_cli/
-app/
