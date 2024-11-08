@@ -65,6 +65,8 @@ validator contract(_random: ByteArray) {
         // Must mint one nft with the 5eed0e1f prefix.
         //
         and {
+          // prevent roll over double nft attack
+          (idx < 256)?,
           // policy must match this pid
           (policy_id == pid)?,
           // the token name must match this tkn

@@ -42,12 +42,10 @@ do
     echo -e "\033[1;37m --------------------------------------------------------------------------------\033[0m"
     echo -e "\033[1;35m\n${contract}\033[0m" 
 
-    datum="${file_name}"
     # get the required lovelace
     min_utxo=$(${cli} conway transaction calculate-min-required-utxo \
         --protocol-params-file ./tmp/protocol.json \
         --tx-out-reference-script-file ${contract} \
-        --tx-out-inline-datum-value "\"${datum}\"" \
         --tx-out="${script_reference_address} + 1000000" | tr -dc '0-9')
 
     # build the utxo
@@ -61,7 +59,6 @@ do
         --tx-out="${reference_address} + ${changeAmount}" \
         --tx-out="${script_reference_utxo}" \
         --tx-out-reference-script-file ${contract} \
-        --tx-out-inline-datum-value "\"${datum}\"" \
         --fee 1000000
 
     size=$(jq -r '.cborHex' ${contract} | awk '{print length($0)*2}')
@@ -83,7 +80,6 @@ do
         --tx-out="${reference_address} + ${changeAmount}" \
         --tx-out="${script_reference_utxo}" \
         --tx-out-reference-script-file ${contract} \
-        --tx-out-inline-datum-value "\"${datum}\"" \
         --fee ${fee}
 
     ${cli} conway transaction sign \

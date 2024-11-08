@@ -27,7 +27,7 @@ pub type WalletRedeemer {
   // this is the g^r as a compressed G1Element
   g_r_b: ByteArray,
   // this vkh is used as a one time pad
-  sig: VerificationKeyHash,
+  vkh: VerificationKeyHash,
 }
 
 validator contract(_random: ByteArray) {
@@ -56,10 +56,10 @@ validator contract(_random: ByteArray) {
               datum,
               wallet_redeemer.z_b,
               wallet_redeemer.g_r_b,
-              wallet_redeemer.sig,
+              wallet_redeemer.vkh,
             )?,
             // forces a one time pad via a random key signature
-            list.has(transaction.extra_signatories, wallet_redeemer.sig)?,
+            list.has(transaction.extra_signatories, wallet_redeemer.vkh)?,
           }
         } else {
           //

@@ -1,14 +1,12 @@
-//// Use this contract to store the script reference UTxOs for the wallet and 
-//// seedelf contract so they have to exist forever.
+//// Use this contract to store script reference UTxOs so they exist forever.
 ////
 
-validator contract(_random: ByteArray) {
+validator contract(_any: Data) {
   //
-  // (\(\
-  // ( -.-)
+  // (\(\    
+  // ( -.-)   
   // o_(")(")
-  //
   else(_) {
-    fail @"I always fail :("
+    fail @"I always fail :/"
   }
 }

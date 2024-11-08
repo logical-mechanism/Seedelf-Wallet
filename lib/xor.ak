@@ -7,10 +7,12 @@
 /// ```
 pub fn xor(a: Bool, b: Bool) -> Bool {
   and {
+    // a or b
     or {
       a,
       b,
     },
+    // but not a and b
     !and {
       a,
       b,
