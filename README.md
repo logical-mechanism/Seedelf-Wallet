@@ -90,18 +90,18 @@ From the outside viewer, the new registry appears random and can not be inverted
 #### Re-Randomization Spendability Proof
 
 $$
-h \leftarrow g^{d} \\
+h \leftarrow g^{d}
+$$
 
-v \leftarrow u^{d} \\
+$$
+v \leftarrow u^{d}
+$$
 
+$$
 h^{z} = h^{r} v^{c} \\
-
 (g^{d})^{z} = (g^{d})^{r +c \cdot x} = (g^{d})^{r} (g^{x})^{d \cdot c} = (g^{d})^{r} (u^{d})^{c} \\
-
 (g^{z})^{d} = (g^{r})^{d} (u^{c})^{d} \\
-
 g^{z} = g^{r} u^{c} \\
-
 \blacksquare
 $$
 
