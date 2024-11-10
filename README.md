@@ -1,14 +1,16 @@
 # Seedelf - A Cardano Stealth Wallet
 
-The seedelf wallet is stealth smart wallet that hides the receiver and spender using Schnorr proofs on the BLS12-381 curve.
+**Seedelf** is a Cardano stealth wallet that hides the receiver and spender with Schnorr proofs using the BLS12-381 curve.
 
-## What is a Seedelf?
+## What is a Seedelf token?
 
-**Seedelf** is a token identifier used to locate the datum of a user inside the wallet contract. A seedelf allows the datum to have a personalized touch while maintaining privacy similar to how ADAHandle work but with a slight twist.
+The wallet name, **Seedelf**, comes from the identifier token used to locate the datum of a UTxO inside the wallet contract. A seedelf allows the root datum to be easily located and provides a personalized touch while maintaining privacy. It is similar to how ADAHandle works but with a slight twist.
 
-Its main purpose is for the ease of locating the datum for address generation. Alice can ask Bob to send funds to their seedelf. Bob can find the UTxO that holds the seedelf token and will use that registry and a random integer to generate a new address for Alice.
+Its main purpose is for the ease of locating the datum for address generation. Alice can ask Bob to send funds to their seedelf. Bob can find the UTxO that holds the seedelf token and will use that datum to re-randomize a new datum for Alice. Bob will then send funds to the contract with this new randomized datum.
 
-Token name scheme:
+### Seedelf Personalization
+
+The token name scheme:
 
 ```
 5eed0e1f | personal | Idx | Tx
@@ -42,7 +44,7 @@ The stealth wallet contract is token agnostic, allowing any NFT to be the locato
 
 ## What is a Stealth Wallet?
 
-Below is a quick overview of the wallet contract using the BLS12-381 curve.
+Below is a quick overview of how the wallet contract works.
 
 ### Terminology
 
@@ -58,28 +60,41 @@ Below is a quick overview of the wallet contract using the BLS12-381 curve.
 
 ### Spendability
 
-The registry contains the generator and the public key for some UTxO. A UTxO is spendable if the transaction can provide proof of knowledge of the secret key using a Schnorr signature.
+The registry contains the generator and the public key for some UTxO. 
 
-A register in the UTxO Set, $(g, u)$, can be spent if a valid Schnorr proof exist of the form:
+```rust
+pub type Register {
+  // the generator, #<Bls12_381, G1>
+  generator: ByteArray,
+  // the public value, #<Bls12_381, G1>
+  public_value: ByteArray,
+}
+```
+
+A UTxO is spendable if the transaction can provide proof of knowledge of the secret key using a Schnorr proof. A valid Schnorr proof has the form:
 
 $$
 g^{z} = g^r u^c,
 $$
 
-where $z = r + c \cdot x$ and $u = g^{x}$. The current implementation uses the Fiat-Shamir heuristic for non-interactivity.
+where $z = r + c \cdot x$ and $u = g^{x}$. The value $g$ is the generator and $u$ is the public value. The secret value is $x$. The current implementation uses the Fiat-Shamir heuristic for non-interactivity.
 
 #### Spendability Proof
 
 $$
-g^{z} = g^{r +c \cdot x} = g^{r} g^{x \cdot c} = g^{r} (g^{x})^{c}  = g^{r} u^{c} \\ \blacksquare
+g^{z} = g^{r +c \cdot x} = g^{r} g^{x \cdot c} = g^{r} (g^{x})^{c}  = g^{r} u^{c}
+$$
+
+$$
+\blacksquare
 $$ 
 
 
 ### Stealth Address
 
-A register defines a public address used to produce a private address. A user wishing to create a stealth address for another user will find the public address and re-randomize the register as the new datum of a future UTxO.
+A register defines a public address used to produce a private address. A user wishing to create a stealth address for another user will find a public address and re-randomize the register as the new datum of a future UTxO.
 
-A user selects a random integer, d, and constructs a new registry.
+A user selects a random integer, $d$, and constructs a new registry.
 
 $$
 (g, u) \rightarrow (g^{d}, u^{d})
@@ -102,9 +117,18 @@ h^{z} = h^{r} v^{c}
 $$
 
 $$
-(g^{d})^{z} = (g^{d})^{r +c \cdot x} = (g^{d})^{r} (g^{x})^{d \cdot c} = (g^{d})^{r} (u^{d})^{c} \\
-(g^{z})^{d} = (g^{r})^{d} (u^{c})^{d} \\
-g^{z} = g^{r} u^{c} \\
+(g^{d})^{z} = (g^{d})^{r +c \cdot x} = (g^{d})^{r} (g^{x})^{d \cdot c} = (g^{d})^{r} (u^{d})^{c}
+$$
+
+$$
+(g^{z})^{d} = (g^{r})^{d} (u^{c})^{d}
+$$
+
+$$
+g^{z} = g^{r} u^{c}
+$$
+
+$$
 \blacksquare
 $$
 
@@ -112,25 +136,25 @@ The proof of re-randomization reduces to proving the original Schnorr proof.
 
 ### Finding Spendable UTxOs From The Set
 
-In the contract, there will be many UTxOs with unique registries. A user can always find their UTxOs by searching the UTxO set at the contract address and finding all the registries that satisfy $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ holds for the user's secret $x$.
+In the contract, there will be many UTxOs with unique registries. A user can always find their UTxOs by searching the UTxO set at the contract address and finding all the registries that satisfy $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ for the user's secret $x$.
 
 ### Wallet Limitations
 
-The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet.
+The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet, but instead of keeping the root key private and generating the address when asked, it is now public via a datum, and address generation is the sender's duty and not the receiver's.
 
-Sending funds requires a correct and equal `d` value applied to both elements of the registry. Incorrectly applied `d` values will be stuck inside the contract as seen in the example below.
+Sending funds requires a correct and equal $d$ value applied to both elements of the registry. Incorrectly applied $d$ values will result in a stuck UTxO inside the contract as seen in the example below.
 
 $$
-(g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } `d` \neq d'
+(g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } d \neq d'
 $$
 
 This registry would become unspendable, resulting in lost funds for both Bob and Alice.
 
 ### De-Anonymizing Attacks
 
-Three attacks are known to break the privacy of this implementation. The first attack comes from picking a bad `d` value. A small `d` value may be able to be brute-forced. The brute-force attack is circumvented by selecting a `d` value on the order of $2^{254}$. The second attack comes from not properly destroying the `d` value information after the transaction. The `d` value is considered toxic waste in this context. If the `d` values are known for some users then it becomes trivial to track the registry into the original form and lose all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the UTxO isn't anonymous to start with then it is known the entire time. This means that an outside user could track a wallet by simply watching which collaterals were used.
+Three attacks are known to break the privacy of this wallet. The first attack comes from picking a bad $d$ value. A small $d$ value may be able to be brute-forced. The brute-force attack is circumvented by selecting a $d$ value on the order of $2^{254}$. The second attack comes from not properly destroying the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users then it becomes trivial to backtrack the registry into the original form thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the collateral UTxO by definition isn't anonymous and ownership it is known the entire time. This means that an outside user could track a wallet by simply watching which collaterals were used.
 
-Privacy is preserved as long as `d` is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner.. This type of wallet can not be staked.
+Privacy is preserved as long as $d$ is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner. This type of wallet can not be staked.
 
 ## Happy Path Testing Scripts
 
@@ -153,7 +177,7 @@ Be sure to keep it safe!
 
 ### Removing Funds
 
-Removing funds is a simple process. Given a secret value x, search the UTxO set for all registies that satify the condition that $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ which do not contain your seedelf token. The seedelf UTxO may be removed but typically it is left inside the contract for location purposes. Each UTxO that a user wishes to spend requires a ZK proof to spend it, as shown below.
+Removing funds is a simple process. Given a secret value $x$, search the UTxO set for all registies that satify the condition that $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ which do not contain your seedelf token. The seedelf UTxO may be removed but typically it is left inside the contract for location purposes. Each UTxO that a user wishes to spend requires a NIZK proof to spend it, as shown below.
 
 ```rust
 /// The zero knowledge elements required for the proof. The c value will be
@@ -174,7 +198,7 @@ These ZK element combined with a registry is the only required knowledge to spen
 
 ### Sending Funds
 
-Sending funds works very similarly to removing funds but the funds are sent to a re-randomized regsitry given by finding the registry on some other seedelf token. Bob could gire-randomized UTxOs to Bob's new re-randomized registry. This act should perserve privacy. An outside user should only see random UTxOs being collected and sent to a new random registry. The link between Alice and Bob should remain hidden.
+Sending funds works very similarly to removing funds but the funds are sent to a new re-randomized regsitry given by finding the registry on some other seedelf token. This act perserves privacy. An outside user should only see random UTxOs being collected and sent to a new random registry. The link between Alice and Bob should remain hidden.
 
 ### Non-Mixablility
 
