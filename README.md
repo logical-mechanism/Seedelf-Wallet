@@ -71,7 +71,11 @@ where $z = r + c \cdot x$ and $u = g^{x}$. The current implementation uses the F
 #### Spendability Proof
 
 $$
-g^{z} = g^{r +c \cdot x} = g^{r} g^{x \cdot c} = g^{r} (g^{x})^{c}  = g^{r} u^{c} \\ \blacksquare
+g^{z} = g^{r +c \cdot x} = g^{r} g^{x \cdot c} = g^{r} (g^{x})^{c}  = g^{r} u^{c}
+$$
+
+$$
+\blacksquare
 $$ 
 
 
@@ -102,9 +106,18 @@ h^{z} = h^{r} v^{c}
 $$
 
 $$
-(g^{d})^{z} = (g^{d})^{r +c \cdot x} = (g^{d})^{r} (g^{x})^{d \cdot c} = (g^{d})^{r} (u^{d})^{c} \\
-(g^{z})^{d} = (g^{r})^{d} (u^{c})^{d} \\
-g^{z} = g^{r} u^{c} \\
+(g^{d})^{z} = (g^{d})^{r +c \cdot x} = (g^{d})^{r} (g^{x})^{d \cdot c} = (g^{d})^{r} (u^{d})^{c}
+$$
+
+$$
+(g^{z})^{d} = (g^{r})^{d} (u^{c})^{d}
+$$
+
+$$
+g^{z} = g^{r} u^{c}
+$$
+
+$$
 \blacksquare
 $$
 
@@ -121,7 +134,7 @@ The wallet is just a smart contract. It is bound by the cpu and memory units of 
 Sending funds requires a correct and equal `d` value applied to both elements of the registry. Incorrectly applied `d` values will be stuck inside the contract as seen in the example below.
 
 $$
-(g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } `d` \neq d'
+(g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } d \neq d'
 $$
 
 This registry would become unspendable, resulting in lost funds for both Bob and Alice.
