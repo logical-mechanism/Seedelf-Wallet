@@ -1,5 +1,5 @@
 /// An XOR statement between two booleans `a` and `b`. This is used to prevent
-/// burning and minting a token at the same time. It is either just burning OR
+/// burning and minting a token at the same time. It is either just burning XOR
 /// minting a token, never both.
 ///
 /// ```aiken

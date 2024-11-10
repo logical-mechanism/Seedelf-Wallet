@@ -1,10 +1,10 @@
-//// A UTxO may be spent if and only if a user can provide the proper ZK 
-//// elements to prove that g^z = g^r * u^c for a given (g, u) Register.
+//// A UTxO may be spent if and only if a user can provide the proper NIZK 
+//// elements to prove that g^z = g^r * u^c for a given (g, u) Registry.
 //// It is assumed that the set of all elements (g, u) are unique such that
 //// no two datums have the same hash. This should allow an arbitrary amount
 //// of UTxOs to be spent inside a single tx, allowing the contract to act like
 //// a wallet for some user who knows a secret value x. This user can always
-//// find their UTxOs by searching all register's for a (g, u) element where
+//// find their UTxOs by searching all registry datums for a (g, u) element where
 //// g^x = u. Another user can send a UTxO to the (g, u) element by selecting a 
 //// large random integer d then doing the transformation, 
 //// (g, u) -> (g^d, u^d). This perserves the g and u relationship while 
