@@ -13,22 +13,8 @@
 ////
 
 use aiken/collection/list
-use aiken/crypto.{VerificationKeyHash}
 use cardano/transaction.{OutputReference, Transaction}
-use types/registry.{Register}
-
-/// The zero knowledge elements required for the proof. The c value will be
-/// computed using the Fiat-Shamir heuristic. The vkh is used as a one time
-/// pad for the proof to prevent rollback attacks.
-///
-pub type WalletRedeemer {
-  // this is z = r + c * x as a bytearray
-  z_b: ByteArray,
-  // this is the g^r as a compressed G1Element
-  g_r_b: ByteArray,
-  // this vkh is used as a one time pad
-  vkh: VerificationKeyHash,
-}
+use schnorr.{Proof, Register}
 
 validator contract(_random: ByteArray) {
   spend(
@@ -43,23 +29,24 @@ validator contract(_random: ByteArray) {
           //
           // expect the redeemer to be the WalletRedeemer
           //
-          expect wallet_redeemer: WalletRedeemer = redeemer
+          expect proof: Proof = redeemer
           //
           // Spend with Schnorr proof if the datum is of type Register using a
           // random verification key hash as a one-time pad for the Fiat-Shamir
           // transform. Without the one-time pad, the funds could be respendable
-          // due to the tx being dropped during a rollback event.
+          // due to the tx being dropped during a rollback event!
           //
           and {
             // zk proof to spend the utxo
-            registry.prove(
-              datum,
-              wallet_redeemer.z_b,
-              wallet_redeemer.g_r_b,
-              wallet_redeemer.vkh,
+            schnorr.prove(
+              datum.generator,
+              datum.public_value,
+              proof.z_b,
+              proof.g_r_b,
+              proof.vkh,
             )?,
             // forces a one time pad via a random key signature
-            list.has(transaction.extra_signatories, wallet_redeemer.vkh)?,
+            list.has(transaction.extra_signatories, proof.vkh)?,
           }
         } else {
           //
