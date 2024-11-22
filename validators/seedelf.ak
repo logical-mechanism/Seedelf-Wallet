@@ -13,8 +13,7 @@ use aiken/collection/list
 use aiken/primitive/bytearray
 use cardano/assets.{AssetName, PolicyId}
 use cardano/transaction.{OutputReference, Transaction, TransactionId}
-use cardano/value
-use types/prefixes
+use token_name.{generate, seedelf}
 use xor.{xor}
 
 validator contract(_random: ByteArray) {
@@ -37,7 +36,7 @@ validator contract(_random: ByteArray) {
           // policy must match this pid
           (policy_id == pid)?,
           // token name doesn't matter, just use the prefix to match it
-          (bytearray.take(tkn, 4) == prefixes.seed)?,
+          (bytearray.take(tkn, 4) == seedelf)?,
           // a single burn
           (-1 == amt)?,
         }
@@ -59,8 +58,7 @@ validator contract(_random: ByteArray) {
         expect Some(input) = list.head(inputs)
         let id: TransactionId = input.output_reference.transaction_id
         let idx: Int = input.output_reference.output_index
-        let token_name: AssetName =
-          value.unique_token_name(id, idx, prefixes.seed, personal_tag)
+        let token_name: AssetName = generate(id, idx, seedelf, personal_tag)
         //
         // Must mint one nft with the 5eed0e1f prefix.
         //
