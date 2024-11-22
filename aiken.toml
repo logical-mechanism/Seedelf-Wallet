@@ -15,9 +15,4 @@ name = "aiken-lang/stdlib"
 version = "v2.1.0"
 source = "github"
 
-[[dependencies]]
-name = "logical-mechanism/assist"
-version = "v0.5.1"
-source = "github"
-
 [config]
