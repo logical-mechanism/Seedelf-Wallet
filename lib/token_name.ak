@@ -19,13 +19,11 @@ pub fn generate(
   let prepend_index: ByteArray = bytearray.push(txid, idx)
   // the personal part max length is 15
   let trimmed_personal: ByteArray = bytearray.slice(personal, 0, 14)
-  // concat the name
-  let prepend_prefix: ByteArray =
-    prefix
-      |> bytearray.concat(trimmed_personal)
-      |> bytearray.concat(prepend_index)
-  // slice off the first 32
-  bytearray.slice(prepend_prefix, 0, 31)
+  // concat the name then slice off the first 32 bytes ( length 64 tkn)
+  prefix
+    |> bytearray.concat(trimmed_personal)
+    |> bytearray.concat(prepend_index)
+    |> bytearray.slice(0, 31)
 }
 
 test no_prefix_token_name() {
@@ -66,4 +64,22 @@ test real_token_name2() {
     tkn == #"5eed0e1facab004172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce",
     bytearray.length(tkn) == 32,
   }
+}
+
+test rollover_attack() fail {
+  let tkn1: AssetName =
+    generate(
+      #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
+      0,
+      seedelf,
+      #"acab",
+    )
+  let tkn2: AssetName =
+    generate(
+      #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
+      256,
+      seedelf,
+      #"acab",
+    )
+  tkn1 == tkn2
 }

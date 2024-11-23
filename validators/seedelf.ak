@@ -16,7 +16,7 @@ use cardano/transaction.{OutputReference, Transaction, TransactionId}
 use token_name.{generate, seedelf}
 use xor.{xor}
 
-validator contract(_random: ByteArray) {
+validator contract(_any: Data) {
   mint(personal_tag: ByteArray, policy_id: PolicyId, transaction: Transaction) {
     //
     // Burn one xor mint one.
@@ -63,7 +63,7 @@ validator contract(_random: ByteArray) {
         // Must mint one nft with the 5eed0e1f prefix.
         //
         and {
-          // prevent roll over double nft attack
+          // prevent roll over
           (idx < 256)?,
           // policy must match this pid
           (policy_id == pid)?,

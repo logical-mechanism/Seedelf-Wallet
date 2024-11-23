@@ -34,7 +34,7 @@ fn fiat_shamir_heuristic(
   g_r_b: ByteArray,
   // compressed g^x element
   u_b: ByteArray,
-  // a bound used to create one time transforms
+  // a bound used to create one time pads
   b: ByteArray,
 ) -> ByteArray {
   // concat g_b, g_r_b, u_b, and b together then hash the result
@@ -78,7 +78,7 @@ test cheapest_hash() {
 
 /// A Schnorr proof to prove knowledge of the secret value x without revealing 
 /// the value in the process. The proof uses, in multiplicative form, 
-/// g^z = g^r * u^c, where z = r + c*x and u = g^x. This function uses the 
+/// g^z = g^r * u^c, where z = r + c * x and u = g^x. This function uses the 
 /// Fiat-Shamir heuristic for non-interactivity.
 ///
 /// ```aiken
@@ -92,7 +92,12 @@ pub fn prove(
   bound: ByteArray,
 ) -> Bool {
   //
-  // the z computation: g^z = g^(r + c * x) = g^r * g^(c * x) = g^r * (g^x)^c
+  // the z computation:
+  //                    g^z = g^(r + c * x) 
+  //                        = g^r * g^(c * x) 
+  //                        = g^r * (g^x)^c
+  //                        = g^r * u^c
+  //
   expect Some(z): Option<Scalar> = scalar.from_bytearray_big_endian(z_b)
   let g_z: G1Element = g1.decompress(generator) |> g1.scale(z)
   //
