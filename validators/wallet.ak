@@ -23,6 +23,8 @@ validator contract(_any: Data) {
     _output_reference: OutputReference,
     transaction: Transaction,
   ) {
+    //
+    // first do a data structure check
     when maybe_register is {
       Some(register) ->
         if register is Register {
@@ -59,6 +61,7 @@ validator contract(_any: Data) {
     }
   }
 
+  // Spend Only
   else(_) {
     fail
   }

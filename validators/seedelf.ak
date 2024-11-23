@@ -53,7 +53,7 @@ validator contract(_any: Data) {
           mint
             |> assets.flatten()
         //
-        // use the first input to create a unique token name using the seedelf prefix
+        // use the first input to generate a token name using the seedelf prefix
         //
         expect Some(input) = list.head(inputs)
         let id: TransactionId = input.output_reference.transaction_id
@@ -76,6 +76,7 @@ validator contract(_any: Data) {
     )
   }
 
+  // Mint Only
   else(_) {
     fail
   }

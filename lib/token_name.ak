@@ -2,6 +2,11 @@ use aiken/primitive/bytearray
 use cardano/assets.{AssetName}
 use cardano/transaction.{TransactionId}
 
+/// The default seed elf token name prefix.
+///
+/// ```aiken
+/// token_name.seedelf
+/// ```
 pub const seedelf: ByteArray = #"5eed0e1f"
 
 /// Generate a unique token name from a `TxId#Idx`, personal tag, and a prefix.
