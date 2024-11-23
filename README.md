@@ -1,6 +1,6 @@
 # Seedelf - A Cardano Stealth Wallet
 
-**Seedelf** is a Cardano stealth wallet that hides the receiver and spender with Schnorr proofs using the BLS12-381 curve.
+**Seedelf** is a stealth wallet that hides the receiver and spender with Schnorr proofs using the BLS12-381 curve.
 
 ## What is a Seedelf token?
 
@@ -50,17 +50,17 @@ Below is a quick overview of how the wallet contract works.
 
 `Generator`: An element of the curve that will produce more elements of the curve with scaler multiplication.
 
-`G1`: The base g1 generator.
+`G1`: The base $\mathbb{G}_{1}$ generator from BLS12-381.
 
-`Public Key`: The public key element of the curve, this information is known publicly.
+`Public Value`: The public value element of the curve, this information is known publicly.
 
-`Registry`: The datum consisting the generator and the public key.
+`Register`: The datum consisting the generator and the public value.
 
-`Re-Randomizing`: The construction of a new registry from an existing and valid registry.
+`Re-Randomizing`: The construction of a new register from an existing register.
 
 ### Spendability
 
-The registry contains the generator and the public key for some UTxO. 
+The register contains the generator and the public key for some UTxO. 
 
 ```rust
 pub type Register {
@@ -94,13 +94,13 @@ $$
 
 A register defines a public address used to produce a private address. A user wishing to create a stealth address for another user will find a public address and re-randomize the register as the new datum of a future UTxO.
 
-A user selects a random integer, $d$, and constructs a new registry.
+A user selects a random integer, $d$, and constructs a new register.
 
 $$
 (g, u) \rightarrow (g^{d}, u^{d})
 $$
 
-From the outside viewer, the new registry appears random and can not be inverted back into the public registry because we assume the Elliptic Curve Decisional-Diffie-Hellman (ECDDH) problem is hard. The scalar multiplication of the registry maintains spendability while providing privacy about who owns the UTxO.
+From the outside viewer, the new register appears random and can not be inverted back into the public register because we assume the Elliptic Curve Decisional-Diffie-Hellman (ECDDH) problem is hard. The scalar multiplication of the register maintains spendability while providing privacy about who owns the UTxO.
 
 #### Re-Randomization Spendability Proof
 
@@ -136,23 +136,23 @@ The proof of re-randomization reduces to proving the original Schnorr proof.
 
 ### Finding Spendable UTxOs From The Set
 
-In the contract, there will be many UTxOs with unique registries. A user can always find their UTxOs by searching the UTxO set at the contract address and finding all the registries that satisfy $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ for the user's secret $x$.
+In the contract, there will be many UTxOs with unique registers. A user can always find their UTxOs by searching the UTxO set at the contract address and finding all the registers that satisfy $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ for the user's secret $x$.
 
 ### Wallet Limitations
 
 The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet, but instead of keeping the root key private and generating the address when asked, it is now public via a datum, and address generation is the sender's duty and not the receiver's.
 
-Sending funds requires a correct and equal $d$ value applied to both elements of the registry. Incorrectly applied $d$ values will result in a stuck UTxO inside the contract as seen in the example below.
+Sending funds requires a correct and equal $d$ value applied to both elements of the register. Incorrectly applied $d$ values will result in a stuck UTxO inside the contract as seen in the example below.
 
 $$
 (g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } d \neq d'
 $$
 
-This registry would become unspendable, resulting in lost funds for both Bob and Alice.
+This register would become unspendable, resulting in lost funds for both Bob and Alice.
 
 ### De-Anonymizing Attacks
 
-Three attacks are known to break the privacy of this wallet. The first attack comes from picking a bad $d$ value. A small $d$ value may be able to be brute-forced. The brute-force attack is circumvented by selecting a $d$ value on the order of $2^{254}$. The second attack comes from not properly destroying the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users then it becomes trivial to backtrack the registry into the original form thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the collateral UTxO by definition isn't anonymous and ownership it is known the entire time. This means that an outside user could track a wallet by simply watching which collaterals were used.
+Three attacks are known to break the privacy of this wallet. The first attack comes from picking a bad $d$ value. A small $d$ value may be able to be brute-forced. The brute-force attack is circumvented by selecting a $d$ value on the order of $2^{254}$. The second attack comes from not properly destroying the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users then it becomes trivial to invert the register into the original form thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the collateral UTxO by definition isn't anonymous and the ownership is known the entire time. This means that an outside user could track a user's actions by simply watching which collaterals were used during transactions.
 
 Privacy is preserved as long as $d$ is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner. This type of wallet can not be staked.
 
@@ -162,14 +162,14 @@ The happy paths follow Alice and Bob as they interact with their seedelf wallets
 
 ### Creating A seedelf
 
-A seedelf will be saved locally inside a file. This file is a simple way to store the secret value $x$ and the original registry values.
+A seedelf will be saved locally inside a file. This file is a simple way to store the secret value $x$ and the original register values.
 
 An example seedelf file is shown below.
 ```json
 {
-    "a": "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
-    "b": "a2e4786cbc52f9e2f5266ed7fcabe88e01ba92e652c8be79b994c522724bba015ccdd038f42aa03f907a0f6ffe16fc4c",
-    "secret": 6626762640525735488664943722689229887125200532629070040776184331198666927087
+  "a": "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+  "b": "8912c5a3e0a3f6dfeee8ab7e1559ad2ff40c4caf32c952593a1ab8863662c26e795176b3bb8930c58f566c53a885452c",
+  "secret": 50932149572198509980040270467982453407914038612833920156636550490899997953674
 }
 ```
 
@@ -184,30 +184,30 @@ Removing funds is a simple process. Given a secret value $x$, search the UTxO se
 /// computed using the Fiat-Shamir heuristic. The vkh is used as a one time
 /// pad for the proof to prevent rollback attacks.
 ///
-pub type WalletRedeemer {
+pub type Proof {
   // this is z = r + c * x as a bytearray
   z_b: ByteArray,
   // this is the g^r compressed G1Element
   g_r_b: ByteArray,
   // one time use signature
-  sig: VerificationKeyHash,
+  vkh: VerificationKeyHash,
 }
 ```
 
-These ZK element combined with a registry is the only required knowledge to spend a UTxO. The spent UTxOs can be sent to any non-seedelf wallet or can be recombined into a new UTxO inside the seedelf wallet with a new re-randomzied registry.
+These ZK element combined with a register is the only required knowledge to spend a UTxO. The spent UTxOs can be sent to any non-seedelf wallet or can be recombined into a new UTxO inside the seedelf wallet with a new re-randomzied register. A random key signature is required to create a one-time pad for the proof as funds could be respendable without it due to the transaction being dropped during a rollback event and a user being able to pick off the proof and resubmit. This is completely circumvented by having a random key sign the transaction and using that verification key hash inside of the Fiat-Shamir transform.
 
 ### Sending Funds
 
-Sending funds works very similarly to removing funds but the funds are sent to a new re-randomized regsitry given by finding the registry on some other seedelf token. This act perserves privacy. An outside user should only see random UTxOs being collected and sent to a new random registry. The link between Alice and Bob should remain hidden.
+Sending funds works very similarly to removing funds but the funds are sent to a new re-randomized register given by finding the register on some other seedelf token. This act perserves privacy. An outside user should only see random UTxOs being collected and sent to a new random register. The link between Alice and Bob should remain hidden.
 
 ### Non-Mixablility
 
-Spendability is always in the hands of the original owner. If two UTxOs are being spent then it is safe to assume it is the same owner because if two different users spent UTxOs together inside of a single transaction then there would be no way to ensure funds are not lost or stolen by one of the parties. If Alice and Bob are working together then either Alice or Bob has the chance of losing funds. Inside of real mixers the chance of losing funds does not exist as the spendability is arbitrary thus ensuring the mixing probably exists. This is not the case inside the seedelf wallet.
+Spendability is always in the hands of the original owner. If two UTxOs are being spent then it is safe to assume it is the same owner because if two different users spent UTxOs together inside of a single transaction then there would be no way to ensure funds are not lost or stolen by one of the parties. If Alice and Bob are working together then either Alice or Bob has the chance of losing funds. Inside of real mixers the chance of losing funds does not exist as the spendability is arbitrary thus ensuring the mixing probably exists. This is not the case inside the seedelf wallet. This wallet is purely just for stealth not for mixing.
 
 ## Defeating The Collateral Problem
 
-TODO
+- TODO
 
 ## The Seedelf Application
 
-TODO
+- TODO

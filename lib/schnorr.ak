@@ -34,7 +34,7 @@ fn fiat_shamir_heuristic(
   g_r_b: ByteArray,
   // compressed g^x element
   u_b: ByteArray,
-  // a bound used to create one time transforms
+  // a bound used to create one time pads
   b: ByteArray,
 ) -> ByteArray {
   // concat g_b, g_r_b, u_b, and b together then hash the result
@@ -78,11 +78,11 @@ test cheapest_hash() {
 
 /// A Schnorr proof to prove knowledge of the secret value x without revealing 
 /// the value in the process. The proof uses, in multiplicative form, 
-/// g^z = g^r * u^c, where z = r + c*x and u = g^x. This function uses the 
+/// g^z = g^r * u^c, where z = r + c * x and u = g^x. This function uses the 
 /// Fiat-Shamir heuristic for non-interactivity.
 ///
 /// ```aiken
-/// registry.prove(generator, public_value, z_b, g_r_b, bound)
+/// schnorr.prove(generator, public_value, z_b, g_r_b, bound)
 /// ```
 pub fn prove(
   generator: ByteArray,
@@ -92,7 +92,12 @@ pub fn prove(
   bound: ByteArray,
 ) -> Bool {
   //
-  // the z computation: g^z = g^(r + c * x) = g^r * g^(c * x) = g^r * (g^x)^c
+  // the z computation:
+  //                    g^z = g^(r + c * x) 
+  //                        = g^r * g^(c * x) 
+  //                        = g^r * (g^x)^c
+  //                        = g^r * u^c
+  //
   expect Some(z): Option<Scalar> = scalar.from_bytearray_big_endian(z_b)
   let g_z: G1Element = g1.decompress(generator) |> g1.scale(z)
   //
@@ -216,6 +221,34 @@ test invalid_schnorr_proof() fail {
   expect Some(c): Option<Scalar> = scalar.from_bytearray_big_endian(c_b)
   // the bad z value, it assumes the secret is the challenge
   let z: Scalar = scalar.mul(c, c) |> scalar.add(r)
+  let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
+  prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
+}
+
+// shows how it is constant time
+test simple_schnorr_proof() {
+  // some secret x 
+  expect Some(x): Option<Scalar> = scalar.new(44203)
+  // the datum register using the g1 generator and the public value for x
+  let datum: Register =
+    Register {
+      generator: g1.generator |> g1.compress,
+      public_value: g1.generator |> g1.scale(x) |> g1.compress,
+    }
+  // a random number
+  expect Some(r): Option<Scalar> = scalar.new(1337)
+  // the bound, something unique from the tx
+  let bound: ByteArray = #"acab"
+  // calculate the g^r term
+  let g: G1Element = g1.generator
+  let g_r: G1Element = g1.scale(g, r)
+  let g_r_b: ByteArray = g_r |> g1.compress
+  // the challenge number using a fiat shamir transform
+  let c_b: ByteArray =
+    fiat_shamir_heuristic(datum.generator, g_r_b, datum.public_value, bound)
+  expect Some(c): Option<Scalar> = scalar.from_bytearray_big_endian(c_b)
+  // the z value
+  let z: Scalar = scalar.mul(c, x) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
   prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }

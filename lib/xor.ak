@@ -6,6 +6,7 @@
 /// xor(a, b)
 /// ```
 pub fn xor(a: Bool, b: Bool) -> Bool {
+  // `xor` is actually an `and` of an `or` and `not and`
   and {
     // a or b
     or {
@@ -37,27 +38,9 @@ test true_false_xor() {
 }
 
 test good_bracket_xor() {
-  xor(
-    {
-      let x = 2
-      x == 2
-    },
-    {
-      let y = 1
-      y == 2
-    },
-  ) == True
+  xor(2 == 2, 1 == 2) == True
 }
 
 test bad_bracket_xor() {
-  xor(
-    {
-      let x = 2
-      x == 2
-    },
-    {
-      let y = 1
-      y == 1
-    },
-  ) == False
+  xor(2 == 2, 1 == 1) == False
 }

@@ -13,6 +13,8 @@ reference_address=$(cat ./wallets/reference-wallet/payment.addr)
 # always false to hold script utxo
 always_false_script_path="../contracts/always_false_contract.plutus"
 script_reference_address=$(${cli} conway address build --payment-script-file ${always_false_script_path} ${network})
+# we can use the reference address for testing
+# script_reference_address=${reference_address}
 
 echo -e "\033[0;35m\nGathering UTxO Information  \033[0m"
 ${cli} conway query utxo \
