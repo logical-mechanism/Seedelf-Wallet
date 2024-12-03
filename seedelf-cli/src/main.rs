@@ -18,6 +18,8 @@ enum Commands {
     Welcome,
     /// Displays wallet information
     WalletInfo,
+    /// Calculates wallet balance
+    Balance,
 }
 
 fn main() {
@@ -32,6 +34,9 @@ fn main() {
         }
         Commands::WalletInfo => {
             commands::wallet_info::run();
+        }
+        Commands::Balance => {
+            commands::balance::run();
         }
     }
 }

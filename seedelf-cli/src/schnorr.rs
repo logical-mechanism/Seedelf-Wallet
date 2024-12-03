@@ -37,6 +37,20 @@ pub fn create_register(sk: Scalar) -> (String, String) {
     )
 }
 
+pub fn is_owned(generator: &str, public_value: &str, sk: Scalar) -> bool {
+    let g1 = G1Affine::from_compressed(
+        &hex::decode(generator)
+            .expect("Failed to decode generator hex")
+            .try_into()
+            .expect("Invalid generator length"),
+    )
+    .expect("Failed to decompress generator");
+
+    let g_x = G1Projective::from(g1) * sk;
+
+    hex::encode(g_x.to_compressed()) == public_value
+}
+
 pub fn create_proof(generator: &str, public_value: &str, sk: Scalar, bound: &str) -> (String, String) {
     let r: Scalar = random_scaler();
     let g1 = G1Affine::from_compressed(

@@ -1,5 +1,5 @@
 use blstrs::Scalar;
-use seedelf_cli::schnorr::{fiat_shamir_heuristic, prove, create_register, create_proof, random_scaler, rerandomize};
+use seedelf_cli::schnorr::{fiat_shamir_heuristic, prove, create_register, create_proof, random_scaler, rerandomize, is_owned};
 
 #[test]
 fn test_empty_string() {
@@ -82,6 +82,7 @@ fn create_random_proof_and_test_it() {
     let (z_b, g_r_b) = create_proof(&generator, &public_value, sk, bound);
     assert!(prove(&generator, &public_value, &z_b, &g_r_b, bound))
 }
+
 #[test]
 fn create_random_proof_rerandomize_it_and_test_it() {
     let sk: Scalar = random_scaler();
@@ -90,4 +91,21 @@ fn create_random_proof_rerandomize_it_and_test_it() {
     let bound = "acab";
     let (z_b, g_r_b) = create_proof(&rgenerator, &rpublic_value, sk, bound);
     assert!(prove(&rgenerator, &rpublic_value, &z_b, &g_r_b, bound))
+}
+
+#[test]
+fn valid_is_owned() {
+    let sk: Scalar = random_scaler();
+    let (generator, public_value) = create_register(sk);
+    let (rgenerator, rpublic_value) = rerandomize(&generator, &public_value);
+    assert!(is_owned(&rgenerator, &rpublic_value, sk))
+}
+
+#[test]
+fn invalid_is_owned() {
+    let sk1: Scalar = random_scaler();
+    let sk2: Scalar = random_scaler();
+    let (generator, public_value) = create_register(sk1);
+    let (rgenerator, rpublic_value) = rerandomize(&generator, &public_value);
+    assert!(!is_owned(&rgenerator, &rpublic_value, sk2))
 }
