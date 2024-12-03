@@ -11,3 +11,4 @@ plutus.json
 papers/
 aiken.lock
 grind_pid.sh
+app/

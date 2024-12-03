@@ -9,7 +9,7 @@ mkdir -p hashes
 rm contracts/* || true
 rm hashes/* || true
 
-# delete the build folder all together
+# delete the build folder
 rm -fr build/ || true
 
 # compile the scripts with aiken build

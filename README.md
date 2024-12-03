@@ -1,6 +1,6 @@
 # Seedelf - A Cardano Stealth Wallet
 
-**Seedelf** is a stealth wallet that hides the receiver and spender with Schnorr proofs using the BLS12-381 curve.
+**Seedelf** is a stealth wallet that hides the receiver and spender with Schnorr proofs using the BLS12-381 curve. UTxOs inside the wallet are indistinguishable from one-another and it is not possible to deduce the intended receiver assuming that the Elliptic Curve Decisional-Diffie-Hellman (ECDDH) problem is hard.
 
 ## What is a Seedelf token?
 
@@ -97,20 +97,12 @@ A register defines a public address used to produce a private address. A user wi
 A user selects a random integer, $d$, and constructs a new register.
 
 $$
-(g, u) \rightarrow (g^{d}, u^{d})
+(g, u) \rightarrow (g^{d}, u^{d}) \rightarrow (h, v)
 $$
 
 From the outside viewer, the new register appears random and can not be inverted back into the public register because we assume the Elliptic Curve Decisional-Diffie-Hellman (ECDDH) problem is hard. The scalar multiplication of the register maintains spendability while providing privacy about who owns the UTxO.
 
 #### Re-Randomization Spendability Proof
-
-$$
-h \leftarrow g^{d}
-$$
-
-$$
-v \leftarrow u^{d}
-$$
 
 $$
 h^{z} = h^{r} v^{c}
@@ -142,13 +134,13 @@ In the contract, there will be many UTxOs with unique registers. A user can alwa
 
 The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet, but instead of keeping the root key private and generating the address when asked, it is now public via a datum, and address generation is the sender's duty and not the receiver's.
 
-Sending funds requires a correct and equal $d$ value applied to both elements of the register. Incorrectly applied $d$ values will result in a stuck UTxO inside the contract as seen in the example below.
+Sending funds requires a correct and equal $d$ value applied to both elements of the register. Incorrectly applied $d$ values will result in a stuck UTxO inside the contract.
 
 $$
 (g, u) \rightarrow (g^{d}, u^{d'}) \quad \text{where } d \neq d'
 $$
 
-This register would become unspendable, resulting in lost funds for both Bob and Alice.
+This register would become unspendable, resulting in lost funds.
 
 ### De-Anonymizing Attacks
 
