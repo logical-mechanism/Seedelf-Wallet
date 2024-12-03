@@ -14,3 +14,5 @@ rand_core = { version = "0.6.4", features = ["std"] }
 serde_json = "1.0.133"
 ff = "0.13.0"
 blake2 = "0.10.6"
+reqwest = "0.12.9"
+tokio = "1.41.1"

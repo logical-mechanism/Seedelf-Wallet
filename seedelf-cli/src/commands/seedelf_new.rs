@@ -7,6 +7,11 @@ pub struct LabelArgs {
     label: String,
 }
 
-pub fn run(args: LabelArgs) {
+pub fn run(args: LabelArgs, network_flag: bool) {
     println!("Label: {}", args.label);
+    if network_flag {
+        println!("Running in network_flag environment");
+    } else {
+        println!("Running in mainnet environment");
+    }
 }

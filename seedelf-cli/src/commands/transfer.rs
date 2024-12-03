@@ -12,7 +12,12 @@ pub struct TransforArgs {
     amount: i32,
 }
 
-pub fn run(args: TransforArgs) {
+pub fn run(args: TransforArgs, network_flag: bool) {
     println!("Seedelf: {}", args.seedelf);
     println!("Amount: {}", args.amount);
+    if network_flag {
+        println!("Running in network_flag environment");
+    } else {
+        println!("Running in mainnet environment");
+    }
 }

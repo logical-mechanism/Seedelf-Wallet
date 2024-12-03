@@ -8,6 +8,10 @@ mod setup;
 #[command(version = "0.0.1")]
 #[command(about = "A Cardano Stealth Wallet", long_about = None)]
 struct Cli {
+    /// preprod flag, defaults to mainnet
+    #[arg(long, global = true)]
+    preprod: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -38,30 +42,35 @@ fn main() {
 
     let cli = Cli::parse();
 
+    // Use the global `preprod` flag
+    if cli.preprod {
+        println!("Running in preprod environment");
+    }
+
     match cli.command {
         Commands::Welcome => {
             commands::welcome::run();
         }
         Commands::WalletInfo => {
-            commands::wallet_info::run();
+            commands::wallet_info::run(cli.preprod);
         }
         Commands::Balance => {
-            commands::balance::run();
+            commands::balance::run(cli.preprod);
         }
         Commands::Transfer(args) => {
-            commands::transfer::run(args);
+            commands::transfer::run(args, cli.preprod);
         }
         Commands::Sweep(args) => {
-            commands::sweep::run(args);
+            commands::sweep::run(args, cli.preprod);
         }
         Commands::SeedelfAll => {
-            commands::seedelf_all::run();
+            commands::seedelf_all::run(cli.preprod);
         }
         Commands::SeedelfNew(args) => {
-            commands::seedelf_new::run(args);
+            commands::seedelf_new::run(args, cli.preprod);
         }
         Commands::SeedelfRemove(args) => {
-            commands::seedelf_remove::run(args);
+            commands::seedelf_remove::run(args, cli.preprod);
         }
     }
 }

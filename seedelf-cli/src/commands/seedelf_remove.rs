@@ -7,6 +7,11 @@ pub struct RemoveArgs {
     seedelf: String,
 }
 
-pub fn run(args: RemoveArgs) {
+pub fn run(args: RemoveArgs, network_flag: bool) {
     println!("Seedelf: {}", args.seedelf);
+    if network_flag {
+        println!("Running in network_flag environment");
+    } else {
+        println!("Running in mainnet environment");
+    }
 }

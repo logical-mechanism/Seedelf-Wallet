@@ -12,7 +12,12 @@ pub struct SweepArgs {
     amount: i32,
 }
 
-pub fn run(args: SweepArgs) {
+pub fn run(args: SweepArgs, network_flag: bool) {
     println!("Address: {}", args.address);
     println!("Amount: {}", args.amount);
+    if network_flag {
+        println!("Running in network_flag environment");
+    } else {
+        println!("Running in mainnet environment");
+    }
 }
