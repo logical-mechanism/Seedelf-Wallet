@@ -36,16 +36,12 @@ enum Commands {
     SeedelfRemove(commands::seedelf_remove::RemoveArgs),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // Pre-run checks for `.seedelf`
     setup::check_and_prepare_seedelf();
 
     let cli = Cli::parse();
-
-    // Use the global `preprod` flag
-    if cli.preprod {
-        println!("Running in preprod environment");
-    }
 
     match cli.command {
         Commands::Welcome => {
@@ -55,7 +51,9 @@ fn main() {
             commands::wallet_info::run(cli.preprod);
         }
         Commands::Balance => {
-            commands::balance::run(cli.preprod);
+            if let Err(err) = commands::balance::run(cli.preprod).await {
+                eprintln!("Error: {}", err);
+            }
         }
         Commands::Transfer(args) => {
             commands::transfer::run(args, cli.preprod);

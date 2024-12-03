@@ -3,7 +3,7 @@ use blstrs::{G1Affine, G1Projective, Scalar};
 
 use ff::Field;
 use hex;
-use rand_core::OsRng; // Import both Field and PrimeField traits
+use rand_core::OsRng;
 
 pub fn fiat_shamir_heuristic(g_b: &str, g_r_b: &str, u_b: &str, b: &str) -> String {
     // Concatenate the strings
