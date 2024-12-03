@@ -144,6 +144,11 @@ test valid_schnorr_proof() {
   // the z value
   let z: Scalar = scalar.mul(c, x) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
+  trace datum.generator
+  trace datum.public_value
+  trace z_b
+  trace g_r_b
+  trace bound
   prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }
 
@@ -189,6 +194,11 @@ test randomized_valid_schnorr_proof() {
   // the z value
   let z: Scalar = scalar.mul(c, x) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
+  trace datum_rng.generator
+  trace datum_rng.public_value
+  trace z_b
+  trace g_r_b
+  trace bound
   prove(datum_rng.generator, datum_rng.public_value, z_b, g_r_b, bound)
 }
 
@@ -251,4 +261,17 @@ test simple_schnorr_proof() {
   let z: Scalar = scalar.mul(c, x) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
   prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
+}
+
+test simple_regsiter() {
+  // some secret x 
+  expect Some(x): Option<Scalar> = scalar.new(18446744073709551606)
+  // the datum register using the g1 generator and the public value for x
+  let datum: Register =
+    Register {
+      generator: g1.generator |> g1.compress,
+      public_value: g1.generator |> g1.scale(x) |> g1.compress,
+    }
+  trace datum
+  True
 }

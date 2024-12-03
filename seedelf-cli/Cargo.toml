@@ -13,3 +13,4 @@ hex = "0.4.3"
 rand_core = { version = "0.6.4", features = ["std"] }
 serde_json = "1.0.133"
 ff = "0.13.0"
+blake2 = "0.10.6"

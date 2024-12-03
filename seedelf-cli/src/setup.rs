@@ -1,10 +1,10 @@
 use blstrs::Scalar;
-use ff::{Field, PrimeField}; // Import both Field and PrimeField traits
+use ff::PrimeField;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use rand_core::OsRng;
+use seedelf_cli::schnorr::random_scaler;
 
 /// Data structure for storing wallet information
 #[derive(Serialize, Deserialize)]
@@ -55,7 +55,7 @@ fn prompt_wallet_name() -> String {
 /// Create a wallet file and save a random private key
 fn create_wallet(wallet_path: &PathBuf) {
     // Generate a random private key
-    let sk = Scalar::random(&mut OsRng); // Requires `Field` trait in scope
+    let sk = random_scaler(); // Requires `Field` trait in scope
     let private_key_bytes = sk.to_repr(); // Use `to_repr()` to get canonical bytes
     let private_key_hex = hex::encode(private_key_bytes);
 
