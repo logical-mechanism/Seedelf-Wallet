@@ -20,6 +20,8 @@ enum Commands {
     WalletInfo,
     /// Calculates wallet balance
     Balance,
+    /// Send ADA to a Seedelf
+    Transfer(commands::transfer::TransforArgs)
 }
 
 fn main() {
@@ -37,6 +39,9 @@ fn main() {
         }
         Commands::Balance => {
             commands::balance::run();
+        }
+        Commands::Transfer(args) => {
+            commands::transfer::run(args);
         }
     }
 }
