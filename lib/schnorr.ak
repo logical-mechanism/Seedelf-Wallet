@@ -273,5 +273,5 @@ test simple_regsiter() {
       public_value: g1.generator |> g1.scale(x) |> g1.compress,
     }
   trace datum
-  True
+  datum == datum
 }
