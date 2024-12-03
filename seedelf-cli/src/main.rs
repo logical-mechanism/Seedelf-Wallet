@@ -21,7 +21,15 @@ enum Commands {
     /// Calculates wallet balance
     Balance,
     /// Send ADA to a Seedelf
-    Transfer(commands::transfer::TransforArgs)
+    Transfer(commands::transfer::TransforArgs),
+    /// Send ADA to an address
+    Sweep(commands::sweep::SweepArgs),
+    /// Display All Seedelfs
+    SeedelfAll,
+    /// Create a new Seedelf
+    SeedelfNew(commands::seedelf_new::LabelArgs),
+    /// Remove a new Seedelf
+    SeedelfRemove(commands::seedelf_remove::RemoveArgs),
 }
 
 fn main() {
@@ -42,6 +50,18 @@ fn main() {
         }
         Commands::Transfer(args) => {
             commands::transfer::run(args);
+        }
+        Commands::Sweep(args) => {
+            commands::sweep::run(args);
+        }
+        Commands::SeedelfAll => {
+            commands::seedelf_all::run();
+        }
+        Commands::SeedelfNew(args) => {
+            commands::seedelf_new::run(args);
+        }
+        Commands::SeedelfRemove(args) => {
+            commands::seedelf_remove::run(args);
         }
     }
 }
