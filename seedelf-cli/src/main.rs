@@ -24,18 +24,18 @@ enum Commands {
     WalletInfo,
     /// Calculates wallet balance
     Balance,
-    /// Send ADA to a Seedelf
+    /// Send ADA from a Seedelf to a Seedelf
     Transfer(commands::transfer::TransforArgs),
-    /// Send ADA to an address
+    /// Send ADA from a Seedelf to an address
     Sweep(commands::sweep::SweepArgs),
-    /// Display All Seedelfs
+    /// Send ADA from an address to a Seedelf
+    Fund(commands::fund::FundArgs),
+    /// Display all Seedelfs
     SeedelfAll,
     /// Create a new Seedelf
     SeedelfNew(commands::seedelf_new::LabelArgs),
-    /// Remove a new Seedelf
+    /// Remove a Seedelf
     SeedelfRemove(commands::seedelf_remove::RemoveArgs),
-    /// Fund a seedelf
-    Fund(commands::fund::FundArgs),
 }
 
 #[tokio::main]
@@ -63,6 +63,9 @@ async fn main() {
         Commands::Sweep(args) => {
             commands::sweep::run(args, cli.preprod);
         }
+        Commands::Fund(args) => {
+            commands::fund::run(args, cli.preprod);
+        }
         Commands::SeedelfAll => {
             commands::seedelf_all::run(cli.preprod);
         }
@@ -71,9 +74,6 @@ async fn main() {
         }
         Commands::SeedelfRemove(args) => {
             commands::seedelf_remove::run(args, cli.preprod);
-        }
-        Commands::Fund(args) => {
-            commands::fund::run(args, cli.preprod);
         }
     }
 }
