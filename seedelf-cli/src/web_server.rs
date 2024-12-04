@@ -16,7 +16,7 @@ pub async fn run_web_server(message: String) {
         // Replace the JSON content inside the injected-data script
         let dynamic_json = format!(r#"{{ "message": "{}" }}"#, message);
         html = html.replace(
-            r#"{ "message": "Welcome to your dynamic Seedelf page!" }"#,
+            r#"{ "message": "ACAB000000000000" }"#,
             &dynamic_json,
         );
         warp::reply::html(html)
@@ -28,8 +28,11 @@ pub async fn run_web_server(message: String) {
     // Serve favicon.ico
     let favicon_route = warp::path("favicon.ico").and(warp::fs::file("static/favicon.ico"));
 
+    // Serve index.css
+    let css_route = warp::path("index.css").and(warp::fs::file("static/index.css"));
+
     // Combine all routes
-    let routes = html_route.or(js_route).or(favicon_route);
+    let routes = html_route.or(js_route).or(favicon_route).or(css_route);
 
     // Run the server with graceful shutdown
     let (_, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, shutdown_signal());

@@ -1,0 +1,105 @@
+* {
+    -webkit-box-sizing: border-box;
+    box-sizing: border-box;
+}
+
+html {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+}
+
+body {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #222831;
+    color: #FEEFEE;
+    font-family: 'Comfortaa', sans-serif;
+    font-size: 18px;
+    background-image: -o-linear-gradient(#222831, #222831 50px, #121212 100px);
+    background-image: linear-gradient(#222831, #222831 50px, #121212 100px);
+    overflow-x: hidden;
+}
+
+nav {
+    /* This ensures the navbar sticks to the top of the viewport */
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+}
+
+code {
+    -webkit-user-select: all;
+    -moz-user-select: all;
+    user-select: all;
+    white-space: normal; /* Allows text to wrap */
+    word-wrap: break-word; /* Breaks long words to wrap */
+    overflow-wrap: break-word; /* Ensures long words wrap in modern browsers */
+}
+
+footer {
+    position: relative;
+    padding-top: 100px;
+}
+
+section {
+    padding-top: 120px;
+    padding-left: 40px;
+    padding-right: 40px;
+}
+
+.centered {
+    /* Centers horizontally */
+    -webkit-box-align: center;
+    -ms-flex-align: center;
+    align-items: center;
+    /* Centers vertically */
+    text-align: center;
+}
+
+.nav-bar {
+    background-color: #2E3440;
+    padding-top: 1px;
+    padding-bottom: 1px;
+    display: -webkit-box;
+    display: -ms-flexbox;
+    display: flex;
+    -webkit-box-pack: justify;
+    -ms-flex-pack: justify;
+    justify-content: space-between;
+    -webkit-box-align: center;
+    -ms-flex-align: center;
+    align-items: center;
+    width: 100%;
+    border-bottom: 1px solid transparent;
+    /* Adjust thickness as needed */
+    background-image: -webkit-gradient(linear, left top, right top, from(#2E3440), to(#222831)), -webkit-gradient(linear, left top, left bottom, from(rgba(0, 0, 0, 0.1)), to(transparent));
+    background-image: -o-linear-gradient(left, #2E3440, #222831), -o-linear-gradient(top, rgba(0, 0, 0, 0.1), transparent);
+    background-image: linear-gradient(to right, #2E3440, #222831), linear-gradient(to bottom, rgba(0, 0, 0, 0.1), transparent);
+    background-origin: border-box;
+    background-clip: content-box, border-box;
+    border-bottom-left-radius: 15px;
+    border-bottom-right-radius: 85px;
+    -webkit-box-sizing: border-box;
+    box-sizing: border-box;
+
+}
+
+.nav-left {
+    -webkit-box-pack: start;
+    -ms-flex-pack: start;
+    justify-content: flex-start;
+    padding-left: 50px;
+}
+
+.nav-right {
+    -webkit-box-pack: end;
+    -ms-flex-pack: end;
+    justify-content: flex-end;
+    padding-right: 50px;
+}

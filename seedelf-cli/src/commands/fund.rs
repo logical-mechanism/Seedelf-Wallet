@@ -4,6 +4,10 @@ use clap::Args;
 #[derive(Args)]
 pub struct FundArgs {
     /// Seedelf to send funds too
+    #[arg(long, help = "The address sending funds.")]
+    address: String,
+
+    /// Seedelf to send funds too
     #[arg(long, help = "The Seedelf receiving funds.")]
     seedelf: String,
 
@@ -13,6 +17,7 @@ pub struct FundArgs {
 }
 
 pub fn run(args: FundArgs, network_flag: bool) {
+    println!("Address: {}", args.address);
     println!("Seedelf: {}", args.seedelf);
     println!("Amount: {}", args.amount);
     if network_flag {
