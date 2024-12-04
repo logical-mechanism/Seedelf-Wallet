@@ -19,3 +19,4 @@ reqwest = { version = "0.12.9", features = ["json"] }
 pallas-addresses = "0.31.0"
 pallas-crypto = "0.31.0"
 pallas-txbuilder = "0.31.0"
+warp = "0.3.7"

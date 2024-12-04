@@ -34,6 +34,8 @@ enum Commands {
     SeedelfNew(commands::seedelf_new::LabelArgs),
     /// Remove a new Seedelf
     SeedelfRemove(commands::seedelf_remove::RemoveArgs),
+    /// Fund a seedelf
+    Fund(commands::fund::FundArgs),
 }
 
 #[tokio::main]
@@ -65,10 +67,13 @@ async fn main() {
             commands::seedelf_all::run(cli.preprod);
         }
         Commands::SeedelfNew(args) => {
-            commands::seedelf_new::run(args, cli.preprod);
+            commands::seedelf_new::run(args, cli.preprod).await;
         }
         Commands::SeedelfRemove(args) => {
             commands::seedelf_remove::run(args, cli.preprod);
+        }
+        Commands::Fund(args) => {
+            commands::fund::run(args, cli.preprod);
         }
     }
 }
