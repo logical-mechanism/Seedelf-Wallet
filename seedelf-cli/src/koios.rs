@@ -50,7 +50,7 @@ pub struct InlineDatum {
 #[derive(Debug, Deserialize)]
 pub struct UtxoResponse {
     pub tx_hash: String,
-    pub tx_index: u32,
+    pub tx_index: u64,
     pub address: String,
     pub value: String,
     pub stake_address: Option<String>,
@@ -77,6 +77,34 @@ pub async fn credential_utxos(payment_credential: &str, network_flag: bool) -> R
     // Prepare the request payload
     let payload = serde_json::json!({
         "_payment_credentials": [payment_credential],
+        "_extended": true
+    });
+
+    // Make the POST request
+    let response = client
+        .post(url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    let utxos: Vec<UtxoResponse> = response.json().await?;
+    Ok(utxos)
+}
+
+pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
+    let network = if network_flag {
+        "preprod"
+    } else {
+        "api"
+    };
+    let url = format!("https://{}.koios.rest/api/v1/address_utxos", network);
+    let client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let payload = serde_json::json!({
+        "_addresses": [address],
         "_extended": true
     });
 

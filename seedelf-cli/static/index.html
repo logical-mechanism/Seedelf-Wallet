@@ -13,6 +13,10 @@
         { "message": "ACAB000000000000" }
     </script>
 
+    <script id="injected-network-data" type="application/json">
+        { "network": "FADECAFE00000000" }
+    </script>
+
     <!-- All the wallet logic needs to go inside index.js -->
     <script src="index.js" defer></script>
 </head>
@@ -30,6 +34,7 @@
     <main>
         <section class="centered">
             <p id="status">Waiting for wallet to load...</p>
+            <a id="tx_link" href="" class="link-button" target="_blank" rel="noopener noreferrer" ></a>
         </section>
     
         <section>

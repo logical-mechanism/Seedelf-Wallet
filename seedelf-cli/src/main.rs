@@ -70,7 +70,9 @@ async fn main() {
             commands::seedelf_all::run(cli.preprod);
         }
         Commands::SeedelfNew(args) => {
-            commands::seedelf_new::run(args, cli.preprod).await;
+            if let Err(err) = commands::seedelf_new::run(args, cli.preprod).await {
+                eprintln!("Error: {}", err);
+            }
         }
         Commands::SeedelfRemove(args) => {
             commands::seedelf_remove::run(args, cli.preprod);

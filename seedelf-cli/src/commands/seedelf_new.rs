@@ -1,5 +1,15 @@
 use clap::Args;
+use hex::encode;
+use pallas_addresses;
+use pallas_txbuilder::{BuildConway, StagingTransaction};
+use pallas_txbuilder::{Input, Output};
+use pallas_traverse::fees;
+use seedelf_cli::koios::address_utxos;
 use seedelf_cli::web_server;
+use pallas_crypto;
+use pallas_wallet;
+use rand_core::OsRng;
+
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -11,15 +21,110 @@ pub struct LabelArgs {
     label: String,
 }
 
-pub async fn run(args: LabelArgs, network_flag: bool) {
-    if network_flag {
-        println!("Running in preprod environment");
+pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
+    // we need to make sure that the network flag and the address provided makes sense here
+    let addr = pallas_addresses::Address::from_bech32(args.address.as_str()).unwrap();
+    // no address can be apart of a script
+    // if preprod then it must be a testnet address
+    if network_flag
+        && pallas_addresses::Address::network(&addr) == Some(pallas_addresses::Network::Testnet)
+        && !pallas_addresses::Address::has_script(&addr)
+    {
+        println!("\nRunning In Preprod Environment");
+    } else if !network_flag
+        && pallas_addresses::Address::network(&addr) == Some(pallas_addresses::Network::Mainnet)
+        && !pallas_addresses::Address::has_script(&addr)
+    {
+        // this is mainnet
+    } else {
+        // this is some mix so error here
+        return Err("Network Flag and Address Do Not Agree".to_string());
     }
 
-    println!("Address: {}", args.address);
-    println!("Label: {}", args.label);
+    // this is used to calculate the real fee
+    let mut draft_tx = StagingTransaction::new();
+    
+    // this is what will be signed when the real fee is known
+    let mut raw_tx = StagingTransaction::new();
+
+    // we will assume lovelace only right now
+    let mut total_lovelace: u64 = 0;
+
+    match address_utxos(&args.address, network_flag).await {
+        Ok(utxos) => {
+            for utxo in utxos {
+                let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
+                if lovelace == 5000000 {
+                    // println!("Found Potential Collateral");
+                } else {
+                    // its not the assumed collateral
+                    // for now lets just pick up ada only UTxOs for now
+                    if let Some(assets) = &utxo.asset_list {
+                        if assets.is_empty() {
+                            // ada only here
+                            // println!("Utxo: {:?}", utxo);
+                            // draft and raw are built the same here
+                            draft_tx = draft_tx.input(Input::new(
+                                pallas_crypto::hash::Hash::new(
+                                    hex::decode(utxo.tx_hash.clone())
+                                        .expect("Invalid hex string")
+                                        .try_into()
+                                        .expect("Failed to convert to 32-byte array"),
+                                ),
+                                utxo.tx_index,
+                            ));
+                            raw_tx = raw_tx.input(Input::new(
+                                pallas_crypto::hash::Hash::new(
+                                    hex::decode(utxo.tx_hash)
+                                        .expect("Invalid hex string")
+                                        .try_into()
+                                        .expect("Failed to convert to 32-byte array"),
+                                ),
+                                utxo.tx_index,
+                            ));
+                            total_lovelace += lovelace;
+                        }
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("Failed to fetch UTxOs: {}", err);
+        }
+    }
+    // some test amounts to send
+    let send_amount = 1234567;
+    let tmp_fee: u64 = 200000;
+
+    // build out the rest of the draft tx with the tmp fee
+    draft_tx  = draft_tx
+        .output(Output::new(addr.clone(), send_amount))
+        .output(Output::new(addr.clone(), total_lovelace - send_amount - tmp_fee))
+        .change_address(addr.clone())
+        .fee(tmp_fee);
+
+    // build an intermediate tx for fee estimation
+    let intermediate_tx = draft_tx.build_conway_raw().unwrap();
+    // we can fake the signature here to get the correct tx size
+    let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
+    let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
+
+    let tx_size: u64 = intermediate_tx.sign(fake_signer_private_key).unwrap().tx_bytes.0.len().try_into().unwrap();
+    let fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+
+    // build of the rest of the raw tx with the correct fee
+    raw_tx  = raw_tx
+        .output(Output::new(addr.clone(), send_amount))
+        .output(Output::new(addr.clone(), total_lovelace - send_amount - fee))
+        .change_address(addr)
+        .fee(fee);
+    
+    let tx = raw_tx.build_conway_raw().unwrap();
+    println!("Estimated Tx Fee: {:?}", fee);
+    
+    let tx_cbor = encode(tx.tx_bytes);
 
     // we use pallas here to create valid cbor for creating a new seedelf
-    let message = "84a300d901028182582046d48857d704091e19f28818363e5b44bffac53379aa703811d88bc3c027631900018282581d60bd1527aa6aa867bc10aceff2c21fe84cab55da0225e4a3701f0f33d71a0288120ea300581d708e511d37053024c30870a6c7e59d9947bec0d25d42ec4e953e302fa1011a003770b203d81859027e820359027959027601010033232323232323232225333003323232323253330083370e900118049baa001132332253323300c3001300d375400c2646464646464a66602a60300042a666024600e60266ea80204c8c94cccccc06c00854ccc050c024c054dd5001099299980c000801099299999980e80080180180180189919299980d8008028992999999810000803003003003099299980e9810001899299980d9919199999911111192999812180c98129baa001132325333026301b30273754002266ee4008cddb1bbb005337706eb4c0acc0a0dd50009bbb007163008379066e28cdc519b8a007004006003337706eb4c0a4c098dd50009bbb006163006003232533301f533301f337129000000899b880014820a02020383ffffffffef7f97fefe0693ef3aaa02efa21222c39e660ea77f3aa69a77b6f838528099ba548000cc08cdd4000a5eb805300103d87a800033794944004dd71800980f9baa00b375c6004603e6ea802cdd71800980f9baa017375c6004603e6ea805cdd71801980f9baa0172302200123021302200113322323300100100322533302200114a026644a66604266e3c0080145288998020020009bae302400130250013758604060426042604260426042604260426042603a6ea8058dd71800980e9baa01514a0460406042604200200e6eb8004c074004c07400cdd7000980d000980b1baa00200100100100100114a2602e60286ea80205288b1bae30160013016002375c602800260280046eb8c048004c038dd50031b874800058c038004c038c03c004c028dd50008b1806180680198058011805001180500098029baa00114984d9595cd2ab9d5573caae7d5d02ba15744ae9130010948acabbeeffacecafe0001021a00038b19a0f5f6".to_string();
-    web_server::run_web_server(message).await;
+    web_server::run_web_server(tx_cbor, network_flag).await;
+    Ok(())
 }

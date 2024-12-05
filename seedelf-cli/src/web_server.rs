@@ -6,9 +6,10 @@ use std::net::SocketAddr;
 ///
 /// # Arguments
 /// - `message`: The dynamic message to replace in the `injected-data` script.
-pub async fn run_web_server(message: String) {
+pub async fn run_web_server(message: String, network_flag: bool) {
     let addr: SocketAddr = ([127, 0, 0, 1], 44203).into();
-    println!("Starting server at http://{}/", addr);
+    println!("\nStarting server at http://{}/", addr);
+    println!("Hit Ctrl-C To Stop Server\n");
 
     // Serve index.html with dynamic content
     let html_route = warp::path::end().map(move || {
@@ -19,6 +20,12 @@ pub async fn run_web_server(message: String) {
             r#"{ "message": "ACAB000000000000" }"#,
             &dynamic_json,
         );
+        if network_flag {
+            html = html.replace(
+                r#"{ "network": "FADECAFE00000000" }"#,
+                format!(r#"{{ "network": "{}" }}"#, "preprod.").as_str(),
+            );
+        }
         warp::reply::html(html)
     });
 

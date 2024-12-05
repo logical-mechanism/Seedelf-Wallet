@@ -103,3 +103,32 @@ section {
     justify-content: flex-end;
     padding-right: 50px;
 }
+
+.link-button {
+    display: inline-block;
+    padding: 10px 20px;
+    font-size: 16px;
+    font-weight: bold;
+    color: white;
+    text-align: center;
+    text-decoration: none;
+    background-color: #007bff; /* Button background color */
+    border-radius: 5px; /* Rounded corners */
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+}
+
+.link-button:empty {
+    display: none;
+}
+
+.link-button:hover {
+    background-color: #0056b3; /* Darker blue for hover effect */
+    transform: scale(1.05); /* Slight zoom effect */
+}
+
+.link-button:active {
+    background-color: #003f7f; /* Even darker for active state */
+    transform: scale(0.95); /* Slightly shrink on click */
+}

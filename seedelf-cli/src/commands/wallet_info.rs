@@ -5,7 +5,7 @@ pub fn run(network_flag: bool) {
     println!("\nWallet Information");
     
     if network_flag {
-        println!("\nRunning in preprod environment");
+        println!("\nRunning In Preprod Environment");
     }
     
     let scalar = setup::load_wallet();
