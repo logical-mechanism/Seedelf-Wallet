@@ -9,9 +9,9 @@ use pallas_txbuilder::{Input, Output};
 use pallas_wallet;
 use rand_core::OsRng;
 use seedelf_cli::address;
-use seedelf_cli::constants::{SEEDELF_POLICY_ID, PREPROD_SEEDELF_REFERENCE_UTXO};
+use seedelf_cli::constants::{PREPROD_SEEDELF_REFERENCE_UTXO, SEEDELF_POLICY_ID};
 use seedelf_cli::data_structures;
-use seedelf_cli::koios::address_utxos;
+use seedelf_cli::koios::{address_utxos, evaluate_transaction};
 use seedelf_cli::schnorr::{create_register, rerandomize};
 use seedelf_cli::transaction;
 use seedelf_cli::web_server;
@@ -195,7 +195,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             addr.clone(),
             total_lovelace - min_utxo - tmp_fee,
         ))
-        .collateral_output(Output::new(addr.clone(), 5000000 - (tmp_fee)*3/2))
+        .collateral_output(Output::new(addr.clone(), 5000000 - (tmp_fee) * 3 / 2))
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
@@ -217,15 +217,38 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             ),
             1,
         ))
-        .add_mint_redeemer(pallas_crypto::hash::Hash::new(
-            hex::decode(SEEDELF_POLICY_ID)
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ), redeemer_vector.clone(), Some(pallas_txbuilder::ExUnits { mem: 0, steps: 0 }));
+        .add_mint_redeemer(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(SEEDELF_POLICY_ID)
+                    .expect("Invalid hex string")
+                    .try_into()
+                    .expect("Failed to convert to 32-byte array"),
+            ),
+            redeemer_vector.clone(),
+            Some(pallas_txbuilder::ExUnits { mem: 0, steps: 0 }),
+        );
 
     // build an intermediate tx for fee estimation
     let intermediate_tx = draft_tx.build_conway_raw().unwrap();
+    let mut cpu_units = 0u64;
+    let mut mem_units = 0u64;
+    match evaluate_transaction(encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
+        Ok(execution_units) => {
+            cpu_units = execution_units
+                .pointer("/result/0/budget/cpu")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            mem_units = execution_units
+                .pointer("/result/0/budget/memory")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            println!("CPU: {}, Memory: {}", cpu_units, mem_units);
+
+        }
+        Err(err) => {
+            eprintln!("Failed to fetch UTxOs: {}", err);
+        }
+    };
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
     let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
@@ -238,7 +261,12 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .len()
         .try_into()
         .unwrap();
-    let fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    println!("Estimated Tx Fee: {:?}", tx_fee);
+    let compute_fee: u64 = (577*mem_units/10000) + (721*cpu_units/10000000);
+    println!("Estimated Compute Fee: {:?}", compute_fee);
+    let total_fee: u64 = tx_fee + compute_fee;
+    println!("Total Fee: {:?}", total_fee);
 
     // build of the rest of the raw tx with the correct fee
     raw_tx = raw_tx
@@ -257,9 +285,9 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 )
                 .unwrap(),
         )
-        .output(Output::new(addr.clone(), total_lovelace - min_utxo - fee))
-        .collateral_output(Output::new(addr.clone(), 5000000 - (fee)*3/2))
-        .fee(fee)
+        .output(Output::new(addr.clone(), total_lovelace - min_utxo - total_fee))
+        .collateral_output(Output::new(addr.clone(), 5000000 - (total_fee) * 3 / 2))
+        .fee(total_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
                 hex::decode(SEEDELF_POLICY_ID)
@@ -280,15 +308,18 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             ),
             1,
         ))
-        .add_mint_redeemer(pallas_crypto::hash::Hash::new(
-            hex::decode(SEEDELF_POLICY_ID)
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ), redeemer_vector.clone(), Some(pallas_txbuilder::ExUnits { mem: 0, steps: 0 }));
+        .add_mint_redeemer(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(SEEDELF_POLICY_ID)
+                    .expect("Invalid hex string")
+                    .try_into()
+                    .expect("Failed to convert to 32-byte array"),
+            ),
+            redeemer_vector.clone(),
+            Some(pallas_txbuilder::ExUnits { mem: mem_units, steps: cpu_units }),
+        );
 
     let tx = raw_tx.build_conway_raw().unwrap();
-    println!("Estimated Tx Fee: {:?}", fee);
 
     let tx_cbor = encode(tx.tx_bytes);
     println!("Tx Cbor: {:?}", tx_cbor.clone());

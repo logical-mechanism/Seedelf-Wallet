@@ -152,3 +152,36 @@ pub fn contains_policy_id(asset_list: Option<Vec<Asset>>, target_policy_id: &str
             assets.iter().any(|asset| asset.policy_id == target_policy_id)
         })
 }
+
+pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
+    let network = if network_flag {
+        "preprod"
+    } else {
+        "api"
+    };
+
+    // Prepare the request payload
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "evaluateTransaction",
+        "params": {
+            "transaction": {
+                "cbor": tx_cbor
+            }
+        }
+    });
+
+    let url = format!("https://{}.koios.rest/api/v1/ogmios", network);
+    let client = reqwest::Client::new();
+
+    // Make the POST request
+    let response = client
+        .post(url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    Ok(response.json().await?)
+}
