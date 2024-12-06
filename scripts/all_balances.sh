@@ -53,3 +53,15 @@ for wallet_folder in wallets/*-wallet; do
         echo -e "\033[0m"
     fi
 done
+
+
+${cli} conway query ref-script-size \
+    --tx-in "46d48857d704091e19f28818363e5b44bffac53379aa703811d88bc3c0276319#1" \
+    ${network} \
+    --output-json
+
+
+${cli} conway query ref-script-size \
+    --tx-in "4ec8f5a0eed8e5567db96b43de59b57c3dc8a8abd88c70ca26f8989346e31889#1" \
+    ${network} \
+    --output-json

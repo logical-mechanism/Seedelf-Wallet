@@ -8,7 +8,7 @@ use pallas_txbuilder::{BuildConway, StagingTransaction};
 use pallas_txbuilder::{Input, Output};
 use pallas_wallet;
 use rand_core::OsRng;
-use seedelf_cli::address;
+use seedelf_cli::{address, constants};
 use seedelf_cli::constants::{PREPROD_SEEDELF_REFERENCE_UTXO, SEEDELF_POLICY_ID};
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{address_utxos, evaluate_transaction};
@@ -225,8 +225,10 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                     .expect("Failed to convert to 32-byte array"),
             ),
             redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits { mem: 0, steps: 0 }),
-        );
+            Some(pallas_txbuilder::ExUnits { mem: 14000000, steps: 10000000000 }),
+        )
+        .language_view(pallas_txbuilder::ScriptKind::PlutusV3, constants::plutus_v3_cost_model());
+
 
     // build an intermediate tx for fee estimation
     let intermediate_tx = draft_tx.build_conway_raw().unwrap();
@@ -243,7 +245,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
             println!("CPU: {}, Memory: {}", cpu_units, mem_units);
-
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {}", err);
@@ -263,9 +264,12 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("Estimated Tx Fee: {:?}", tx_fee);
-    let compute_fee: u64 = (577*mem_units/10000) + (721*cpu_units/10000000);
+    let compute_fee: u64 = (577 * mem_units / 10000) + (721 * cpu_units / 10000000);
     println!("Estimated Compute Fee: {:?}", compute_fee);
-    let total_fee: u64 = tx_fee + compute_fee;
+    // I need a way to calculate this, its paying for the script data
+    // but my calculation seems off. Should be 587*15 = 8805 but that is too small
+    let script_reference_fee: u64 = 10000; // 587*15; // hardcode this to 10k to make it work for now
+    let total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
     println!("Total Fee: {:?}", total_fee);
 
     // build of the rest of the raw tx with the correct fee
@@ -285,7 +289,10 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 )
                 .unwrap(),
         )
-        .output(Output::new(addr.clone(), total_lovelace - min_utxo - total_fee))
+        .output(Output::new(
+            addr.clone(),
+            total_lovelace - min_utxo - total_fee,
+        ))
         .collateral_output(Output::new(addr.clone(), 5000000 - (total_fee) * 3 / 2))
         .fee(total_fee)
         .mint_asset(
@@ -316,8 +323,13 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                     .expect("Failed to convert to 32-byte array"),
             ),
             redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits { mem: mem_units, steps: cpu_units }),
-        );
+            Some(pallas_txbuilder::ExUnits {
+                mem: mem_units,
+                steps: cpu_units,
+            }),
+        )
+        .language_view(pallas_txbuilder::ScriptKind::PlutusV3, constants::plutus_v3_cost_model());
+
 
     let tx = raw_tx.build_conway_raw().unwrap();
 

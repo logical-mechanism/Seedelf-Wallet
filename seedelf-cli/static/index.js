@@ -21,10 +21,16 @@ async function initializePage() {
         const wallet = await walletObject.enable();
         statusElement.textContent = "Wallet connected successfully!";
         
-        const sig = await wallet.signTx(data.message);
-        console.log("Wallet Sig:", sig);
+        const sig_part = await wallet.signTx(data.message);
+        console.log("Wallet Sig:", sig_part);
+        const sig = "a2" + sig_part.slice(2);
         
-        const complete_tx = data.message.replace("a0f5f6", sig) + "f5f6";
+        console.log(sig);
+        
+        const redeemer_part = data.message.slice(data.message.indexOf("a105"));
+        console.log(redeemer_part);
+        
+        const complete_tx = data.message.replace(redeemer_part, sig) + redeemer_part.slice(2);
         console.log("Tx:", complete_tx);
         
         let tx_hash = await wallet.submitTx(complete_tx);
@@ -34,7 +40,6 @@ async function initializePage() {
         txLinkElement.textContent = "View Transaction On Cardanoscan";
         
         statusElement.textContent = "Transaction successfully submitted! Please close this tab and Crtl-C the server in the terminal.";
-        // do other things here
     } catch (error) {
         console.error("Failed to enable wallet:", error);
         statusElement.textContent = "Failed to connect wallet: " + error.message;
