@@ -19,6 +19,7 @@ tokio = { version = "1.41.1", features = ["full"] }
 reqwest = { version = "0.12.9", features = ["json"] }
 pallas-addresses = "0.31.0"
 pallas-crypto = "0.31.0"
+pallas-codec = "0.31.0"
 pallas-txbuilder = "0.31.0"
 pallas-traverse = "0.31.0"
 pallas-wallet = "0.31.0"

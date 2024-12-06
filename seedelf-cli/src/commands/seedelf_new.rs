@@ -1,17 +1,19 @@
 use crate::setup;
 use clap::Args;
 use hex::encode;
-use pallas_addresses;
+use pallas_addresses::Address;
 use pallas_crypto;
 use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, StagingTransaction};
 use pallas_txbuilder::{Input, Output};
 use pallas_wallet;
 use rand_core::OsRng;
-use seedelf_cli::constants::WALLET_CONTRACT_HASH;
+use seedelf_cli::address;
+use seedelf_cli::constants::SEEDELF_POLICY_ID;
 use seedelf_cli::data_structures::Data;
 use seedelf_cli::koios::address_utxos;
 use seedelf_cli::schnorr::{create_register, rerandomize};
+use seedelf_cli::transaction;
 use seedelf_cli::web_server;
 
 /// Struct to hold command-specific arguments
@@ -26,51 +28,19 @@ pub struct LabelArgs {
 
 pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // we need to make sure that the network flag and the address provided makes sense here
-    let addr = pallas_addresses::Address::from_bech32(args.address.as_str()).unwrap();
+    let addr: Address = pallas_addresses::Address::from_bech32(args.address.as_str()).unwrap();
+    if !(address::is_not_a_script(addr.clone())
+        && address::is_on_correct_network(addr.clone(), network_flag))
+    {
+        return Err("Supplied Address Is Incorrect".to_string());
+    }
 
-    // wallet script address
-    let shelly_wallet_address = if network_flag {
-        pallas_addresses::ShelleyAddress::new(
-            pallas_addresses::Network::Testnet,
-            pallas_addresses::ShelleyPaymentPart::Script(pallas_addresses::ScriptHash::new(
-                hex::decode(WALLET_CONTRACT_HASH)
-                    .unwrap()
-                    .try_into()
-                    .expect("Not Correct Length"),
-            )),
-            pallas_addresses::ShelleyDelegationPart::Null,
-        )
-    } else {
-        pallas_addresses::ShelleyAddress::new(
-            pallas_addresses::Network::Mainnet,
-            pallas_addresses::ShelleyPaymentPart::Script(pallas_addresses::ScriptHash::new(
-                hex::decode(WALLET_CONTRACT_HASH)
-                    .unwrap()
-                    .try_into()
-                    .expect("Not Correct Length"),
-            )),
-            pallas_addresses::ShelleyDelegationPart::Null,
-        )
-    };
     // we need this as the address type and not the shelley
-    let wallet_addr = pallas_addresses::Address::from(shelly_wallet_address.clone());
-    println!("Wallet Address {:?}", shelly_wallet_address.to_bech32().unwrap());
+    let wallet_addr: Address = address::wallet_contract(network_flag);
 
-    // no address can be apart of a script
-    // if preprod then it must be a testnet address
-    if network_flag
-        && pallas_addresses::Address::network(&addr) == Some(pallas_addresses::Network::Testnet)
-        && !pallas_addresses::Address::has_script(&addr)
-    {
+    // if preprod then print the preprod message
+    if network_flag {
         println!("\nRunning In Preprod Environment");
-    } else if !network_flag
-        && pallas_addresses::Address::network(&addr) == Some(pallas_addresses::Network::Mainnet)
-        && !pallas_addresses::Address::has_script(&addr)
-    {
-        // this is mainnet
-    } else {
-        // this is some mix so error here
-        return Err("Network Flag and Address Do Not Agree".to_string());
     }
 
     // this is used to calculate the real fee
@@ -82,16 +52,21 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
 
+    // This should probably be some generalized function later
     match address_utxos(&args.address, network_flag).await {
         Ok(utxos) => {
+            // loop all the utxos found from the address
             for utxo in utxos {
+                // get the lovelace on this utxo
                 let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
                 if lovelace == 5000000 {
-                    // println!("Found Potential Collateral");
+                    // its probably a collateral utxo
+                    // println!("Found Potential Collateral: {:?}", utxo);
                     // will need to add in the collateral input here
                     // the output will be added later to account for the fee correctly
                 } else {
-                    // its not the assumed collateral
+                    // its probably not a collateral utxo
+                    //
                     // for now lets just pick up ada only UTxOs for now
                     if let Some(assets) = &utxo.asset_list {
                         if assets.is_empty() {
@@ -125,23 +100,57 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             eprintln!("Failed to fetch UTxOs: {}", err);
         }
     }
-    // some test amounts to send
     // This send amount needs to be the min ada required to hold the token and the datum
-    let send_amount = 2345678;
     let tmp_fee: u64 = 200000;
 
     // this is going to be the datum on the seedelf
     let sk = setup::load_wallet();
+    // use the base register to rerandomize for the datum
     let (base_generator, base_public_value) = create_register(sk);
     let (generator, public_value) = rerandomize(&base_generator, &base_public_value);
     let datum_vector = Data::new(&generator, &public_value).to_cbor();
 
+    // lets build the seelfelf token
+    // hex the label
+    let label_hex = hex::encode(args.label);
+    // find the smallest input, first in lexicogrpahical order
+    let smallest_input = draft_tx
+        .inputs
+        .as_ref()
+        .and_then(|inputs| {
+            inputs.iter().min_by(|a, b| {
+                a.tx_hash
+                    .0
+                    .cmp(&b.tx_hash.0)
+                    .then(a.txo_index.cmp(&b.txo_index))
+            })
+        })
+        .unwrap();
+    // format the tx index
+    let formatted_index = format!("{:02x}", smallest_input.txo_index);
+    let tx_hash_hex = hex::encode(smallest_input.tx_hash.0);
+    let concatenated = format!("{}{}{}", formatted_index, label_hex, tx_hash_hex);
+    let token_name = hex::decode(&concatenated[..64.min(concatenated.len())]).unwrap();
+
+    // This is a staging output to calculate what the minimum required lovelace is for this output. Default it to 5 ADA so the bytes get calculated.
+    let staging_output: Output = Output::new(wallet_addr.clone(), 5000000)
+        .set_inline_datum(datum_vector.clone())
+        .add_asset(pallas_crypto::hash::Hash::new(hex::decode(SEEDELF_POLICY_ID)
+        .unwrap()
+        .try_into()
+        .expect("Not Correct Length"),), token_name.clone(), 1).unwrap();
+    let min_utxo: u64 = transaction::calculate_min_required_utxo(staging_output);
+    println!("Minimum Required Lovelace: {:?}", min_utxo);
+
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
-        .output(Output::new(wallet_addr.clone(), send_amount).set_inline_datum(datum_vector.clone()))
+        .output(Output::new(wallet_addr.clone(), min_utxo).set_inline_datum(datum_vector.clone()).add_asset(pallas_crypto::hash::Hash::new(hex::decode(SEEDELF_POLICY_ID)
+        .unwrap()
+        .try_into()
+        .expect("Not Correct Length"),), token_name.clone(), 1).unwrap())
         .output(Output::new(
             addr.clone(),
-            total_lovelace - send_amount - tmp_fee,
+            total_lovelace - min_utxo - tmp_fee,
         ))
         .change_address(addr.clone())
         .fee(tmp_fee);
@@ -164,11 +173,11 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
 
     // build of the rest of the raw tx with the correct fee
     raw_tx = raw_tx
-        .output(Output::new(wallet_addr.clone(), send_amount).set_inline_datum(datum_vector.clone()))
-        .output(Output::new(
-            addr.clone(),
-            total_lovelace - send_amount - fee,
-        ))
+        .output(Output::new(wallet_addr.clone(), min_utxo).set_inline_datum(datum_vector.clone()).add_asset(pallas_crypto::hash::Hash::new(hex::decode(SEEDELF_POLICY_ID)
+        .unwrap()
+        .try_into()
+        .expect("Not Correct Length"),), token_name.clone(), 1).unwrap())
+        .output(Output::new(addr.clone(), total_lovelace - min_utxo - fee))
         .change_address(addr)
         .fee(fee);
 
@@ -176,7 +185,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     println!("Estimated Tx Fee: {:?}", fee);
 
     let tx_cbor = encode(tx.tx_bytes);
-    println!("Tx: {:?}", tx_cbor.clone());
+    println!("Tx Cbor: {:?}", tx_cbor.clone());
 
     // we use pallas here to create valid cbor for creating a new seedelf
     web_server::run_web_server(tx_cbor, network_flag).await;

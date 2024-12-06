@@ -1,6 +1,6 @@
 use seedelf_cli::data_structures::Data;
 use serde_json::json;
-use pallas_primitives::{alonzo::{Constr, MaybeIndefArray, PlutusData}, BoundedBytes, Fragment};
+use pallas_primitives::{alonzo::{Constr, MaybeIndefArray, PlutusData, KeyValuePairs}, BoundedBytes, Fragment, BigInt};
 use hex::FromHex;
 #[test]
 fn test_simple_data() {
@@ -45,4 +45,14 @@ fn test_plutus_data() {
     });
     let x = hex::encode(d.encode_fragment().unwrap());
     assert_eq!(x, "d8799f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb5830aafdf5aaed4bae8122d02990b67b9030c8fe352dc40c5823cce4588ed981e89ec7057e1c057a9657a934f310e8c0851aff")
+}
+
+#[test]
+fn test_output_data() {
+    let hex_addr = "00dd996ca1174aa2e32dbbad88046b440ff563a3cde0716a56865400c6b5c562bdedfb6d283af13b35a63556c0d4acc5ea01069f96e7975a6b";
+    let hab = Vec::from_hex(&hex_addr).expect("Invalid hex string");
+
+    let d = PlutusData::Map(KeyValuePairs::Def(vec![(PlutusData::BigInt(BigInt::Int(0.into())), PlutusData::BoundedBytes(BoundedBytes::from(hab)))]));
+    let x = hex::encode(d.encode_fragment().unwrap());
+    assert_eq!(x, "")
 }
