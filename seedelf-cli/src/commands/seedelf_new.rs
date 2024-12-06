@@ -9,8 +9,8 @@ use pallas_txbuilder::{Input, Output};
 use pallas_wallet;
 use rand_core::OsRng;
 use seedelf_cli::address;
-use seedelf_cli::constants::SEEDELF_POLICY_ID;
-use seedelf_cli::data_structures::Data;
+use seedelf_cli::constants::{SEEDELF_POLICY_ID, PREPROD_SEEDELF_REFERENCE_UTXO};
+use seedelf_cli::data_structures;
 use seedelf_cli::koios::address_utxos;
 use seedelf_cli::schnorr::{create_register, rerandomize};
 use seedelf_cli::transaction;
@@ -52,6 +52,9 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
 
+    // there may be many collateral utxos, we just need one
+    let mut found_collateral: bool = false;
+
     // This should probably be some generalized function later
     match address_utxos(&args.address, network_flag).await {
         Ok(utxos) => {
@@ -62,8 +65,28 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 if lovelace == 5000000 {
                     // its probably a collateral utxo
                     // println!("Found Potential Collateral: {:?}", utxo);
-                    // will need to add in the collateral input here
-                    // the output will be added later to account for the fee correctly
+                    // draft and raw are built the same here
+                    if !found_collateral {
+                        draft_tx = draft_tx.collateral_input(Input::new(
+                            pallas_crypto::hash::Hash::new(
+                                hex::decode(utxo.tx_hash.clone())
+                                    .expect("Invalid hex string")
+                                    .try_into()
+                                    .expect("Failed to convert to 32-byte array"),
+                            ),
+                            utxo.tx_index,
+                        ));
+                        raw_tx = raw_tx.collateral_input(Input::new(
+                            pallas_crypto::hash::Hash::new(
+                                hex::decode(utxo.tx_hash)
+                                    .expect("Invalid hex string")
+                                    .try_into()
+                                    .expect("Failed to convert to 32-byte array"),
+                            ),
+                            utxo.tx_index,
+                        ));
+                        found_collateral = true;
+                    }
                 } else {
                     // its probably not a collateral utxo
                     //
@@ -108,7 +131,8 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // use the base register to rerandomize for the datum
     let (base_generator, base_public_value) = create_register(sk);
     let (generator, public_value) = rerandomize(&base_generator, &base_public_value);
-    let datum_vector = Data::new(&generator, &public_value).to_cbor();
+    let datum_vector = data_structures::create_register_datum(generator, public_value);
+    let redeemer_vector = data_structures::create_mint_redeemer(args.label.clone());
 
     // lets build the seelfelf token
     // hex the label
@@ -129,31 +153,76 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // format the tx index
     let formatted_index = format!("{:02x}", smallest_input.txo_index);
     let tx_hash_hex = hex::encode(smallest_input.tx_hash.0);
-    let concatenated = format!("{}{}{}", formatted_index, label_hex, tx_hash_hex);
+    let prefix = "5eed0e1f";
+    let concatenated = format!("{}{}{}{}", prefix, label_hex, formatted_index, tx_hash_hex);
     let token_name = hex::decode(&concatenated[..64.min(concatenated.len())]).unwrap();
 
     // This is a staging output to calculate what the minimum required lovelace is for this output. Default it to 5 ADA so the bytes get calculated.
     let staging_output: Output = Output::new(wallet_addr.clone(), 5000000)
         .set_inline_datum(datum_vector.clone())
-        .add_asset(pallas_crypto::hash::Hash::new(hex::decode(SEEDELF_POLICY_ID)
-        .unwrap()
-        .try_into()
-        .expect("Not Correct Length"),), token_name.clone(), 1).unwrap();
+        .add_asset(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(SEEDELF_POLICY_ID)
+                    .unwrap()
+                    .try_into()
+                    .expect("Not Correct Length"),
+            ),
+            token_name.clone(),
+            1,
+        )
+        .unwrap();
     let min_utxo: u64 = transaction::calculate_min_required_utxo(staging_output);
     println!("Minimum Required Lovelace: {:?}", min_utxo);
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
-        .output(Output::new(wallet_addr.clone(), min_utxo).set_inline_datum(datum_vector.clone()).add_asset(pallas_crypto::hash::Hash::new(hex::decode(SEEDELF_POLICY_ID)
-        .unwrap()
-        .try_into()
-        .expect("Not Correct Length"),), token_name.clone(), 1).unwrap())
+        .output(
+            Output::new(wallet_addr.clone(), min_utxo)
+                .set_inline_datum(datum_vector.clone())
+                .add_asset(
+                    pallas_crypto::hash::Hash::new(
+                        hex::decode(SEEDELF_POLICY_ID)
+                            .unwrap()
+                            .try_into()
+                            .expect("Not Correct Length"),
+                    ),
+                    token_name.clone(),
+                    1,
+                )
+                .unwrap(),
+        )
         .output(Output::new(
             addr.clone(),
             total_lovelace - min_utxo - tmp_fee,
         ))
-        .change_address(addr.clone())
-        .fee(tmp_fee);
+        .collateral_output(Output::new(addr.clone(), 5000000 - (tmp_fee)*3/2))
+        .fee(tmp_fee)
+        .mint_asset(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(SEEDELF_POLICY_ID)
+                    .unwrap()
+                    .try_into()
+                    .expect("Not Correct Length"),
+            ),
+            token_name.clone(),
+            1,
+        )
+        .unwrap()
+        .reference_input(Input::new(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(PREPROD_SEEDELF_REFERENCE_UTXO)
+                    .expect("Invalid hex string")
+                    .try_into()
+                    .expect("Failed to convert to 32-byte array"),
+            ),
+            1,
+        ))
+        .add_mint_redeemer(pallas_crypto::hash::Hash::new(
+            hex::decode(SEEDELF_POLICY_ID)
+                .expect("Invalid hex string")
+                .try_into()
+                .expect("Failed to convert to 32-byte array"),
+        ), redeemer_vector.clone(), Some(pallas_txbuilder::ExUnits { mem: 0, steps: 0 }));
 
     // build an intermediate tx for fee estimation
     let intermediate_tx = draft_tx.build_conway_raw().unwrap();
@@ -173,13 +242,50 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
 
     // build of the rest of the raw tx with the correct fee
     raw_tx = raw_tx
-        .output(Output::new(wallet_addr.clone(), min_utxo).set_inline_datum(datum_vector.clone()).add_asset(pallas_crypto::hash::Hash::new(hex::decode(SEEDELF_POLICY_ID)
-        .unwrap()
-        .try_into()
-        .expect("Not Correct Length"),), token_name.clone(), 1).unwrap())
+        .output(
+            Output::new(wallet_addr.clone(), min_utxo)
+                .set_inline_datum(datum_vector.clone())
+                .add_asset(
+                    pallas_crypto::hash::Hash::new(
+                        hex::decode(SEEDELF_POLICY_ID)
+                            .unwrap()
+                            .try_into()
+                            .expect("Not Correct Length"),
+                    ),
+                    token_name.clone(),
+                    1,
+                )
+                .unwrap(),
+        )
         .output(Output::new(addr.clone(), total_lovelace - min_utxo - fee))
-        .change_address(addr)
-        .fee(fee);
+        .collateral_output(Output::new(addr.clone(), 5000000 - (fee)*3/2))
+        .fee(fee)
+        .mint_asset(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(SEEDELF_POLICY_ID)
+                    .unwrap()
+                    .try_into()
+                    .expect("Not Correct Length"),
+            ),
+            token_name.clone(),
+            1,
+        )
+        .unwrap()
+        .reference_input(Input::new(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(PREPROD_SEEDELF_REFERENCE_UTXO)
+                    .expect("Invalid hex string")
+                    .try_into()
+                    .expect("Failed to convert to 32-byte array"),
+            ),
+            1,
+        ))
+        .add_mint_redeemer(pallas_crypto::hash::Hash::new(
+            hex::decode(SEEDELF_POLICY_ID)
+                .expect("Invalid hex string")
+                .try_into()
+                .expect("Failed to convert to 32-byte array"),
+        ), redeemer_vector.clone(), Some(pallas_txbuilder::ExUnits { mem: 0, steps: 0 }));
 
     let tx = raw_tx.build_conway_raw().unwrap();
     println!("Estimated Tx Fee: {:?}", fee);
