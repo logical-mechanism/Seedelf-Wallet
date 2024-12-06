@@ -121,7 +121,7 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
     Ok(utxos)
 }
 
-pub fn extract_bytes_with_logging(inline_datum: Option<InlineDatum>) -> Option<(String, String)> {
+pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<(String, String)> {
     if let Some(datum) = inline_datum {
         if let Value::Object(ref value_map) = datum.value {
             if let Some(Value::Array(fields)) = value_map.get("fields") {
@@ -145,7 +145,7 @@ pub fn extract_bytes_with_logging(inline_datum: Option<InlineDatum>) -> Option<(
 }
 
 // Function to check if a policy ID exists in the asset list
-pub fn contains_policy_id(asset_list: Option<Vec<Asset>>, target_policy_id: &str) -> bool {
+pub fn contains_policy_id(asset_list: &Option<Vec<Asset>>, target_policy_id: &str) -> bool {
     asset_list
         .as_ref() // Convert Option<Vec<Asset>> to Option<&Vec<Asset>>
         .map_or(false, |assets| {

@@ -30,11 +30,11 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
-                if let Some((generator, public_value)) = extract_bytes_with_logging(utxo.inline_datum) {
+                if let Some((generator, public_value)) = extract_bytes_with_logging(&utxo.inline_datum) {
                     // utxo must be owned by this secret scaler
                     if is_owned(&generator, &public_value, scalar) {
                         // its owned but lets not count the seedelf in the balance
-                        if !contains_policy_id(utxo.asset_list, SEEDELF_POLICY_ID) {
+                        if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
                             // just count the lovelace for now
                             let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
                             total_lovelace += lovelace;

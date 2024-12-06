@@ -64,7 +64,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
                 if lovelace == 5000000 {
                     // its probably a collateral utxo
-                    // println!("Found Potential Collateral: {:?}", utxo);
                     // draft and raw are built the same here
                     if !found_collateral {
                         draft_tx = draft_tx.collateral_input(Input::new(
@@ -85,6 +84,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                             ),
                             utxo.tx_index,
                         ));
+                        // we just want a single collateral here
                         found_collateral = true;
                     }
                 } else {
@@ -123,7 +123,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             eprintln!("Failed to fetch UTxOs: {}", err);
         }
     }
-    // This send amount needs to be the min ada required to hold the token and the datum
+    // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200000;
 
     // this is going to be the datum on the seedelf
@@ -264,11 +264,12 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("Estimated Tx Fee: {:?}", tx_fee);
+    // This probably should be a function
     let compute_fee: u64 = (577 * mem_units / 10000) + (721 * cpu_units / 10000000);
     println!("Estimated Compute Fee: {:?}", compute_fee);
     // I need a way to calculate this, its paying for the script data
     // but my calculation seems off. Should be 587*15 = 8805 but that is too small
-    let script_reference_fee: u64 = 10000; // 587*15; // hardcode this to 10k to make it work for now
+    let script_reference_fee: u64 = 587*15; // hardcode this to 10k to make it work for now
     let total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
     println!("Total Fee: {:?}", total_fee);
 
@@ -336,7 +337,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     let tx_cbor = encode(tx.tx_bytes);
     println!("Tx Cbor: {:?}", tx_cbor.clone());
 
-    // we use pallas here to create valid cbor for creating a new seedelf
+    // inject the tx cbor into the local webserver to prompt the wallet
     web_server::run_web_server(tx_cbor, network_flag).await;
     Ok(())
 }
