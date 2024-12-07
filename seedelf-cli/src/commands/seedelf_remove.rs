@@ -5,6 +5,9 @@ use clap::Args;
 pub struct RemoveArgs {
     #[arg(long, help = "The seedelf to remove.")]
     seedelf: String,
+
+    #[arg(long, help = "The receiving address.")]
+    address: String,
 }
 
 pub fn run(args: RemoveArgs, network_flag: bool) {

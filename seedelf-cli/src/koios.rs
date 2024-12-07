@@ -185,3 +185,28 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
 
     Ok(response.json().await?)
 }
+
+pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<String, Error> {
+    let network = if network_flag {
+        "preprod"
+    } else {
+        "mainnet"
+    };
+    let url = format!("https://www.giveme.my/{}/collateral/", network);
+    let client = reqwest::Client::new();
+
+    let payload = serde_json::json!({
+        "tx_body": tx_cbor,
+    });
+
+    // Make the POST request
+    let response = client
+        .post(url)
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    let witness: String = response.json().await?;
+    Ok(witness)
+}

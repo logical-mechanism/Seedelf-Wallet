@@ -24,5 +24,15 @@ fn test_mint_redeemer() {
     let lb = Vec::from_hex(&label_hex).expect("Invalid hex string");
     let d = PlutusData::BoundedBytes(BoundedBytes::from(lb));
     let x = hex::encode(d.encode_fragment().unwrap());
-    assert_eq!(x, "")
+    assert_eq!(x, "4774657374696e67")
+}
+
+#[test]
+fn test_empty_mint_redeemer() {
+    let label = "";
+    let label_hex = hex::encode(label);
+    let lb = Vec::from_hex(&label_hex).expect("Invalid hex string");
+    let d = PlutusData::BoundedBytes(BoundedBytes::from(lb));
+    let x = hex::encode(d.encode_fragment().unwrap());
+    assert_eq!(x, "40")
 }

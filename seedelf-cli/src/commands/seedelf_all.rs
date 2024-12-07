@@ -34,7 +34,8 @@ pub async fn run(network_flag: bool) -> Result<(), Error>  {
                         // its owned but lets not count the seedelf in the balance
                         if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
                             let asset_name = utxo.asset_list.as_ref().and_then(|vec| vec.iter().find(|asset| asset.policy_id == SEEDELF_POLICY_ID).map(|asset| &asset.asset_name)).unwrap();
-                            println!("Seedelf: {:?}", asset_name);
+                            let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
+                            println!("Seedelf: {:?} With {:?} Lovelace", asset_name, lovelace);
                         }
                     }
                 }
