@@ -3,17 +3,22 @@ use clap::Args;
 use hex;
 use pallas_addresses::Address;
 use pallas_crypto;
+use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
 use pallas_wallet;
 use rand_core::OsRng;
 use seedelf_cli::address;
-use seedelf_cli::constants::{plutus_v3_cost_model, COLLATERAL_HASH, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH, COLLATERAL_PUBLIC_KEY};
+use seedelf_cli::constants::{
+    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_POLICY_ID,
+    WALLET_CONTRACT_HASH,
+};
 use seedelf_cli::data_structures;
-use seedelf_cli::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, evaluate_transaction, witness_collateral};
+use seedelf_cli::koios::{
+    contains_policy_id, credential_utxos, evaluate_transaction, extract_bytes_with_logging,
+    witness_collateral,
+};
 use seedelf_cli::schnorr::{create_proof, is_owned};
 use seedelf_cli::transaction;
-use pallas_traverse::fees;
-
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -144,8 +149,10 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
 
     // we can fake the signature here to get the correct tx size
     let one_time_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
-    let one_time_private_key = pallas_wallet::PrivateKey::from(one_time_secret_key);
-    let public_key_hash = pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref()).to_ascii_lowercase();
+    let one_time_private_key = pallas_wallet::PrivateKey::from(one_time_secret_key.clone());
+    let public_key_hash =
+        pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref())
+            .to_ascii_lowercase();
     let pkh = hex::encode(public_key_hash);
 
     // use the base register to rerandomize for the datum
@@ -259,7 +266,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
 
     let tx_size: u64 = intermediate_tx
-        .sign(one_time_private_key).unwrap()
+        .sign(one_time_private_key)
+        .unwrap()
         .sign(fake_signer_private_key)
         .unwrap()
         .tx_bytes
@@ -270,12 +278,18 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("Estimated Tx Fee: {:?}", tx_fee);
     // This probably should be a function
-    let compute_fee: u64 = (577 * (mint_mem_units + spend_mem_units) / 10000) + (721 * (mint_cpu_units + spend_cpu_units) / 10000000);
+    let compute_fee: u64 = (577 * (mint_mem_units + spend_mem_units) / 10000)
+        + (721 * (mint_cpu_units + spend_cpu_units) / 10000000);
     println!("Estimated Compute Fee: {:?}", compute_fee);
     // I need a way to calculate this, its paying for the script data
     // but my calculation seems off. Should be 587*15 = 8805 but that is too small
-    let script_reference_fee: u64 = 587*15 + 633*15; // hardcode this to 10k to make it work for now
-    let total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
+    let script_reference_fee: u64 = 587 * 15 + 633 * 15; // hardcode this to 10k to make it work for now
+    let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
+    total_fee = if total_fee % 2 == 1 {
+        total_fee + 1
+    } else {
+        total_fee
+    };
     println!("Total Fee: {:?}", total_fee);
 
     raw_tx = raw_tx
@@ -337,28 +351,43 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .expect("Not Correct Length"),
         ));
 
-        let mut tx = raw_tx.build_conway_raw().unwrap();
-        // need to witness it now
-        let tx_cbor = hex::encode(tx.tx_bytes.as_ref());
+    let tx = raw_tx.build_conway_raw().unwrap();
+    // need to witness it now
+    let tx_cbor = hex::encode(tx.tx_bytes.as_ref());
 
-        let public_key_vector: [u8; 32] = hex::decode("COLLATERAL_PUBLIC_KEY")
+    let public_key_vector: [u8; 32] = hex::decode(COLLATERAL_PUBLIC_KEY)
         .unwrap()
         .try_into()
         .unwrap();
-        let witness_public_key = pallas_crypto::key::ed25519::PublicKey::from(public_key_vector);
-        match witness_collateral(tx_cbor.clone(), network_flag).await {
-            Ok(witness) => {
-                println!("Witness: {:?}", witness);
-                tx = tx
-                .sign(one_time_private_key).unwrap()
-            }
-            Err(err) => {
-                eprintln!("Failed to fetch UTxOs: {}", err);
-            }
-        }
-        
+    let witness_public_key = pallas_crypto::key::ed25519::PublicKey::from(public_key_vector);
+    match witness_collateral(tx_cbor.clone(), network_flag).await {
+        Ok(witness) => {
+            let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
+            let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
 
-        println!("Tx Cbor: {:?}", tx_cbor.clone());
+            let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
+            // this works
+            println!(
+                "{:?}",
+                    witness_public_key
+                    .verify(
+                        tx.tx_hash.0,
+                        &pallas_crypto::key::ed25519::Signature::from(witness_vector)
+                    )
+            );
+            let final_tx = tx
+                .sign(pallas_wallet::PrivateKey::from(one_time_secret_key.clone()))
+                .unwrap()
+                // something is off here
+                .add_signature(witness_public_key, witness_vector)
+                .unwrap()
+                .tx_bytes;
+            println!("Tx Cbor: {:?}", hex::encode(final_tx));
+        }
+        Err(err) => {
+            eprintln!("Failed to fetch UTxOs: {}", err);
+        }
+    }
 
     Ok(())
 }

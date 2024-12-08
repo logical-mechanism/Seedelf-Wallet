@@ -50,6 +50,8 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
 
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
+    // we need about 2 ada for the utxo and another 2 for change so make it 5
+    let lovelace_goal:u64 = 5000000;
 
     // there may be many collateral utxos, we just need one
     let mut found_collateral: bool = false;
@@ -91,7 +93,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                     //
                     // for now lets just pick up ada only UTxOs for now
                     if let Some(assets) = &utxo.asset_list {
-                        if assets.is_empty() {
+                        if assets.is_empty() && total_lovelace < lovelace_goal {
                             // draft and raw are built the same here
                             draft_tx = draft_tx.input(Input::new(
                                 pallas_crypto::hash::Hash::new(
@@ -261,7 +263,8 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // I need a way to calculate this, its paying for the script data
     // but my calculation seems off. Should be 587*15 = 8805 but that is too small
     let script_reference_fee: u64 = 587*15; // hardcode this to 10k to make it work for now
-    let total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
+    let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
+    total_fee = if total_fee % 2 == 1 { total_fee + 1 } else { total_fee };
     println!("Total Fee: {:?}", total_fee);
 
     // build of the rest of the raw tx with the correct fee
