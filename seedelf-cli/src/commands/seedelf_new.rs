@@ -4,12 +4,11 @@ use hex::encode;
 use pallas_addresses::Address;
 use pallas_crypto;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, StagingTransaction};
-use pallas_txbuilder::{Input, Output};
+use pallas_txbuilder::{BuildConway, StagingTransaction, Input, Output};
 use pallas_wallet;
 use rand_core::OsRng;
-use seedelf_cli::{address, constants};
-use seedelf_cli::constants::{PREPROD_SEEDELF_REFERENCE_UTXO, SEEDELF_POLICY_ID};
+use seedelf_cli::address;
+use seedelf_cli::constants::{SEEDELF_POLICY_ID, plutus_v3_cost_model};
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{address_utxos, evaluate_transaction};
 use seedelf_cli::schnorr::{create_register, rerandomize};
@@ -28,7 +27,7 @@ pub struct LabelArgs {
 
 pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // we need to make sure that the network flag and the address provided makes sense here
-    let addr: Address = pallas_addresses::Address::from_bech32(args.address.as_str()).unwrap();
+    let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
@@ -208,15 +207,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             1,
         )
         .unwrap()
-        .reference_input(Input::new(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(PREPROD_SEEDELF_REFERENCE_UTXO)
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
-            1,
-        ))
+        .reference_input(transaction::seedelf_reference_utxo(network_flag))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
                 hex::decode(SEEDELF_POLICY_ID)
@@ -227,7 +218,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             redeemer_vector.clone(),
             Some(pallas_txbuilder::ExUnits { mem: 14000000, steps: 10000000000 }),
         )
-        .language_view(pallas_txbuilder::ScriptKind::PlutusV3, constants::plutus_v3_cost_model());
+        .language_view(pallas_txbuilder::ScriptKind::PlutusV3, plutus_v3_cost_model());
 
 
     // build an intermediate tx for fee estimation
@@ -307,15 +298,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             1,
         )
         .unwrap()
-        .reference_input(Input::new(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(PREPROD_SEEDELF_REFERENCE_UTXO)
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
-            1,
-        ))
+        .reference_input(transaction::seedelf_reference_utxo(network_flag))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
                 hex::decode(SEEDELF_POLICY_ID)
@@ -329,7 +312,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 steps: cpu_units,
             }),
         )
-        .language_view(pallas_txbuilder::ScriptKind::PlutusV3, constants::plutus_v3_cost_model());
+        .language_view(pallas_txbuilder::ScriptKind::PlutusV3, plutus_v3_cost_model());
 
 
     let tx = raw_tx.build_conway_raw().unwrap();

@@ -77,7 +77,9 @@ async fn main() {
             }
         }
         Commands::SeedelfRemove(args) => {
-            commands::seedelf_remove::run(args, cli.preprod);
+            if let Err(err) = commands::seedelf_remove::run(args, cli.preprod).await {
+                eprintln!("Error: {}", err);
+            }
         }
     }
 }

@@ -186,7 +186,7 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
     Ok(response.json().await?)
 }
 
-pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<String, Error> {
+pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
     let network = if network_flag {
         "preprod"
     } else {
@@ -207,6 +207,5 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<S
         .send()
         .await?;
 
-    let witness: String = response.json().await?;
-    Ok(witness)
+    Ok(response.json().await?)
 }
