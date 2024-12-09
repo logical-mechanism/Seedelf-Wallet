@@ -6,6 +6,7 @@ use pallas_crypto;
 use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
 use pallas_wallet;
+use serde_json::Value;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{
@@ -15,7 +16,7 @@ use seedelf_cli::constants::{
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{
     contains_policy_id, credential_utxos, evaluate_transaction, extract_bytes_with_logging,
-    witness_collateral,
+    witness_collateral, submit_tx
 };
 use seedelf_cli::schnorr::{create_proof, is_owned};
 use seedelf_cli::transaction;
@@ -236,6 +237,9 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
         Ok(execution_units) => {
             println!("{:?}", execution_units);
+            if let Some(_error) = execution_units.get("error") {
+                std::process::exit(1);
+            }
             spend_cpu_units = execution_units
                 .pointer("/result/0/budget/cpu")
                 .and_then(|v| v.as_u64())
@@ -257,7 +261,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
             println!("CPU: {}, Memory: {}", mint_cpu_units, mint_mem_units);
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to evaluate transaction: {}", err);
         }
     };
 
@@ -376,16 +380,30 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                         &pallas_crypto::key::ed25519::Signature::from(witness_vector)
                     )
             );
+
+            
+            println!("One Time Pad: {:?}",pkh.clone());
+            println!("One Time Pad: {:?}",pallas_wallet::PrivateKey::from(one_time_secret_key.clone()).public_key());
+
             let signed_tx_cbor = tx
-                // this is ok.
                 .sign(pallas_wallet::PrivateKey::from(one_time_secret_key.clone()))
                 .unwrap()
-                // this doesnt work
-                // called `Result::unwrap()` on an `Err` value: CorruptedTxBytes
                 .add_signature(witness_public_key, witness_vector)
-                .unwrap()
-                .tx_bytes;
-            println!("Tx Cbor: {:?}", hex::encode(signed_tx_cbor));
+                .unwrap();
+
+                println!("Tx Cbor: {:?}", hex::encode(signed_tx_cbor.tx_bytes.clone()));
+            match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
+                Ok(response) => {
+                    if let Value::String(inner_value) = response {
+                        println!("Extracted value: {}", inner_value);
+                    } else {
+                        println!("Unexpected response format.");
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Failed to submit tx: {}", err);
+                }
+            }
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {}", err);
