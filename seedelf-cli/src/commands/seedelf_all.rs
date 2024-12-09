@@ -23,7 +23,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error>  {
 
     let scalar = setup::load_wallet();
     println!("\nCurrent Seedelf:\n");
-
+    
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {

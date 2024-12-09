@@ -247,6 +247,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
     let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
 
+    // we need the script size here
     let tx_size: u64 = intermediate_tx
         .sign(fake_signer_private_key)
         .unwrap()
@@ -260,10 +261,10 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // This probably should be a function
     let compute_fee: u64 = (577 * mem_units / 10000) + (721 * cpu_units / 10000000);
     println!("Estimated Compute Fee: {:?}", compute_fee);
-    // I need a way to calculate this, its paying for the script data
-    // but my calculation seems off. Should be 587*15 = 8805 but that is too small
-    let script_reference_fee: u64 = 587*15; // hardcode this to 10k to make it work for now
+    // minting script size is 587
+    let script_reference_fee: u64 = 587*15;
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
+    // we add a single lovelace so the 3/2 * fee has no rounding issues
     total_fee = if total_fee % 2 == 1 { total_fee + 1 } else { total_fee };
     println!("Total Fee: {:?}", total_fee);
 

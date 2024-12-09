@@ -6,7 +6,6 @@ use pallas_crypto;
 use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
 use pallas_wallet;
-use serde_json::Value;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{
@@ -364,16 +363,17 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let witness_public_key = pallas_crypto::key::ed25519::PublicKey::from(public_key_vector);
+    
     match witness_collateral(tx_cbor.clone(), network_flag).await {
         Ok(witness) => {
             let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
             let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
             let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
-            println!("Witness SIG: {:?}", witness_sig);
+            println!("\nWitness SIG: {:?}", witness_sig);
 
             // this works and is valid
             println!(
-                "Valid Sig: {:?}",
+                "Valid Witness Sig: {:?}",
                     witness_public_key
                     .verify(
                         tx.tx_hash.0,
@@ -381,9 +381,10 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                     )
             );
 
-            
-            println!("One Time Pad: {:?}",pkh.clone());
-            println!("One Time Pad: {:?}",pallas_wallet::PrivateKey::from(one_time_secret_key.clone()).public_key());
+            println!("\nOne Time Pad PKH: {:?}", &pkh);
+            println!("One Time Pad Public Key: {:?}",pallas_wallet::PrivateKey::from(one_time_secret_key.clone()).public_key());
+            println!("\nWitness PKH: {:?}", COLLATERAL_HASH);
+            println!("Witness Public Key: {:?}",witness_public_key.clone());
 
             let signed_tx_cbor = tx
                 .sign(pallas_wallet::PrivateKey::from(one_time_secret_key.clone()))
@@ -391,13 +392,21 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .add_signature(witness_public_key, witness_vector)
                 .unwrap();
 
-                println!("Tx Cbor: {:?}", hex::encode(signed_tx_cbor.tx_bytes.clone()));
+            let keys_signed: Vec<String> = signed_tx_cbor.signatures.unwrap().into_keys().map(|key| hex::encode(key.0)).collect();
+                println!("\nSigning Keys: {:?}", keys_signed);
+                println!("\nTx Cbor: {:?}", hex::encode(signed_tx_cbor.tx_bytes.clone()));
+            
             match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
                 Ok(response) => {
-                    if let Value::String(inner_value) = response {
-                        println!("Extracted value: {}", inner_value);
+                    if let Some(_error) = response.get("contents") {
+                        println!("\nError: {}", response);
+                        std::process::exit(1);
+                    }
+                    println!("\nTx Hash: {}", response.as_str().unwrap_or("default"));
+                    if network_flag {
+                        println!("\nhttps://preprod.cardanoscan.io/transaction/{}", response.as_str().unwrap_or("default"));
                     } else {
-                        println!("Unexpected response format.");
+                        println!("\nhttps://cardanoscan.io/transaction/{}", response.as_str().unwrap_or("default"));
                     }
                 }
                 Err(err) => {
