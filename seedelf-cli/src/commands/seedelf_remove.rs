@@ -364,25 +364,28 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         Ok(witness) => {
             let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
             let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
-
             let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
-            // this works
+            println!("Witness SIG: {:?}", witness_sig);
+
+            // this works and is valid
             println!(
-                "{:?}",
+                "Valid Sig: {:?}",
                     witness_public_key
                     .verify(
                         tx.tx_hash.0,
                         &pallas_crypto::key::ed25519::Signature::from(witness_vector)
                     )
             );
-            let final_tx = tx
+            let signed_tx_cbor = tx
+                // this is ok.
                 .sign(pallas_wallet::PrivateKey::from(one_time_secret_key.clone()))
                 .unwrap()
-                // something is off here
+                // this doesnt work
+                // called `Result::unwrap()` on an `Err` value: CorruptedTxBytes
                 .add_signature(witness_public_key, witness_vector)
                 .unwrap()
                 .tx_bytes;
-            println!("Tx Cbor: {:?}", hex::encode(final_tx));
+            println!("Tx Cbor: {:?}", hex::encode(signed_tx_cbor));
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {}", err);

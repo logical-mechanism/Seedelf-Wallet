@@ -209,3 +209,25 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
 
     Ok(response.json().await?)
 }
+
+pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
+    let network = if network_flag {
+        "preprod"
+    } else {
+        "mainnet"
+    };
+    let url = format!("https://{}.koios.rest/api/v1/submittx", network);
+    let client = reqwest::Client::new();
+
+    // Decode the hex string into binary data
+    let data = hex::decode(&tx_cbor).unwrap();
+
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/cbor")
+        .body(data)  // Send the raw binary data as the body of the request
+        .send()
+        .await?;
+
+    Ok(response.json().await?)
+}

@@ -4,6 +4,7 @@ use crate::constants::{
 };
 use pallas_primitives::Fragment;
 use pallas_txbuilder::{Input, Output};
+use pallas_crypto;
 
 pub fn calculate_min_required_utxo(output: Output) -> u64 {
     // we need the output in the post alonzo form so we can encode it
