@@ -1,18 +1,16 @@
 use clap::Args;
+use hex;
 use pallas_addresses::Address;
 use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
-use seedelf_cli::data_structures;
 use seedelf_cli::koios::{
     address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
 };
-use seedelf_cli::schnorr::rerandomize;
 use seedelf_cli::web_server;
-use hex;
-
+use seedelf_cli::register::Register;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -35,7 +33,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         println!("Running In Preprod Environment");
     }
 
-    if args.amount < 2000000 {
+    if args.amount < 2_000_000 {
         return Err("Not Enough Lovelace".to_string());
     }
 
@@ -59,20 +57,19 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
 
-    let mut base_generator: String = String::new();
-    let mut base_public_value: String = String::new();
+    let mut datum: Register = Register::default();
 
     // we need to make sure we found something to remove else err
     let mut found_seedelf: bool = false;
 
-    // we need about 2 ada for the utxo and another 2 for change so make it 5
-    let lovelace_goal: u64 = 2000000 + args.amount;
+    // we need about 2 ada for change so just add that to the amount
+    let lovelace_goal: u64 = 2_000_000 + args.amount;
 
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
-                if let Some((gen, pub_val)) = extract_bytes_with_logging(&utxo.inline_datum) {
+                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
                     // its owned but lets not count the seedelf in the balance
                     if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
                         let asset_name = utxo
@@ -87,8 +84,9 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
                         if asset_name == &args.seedelf {
                             // just sum up all the lovelace of the ada only inputs
                             found_seedelf = true;
-                            base_generator = gen;
-                            base_public_value = pub_val;
+                            datum = inline_datum;
+                            // we found it so stop searching
+                            break;
                         }
                     }
                 }
@@ -110,7 +108,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             for utxo in utxos {
                 // get the lovelace on this utxo
                 let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                if lovelace == 5000000 {
+                if lovelace == 5_000_000 {
                     // its probably a collateral utxo
                     // draft and raw are built the same here
                 } else {
@@ -118,28 +116,33 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
                     //
                     // for now lets just pick up ada only UTxOs for now
                     if let Some(assets) = &utxo.asset_list {
-                        if assets.is_empty() && total_lovelace < lovelace_goal {
-                            // draft and raw are built the same here
-                            draft_tx = draft_tx.input(Input::new(
-                                pallas_crypto::hash::Hash::new(
-                                    hex::decode(utxo.tx_hash.clone())
-                                        .expect("Invalid hex string")
-                                        .try_into()
-                                        .expect("Failed to convert to 32-byte array"),
-                                ),
-                                utxo.tx_index,
-                            ));
-                            raw_tx = raw_tx.input(Input::new(
-                                pallas_crypto::hash::Hash::new(
-                                    hex::decode(utxo.tx_hash)
-                                        .expect("Invalid hex string")
-                                        .try_into()
-                                        .expect("Failed to convert to 32-byte array"),
-                                ),
-                                utxo.tx_index,
-                            ));
-                            // just sum up all the lovelace of the ada only inputs
-                            total_lovelace += lovelace;
+                        if assets.is_empty() {
+                            if total_lovelace < lovelace_goal {
+                                // draft and raw are built the same here
+                                draft_tx = draft_tx.input(Input::new(
+                                    pallas_crypto::hash::Hash::new(
+                                        hex::decode(utxo.tx_hash.clone())
+                                            .expect("Invalid hex string")
+                                            .try_into()
+                                            .expect("Failed to convert to 32-byte array"),
+                                    ),
+                                    utxo.tx_index,
+                                ));
+                                raw_tx = raw_tx.input(Input::new(
+                                    pallas_crypto::hash::Hash::new(
+                                        hex::decode(utxo.tx_hash)
+                                            .expect("Invalid hex string")
+                                            .try_into()
+                                            .expect("Failed to convert to 32-byte array"),
+                                    ),
+                                    utxo.tx_index,
+                                ));
+                                // just sum up all the lovelace of the ada only inputs
+                                total_lovelace += lovelace;
+                            } else {
+                                // we found enough lovelace
+                                break;
+                            }
                         }
                     }
                 }
@@ -150,11 +153,15 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         }
     }
 
-    // This is some semi legit fee to be used to estimate it
-    let tmp_fee: u64 = 200000;
+    // if the seedelf isn't found then error
+    if total_lovelace < lovelace_goal {
+        return Err("Not Enough Lovelace".to_string());
+    }
 
-    let (generator, public_value) = rerandomize(&base_generator, &base_public_value);
-    let datum_vector = data_structures::create_register_datum(generator, public_value);
+    // This is some semi legit fee to be used to estimate it
+    let tmp_fee: u64 = 200_000;
+
+    let datum_vector: Vec<u8> = datum.rerandomize().to_vec();
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
@@ -197,13 +204,13 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         ))
         .fee(tx_fee);
 
-        let tx = raw_tx.build_conway_raw().unwrap();
+    let tx = raw_tx.build_conway_raw().unwrap();
 
-        let tx_cbor = hex::encode(tx.tx_bytes);
-        println!("Tx Cbor: {:?}", tx_cbor.clone());
-    
-        // inject the tx cbor into the local webserver to prompt the wallet
-        web_server::run_web_server(tx_cbor, network_flag).await;
+    let tx_cbor = hex::encode(tx.tx_bytes);
+    println!("Tx Cbor: {:?}", tx_cbor.clone());
+
+    // inject the tx cbor into the local webserver to prompt the wallet
+    web_server::run_web_server(tx_cbor, network_flag).await;
 
     Ok(())
 }

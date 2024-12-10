@@ -2,7 +2,6 @@ use crate::setup;
 use reqwest::Error;
 use seedelf_cli::constants::{WALLET_CONTRACT_HASH, SEEDELF_POLICY_ID};
 use seedelf_cli::koios::{credential_utxos, extract_bytes_with_logging, tip, contains_policy_id};
-use seedelf_cli::schnorr::is_owned;
 
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
@@ -30,9 +29,9 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
-                if let Some((generator, public_value)) = extract_bytes_with_logging(&utxo.inline_datum) {
+                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
                     // utxo must be owned by this secret scaler
-                    if is_owned(&generator, &public_value, scalar) {
+                    if inline_datum.is_owned(scalar) {
                         // its owned but lets not count the seedelf in the balance
                         if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
                             // just count the lovelace for now

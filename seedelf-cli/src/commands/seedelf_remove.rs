@@ -15,10 +15,12 @@ use seedelf_cli::constants::{
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{
     contains_policy_id, credential_utxos, evaluate_transaction, extract_bytes_with_logging,
-    witness_collateral, submit_tx
+    submit_tx, witness_collateral,
 };
-use seedelf_cli::schnorr::{create_proof, is_owned};
+use seedelf_cli::schnorr::create_proof;
 use seedelf_cli::transaction;
+use seedelf_cli::register::Register;
+
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -52,15 +54,15 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     // this is what will be signed when the real fee is known
     let mut raw_tx = StagingTransaction::new();
 
-    let mut draft_vector: Vec<Input> = Vec::new();
-    let mut raw_vector: Vec<Input> = Vec::new();
+    // we do this so I can initialize it to the empty vector
+    let mut draft_input_vector: Vec<Input> = Vec::new();
+    let mut raw_input_vector: Vec<Input> = Vec::new();
 
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
 
-    let mut generator: String = String::new();
-    let mut public_value: String = String::new();
-
+    // There is a single register here so we can do this
+    let mut datum: Register = Register::default();
     let scalar = setup::load_wallet();
 
     // we need to make sure we found something to remove else err
@@ -70,10 +72,10 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
-                if let Some((gen, pub_val)) = extract_bytes_with_logging(&utxo.inline_datum) {
+                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
                     // utxo must be owned by this secret scaler
-                    if is_owned(&gen, &pub_val, scalar) {
-                        // its owned but lets not count the seedelf in the balance
+                    if inline_datum.is_owned(scalar) {
+                        // its owned so check if its holding a seedelf
                         if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
                             let asset_name = utxo
                                 .asset_list
@@ -106,7 +108,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                                     ),
                                     utxo.tx_index,
                                 ));
-                                draft_vector.push(Input::new(
+                                draft_input_vector.push(Input::new(
                                     pallas_crypto::hash::Hash::new(
                                         hex::decode(utxo.tx_hash.clone())
                                             .expect("Invalid hex string")
@@ -115,7 +117,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                                     ),
                                     utxo.tx_index,
                                 ));
-                                raw_vector.push(Input::new(
+                                raw_input_vector.push(Input::new(
                                     pallas_crypto::hash::Hash::new(
                                         hex::decode(utxo.tx_hash.clone())
                                             .expect("Invalid hex string")
@@ -127,8 +129,9 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                                 // just sum up all the lovelace of the ada only inputs
                                 total_lovelace += lovelace;
                                 found_seedelf = true;
-                                generator = gen;
-                                public_value = pub_val;
+                                datum = inline_datum;
+                                // we found it so break out there is no reason to keep searching
+                                break;
                             }
                         }
                     }
@@ -145,23 +148,23 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     }
 
     // This is some semi legit fee to be used to estimate it
-    let tmp_fee: u64 = 200000;
+    let tmp_fee: u64 = 200_000;
 
     // we can fake the signature here to get the correct tx size
     let one_time_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
     let one_time_private_key = pallas_wallet::PrivateKey::from(one_time_secret_key.clone());
     let public_key_hash =
         pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
-    let pkh = hex::encode(public_key_hash);
+    let pkh: String = hex::encode(public_key_hash);
 
     // use the base register to rerandomize for the datum
 
-    let (z, g_r) = create_proof(&generator, &public_value, scalar, &pkh.clone());
+    let (z, g_r) = create_proof(datum, scalar, pkh.clone());
     let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
     let burn_redeemer_vector = data_structures::create_mint_redeemer("".to_string());
 
     // This is a staging output to calculate what the minimum required lovelace is for this output. Default it to 5 ADA so the bytes get calculated.
-    let staging_output: Output = Output::new(addr.clone(), 5000000);
+    let staging_output: Output = Output::new(addr.clone(), 5_000_000);
     let min_utxo: u64 = transaction::calculate_min_required_utxo(staging_output);
     println!("Minimum Required Lovelace: {:?}", min_utxo);
 
@@ -171,7 +174,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .collateral_input(transaction::collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
-            5000000 - (tmp_fee) * 3 / 2,
+            5_000_000 - (tmp_fee) * 3 / 2,
         ))
         .fee(tmp_fee)
         .mint_asset(
@@ -188,11 +191,11 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .reference_input(transaction::seedelf_reference_utxo(network_flag))
         .reference_input(transaction::wallet_reference_utxo(network_flag))
         .add_spend_redeemer(
-            draft_vector.remove(0),
+            draft_input_vector.remove(0),
             spend_redeemer_vector.clone(),
             Some(pallas_txbuilder::ExUnits {
-                mem: 14000000,
-                steps: 10000000000,
+                mem: 14_000_000,
+                steps: 10_000_000_000,
             }),
         )
         .add_mint_redeemer(
@@ -204,8 +207,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
             ),
             burn_redeemer_vector.clone(),
             Some(pallas_txbuilder::ExUnits {
-                mem: 14000000,
-                steps: 10000000000,
+                mem: 14_000_000,
+                steps: 10_000_000_000,
             }),
         )
         .language_view(
@@ -255,8 +258,14 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .pointer("/result/1/budget/memory")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            println!("Spend -> CPU: {}, Memory: {}", spend_cpu_units, spend_mem_units);
-            println!("Mint -> CPU: {}, Memory: {}", mint_cpu_units, mint_mem_units);
+            println!(
+                "Spend -> CPU: {}, Memory: {}",
+                spend_cpu_units, spend_mem_units
+            );
+            println!(
+                "Mint -> CPU: {}, Memory: {}",
+                mint_cpu_units, mint_mem_units
+            );
         }
         Err(err) => {
             eprintln!("Failed to evaluate transaction: {}", err);
@@ -279,14 +288,17 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("Estimated Tx Fee: {:?}", tx_fee);
+    
     // This probably should be a function
-    let compute_fee: u64 = (577 * (mint_mem_units + spend_mem_units) / 10000)
-        + (721 * (mint_cpu_units + spend_cpu_units) / 10000000);
+    let compute_fee: u64 = transaction::computation_fee(mint_mem_units, mint_cpu_units) + transaction::computation_fee(spend_mem_units, spend_cpu_units);
     println!("Estimated Compute Fee: {:?}", compute_fee);
-    // I need a way to calculate this, its paying for the script data
-    // but my calculation seems off. Should be 587*15 = 8805 but that is too small
-    let script_reference_fee: u64 = 587 * 15 + 633 * 15; // hardcode this to 10k to make it work for now
+
+    // 587 for mint, 633 for spend
+    let script_reference_fee: u64 = 587 * 15 + 633 * 15;
+    
+    // total fee is the sum of everything
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
+    // total fee needs to be even for the collateral calculation to work
     total_fee = if total_fee % 2 == 1 {
         total_fee + 1
     } else {
@@ -299,7 +311,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .collateral_input(transaction::collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
-            5000000 - (total_fee) * 3 / 2,
+            5_000_000 - (total_fee) * 3 / 2,
         ))
         .fee(total_fee)
         .mint_asset(
@@ -316,7 +328,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .reference_input(transaction::seedelf_reference_utxo(network_flag))
         .reference_input(transaction::wallet_reference_utxo(network_flag))
         .add_spend_redeemer(
-            raw_vector.remove(0),
+            raw_input_vector.remove(0),
             spend_redeemer_vector.clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: spend_mem_units,
@@ -362,7 +374,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let witness_public_key = pallas_crypto::key::ed25519::PublicKey::from(public_key_vector);
-    
+
     match witness_collateral(tx_cbor.clone(), network_flag).await {
         Ok(witness) => {
             let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
@@ -375,8 +387,11 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .add_signature(witness_public_key, witness_vector)
                 .unwrap();
 
-            println!("\nTx Cbor: {:?}", hex::encode(signed_tx_cbor.tx_bytes.clone()));
-            
+            println!(
+                "\nTx Cbor: {:?}",
+                hex::encode(signed_tx_cbor.tx_bytes.clone())
+            );
+
             match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
                 Ok(response) => {
                     if let Some(_error) = response.get("contents") {
@@ -386,9 +401,15 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                     println!("\nTransaction Successfully Submitted!");
                     println!("\nTx Hash: {}", response.as_str().unwrap_or("default"));
                     if network_flag {
-                        println!("\nhttps://preprod.cardanoscan.io/transaction/{}", response.as_str().unwrap_or("default"));
+                        println!(
+                            "\nhttps://preprod.cardanoscan.io/transaction/{}",
+                            response.as_str().unwrap_or("default")
+                        );
                     } else {
-                        println!("\nhttps://cardanoscan.io/transaction/{}", response.as_str().unwrap_or("default"));
+                        println!(
+                            "\nhttps://cardanoscan.io/transaction/{}",
+                            response.as_str().unwrap_or("default")
+                        );
                     }
                 }
                 Err(err) => {

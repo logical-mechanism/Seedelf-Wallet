@@ -1,11 +1,11 @@
-use crate::hashing::blake2b_224;
+use crate::{hashing::blake2b_224, register::Register};
 use blstrs::{G1Affine, G1Projective, Scalar};
 
 use ff::Field;
 use hex;
 use rand_core::OsRng;
 
-pub fn fiat_shamir_heuristic(g_b: &str, g_r_b: &str, u_b: &str, b: &str) -> String {
+pub fn fiat_shamir_heuristic(g_b: String, g_r_b: String, u_b: String, b: String) -> String {
     // Concatenate the strings
     let concatenated = format!("{}{}{}{}", g_b, g_r_b, u_b, b);
 
@@ -13,7 +13,7 @@ pub fn fiat_shamir_heuristic(g_b: &str, g_r_b: &str, u_b: &str, b: &str) -> Stri
     blake2b_224(&concatenated)
 }
 
-pub fn random_scaler() -> Scalar {
+pub fn random_scalar() -> Scalar {
     Scalar::random(&mut OsRng)
 }
 
@@ -51,25 +51,25 @@ pub fn is_owned(generator: &str, public_value: &str, sk: Scalar) -> bool {
     hex::encode(g_x.to_compressed()) == public_value
 }
 
-pub fn create_proof(generator: &str, public_value: &str, sk: Scalar, bound: &str) -> (String, String) {
-    let r: Scalar = random_scaler();
-    let g1 = G1Affine::from_compressed(
-        &hex::decode(generator)
+pub fn create_proof(datum: Register, sk: Scalar, bound: String) -> (String, String) {
+    let r: Scalar = random_scalar();
+    let g1: G1Affine = G1Affine::from_compressed(
+        &hex::decode(&datum.generator)
             .expect("Failed to decode generator hex")
             .try_into()
             .expect("Invalid generator length"),
     )
     .expect("Failed to decompress generator");
 
-    let g_r = G1Projective::from(g1) * r;
+    let g_r: G1Projective = G1Projective::from(g1) * r;
 
-    let c_hex = fiat_shamir_heuristic(generator, &hex::encode(g_r.to_compressed()), public_value, bound);
-    let c_bytes = hex::decode(&c_hex).expect("Failed to decode Fiat-Shamir output");
-    let mut c_array = [0u8; 32];
+    let c_hex: String = fiat_shamir_heuristic(datum.generator, hex::encode(g_r.to_compressed()),datum.public_value, bound);
+    let c_bytes: Vec<u8> = hex::decode(&c_hex).expect("Failed to decode Fiat-Shamir output");
+    let mut c_array: [u8; 32] = [0u8; 32];
     c_array[(32 - c_bytes.len())..].copy_from_slice(&c_bytes);
-    let c = Scalar::from_bytes_be(&c_array).unwrap();
+    let c: Scalar = Scalar::from_bytes_be(&c_array).unwrap();
     
-    let z: Scalar = r + c*sk;
+    let z: Scalar = r + c * sk;
     (hex::encode(z.to_bytes_be()), hex::encode(g_r.to_compressed()))
 
 }
@@ -92,7 +92,7 @@ pub fn rerandomize(generator: &str, public_value: &str) -> (String, String) {
             .expect("Invalid public value length"),
     )
     .expect("Failed to decompress public value");
-    let d: Scalar = random_scaler();
+    let d: Scalar = random_scalar();
     // Multiply points by the scalar in G1Projective
     let g1_randomized = G1Projective::from(g1) * d;
     let u_randomized = G1Projective::from(u) * d;
@@ -153,7 +153,7 @@ pub fn prove(generator: &str, public_value: &str, z_b: &str, g_r_b: &str, bound:
     let g_z: G1Projective = (g1 * z).into(); // Convert to G1Affine for comparison
 
     // Calculate challenge `c` using the Fiat-Shamir heuristic
-    let c_hex = fiat_shamir_heuristic(generator, g_r_b, public_value, bound);
+    let c_hex = fiat_shamir_heuristic(generator.to_string(), g_r_b.to_string(), public_value.to_string(), bound.to_string());
     let c_bytes = hex::decode(&c_hex).expect("Failed to decode Fiat-Shamir output");
     let mut c_array = [0u8; 32];
     c_array[(32 - c_bytes.len())..].copy_from_slice(&c_bytes);

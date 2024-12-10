@@ -73,3 +73,28 @@ pub fn wallet_reference_utxo(network_flag: bool) -> Input {
         1,
     )
 }
+
+pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8> {
+    let label_hex = hex::encode(label);
+    // find the smallest input, first in lexicogrpahical order
+    let smallest_input = inputs
+        .and_then(|inputs| {
+            inputs.iter().min_by(|a, b| {
+                a.tx_hash
+                    .0
+                    .cmp(&b.tx_hash.0)
+                    .then(a.txo_index.cmp(&b.txo_index))
+            })
+        })
+        .unwrap();
+    // format the tx index
+    let formatted_index = format!("{:02x}", smallest_input.txo_index);
+    let tx_hash_hex = hex::encode(smallest_input.tx_hash.0);
+    let prefix = "5eed0e1f".to_string();
+    let concatenated = format!("{}{}{}{}", prefix, label_hex, formatted_index, tx_hash_hex);
+    hex::decode(&concatenated[..64.min(concatenated.len())]).unwrap()
+}
+
+pub fn computation_fee(mem_units: u64, cpu_units: u64) -> u64 {
+    (577 * mem_units / 10_000) + (721 * cpu_units / 10_000_000)
+}

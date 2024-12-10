@@ -5,6 +5,7 @@ use pallas_primitives::{
     BoundedBytes, Fragment,
 };
 
+
 pub fn create_register_datum(generator: String, public_value: String) -> Vec<u8> {
     let gb = Vec::from_hex(generator).expect("Invalid hex string");
     let pvb = Vec::from_hex(public_value).expect("Invalid hex string");

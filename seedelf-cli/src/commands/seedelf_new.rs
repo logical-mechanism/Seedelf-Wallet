@@ -4,16 +4,16 @@ use hex;
 use pallas_addresses::Address;
 use pallas_crypto;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, StagingTransaction, Input, Output};
+use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
 use pallas_wallet;
 use rand_core::OsRng;
 use seedelf_cli::address;
-use seedelf_cli::constants::{SEEDELF_POLICY_ID, plutus_v3_cost_model};
+use seedelf_cli::constants::{plutus_v3_cost_model, SEEDELF_POLICY_ID};
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{address_utxos, evaluate_transaction};
-use seedelf_cli::schnorr::{create_register, rerandomize};
 use seedelf_cli::transaction;
 use seedelf_cli::web_server;
+use seedelf_cli::register::Register;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -43,15 +43,15 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     }
 
     // this is used to calculate the real fee
-    let mut draft_tx = StagingTransaction::new();
+    let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
     // this is what will be signed when the real fee is known
-    let mut raw_tx = StagingTransaction::new();
+    let mut raw_tx: StagingTransaction = StagingTransaction::new();
 
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
     // we need about 2 ada for the utxo and another 2 for change so make it 5
-    let lovelace_goal:u64 = 5000000;
+    let lovelace_goal: u64 = 5_000_000;
 
     // there may be many collateral utxos, we just need one
     let mut found_collateral: bool = false;
@@ -63,7 +63,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             for utxo in utxos {
                 // get the lovelace on this utxo
                 let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                if lovelace == 5000000 {
+                if lovelace == 5_000_000 {
                     // its probably a collateral utxo
                     // draft and raw are built the same here
                     if !found_collateral {
@@ -93,28 +93,33 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                     //
                     // for now lets just pick up ada only UTxOs for now
                     if let Some(assets) = &utxo.asset_list {
-                        if assets.is_empty() && total_lovelace < lovelace_goal {
-                            // draft and raw are built the same here
-                            draft_tx = draft_tx.input(Input::new(
-                                pallas_crypto::hash::Hash::new(
-                                    hex::decode(utxo.tx_hash.clone())
-                                        .expect("Invalid hex string")
-                                        .try_into()
-                                        .expect("Failed to convert to 32-byte array"),
-                                ),
-                                utxo.tx_index,
-                            ));
-                            raw_tx = raw_tx.input(Input::new(
-                                pallas_crypto::hash::Hash::new(
-                                    hex::decode(utxo.tx_hash)
-                                        .expect("Invalid hex string")
-                                        .try_into()
-                                        .expect("Failed to convert to 32-byte array"),
-                                ),
-                                utxo.tx_index,
-                            ));
-                            // just sum up all the lovelace of the ada only inputs
-                            total_lovelace += lovelace;
+                        if assets.is_empty() {
+                            if total_lovelace < lovelace_goal {
+                                // draft and raw are built the same here
+                                draft_tx = draft_tx.input(Input::new(
+                                    pallas_crypto::hash::Hash::new(
+                                        hex::decode(utxo.tx_hash.clone())
+                                            .expect("Invalid hex string")
+                                            .try_into()
+                                            .expect("Failed to convert to 32-byte array"),
+                                    ),
+                                    utxo.tx_index,
+                                ));
+                                raw_tx = raw_tx.input(Input::new(
+                                    pallas_crypto::hash::Hash::new(
+                                        hex::decode(utxo.tx_hash)
+                                            .expect("Invalid hex string")
+                                            .try_into()
+                                            .expect("Failed to convert to 32-byte array"),
+                                    ),
+                                    utxo.tx_index,
+                                ));
+                                // just sum up all the lovelace of the ada only inputs
+                                total_lovelace += lovelace;
+                            } else {
+                                // we have met our lovelace goal
+                                break;
+                            }
                         }
                     }
                 }
@@ -124,42 +129,26 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             eprintln!("Failed to fetch UTxOs: {}", err);
         }
     }
+
+    // if the seedelf isn't found then error
+    if total_lovelace < lovelace_goal {
+        return Err("Not Enough Lovelace".to_string());
+    }
+    
     // This is some semi legit fee to be used to estimate it
-    let tmp_fee: u64 = 200000;
+    let tmp_fee: u64 = 200_000;
 
     // this is going to be the datum on the seedelf
     let sk = setup::load_wallet();
-    // use the base register to rerandomize for the datum
-    let (base_generator, base_public_value) = create_register(sk);
-    let (generator, public_value) = rerandomize(&base_generator, &base_public_value);
-    let datum_vector = data_structures::create_register_datum(generator, public_value);
+    let datum_vector = Register::create(sk).rerandomize().to_vec();
     let redeemer_vector = data_structures::create_mint_redeemer(args.label.clone());
 
     // lets build the seelfelf token
-    // hex the label
-    let label_hex = hex::encode(args.label);
-    // find the smallest input, first in lexicogrpahical order
-    let smallest_input = draft_tx
-        .inputs
-        .as_ref()
-        .and_then(|inputs| {
-            inputs.iter().min_by(|a, b| {
-                a.tx_hash
-                    .0
-                    .cmp(&b.tx_hash.0)
-                    .then(a.txo_index.cmp(&b.txo_index))
-            })
-        })
-        .unwrap();
-    // format the tx index
-    let formatted_index = format!("{:02x}", smallest_input.txo_index);
-    let tx_hash_hex = hex::encode(smallest_input.tx_hash.0);
-    let prefix = "5eed0e1f";
-    let concatenated = format!("{}{}{}{}", prefix, label_hex, formatted_index, tx_hash_hex);
-    let token_name = hex::decode(&concatenated[..64.min(concatenated.len())]).unwrap();
+    let token_name: Vec<u8> = transaction::seedelf_token_name(args.label.clone(), draft_tx.inputs.as_ref());
 
-    // This is a staging output to calculate what the minimum required lovelace is for this output. Default it to 5 ADA so the bytes get calculated.
-    let staging_output: Output = Output::new(wallet_addr.clone(), 5000000)
+    // This is a staging output to calculate what the minimum required lovelace is for the seedelf output.
+    // Default it to 5 ADA so the bytes get calculated.
+    let staging_output: Output = Output::new(wallet_addr.clone(), 5_000_000)
         .set_inline_datum(datum_vector.clone())
         .add_asset(
             pallas_crypto::hash::Hash::new(
@@ -172,6 +161,8 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             1,
         )
         .unwrap();
+    
+    // use the staging output to calculate the minimum required lovelace
     let min_utxo: u64 = transaction::calculate_min_required_utxo(staging_output);
     println!("Minimum Required Lovelace: {:?}", min_utxo);
 
@@ -196,7 +187,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             addr.clone(),
             total_lovelace - min_utxo - tmp_fee,
         ))
-        .collateral_output(Output::new(addr.clone(), 5000000 - (tmp_fee) * 3 / 2))
+        .collateral_output(Output::new(addr.clone(), 5_000_000 - (tmp_fee) * 3 / 2))
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
@@ -218,13 +209,20 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                     .expect("Failed to convert to 32-byte array"),
             ),
             redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits { mem: 14000000, steps: 10000000000 }),
+            Some(pallas_txbuilder::ExUnits {
+                mem: 14_000_000,
+                steps: 10_000_000_000,
+            }),
         )
-        .language_view(pallas_txbuilder::ScriptKind::PlutusV3, plutus_v3_cost_model());
-
+        .language_view(
+            pallas_txbuilder::ScriptKind::PlutusV3,
+            plutus_v3_cost_model(),
+        );
 
     // build an intermediate tx for fee estimation
     let intermediate_tx = draft_tx.build_conway_raw().unwrap();
+    
+    // Lets evaluate the transaction to get the execution units
     let mut cpu_units = 0u64;
     let mut mem_units = 0u64;
     match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
@@ -243,6 +241,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             eprintln!("Failed to fetch UTxOs: {}", err);
         }
     };
+
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
     let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
@@ -258,14 +257,22 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("Estimated Tx Fee: {:?}", tx_fee);
+    
     // This probably should be a function
-    let compute_fee: u64 = (577 * mem_units / 10000) + (721 * cpu_units / 10000000);
+    let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
     println!("Estimated Compute Fee: {:?}", compute_fee);
+    
     // minting script size is 587
-    let script_reference_fee: u64 = 587*15;
+    let script_reference_fee: u64 = 587 * 15;
+    
+    // total fee is the sum
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
-    // we add a single lovelace so the 3/2 * fee has no rounding issues
-    total_fee = if total_fee % 2 == 1 { total_fee + 1 } else { total_fee };
+    // we add a single lovelace so the 3/2 * fee has no rounding issues during the collateral calculation
+    total_fee = if total_fee % 2 == 1 {
+        total_fee + 1
+    } else {
+        total_fee
+    };
     println!("Total Fee: {:?}", total_fee);
 
     // build of the rest of the raw tx with the correct fee
@@ -289,7 +296,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             addr.clone(),
             total_lovelace - min_utxo - total_fee,
         ))
-        .collateral_output(Output::new(addr.clone(), 5000000 - (total_fee) * 3 / 2))
+        .collateral_output(Output::new(addr.clone(), 5_000_000 - (total_fee) * 3 / 2))
         .fee(total_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
@@ -316,8 +323,10 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 steps: cpu_units,
             }),
         )
-        .language_view(pallas_txbuilder::ScriptKind::PlutusV3, plutus_v3_cost_model());
-
+        .language_view(
+            pallas_txbuilder::ScriptKind::PlutusV3,
+            plutus_v3_cost_model(),
+        );
 
     let tx = raw_tx.build_conway_raw().unwrap();
 

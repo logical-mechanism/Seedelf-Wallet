@@ -2,6 +2,8 @@ use reqwest::Error;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::register::Register;
+
 #[derive(Deserialize, Debug)]
 pub struct BlockchainTip {
     pub hash: String,
@@ -121,14 +123,14 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
     Ok(utxos)
 }
 
-pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<(String, String)> {
+pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<Register> {
     if let Some(datum) = inline_datum {
         if let Value::Object(ref value_map) = datum.value {
             if let Some(Value::Array(fields)) = value_map.get("fields") {
                 if let (Some(first), Some(second)) = (fields.get(0), fields.get(1)) {
                     let first_bytes = first.get("bytes")?.as_str()?.to_string();
                     let second_bytes = second.get("bytes")?.as_str()?.to_string();
-                    return Some((first_bytes, second_bytes));
+                    return Some(Register::new(first_bytes, second_bytes));
                 } else {
                     eprintln!("Fields array has fewer than two elements.");
                 }
