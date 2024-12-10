@@ -151,8 +151,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     let one_time_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
     let one_time_private_key = pallas_wallet::PrivateKey::from(one_time_secret_key.clone());
     let public_key_hash =
-        pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref())
-            .to_ascii_lowercase();
+        pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
     let pkh = hex::encode(public_key_hash);
 
     // use the base register to rerandomize for the datum
@@ -235,8 +234,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     let mut spend_mem_units = 0u64;
     match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
         Ok(execution_units) => {
-            println!("{:?}", execution_units);
             if let Some(_error) = execution_units.get("error") {
+                println!("{:?}", execution_units);
                 std::process::exit(1);
             }
             spend_cpu_units = execution_units
@@ -256,8 +255,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .pointer("/result/1/budget/memory")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            println!("CPU: {}, Memory: {}", spend_cpu_units, spend_mem_units);
-            println!("CPU: {}, Memory: {}", mint_cpu_units, mint_mem_units);
+            println!("Spend -> CPU: {}, Memory: {}", spend_cpu_units, spend_mem_units);
+            println!("Mint -> CPU: {}, Memory: {}", mint_cpu_units, mint_mem_units);
         }
         Err(err) => {
             eprintln!("Failed to evaluate transaction: {}", err);
@@ -369,22 +368,6 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
             let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
             let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
             let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
-            println!("\nWitness SIG: {:?}", witness_sig);
-
-            // this works and is valid
-            println!(
-                "Valid Witness Sig: {:?}",
-                    witness_public_key
-                    .verify(
-                        tx.tx_hash.0,
-                        &pallas_crypto::key::ed25519::Signature::from(witness_vector)
-                    )
-            );
-
-            println!("\nOne Time Pad PKH: {:?}", &pkh);
-            println!("One Time Pad Public Key: {:?}",pallas_wallet::PrivateKey::from(one_time_secret_key.clone()).public_key());
-            println!("\nWitness PKH: {:?}", COLLATERAL_HASH);
-            println!("Witness Public Key: {:?}",witness_public_key.clone());
 
             let signed_tx_cbor = tx
                 .sign(pallas_wallet::PrivateKey::from(one_time_secret_key.clone()))
@@ -392,9 +375,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .add_signature(witness_public_key, witness_vector)
                 .unwrap();
 
-            let keys_signed: Vec<String> = signed_tx_cbor.signatures.unwrap().into_keys().map(|key| hex::encode(key.0)).collect();
-                println!("\nSigning Keys: {:?}", keys_signed);
-                println!("\nTx Cbor: {:?}", hex::encode(signed_tx_cbor.tx_bytes.clone()));
+            println!("\nTx Cbor: {:?}", hex::encode(signed_tx_cbor.tx_bytes.clone()));
             
             match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
                 Ok(response) => {
@@ -402,6 +383,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                         println!("\nError: {}", response);
                         std::process::exit(1);
                     }
+                    println!("\nTransaction Successfully Submitted!");
                     println!("\nTx Hash: {}", response.as_str().unwrap_or("default"));
                     if network_flag {
                         println!("\nhttps://preprod.cardanoscan.io/transaction/{}", response.as_str().unwrap_or("default"));
