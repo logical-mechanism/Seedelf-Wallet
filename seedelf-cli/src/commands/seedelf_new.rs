@@ -1,6 +1,6 @@
 use crate::setup;
 use clap::Args;
-use hex::encode;
+use hex;
 use pallas_addresses::Address;
 use pallas_crypto;
 use pallas_traverse::fees;
@@ -227,7 +227,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     let intermediate_tx = draft_tx.build_conway_raw().unwrap();
     let mut cpu_units = 0u64;
     let mut mem_units = 0u64;
-    match evaluate_transaction(encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
+    match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
         Ok(execution_units) => {
             cpu_units = execution_units
                 .pointer("/result/0/budget/cpu")
@@ -321,7 +321,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
 
     let tx = raw_tx.build_conway_raw().unwrap();
 
-    let tx_cbor = encode(tx.tx_bytes);
+    let tx_cbor = hex::encode(tx.tx_bytes);
     println!("Tx Cbor: {:?}", tx_cbor.clone());
 
     // inject the tx cbor into the local webserver to prompt the wallet

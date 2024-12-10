@@ -23,16 +23,19 @@ async function initializePage() {
         
         const sig_part = await wallet.signTx(data.message);
         console.log("Wallet Sig:", sig_part);
-        const sig = "a2" + sig_part.slice(2);
         
-        console.log(sig);
-        
-        const redeemer_part = data.message.slice(data.message.indexOf("a105"));
-        console.log(redeemer_part);
-        
-        const complete_tx = data.message.replace(redeemer_part, sig) + redeemer_part.slice(2);
+        let sig;
+        let complete_tx;
+        if (data.message.indexOf("a105") === -1) {
+            complete_tx = data.message.replace("a0f5f6", sig_part + "f5f6")
+        } else {
+            // smart contract exists as there is a redeemer
+            sig = "a2" + sig_part.slice(2);
+            const redeemer_part = data.message.slice(data.message.indexOf("a105"));
+            complete_tx = data.message.replace(redeemer_part, sig) + redeemer_part.slice(2);
+        }
+
         console.log("Tx:", complete_tx);
-        
         let tx_hash = await wallet.submitTx(complete_tx);
         console.log("Tx Hash:", tx_hash);
         
