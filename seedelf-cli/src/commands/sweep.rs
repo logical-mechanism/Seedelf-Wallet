@@ -303,7 +303,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
 
     // build out the rest of the draft tx with the tmp fee
     raw_tx = raw_tx
-        .output(Output::new(addr.clone(), if lovelace_goal == 0 { total_lovelace_found - total_fee } else { lovelace_goal - total_fee }))
+        .output(Output::new(addr.clone(), if lovelace_goal == 0 { total_lovelace_found - total_fee } else { lovelace_goal }))
         .collateral_input(transaction::collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),

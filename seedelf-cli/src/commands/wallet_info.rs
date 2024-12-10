@@ -1,5 +1,5 @@
 use crate::setup;
-use seedelf_cli::schnorr;
+use seedelf_cli::register::Register;
 
 pub fn run(network_flag: bool) {
     if network_flag {
@@ -11,8 +11,8 @@ pub fn run(network_flag: bool) {
     let scalar = setup::load_wallet();
     println!("\nSecret Key: {}", scalar);
     
-    let (generator, public_value) = schnorr::create_register(scalar);
+    let datum: Register = Register::create(scalar);
     println!("\nBase Register:");
-    println!("Generator: {}", generator);
-    println!("Public Value: {}", public_value);
+    println!("Generator: {}", datum.generator);
+    println!("Public Value: {}", datum.public_value);
 }

@@ -17,40 +17,6 @@ pub fn random_scalar() -> Scalar {
     Scalar::random(&mut OsRng)
 }
 
-pub fn create_register(sk: Scalar) -> (String, String) {
-    // Decode and decompress generator
-    let generator = "97F1D3A73197D7942695638C4FA9AC0FC3688C4F9774B905A14E3A3F171BAC586C55E83FF97A1AEFFB3AF00ADB22C6BB";
-    let g1 = G1Affine::from_compressed(
-        &hex::decode(generator)
-            .expect("Failed to decode generator hex")
-            .try_into()
-            .expect("Invalid generator length"),
-    )
-    .expect("Failed to decompress generator");
-
-    let public_value = G1Projective::from(g1) * sk;
-
-    // Compress points and return them as hex strings
-    (
-        hex::encode(g1.to_compressed()),
-        hex::encode(public_value.to_compressed()),
-    )
-}
-
-pub fn is_owned(generator: &str, public_value: &str, sk: Scalar) -> bool {
-    let g1 = G1Affine::from_compressed(
-        &hex::decode(generator)
-            .expect("Failed to decode generator hex")
-            .try_into()
-            .expect("Invalid generator length"),
-    )
-    .expect("Failed to decompress generator");
-
-    let g_x = G1Projective::from(g1) * sk;
-
-    hex::encode(g_x.to_compressed()) == public_value
-}
-
 pub fn create_proof(datum: Register, sk: Scalar, bound: String) -> (String, String) {
     let r: Scalar = random_scalar();
     let g1: G1Affine = G1Affine::from_compressed(
@@ -72,36 +38,6 @@ pub fn create_proof(datum: Register, sk: Scalar, bound: String) -> (String, Stri
     let z: Scalar = r + c * sk;
     (hex::encode(z.to_bytes_be()), hex::encode(g_r.to_compressed()))
 
-}
-
-pub fn rerandomize(generator: &str, public_value: &str) -> (String, String) {
-    // Decode and decompress generator
-    let g1 = G1Affine::from_compressed(
-        &hex::decode(generator)
-            .expect("Failed to decode generator hex")
-            .try_into()
-            .expect("Invalid generator length"),
-    )
-    .expect("Failed to decompress generator");
-
-    // Decode and decompress public_value
-    let u = G1Affine::from_compressed(
-        &hex::decode(public_value)
-            .expect("Failed to decode public value hex")
-            .try_into()
-            .expect("Invalid public value length"),
-    )
-    .expect("Failed to decompress public value");
-    let d: Scalar = random_scalar();
-    // Multiply points by the scalar in G1Projective
-    let g1_randomized = G1Projective::from(g1) * d;
-    let u_randomized = G1Projective::from(u) * d;
-
-    // Compress points and return them as hex strings
-    (
-        hex::encode(g1_randomized.to_compressed()),
-        hex::encode(u_randomized.to_compressed()),
-    )
 }
 
 /// Computes a Schnorr proof.

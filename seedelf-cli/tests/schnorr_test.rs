@@ -1,5 +1,5 @@
 use blstrs::Scalar;
-use seedelf_cli::schnorr::{fiat_shamir_heuristic, prove, create_register, create_proof, random_scalar, rerandomize, is_owned};
+use seedelf_cli::schnorr::{fiat_shamir_heuristic, prove, create_proof, random_scalar};
 use seedelf_cli::register::Register;
 
 #[test]
@@ -44,20 +44,20 @@ fn valid_randomized_schnorr_proof() {
 #[test]
 fn default_register() {
     let sk: Scalar = Scalar::from(1u64);
-    let (generator, public_value) = create_register(sk);
+    let datum: Register = Register::create(sk);
     let generator_hex = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
-    assert_eq!(generator, generator_hex);
-    assert_eq!(public_value, generator_hex);
+    assert_eq!(datum.generator, generator_hex);
+    assert_eq!(datum.public_value, generator_hex);
 }
 
 #[test]
 fn random_register() {
     let sk: Scalar = Scalar::from(18446744073709551606u64);
-    let (generator, public_value) = create_register(sk);
+    let datum: Register = Register::create(sk);
     let generator_hex = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
     let public_value_hex = "82dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475";
-    assert_eq!(generator, generator_hex);
-    assert_eq!(public_value, public_value_hex);
+    assert_eq!(datum.generator, generator_hex);
+    assert_eq!(datum.public_value, public_value_hex);
 }
 
 #[test]
@@ -95,16 +95,14 @@ fn create_random_proof_rerandomize_it_and_test_it() {
 #[test]
 fn valid_is_owned() {
     let sk: Scalar = random_scalar();
-    let (generator, public_value) = create_register(sk);
-    let (rgenerator, rpublic_value) = rerandomize(&generator, &public_value);
-    assert!(is_owned(&rgenerator, &rpublic_value, sk))
+    let datum: Register = Register::create(sk).rerandomize();
+    assert!(datum.is_owned(sk))
 }
 
 #[test]
 fn invalid_is_owned() {
     let sk1: Scalar = random_scalar();
     let sk2: Scalar = random_scalar();
-    let (generator, public_value) = create_register(sk1);
-    let (rgenerator, rpublic_value) = rerandomize(&generator, &public_value);
-    assert!(!is_owned(&rgenerator, &rpublic_value, sk2))
+    let datum: Register = Register::create(sk1).rerandomize();
+    assert!(!datum.is_owned(sk2))
 }
