@@ -8,7 +8,7 @@ mod setup;
 #[command(version = "0.0.1")]
 #[command(about = "A Cardano Stealth Wallet", long_about = None)]
 struct Cli {
-    /// preprod flag, defaults to mainnet
+    /// This forces each command to use the pre-production environment
     #[arg(long, global = true)]
     preprod: bool,
 
@@ -18,22 +18,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Displays a welcome message
+    /// Displays the Seedelf welcome message
     Welcome,
     /// Displays wallet information
     WalletInfo,
-    /// Calculates wallet balance
+    /// Displays the current wallet balance
     Balance,
+    /// Send ADA from an address to a Seedelf
+    Fund(commands::fund::FundArgs),
     /// Send ADA from a Seedelf to a Seedelf
     Transfer(commands::transfer::TransforArgs),
     /// Send ADA from a Seedelf to an address
     Sweep(commands::sweep::SweepArgs),
-    /// Send ADA from an address to a Seedelf
-    Fund(commands::fund::FundArgs),
-    /// Display all Seedelfs
-    SeedelfAll,
     /// Create a new Seedelf
     SeedelfNew(commands::seedelf_new::LabelArgs),
+    /// Display all Seedelfs
+    SeedelfAll,
     /// Remove a Seedelf
     SeedelfRemove(commands::seedelf_remove::RemoveArgs),
 }
@@ -61,7 +61,10 @@ async fn main() {
             commands::transfer::run(args, cli.preprod);
         }
         Commands::Sweep(args) => {
-            commands::sweep::run(args, cli.preprod);
+            
+            if let Err(err) = commands::sweep::run(args, cli.preprod).await {
+                eprintln!("Error: {}", err);
+            }
         }
         Commands::Fund(args) => {
             if let Err(err) = commands::fund::run(args, cli.preprod).await {
