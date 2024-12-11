@@ -19,6 +19,21 @@ async function initializePage() {
     try {
         const walletObject = await waitForWallet();
         const wallet = await walletObject.enable();
+
+        // we need to make sure that the wallet is actually on the correct network
+        const network_int = await wallet.getNetworkId();
+        if (network.network === "preprod.") {
+            if (network_int !== 0) {
+                statusElement.textContent = "Wallet is not using pre-production. Please switch to the pre-production network and try again.";
+                return;
+            }
+        } else {
+            if (network_int !== 1) {
+                statusElement.textContent = "Wallet is not using Mainnet. Please switch to mainnet and try again.";
+                return;
+            }
+        }
+
         statusElement.textContent = "Wallet connected successfully!";
         
         const sig_part = await wallet.signTx(data.message);
@@ -42,7 +57,7 @@ async function initializePage() {
         txLinkElement.href = "https://" + network.network + "cardanoscan.io/transaction/" + tx_hash; // Set the href attribute
         txLinkElement.textContent = "View Transaction On Cardanoscan";
         
-        statusElement.textContent = "Transaction successfully submitted! Please close this tab and Crtl-C the server in the terminal. The transaction can be viewed on Cardanoscan by clicking the View Transaction On Cardanoscan button.";
+        statusElement.textContent = "Transaction successfully submitted! Please close this tab and crtl-c the server in the terminal. The transaction can be viewed on Cardanoscan by clicking the View Transaction On Cardanoscan button.";
     } catch (error) {
         console.error("Failed to enable wallet:", error);
         statusElement.textContent = "Failed to connect wallet: " + error.message;

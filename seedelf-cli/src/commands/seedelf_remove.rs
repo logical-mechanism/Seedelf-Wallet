@@ -25,10 +25,10 @@ use seedelf_cli::register::Register;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct RemoveArgs {
-    #[arg(long, help = "The seedelf to remove.")]
+    #[arg(long, help = "The Seedelf to remove.")]
     seedelf: String,
 
-    #[arg(long, help = "The receiving address.")]
+    #[arg(long, help = "The address receiving the leftover ADA.")]
     address: String,
 }
 
@@ -139,7 +139,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
         }
     }
 
@@ -287,14 +287,15 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("Estimated Tx Fee: {:?}", tx_fee);
+    println!("Tx Size Fee: {:?}", tx_fee);
     
     // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mint_mem_units, mint_cpu_units) + transaction::computation_fee(spend_mem_units, spend_cpu_units);
-    println!("Estimated Compute Fee: {:?}", compute_fee);
+    println!("Compute Fee: {:?}", compute_fee);
 
     // 587 for mint, 633 for spend
     let script_reference_fee: u64 = 587 * 15 + 633 * 15;
+    println!("Script Reference Fee: {:?}", script_reference_fee);
     
     // total fee is the sum of everything
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
@@ -418,7 +419,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
         }
     }
 

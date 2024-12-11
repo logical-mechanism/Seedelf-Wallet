@@ -184,7 +184,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
         }
     }
 
@@ -282,15 +282,16 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
         .try_into()
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("Estimated Tx Fee: {:?}", tx_fee);
+    println!("Tx Size Fee: {:?}", tx_fee);
     
     // This probably should be a function
     let compute_fee: u64 = total_computation_fee(budgets.clone()) ;
-    println!("Estimated Compute Fee: {:?}", compute_fee);
+    println!("Compute Fee: {:?}", compute_fee);
 
     // 587 for mint, 633 for spend
     let script_reference_fee: u64 = 633 * 15;
-    
+    println!("Script Reference Fee: {:?}", script_reference_fee);
+
     // total fee is the sum of everything
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
     // total fee needs to be even for the collateral calculation to work

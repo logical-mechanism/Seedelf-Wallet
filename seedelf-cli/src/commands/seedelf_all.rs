@@ -19,7 +19,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch blockchain tip: {}", err);
+            eprintln!("Failed to fetch blockchain tip: {}\nWait a few moments and try again.", err);
         }
     }
 
@@ -55,7 +55,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
         }
     }
 

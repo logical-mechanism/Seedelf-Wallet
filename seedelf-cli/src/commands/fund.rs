@@ -16,7 +16,7 @@ use seedelf_cli::register::Register;
 #[derive(Args)]
 pub struct FundArgs {
     /// Seedelf to send funds too
-    #[arg(long, help = "The address sending funds.")]
+    #[arg(long, help = "The address sending funds to the Seedelf.")]
     address: String,
 
     /// Seedelf to send funds too
@@ -93,7 +93,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
         }
     }
     // if the seedelf isn't found then error
@@ -149,7 +149,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
         }
     }
 
@@ -191,7 +191,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("Estimated Tx Fee: {:?}", tx_fee);
+    println!("Tx Size Fee: {:?}", tx_fee);
 
     // build out the rest of the draft tx with the tmp fee
     raw_tx = raw_tx

@@ -24,11 +24,11 @@ enum Commands {
     WalletInfo,
     /// Displays the current wallet balance
     Balance,
-    /// Send ADA from an address to a Seedelf
+    /// An address sends ADA to a Seedelf
     Fund(commands::fund::FundArgs),
-    /// Send ADA from a Seedelf to a Seedelf
+    /// A Seedelf sends ADA to a Seedelf
     Transfer(commands::transfer::TransforArgs),
-    /// Send ADA from a Seedelf to an address
+    /// A Seedelf sends ADA to an address
     Sweep(commands::sweep::SweepArgs),
     /// Create a new Seedelf
     SeedelfNew(commands::seedelf_new::LabelArgs),

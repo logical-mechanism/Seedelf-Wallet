@@ -18,7 +18,7 @@ use seedelf_cli::register::Register;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct LabelArgs {
-    #[arg(long, help = "The payee address.")]
+    #[arg(long, help = "The address paying for the seedelf.")]
     address: String,
 
     #[arg(long, help = "The seedelf label / personal tag.")]
@@ -256,15 +256,16 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("Estimated Tx Fee: {:?}", tx_fee);
+    println!("Tx Size Fee: {:?}", tx_fee);
     
     // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
-    println!("Estimated Compute Fee: {:?}", compute_fee);
+    println!("Compute Fee: {:?}", compute_fee);
     
     // minting script size is 587
     let script_reference_fee: u64 = 587 * 15;
-    
+    println!("Script Reference Fee: {:?}", script_reference_fee);
+
     // total fee is the sum
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
     // we add a single lovelace so the 3/2 * fee has no rounding issues during the collateral calculation
