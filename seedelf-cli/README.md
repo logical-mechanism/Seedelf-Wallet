@@ -1,4 +1,4 @@
 ```bash
 cargo build
-cargo run -- welcome
+cargo run -- help
 ```

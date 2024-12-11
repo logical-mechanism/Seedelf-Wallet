@@ -1,10 +1,11 @@
-use crate::constants::{
+use crate::{constants::{
     MAINNET_COLLATERAL_UTXO, MAINNET_SEEDELF_REFERENCE_UTXO, MAINNET_WALLET_REFERENCE_UTXO,
-    PREPROD_COLLATERAL_UTXO, PREPROD_SEEDELF_REFERENCE_UTXO, PREPROD_WALLET_REFERENCE_UTXO,
-};
+    PREPROD_COLLATERAL_UTXO, PREPROD_SEEDELF_REFERENCE_UTXO, PREPROD_WALLET_REFERENCE_UTXO, SEEDELF_POLICY_ID
+}, schnorr, address, register::Register};
+use pallas_addresses::Address;
+use pallas_crypto;
 use pallas_primitives::Fragment;
 use pallas_txbuilder::{Input, Output};
-use pallas_crypto;
 use serde_json::Value;
 
 
@@ -127,4 +128,39 @@ pub fn total_computation_fee(budgets: Vec<(u64, u64)>) -> u64 {
         fee += computation_fee(mem, cpu);
     }
     fee
+}
+
+pub fn seedelf_minimum_lovelace() -> u64 {
+    let token_name: Vec<u8> = [94, 237, 14, 31, 1, 66, 250, 134, 20, 230, 198, 12, 121, 19, 73, 107, 154, 156, 226, 154, 138, 103, 76, 134, 93, 156, 23, 169, 169, 167, 201, 55].to_vec();
+    let staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
+        .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec())
+        .add_asset(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(SEEDELF_POLICY_ID)
+                    .unwrap()
+                    .try_into()
+                    .expect("Not Correct Length"),
+            ),
+            token_name,
+            1,
+        )
+        .unwrap();
+    
+    // use the staging output to calculate the minimum required lovelace
+    calculate_min_required_utxo(staging_output)
+}
+
+pub fn wallet_minimum_lovelace() -> u64 {
+    let staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
+        .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec());
+    // use the staging output to calculate the minimum required lovelace
+    calculate_min_required_utxo(staging_output)
+}
+
+pub fn address_minimum_lovelace(address: &str) -> u64 {
+    let addr: Address = Address::from_bech32(address).unwrap();
+    let staging_output: Output = Output::new(addr, 5_000_000);
+    // use the staging output to calculate the minimum required lovelace
+    calculate_min_required_utxo(staging_output)
+
 }

@@ -1,19 +1,20 @@
 use crate::setup;
+use blstrs::Scalar;
 use clap::Args;
 use hex;
 use pallas_addresses::Address;
-use pallas_crypto;
+use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
-use pallas_wallet;
+use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
+use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{plutus_v3_cost_model, SEEDELF_POLICY_ID};
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{address_utxos, evaluate_transaction};
+use seedelf_cli::register::Register;
 use seedelf_cli::transaction;
 use seedelf_cli::web_server;
-use seedelf_cli::register::Register;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -26,6 +27,11 @@ pub struct LabelArgs {
 }
 
 pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
+    // if preprod then print the preprod message
+    if network_flag {
+        println!("\nRunning In Preprod Environment");
+    }
+
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
     if !(address::is_not_a_script(addr.clone())
@@ -36,11 +42,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
 
     // we need this as the address type and not the shelley
     let wallet_addr: Address = address::wallet_contract(network_flag);
-
-    // if preprod then print the preprod message
-    if network_flag {
-        println!("\nRunning In Preprod Environment");
-    }
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -134,37 +135,22 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     if total_lovelace < lovelace_goal {
         return Err("Not Enough Lovelace".to_string());
     }
-    
+
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
 
     // this is going to be the datum on the seedelf
-    let sk = setup::load_wallet();
-    let datum_vector = Register::create(sk).rerandomize().to_vec();
-    let redeemer_vector = data_structures::create_mint_redeemer(args.label.clone());
+    let sk: Scalar = setup::load_wallet();
+    let datum_vector: Vec<u8> = Register::create(sk).rerandomize().to_vec();
+    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(args.label.clone());
 
     // lets build the seelfelf token
-    let token_name: Vec<u8> = transaction::seedelf_token_name(args.label.clone(), draft_tx.inputs.as_ref());
+    let token_name: Vec<u8> =
+        transaction::seedelf_token_name(args.label.clone(), draft_tx.inputs.as_ref());
+    println!("\nCreating Seedelf: {}", hex::encode(token_name.clone()));
 
-    // This is a staging output to calculate what the minimum required lovelace is for the seedelf output.
-    // Default it to 5 ADA so the bytes get calculated.
-    let staging_output: Output = Output::new(wallet_addr.clone(), 5_000_000)
-        .set_inline_datum(datum_vector.clone())
-        .add_asset(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(SEEDELF_POLICY_ID)
-                    .unwrap()
-                    .try_into()
-                    .expect("Not Correct Length"),
-            ),
-            token_name.clone(),
-            1,
-        )
-        .unwrap();
-    
-    // use the staging output to calculate the minimum required lovelace
-    let min_utxo: u64 = transaction::calculate_min_required_utxo(staging_output);
-    println!("Minimum Required Lovelace: {:?}", min_utxo);
+    let min_utxo: u64 = transaction::seedelf_minimum_lovelace();
+    println!("\nMinimum Required Lovelace: {:?}", min_utxo);
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
@@ -220,13 +206,17 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         );
 
     // build an intermediate tx for fee estimation
-    let intermediate_tx = draft_tx.build_conway_raw().unwrap();
-    
+    let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
+
     // Lets evaluate the transaction to get the execution units
-    let mut cpu_units = 0u64;
-    let mut mem_units = 0u64;
+    let mut cpu_units: u64 = 0u64;
+    let mut mem_units: u64 = 0u64;
     match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
         Ok(execution_units) => {
+            if let Some(_error) = execution_units.get("error") {
+                println!("Error: {:?}", execution_units);
+                std::process::exit(1);
+            }
             cpu_units = execution_units
                 .pointer("/result/0/budget/cpu")
                 .and_then(|v| v.as_u64())
@@ -235,7 +225,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 .pointer("/result/0/budget/memory")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            println!("CPU: {}, Memory: {}", cpu_units, mem_units);
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {}", err);
@@ -243,8 +232,8 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     };
 
     // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
-    let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
+    let fake_signer_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     // we need the script size here
     let tx_size: u64 = intermediate_tx
@@ -255,13 +244,13 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .len()
         .try_into()
         .unwrap();
-    let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("Tx Size Fee: {:?}", tx_fee);
-    
+    let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    println!("\nTx Size Fee: {:?}", tx_fee);
+
     // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
     println!("Compute Fee: {:?}", compute_fee);
-    
+
     // minting script size is 587
     let script_reference_fee: u64 = 587 * 15;
     println!("Script Reference Fee: {:?}", script_reference_fee);
@@ -329,12 +318,13 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             plutus_v3_cost_model(),
         );
 
-    let tx = raw_tx.build_conway_raw().unwrap();
+    let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
-    let tx_cbor = hex::encode(tx.tx_bytes);
-    println!("Tx Cbor: {:?}", tx_cbor.clone());
+    let tx_cbor: String = hex::encode(tx.tx_bytes);
+    println!("\nTx Cbor: {:?}", tx_cbor.clone());
 
     // inject the tx cbor into the local webserver to prompt the wallet
     web_server::run_web_server(tx_cbor, network_flag).await;
+
     Ok(())
 }

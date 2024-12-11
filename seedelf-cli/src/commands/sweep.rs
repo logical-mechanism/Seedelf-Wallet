@@ -1,8 +1,11 @@
-use crate::setup;
 use clap::Args;
+use blstrs::Scalar;
 use pallas_addresses::Address;
+use pallas_crypto::key::ed25519::{SecretKey, PublicKey};
+use pallas_primitives::Hash;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
+use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTransaction};
+use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{
@@ -17,6 +20,7 @@ use seedelf_cli::koios::{
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
 use seedelf_cli::transaction;
+use crate::setup;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -36,7 +40,7 @@ pub struct SweepArgs {
 
 pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     if network_flag {
-        println!("Running In Preprod Environment");
+        println!("\nRunning In Preprod Environment");
     }
 
     if args.amount.is_none() && !args.all {
@@ -47,7 +51,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         return Err("--amount u64 and --all cannot be used together.".to_string());
     }
 
-    if args.amount.is_some_and(|x| x < 1_000_000) {
+    if args.amount.is_some_and(|x| x < transaction::address_minimum_lovelace(&args.address)) {
         return Err("Amount Too Small For Min UTxO".to_string());
     }
 
@@ -63,10 +67,10 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let wallet_addr: Address = address::wallet_contract(network_flag);
 
     // this is used to calculate the real fee
-    let mut draft_tx = StagingTransaction::new();
+    let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
     // this is what will be signed when the real fee is known
-    let mut raw_tx = StagingTransaction::new();
+    let mut raw_tx: StagingTransaction = StagingTransaction::new();
 
     let mut draft_input_vector: Vec<Input> = Vec::new();
     let mut draft_register_vector: Vec<Register> = Vec::new();
@@ -80,7 +84,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let lovelace_goal: u64 = args.amount.unwrap_or(0);
 
     // if there is change going back then we need this to rerandomize a datum
-    let scalar = setup::load_wallet();
+    let scalar: Scalar = setup::load_wallet();
 
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
         Ok(utxos) => {
@@ -96,13 +100,15 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
                                 println!("Hitting max utxos on send all");
                                 break;
                             }
+
                             if !args.all && total_lovelace_found >= (lovelace_goal + 2_000_000) {
-                                println!("found all the required lovelace");
+                                println!("Found all the required lovelace");
                                 // an amount implies changes so find another 2 ada
                                 break;
                             }
+
                             if number_of_utxos >= max_utxos {
-                                println!("too many utxos");
+                                println!("Too many utxos");
                                 // if this ever happens then break
                                 break;
                             }
@@ -172,11 +178,11 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let tmp_fee: u64 = 200_000;
 
     // we can fake the signature here to get the correct tx size
-    let one_time_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
-    let one_time_private_key = pallas_wallet::PrivateKey::from(one_time_secret_key.clone());
-    let public_key_hash =
+    let one_time_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let one_time_private_key: PrivateKey = PrivateKey::from(one_time_secret_key.clone());
+    let public_key_hash: Hash<28> =
         pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
-    let pkh = hex::encode(public_key_hash);
+    let pkh: String = hex::encode(public_key_hash);
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
@@ -239,9 +245,9 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             }),
         )
     }
-    let intermediate_tx = draft_tx.build_conway_raw().unwrap();
+    let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
-    let mut budgets = Vec::new();
+    let mut budgets: Vec<(u64, u64)> = Vec::new();
     match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
         Ok(execution_units) => {
             if let Some(_error) = execution_units.get("error") {
@@ -256,8 +262,8 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     };
 
     // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
-    let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
+    let fake_signer_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     let tx_size: u64 = intermediate_tx
         .sign(one_time_private_key)
@@ -270,7 +276,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("Tx Size Fee: {:?}", tx_fee);
+    println!("\nTx Size Fee: {:?}", tx_fee);
 
     // This probably should be a function
     let compute_fee: u64 = transaction::total_computation_fee(budgets.clone());
@@ -352,15 +358,15 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         )
     }
 
-    let tx = raw_tx.build_conway_raw().unwrap();
+    let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
     // need to witness it now
-    let tx_cbor = hex::encode(tx.tx_bytes.as_ref());
+    let tx_cbor: String = hex::encode(tx.tx_bytes.as_ref());
 
     let public_key_vector: [u8; 32] = hex::decode(COLLATERAL_PUBLIC_KEY)
         .unwrap()
         .try_into()
         .unwrap();
-    let witness_public_key = pallas_crypto::key::ed25519::PublicKey::from(public_key_vector);
+    let witness_public_key: PublicKey = PublicKey::from(public_key_vector);
 
     match witness_collateral(tx_cbor.clone(), network_flag).await {
         Ok(witness) => {

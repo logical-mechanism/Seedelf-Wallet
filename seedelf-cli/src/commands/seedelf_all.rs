@@ -1,7 +1,8 @@
-use crate::setup;
+use blstrs::Scalar;
 use reqwest::Error;
 use seedelf_cli::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
 use seedelf_cli::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
+use crate::setup;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
     if network_flag {
@@ -23,7 +24,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
         }
     }
 
-    let scalar = setup::load_wallet();
+    let scalar: Scalar = setup::load_wallet();
     println!("\nCurrent Seedelf:\n");
 
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
@@ -46,9 +47,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
                                         .map(|asset| &asset.asset_name)
                                 })
                                 .unwrap();
-                            let lovelace: u64 =
-                                utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                            println!("Seedelf: {:?} With {:?} Lovelace", asset_name, lovelace);
+                            println!("Seedelf: {}", asset_name);
                         }
                     }
                 }

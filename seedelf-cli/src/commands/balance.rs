@@ -1,15 +1,14 @@
-use crate::setup;
+use blstrs::Scalar;
 use reqwest::Error;
 use seedelf_cli::constants::{WALLET_CONTRACT_HASH, SEEDELF_POLICY_ID};
 use seedelf_cli::koios::{credential_utxos, extract_bytes_with_logging, tip, contains_policy_id};
-
+use crate::setup;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
     if network_flag {
         println!("\nRunning In Preprod Environment");
     }
 
-    // Call the asynchronous function
     match tip(network_flag).await {
         Ok(tips) => {
             if let Some(tip) = tips.get(0) {
@@ -17,11 +16,11 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch blockchain tip: {}", err);
+            eprintln!("Failed to fetch blockchain tip: {}\nWait a few moments and try again.", err);
         }
     }
 
-    let scalar = setup::load_wallet();
+    let scalar: Scalar = setup::load_wallet();
     let mut total_lovelace: u64 = 0;
     let mut total_utxos: u64 = 0;
 
@@ -44,11 +43,12 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
         }
     }
 
     println!("\nBalance: {:.6} ₳", total_lovelace as f64 / 1_000_000.0);
-    println!("{} UTxOs", total_utxos);
+    println!("Wallet Has {} UTxOs", total_utxos);
+
     Ok(())
 }

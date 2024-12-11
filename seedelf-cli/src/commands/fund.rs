@@ -1,16 +1,18 @@
 use clap::Args;
 use hex;
 use pallas_addresses::Address;
+use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
+use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTransaction};
+use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::address;
+use seedelf_cli::{address, transaction};
 use seedelf_cli::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
 use seedelf_cli::koios::{
     address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
 };
-use seedelf_cli::web_server;
 use seedelf_cli::register::Register;
+use seedelf_cli::web_server;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -30,11 +32,11 @@ pub struct FundArgs {
 
 pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     if network_flag {
-        println!("Running In Preprod Environment");
+        println!("\nRunning In Preprod Environment");
     }
 
-    if args.amount < 2_000_000 {
-        return Err("Not Enough Lovelace".to_string());
+    if args.amount < transaction::wallet_minimum_lovelace() {
+        return Err("Not Enough Lovelace On UTxO".to_string());
     }
 
     // we need to make sure that the network flag and the address provided makes sense here
@@ -49,10 +51,10 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let wallet_addr: Address = address::wallet_contract(network_flag);
 
     // this is used to calculate the real fee
-    let mut draft_tx = StagingTransaction::new();
+    let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
     // this is what will be signed when the real fee is known
-    let mut raw_tx = StagingTransaction::new();
+    let mut raw_tx: StagingTransaction = StagingTransaction::new();
 
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
@@ -175,11 +177,11 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         .fee(tmp_fee);
 
     // build an intermediate tx for fee estimation
-    let intermediate_tx = draft_tx.build_conway_raw().unwrap();
+    let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
     // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
-    let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
+    let fake_signer_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     // we need the script size here
     let tx_size: u64 = intermediate_tx
@@ -190,8 +192,8 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         .len()
         .try_into()
         .unwrap();
-    let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("Tx Size Fee: {:?}", tx_fee);
+    let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    println!("\nTx Size Fee: {:?}", tx_fee);
 
     // build out the rest of the draft tx with the tmp fee
     raw_tx = raw_tx
@@ -204,10 +206,10 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         ))
         .fee(tx_fee);
 
-    let tx = raw_tx.build_conway_raw().unwrap();
+    let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
-    let tx_cbor = hex::encode(tx.tx_bytes);
-    println!("Tx Cbor: {:?}", tx_cbor.clone());
+    let tx_cbor: String = hex::encode(tx.tx_bytes);
+    println!("\nTx Cbor: {:?}", tx_cbor.clone());
 
     // inject the tx cbor into the local webserver to prompt the wallet
     web_server::run_web_server(tx_cbor, network_flag).await;
