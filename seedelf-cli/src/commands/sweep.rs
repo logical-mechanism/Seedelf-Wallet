@@ -100,11 +100,13 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
                                 println!("Hitting max utxos on send all");
                                 break;
                             }
+
                             if !args.all && total_lovelace_found >= (lovelace_goal + 2_000_000) {
                                 println!("Found all the required lovelace");
                                 // an amount implies changes so find another 2 ada
                                 break;
                             }
+
                             if number_of_utxos >= max_utxos {
                                 println!("Too many utxos");
                                 // if this ever happens then break
