@@ -1,8 +1,8 @@
-use crate::setup;
+use blstrs::Scalar;
 use reqwest::Error;
 use seedelf_cli::constants::{WALLET_CONTRACT_HASH, SEEDELF_POLICY_ID};
 use seedelf_cli::koios::{credential_utxos, extract_bytes_with_logging, tip, contains_policy_id};
-use blstrs::Scalar;
+use crate::setup;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
     if network_flag {

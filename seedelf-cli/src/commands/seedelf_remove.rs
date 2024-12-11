@@ -1,5 +1,5 @@
-use crate::setup;
 use clap::Args;
+use blstrs::Scalar;
 use hex;
 use pallas_addresses::Address;
 use pallas_crypto;
@@ -17,9 +17,10 @@ use seedelf_cli::koios::{
     contains_policy_id, credential_utxos, evaluate_transaction, extract_bytes_with_logging,
     submit_tx, witness_collateral,
 };
+use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
 use seedelf_cli::transaction;
-use seedelf_cli::register::Register;
+use crate::setup;
 
 
 /// Struct to hold command-specific arguments
@@ -63,7 +64,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
 
     // There is a single register here so we can do this
     let mut datum: Register = Register::default();
-    let scalar = setup::load_wallet();
+    let scalar: Scalar = setup::load_wallet();
 
     // we need to make sure we found something to remove else err
     let mut found_seedelf: bool = false;

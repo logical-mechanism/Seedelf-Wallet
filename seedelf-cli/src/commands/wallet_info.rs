@@ -1,10 +1,11 @@
-use crate::setup;
+use blstrs::Scalar;
 use seedelf_cli::register::Register;
+use crate::setup;
 
 pub fn run() {
     println!("\nSeedelf Wallet Information");
     
-    let scalar = setup::load_wallet();
+    let scalar: Scalar = setup::load_wallet();
     println!("\nSecret Key:\n");
     println!("{}", scalar);
     

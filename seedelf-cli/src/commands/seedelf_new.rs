@@ -1,19 +1,20 @@
-use crate::setup;
 use clap::Args;
+use blstrs::Scalar;
 use hex;
 use pallas_addresses::Address;
-use pallas_crypto;
+use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
-use pallas_wallet;
+use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTransaction};
+use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{plutus_v3_cost_model, SEEDELF_POLICY_ID};
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{address_utxos, evaluate_transaction};
+use seedelf_cli::register::Register;
 use seedelf_cli::transaction;
 use seedelf_cli::web_server;
-use seedelf_cli::register::Register;
+use crate::setup;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -139,9 +140,9 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     let tmp_fee: u64 = 200_000;
 
     // this is going to be the datum on the seedelf
-    let sk = setup::load_wallet();
-    let datum_vector = Register::create(sk).rerandomize().to_vec();
-    let redeemer_vector = data_structures::create_mint_redeemer(args.label.clone());
+    let sk: Scalar = setup::load_wallet();
+    let datum_vector: Vec<u8> = Register::create(sk).rerandomize().to_vec();
+    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(args.label.clone());
 
     // lets build the seelfelf token
     let token_name: Vec<u8> = transaction::seedelf_token_name(args.label.clone(), draft_tx.inputs.as_ref());
@@ -204,11 +205,11 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         );
 
     // build an intermediate tx for fee estimation
-    let intermediate_tx = draft_tx.build_conway_raw().unwrap();
+    let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
     
     // Lets evaluate the transaction to get the execution units
-    let mut cpu_units = 0u64;
-    let mut mem_units = 0u64;
+    let mut cpu_units: u64 = 0u64;
+    let mut mem_units: u64 = 0u64;
     match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
         Ok(execution_units) => {
             cpu_units = execution_units
@@ -226,8 +227,8 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     };
 
     // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
-    let fake_signer_private_key = pallas_wallet::PrivateKey::from(fake_signer_secret_key);
+    let fake_signer_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     // we need the script size here
     let tx_size: u64 = intermediate_tx
@@ -238,7 +239,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .len()
         .try_into()
         .unwrap();
-    let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("\nTx Size Fee: {:?}", tx_fee);
     
     // This probably should be a function
@@ -312,9 +313,9 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             plutus_v3_cost_model(),
         );
 
-    let tx = raw_tx.build_conway_raw().unwrap();
+    let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
-    let tx_cbor = hex::encode(tx.tx_bytes);
+    let tx_cbor: String = hex::encode(tx.tx_bytes);
     println!("\nTx Cbor: {:?}", tx_cbor.clone());
 
     // inject the tx cbor into the local webserver to prompt the wallet
