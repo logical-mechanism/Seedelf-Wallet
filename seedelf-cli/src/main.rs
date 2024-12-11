@@ -50,7 +50,7 @@ async fn main() {
             commands::welcome::run();
         }
         Commands::WalletInfo => {
-            commands::wallet_info::run(cli.preprod);
+            commands::wallet_info::run();
         }
         Commands::Balance => {
             if let Err(err) = commands::balance::run(cli.preprod).await {

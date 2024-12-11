@@ -145,26 +145,10 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
 
     // lets build the seelfelf token
     let token_name: Vec<u8> = transaction::seedelf_token_name(args.label.clone(), draft_tx.inputs.as_ref());
+    println!("\nCreating Seedelf: {}", hex::encode(token_name.clone()));
 
-    // This is a staging output to calculate what the minimum required lovelace is for the seedelf output.
-    // Default it to 5 ADA so the bytes get calculated.
-    let staging_output: Output = Output::new(wallet_addr.clone(), 5_000_000)
-        .set_inline_datum(datum_vector.clone())
-        .add_asset(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(SEEDELF_POLICY_ID)
-                    .unwrap()
-                    .try_into()
-                    .expect("Not Correct Length"),
-            ),
-            token_name.clone(),
-            1,
-        )
-        .unwrap();
-    
-    // use the staging output to calculate the minimum required lovelace
-    let min_utxo: u64 = transaction::calculate_min_required_utxo(staging_output);
-    println!("Minimum Required Lovelace: {:?}", min_utxo);
+    let min_utxo: u64 = transaction::seedelf_minimum_lovelace();
+    println!("\nMinimum Required Lovelace: {:?}", min_utxo);
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
@@ -235,7 +219,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 .pointer("/result/0/budget/memory")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            println!("CPU: {}, Memory: {}", cpu_units, mem_units);
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {}", err);
@@ -256,7 +239,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("Tx Size Fee: {:?}", tx_fee);
+    println!("\nTx Size Fee: {:?}", tx_fee);
     
     // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
@@ -332,9 +315,10 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     let tx = raw_tx.build_conway_raw().unwrap();
 
     let tx_cbor = hex::encode(tx.tx_bytes);
-    println!("Tx Cbor: {:?}", tx_cbor.clone());
+    println!("\nTx Cbor: {:?}", tx_cbor.clone());
 
     // inject the tx cbor into the local webserver to prompt the wallet
     web_server::run_web_server(tx_cbor, network_flag).await;
+
     Ok(())
 }
