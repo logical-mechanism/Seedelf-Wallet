@@ -1,49 +1,22 @@
+use crate::setup;
 use clap::Args;
 use pallas_addresses::Address;
-use seedelf_cli::address;
-use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
 use pallas_traverse::fees;
-use crate::setup;
-use seedelf_cli::constants::{plutus_v3_cost_model, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY};
+use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
+use rand_core::OsRng;
+use seedelf_cli::address;
+use seedelf_cli::constants::{
+    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_POLICY_ID,
+    WALLET_CONTRACT_HASH,
+};
+use seedelf_cli::data_structures;
 use seedelf_cli::koios::{
     contains_policy_id, credential_utxos, evaluate_transaction, extract_bytes_with_logging,
     submit_tx, witness_collateral,
 };
-use seedelf_cli::schnorr::create_proof;
-use rand_core::OsRng;
-use seedelf_cli::transaction;
 use seedelf_cli::register::Register;
-use seedelf_cli::data_structures;
-
-use serde_json::Value;
-
-fn extract_budgets(value: &Value) -> Vec<(u64, u64)> {
-    let mut budgets = Vec::new();
-
-    // Ensure the value contains the expected "result" array
-    if let Some(result_array) = value.get("result").and_then(|r| r.as_array()) {
-        for item in result_array {
-            if let Some(budget) = item.get("budget") {
-                if let (Some(cpu), Some(memory)) = (
-                    budget.get("cpu").and_then(|c| c.as_u64()),
-                    budget.get("memory").and_then(|m| m.as_u64()),
-                ) {
-                    budgets.push((cpu, memory));
-                }
-            }
-        }
-    }
-
-    budgets
-}
-
-fn total_computation_fee(budgets: Vec<(u64, u64)>) -> u64 {
-    let mut fee: u64 = 0;
-    for (cpu, mem) in budgets.into_iter() {
-        fee += transaction::computation_fee(mem, cpu);
-    }
-    fee
-}
+use seedelf_cli::schnorr::create_proof;
+use seedelf_cli::transaction;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -61,7 +34,7 @@ pub struct SweepArgs {
     all: bool,
 }
 
-pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
+pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     if network_flag {
         println!("Running In Preprod Environment");
     }
@@ -133,58 +106,61 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
                                 // if this ever happens then break
                                 break;
                             }
-                                let lovelace: u64 =
-                                    utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                                // draft and raw are built the same here
-                                draft_tx = draft_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                raw_tx = raw_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                draft_input_vector.push(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                raw_input_vector.push(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                // do the registers
-                                draft_register_vector.push(inline_datum.clone());
-                                raw_register_vector.push(inline_datum);
-                                // just sum up all the lovelace of the ada only inputs
-                                total_lovelace_found += lovelace;
-                                number_of_utxos += 1;
+                            let lovelace: u64 =
+                                utxo.value.parse::<u64>().expect("Invalid Lovelace");
+                            // draft and raw are built the same here
+                            draft_tx = draft_tx.input(Input::new(
+                                pallas_crypto::hash::Hash::new(
+                                    hex::decode(utxo.tx_hash.clone())
+                                        .expect("Invalid hex string")
+                                        .try_into()
+                                        .expect("Failed to convert to 32-byte array"),
+                                ),
+                                utxo.tx_index,
+                            ));
+                            raw_tx = raw_tx.input(Input::new(
+                                pallas_crypto::hash::Hash::new(
+                                    hex::decode(utxo.tx_hash.clone())
+                                        .expect("Invalid hex string")
+                                        .try_into()
+                                        .expect("Failed to convert to 32-byte array"),
+                                ),
+                                utxo.tx_index,
+                            ));
+                            draft_input_vector.push(Input::new(
+                                pallas_crypto::hash::Hash::new(
+                                    hex::decode(utxo.tx_hash.clone())
+                                        .expect("Invalid hex string")
+                                        .try_into()
+                                        .expect("Failed to convert to 32-byte array"),
+                                ),
+                                utxo.tx_index,
+                            ));
+                            raw_input_vector.push(Input::new(
+                                pallas_crypto::hash::Hash::new(
+                                    hex::decode(utxo.tx_hash.clone())
+                                        .expect("Invalid hex string")
+                                        .try_into()
+                                        .expect("Failed to convert to 32-byte array"),
+                                ),
+                                utxo.tx_index,
+                            ));
+                            // do the registers
+                            draft_register_vector.push(inline_datum.clone());
+                            raw_register_vector.push(inline_datum);
+                            // just sum up all the lovelace of the ada only inputs
+                            total_lovelace_found += lovelace;
+                            number_of_utxos += 1;
                         }
                     }
                 }
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
         }
     }
 
@@ -204,7 +180,14 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
-        .output(Output::new(addr.clone(), if lovelace_goal == 0 { total_lovelace_found - tmp_fee } else { lovelace_goal }))
+        .output(Output::new(
+            addr.clone(),
+            if lovelace_goal == 0 {
+                total_lovelace_found - tmp_fee
+            } else {
+                lovelace_goal
+            },
+        ))
         .collateral_input(transaction::collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
@@ -228,27 +211,33 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
                 .try_into()
                 .expect("Not Correct Length"),
         ));
-    
+
     // need to check if there is change going back here
     if lovelace_goal != 0 {
         let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let change_output: Output = Output::new(wallet_addr.clone(), total_lovelace_found - lovelace_goal - tmp_fee)
-            .set_inline_datum(datum_vector.clone());
+        let change_output: Output = Output::new(
+            wallet_addr.clone(),
+            total_lovelace_found - lovelace_goal - tmp_fee,
+        )
+        .set_inline_datum(datum_vector.clone());
         draft_tx = draft_tx.output(change_output)
     }
-    
+
     // Use zip to pair elements from the two lists
-    for (input, datum) in draft_input_vector.into_iter().zip(draft_register_vector.into_iter()) {
+    for (input, datum) in draft_input_vector
+        .into_iter()
+        .zip(draft_register_vector.into_iter())
+    {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone());
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         draft_tx = draft_tx.add_spend_redeemer(
-                input,
-                spend_redeemer_vector.clone(),
-                Some(pallas_txbuilder::ExUnits {
-                    mem: 14_000_000,
-                    steps: 10_000_000_000,
-                })
-            )
+            input,
+            spend_redeemer_vector.clone(),
+            Some(pallas_txbuilder::ExUnits {
+                mem: 14_000_000,
+                steps: 10_000_000_000,
+            }),
+        )
     }
     let intermediate_tx = draft_tx.build_conway_raw().unwrap();
 
@@ -259,13 +248,12 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
                 println!("{:?}", execution_units);
                 std::process::exit(1);
             }
-            budgets = extract_budgets(&execution_units)
+            budgets = transaction::extract_budgets(&execution_units)
         }
         Err(err) => {
             eprintln!("Failed to evaluate transaction: {}", err);
         }
     };
-    // println!("{:?}", budgets);
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key = pallas_crypto::key::ed25519::SecretKey::new(&mut OsRng);
@@ -283,9 +271,9 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("Tx Size Fee: {:?}", tx_fee);
-    
+
     // This probably should be a function
-    let compute_fee: u64 = total_computation_fee(budgets.clone()) ;
+    let compute_fee: u64 = transaction::total_computation_fee(budgets.clone());
     println!("Compute Fee: {:?}", compute_fee);
 
     // 587 for mint, 633 for spend
@@ -304,7 +292,14 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
 
     // build out the rest of the draft tx with the tmp fee
     raw_tx = raw_tx
-        .output(Output::new(addr.clone(), if lovelace_goal == 0 { total_lovelace_found - total_fee } else { lovelace_goal }))
+        .output(Output::new(
+            addr.clone(),
+            if lovelace_goal == 0 {
+                total_lovelace_found - total_fee
+            } else {
+                lovelace_goal
+            },
+        ))
         .collateral_input(transaction::collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
@@ -332,22 +327,29 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String>  {
     // need to check if there is change going back here
     if lovelace_goal != 0 {
         let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let change_output: Output = Output::new(wallet_addr.clone(), total_lovelace_found - lovelace_goal - total_fee)
-            .set_inline_datum(datum_vector.clone());
+        let change_output: Output = Output::new(
+            wallet_addr.clone(),
+            total_lovelace_found - lovelace_goal - total_fee,
+        )
+        .set_inline_datum(datum_vector.clone());
         raw_tx = raw_tx.output(change_output)
     }
 
-    for ((input, datum), (cpu, mem)) in raw_input_vector.into_iter().zip(raw_register_vector.into_iter()).zip(budgets.into_iter()) {
+    for ((input, datum), (cpu, mem)) in raw_input_vector
+        .into_iter()
+        .zip(raw_register_vector.into_iter())
+        .zip(budgets.into_iter())
+    {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone());
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         raw_tx = raw_tx.add_spend_redeemer(
-                input,
-                spend_redeemer_vector.clone(),
-                Some(pallas_txbuilder::ExUnits {
-                    mem: mem,
-                    steps: cpu,
-                })
-            )
+            input,
+            spend_redeemer_vector.clone(),
+            Some(pallas_txbuilder::ExUnits {
+                mem: mem,
+                steps: cpu,
+            }),
+        )
     }
 
     let tx = raw_tx.build_conway_raw().unwrap();

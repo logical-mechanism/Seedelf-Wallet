@@ -5,6 +5,8 @@ use crate::constants::{
 use pallas_primitives::Fragment;
 use pallas_txbuilder::{Input, Output};
 use pallas_crypto;
+use serde_json::Value;
+
 
 pub fn calculate_min_required_utxo(output: Output) -> u64 {
     // we need the output in the post alonzo form so we can encode it
@@ -97,4 +99,32 @@ pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8>
 
 pub fn computation_fee(mem_units: u64, cpu_units: u64) -> u64 {
     (577 * mem_units / 10_000) + (721 * cpu_units / 10_000_000)
+}
+
+pub fn extract_budgets(value: &Value) -> Vec<(u64, u64)> {
+    let mut budgets = Vec::new();
+
+    // Ensure the value contains the expected "result" array
+    if let Some(result_array) = value.get("result").and_then(|r| r.as_array()) {
+        for item in result_array {
+            if let Some(budget) = item.get("budget") {
+                if let (Some(cpu), Some(memory)) = (
+                    budget.get("cpu").and_then(|c| c.as_u64()),
+                    budget.get("memory").and_then(|m| m.as_u64()),
+                ) {
+                    budgets.push((cpu, memory));
+                }
+            }
+        }
+    }
+
+    budgets
+}
+
+pub fn total_computation_fee(budgets: Vec<(u64, u64)>) -> u64 {
+    let mut fee: u64 = 0;
+    for (cpu, mem) in budgets.into_iter() {
+        fee += computation_fee(mem, cpu);
+    }
+    fee
 }

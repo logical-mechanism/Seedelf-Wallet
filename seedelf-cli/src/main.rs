@@ -58,10 +58,11 @@ async fn main() {
             }
         }
         Commands::Transfer(args) => {
-            commands::transfer::run(args, cli.preprod);
+            if let Err(err) = commands::transfer::run(args, cli.preprod).await {
+                eprintln!("Error: {}", err);
+            }
         }
         Commands::Sweep(args) => {
-            
             if let Err(err) = commands::sweep::run(args, cli.preprod).await {
                 eprintln!("Error: {}", err);
             }
