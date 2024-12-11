@@ -1,8 +1,7 @@
+use crate::register::Register;
 use reqwest::Error;
 use serde::Deserialize;
 use serde_json::Value;
-
-use crate::register::Register;
 
 #[derive(Deserialize, Debug)]
 pub struct BlockchainTip {
@@ -31,7 +30,6 @@ pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
 
     Ok(response)
 }
-
 
 #[derive(Debug, Deserialize)]
 pub struct Asset {
@@ -92,6 +90,7 @@ pub async fn credential_utxos(payment_credential: &str, network_flag: bool) -> R
         .await?;
 
     let utxos: Vec<UtxoResponse> = response.json().await?;
+
     Ok(utxos)
 }
 
@@ -120,6 +119,7 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
         .await?;
 
     let utxos: Vec<UtxoResponse> = response.json().await?;
+
     Ok(utxos)
 }
 

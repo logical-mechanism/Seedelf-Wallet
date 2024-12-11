@@ -1,5 +1,5 @@
-use pallas_addresses::{Address, ShelleyAddress, Network, ShelleyPaymentPart, ScriptHash, PaymentKeyHash, ShelleyDelegationPart};
 use crate::constants::{WALLET_CONTRACT_HASH, COLLATERAL_HASH};
+use pallas_addresses::{Address, ShelleyAddress, Network, ShelleyPaymentPart, ScriptHash, PaymentKeyHash, ShelleyDelegationPart};
 
 pub fn is_on_correct_network(addr: Address, network_flag: bool) -> bool {
     if network_flag {
@@ -16,7 +16,7 @@ pub fn is_not_a_script(addr: Address) -> bool {
 /// Given a network flag produce the Address type for the wallet contract.
 pub fn wallet_contract(network_flag: bool) -> Address {
     // wallet script address
-    let shelly_wallet_address = if network_flag {
+    let shelly_wallet_address: ShelleyAddress = if network_flag {
         ShelleyAddress::new(
             Network::Testnet,
             ShelleyPaymentPart::Script(ScriptHash::new(
@@ -45,7 +45,7 @@ pub fn wallet_contract(network_flag: bool) -> Address {
 
 pub fn collateral_address(network_flag: bool) -> Address {
         // wallet script address
-        let shelly_wallet_address = if network_flag {
+        let shelly_wallet_address: ShelleyAddress = if network_flag {
             ShelleyAddress::new(
                 Network::Testnet,
                 ShelleyPaymentPart::Key(PaymentKeyHash::new(

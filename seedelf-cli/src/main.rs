@@ -1,11 +1,10 @@
 use clap::{Parser, Subcommand};
-
 mod commands;
 mod setup;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
-#[command(version = "0.0.1")]
+#[command(version = "0.1.0")]
 #[command(about = "A Cardano Stealth Wallet", long_about = None)]
 struct Cli {
     /// This forces each command to use the pre-production environment

@@ -1,6 +1,6 @@
-use warp::Filter;
 use std::fs;
 use std::net::SocketAddr;
+use warp::Filter;
 
 /// Start a web server and inject a dynamic message into the HTML.
 ///

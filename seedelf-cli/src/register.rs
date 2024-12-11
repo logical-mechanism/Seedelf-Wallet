@@ -1,13 +1,12 @@
+use blstrs::{G1Affine, G1Projective, Scalar};
 use hex;
 use hex::FromHex;
 use pallas_primitives::{
     alonzo::{Constr, MaybeIndefArray, PlutusData},
     BoundedBytes, Fragment,
 };
-use serde::{Deserialize, Serialize};
 use crate::schnorr::random_scalar;
-use blstrs::{G1Affine, G1Projective, Scalar};
-
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Hash, Clone)]
 pub struct Register {

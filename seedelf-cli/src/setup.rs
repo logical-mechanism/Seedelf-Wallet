@@ -14,6 +14,7 @@ struct Wallet {
 
 /// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
 pub fn check_and_prepare_seedelf() {
+    // this may only work on ubuntu
     let seedelf_path = Path::new("/home").join(whoami::username()).join(".seedelf");
 
     // Check if `.seedelf` exists
@@ -91,13 +92,13 @@ pub fn load_wallet() -> Scalar {
     let wallet_path = first_file.path();
 
     // Read the wallet file
-    let wallet_data = fs::read_to_string(&wallet_path).expect("Failed to read wallet file");
+    let wallet_data: String = fs::read_to_string(&wallet_path).expect("Failed to read wallet file");
 
     // Deserialize the wallet JSON
     let wallet: Wallet = serde_json::from_str(&wallet_data).expect("Failed to parse wallet JSON");
 
     // Decode the hex string back into bytes
-    let private_key_bytes =
+    let private_key_bytes: Vec<u8> =
         hex::decode(wallet.private_key).expect("Failed to decode private key hex");
 
     // Convert bytes to Scalar

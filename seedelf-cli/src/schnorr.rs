@@ -7,7 +7,7 @@ use rand_core::OsRng;
 
 pub fn fiat_shamir_heuristic(g_b: String, g_r_b: String, u_b: String, b: String) -> String {
     // Concatenate the strings
-    let concatenated = format!("{}{}{}{}", g_b, g_r_b, u_b, b);
+    let concatenated: String = format!("{}{}{}{}", g_b, g_r_b, u_b, b);
 
     // Convert to bytes and hash
     blake2b_224(&concatenated)
@@ -40,17 +40,6 @@ pub fn create_proof(datum: Register, sk: Scalar, bound: String) -> (String, Stri
 
 }
 
-/// Computes a Schnorr proof.
-///
-/// # Arguments
-/// - `generator`: Hex-encoded compressed G1 point.
-/// - `public_value`: Hex-encoded compressed G1 point (g^x).
-/// - `z_b`: Hex string of scalar `z`.
-/// - `g_r_b`: Hex-encoded compressed G1 point (g^r).
-/// - `bound`: Hex string used as part of the Fiat-Shamir heuristic.
-///
-/// # Returns
-/// - `true` if the proof verifies, `false` otherwise.
 pub fn prove(generator: &str, public_value: &str, z_b: &str, g_r_b: &str, bound: &str) -> bool {
     // Decode and decompress generator
     let g1: G1Affine = G1Affine::from_compressed(
