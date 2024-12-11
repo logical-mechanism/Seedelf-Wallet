@@ -3,16 +3,17 @@ use hex;
 use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTransaction};
+use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::{address, transaction};
+use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
 use seedelf_cli::koios::{
-    address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
+    address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging, UtxoResponse,
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::web_server;
+use seedelf_cli::{address, transaction};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -25,9 +26,20 @@ pub struct FundArgs {
     #[arg(long, help = "The Seedelf receiving funds.")]
     seedelf: String,
 
-    /// The amount of ADA to send
-    #[arg(long, help = "The amount of ADA being sent.")]
-    amount: u64,
+    /// The amount of Lovelace to send
+    #[arg(long, help = "The amount of Lovelace being sent to the Seedelf.")]
+    lovelace: Option<u64>,
+
+    #[arg(short = 'p', long = "policy-id")]
+    policy_ids: Option<Vec<String>>,
+
+    /// Optional repeated `token-name`
+    #[arg(short = 't', long = "token-name")]
+    token_names: Option<Vec<String>>,
+
+    /// Optional repeated `amount`
+    #[arg(short = 'a', long = "amount")]
+    amounts: Option<Vec<u64>>,
 }
 
 pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
@@ -35,7 +47,38 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         println!("\nRunning In Preprod Environment");
     }
 
-    if args.amount < transaction::wallet_minimum_lovelace() {
+    // its ok not to define lovelace but in that case an asset has to be define
+    if args.lovelace.is_none()
+        && (!args.policy_ids.is_some() || !args.token_names.is_some() || !args.amounts.is_some())
+    {
+        return Err("No Lovelace or Assets Provided.".to_string());
+    }
+    
+    // lets collect the tokens if they exist
+    let tokens: Assets = Assets::new();
+    if let (Some(policy_ids), Some(token_names), Some(amounts)) =
+        (args.policy_ids, args.token_names, args.amounts)
+    {
+        if policy_ids.len() != token_names.len() || policy_ids.len() != amounts.len() {
+            return Err(
+                "Error: Each --policy-id must have a corresponding --token-name and --amount."
+                    .to_string(),
+            );
+        }
+
+        for ((pid, tkn), amt) in policy_ids
+            .into_iter()
+            .zip(token_names.into_iter())
+            .zip(amounts.into_iter())
+        {
+            tokens.add(Asset::new(pid, tkn, amt));
+        }
+    }
+    let minimum_lovelace: u64 = transaction::wallet_minimum_lovelace_with_assets(tokens);
+    if args
+        .lovelace
+        .is_some_and(|x| x < minimum_lovelace)
+    {
         return Err("Not Enough Lovelace On UTxO".to_string());
     }
 
@@ -65,7 +108,8 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let mut found_seedelf: bool = false;
 
     // we need about 2 ada for change so just add that to the amount
-    let lovelace_goal: u64 = 2_000_000 + args.amount;
+    let lovelace: u64 = args.lovelace.unwrap_or(minimum_lovelace);
+    let lovelace_goal: u64 = 2_000_000 + lovelace;
 
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
         Ok(utxos) => {
@@ -95,7 +139,10 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
         }
     }
     // if the seedelf isn't found then error
@@ -103,6 +150,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         return Err("Seedelf Not Found".to_string());
     }
 
+    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
     // This should probably be some generalized function later
     match address_utxos(&args.address, network_flag).await {
         Ok(utxos) => {
@@ -110,51 +158,28 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             for utxo in utxos {
                 // get the lovelace on this utxo
                 let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                if lovelace == 5_000_000 {
-                    // its probably a collateral utxo
-                    // draft and raw are built the same here
-                } else {
-                    // its probably not a collateral utxo
-                    //
-                    // for now lets just pick up ada only UTxOs for now
-                    if let Some(assets) = &utxo.asset_list {
-                        if assets.is_empty() {
-                            if total_lovelace < lovelace_goal {
-                                // draft and raw are built the same here
-                                draft_tx = draft_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                raw_tx = raw_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash)
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                // just sum up all the lovelace of the ada only inputs
-                                total_lovelace += lovelace;
-                            } else {
-                                // we found enough lovelace
-                                break;
-                            }
-                        }
+                if let Some(assets) = &utxo.asset_list {
+                    if assets.is_empty() && lovelace == 5_000_000 {
+                        // its probably a collateral utxo
+                    } else {
+                        // its probably not a collateral utxo
+                        usuable_utxos.push(utxo);
                     }
                 }
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
         }
     }
+    // we have to use a utxo selection algo to pick the utxos that fit the match
+    // it must contain a change back function too
 
+
+    return Err("QUIT".to_string());
     // if the seedelf isn't found then error
     if total_lovelace < lovelace_goal {
         return Err("Not Enough Lovelace".to_string());
@@ -167,12 +192,10 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
-        .output(
-            Output::new(wallet_addr.clone(), args.amount).set_inline_datum(datum_vector.clone()),
-        )
+        .output(Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone()))
         .output(Output::new(
             addr.clone(),
-            total_lovelace - args.amount - tmp_fee,
+            total_lovelace - lovelace - tmp_fee,
         ))
         .fee(tmp_fee);
 
@@ -197,12 +220,10 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     // build out the rest of the draft tx with the tmp fee
     raw_tx = raw_tx
-        .output(
-            Output::new(wallet_addr.clone(), args.amount).set_inline_datum(datum_vector.clone()),
-        )
+        .output(Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone()))
         .output(Output::new(
             addr.clone(),
-            total_lovelace - args.amount - tx_fee,
+            total_lovelace - lovelace - tx_fee,
         ))
         .fee(tx_fee);
 
