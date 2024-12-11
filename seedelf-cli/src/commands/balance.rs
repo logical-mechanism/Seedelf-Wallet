@@ -48,7 +48,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
     }
 
     println!("\nBalance: {:.6} ₳", total_lovelace as f64 / 1_000_000.0);
-    println!("{} UTxOs", total_utxos);
+    println!("Wallet Has {} UTxOs", total_utxos);
 
     Ok(())
 }
