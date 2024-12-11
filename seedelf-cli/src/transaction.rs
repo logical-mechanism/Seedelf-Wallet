@@ -2,9 +2,10 @@ use crate::{constants::{
     MAINNET_COLLATERAL_UTXO, MAINNET_SEEDELF_REFERENCE_UTXO, MAINNET_WALLET_REFERENCE_UTXO,
     PREPROD_COLLATERAL_UTXO, PREPROD_SEEDELF_REFERENCE_UTXO, PREPROD_WALLET_REFERENCE_UTXO, SEEDELF_POLICY_ID
 }, schnorr, address, register::Register};
+use pallas_addresses::Address;
+use pallas_crypto;
 use pallas_primitives::Fragment;
 use pallas_txbuilder::{Input, Output};
-use pallas_crypto;
 use serde_json::Value;
 
 
@@ -154,4 +155,12 @@ pub fn wallet_minimum_lovelace() -> u64 {
         .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec());
     // use the staging output to calculate the minimum required lovelace
     calculate_min_required_utxo(staging_output)
+}
+
+pub fn address_minimum_lovelace(address: &str) -> u64 {
+    let addr: Address = Address::from_bech32(address).unwrap();
+    let staging_output: Output = Output::new(addr, 5_000_000);
+    // use the staging output to calculate the minimum required lovelace
+    calculate_min_required_utxo(staging_output)
+
 }
