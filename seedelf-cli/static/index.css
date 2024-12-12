@@ -60,6 +60,8 @@ section {
     align-items: center;
     /* Centers vertically */
     text-align: center;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .nav-bar {
@@ -131,4 +133,9 @@ section {
 .link-button:active {
     background-color: #003f7f; /* Even darker for active state */
     transform: scale(0.95); /* Slightly shrink on click */
+}
+
+#status {
+    max-width: 60%;
+    word-wrap: break-word;
 }

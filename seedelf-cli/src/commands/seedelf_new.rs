@@ -23,7 +23,7 @@ pub struct LabelArgs {
     address: String,
 
     #[arg(long, help = "The seedelf label / personal tag.")]
-    label: String,
+    label: Option<String>,
 }
 
 pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
@@ -51,11 +51,14 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
 
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
-    // we need about 2 ada for the utxo and another 2 for change so make it 5
+    // we need about 2 ada for the utxo and another 2 for change so make it 5 as it should account for change
     let lovelace_goal: u64 = 5_000_000;
 
     // there may be many collateral utxos, we just need one
     let mut found_collateral: bool = false;
+
+    // if the label is none then just use the empty string
+    let label: String = args.label.unwrap_or(String::new());
 
     // This should probably be some generalized function later
     match address_utxos(&args.address, network_flag).await {
@@ -142,11 +145,11 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // this is going to be the datum on the seedelf
     let sk: Scalar = setup::load_wallet();
     let datum_vector: Vec<u8> = Register::create(sk).rerandomize().to_vec();
-    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(args.label.clone());
+    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone());
 
     // lets build the seelfelf token
     let token_name: Vec<u8> =
-        transaction::seedelf_token_name(args.label.clone(), draft_tx.inputs.as_ref());
+        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref());
     println!("\nCreating Seedelf: {}", hex::encode(token_name.clone()));
 
     let min_utxo: u64 = transaction::seedelf_minimum_lovelace();
