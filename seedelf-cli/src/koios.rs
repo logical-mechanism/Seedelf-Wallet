@@ -31,7 +31,7 @@ pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
     Ok(response)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Asset {
     pub decimals: u8,
     pub quantity: String,
@@ -40,14 +40,14 @@ pub struct Asset {
     pub fingerprint: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct InlineDatum {
     pub bytes: String,
     pub value: Value, // Flexible for arbitrary JSON
 }
 
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct UtxoResponse {
     pub tx_hash: String,
     pub tx_index: u64,
@@ -71,6 +71,7 @@ pub async fn credential_utxos(payment_credential: &str, network_flag: bool) -> R
     } else {
         "api"
     };
+    // this is searching the wallet contract. We have to collect the entire utxo set to search it.
     let url = format!("https://{}.koios.rest/api/v1/credential_utxos", network);
     let client = reqwest::Client::new();
 
@@ -80,18 +81,35 @@ pub async fn credential_utxos(payment_credential: &str, network_flag: bool) -> R
         "_extended": true
     });
 
-    // Make the POST request
-    let response = client
-        .post(url)
-        .header("accept", "application/json")
-        .header("content-type", "application/json")
-        .json(&payload)
-        .send()
-        .await?;
+    let mut all_utxos = Vec::new();
+    let mut offset = 0;
 
-    let utxos: Vec<UtxoResponse> = response.json().await?;
+    loop {
+        // Make the POST request
+        let response = client
+            .post(url.clone())
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .query(&[("offset", offset.to_string())])
+            .json(&payload)
+            .send()
+            .await?;
+    
+        let mut utxos: Vec<UtxoResponse> = response.json().await?;
+        // Break the loop if no more results
+        if utxos.is_empty() {
+            break;
+        }
 
-    Ok(utxos)
+        // Append the retrieved UTXOs to the main list
+        all_utxos.append(&mut utxos);
+
+        // Increment the offset by 1000 (page size)
+        offset += 1000;
+    }
+
+
+    Ok(all_utxos)
 }
 
 pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
@@ -100,6 +118,9 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
     } else {
         "api"
     };
+    // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
+    // if you have 1000 utxos in that wallets that can pay for anything then something
+    // is wrong in that wallet
     let url = format!("https://{}.koios.rest/api/v1/address_utxos", network);
     let client = reqwest::Client::new();
 
