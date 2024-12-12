@@ -30,8 +30,8 @@ pub struct SweepArgs {
     address: String,
 
     /// The amount of ADA to send
-    #[arg(long, help = "The amount of ADA being sent. Cannt be used with --all")]
-    amount: Option<u64>,
+    #[arg(long, help = "The amount of Lovelace being sent to the address. Cannt be used with --all")]
+    lovelace: Option<u64>,
 
     /// Send all funds if amount is not specified
     #[arg(long, help = "Send all funds. Cannot be used with --amount.")]
@@ -43,15 +43,15 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         println!("\nRunning In Preprod Environment");
     }
 
-    if args.amount.is_none() && !args.all {
+    if args.lovelace.is_none() && !args.all {
         return Err("Either --amount u64 or --all must be specified.".to_string());
     }
 
-    if args.amount.is_some() && args.all {
+    if args.lovelace.is_some() && args.all {
         return Err("--amount u64 and --all cannot be used together.".to_string());
     }
 
-    if args.amount.is_some_and(|x| x < transaction::address_minimum_lovelace(&args.address)) {
+    if args.lovelace.is_some_and(|x| x < transaction::address_minimum_lovelace(&args.address)) {
         return Err("Amount Too Small For Min UTxO".to_string());
     }
 
@@ -81,7 +81,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let mut total_lovelace_found: u64 = 0;
     let mut number_of_utxos: u64 = 0;
     let max_utxos: u64 = 20;
-    let lovelace_goal: u64 = args.amount.unwrap_or(0);
+    let lovelace_goal: u64 = args.lovelace.unwrap_or(0);
 
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();

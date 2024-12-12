@@ -30,8 +30,8 @@ pub struct TransforArgs {
     seedelf: String,
 
     /// The amount of ADA to send
-    #[arg(long, help = "The amount of ADA being sent.")]
-    amount: u64,
+    #[arg(long, help = "The amount of ADA being sent to the Seedelf.")]
+    lovelace: u64,
 }
 
 pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
@@ -39,7 +39,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
         println!("\nRunning In Preprod Environment");
     }
 
-    if args.amount < transaction::wallet_minimum_lovelace() {
+    if args.lovelace < transaction::wallet_minimum_lovelace() {
         return Err("Amount Too Small For Min UTxO".to_string());
     }
 
@@ -61,7 +61,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     let mut total_lovelace_found: u64 = 0;
     let mut number_of_utxos: u64 = 0;
     let max_utxos: u64 = 20;
-    let lovelace_goal: u64 = args.amount;
+    let lovelace_goal: u64 = args.lovelace;
 
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();

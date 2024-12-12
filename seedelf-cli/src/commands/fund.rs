@@ -25,9 +25,9 @@ pub struct FundArgs {
     #[arg(long, help = "The Seedelf receiving funds.")]
     seedelf: String,
 
-    /// The amount of ADA to send
-    #[arg(long, help = "The amount of ADA being sent.")]
-    amount: u64,
+    /// The amount of Lovelace to send
+    #[arg(long, help = "The amount of Lovelace being sent to the Seedelf.")]
+    lovelace: u64,
 }
 
 pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
@@ -35,7 +35,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         println!("\nRunning In Preprod Environment");
     }
 
-    if args.amount < transaction::wallet_minimum_lovelace() {
+    if args.lovelace < transaction::wallet_minimum_lovelace() {
         return Err("Not Enough Lovelace On UTxO".to_string());
     }
 
@@ -65,7 +65,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let mut found_seedelf: bool = false;
 
     // we need about 2 ada for change so just add that to the amount
-    let lovelace_goal: u64 = 2_000_000 + args.amount;
+    let lovelace_goal: u64 = 2_000_000 + args.lovelace;
 
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
         Ok(utxos) => {
@@ -168,11 +168,11 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(
-            Output::new(wallet_addr.clone(), args.amount).set_inline_datum(datum_vector.clone()),
+            Output::new(wallet_addr.clone(), args.lovelace).set_inline_datum(datum_vector.clone()),
         )
         .output(Output::new(
             addr.clone(),
-            total_lovelace - args.amount - tmp_fee,
+            total_lovelace - args.lovelace - tmp_fee,
         ))
         .fee(tmp_fee);
 
@@ -198,11 +198,11 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // build out the rest of the draft tx with the tmp fee
     raw_tx = raw_tx
         .output(
-            Output::new(wallet_addr.clone(), args.amount).set_inline_datum(datum_vector.clone()),
+            Output::new(wallet_addr.clone(), args.lovelace).set_inline_datum(datum_vector.clone()),
         )
         .output(Output::new(
             addr.clone(),
-            total_lovelace - args.amount - tx_fee,
+            total_lovelace - args.lovelace - tx_fee,
         ))
         .fee(tx_fee);
 
