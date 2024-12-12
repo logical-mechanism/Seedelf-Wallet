@@ -152,6 +152,20 @@ impl Assets {
     
         merged
     }
+
+    pub fn separate(&self, other: Assets) -> Self {
+        let mut separated = self.clone(); // Clone the current `Assets` as a starting point
+    
+        for other_asset in other.items {
+            separated = separated.sub(other_asset); // Use `add` to handle merging logic
+        }
+    
+        separated
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
 }
 
 pub fn string_to_u64(input: String) -> Result<u64, String> {

@@ -31,6 +31,5 @@ async fn find_nft_and_ada() {
     
     for utxo in selected_utxos {
         println!("nft {:?}", string_to_u64(utxo.value));
-
     }
 }
