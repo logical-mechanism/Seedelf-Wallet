@@ -48,6 +48,14 @@ impl Asset {
             amount: self.amount - other.amount,
         })
     }
+
+    pub fn compare(&self, other: Asset) -> bool {
+        if self.policy_id != other.policy_id || self.token_name != other.token_name {
+            false
+        } else {
+            self.amount >= other.amount
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Hash, Clone)]
@@ -94,6 +102,69 @@ impl Assets {
         Self {
             items: filtered_items,
         }
+    }
+
+    pub fn contains(&self, other: Assets) -> bool {
+        // search all other tokens and make sure they exist in these assets
+        for other_token in other.items {
+            // we assume we cant find it
+            let mut found = false;
+            // lets check all the assets in these assets
+            for token in self.items.clone() {
+                if token.compare(other_token.clone()) {
+                    found = true;
+                    break;
+                }
+            }
+            // if we didnt find it then false
+            if !found {
+                return false
+            }
+        }
+        // we found all the other tokens
+        true
+    }
+
+    pub fn any(&self, other: Assets) -> bool {
+        if other.items.is_empty() {
+            return true
+        }
+        // search all other tokens and make sure they exist in these assets
+        for other_token in other.items {
+            // lets check all the assets in these assets
+            for token in self.items.clone() {
+                // if its greater than or equal then break
+                if token.policy_id == other_token.policy_id && token.token_name == other_token.token_name {
+                    return true
+                }
+            }
+        }
+        // we found nothing
+        false
+    }
+
+    pub fn merge(&self, other: Assets) -> Self {
+        let mut merged = self.clone(); // Clone the current `Assets` as a starting point
+    
+        for other_asset in other.items {
+            merged = merged.add(other_asset); // Use `add` to handle merging logic
+        }
+    
+        merged
+    }
+
+    pub fn separate(&self, other: Assets) -> Self {
+        let mut separated = self.clone(); // Clone the current `Assets` as a starting point
+    
+        for other_asset in other.items {
+            separated = separated.sub(other_asset); // Use `add` to handle merging logic
+        }
+    
+        separated
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
     }
 }
 

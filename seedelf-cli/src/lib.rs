@@ -1,10 +1,11 @@
+pub mod address;
 pub mod assets;
-pub mod hashing;
-pub mod schnorr;
-pub mod koios;
-pub mod web_server;
 pub mod constants;
 pub mod data_structures;
-pub mod transaction;
-pub mod address;
+pub mod hashing;
+pub mod koios;
 pub mod register;
+pub mod schnorr;
+pub mod transaction;
+pub mod utxos;
+pub mod web_server;
