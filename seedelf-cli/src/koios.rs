@@ -119,7 +119,7 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
         "api"
     };
     // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
-    // if you have 1000 utxos in that wallets that can pay for anything then something
+    // if you have 1000 utxos in that wallets that cannot pay for anything then something
     // is wrong in that wallet
     let url = format!("https://{}.koios.rest/api/v1/address_utxos", network);
     let client = reqwest::Client::new();
