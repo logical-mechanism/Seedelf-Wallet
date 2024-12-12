@@ -7,7 +7,7 @@ mod setup;
 #[command(version = "0.1.0")]
 #[command(about = "A Cardano Stealth Wallet", long_about = None)]
 struct Cli {
-    /// This forces each command to use the pre-production environment
+    /// Use this flag to interact with the pre-production environment
     #[arg(long, global = true)]
     preprod: bool,
 
