@@ -52,12 +52,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // this is what will be signed when the real fee is known
-    let mut raw_tx: StagingTransaction = StagingTransaction::new();
-
     // we do this so I can initialize it to the empty vector
-    let mut draft_input_vector: Vec<Input> = Vec::new();
-    let mut raw_input_vector: Vec<Input> = Vec::new();
+    let mut input_vector: Vec<Input> = Vec::new();
 
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
@@ -100,25 +96,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                                     ),
                                     utxo.tx_index,
                                 ));
-                                raw_tx = raw_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                draft_input_vector.push(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                raw_input_vector.push(Input::new(
+                                input_vector.push(Input::new(
                                     pallas_crypto::hash::Hash::new(
                                         hex::decode(utxo.tx_hash.clone())
                                             .expect("Invalid hex string")
@@ -187,7 +165,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .reference_input(transaction::seedelf_reference_utxo(network_flag))
         .reference_input(transaction::wallet_reference_utxo(network_flag))
         .add_spend_redeemer(
-            draft_input_vector.remove(0),
+            input_vector.clone().remove(0),
             spend_redeemer_vector.clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: 14_000_000,
@@ -222,6 +200,20 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .unwrap()
                 .try_into()
                 .expect("Not Correct Length"),
+        ));
+    
+    // this is what will be signed when the real fee is known
+    let mut raw_tx: StagingTransaction = draft_tx
+        .clone()
+        .clear_fee()
+        .clear_collateral_output()
+        .remove_output(0)
+        .remove_spend_redeemer(input_vector.clone().remove(0))
+        .remove_mint_redeemer(pallas_crypto::hash::Hash::new(
+            hex::decode(SEEDELF_POLICY_ID)
+                .expect("Invalid hex string")
+                .try_into()
+                .expect("Failed to convert to 32-byte array"),
         ));
 
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
@@ -297,27 +289,13 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
 
     raw_tx = raw_tx
         .output(Output::new(addr.clone(), total_lovelace - total_fee))
-        .collateral_input(transaction::collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
             5_000_000 - (total_fee) * 3 / 2,
         ))
         .fee(total_fee)
-        .mint_asset(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(SEEDELF_POLICY_ID)
-                    .unwrap()
-                    .try_into()
-                    .expect("Not Correct Length"),
-            ),
-            hex::decode(args.seedelf.clone()).unwrap(),
-            -1,
-        )
-        .unwrap()
-        .reference_input(transaction::seedelf_reference_utxo(network_flag))
-        .reference_input(transaction::wallet_reference_utxo(network_flag))
         .add_spend_redeemer(
-            raw_input_vector.remove(0),
+            input_vector.clone().remove(0),
             spend_redeemer_vector.clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: spend_mem_units,
@@ -336,23 +314,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 mem: mint_mem_units,
                 steps: mint_cpu_units,
             }),
-        )
-        .language_view(
-            pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
-        )
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(&pkh)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ))
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(COLLATERAL_HASH)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ));
+        );
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
     // need to witness it now

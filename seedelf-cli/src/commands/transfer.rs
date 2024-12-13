@@ -49,13 +49,8 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // this is what will be signed when the real fee is known
-    let mut raw_tx: StagingTransaction = StagingTransaction::new();
-
-    let mut draft_input_vector: Vec<Input> = Vec::new();
-    let mut draft_register_vector: Vec<Register> = Vec::new();
-    let mut raw_input_vector: Vec<Input> = Vec::new();
-    let mut raw_register_vector: Vec<Register> = Vec::new();
+    let mut input_vector: Vec<Input> = Vec::new();
+    let mut register_vector: Vec<Register> = Vec::new();
 
     // we will assume lovelace only right now
     let mut total_lovelace_found: u64 = 0;
@@ -118,25 +113,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
                                 ),
                                 utxo.tx_index,
                             ));
-                            raw_tx = raw_tx.input(Input::new(
-                                pallas_crypto::hash::Hash::new(
-                                    hex::decode(utxo.tx_hash.clone())
-                                        .expect("Invalid hex string")
-                                        .try_into()
-                                        .expect("Failed to convert to 32-byte array"),
-                                ),
-                                utxo.tx_index,
-                            ));
-                            draft_input_vector.push(Input::new(
-                                pallas_crypto::hash::Hash::new(
-                                    hex::decode(utxo.tx_hash.clone())
-                                        .expect("Invalid hex string")
-                                        .try_into()
-                                        .expect("Failed to convert to 32-byte array"),
-                                ),
-                                utxo.tx_index,
-                            ));
-                            raw_input_vector.push(Input::new(
+                            input_vector.push(Input::new(
                                 pallas_crypto::hash::Hash::new(
                                     hex::decode(utxo.tx_hash.clone())
                                         .expect("Invalid hex string")
@@ -146,8 +123,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
                                 utxo.tx_index,
                             ));
                             // do the registers
-                            draft_register_vector.push(inline_datum.clone());
-                            raw_register_vector.push(inline_datum);
+                            register_vector.push(inline_datum.clone());
                             // just sum up all the lovelace of the ada only inputs
                             total_lovelace_found += lovelace;
                             number_of_utxos += 1;
@@ -218,9 +194,9 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
         ));
     
     // Use zip to pair elements from the two lists
-    for (input, datum) in draft_input_vector
+    for (input, datum) in input_vector.clone()
         .into_iter()
-        .zip(draft_register_vector.into_iter())
+        .zip(register_vector.clone().into_iter())
     {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone());
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
@@ -233,6 +209,23 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
             }),
         )
     }
+
+    // this is what will be signed when the real fee is known
+    let mut raw_tx: StagingTransaction = draft_tx
+        .clone()
+        .clear_fee()
+        .clear_collateral_output()
+        .remove_output(1);
+
+    // Use zip to pair elements from the two lists
+    for input in input_vector.clone()
+        .into_iter()
+    {
+        raw_tx = raw_tx.remove_spend_redeemer(
+            input,
+        );
+    }
+
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
     let mut budgets: Vec<(u64, u64)> = Vec::new();
@@ -287,41 +280,19 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     raw_tx = raw_tx
         .output(Output::new(
             wallet_addr.clone(),
-                lovelace_goal,
-        ).set_inline_datum(seedelf_datum.rerandomize().to_vec()))
-        .output(Output::new(
-            wallet_addr.clone(),
             total_lovelace_found - lovelace_goal - total_fee,
         )
         .set_inline_datum(Register::create(scalar).rerandomize().to_vec()))
-        .collateral_input(transaction::collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
             5_000_000 - (total_fee) * 3 / 2,
         ))
-        .fee(total_fee)
-        .reference_input(transaction::wallet_reference_utxo(network_flag))
-        .language_view(
-            pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
-        )
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(&pkh)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ))
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(COLLATERAL_HASH)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ));
+        .fee(total_fee);
     
-    for ((input, datum), (cpu, mem)) in raw_input_vector
+    for ((input, datum), (cpu, mem)) in input_vector.clone()
         .into_iter()
-        .zip(raw_register_vector.into_iter())
-        .zip(budgets.into_iter())
+        .zip(register_vector.clone().into_iter())
+        .zip(budgets.clone().into_iter())
     {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone());
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
