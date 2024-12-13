@@ -115,3 +115,31 @@ pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Ve
         Vec::new()
     }
 }
+
+pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
+    let mut found_assets: Assets = Assets::new();
+    let mut current_lovelace_sum: u64 = 0;
+
+
+    for utxo in utxos.clone() {
+        let value: u64 = string_to_u64(utxo.value.clone()).unwrap();
+        current_lovelace_sum += value;
+        
+        if let Some(assets) = utxo.clone().asset_list {
+            if !assets.is_empty() {
+                let mut utxo_assets: Assets = Assets::new();
+
+                for token in assets.clone() {
+                    utxo_assets = utxo_assets.add(Asset::new(
+                        token.policy_id,
+                        token.asset_name,
+                        string_to_u64(token.quantity).unwrap(),
+                    ));
+                }
+
+                found_assets = found_assets.merge(utxo_assets.clone());
+            }
+        }
+    }
+    (current_lovelace_sum, found_assets)
+}
