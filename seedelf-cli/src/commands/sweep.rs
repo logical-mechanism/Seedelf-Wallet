@@ -245,6 +245,9 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             }),
         )
     }
+
+    let tmp_tx: StagingTransaction = draft_tx.clone();
+
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
     let mut budgets: Vec<(u64, u64)> = Vec::new();
