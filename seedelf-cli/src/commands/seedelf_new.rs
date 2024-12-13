@@ -46,9 +46,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // this is what will be signed when the real fee is known
-    let mut raw_tx: StagingTransaction = StagingTransaction::new();
-
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
     // we need about 2 ada for the utxo and another 2 for change so make it 5 as it should account for change
@@ -80,15 +77,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                             ),
                             utxo.tx_index,
                         ));
-                        raw_tx = raw_tx.collateral_input(Input::new(
-                            pallas_crypto::hash::Hash::new(
-                                hex::decode(utxo.tx_hash)
-                                    .expect("Invalid hex string")
-                                    .try_into()
-                                    .expect("Failed to convert to 32-byte array"),
-                            ),
-                            utxo.tx_index,
-                        ));
                         // we just want a single collateral here
                         found_collateral = true;
                     }
@@ -103,15 +91,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                                 draft_tx = draft_tx.input(Input::new(
                                     pallas_crypto::hash::Hash::new(
                                         hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                raw_tx = raw_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash)
                                             .expect("Invalid hex string")
                                             .try_into()
                                             .expect("Failed to convert to 32-byte array"),
@@ -207,6 +186,19 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),
         );
+    
+    // clone the tx but remove the tmp fee, collateral, change output, and fake redeemer
+    let mut raw_tx: StagingTransaction = draft_tx
+        .clone()
+        .clear_fee()
+        .clear_collateral_output()
+        .remove_output(1)
+        .remove_mint_redeemer(pallas_crypto::hash::Hash::new(
+            hex::decode(SEEDELF_POLICY_ID)
+                .expect("Invalid hex string")
+                .try_into()
+                .expect("Failed to convert to 32-byte array"),
+        ));
 
     // build an intermediate tx for fee estimation
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
@@ -270,39 +262,12 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
 
     // build of the rest of the raw tx with the correct fee
     raw_tx = raw_tx
-        .output(
-            Output::new(wallet_addr.clone(), min_utxo)
-                .set_inline_datum(datum_vector.clone())
-                .add_asset(
-                    pallas_crypto::hash::Hash::new(
-                        hex::decode(SEEDELF_POLICY_ID)
-                            .unwrap()
-                            .try_into()
-                            .expect("Not Correct Length"),
-                    ),
-                    token_name.clone(),
-                    1,
-                )
-                .unwrap(),
-        )
         .output(Output::new(
             addr.clone(),
             total_lovelace - min_utxo - total_fee,
         ))
         .collateral_output(Output::new(addr.clone(), 5_000_000 - (total_fee) * 3 / 2))
         .fee(total_fee)
-        .mint_asset(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(SEEDELF_POLICY_ID)
-                    .unwrap()
-                    .try_into()
-                    .expect("Not Correct Length"),
-            ),
-            token_name.clone(),
-            1,
-        )
-        .unwrap()
-        .reference_input(transaction::seedelf_reference_utxo(network_flag))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
                 hex::decode(SEEDELF_POLICY_ID)
@@ -315,10 +280,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 mem: mem_units,
                 steps: cpu_units,
             }),
-        )
-        .language_view(
-            pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
         );
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
