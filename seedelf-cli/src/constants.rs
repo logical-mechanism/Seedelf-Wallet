@@ -318,3 +318,5 @@ pub fn plutus_v3_cost_model() -> Vec<i64> {
         3
     ]
 }
+
+pub const MAXIMUM_WALLET_UTXOS: u64 = 20;

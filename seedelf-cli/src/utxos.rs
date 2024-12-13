@@ -1,6 +1,78 @@
+use blstrs::Scalar;
+
 use crate::assets::{string_to_u64, Asset, Assets};
-use crate::koios::{address_utxos, UtxoResponse};
+use crate::constants::{MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
+use crate::koios::{
+    address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging, UtxoResponse,
+};
 use crate::transaction::wallet_minimum_lovelace_with_assets;
+
+pub async fn find_seedelf_utxo(seedelf: String, network_flag: bool) -> Option<UtxoResponse> {
+    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+        Ok(utxos) => {
+            for utxo in utxos {
+                if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                    let asset_name = utxo
+                        .asset_list
+                        .as_ref()
+                        .and_then(|vec| {
+                            vec.iter()
+                                .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
+                                .map(|asset| &asset.asset_name)
+                        })
+                        .unwrap();
+                    if asset_name == &seedelf {
+                        // we found it so stop searching
+                        return Some(utxo);
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
+        }
+    }
+    None
+}
+
+pub async fn collect_wallet_utxos(sk: Scalar, network_flag: bool) -> Vec<UtxoResponse> {
+    let mut number_of_utxos: u64 = 0;
+
+    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
+
+    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+        Ok(utxos) => {
+            for utxo in utxos {
+                // Extract bytes
+                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
+                    // utxo must be owned by this secret scaler
+                    if inline_datum.is_owned(sk) {
+                        // its owned but it can't hold a seedelf
+                        if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                            if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
+                                // we hit the max utxos allowed in a single tx
+                                println!("Maximum UTxOs");
+                                break;
+                            }
+                            usuable_utxos.push(utxo);
+                            number_of_utxos += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
+        }
+    }
+    usuable_utxos
+}
 
 pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<UtxoResponse> {
     let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
@@ -35,7 +107,7 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
 // use largest first algo but account for change
 pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Vec<UtxoResponse> {
     let mut selected_utxos: Vec<UtxoResponse> = Vec::new();
-    
+
     let mut current_lovelace_sum: u64 = 0;
     let mut found_enough: bool = false;
 
@@ -47,14 +119,16 @@ pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Ve
     utxos.sort_by(|a, b| {
         let a_group_key = a.asset_list.as_ref().map_or(false, |list| list.is_empty());
         let b_group_key = b.asset_list.as_ref().map_or(false, |list| list.is_empty());
-    
-        b_group_key.cmp(&a_group_key).then_with(|| string_to_u64(b.value.clone()).cmp(&string_to_u64(a.value.clone())))
+
+        b_group_key
+            .cmp(&a_group_key)
+            .then_with(|| string_to_u64(b.value.clone()).cmp(&string_to_u64(a.value.clone())))
     });
 
     for utxo in utxos.clone() {
         // the value from koios is the lovelace
         let value: u64 = string_to_u64(utxo.value.clone()).unwrap();
-        
+
         let mut utxo_assets: Assets = Assets::new();
         let mut added: bool = false;
 
@@ -120,11 +194,10 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
     let mut found_assets: Assets = Assets::new();
     let mut current_lovelace_sum: u64 = 0;
 
-
     for utxo in utxos.clone() {
         let value: u64 = string_to_u64(utxo.value.clone()).unwrap();
         current_lovelace_sum += value;
-        
+
         if let Some(assets) = utxo.clone().asset_list {
             if !assets.is_empty() {
                 let mut utxo_assets: Assets = Assets::new();

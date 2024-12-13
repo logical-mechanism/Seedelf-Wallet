@@ -6,12 +6,15 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::{address, transaction};
+use seedelf_cli::address;
+use seedelf_cli::assets::Assets;
 use seedelf_cli::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
 use seedelf_cli::koios::{
-    address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
+    contains_policy_id, credential_utxos, extract_bytes_with_logging, UtxoResponse
 };
 use seedelf_cli::register::Register;
+use seedelf_cli::transaction;
+use seedelf_cli::utxos;
 use seedelf_cli::web_server;
 
 /// Struct to hold command-specific arguments
@@ -53,9 +56,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // we will assume lovelace only right now
-    let mut total_lovelace: u64 = 0;
-
     let mut datum: Register = Register::default();
 
     // we need to make sure we found something to remove else err
@@ -64,6 +64,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // we need about 2 ada for change so just add that to the amount
     let lovelace_goal: u64 = 2_000_000 + args.lovelace;
 
+    // utxos
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
@@ -100,48 +101,22 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         return Err("Seedelf Not Found".to_string());
     }
 
-    // This should probably be some generalized function later
-    match address_utxos(&args.address, network_flag).await {
-        Ok(utxos) => {
-            // loop all the utxos found from the address
-            for utxo in utxos {
-                // get the lovelace on this utxo
-                let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                if lovelace == 5_000_000 {
-                    // its probably a collateral utxo
-                    // draft and raw are built the same here
-                } else {
-                    // its probably not a collateral utxo
-                    //
-                    // for now lets just pick up ada only UTxOs for now
-                    if let Some(assets) = &utxo.asset_list {
-                        if assets.is_empty() {
-                            if total_lovelace < lovelace_goal {
-                                // draft and raw are built the same here
-                                draft_tx = draft_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                // just sum up all the lovelace of the ada only inputs
-                                total_lovelace += lovelace;
-                            } else {
-                                // we found enough lovelace
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
-        }
+    let all_utxos: Vec<UtxoResponse> = utxos::collect_address_utxos(&args.address, network_flag).await;
+    let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, Assets::new());
+    for utxo in selected_utxos.clone() {
+        // draft and raw are built the same here
+        draft_tx = draft_tx.input(Input::new(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(utxo.tx_hash.clone())
+                    .expect("Invalid hex string")
+                    .try_into()
+                    .expect("Failed to convert to 32-byte array"),
+            ),
+            utxo.tx_index,
+        ));
     }
+
+    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos);
 
     // if the seedelf isn't found then error
     if total_lovelace < lovelace_goal {
@@ -153,15 +128,21 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     let datum_vector: Vec<u8> = datum.rerandomize().to_vec();
 
+    let mut change_output: Output = Output::new(
+        addr.clone(),
+        total_lovelace - args.lovelace - tmp_fee,
+    );
+    for asset in tokens.items.clone() {
+        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+        .unwrap();
+    }
+
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(
             Output::new(wallet_addr.clone(), args.lovelace).set_inline_datum(datum_vector.clone()),
         )
-        .output(Output::new(
-            addr.clone(),
-            total_lovelace - args.lovelace - tmp_fee,
-        ))
+        .output(change_output)
         .fee(tmp_fee);
     
     let mut raw_tx: StagingTransaction = draft_tx.clone().remove_output(1).clear_fee();
@@ -183,13 +164,18 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("\nTx Size Fee: {:?}", tx_fee);
-
+    
+    let mut change_output: Output = Output::new(
+        addr.clone(),
+        total_lovelace - args.lovelace - tx_size,
+    );
+    for asset in tokens.items.clone() {
+        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+        .unwrap();
+    }
     // build out the rest of the draft tx with the tmp fee
     raw_tx = raw_tx
-        .output(Output::new(
-            addr.clone(),
-            total_lovelace - args.lovelace - tx_fee,
-        ))
+        .output(change_output)
         .fee(tx_fee);
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();

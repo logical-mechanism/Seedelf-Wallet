@@ -93,6 +93,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         }
     }
 
+    // lovelace goal here should account for the estimated fee
     let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, Assets::new());
     for utxo in selected_utxos.clone() {
         // draft and raw are built the same here

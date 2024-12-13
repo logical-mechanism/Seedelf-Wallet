@@ -86,25 +86,18 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                             if asset_name == &args.seedelf {
                                 let lovelace: u64 =
                                     utxo.value.parse::<u64>().expect("Invalid Lovelace");
+                                let this_input: Input = Input::new(
+                                    pallas_crypto::hash::Hash::new(
+                                        hex::decode(utxo.tx_hash.clone())
+                                            .expect("Invalid hex string")
+                                            .try_into()
+                                            .expect("Failed to convert to 32-byte array"),
+                                    ),
+                                    utxo.tx_index.clone(),
+                                );
                                 // draft and raw are built the same here
-                                draft_tx = draft_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                input_vector.push(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
+                                draft_tx = draft_tx.input(this_input.clone());
+                                input_vector.push(this_input.clone());
                                 // just sum up all the lovelace of the ada only inputs
                                 total_lovelace += lovelace;
                                 found_seedelf = true;
