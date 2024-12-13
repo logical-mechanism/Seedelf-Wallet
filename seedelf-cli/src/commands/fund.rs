@@ -53,9 +53,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // this is what will be signed when the real fee is known
-    let mut raw_tx: StagingTransaction = StagingTransaction::new();
-
     // we will assume lovelace only right now
     let mut total_lovelace: u64 = 0;
 
@@ -130,15 +127,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
                                     ),
                                     utxo.tx_index,
                                 ));
-                                raw_tx = raw_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash)
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
                                 // just sum up all the lovelace of the ada only inputs
                                 total_lovelace += lovelace;
                             } else {
@@ -175,7 +163,8 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             total_lovelace - args.lovelace - tmp_fee,
         ))
         .fee(tmp_fee);
-
+    
+    let mut raw_tx: StagingTransaction = draft_tx.clone().remove_output(1).clear_fee();
     // build an intermediate tx for fee estimation
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
@@ -197,9 +186,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     // build out the rest of the draft tx with the tmp fee
     raw_tx = raw_tx
-        .output(
-            Output::new(wallet_addr.clone(), args.lovelace).set_inline_datum(datum_vector.clone()),
-        )
         .output(Output::new(
             addr.clone(),
             total_lovelace - args.lovelace - tx_fee,
