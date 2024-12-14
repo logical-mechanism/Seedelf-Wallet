@@ -128,7 +128,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     
     let mut change_output: Output = Output::new(
         addr.clone(),
-        total_lovelace - args.lovelace - tx_size,
+        total_lovelace - args.lovelace - tx_fee,
     );
     for asset in tokens.items.clone() {
         change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)

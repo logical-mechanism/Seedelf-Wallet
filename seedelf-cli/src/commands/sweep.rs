@@ -78,15 +78,14 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
 
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
-    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
 
     let owned_utxos: Vec<UtxoResponse> = utxos::collect_wallet_utxos(scalar, network_flag).await;
-    if args.all {
-        usuable_utxos = owned_utxos;
+    let usuable_utxos: Vec<UtxoResponse> = if args.all {
+        owned_utxos
     } else {
-        usuable_utxos = utxos::select(owned_utxos, lovelace_goal + 2_000_000, Assets::new());
-
-    }
+        // we will assume that the change will required ~2 ADA and the fee about ~0.5 ADA
+        utxos::select(owned_utxos, lovelace_goal + 2_500_000, Assets::new())
+    };
     
     let (total_lovelace_found, tokens) = utxos::assets_of(usuable_utxos.clone());
     for utxo in usuable_utxos.clone() {
@@ -107,75 +106,6 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         register_vector.push(inline_datum.clone());
     }
 
-    // match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
-    //     Ok(utxos) => {
-    //         for utxo in utxos {
-    //             // Extract bytes
-    //             if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-    //                 // utxo must be owned by this secret scaler
-    //                 if inline_datum.is_owned(scalar) {
-    //                     // its owned but it can't hold a seedelf
-    //                     if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
-    //                         if args.all && number_of_utxos >= max_utxos {
-    //                             // all is set and we hit the max utxos allowed in a single tx
-    //                             println!("Hitting max utxos on send all");
-    //                             break;
-    //                         }
-
-    //                         if !args.all && total_lovelace_found >= (lovelace_goal + 2_000_000) {
-    //                             println!("Found all the required lovelace");
-    //                             // an amount implies changes so find another 2 ada
-    //                             break;
-    //                         }
-
-    //                         if number_of_utxos >= max_utxos {
-    //                             println!("Too many utxos");
-    //                             // if this ever happens then break
-    //                             break;
-    //                         }
-    //                         let lovelace: u64 =
-    //                             utxo.value.parse::<u64>().expect("Invalid Lovelace");
-    //                         // draft and raw are built the same here
-    //                         draft_tx = draft_tx.input(Input::new(
-    //                             pallas_crypto::hash::Hash::new(
-    //                                 hex::decode(utxo.tx_hash.clone())
-    //                                     .expect("Invalid hex string")
-    //                                     .try_into()
-    //                                     .expect("Failed to convert to 32-byte array"),
-    //                             ),
-    //                             utxo.tx_index,
-    //                         ));
-    //                         input_vector.push(Input::new(
-    //                             pallas_crypto::hash::Hash::new(
-    //                                 hex::decode(utxo.tx_hash.clone())
-    //                                     .expect("Invalid hex string")
-    //                                     .try_into()
-    //                                     .expect("Failed to convert to 32-byte array"),
-    //                             ),
-    //                             utxo.tx_index,
-    //                         ));
-    //                         // do the registers
-    //                         register_vector.push(inline_datum.clone());
-    //                         // just sum up all the lovelace of the ada only inputs
-    //                         total_lovelace_found += lovelace;
-    //                         number_of_utxos += 1;
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     Err(err) => {
-    //         eprintln!(
-    //             "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-    //             err
-    //         );
-    //     }
-    // }
-
-    // if !args.all && total_lovelace_found < (lovelace_goal + 2_000_000) {
-    //     return Err("Not Enough Lovelace".to_string());
-    // }
-
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
 
@@ -188,7 +118,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
 
     let mut sweep_output: Output = Output::new(
         addr.clone(),
-        if lovelace_goal == 0 {
+        if args.all {
             total_lovelace_found - tmp_fee
         } else {
             lovelace_goal
@@ -333,15 +263,24 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     };
     println!("Total Fee: {:?}", total_fee);
 
+    let mut sweep_output: Output = Output::new(
+        addr.clone(),
+        if args.all {
+            total_lovelace_found - total_fee
+        } else {
+            lovelace_goal
+        },
+    );
+
+    if args.all {
+        for asset in tokens.items.clone() {
+            sweep_output = sweep_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
+        }
+    }
+
     raw_tx = raw_tx
-        .output(Output::new(
-            addr.clone(),
-            if lovelace_goal == 0 {
-                total_lovelace_found - total_fee
-            } else {
-                lovelace_goal
-            },
-        ))
+        .output(sweep_output)
         .collateral_output(Output::new(
             collat_addr.clone(),
             5_000_000 - (total_fee) * 3 / 2,
@@ -351,11 +290,15 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     // need to check if there is change going back here
     if lovelace_goal != 0 {
         let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let change_output: Output = Output::new(
+        let mut change_output: Output = Output::new(
             wallet_addr.clone(),
             total_lovelace_found - lovelace_goal - total_fee,
         )
         .set_inline_datum(datum_vector.clone());
+        for asset in tokens.items.clone() {
+            change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
+        }
         raw_tx = raw_tx.output(change_output)
     }
 
