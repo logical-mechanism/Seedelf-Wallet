@@ -1,6 +1,6 @@
 name = "logical-mechanism/Seedelf-Wallet"
 version = "0.1.2"
-compiler = "v1.1.7"
+compiler = "v1.1.9"
 plutus = "v3"
 license = "GPL-3.0-or-later"
 description = "A Cardano Stealth Wallet"

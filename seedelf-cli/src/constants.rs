@@ -17,6 +17,8 @@ pub const COLLATERAL_PUBLIC_KEY: &str = "fa2025e788fae01ce10deffff386f992f62a311
 pub const PREPROD_COLLATERAL_UTXO: &str = "1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f";
 pub const MAINNET_COLLATERAL_UTXO: &str = "";
 
+pub const MAXIMUM_WALLET_UTXOS: u64 = 20;
+
 pub fn plutus_v3_cost_model() -> Vec<i64> {
     vec![
         100788,
@@ -318,5 +320,3 @@ pub fn plutus_v3_cost_model() -> Vec<i64> {
         3
     ]
 }
-
-pub const MAXIMUM_WALLET_UTXOS: u64 = 20;
