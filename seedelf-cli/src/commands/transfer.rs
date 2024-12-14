@@ -8,18 +8,19 @@ use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTran
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
+use seedelf_cli::assets::Assets;
 use seedelf_cli::constants::{
-    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_POLICY_ID,
-    WALLET_CONTRACT_HASH,
+    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{
-    contains_policy_id, credential_utxos, evaluate_transaction, extract_bytes_with_logging,
+    evaluate_transaction, extract_bytes_with_logging,
     submit_tx, witness_collateral,
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
 use seedelf_cli::transaction;
+use seedelf_cli::utxos;
 use crate::setup;
 
 /// Struct to hold command-specific arguments
@@ -53,99 +54,32 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     let mut register_vector: Vec<Register> = Vec::new();
 
     // we will assume lovelace only right now
-    let mut total_lovelace_found: u64 = 0;
-    let mut number_of_utxos: u64 = 0;
-    let max_utxos: u64 = 20;
     let lovelace_goal: u64 = args.lovelace;
 
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
 
-    let mut found_seedelf: bool = false;
-    let mut seedelf_datum: Register = Register::default();
+    let (seedelf_datum, usuable_utxos) = utxos::find_seedelf_and_wallet_utxos(scalar, args.seedelf, network_flag).await;
+    // the extra 2.5 ADA should account for the change and fee
+    let selected_utxos = utxos::select(usuable_utxos, lovelace_goal + 2_500_000, Assets::new());
+    let (total_lovelace_found, tokens) = utxos::assets_of(selected_utxos.clone());
 
-
-    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
-        Ok(utxos) => {
-            for utxo in utxos {
-                // Extract bytes
-                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-                    if !found_seedelf && contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
-                        let asset_name = utxo
-                                .asset_list
-                                .as_ref()
-                                .and_then(|vec| {
-                                    vec.iter()
-                                        .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
-                                        .map(|asset| &asset.asset_name)
-                                })
-                                .unwrap();
-                            if asset_name == &args.seedelf {
-                                found_seedelf = true;
-                                seedelf_datum = inline_datum.clone();
-                            }
-                    }
-                    // utxo must be owned by this secret scaler
-                    if inline_datum.is_owned(scalar) {
-                        // its owned but it can't hold a seedelf
-                        if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
-                            if number_of_utxos >= max_utxos {
-                                // all is set and we hit the max utxos allowed in a single tx
-                                println!("Too many utxos");
-                                break;
-                            }
-
-                            if total_lovelace_found >= (lovelace_goal + 2_000_000) {
-                                // The extra two ada is for the chnage that has to exist
-                                println!("Found all the required lovelace");
-                                break;
-                            }
-
-                            let lovelace: u64 =
-                                utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                            // draft and raw are built the same here
-                            draft_tx = draft_tx.input(Input::new(
-                                pallas_crypto::hash::Hash::new(
-                                    hex::decode(utxo.tx_hash.clone())
-                                        .expect("Invalid hex string")
-                                        .try_into()
-                                        .expect("Failed to convert to 32-byte array"),
-                                ),
-                                utxo.tx_index,
-                            ));
-                            input_vector.push(Input::new(
-                                pallas_crypto::hash::Hash::new(
-                                    hex::decode(utxo.tx_hash.clone())
-                                        .expect("Invalid hex string")
-                                        .try_into()
-                                        .expect("Failed to convert to 32-byte array"),
-                                ),
-                                utxo.tx_index,
-                            ));
-                            // do the registers
-                            register_vector.push(inline_datum.clone());
-                            // just sum up all the lovelace of the ada only inputs
-                            total_lovelace_found += lovelace;
-                            number_of_utxos += 1;
-                        }
-                    }
-                }
-            }
-        }
-        Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
-        }
-    }
-
-    if !found_seedelf {
-        return Err("Seedelf Not Found".to_string());
-    }
-
-    if total_lovelace_found < (lovelace_goal + 2_000_000) {
-        return Err("Not Enough Lovelace".to_string());
+    for utxo in selected_utxos.clone() {
+        let this_input: Input = Input::new(
+            pallas_crypto::hash::Hash::new(
+                hex::decode(utxo.tx_hash.clone())
+                    .expect("Invalid hex string")
+                    .try_into()
+                    .expect("Failed to convert to 32-byte array"),
+            ),
+            utxo.tx_index.clone(),
+        );
+        let inline_datum: Register = extract_bytes_with_logging(&utxo.inline_datum).ok_or("Not Register Type".to_string()).unwrap();
+        // draft and raw are built the same here
+        draft_tx = draft_tx.input(this_input.clone());
+        input_vector.push(this_input.clone());
+        // do the registers
+        register_vector.push(inline_datum.clone());
     }
 
     // This is some semi legit fee to be used to estimate it
@@ -158,17 +92,24 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
         pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
     let pkh: String = hex::encode(public_key_hash);
 
+    let mut change_output: Output = Output::new(
+        wallet_addr.clone(),
+        total_lovelace_found - lovelace_goal - tmp_fee,
+    )
+    .set_inline_datum(Register::create(scalar).rerandomize().to_vec());
+
+    for asset in tokens.items.clone() {
+        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+        .unwrap();
+    }
+
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(Output::new(
             wallet_addr.clone(),
                 lovelace_goal,
-        ).set_inline_datum(seedelf_datum.clone().rerandomize().to_vec()))
-        .output(Output::new(
-            wallet_addr.clone(),
-            total_lovelace_found - lovelace_goal - tmp_fee,
-        )
-        .set_inline_datum(Register::create(scalar).rerandomize().to_vec()))
+        ).set_inline_datum(seedelf_datum.ok_or("Seedelf Not Found").unwrap().clone().rerandomize().to_vec()))
+        .output(change_output)
         .collateral_input(transaction::collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
@@ -277,12 +218,19 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     };
     println!("Total Fee: {:?}", total_fee);
 
+    let mut change_output: Output = Output::new(
+        wallet_addr.clone(),
+        total_lovelace_found - lovelace_goal - total_fee,
+    )
+    .set_inline_datum(Register::create(scalar).rerandomize().to_vec());
+
+    for asset in tokens.items.clone() {
+        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+        .unwrap();
+    }
+
     raw_tx = raw_tx
-        .output(Output::new(
-            wallet_addr.clone(),
-            total_lovelace_found - lovelace_goal - total_fee,
-        )
-        .set_inline_datum(Register::create(scalar).rerandomize().to_vec()))
+        .output(change_output)
         .collateral_output(Output::new(
             collat_addr.clone(),
             5_000_000 - (total_fee) * 3 / 2,

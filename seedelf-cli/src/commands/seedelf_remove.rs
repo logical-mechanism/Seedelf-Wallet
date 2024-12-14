@@ -11,16 +11,16 @@ use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{
     plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_POLICY_ID,
-    WALLET_CONTRACT_HASH,
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{
-    contains_policy_id, credential_utxos, evaluate_transaction, extract_bytes_with_logging,
-    submit_tx, witness_collateral,
+    evaluate_transaction, extract_bytes_with_logging,
+    submit_tx, witness_collateral, UtxoResponse
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
 use seedelf_cli::transaction;
+use seedelf_cli::utxos;
 use crate::setup;
 
 /// Struct to hold command-specific arguments
@@ -55,76 +55,23 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     // we do this so I can initialize it to the empty vector
     let mut input_vector: Vec<Input> = Vec::new();
 
-    // we will assume lovelace only right now
-    let mut total_lovelace: u64 = 0;
-
     // There is a single register here so we can do this
-    let mut datum: Register = Register::default();
     let scalar: Scalar = setup::load_wallet();
 
-    // we need to make sure we found something to remove else err
-    let mut found_seedelf: bool = false;
-
-    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
-        Ok(utxos) => {
-            for utxo in utxos {
-                // Extract bytes
-                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-                    // utxo must be owned by this secret scaler
-                    if inline_datum.is_owned(scalar) {
-                        // its owned so check if its holding a seedelf
-                        if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
-                            let asset_name = utxo
-                                .asset_list
-                                .as_ref()
-                                .and_then(|vec| {
-                                    vec.iter()
-                                        .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
-                                        .map(|asset| &asset.asset_name)
-                                })
-                                .unwrap();
-                            if asset_name == &args.seedelf {
-                                let lovelace: u64 =
-                                    utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                                // draft and raw are built the same here
-                                draft_tx = draft_tx.input(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                input_vector.push(Input::new(
-                                    pallas_crypto::hash::Hash::new(
-                                        hex::decode(utxo.tx_hash.clone())
-                                            .expect("Invalid hex string")
-                                            .try_into()
-                                            .expect("Failed to convert to 32-byte array"),
-                                    ),
-                                    utxo.tx_index,
-                                ));
-                                // just sum up all the lovelace of the ada only inputs
-                                total_lovelace += lovelace;
-                                found_seedelf = true;
-                                datum = inline_datum;
-                                // we found it so break out there is no reason to keep searching
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
-        }
-    }
-
-    if !found_seedelf {
-        return Err("Seedelf Not Found".to_string());
-    }
+    let seedelf_utxo: UtxoResponse= utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag).await.ok_or("Seedelf Not Found".to_string()).unwrap();
+    let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum).ok_or("Not Register Type".to_string()).unwrap();
+    let total_lovelace: u64 = seedelf_utxo.value.parse::<u64>().expect("Invalid Lovelace");
+    let seedelf_input: Input = Input::new(
+        pallas_crypto::hash::Hash::new(
+            hex::decode(seedelf_utxo.tx_hash.clone())
+                .expect("Invalid hex string")
+                .try_into()
+                .expect("Failed to convert to 32-byte array"),
+        ),
+        seedelf_utxo.tx_index.clone(),
+    );
+    draft_tx = draft_tx.input(seedelf_input.clone());
+    input_vector.push(seedelf_input.clone());
 
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
@@ -138,7 +85,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
 
     // use the base register to rerandomize for the datum
 
-    let (z, g_r) = create_proof(datum, scalar, pkh.clone());
+    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone());
     let spend_redeemer_vector: Vec<u8> = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
     let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string());
 
