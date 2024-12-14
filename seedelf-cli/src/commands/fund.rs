@@ -8,9 +8,8 @@ use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
-use seedelf_cli::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
 use seedelf_cli::koios::{
-    contains_policy_id, credential_utxos, extract_bytes_with_logging, UtxoResponse
+    extract_bytes_with_logging, UtxoResponse
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::transaction;
@@ -56,50 +55,12 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    let mut datum: Register = Register::default();
-
-    // we need to make sure we found something to remove else err
-    let mut found_seedelf: bool = false;
-
     // we need about 2 ada for change so just add that to the amount
     let lovelace_goal: u64 = 2_000_000 + args.lovelace;
 
     // utxos
-    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
-        Ok(utxos) => {
-            for utxo in utxos {
-                // Extract bytes
-                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-                    // its owned but lets not count the seedelf in the balance
-                    if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
-                        let asset_name = utxo
-                            .asset_list
-                            .as_ref()
-                            .and_then(|vec| {
-                                vec.iter()
-                                    .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
-                                    .map(|asset| &asset.asset_name)
-                            })
-                            .unwrap();
-                        if asset_name == &args.seedelf {
-                            // just sum up all the lovelace of the ada only inputs
-                            found_seedelf = true;
-                            datum = inline_datum;
-                            // we found it so stop searching
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
-        }
-    }
-    // if the seedelf isn't found then error
-    if !found_seedelf {
-        return Err("Seedelf Not Found".to_string());
-    }
+    let seedelf_utxo: UtxoResponse= utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag).await.ok_or("Seedelf Not Found".to_string()).unwrap();
+    let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum).ok_or("Not Register Type".to_string()).unwrap();
 
     let all_utxos: Vec<UtxoResponse> = utxos::collect_address_utxos(&args.address, network_flag).await;
     let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, Assets::new());
@@ -126,7 +87,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
 
-    let datum_vector: Vec<u8> = datum.rerandomize().to_vec();
+    let datum_vector: Vec<u8> = seedelf_datum.rerandomize().to_vec();
 
     let mut change_output: Output = Output::new(
         addr.clone(),
