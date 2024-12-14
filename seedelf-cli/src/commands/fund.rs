@@ -7,7 +7,7 @@ use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTran
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
-use seedelf_cli::assets::Assets;
+use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::koios::{
     extract_bytes_with_logging, UtxoResponse
 };
@@ -29,7 +29,18 @@ pub struct FundArgs {
 
     /// The amount of Lovelace to send
     #[arg(long, help = "The amount of Lovelace being sent to the Seedelf.")]
-    lovelace: u64,
+    lovelace: Option<u64>,
+
+    #[arg(short = 'p', long = "The policy id for the token")]
+    policy_ids: Option<Vec<String>>,
+
+    /// Optional repeated `token-name`
+    #[arg(short = 't', long = "token-name")]
+    token_names: Option<Vec<String>>,
+
+    /// Optional repeated `amount`
+    #[arg(short = 'a', long = "amount")]
+    amounts: Option<Vec<u64>>,
 }
 
 pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
@@ -37,7 +48,37 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         println!("\nRunning In Preprod Environment");
     }
 
-    if args.lovelace < transaction::wallet_minimum_lovelace() {
+    // its ok not to define lovelace but in that case an asset has to be define
+    if args.lovelace.is_none()
+        && (!args.policy_ids.is_some() || !args.token_names.is_some() || !args.amounts.is_some())
+    {
+        return Err("No Lovelace or Assets Provided.".to_string());
+    }
+
+    // lets collect the tokens if they exist
+    let selected_tokens: Assets = Assets::new();
+    if let (Some(policy_ids), Some(token_names), Some(amounts)) =
+        (args.policy_ids, args.token_names, args.amounts)
+    {
+        if policy_ids.len() != token_names.len() || policy_ids.len() != amounts.len() {
+            return Err(
+                "Error: Each --policy-id must have a corresponding --token-name and --amount."
+                    .to_string(),
+            );
+        }
+
+        for ((pid, tkn), amt) in policy_ids
+            .into_iter()
+            .zip(token_names.into_iter())
+            .zip(amounts.into_iter())
+        {
+            selected_tokens.add(Asset::new(pid, tkn, amt));
+        }
+    }
+
+    let minimum_lovelace: u64 = transaction::wallet_minimum_lovelace_with_assets(selected_tokens.clone());
+
+    if args.lovelace.is_some_and(|l| l < minimum_lovelace) {
         return Err("Not Enough Lovelace On UTxO".to_string());
     }
 
@@ -56,14 +97,15 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
     // we need about 2 ada for change so just add that to the amount
-    let lovelace_goal: u64 = 2_000_000 + args.lovelace;
+    let lovelace: u64 = args.lovelace.unwrap_or(minimum_lovelace);
+    let lovelace_goal: u64 = 2_000_000 + lovelace;
 
     // utxos
     let seedelf_utxo: UtxoResponse= utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag).await.ok_or("Seedelf Not Found".to_string()).unwrap();
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum).ok_or("Not Register Type".to_string()).unwrap();
 
     let all_utxos: Vec<UtxoResponse> = utxos::collect_address_utxos(&args.address, network_flag).await;
-    let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, Assets::new());
+    let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, selected_tokens.clone());
     for utxo in selected_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
@@ -91,7 +133,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     let mut change_output: Output = Output::new(
         addr.clone(),
-        total_lovelace - args.lovelace - tmp_fee,
+        total_lovelace - lovelace - tmp_fee,
     );
     for asset in tokens.items.clone() {
         change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -101,7 +143,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(
-            Output::new(wallet_addr.clone(), args.lovelace).set_inline_datum(datum_vector.clone()),
+            Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone()),
         )
         .output(change_output)
         .fee(tmp_fee);
@@ -128,7 +170,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     
     let mut change_output: Output = Output::new(
         addr.clone(),
-        total_lovelace - args.lovelace - tx_fee,
+        total_lovelace - lovelace - tx_fee,
     );
     for asset in tokens.items.clone() {
         change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
