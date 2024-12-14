@@ -5,7 +5,60 @@ use crate::constants::{MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_
 use crate::koios::{
     address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging, UtxoResponse,
 };
+use crate::register::Register;
 use crate::transaction::wallet_minimum_lovelace_with_assets;
+
+pub async fn find_seedelf_and_wallet_utxos(sk: Scalar, seedelf: String, network_flag: bool) -> (Option<Register>, Vec<UtxoResponse>) {
+    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
+    let mut number_of_utxos: u64 = 0;
+
+    let mut seedelf_datum: Option<Register> = None;
+    let mut found_seedelf: bool = false;
+    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+        Ok(utxos) => {
+            for utxo in utxos {
+                // Extract bytes
+                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
+                    if !found_seedelf && contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                        let asset_name = utxo
+                                .asset_list
+                                .as_ref()
+                                .and_then(|vec| {
+                                    vec.iter()
+                                        .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
+                                        .map(|asset| &asset.asset_name)
+                                })
+                                .unwrap();
+                            if asset_name == &seedelf {
+                                found_seedelf = true;
+                                seedelf_datum = Some(inline_datum.clone());
+                            }
+                    }
+                    // utxo must be owned by this secret scaler
+                    if inline_datum.is_owned(sk) {
+                        // its owned but it can't hold a seedelf
+                        if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                            if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
+                                // we hit the max utxos allowed in a single tx
+                                println!("Maximum UTxOs");
+                                break;
+                            }
+                            usuable_utxos.push(utxo);
+                            number_of_utxos += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
+        }
+    }
+    (seedelf_datum, usuable_utxos)
+}
 
 pub async fn find_seedelf_utxo(seedelf: String, network_flag: bool) -> Option<UtxoResponse> {
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
