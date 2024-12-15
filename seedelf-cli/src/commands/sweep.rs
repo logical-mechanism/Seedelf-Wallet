@@ -8,7 +8,7 @@ use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTran
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
-use seedelf_cli::assets::Assets;
+use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::{
     plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY
 };
@@ -57,16 +57,43 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     }
 
     // need to check about if all then assets is none too etc
-    if args.lovelace.is_none() && !args.all {
-        return Err("Either --amount u64 or --all must be specified.".to_string());
+    if  !args.all && (args.lovelace.is_none() || args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none()) {
+        return Err("Either --lovelace or --all must be specified.".to_string());
     }
 
-    if args.lovelace.is_some() && args.all {
-        return Err("--amount u64 and --all cannot be used together.".to_string());
+    if  args.all && (args.lovelace.is_some() || args.policy_id.is_some() || args.token_name.is_some() || args.amount.is_some()) {
+        return Err("--lovelace and --all cannot be used together.".to_string());
     }
 
-    if args.lovelace.is_some_and(|x| x < transaction::address_minimum_lovelace(&args.address)) {
-        return Err("Amount Too Small For Min UTxO".to_string());
+    if args.lovelace.is_none()
+        && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())
+    {
+        return Err("No Lovelace or Assets Provided.".to_string());
+    }
+
+    // lets collect the tokens if they exist
+    let mut selected_tokens: Assets = Assets::new();
+    if let (Some(policy_id), Some(token_name), Some(amount)) =
+        (args.policy_id, args.token_name, args.amount)
+    {
+        if policy_id.len() != token_name.len() || policy_id.len() != amount.len() {
+            return Err(
+                "Error: Each --policy-id must have a corresponding --token-name and --amount."
+                    .to_string(),
+            );
+        }
+
+        for ((pid, tkn), amt) in policy_id
+            .into_iter()
+            .zip(token_name.into_iter())
+            .zip(amount.into_iter())
+        {
+            selected_tokens = selected_tokens.add(Asset::new(pid, tkn, amt));
+        }
+    }
+
+    if args.lovelace.is_some_and(|x| x < transaction::address_minimum_lovelace_with_assets(&args.address, selected_tokens.clone())) {
+        return Err("lovelace Too Small For Min UTxO".to_string());
     }
 
     // we need to make sure that the network flag and the address provided makes sense here
@@ -97,7 +124,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         owned_utxos
     } else {
         // we will assume that the change will required ~2 ADA and the fee about ~0.5 ADA
-        utxos::select(owned_utxos, lovelace_goal + 2_500_000, Assets::new())
+        utxos::select(owned_utxos, lovelace_goal + 2_500_000, selected_tokens.clone())
     };
     
     let (total_lovelace_found, tokens) = utxos::assets_of(usuable_utxos.clone());

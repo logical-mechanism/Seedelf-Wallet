@@ -49,7 +49,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     // its ok not to define lovelace but in that case an asset has to be define
     if args.lovelace.is_none()
-        && (!args.policy_id.is_some() || !args.token_name.is_some() || !args.amount.is_some())
+        && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())
     {
         return Err("No Lovelace or Assets Provided.".to_string());
     }
