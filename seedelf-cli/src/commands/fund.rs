@@ -3,14 +3,12 @@ use hex;
 use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTransaction};
+use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
-use seedelf_cli::koios::{
-    extract_bytes_with_logging, UtxoResponse
-};
+use seedelf_cli::koios::{extract_bytes_with_logging, UtxoResponse};
 use seedelf_cli::register::Register;
 use seedelf_cli::transaction;
 use seedelf_cli::utxos;
@@ -31,16 +29,16 @@ pub struct FundArgs {
     #[arg(long, help = "The amount of Lovelace being sent to the Seedelf.")]
     lovelace: Option<u64>,
 
-    #[arg(short = 'p', long = "The policy id for the token")]
-    policy_ids: Option<Vec<String>>,
+    #[arg(long = "policy-id", help = "The policy id for the asset.")]
+    policy_id: Option<Vec<String>>,
 
     /// Optional repeated `token-name`
-    #[arg(short = 't', long = "token-name")]
-    token_names: Option<Vec<String>>,
+    #[arg(long = "token-name", help = "The token name for the asset")]
+    token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
-    #[arg(short = 'a', long = "amount")]
-    amounts: Option<Vec<u64>>,
+    #[arg(long = "amount", help = "The amount for the asset")]
+    amount: Option<Vec<u64>>,
 }
 
 pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
@@ -50,33 +48,34 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     // its ok not to define lovelace but in that case an asset has to be define
     if args.lovelace.is_none()
-        && (!args.policy_ids.is_some() || !args.token_names.is_some() || !args.amounts.is_some())
+        && (!args.policy_id.is_some() || !args.token_name.is_some() || !args.amount.is_some())
     {
         return Err("No Lovelace or Assets Provided.".to_string());
     }
 
     // lets collect the tokens if they exist
-    let selected_tokens: Assets = Assets::new();
-    if let (Some(policy_ids), Some(token_names), Some(amounts)) =
-        (args.policy_ids, args.token_names, args.amounts)
+    let mut selected_tokens: Assets = Assets::new();
+    if let (Some(policy_id), Some(token_name), Some(amount)) =
+        (args.policy_id, args.token_name, args.amount)
     {
-        if policy_ids.len() != token_names.len() || policy_ids.len() != amounts.len() {
+        if policy_id.len() != token_name.len() || policy_id.len() != amount.len() {
             return Err(
                 "Error: Each --policy-id must have a corresponding --token-name and --amount."
                     .to_string(),
             );
         }
 
-        for ((pid, tkn), amt) in policy_ids
+        for ((pid, tkn), amt) in policy_id
             .into_iter()
-            .zip(token_names.into_iter())
-            .zip(amounts.into_iter())
+            .zip(token_name.into_iter())
+            .zip(amount.into_iter())
         {
-            selected_tokens.add(Asset::new(pid, tkn, amt));
+            selected_tokens = selected_tokens.add(Asset::new(pid, tkn, amt));
         }
     }
 
-    let minimum_lovelace: u64 = transaction::wallet_minimum_lovelace_with_assets(selected_tokens.clone());
+    let minimum_lovelace: u64 =
+        transaction::wallet_minimum_lovelace_with_assets(selected_tokens.clone());
 
     if args.lovelace.is_some_and(|l| l < minimum_lovelace) {
         return Err("Not Enough Lovelace On UTxO".to_string());
@@ -101,11 +100,18 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let lovelace_goal: u64 = 2_000_000 + lovelace;
 
     // utxos
-    let seedelf_utxo: UtxoResponse= utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag).await.ok_or("Seedelf Not Found".to_string()).unwrap();
-    let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum).ok_or("Not Register Type".to_string()).unwrap();
+    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag)
+        .await
+        .ok_or("Seedelf Not Found".to_string())
+        .unwrap();
+    let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
+        .ok_or("Not Register Type".to_string())
+        .unwrap();
 
-    let all_utxos: Vec<UtxoResponse> = utxos::collect_address_utxos(&args.address, network_flag).await;
-    let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, selected_tokens.clone());
+    let all_utxos: Vec<UtxoResponse> =
+        utxos::collect_address_utxos(&args.address, network_flag).await;
+    let selected_utxos: Vec<UtxoResponse> =
+        utxos::select(all_utxos, lovelace_goal, selected_tokens.clone());
     for utxo in selected_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
@@ -131,23 +137,19 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     let datum_vector: Vec<u8> = seedelf_datum.rerandomize().to_vec();
 
-    let mut change_output: Output = Output::new(
-        addr.clone(),
-        total_lovelace - lovelace - tmp_fee,
-    );
+    let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tmp_fee);
     for asset in tokens.items.clone() {
-        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        .unwrap();
+        change_output = change_output
+            .add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
     }
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
-        .output(
-            Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone()),
-        )
+        .output(Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone()))
         .output(change_output)
         .fee(tmp_fee);
-    
+
     let mut raw_tx: StagingTransaction = draft_tx.clone().remove_output(1).clear_fee();
     // build an intermediate tx for fee estimation
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
@@ -167,19 +169,15 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("\nTx Size Fee: {:?}", tx_fee);
-    
-    let mut change_output: Output = Output::new(
-        addr.clone(),
-        total_lovelace - lovelace - tx_fee,
-    );
+
+    let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tx_fee);
     for asset in tokens.items.clone() {
-        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        .unwrap();
+        change_output = change_output
+            .add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
     }
     // build out the rest of the draft tx with the tmp fee
-    raw_tx = raw_tx
-        .output(change_output)
-        .fee(tx_fee);
+    raw_tx = raw_tx.output(change_output).fee(tx_fee);
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
