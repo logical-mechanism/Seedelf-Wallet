@@ -29,6 +29,7 @@ pub struct FundArgs {
     #[arg(long, help = "The amount of Lovelace being sent to the Seedelf.")]
     lovelace: Option<u64>,
 
+    /// Optional repeated `policy-id`
     #[arg(long = "policy-id", help = "The policy id for the asset.")]
     policy_id: Option<Vec<String>>,
 

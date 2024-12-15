@@ -37,6 +37,18 @@ pub struct SweepArgs {
     /// Send all funds if amount is not specified
     #[arg(long, help = "Send all funds. Cannot be used with --amount.")]
     all: bool,
+
+    /// Optional repeated `policy-id`
+    #[arg(long = "policy-id", help = "The policy id for the asset.")]
+    policy_id: Option<Vec<String>>,
+
+    /// Optional repeated `token-name`
+    #[arg(long = "token-name", help = "The token name for the asset")]
+    token_name: Option<Vec<String>>,
+
+    /// Optional repeated `amount`
+    #[arg(long = "amount", help = "The amount for the asset")]
+    amount: Option<Vec<u64>>,
 }
 
 pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
@@ -44,6 +56,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         println!("\nRunning In Preprod Environment");
     }
 
+    // need to check about if all then assets is none too etc
     if args.lovelace.is_none() && !args.all {
         return Err("Either --amount u64 or --all must be specified.".to_string());
     }
