@@ -1,7 +1,8 @@
 use blstrs::Scalar;
 use reqwest::Error;
 use seedelf_cli::constants::{WALLET_CONTRACT_HASH, SEEDELF_POLICY_ID};
-use seedelf_cli::koios::{credential_utxos, extract_bytes_with_logging, tip, contains_policy_id};
+use seedelf_cli::koios::{credential_utxos, extract_bytes_with_logging, tip, contains_policy_id, UtxoResponse};
+use seedelf_cli::utxos;
 use crate::setup;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
@@ -21,8 +22,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
     }
 
     let scalar: Scalar = setup::load_wallet();
-    let mut total_lovelace: u64 = 0;
-    let mut total_utxos: u64 = 0;
+    let mut all_utxos: Vec<UtxoResponse> = Vec::new();
 
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
         Ok(utxos) => {
@@ -33,10 +33,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
                     if inline_datum.is_owned(scalar) {
                         // its owned but lets not count the seedelf in the balance
                         if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
-                            // just count the lovelace for now
-                            let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                            total_lovelace += lovelace;
-                            total_utxos += 1;
+                            all_utxos.push(utxo.clone());
                         }
                     }
                 }
@@ -47,8 +44,17 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
         }
     }
 
+    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone());
+
+    println!("Wallet Has {} UTxOs", all_utxos.len());
     println!("\nBalance: {:.6} ₳", total_lovelace as f64 / 1_000_000.0);
-    println!("Wallet Has {} UTxOs", total_utxos);
+
+    if tokens.items.len() > 0 {
+        println!("\nTokens:\n");
+        for asset in tokens.items.clone() {
+            println!("{} {}.{}", asset.amount, hex::encode(asset.policy_id.as_ref()), hex::encode(asset.token_name));
+        }
+    }
 
     Ok(())
 }

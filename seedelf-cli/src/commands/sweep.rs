@@ -65,12 +65,6 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         return Err("--lovelace and --all cannot be used together.".to_string());
     }
 
-    if args.lovelace.is_none()
-        && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())
-    {
-        return Err("No Lovelace or Assets Provided.".to_string());
-    }
-
     // lets collect the tokens if they exist
     let mut selected_tokens: Assets = Assets::new();
     if let (Some(policy_id), Some(token_name), Some(amount)) =
@@ -88,6 +82,9 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             .zip(token_name.into_iter())
             .zip(amount.into_iter())
         {
+            if amt <= 0 {
+                return Err("Error: Token Amount must be positive".to_string());
+            }
             selected_tokens = selected_tokens.add(Asset::new(pid, tkn, amt));
         }
     }

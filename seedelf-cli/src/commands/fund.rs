@@ -66,11 +66,15 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             );
         }
 
+        
         for ((pid, tkn), amt) in policy_id
-            .into_iter()
-            .zip(token_name.into_iter())
-            .zip(amount.into_iter())
+        .into_iter()
+        .zip(token_name.into_iter())
+        .zip(amount.into_iter())
         {
+            if amt <= 0 {
+                return Err("Error: Token Amount must be positive".to_string());
+            }
             selected_tokens = selected_tokens.add(Asset::new(pid, tkn, amt));
         }
     }
@@ -113,6 +117,11 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         utxos::collect_address_utxos(&args.address, network_flag).await;
     let selected_utxos: Vec<UtxoResponse> =
         utxos::select(all_utxos, lovelace_goal, selected_tokens.clone());
+
+    if selected_tokens.is_empty() {
+        return Err("Not Enough Lovelace/Tokens".to_string());
+    }
+
     for utxo in selected_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
@@ -132,7 +141,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     // if the seedelf isn't found then error
     if total_lovelace < lovelace_goal {
-        return Err("Not Enough Lovelace".to_string());
+        return Err("Not Enough Lovelace/Tokens".to_string());
     }
 
     // This is some semi legit fee to be used to estimate it
