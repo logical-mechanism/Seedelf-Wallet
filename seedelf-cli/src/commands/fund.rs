@@ -127,6 +127,8 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     }
 
     let (total_lovelace, tokens) = utxos::assets_of(selected_utxos);
+    // tokens tha need to be put into the change output
+    let change_tokens: Assets = tokens.separate(selected_tokens.clone());
 
     // if the seedelf isn't found then error
     if total_lovelace < lovelace_goal {
@@ -137,9 +139,15 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let tmp_fee: u64 = 200_000;
 
     let datum_vector: Vec<u8> = seedelf_datum.rerandomize().to_vec();
+    let mut fund_output: Output = Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone());
+    for asset in selected_tokens.items.clone() {
+        fund_output = fund_output
+            .add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
+    }
 
     let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tmp_fee);
-    for asset in tokens.items.clone() {
+    for asset in change_tokens.items.clone() {
         change_output = change_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
             .unwrap();
@@ -147,7 +155,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
-        .output(Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone()))
+        .output(fund_output)
         .output(change_output)
         .fee(tmp_fee);
 
@@ -172,7 +180,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     println!("\nTx Size Fee: {:?}", tx_fee);
 
     let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tx_fee);
-    for asset in tokens.items.clone() {
+    for asset in change_tokens.items.clone() {
         change_output = change_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
             .unwrap();
