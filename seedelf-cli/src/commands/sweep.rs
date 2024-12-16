@@ -128,6 +128,8 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     };
     
     let (total_lovelace_found, tokens) = utxos::assets_of(usuable_utxos.clone());
+    let change_tokens: Assets = tokens.separate(selected_tokens.clone());
+
     for utxo in usuable_utxos.clone() {
         let this_input: Input = Input::new(
             pallas_crypto::hash::Hash::new(
@@ -170,6 +172,11 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             sweep_output = sweep_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
             .unwrap();
         }
+    } else {
+        for asset in selected_tokens.items.clone() {
+            sweep_output = sweep_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
+        }
     }
 
     // build out the rest of the draft tx with the tmp fee
@@ -207,7 +214,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             total_lovelace_found - lovelace_goal - tmp_fee,
         )
         .set_inline_datum(datum_vector.clone());
-        for asset in tokens.items.clone() {
+        for asset in change_tokens.items.clone() {
             change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
             .unwrap();
         }
@@ -317,6 +324,11 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             sweep_output = sweep_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
             .unwrap();
         }
+    } else {
+        for asset in selected_tokens.items.clone() {
+            sweep_output = sweep_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
+        }
     }
 
     raw_tx = raw_tx
@@ -328,14 +340,14 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         .fee(total_fee);
     
     // need to check if there is change going back here
-    if lovelace_goal != 0 {
+    if !args.all {
         let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
         let mut change_output: Output = Output::new(
             wallet_addr.clone(),
             total_lovelace_found - lovelace_goal - total_fee,
         )
         .set_inline_datum(datum_vector.clone());
-        for asset in tokens.items.clone() {
+        for asset in change_tokens.items.clone() {
             change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
             .unwrap();
         }
