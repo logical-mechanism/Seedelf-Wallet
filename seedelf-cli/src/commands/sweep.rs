@@ -57,7 +57,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     }
 
     // need to check about if all then assets is none too etc
-    if  !args.all && (args.lovelace.is_none() || args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none()) {
+    if  !args.all && (args.lovelace.is_none() && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())) {
         return Err("Either --lovelace or --all must be specified.".to_string());
     }
 
@@ -111,7 +111,9 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let mut register_vector: Vec<Register> = Vec::new();
 
     // we will assume lovelace only right now
-    let lovelace_goal: u64 = args.lovelace.unwrap_or(0);
+    let minimum_lovelace: u64 =
+        transaction::wallet_minimum_lovelace_with_assets(selected_tokens.clone());
+    let lovelace_goal: u64 = args.lovelace.unwrap_or(minimum_lovelace);
 
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
@@ -240,7 +242,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         .clear_fee()
         .clear_collateral_output();
 
-    if lovelace_goal != 0 {
+    if !args.all {
         raw_tx = raw_tx.remove_output(1);
         raw_tx = raw_tx.remove_output(0);
     } else {
