@@ -20,6 +20,15 @@ pub const MAINNET_COLLATERAL_UTXO: &str = "";
 // This maximum is estimated
 pub const MAXIMUM_WALLET_UTXOS: u64 = 20;
 
+// protocol parameters
+pub const OVERHEAD_COST: u64 = 160;
+pub const UTXO_COST_PER_BYTE: u64 = 4_310;
+
+pub const MEM_COST_NUMERATOR: u64 = 577;
+pub const MEM_COST_DENOMINATOR: u64 = 10_000;
+pub const CPU_COST_NUMERATOR: u64 = 721;
+pub const CPU_COST_DENOMINATOR: u64 = 10_000_000;
+
 pub fn plutus_v3_cost_model() -> Vec<i64> {
     vec![
         100788,

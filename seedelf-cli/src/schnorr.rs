@@ -5,6 +5,21 @@ use ff::Field;
 use hex;
 use rand_core::OsRng;
 
+/// Applies the Fiat-Shamir heuristic using the BLAKE2b-224 hash function.
+///
+/// This function takes four inputs as hex strings, concatenates them, and hashes
+/// the resulting string using the BLAKE2b-224 hash function.
+///
+/// # Arguments
+///
+/// * `g_b` - A string representing the generator in its hex-encoded form.
+/// * `g_r_b` - A string representing the randomized generator value in hex form.
+/// * `u_b` - A string representing the public value in hex form.
+/// * `b` - A string representing an additional value or input in hex form.
+///
+/// # Returns
+///
+/// * `String` - A hex-encoded BLAKE2b-224 hash of the concatenated input strings.
 pub fn fiat_shamir_heuristic(g_b: String, g_r_b: String, u_b: String, b: String) -> String {
     // Concatenate the strings
     let concatenated: String = format!("{}{}{}{}", g_b, g_r_b, u_b, b);
@@ -13,10 +28,35 @@ pub fn fiat_shamir_heuristic(g_b: String, g_r_b: String, u_b: String, b: String)
     blake2b_224(&concatenated)
 }
 
+/// Generates a cryptographically secure random scalar.
+///
+/// This function uses a secure random number generator (`OsRng`) to produce
+/// a random `Scalar` suitable for cryptographic operations.
+///
+/// # Returns
+///
+/// * `Scalar` - A randomly generated scalar.
 pub fn random_scalar() -> Scalar {
     Scalar::random(&mut OsRng)
 }
 
+/// Creates a non-interactive Schnorr proof using the Fiat-Shamir heuristic.
+///
+/// This function generates a proof of knowledge for a secret scalar `sk` associated
+/// with a `Register`. It uses a random scalar `r` and applies the Fiat-Shamir heuristic
+/// to produce a challenge, which is then used to compute the response.
+///
+/// # Arguments
+///
+/// * `datum` - A `Register` containing the generator and public value as hex-encoded strings.
+/// * `sk` - A secret scalar representing the private key.
+/// * `bound` - A string representing an additional input for the Fiat-Shamir heuristic.
+///
+/// # Returns
+///
+/// * `(String, String)` - A tuple containing:
+///     - `z` - The response scalar as a hex-encoded string.
+///     - `g_r` - The blinded generator (`g^r`) as a hex-encoded compressed point.
 pub fn create_proof(datum: Register, sk: Scalar, bound: String) -> (String, String) {
     let r: Scalar = random_scalar();
     let g1: G1Affine = G1Affine::from_compressed(
@@ -37,9 +77,9 @@ pub fn create_proof(datum: Register, sk: Scalar, bound: String) -> (String, Stri
     
     let z: Scalar = r + c * sk;
     (hex::encode(z.to_bytes_be()), hex::encode(g_r.to_compressed()))
-
 }
 
+/// Used for testing
 pub fn prove(generator: &str, public_value: &str, z_b: &str, g_r_b: &str, bound: &str) -> bool {
     // Decode and decompress generator
     let g1: G1Affine = G1Affine::from_compressed(

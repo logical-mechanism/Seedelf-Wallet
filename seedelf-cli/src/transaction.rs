@@ -1,14 +1,26 @@
 use crate::{constants::{
     MAINNET_COLLATERAL_UTXO, MAINNET_SEEDELF_REFERENCE_UTXO, MAINNET_WALLET_REFERENCE_UTXO,
-    PREPROD_COLLATERAL_UTXO, PREPROD_SEEDELF_REFERENCE_UTXO, PREPROD_WALLET_REFERENCE_UTXO, SEEDELF_POLICY_ID
+    PREPROD_COLLATERAL_UTXO, PREPROD_SEEDELF_REFERENCE_UTXO, PREPROD_WALLET_REFERENCE_UTXO, SEEDELF_POLICY_ID, OVERHEAD_COST, UTXO_COST_PER_BYTE, MEM_COST_NUMERATOR, MEM_COST_DENOMINATOR, CPU_COST_NUMERATOR, CPU_COST_DENOMINATOR
 }, schnorr, address, register::Register, assets::Assets};
 use pallas_addresses::Address;
-use pallas_crypto;
+use pallas_crypto::hash::Hash;
 use pallas_primitives::Fragment;
 use pallas_txbuilder::{Input, Output};
 use serde_json::Value;
 
-
+/// Calculates the minimum required UTXO for a given output.
+///
+/// This function calculates the minimum required UTXO value based on the size of the serialized output.
+/// The calculation uses the post-Alonzo (Babbage) form of the output and incorporates
+/// the overhead cost and cost per byte.
+///
+/// # Arguments
+///
+/// * `output` - An `Output` representing the transaction output.
+///
+/// # Returns
+///
+/// * `u64` - The minimum required UTXO value in lovelace.
 pub fn calculate_min_required_utxo(output: Output) -> u64 {
     // we need the output in the post alonzo form so we can encode it
     let output_cbor_length: u64 = output
@@ -19,15 +31,26 @@ pub fn calculate_min_required_utxo(output: Output) -> u64 {
         .len()
         .try_into()
         .unwrap();
-    // 160 is overhead constant, 4310 is the utxoCostPerByte
-    let overhead_cost: u64 = 160;
-    let utxo_cost_per_byte: u64 = 4310;
     // sum the overhead and length times the cost per byte
-    (overhead_cost + output_cbor_length) * utxo_cost_per_byte
+    (OVERHEAD_COST + output_cbor_length) * UTXO_COST_PER_BYTE
 }
 
+/// Creates a collateral input for a transaction based on the network.
+///
+/// This function selects a pre-defined collateral UTXO based on the network flag
+/// and creates an `Input` using the UTXO hash and an index of `0`.
+///
+/// # Arguments
+///
+/// * `network_flag` - A boolean flag specifying the network:
+///     - `true` for Preprod.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Input` - A transaction input constructed from the specified collateral UTXO.
 pub fn collateral_input(network_flag: bool) -> Input {
-    let utxo = if network_flag {
+    let utxo: &str = if network_flag {
         PREPROD_COLLATERAL_UTXO
     } else {
         MAINNET_COLLATERAL_UTXO
@@ -43,14 +66,28 @@ pub fn collateral_input(network_flag: bool) -> Input {
     )
 }
 
+/// Creates a reference UTXO input for the Seedelf contract.
+///
+/// This function selects a pre-defined reference UTXO based on the network flag
+/// and creates an `Input` using the UTXO hash and a fixed index of `1`.
+///
+/// # Arguments
+///
+/// * `network_flag` - A boolean flag specifying the network:
+///     - `true` for Preprod.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Input` - A transaction input constructed from the specified reference UTXO.
 pub fn seedelf_reference_utxo(network_flag: bool) -> Input {
-    let utxo = if network_flag {
+    let utxo: &str = if network_flag {
         PREPROD_SEEDELF_REFERENCE_UTXO
     } else {
         MAINNET_SEEDELF_REFERENCE_UTXO
     };
     Input::new(
-        pallas_crypto::hash::Hash::new(
+        Hash::new(
             hex::decode(utxo)
                 .expect("Invalid hex string")
                 .try_into()
@@ -60,14 +97,28 @@ pub fn seedelf_reference_utxo(network_flag: bool) -> Input {
     )
 }
 
+/// Creates a reference UTXO input for the wallet contract.
+///
+/// This function selects a pre-defined wallet reference UTXO based on the network flag
+/// and creates an `Input` using the UTXO hash and a fixed index of `1`.
+///
+/// # Arguments
+///
+/// * `network_flag` - A boolean flag specifying the network:
+///     - `true` for Preprod.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Input` - A transaction input constructed from the specified wallet reference UTXO.
 pub fn wallet_reference_utxo(network_flag: bool) -> Input {
-    let utxo = if network_flag {
+    let utxo: &str = if network_flag {
         PREPROD_WALLET_REFERENCE_UTXO
     } else {
         MAINNET_WALLET_REFERENCE_UTXO
     };
     Input::new(
-        pallas_crypto::hash::Hash::new(
+        Hash::new(
             hex::decode(utxo)
                 .expect("Invalid hex string")
                 .try_into()
@@ -77,10 +128,26 @@ pub fn wallet_reference_utxo(network_flag: bool) -> Input {
     )
 }
 
+/// Generates the SeedElf token name.
+///
+/// This function constructs a token name by concatenating a prefix, a provided label,
+/// the smallest input's transaction index (formatted as hex), and its transaction hash.
+/// The smallest input is determined lexicographically based on its transaction hash
+/// and index. The result is a byte vector derived from the concatenated string.
+///
+/// # Arguments
+///
+/// * `label` - A string label to include in the token name.
+/// * `inputs` - An optional reference to a vector of `Input` structs. The smallest input is selected
+///              based on lexicographical order of the transaction hash and the index.
+///
+/// # Returns
+///
+/// * `Vec<u8>` - A vector of bytes representing the constructed token name.
 pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8> {
-    let label_hex = hex::encode(label);
+    let label_hex: String = hex::encode(label);
     // find the smallest input, first in lexicogrpahical order
-    let smallest_input = inputs
+    let smallest_input: &Input = inputs
         .and_then(|inputs| {
             inputs.iter().min_by(|a, b| {
                 a.tx_hash
@@ -91,19 +158,48 @@ pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8>
         })
         .unwrap();
     // format the tx index
-    let formatted_index = format!("{:02x}", smallest_input.txo_index);
-    let tx_hash_hex = hex::encode(smallest_input.tx_hash.0);
-    let prefix = "5eed0e1f".to_string();
-    let concatenated = format!("{}{}{}{}", prefix, label_hex, formatted_index, tx_hash_hex);
+    let formatted_index: String = format!("{:02x}", smallest_input.txo_index);
+    let tx_hash_hex: String = hex::encode(smallest_input.tx_hash.0);
+    let prefix: String = "5eed0e1f".to_string();
+    let concatenated: String = format!("{}{}{}{}", prefix, label_hex, formatted_index, tx_hash_hex);
     hex::decode(&concatenated[..64.min(concatenated.len())]).unwrap()
 }
 
+/// Computes the computation fee for a transaction.
+///
+/// This function calculates the total computation fee based on the memory and CPU units consumed.
+/// It applies a cost model where memory and CPU costs are scaled using pre-defined numerators
+/// and denominators.
+///
+/// # Arguments
+///
+/// * `mem_units` - The number of memory units consumed.
+/// * `cpu_units` - The number of CPU units consumed.
+///
+/// # Returns
+///
+/// * `u64` - The total computation fee as a sum of the memory and CPU costs.
 pub fn computation_fee(mem_units: u64, cpu_units: u64) -> u64 {
-    (577 * mem_units / 10_000) + (721 * cpu_units / 10_000_000)
+    (MEM_COST_NUMERATOR * mem_units / MEM_COST_DENOMINATOR) + (CPU_COST_NUMERATOR * cpu_units / CPU_COST_DENOMINATOR)
 }
 
+/// Extracts CPU and memory budgets from a JSON value.
+///
+/// This function parses a JSON structure to extract CPU and memory usage budgets
+/// from an array located under the `"result"` key. Each item in the array is expected
+/// to have a `"budget"` object containing `"cpu"` and `"memory"` fields.
+///
+/// # Arguments
+///
+/// * `value` - A reference to a `serde_json::Value` containing the JSON data.
+///
+/// # Returns
+///
+/// * `Vec<(u64, u64)>` - A vector of tuples, where each tuple contains:
+///     - `u64` - CPU budget.
+///     - `u64` - Memory budget.
 pub fn extract_budgets(value: &Value) -> Vec<(u64, u64)> {
-    let mut budgets = Vec::new();
+    let mut budgets: Vec<(u64, u64)> = Vec::new();
 
     // Ensure the value contains the expected "result" array
     if let Some(result_array) = value.get("result").and_then(|r| r.as_array()) {
@@ -122,6 +218,21 @@ pub fn extract_budgets(value: &Value) -> Vec<(u64, u64)> {
     budgets
 }
 
+/// Calculates the total computation fee for a list of CPU and memory budgets.
+///
+/// This function iterates through a vector of `(CPU, Memory)` tuples and computes
+/// the fee for each pair using the `computation_fee` function. The resulting fees
+/// are summed to produce the total computation fee.
+///
+/// # Arguments
+///
+/// * `budgets` - A vector of tuples where each tuple contains:
+///     - `u64` - CPU units.
+///     - `u64` - Memory units.
+///
+/// # Returns
+///
+/// * `u64` - The total computation fee for all provided budgets.
 pub fn total_computation_fee(budgets: Vec<(u64, u64)>) -> u64 {
     let mut fee: u64 = 0;
     for (cpu, mem) in budgets.into_iter() {
@@ -130,12 +241,26 @@ pub fn total_computation_fee(budgets: Vec<(u64, u64)>) -> u64 {
     fee
 }
 
+/// Calculates the minimum lovelace required for a SeedElf transaction.
+///
+/// This function constructs a staged transaction output that includes:
+/// - A long token name.
+/// - Inline datum.
+/// - A specific asset tied to a SeedElf policy ID.
+/// 
+/// The function then calculates the minimum required lovelace using the 
+/// `calculate_min_required_utxo` function.
+///
+/// # Returns
+///
+/// * `u64` - The minimum lovelace required for the transaction output.
 pub fn seedelf_minimum_lovelace() -> u64 {
+    // a very long token name
     let token_name: Vec<u8> = [94, 237, 14, 31, 1, 66, 250, 134, 20, 230, 198, 12, 121, 19, 73, 107, 154, 156, 226, 154, 138, 103, 76, 134, 93, 156, 23, 169, 169, 167, 201, 55].to_vec();
     let staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
         .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec())
         .add_asset(
-            pallas_crypto::hash::Hash::new(
+            Hash::new(
                 hex::decode(SEEDELF_POLICY_ID)
                     .unwrap()
                     .try_into()
@@ -150,20 +275,22 @@ pub fn seedelf_minimum_lovelace() -> u64 {
     calculate_min_required_utxo(staging_output)
 }
 
-pub fn wallet_minimum_lovelace() -> u64 {
-    let staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
-        .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec());
-    // use the staging output to calculate the minimum required lovelace
-    calculate_min_required_utxo(staging_output)
-}
-
-pub fn address_minimum_lovelace(address: &str) -> u64 {
-    let addr: Address = Address::from_bech32(address).unwrap();
-    let staging_output: Output = Output::new(addr, 5_000_000);
-    // use the staging output to calculate the minimum required lovelace
-    calculate_min_required_utxo(staging_output)
-}
-
+/// Calculates the minimum lovelace required for a wallet transaction output with assets.
+///
+/// This function constructs a staged transaction output that includes:
+/// - Inline datum.
+/// - A list of assets (policy IDs, token names, and amounts).
+///
+/// The function iterates over the provided `Assets` to add each asset to the output
+/// and then calculates the minimum required lovelace using `calculate_min_required_utxo`.
+///
+/// # Arguments
+///
+/// * `tokens` - An `Assets` struct containing a list of assets (policy ID, token name, and amount).
+///
+/// # Returns
+///
+/// * `u64` - The minimum lovelace required for the transaction output.
 pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> u64 {
     let mut staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
         .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec());
@@ -177,6 +304,20 @@ pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> u64 {
     calculate_min_required_utxo(staging_output)
 }
 
+/// Calculates the minimum lovelace required for a given address with assets.
+///
+/// This function constructs a transaction output for the specified address with a base
+/// lovelace amount and iterates over the provided list of assets to add them to the output.
+/// It then calculates the minimum required lovelace using `calculate_min_required_utxo`.
+///
+/// # Arguments
+///
+/// * `address` - A string slice containing the Bech32-encoded address.
+/// * `tokens` - An `Assets` struct containing a list of assets (policy ID, token name, and amount).
+///
+/// # Returns
+///
+/// * `u64` - The minimum lovelace required for the transaction output.
 pub fn address_minimum_lovelace_with_assets(address: &str, tokens: Assets) -> u64 {
     let addr: Address = Address::from_bech32(address).unwrap();
     let mut staging_output: Output = Output::new(addr, 5_000_000);
