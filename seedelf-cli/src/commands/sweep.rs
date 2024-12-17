@@ -125,6 +125,10 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         // we will assume that the change will required ~2 ADA and the fee about ~0.5 ADA
         utxos::select(owned_utxos, lovelace_goal + 2_500_000, selected_tokens.clone())
     };
+
+    if usuable_utxos.is_empty() {
+        return Err("Not Enough Lovelace/Tokens".to_string());
+    }
     
     let (total_lovelace_found, tokens) = utxos::assets_of(usuable_utxos.clone());
     let change_tokens: Assets = tokens.separate(selected_tokens.clone());

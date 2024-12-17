@@ -1,7 +1,10 @@
 use pallas_crypto::hash::Hash;
 use serde::{Deserialize, Serialize};
 
-// An Asset is a non-lovelace value
+/// Represents an asset in the Cardano blockchain.
+///
+/// An `Asset` is identified by a `policy_id` and a `token_name`, and it tracks
+/// the amount of tokens associated with the asset.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Hash, Clone)]
 pub struct Asset {
     pub policy_id: Hash<28>,
@@ -10,6 +13,13 @@ pub struct Asset {
 }
 
 impl Asset {
+    /// Creates a new `Asset` instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy_id` - A hex-encoded string representing the policy ID.
+    /// * `token_name` - A hex-encoded string representing the token name.
+    /// * `amount` - The amount of tokens for the asset.
     pub fn new(policy_id: String, token_name: String, amount: u64) -> Self {
         Self {
             policy_id: Hash::new(
@@ -23,6 +33,16 @@ impl Asset {
         }
     }
 
+    /// Adds two assets together if they have the same `policy_id` and `token_name`.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other asset to add.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Self)` - The resulting `Asset` with the combined amounts.
+    /// * `Err(String)` - If the `policy_id` or `token_name` do not match.
     pub fn add(&self, other: &Asset) -> Result<Self, String> {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
             return Err(format!(
@@ -36,6 +56,16 @@ impl Asset {
         })
     }
 
+    /// Subtracts the amount of another asset if they have the same `policy_id` and `token_name`.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other asset to subtract.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Self)` - The resulting `Asset` after subtraction.
+    /// * `Err(String)` - If the `policy_id` or `token_name` do not match.
     pub fn sub(&self, other: &Asset) -> Result<Self, String> {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
             return Err(format!(
@@ -49,6 +79,17 @@ impl Asset {
         })
     }
 
+    /// Compares two assets for equivalence in `policy_id` and `token_name`,
+    /// and checks if the amount is greater or equal.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other asset to compare against.
+    ///
+    /// # Returns
+    ///
+    /// * `true` if the `policy_id` and `token_name` match and the amount is greater or equal.
+    /// * `false` otherwise.
     pub fn compare(&self, other: Asset) -> bool {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
             false
@@ -58,16 +99,27 @@ impl Asset {
     }
 }
 
+/// Represents a collection of `Asset` instances.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Hash, Clone)]
 pub struct Assets {
     pub items: Vec<Asset>,
 }
 
 impl Assets {
+    /// Creates a new, empty `Assets` instance.
     pub fn new() -> Self {
         Self { items: Vec::new() }
     }
 
+    /// Adds an asset to the collection, combining amounts if the asset already exists.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The asset to add.
+    ///
+    /// # Returns
+    ///
+    /// * A new `Assets` instance with the updated list of assets.
     pub fn add(&self, other: Asset) -> Self {
         let mut new_items: Vec<Asset> = self.items.clone();
         if let Some(existing) = new_items.iter_mut().find(|existing| {
@@ -80,6 +132,15 @@ impl Assets {
         Self { items: new_items }
     }
 
+    /// Subtracts an asset from the collection, removing it if the amount becomes zero.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The asset to subtract.
+    ///
+    /// # Returns
+    ///
+    /// * A new `Assets` instance with updated asset amounts.
     pub fn sub(&self, other: Asset) -> Self {
         let mut new_items: Vec<Asset> = self.items.clone();
         if let Some(existing) = new_items.iter_mut().find(|existing| {
@@ -92,6 +153,7 @@ impl Assets {
         Self { items: new_items }.remove_zero_amounts()
     }
 
+    /// Removes assets with zero amounts from the collection.
     pub fn remove_zero_amounts(&self) -> Self {
         let filtered_items: Vec<Asset> = self
             .items
@@ -104,6 +166,7 @@ impl Assets {
         }
     }
 
+    /// Checks if all assets in `other` are contained in this collection.
     pub fn contains(&self, other: Assets) -> bool {
         // search all other tokens and make sure they exist in these assets
         for other_token in other.items {
@@ -125,6 +188,7 @@ impl Assets {
         true
     }
 
+    /// Checks if any asset in `other` exists in this collection.
     pub fn any(&self, other: Assets) -> bool {
         if other.items.is_empty() {
             return true
@@ -143,8 +207,9 @@ impl Assets {
         false
     }
 
+    /// Merges two collections of assets, combining amounts of matching assets.
     pub fn merge(&self, other: Assets) -> Self {
-        let mut merged = self.clone(); // Clone the current `Assets` as a starting point
+        let mut merged: Assets = self.clone(); // Clone the current `Assets` as a starting point
     
         for other_asset in other.items {
             merged = merged.add(other_asset); // Use `add` to handle merging logic
@@ -153,8 +218,9 @@ impl Assets {
         merged
     }
 
+    /// Separates two collections of assets, subtracting amounts of matching assets.
     pub fn separate(&self, other: Assets) -> Self {
-        let mut separated = self.clone(); // Clone the current `Assets` as a starting point
+        let mut separated: Assets = self.clone(); // Clone the current `Assets` as a starting point
     
         for other_asset in other.items {
             separated = separated.sub(other_asset); // Use `add` to handle merging logic
@@ -169,6 +235,16 @@ impl Assets {
 
 }
 
+/// Converts a string into a `u64` value.
+///
+/// # Arguments
+///
+/// * `input` - The string to parse into a `u64`.
+///
+/// # Returns
+///
+/// * `Ok(u64)` - If the conversion is successful.
+/// * `Err(String)` - If the conversion fails.
 pub fn string_to_u64(input: String) -> Result<u64, String> {
     match input.parse::<u64>() {
         Ok(value) => Ok(value),

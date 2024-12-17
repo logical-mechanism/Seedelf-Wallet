@@ -8,6 +8,32 @@ use crate::koios::{
 use crate::register::Register;
 use crate::transaction::wallet_minimum_lovelace_with_assets;
 
+/// collects all the wallet utxos owned by some scalar.
+pub async fn collect_all_wallet_utxos(sk: Scalar, network_flag: bool) -> Vec<UtxoResponse> {
+    let mut all_utxos: Vec<UtxoResponse> = Vec::new();
+
+    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+        Ok(utxos) => {
+            for utxo in utxos {
+                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
+                    // utxo must be owned by this secret scaler
+                    if inline_datum.is_owned(sk) {
+                        // its owned but lets not count the seedelf in the balance
+                        if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                            all_utxos.push(utxo.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
+        }
+    }
+    all_utxos
+}
+
+/// Find a specific seedelf's datum and all the utxos owned by a scalar. The maximum amount of utxos is limited by a upper bound.
 pub async fn find_seedelf_and_wallet_utxos(sk: Scalar, seedelf: String, network_flag: bool) -> (Option<Register>, Vec<UtxoResponse>) {
     let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
     let mut number_of_utxos: u64 = 0;
@@ -60,6 +86,7 @@ pub async fn find_seedelf_and_wallet_utxos(sk: Scalar, seedelf: String, network_
     (seedelf_datum, usuable_utxos)
 }
 
+/// Find a specific seedelf.
 pub async fn find_seedelf_utxo(seedelf: String, network_flag: bool) -> Option<UtxoResponse> {
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
         Ok(utxos) => {
@@ -91,6 +118,7 @@ pub async fn find_seedelf_utxo(seedelf: String, network_flag: bool) -> Option<Ut
     None
 }
 
+// Find wallet utxos owned by some scalar. The maximum amount of utxos is limited by a upper bound.
 pub async fn collect_wallet_utxos(sk: Scalar, network_flag: bool) -> Vec<UtxoResponse> {
     let mut number_of_utxos: u64 = 0;
 
@@ -127,6 +155,7 @@ pub async fn collect_wallet_utxos(sk: Scalar, network_flag: bool) -> Vec<UtxoRes
     usuable_utxos
 }
 
+/// Collect all the address utxos that are not an assumed collateral utxo.
 pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<UtxoResponse> {
     let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
     // This should probably be some generalized function later
@@ -244,6 +273,7 @@ pub fn  select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> V
     }
 }
 
+/// Calculate the total assets of a list of utxos.
 pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
     let mut found_assets: Assets = Assets::new();
     let mut current_lovelace_sum: u64 = 0;
