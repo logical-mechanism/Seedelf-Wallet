@@ -8,6 +8,13 @@ use pallas_primitives::{
 use crate::schnorr::random_scalar;
 use serde::{Deserialize, Serialize};
 
+/// Represents a cryptographic register containing a generator and a public value.
+///
+/// The `Register` struct holds two points in compressed hex string format:
+/// - `generator`: A generator point in G1.
+/// - `public_value`: A public value computed as `generator * sk` where `sk` is a scalar.
+///
+/// It provides methods for creating, serializing, rerandomizing, and verifying ownership of the register.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Hash, Clone)]
 pub struct Register {
     pub generator: String,
@@ -24,10 +31,28 @@ impl Default for Register {
 }
 
 impl Register {
+    /// Creates a new `Register` with the specified generator and public value.
+    ///
+    /// # Arguments
+    ///
+    /// * `generator` - A compressed hex string representing the generator point.
+    /// * `public_value` - A compressed hex string representing the public value point.
     pub fn new(generator: String, public_value: String) -> Self {
         Self { generator: generator, public_value: public_value }
     }
 
+    /// Generates a `Register` using a provided scalar (`sk`).
+    ///
+    /// This method decompresses a hardcoded generator point, multiplies it by the scalar
+    /// to compute the public value, and compresses both points into hex strings.
+    ///
+    /// # Arguments
+    ///
+    /// * `sk` - A scalar used to compute the public value.
+    ///
+    /// # Returns
+    ///
+    /// * A new `Register` with compressed generator and public value.
     pub fn create(sk: Scalar) -> Self {
         // Decode and decompress generator
         let compressed_g1_generator: &str = "97F1D3A73197D7942695638C4FA9AC0FC3688C4F9774B905A14E3A3F171BAC586C55E83FF97A1AEFFB3AF00ADB22C6BB";
@@ -46,6 +71,15 @@ impl Register {
         Self { generator: hex::encode(g1_generator.to_compressed()), public_value: hex::encode(public_value.to_compressed()) }
     }
 
+    /// Converts the `Register` into a serialized vector of bytes using PlutusData encoding.
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<u8>` - A serialized byte vector representing the `Register`.
+    ///
+    /// # Panics
+    ///
+    /// * If the generator or public value are invalid hex strings.
     pub fn to_vec(&self) -> Vec<u8> {
         // convert the strings into vectors
         let generator_vector: Vec<u8> = Vec::from_hex(&self.generator).expect("Invalid hex string");
@@ -62,6 +96,14 @@ impl Register {
         plutus_data.encode_fragment().unwrap()
     }
 
+    /// Rerandomizes the `Register` using a new random scalar.
+    ///
+    /// This method multiplies both the generator and the public value by a new random scalar,
+    /// producing a rerandomized `Register`.
+    ///
+    /// # Returns
+    ///
+    /// * A new `Register` instance with rerandomized points.
     pub fn rerandomize(self) -> Self {
         // Decode and decompress generator
         let g1: G1Affine = G1Affine::from_compressed(
@@ -92,6 +134,19 @@ impl Register {
         Self { generator: hex::encode(g1_randomized.to_compressed()), public_value: hex::encode(u_randomized.to_compressed()) }
     }
 
+    /// Verifies ownership of the `Register` using a provided scalar (`sk`).
+    ///
+    /// This method checks if the public value in the `Register` matches the generator
+    /// multiplied by the scalar.
+    ///
+    /// # Arguments
+    ///
+    /// * `sk` - The scalar to verify ownership.
+    ///
+    /// # Returns
+    ///
+    /// * `true` - If the scalar matches and proves ownership.
+    /// * `false` - Otherwise.
     pub fn is_owned(&self, sk: Scalar) -> bool {
         let g1: G1Affine = G1Affine::from_compressed(
             &hex::decode(&self.generator)
