@@ -81,7 +81,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     let minimum_lovelace: u64 =
         transaction::wallet_minimum_lovelace_with_assets(selected_tokens.clone());
-
     if args.lovelace.is_some_and(|l| l < minimum_lovelace) {
         return Err("Not Enough Lovelace On UTxO".to_string());
     }
@@ -115,14 +114,15 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     let all_utxos: Vec<UtxoResponse> =
         utxos::collect_address_utxos(&args.address, network_flag).await;
-    let selected_utxos: Vec<UtxoResponse> =
+    let usuable_utxos: Vec<UtxoResponse> =
         utxos::select(all_utxos, lovelace_goal, selected_tokens.clone());
 
-    if selected_tokens.is_empty() {
+
+    if usuable_utxos.is_empty() {
         return Err("Not Enough Lovelace/Tokens".to_string());
     }
 
-    for utxo in selected_utxos.clone() {
+    for utxo in usuable_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
             pallas_crypto::hash::Hash::new(
@@ -135,7 +135,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos);
+    let (total_lovelace, tokens) = utxos::assets_of(usuable_utxos);
     // tokens tha need to be put into the change output
     let change_tokens: Assets = tokens.separate(selected_tokens.clone());
 
