@@ -143,6 +143,7 @@ jobs:
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+        working-directory: seedelf-cli
       - id: cargo-dist
         name: Post-build
         # We force bash here just because github makes it really hard to get values up
@@ -202,6 +203,7 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
+        working-directory: seedelf-cli
       - name: "Upload artifacts"
         uses: actions/upload-artifact@v4
         with:
@@ -246,6 +248,7 @@ jobs:
           echo "artifacts uploaded and released successfully"
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
+        working-directory: seedelf-cli
       - name: "Upload dist-manifest.json"
         uses: actions/upload-artifact@v4
         with:
