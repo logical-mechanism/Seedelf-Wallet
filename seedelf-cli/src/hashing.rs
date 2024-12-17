@@ -2,6 +2,24 @@ use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use hex;
 
+/// Computes the BLAKE2b-224 hash of the input data.
+///
+/// This function accepts a string input, which can be a hex-encoded string or a raw string.
+/// If the input is hex-encoded, it is decoded to bytes. Otherwise, the raw bytes of the string are used.
+/// The resulting hash is 224 bits (28 bytes) and is returned as a hex-encoded string.
+///
+/// # Arguments
+///
+/// * `data` - A string slice representing the input data. It can be a hex-encoded string or plain text.
+///
+/// # Returns
+///
+/// * `String` - The BLAKE2b-224 hash of the input data, encoded as a hex string.
+///
+/// # Panics
+///
+/// * If creating or finalizing the BLAKE2b hasher fails.
+/// * If the input hex string cannot be decoded.
 pub fn blake2b_224(data: &str) -> String {
     // Decode hex string to bytes if needed
     let decoded_data: Vec<u8> = if let Ok(decoded) = hex::decode(data) {
