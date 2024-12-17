@@ -11,3 +11,5 @@ plutus.json
 papers/
 aiken.lock
 grind_pid.sh
+app/
+seedelf_app/

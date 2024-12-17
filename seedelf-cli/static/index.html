@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Seedelf Web Interface</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    
+    <!-- Make it look pretty inside of index.css -->
+    <link rel="stylesheet" href="index.css">
+    
+    <!-- Placeholder for injecting dynamic text -->
+    <script id="injected-data" type="application/json">
+        { "message": "ACAB000000000000" }
+    </script>
+
+    <script id="injected-network-data" type="application/json">
+        { "network": "FADECAFE00000000" }
+    </script>
+
+    <!-- All the wallet logic needs to go inside index.js -->
+    <script src="index.js" defer></script>
+</head>
+
+<body>
+    <nav class="nav-bar">
+        <h1 class="nav-left">Welcome to Seedelf Web Interface!</h1>
+        <h3 class="nav-right">Currently only Eternl is supported.</h3>
+    </nav>
+    
+    <header class="centered">
+        <h4>This page will prompt you to sign a transaction. This allows the Seedelf wallet to interact with a CIP30 wallet when applicable.</h4>
+    </header>
+
+    <main>
+        <section class="centered">
+            <p id="status" class="centered">Waiting for wallet to load...</p>
+            <a id="tx_link" href="" class="link-button" target="_blank" rel="noopener noreferrer" ></a>
+        </section>
+    
+        <section>
+            <p>Transaction CBOR Being Signed:</p>
+            <code id="tx_cbor"></code>
+        </section>
+    </main>
+
+    <footer class="centered">
+        <p>© 2024 Logical Mechanism LLC</p>
+    </footer>
+</body>
+
+</html>

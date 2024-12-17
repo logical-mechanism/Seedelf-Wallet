@@ -1,0 +1,418 @@
+use crate::register::Register;
+use reqwest::{Error, Client, Response};
+use serde::Deserialize;
+use serde_json::Value;
+
+/// Represents the latest blockchain tip information from Koios.
+#[derive(Deserialize, Debug)]
+pub struct BlockchainTip {
+    pub hash: String,
+    pub epoch_no: u64,
+    pub abs_slot: u64,
+    pub epoch_slot: u64,
+    pub block_no: u64,
+    pub block_time: u64,
+}
+
+/// Fetches the latest blockchain tip from the Koios API.
+///
+/// Queries the Koios API to retrieve the most recent block's details
+/// for the specified network.
+///
+/// # Arguments
+///
+/// * `network_flag` - A boolean flag indicating the network:
+///     - `true` for Preprod/Testnet.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Ok(Vec<BlockchainTip>)` - A vector containing the latest blockchain tip data.
+/// * `Err(Error)` - If the API request or JSON parsing fails.
+pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
+    let network: &str = if network_flag {
+        "preprod"
+    } else {
+        "api"
+    };
+    let url: String = format!("https://{}.koios.rest/api/v1/tip", network);
+
+    // Make the GET request and parse the JSON response
+    let response: Vec<BlockchainTip> = reqwest::get(&url)
+        .await?
+        .json::<Vec<BlockchainTip>>()
+        .await?;
+
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Asset {
+    pub decimals: u8,
+    pub quantity: String,
+    pub policy_id: String,
+    pub asset_name: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct InlineDatum {
+    pub bytes: String,
+    pub value: Value, // Flexible for arbitrary JSON
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct UtxoResponse {
+    pub tx_hash: String,
+    pub tx_index: u64,
+    pub address: String,
+    pub value: String,
+    pub stake_address: Option<String>,
+    pub payment_cred: String,
+    pub epoch_no: u64,
+    pub block_height: u64,
+    pub block_time: u64,
+    pub datum_hash: Option<String>,
+    pub inline_datum: Option<InlineDatum>,
+    pub reference_script: Option<Value>, // Flexible for arbitrary scripts
+    pub asset_list: Option<Vec<Asset>>,
+    pub is_spent: bool,
+}
+
+/// Fetches the UTXOs associated with a given payment credential from the Koios API.
+///
+/// This function collects all UTXOs (Unspent Transaction Outputs) related to the specified
+/// payment credential by paginating through the Koios API results.
+///
+/// # Arguments
+///
+/// * `payment_credential` - A string slice representing the payment credential to search for.
+/// * `network_flag` - A boolean flag specifying the network:
+///     - `true` for Preprod/Testnet.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Ok(Vec<UtxoResponse>)` - A vector containing all UTXOs associated with the payment credential.
+/// * `Err(Error)` - If the API request or JSON parsing fails.
+///
+/// # Behavior
+///
+/// The function paginates through the UTXO results, starting with an offset of zero
+/// and incrementing by 1000 until no further results are returned.
+pub async fn credential_utxos(payment_credential: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
+    let network: &str = if network_flag {
+        "preprod"
+    } else {
+        "api"
+    };
+    // this is searching the wallet contract. We have to collect the entire utxo set to search it.
+    let url: String = format!("https://{}.koios.rest/api/v1/credential_utxos", network);
+    let client: Client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let payload: Value = serde_json::json!({
+        "_payment_credentials": [payment_credential],
+        "_extended": true
+    });
+
+    let mut all_utxos: Vec<UtxoResponse> = Vec::new();
+    let mut offset: i32 = 0;
+
+    loop {
+        // Make the POST request
+        let response: Response = client
+            .post(url.clone())
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .query(&[("offset", offset.to_string())])
+            .json(&payload)
+            .send()
+            .await?;
+    
+        let mut utxos: Vec<UtxoResponse> = response.json().await?;
+        // Break the loop if no more results
+        if utxos.is_empty() {
+            break;
+        }
+
+        // Append the retrieved UTXOs to the main list
+        all_utxos.append(&mut utxos);
+
+        // Increment the offset by 1000 (page size)
+        offset += 1000;
+    }
+
+    Ok(all_utxos)
+}
+
+/// Fetches the UTXOs associated with a specific address from the Koios API.
+///
+/// This function retrieves up to 1000 UTXOs for the given address. The `_extended` flag
+/// is enabled in the payload to include detailed UTXO information.
+///
+/// # Arguments
+///
+/// * `address` - A string slice representing the Cardano address to query.
+/// * `network_flag` - A boolean flag specifying the network:
+///     - `true` for Preprod/Testnet.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Ok(Vec<UtxoResponse>)` - A vector containing the UTXOs associated with the given address.
+/// * `Err(Error)` - If the API request or JSON parsing fails.
+///
+/// # Notes
+///
+/// The function assumes a maximum of 1000 UTXOs per address, as per CIP-30 wallets.
+/// If an address exceeds this limit, the wallet is likely mismanaged.
+pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
+    let network: &str = if network_flag {
+        "preprod"
+    } else {
+        "api"
+    };
+    // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
+    // if you have 1000 utxos in that wallets that cannot pay for anything then something
+    // is wrong in that wallet
+    let url: String = format!("https://{}.koios.rest/api/v1/address_utxos", network);
+    let client: Client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let payload: Value = serde_json::json!({
+        "_addresses": [address],
+        "_extended": true
+    });
+
+    // Make the POST request
+    let response: Response = client
+        .post(url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    let utxos: Vec<UtxoResponse> = response.json().await?;
+
+    Ok(utxos)
+}
+
+/// Extracts byte values from an `InlineDatum` with detailed logging.
+///
+/// This function attempts to extract two byte strings from the `fields` array inside the `InlineDatum`.
+/// If the extraction fails due to missing keys, incorrect types, or insufficient elements, an error
+/// message is logged to standard error.
+///
+/// # Arguments
+///
+/// * `inline_datum` - An optional reference to an `InlineDatum`. The `InlineDatum` is expected to contain
+///   a `value` key, which maps to an object with a `fields` array of at least two elements.
+///
+/// # Returns
+///
+/// * `Some(Register)` - A `Register` instance containing the two extracted byte strings.
+/// * `None` - If the extraction fails or `inline_datum` is `None`.
+///
+/// # Behavior
+///
+/// Logs errors to `stderr` using `eprintln!` when:
+/// - `inline_datum` is `None`.
+/// - The `value` key is missing or is not an object.
+/// - The `fields` key is missing or is not an array.
+/// - The `fields` array has fewer than two elements.
+pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<Register> {
+    if let Some(datum) = inline_datum {
+        if let Value::Object(ref value_map) = datum.value {
+            if let Some(Value::Array(fields)) = value_map.get("fields") {
+                if let (Some(first), Some(second)) = (fields.get(0), fields.get(1)) {
+                    let first_bytes: String = first.get("bytes")?.as_str()?.to_string();
+                    let second_bytes: String = second.get("bytes")?.as_str()?.to_string();
+                    return Some(Register::new(first_bytes, second_bytes));
+                } else {
+                    eprintln!("Fields array has fewer than two elements.");
+                }
+            } else {
+                eprintln!("`fields` key is missing or not an array.");
+            }
+        } else {
+            eprintln!("`value` is not an object.");
+        }
+    } else {
+        eprintln!("Inline datum is None.");
+    }
+    None
+}
+
+/// Checks if a target policy ID exists in the asset list.
+///
+/// This function checks whether a specified `target_policy_id` exists
+/// within the provided `asset_list`. If the `asset_list` is `None`, the function
+/// returns `false`.
+///
+/// # Arguments
+///
+/// * `asset_list` - An optional reference to a vector of `Asset` items.
+/// * `target_policy_id` - A string slice representing the policy ID to search for.
+///
+/// # Returns
+///
+/// * `true` - If the target policy ID exists in the asset list.
+/// * `false` - If the target policy ID does not exist or the asset list is `None`.
+///
+/// # Behavior
+///
+/// - Safely handles `None` values for `asset_list` using `map_or`.
+/// - Uses `iter().any()` to efficiently search for a matching policy ID.
+pub fn contains_policy_id(asset_list: &Option<Vec<Asset>>, target_policy_id: &str) -> bool {
+    asset_list
+        .as_ref() // Convert Option<Vec<Asset>> to Option<&Vec<Asset>>
+        .map_or(false, |assets| {
+            assets.iter().any(|asset| asset.policy_id == target_policy_id)
+        })
+}
+
+/// Evaluates a transaction using the Koios API.
+///
+/// This function sends a CBOR-encoded transaction to the Koios API for evaluation.
+/// The API uses Ogmios to validate and evaluate the transaction. The target network
+/// is determined by the `network_flag`.
+///
+/// # Arguments
+///
+/// * `tx_cbor` - A string containing the CBOR-encoded transaction.
+/// * `network_flag` - A boolean flag specifying the network:
+///     - `true` for Preprod/Testnet.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Ok(Value)` - A JSON response containing the evaluation result.
+/// * `Err(Error)` - If the API request fails or the JSON parsing fails.
+///
+/// # Behavior
+///
+/// The function constructs a JSON-RPC request payload and sends a POST request
+/// to the Koios Ogmios endpoint.
+pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
+    let network: &str = if network_flag {
+        "preprod"
+    } else {
+        "api"
+    };
+
+    // Prepare the request payload
+    let payload: Value = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "evaluateTransaction",
+        "params": {
+            "transaction": {
+                "cbor": tx_cbor
+            }
+        }
+    });
+
+    let url: String = format!("https://{}.koios.rest/api/v1/ogmios", network);
+    let client: Client = reqwest::Client::new();
+
+    // Make the POST request
+    let response: Response = client
+        .post(url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    Ok(response.json().await?)
+}
+
+/// Submits a transaction body to witness collateral using a specified API endpoint.
+///
+/// This function sends a CBOR-encoded transaction body to the collateral witnessing endpoint.
+/// The target network (Preprod or Mainnet) is determined by the `network_flag`.
+///
+/// # Arguments
+///
+/// * `tx_cbor` - A string containing the CBOR-encoded transaction body.
+/// * `network_flag` - A boolean flag specifying the network:
+///     - `true` for Preprod.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Ok(Value)` - A JSON response from the API, containing collateral witnessing results.
+/// * `Err(Error)` - If the API request fails or the response JSON parsing fails.
+///
+/// # Behavior
+///
+/// The function constructs a JSON payload containing the transaction body and sends
+/// it to the specified API endpoint using a POST request.
+pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
+    let network: &str = if network_flag {
+        "preprod"
+    } else {
+        "mainnet"
+    };
+    let url: String = format!("https://www.giveme.my/{}/collateral/", network);
+    let client: Client = reqwest::Client::new();
+
+    let payload: Value = serde_json::json!({
+        "tx_body": tx_cbor,
+    });
+
+    // Make the POST request
+    let response: Response = client
+        .post(url)
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    Ok(response.json().await?)
+}
+
+/// Submits a CBOR-encoded transaction to the Koios API.
+///
+/// This function decodes the provided CBOR-encoded transaction from a hex string into binary
+/// data and sends it to the Koios API for submission. The target network (Preprod or Mainnet)
+/// is determined by the `network_flag`.
+///
+/// # Arguments
+///
+/// * `tx_cbor` - A string containing the hex-encoded CBOR transaction.
+/// * `network_flag` - A boolean flag specifying the network:
+///     - `true` for Preprod.
+///     - `false` for Mainnet.
+///
+/// # Returns
+///
+/// * `Ok(Value)` - A JSON response from the API indicating the result of the transaction submission.
+/// * `Err(Error)` - If the API request fails or the response JSON parsing fails.
+///
+/// # Behavior
+///
+/// - Decodes the transaction CBOR hex string into raw binary data.
+/// - Sends the binary data as the body of a POST request with `Content-Type: application/cbor`.
+pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
+    let network: &str = if network_flag {
+        "preprod"
+    } else {
+        "mainnet"
+    };
+    let url: String = format!("https://{}.koios.rest/api/v1/submittx", network);
+    let client: Client = reqwest::Client::new();
+
+    // Decode the hex string into binary data
+    let data: Vec<u8> = hex::decode(&tx_cbor).unwrap();
+
+    let response: Response = client
+        .post(url)
+        .header("Content-Type", "application/cbor")
+        .body(data)  // Send the raw binary data as the body of the request
+        .send()
+        .await?;
+
+    Ok(response.json().await?)
+}
