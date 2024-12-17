@@ -43,6 +43,3 @@ warp = "0.3.7"
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-[package.metadata.dist]
-allow-dirty = ["ci", "msi"]
