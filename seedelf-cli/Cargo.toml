@@ -18,17 +18,19 @@ blake2 = "0.10.6"
 tokio = { version = "1.41.1", features = ["full"] }
 reqwest = { version = "0.12.9", features = ["json"] }
 pallas-addresses = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-addresses = "0.31.0"
 pallas-crypto = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-crypto = "0.31.0"
 pallas-codec = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-codec = "0.31.0"
 pallas-txbuilder = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-txbuilder = "0.31.0"
 pallas-traverse = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-traverse = "0.31.0"
 pallas-wallet = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-wallet = "0.31.0"
 pallas-primitives = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
+#
+#pallas-addresses = "0.31.0"
+#pallas-crypto = "0.31.0"
+#pallas-codec = "0.31.0"
+#pallas-txbuilder = "0.31.0"
+#pallas-traverse = "0.31.0"
+#pallas-wallet = "0.31.0"
 #pallas-primitives = "0.31.0"
+#
 warp = "0.3.7"
