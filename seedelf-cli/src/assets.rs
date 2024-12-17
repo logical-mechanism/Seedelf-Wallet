@@ -166,6 +166,7 @@ impl Assets {
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
+
 }
 
 pub fn string_to_u64(input: String) -> Result<u64, String> {

@@ -162,12 +162,24 @@ pub fn address_minimum_lovelace(address: &str) -> u64 {
     let staging_output: Output = Output::new(addr, 5_000_000);
     // use the staging output to calculate the minimum required lovelace
     calculate_min_required_utxo(staging_output)
-
 }
 
 pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> u64 {
     let mut staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
         .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec());
+
+    for asset in tokens.items {
+        staging_output = staging_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
+        .unwrap();
+    }
+
+    // use the staging output to calculate the minimum required lovelace
+    calculate_min_required_utxo(staging_output)
+}
+
+pub fn address_minimum_lovelace_with_assets(address: &str, tokens: Assets) -> u64 {
+    let addr: Address = Address::from_bech32(address).unwrap();
+    let mut staging_output: Output = Output::new(addr, 5_000_000);
 
     for asset in tokens.items {
         staging_output = staging_output.add_asset(asset.policy_id, asset.token_name, asset.amount)

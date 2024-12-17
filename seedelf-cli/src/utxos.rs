@@ -158,7 +158,7 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
 
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
-pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Vec<UtxoResponse> {
+pub fn  select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Vec<UtxoResponse> {
     let mut selected_utxos: Vec<UtxoResponse> = Vec::new();
 
     let mut current_lovelace_sum: u64 = 0;
@@ -201,6 +201,7 @@ pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Ve
                     current_lovelace_sum += value;
                     found_assets = found_assets.merge(utxo_assets.clone());
                     added = true;
+
                 }
             } else {
                 // no tokens here just lovelace so add it
@@ -211,7 +212,7 @@ pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Ve
                 }
             }
         }
-
+        
         // the utxo is not pure ada and doesnt contain what you need but you need ada because you already found the tokens so add it
         if !added && current_lovelace_sum < lovelace && found_assets.contains(tokens.clone()) {
             selected_utxos.push(utxo.clone());
