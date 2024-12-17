@@ -45,4 +45,4 @@ inherits = "release"
 lto = "thin"
 
 [package.metadata.dist]
-allow-dirty = true
+allow-dirty = ["ci", "msi"]
