@@ -80,6 +80,7 @@ jobs:
           echo "dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+        working-directory: seedelf-cli
       - name: "Upload dist-manifest.json"
         uses: actions/upload-artifact@v4
         with:
