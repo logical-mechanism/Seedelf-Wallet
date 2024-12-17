@@ -209,7 +209,7 @@ impl Assets {
 
     /// Merges two collections of assets, combining amounts of matching assets.
     pub fn merge(&self, other: Assets) -> Self {
-        let mut merged = self.clone(); // Clone the current `Assets` as a starting point
+        let mut merged: Assets = self.clone(); // Clone the current `Assets` as a starting point
     
         for other_asset in other.items {
             merged = merged.add(other_asset); // Use `add` to handle merging logic
@@ -220,7 +220,7 @@ impl Assets {
 
     /// Separates two collections of assets, subtracting amounts of matching assets.
     pub fn separate(&self, other: Assets) -> Self {
-        let mut separated = self.clone(); // Clone the current `Assets` as a starting point
+        let mut separated: Assets = self.clone(); // Clone the current `Assets` as a starting point
     
         for other_asset in other.items {
             separated = separated.sub(other_asset); // Use `add` to handle merging logic

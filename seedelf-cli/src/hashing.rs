@@ -1,5 +1,6 @@
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
+use blake2::digest::core_api::RtVariableCoreWrapper;
 use hex;
 
 /// Computes the BLAKE2b-224 hash of the input data.
@@ -29,7 +30,7 @@ pub fn blake2b_224(data: &str) -> String {
     };
 
     // Create a BLAKE2b hasher with a 224-bit output
-    let mut hasher = Blake2bVar::new(28).expect("Failed to create BLAKE2b hasher");
+    let mut hasher: RtVariableCoreWrapper<blake2::Blake2bVarCore> = Blake2bVar::new(28).expect("Failed to create BLAKE2b hasher");
     hasher.update(&decoded_data);
 
     // Retrieve the hash result
