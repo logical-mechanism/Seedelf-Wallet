@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-       - '**[0-9]+.[0-9]+.[0-9]+*'
+      - "*.*.*"
 
 jobs:
   build-and-release:
@@ -16,39 +16,41 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Optional: If you need cross compilation
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       # Build for Linux
       - name: Build (Linux)
+        working-directory: seedelf-cli
         run: cargo build --release
 
-      # Generate checksum for Linux binary
+      # Generate checksum (Linux)
       - name: Generate checksum (Linux)
+        working-directory: seedelf-cli
         run: sha256sum target/release/seedelf-cli > seedelf-cli-linux.sha256
 
-      # Example Windows build (requires cross setup)
+      # Build for Windows
       - name: Build (Windows)
+        working-directory: seedelf-cli
         run: cross build --release --target x86_64-pc-windows-gnu
 
       - name: Generate checksum (Windows)
+        working-directory: seedelf-cli
         run: sha256sum target/x86_64-pc-windows-gnu/release/seedelf-cli.exe > seedelf-cli-windows.sha256
 
-      # Create a GitHub Release and assign an id to this step
+      # Create a GitHub Release
       - name: Create GitHub Release
         id: create_github_release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
+          tag_name: ${{ github.ref_name }}
           body: "Automated release of seedelf-cli."
 
-      # Now you can reference the upload_url output
       - name: Upload Linux Binary
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_github_release.outputs.upload_url }}
-          asset_path: target/release/seedelf-cli
+          asset_path: seedelf-cli/target/release/seedelf-cli
           asset_name: seedelf-cli-linux
           asset_content_type: application/octet-stream
 
@@ -56,7 +58,7 @@ jobs:
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_github_release.outputs.upload_url }}
-          asset_path: seedelf-cli-linux.sha256
+          asset_path: seedelf-cli/seedelf-cli-linux.sha256
           asset_name: seedelf-cli-linux.sha256
           asset_content_type: text/plain
 
@@ -64,7 +66,7 @@ jobs:
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_github_release.outputs.upload_url }}
-          asset_path: target/x86_64-pc-windows-gnu/release/seedelf-cli.exe
+          asset_path: seedelf-cli/target/x86_64-pc-windows-gnu/release/seedelf-cli.exe
           asset_name: seedelf-cli-windows.exe
           asset_content_type: application/octet-stream
 
@@ -72,6 +74,6 @@ jobs:
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_github_release.outputs.upload_url }}
-          asset_path: seedelf-cli-windows.sha256
+          asset_path: seedelf-cli/seedelf-cli-windows.sha256
           asset_name: seedelf-cli-windows.sha256
           asset_content_type: text/plain
