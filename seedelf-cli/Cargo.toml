@@ -38,8 +38,3 @@ pallas-primitives = { git = "https://github.com/logicalmechanism/pallas", branch
 #pallas-primitives = "0.31.0"
 #
 warp = "0.3.7"
-
-# The profile that 'dist' will build with
-[profile.dist]
-inherits = "release"
-lto = "thin"
