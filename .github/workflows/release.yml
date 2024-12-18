@@ -80,7 +80,6 @@ jobs:
           echo "dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
-        working-directory: seedelf-cli
       - name: "Upload dist-manifest.json"
         uses: actions/upload-artifact@v4
         with:
@@ -90,11 +89,22 @@ jobs:
   # Build and packages all the platform-specific things
   build-local-artifacts:
     name: build-local-artifacts (${{ join(matrix.targets, ', ') }})
+    # Let the initial task tell us to not run (currently very blunt)
     needs:
       - plan
     if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
     strategy:
       fail-fast: false
+      # Target platforms/runners are computed by dist in create-release.
+      # Each member of the matrix has the following arguments:
+      #
+      # - runner: the github runner
+      # - dist-args: cli flags to pass to dist
+      # - install-dist: expression to run to install dist on the runner
+      #
+      # Typically there will be:
+      # - 1 "global" task that builds universal installers
+      # - N "local" tasks that build each platform's binaries and platform-specific installers
       matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container && matrix.container.image || null }}
@@ -108,39 +118,43 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      # Install OpenSSL and MUSL dependencies
-      - name: Install OpenSSL and Cross-Compilation Tools
+      - name: Install Rust non-interactively if not already installed
+        if: ${{ matrix.container }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools libssl-dev pkg-config
-      - name: Add Target for MUSL
-        run: rustup target add x86_64-unknown-linux-musl
-
-      # Set environment variables for OpenSSL
-      - name: Set OpenSSL Environment Variables
+          if ! command -v cargo > /dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          fi
+      - name: Install dist
+        run: ${{ matrix.install_dist.run }}
+      # Get the dist-manifest
+      - name: Fetch local artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+      - name: Install dependencies
         run: |
-          echo "OPENSSL_DIR=/usr/lib/ssl" >> $GITHUB_ENV
-          echo "PKG_CONFIG_SYSROOT_DIR=/usr/local/musl" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/local/musl/lib/pkgconfig" >> $GITHUB_ENV
-
-      # Build artifacts with dist
+          ${{ matrix.packages_install }}
       - name: Build artifacts
         run: |
+          # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
-        working-directory: seedelf-cli
-
       - id: cargo-dist
         name: Post-build
+        # We force bash here just because github makes it really hard to get values up
+        # to "real" actions without writing to env-vars, and writing to env-vars has
+        # inconsistent syntax between shell and powershell.
         shell: bash
         run: |
+          # Parse out what we just built and upload it to scratch storage
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
           dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
-
       - name: "Upload artifacts"
         uses: actions/upload-artifact@v4
         with:
@@ -187,7 +201,6 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
-        working-directory: seedelf-cli
       - name: "Upload artifacts"
         uses: actions/upload-artifact@v4
         with:
@@ -232,7 +245,6 @@ jobs:
           echo "artifacts uploaded and released successfully"
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
-        working-directory: seedelf-cli
       - name: "Upload dist-manifest.json"
         uses: actions/upload-artifact@v4
         with:
