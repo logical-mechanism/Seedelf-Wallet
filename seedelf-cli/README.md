@@ -2,8 +2,6 @@
 
 Seedelf is a stealth wallet that hides the receiver and spender.
 
-- TODO -> Build github action workflow for tagged releases
-
 ## Installation
 
 Installing on path

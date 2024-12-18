@@ -2,12 +2,12 @@
 <html>
 
 <head>
-    <title>Seedelf Web Interface</title>
+    <title>Seedelf Wallet</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    
+
     <!-- Make it look pretty inside of index.css -->
     <link rel="stylesheet" href="index.css">
-    
+
     <!-- Placeholder for injecting dynamic text -->
     <script id="injected-data" type="application/json">
         { "message": "ACAB000000000000" }
@@ -23,22 +23,27 @@
 
 <body>
     <nav class="nav-bar">
-        <h1 class="nav-left">Welcome to Seedelf Web Interface!</h1>
-        <h3 class="nav-right">Currently only Eternl is supported.</h3>
+        <h1 class="nav-left">Seedelf Wallet</h1>
+        <!-- <h3 class="nav-right">Currently only Eternl is supported.</h3> -->
+        <div class="nav-right">
+            <select id="wallet_dropdown" name="options">
+                <option value="" selected>Connect A Wallet</option>
+            </select>
+        </div>
     </nav>
-    
+
     <header class="centered">
-        <h4>This page will prompt you to sign a transaction. This allows the Seedelf wallet to interact with a CIP30 wallet when applicable.</h4>
+        <h3>This page will prompt you to sign a transaction with the wallet of your choice.</h3>
     </header>
 
     <main>
         <section class="centered">
             <p id="status" class="centered">Waiting for wallet to load...</p>
-            <a id="tx_link" href="" class="link-button" target="_blank" rel="noopener noreferrer" ></a>
+            <a id="tx_link" href="" class="link-button" target="_blank" rel="noopener noreferrer"></a>
         </section>
-    
+
         <section>
-            <p>Transaction CBOR Being Signed:</p>
+            <h4>Transaction CBOR:</h4>
             <code id="tx_cbor"></code>
         </section>
     </main>
