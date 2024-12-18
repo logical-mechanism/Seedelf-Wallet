@@ -8,9 +8,9 @@ use aiken/primitive/bytearray
 /// The value x is a secret integer used to create the public value from the 
 /// generator.
 pub type Register {
-  // the generator, #<Bls12_381, G1>
+  /// the generator, #<Bls12_381, G1>
   generator: ByteArray,
-  // the public value, #<Bls12_381, G1>
+  /// the public value, #<Bls12_381, G1>
   public_value: ByteArray,
 }
 
@@ -18,11 +18,11 @@ pub type Register {
 /// computed using the Fiat-Shamir heuristic. The vkh is used as a one time
 /// pad for the proof to prevent rollback attacks.
 pub type Proof {
-  // this is z = r + c * x as a bytearray
+  /// this is z = r + c * x as a bytearray
   z_b: ByteArray,
-  // this is the g^r compressed G1Element
+  /// this is the g^r compressed G1Element
   g_r_b: ByteArray,
-  // this vkh is used as a one time pad
+  /// this vkh is used as a one time pad
   vkh: VerificationKeyHash,
 }
 

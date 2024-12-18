@@ -1,10 +1,10 @@
 # Seedelf - A Cardano Stealth Wallet
 
-**Seedelf** is a stealth wallet that hides the receiver and spender with Schnorr proofs using the BLS12-381 curve. UTxOs inside the wallet are indistinguishable from one-another and it is not possible to deduce the intended receiver assuming that the Elliptic Curve Decisional-Diffie-Hellman (ECDDH) problem is hard.
+**Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It is not possible to deduce the intended receiver or spender of UTxOs inside this wallet. The Seedelf [cli](./seedelf-cli/README.md) is available on Linux, Windows, and MacOS.
 
 ## What is a Seedelf token?
 
-The wallet name, **Seedelf**, comes from the identifier token used to locate the datum of a UTxO inside the wallet contract. A seedelf allows the root datum to be easily located and provides a personalized touch while maintaining privacy. It is similar to how ADAHandle works but with a slight twist.
+The wallet name, **Seedelf**, comes from the prefix of the identifier token used to locate the datum of a UTxO inside the wallet contract. A seedelf allows the root datum to be easily located and provides a personalized touch while maintaining privacy. It is similar to how ADAHandle works but with a slight twist.
 
 Its main purpose is for the ease of locating the datum for address generation. Alice can ask Bob to send funds to their seedelf. Bob can find the UTxO that holds the seedelf token and will use that datum to re-randomize a new datum for Alice. Bob will then send funds to the contract with this new randomized datum.
 
@@ -44,7 +44,7 @@ The stealth wallet contract is token agnostic, allowing any NFT to be the locato
 
 ## What is a Stealth Wallet?
 
-Below is a quick overview of how the wallet contract works.
+A stealth wallet hides the receiver and spender of funds inside the contract. Below is a quick overview of how the wallet contract works.
 
 ### Terminology
 
@@ -64,14 +64,14 @@ The register contains the generator and the public key for some UTxO.
 
 ```rust
 pub type Register {
-  // the generator, #<Bls12_381, G1>
+  /// the generator, #<Bls12_381, G1>
   generator: ByteArray,
-  // the public value, #<Bls12_381, G1>
+  /// the public value, #<Bls12_381, G1>
   public_value: ByteArray,
 }
 ```
 
-A UTxO is spendable if the transaction can provide proof of knowledge of the secret key using a Schnorr proof. A valid Schnorr proof has the form:
+A UTxO is spendable if the transaction can provide proof of knowledge of the secret key using a non-interactive zero knowledge Schnorr proof. A valid Schnorr proof has the form:
 
 $$
 g^{z} = g^r u^c,
@@ -92,7 +92,7 @@ $$
 
 ### Stealth Address
 
-A register defines a public address used to produce a private address. A user wishing to create a stealth address for another user will find a public address and re-randomize the register as the new datum of a future UTxO.
+A register defines a public address used to produce a private address. A user wishing to create a stealth address for another user will find their public address and re-randomize the register as the new datum of a future UTxO.
 
 A user selects a random integer, $d$, and constructs a new register.
 
@@ -146,7 +146,7 @@ This register would become unspendable, resulting in lost funds.
 
 Three attacks are known to break the privacy of this wallet. The first attack comes from picking a bad $d$ value. A small $d$ value may be able to be brute-forced. The brute-force attack is circumvented by selecting a $d$ value on the order of $2^{254}$. The second attack comes from not properly destroying the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users then it becomes trivial to invert the register into the original form thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the collateral UTxO by definition isn't anonymous and the ownership is known the entire time. This means that an outside user could track a user's actions by simply watching which collaterals were used during transactions.
 
-Privacy is preserved as long as $d$ is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner. This type of wallet can not be staked.
+Privacy is preserved as long as $d$ is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner.
 
 ## Happy Path Testing Scripts
 
@@ -198,8 +198,8 @@ Spendability is always in the hands of the original owner. If two UTxOs are bein
 
 ## Defeating The Collateral Problem
 
-- TODO
+The `seedelf-cli` uses the [Cardano collateral provider](https://giveme.my/). Every user will share the same collateral UTxO thus defeating the collateral problem.
 
-## The Seedelf Application
+## The **seedelf-cli**
 
-- TODO
+Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/).
