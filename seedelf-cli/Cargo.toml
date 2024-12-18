@@ -2,6 +2,10 @@
 name = "seedelf-cli"
 version = "0.2.0"
 edition = "2021"
+license = "MIT"
+description = "A CLI for the Seedelf Wallet"
+authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
+repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
 
 [dependencies]
 clap = { version = "4.5.21", features = ["derive"] }
@@ -34,3 +38,8 @@ pallas-primitives = { git = "https://github.com/logicalmechanism/pallas", branch
 #pallas-primitives = "0.31.0"
 #
 warp = "0.3.7"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

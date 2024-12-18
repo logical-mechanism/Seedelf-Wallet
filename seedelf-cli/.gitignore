@@ -6,6 +6,12 @@
 /debug/
 release/
 
+# Cargo Dist outputs
+/dist/                # If cargo-dist generates output in 'dist' folder
+*.zip                 # ZIP archives
+*.tar.gz              # Tarball archives
+*.sha256              # Checksum files
+
 # Ignore Cargo.lock if the project is a library (optional)
 # Uncomment if your project is a library and not a binary
 # Cargo.lock
