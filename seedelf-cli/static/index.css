@@ -139,3 +139,24 @@ section {
     max-width: 60%;
     word-wrap: break-word;
 }
+
+select {
+    padding: 16px;
+    font-size: 16px;
+    background-color: #f9f9f9;
+    color: #333;
+    outline: none;
+    cursor: pointer;
+    text-align: center;
+    text-align-last: center;
+}
+
+/* Add hover and focus effects */
+select:hover {
+    background-color: #f0f0f0;
+}
+
+select:focus {
+    border-color: #007bff;
+    box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
+}
