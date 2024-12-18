@@ -1,25 +1,31 @@
-# Seedelf CLI
+# **seedelf-cli**
 
-Seedelf is a stealth wallet that hides the receiver and spender.
+The `seedelf-cli` is a rust implementation of the stealth wallet. It uses [Cardano collateral provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal base but it does use a static HTML web interface for CIP30 funding when required.
 
 ## Installation
 
-Installing on path
+First, clone the repo and enter the cli subfolder.
+```bash
+git clone https://github.com/logical-mechanism/Seedelf-Wallet
+cd Seedelf-Wallet/seedelf-cli
+```
 
+Installing on path:
 ```bash
 cargo install --path .
 ```
 
-Building for release
+Building for release:
 ```bash
 cargo build --release
 ```
 
-Locally running it
+Running it locally:
 ```bash
 cargo build
-cargo run -- help
 ```
+
+Precompile binaries are available for Linux, Windows, and MacOS. These may be found in the latest release.
 
 ## Using The Seedelf CLI
 
@@ -51,4 +57,6 @@ Options:
 
 Create a Seedelf with the `seedelf-new` command. The Seedelf is funded with the `fund` command. Send funds to another Seedelf with the `transfer` command. Funds can be send to an address with the `sweep` command. Use the `--help` option to see more information.
 
-Some commands will prompt to open a localhost for cip30 wallet interaction.
+**Some commands will prompt to open a localhost for cip30 wallet interaction.**
+
+The wallet will create a secret key file on the local machine inside the home directory under the .seedelf folder. The wallet will prompt the user at first use to name the secrey key file. Keep this file safe!
