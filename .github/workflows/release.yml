@@ -6,18 +6,14 @@ on:
       - "*.*.*"
 
 jobs:
-  build-and-release:
+  build-linux:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out the code
         uses: actions/checkout@v3
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
 
       # Build for Linux
       - name: Build (Linux)
@@ -28,15 +24,6 @@ jobs:
       - name: Generate checksum (Linux)
         working-directory: seedelf-cli
         run: sha256sum target/release/seedelf-cli > seedelf-cli-linux.sha256
-
-      # Build for Windows
-      - name: Build (Windows)
-        working-directory: seedelf-cli
-        run: cross build --release --target x86_64-pc-windows-gnu
-
-      - name: Generate checksum (Windows)
-        working-directory: seedelf-cli
-        run: sha256sum target/x86_64-pc-windows-gnu/release/seedelf-cli.exe > seedelf-cli-windows.sha256
 
       # Create a GitHub Release
       - name: Create GitHub Release
@@ -62,10 +49,40 @@ jobs:
           asset_name: seedelf-cli-linux.sha256
           asset_content_type: text/plain
 
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Build for Windows
+      - name: Build (Windows)
+        working-directory: seedelf-cli
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
+      - name: Generate checksum (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: |
+          $hash = Get-FileHash target\x86_64-pc-windows-gnu\release\seedelf-cli.exe -Algorithm SHA256
+          $hash.Hash | Out-File -Encoding ASCII seedelf-cli-windows.sha256
+
+      # Update the existing GitHub Release (the release is already created by the linux job)
+      - name: Update GitHub Release with Windows Assets
+        id: update_github_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          # Optional: if you don't provide a body here, it won't overwrite the previous body.
+          # body: "Windows build of seedelf-cli added."
+
       - name: Upload Windows Binary
         uses: actions/upload-release-asset@v1
         with:
-          upload_url: ${{ steps.create_github_release.outputs.upload_url }}
+          upload_url: ${{ steps.update_github_release.outputs.upload_url }}
           asset_path: seedelf-cli/target/x86_64-pc-windows-gnu/release/seedelf-cli.exe
           asset_name: seedelf-cli-windows.exe
           asset_content_type: application/octet-stream
@@ -73,7 +90,7 @@ jobs:
       - name: Upload Windows Checksum
         uses: actions/upload-release-asset@v1
         with:
-          upload_url: ${{ steps.create_github_release.outputs.upload_url }}
+          upload_url: ${{ steps.update_github_release.outputs.upload_url }}
           asset_path: seedelf-cli/seedelf-cli-windows.sha256
           asset_name: seedelf-cli-windows.sha256
           asset_content_type: text/plain
