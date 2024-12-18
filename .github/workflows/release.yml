@@ -68,3 +68,34 @@ jobs:
             seedelf-cli/seedelf-cli-windows.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Build for macOS
+      - name: Build (macOS)
+        working-directory: seedelf-cli
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Generate checksum (macOS)
+        shell: bash
+        working-directory: seedelf-cli
+        run: |
+          shasum -a 256 target/release/seedelf-cli > seedelf-cli-macos.sha256
+
+      # Add macOS Assets to Existing Release
+      - name: Update GitHub Release with macOS Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            seedelf-cli/target/release/seedelf-cli
+            seedelf-cli/seedelf-cli-macos.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,7 +4,7 @@ mod setup;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
-#[command(version = "0.2.1")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "A Cardano Stealth Wallet", long_about = None)]
 struct Cli {
     /// Use this flag to interact with the pre-production environment
