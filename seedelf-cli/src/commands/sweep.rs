@@ -27,27 +27,27 @@ use seedelf_cli::setup;
 #[derive(Args)]
 pub struct SweepArgs {
     /// address that receives the funds
-    #[arg(long, help = "The address receiving funds.")]
+    #[arg(short = 'a', long, help = "The address receiving funds.", display_order = 1)]
     address: String,
 
     /// The amount of ADA to send
-    #[arg(long, help = "The amount of Lovelace being sent to the address. Cannt be used with --all")]
+    #[arg(short = 'l', long, help = "The amount of Lovelace being sent to the address. Cannt be used with --all", display_order = 2)]
     lovelace: Option<u64>,
 
     /// Send all funds if amount is not specified
-    #[arg(long, help = "Send all funds. Cannot be used with --amount.")]
+    #[arg(long, help = "Send all funds. Cannot be used with --amount.", display_order = 3)]
     all: bool,
 
     /// Optional repeated `policy-id`
-    #[arg(long = "policy-id", help = "The policy id for the asset.")]
+    #[arg(long = "policy-id", help = "The policy id for the asset.", display_order = 4)]
     policy_id: Option<Vec<String>>,
 
     /// Optional repeated `token-name`
-    #[arg(long = "token-name", help = "The token name for the asset")]
+    #[arg(long = "token-name", help = "The token name for the asset", display_order = 5)]
     token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
-    #[arg(long = "amount", help = "The amount for the asset")]
+    #[arg(long = "amount", help = "The amount for the asset", display_order = 6)]
     amount: Option<Vec<u64>>,
 }
 

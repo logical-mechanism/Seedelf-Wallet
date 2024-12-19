@@ -27,23 +27,23 @@ use seedelf_cli::setup;
 #[derive(Args)]
 pub struct TransforArgs {
     /// Seedelf to send funds too
-    #[arg(long, help = "The Seedelf receiving funds.")]
+    #[arg(short = 's', long, help = "The Seedelf receiving funds.", display_order = 1)]
     seedelf: String,
 
     /// The amount of ADA to send
-    #[arg(long, help = "The amount of ADA being sent to the Seedelf.")]
+    #[arg(short = 'l', long, help = "The amount of ADA being sent to the Seedelf.", display_order = 2)]
     lovelace: Option<u64>,
 
     /// Optional repeated `policy-id`
-    #[arg(long = "policy-id", help = "The policy id for the asset.")]
+    #[arg(long = "policy-id", help = "The policy id for the asset.", display_order = 3)]
     policy_id: Option<Vec<String>>,
 
     /// Optional repeated `token-name`
-    #[arg(long = "token-name", help = "The token name for the asset")]
+    #[arg(long = "token-name", help = "The token name for the asset", display_order = 4)]
     token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
-    #[arg(long = "amount", help = "The amount for the asset")]
+    #[arg(long = "amount", help = "The amount for the asset", display_order = 5)]
     amount: Option<Vec<u64>>,
 }
 

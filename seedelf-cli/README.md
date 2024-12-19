@@ -32,30 +32,27 @@ Precompile binaries are available for Linux, Windows, and MacOS. These may be fo
 ```bash
 A Cardano Stealth Wallet
 
-Usage: seedelf-cli [OPTIONS] <COMMAND>
+Usage: seedelf-cli [OPTIONS] [COMMAND]
 
 Commands:
-  welcome         Displays the Seedelf welcome message
-  wallet-info     Displays wallet information
-  balance         Displays the current wallet balance
-  fund            An address sends ADA to a Seedelf
-  transfer        A Seedelf sends ADA to a Seedelf
-  sweep           A Seedelf sends ADA to an address
-  seedelf-new     Create a new Seedelf
-  seedelf-all     Display all Seedelfs
-  seedelf-remove  Remove a Seedelf
-  help            Print this message or the help of the given subcommand(s)
+  welcome   Displays the seedelf-cli welcome message
+  create    Create a new Seedelf in the wallet
+  remove    Remove a Seedelf from the wallet
+  balance   Displays the current wallet information, seedelfs, and balance
+  fund      An address sends funds to a Seedelf
+  transfer  A Seedelf sends funds to a Seedelf
+  sweep     A Seedelf sends funds to an address
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
       --preprod  Use this flag to interact with the pre-production environment
   -h, --help     Print help
   -V, --version  Print version
-
 ```
 
 ### Basic Usage
 
-Create a Seedelf with the `seedelf-new` command. The Seedelf is funded with the `fund` command. Send funds to another Seedelf with the `transfer` command. Funds can be send to an address with the `sweep` command. Use the `--help` option to see more information.
+Create a Seedelf with the `create` command. The Seedelf is funded with the `fund` command. Send funds to another Seedelf with the `transfer` command. Funds can be send to an address with the `sweep` command. Use the `--help` option to see more information.
 
 **Some commands will prompt to open a localhost for cip30 wallet interaction.**
 
