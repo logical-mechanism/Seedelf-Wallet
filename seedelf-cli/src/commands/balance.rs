@@ -2,14 +2,27 @@ use blstrs::Scalar;
 use reqwest::Error;
 use seedelf_cli::display;
 use seedelf_cli::koios::UtxoResponse;
-use seedelf_cli::utxos;
+use seedelf_cli::register::Register;
 use seedelf_cli::setup;
+use seedelf_cli::utxos;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
 
+    println!("\nSeedelf Wallet Information");
+    
     let scalar: Scalar = setup::load_wallet();
+    println!("\nSecret Key:\n");
+    println!("{}", scalar);
+    
+    let datum: Register = Register::create(scalar);
+    println!("\nBase Register:\n");
+    println!("Generator: {}", datum.generator);
+    println!("Public Value: {}", datum.public_value);
+
+    display::all_seedelfs(scalar, network_flag).await;
+
     let all_utxos: Vec<UtxoResponse> = utxos::collect_all_wallet_utxos(scalar, network_flag).await;
     let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone());
 

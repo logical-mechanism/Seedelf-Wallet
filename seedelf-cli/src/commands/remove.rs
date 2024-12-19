@@ -26,10 +26,10 @@ use seedelf_cli::setup;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct RemoveArgs {
-    #[arg(long, help = "The Seedelf to remove.")]
+    #[arg(short = 's', long, help = "The Seedelf to remove.", display_order = 1)]
     seedelf: String,
 
-    #[arg(long, help = "The address receiving the leftover ADA.")]
+    #[arg(short = 'a', long, help = "The address receiving the leftover ADA.", display_order = 2)]
     address: String,
 }
 
