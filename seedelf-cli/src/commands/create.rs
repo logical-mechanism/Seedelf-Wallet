@@ -21,10 +21,10 @@ use seedelf_cli::web_server;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct LabelArgs {
-    #[arg(long, help = "The address paying for the seedelf.")]
+    #[arg(short = 'a', long, help = "The address paying for the seedelf.", display_order = 1)]
     address: String,
 
-    #[arg(long, help = "The seedelf label / personal tag.")]
+    #[arg(short = 'l', long, help = "The seedelf label / personal tag.", display_order = 2)]
     label: Option<String>,
 }
 

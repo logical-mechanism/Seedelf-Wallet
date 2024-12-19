@@ -1,9 +1,7 @@
 pub mod balance;
 pub mod fund;
-pub mod seedelf_all;
-pub mod seedelf_new;
-pub mod seedelf_remove;
+pub mod create;
+pub mod remove;
 pub mod sweep;
 pub mod transfer;
-pub mod wallet_info;
 pub mod welcome;
