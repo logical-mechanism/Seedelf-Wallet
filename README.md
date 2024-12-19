@@ -1,6 +1,6 @@
 # Seedelf - A Cardano Stealth Wallet
 
-**Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It is not possible to deduce the intended receiver or spender of UTxOs inside this wallet. The Seedelf [cli](./seedelf-cli/README.md) is available on Linux, Windows, and MacOS.
+**Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It is not possible to deduce the intended receiver or spender of UTxOs inside this wallet. The [seedelf-cli](./seedelf-cli/README.md) is available on Linux, Windows, and MacOS.
 
 ## What is a Seedelf token?
 

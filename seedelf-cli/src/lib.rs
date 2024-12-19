@@ -7,6 +7,7 @@ pub mod hashing;
 pub mod koios;
 pub mod register;
 pub mod schnorr;
+pub mod setup;
 pub mod transaction;
 pub mod utxos;
 pub mod web_server;

@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use seedelf_cli::schnorr::random_scalar;
+use crate::schnorr::random_scalar;
+
 
 /// Data structure for storing wallet information
 #[derive(Serialize, Deserialize)]
@@ -15,7 +16,7 @@ struct Wallet {
 /// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
 pub fn check_and_prepare_seedelf() {
     // this may only work on ubuntu
-    let seedelf_path = Path::new("/home").join(whoami::username()).join(".seedelf");
+    let seedelf_path: PathBuf = Path::new("/home").join(whoami::username()).join(".seedelf");
 
     // Check if `.seedelf` exists
     if !seedelf_path.exists() {
@@ -23,7 +24,7 @@ pub fn check_and_prepare_seedelf() {
     }
 
     // Check if there are any files in `.seedelf`
-    let contents = fs::read_dir(&seedelf_path)
+    let contents: Vec<fs::DirEntry> = fs::read_dir(&seedelf_path)
         .expect("Failed to read .seedelf directory")
         .filter_map(|entry| entry.ok())
         .collect::<Vec<_>>();
@@ -56,15 +57,15 @@ fn prompt_wallet_name() -> String {
 /// Create a wallet file and save a random private key
 fn create_wallet(wallet_path: &PathBuf) {
     // Generate a random private key
-    let sk = random_scalar(); // Requires `Field` trait in scope
-    let private_key_bytes = sk.to_repr(); // Use `to_repr()` to get canonical bytes
-    let private_key_hex = hex::encode(private_key_bytes);
+    let sk: Scalar = random_scalar(); // Requires `Field` trait in scope
+    let private_key_bytes: [u8; 32] = sk.to_repr(); // Use `to_repr()` to get canonical bytes
+    let private_key_hex: String = hex::encode(private_key_bytes);
 
     // Serialize the wallet
-    let wallet = Wallet {
+    let wallet: Wallet = Wallet {
         private_key: private_key_hex,
     };
-    let wallet_data = serde_json::to_string_pretty(&wallet).expect("Failed to serialize wallet");
+    let wallet_data: String = serde_json::to_string_pretty(&wallet).expect("Failed to serialize wallet");
 
     // Save to file
     fs::write(wallet_path, wallet_data).expect("Failed to write wallet file");
@@ -75,10 +76,10 @@ fn create_wallet(wallet_path: &PathBuf) {
 /// Load the wallet file and deserialize the private key into a Scalar
 pub fn load_wallet() -> Scalar {
     // Default `.seedelf` directory path
-    let seedelf_path = Path::new("/home").join(whoami::username()).join(".seedelf");
+    let seedelf_path: PathBuf = Path::new("/home").join(whoami::username()).join(".seedelf");
 
     // Get the list of files in `.seedelf`
-    let contents = fs::read_dir(&seedelf_path)
+    let contents: Vec<fs::DirEntry> = fs::read_dir(&seedelf_path)
         .expect("Failed to read .seedelf directory")
         .filter_map(|entry| entry.ok())
         .collect::<Vec<_>>();
@@ -88,8 +89,8 @@ pub fn load_wallet() -> Scalar {
     }
 
     // Use the first file in the directory to build the wallet path
-    let first_file = &contents[0];
-    let wallet_path = first_file.path();
+    let first_file: &fs::DirEntry = &contents[0];
+    let wallet_path: PathBuf = first_file.path();
 
     // Read the wallet file
     let wallet_data: String = fs::read_to_string(&wallet_path).expect("Failed to read wallet file");

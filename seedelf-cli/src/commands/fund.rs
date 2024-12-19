@@ -18,27 +18,27 @@ use seedelf_cli::web_server;
 #[derive(Args)]
 pub struct FundArgs {
     /// Seedelf to send funds too
-    #[arg(long, help = "The address sending funds to the Seedelf.")]
+    #[arg(short = 'a', long, help = "The address sending funds to the Seedelf.", display_order = 1)]
     address: String,
 
     /// Seedelf to send funds too
-    #[arg(long, help = "The Seedelf receiving funds.")]
+    #[arg(short = 's', long, help = "The Seedelf receiving funds.", display_order = 2)]
     seedelf: String,
 
     /// The amount of Lovelace to send
-    #[arg(long, help = "The amount of Lovelace being sent to the Seedelf.")]
+    #[arg(short = 'l', long, help = "The amount of Lovelace being sent to the Seedelf.", display_order = 3)]
     lovelace: Option<u64>,
 
     /// Optional repeated `policy-id`
-    #[arg(long = "policy-id", help = "The policy id for the asset.")]
+    #[arg(long = "policy-id", help = "The policy id for the asset.", display_order = 4)]
     policy_id: Option<Vec<String>>,
 
     /// Optional repeated `token-name`
-    #[arg(long = "token-name", help = "The token name for the asset")]
+    #[arg(long = "token-name", help = "The token name for the asset", display_order = 5)]
     token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
-    #[arg(long = "amount", help = "The amount for the asset")]
+    #[arg(long = "amount", help = "The amount for the asset", display_order = 6)]
     amount: Option<Vec<u64>>,
 }
 
