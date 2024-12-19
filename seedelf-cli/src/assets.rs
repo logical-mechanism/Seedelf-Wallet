@@ -233,6 +233,9 @@ impl Assets {
         self.items.is_empty()
     }
 
+    pub fn len(&self) -> u64 {
+        self.items.len() as u64
+    }
 }
 
 /// Converts a string into a `u64` value.
