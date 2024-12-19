@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 mod commands;
-mod setup;
+use seedelf_cli::setup;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
