@@ -14,5 +14,8 @@ jobs:
         with:
           version: v1.1.9
       - run: aiken fmt --check
+        working-directory: seedelf-cli
       - run: aiken check -D
+        working-directory: seedelf-cli
       - run: aiken build
+        working-directory: seedelf-cli
