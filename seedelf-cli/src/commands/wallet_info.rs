@@ -1,6 +1,6 @@
 use blstrs::Scalar;
 use seedelf_cli::register::Register;
-use crate::setup;
+use seedelf_cli::setup;
 
 pub fn run() {
     println!("\nSeedelf Wallet Information");

@@ -21,7 +21,7 @@ use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
 use seedelf_cli::transaction;
 use seedelf_cli::utxos;
-use crate::setup;
+use seedelf_cli::setup;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]

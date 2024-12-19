@@ -1,7 +1,7 @@
 use blstrs::Scalar;
 use reqwest::Error;
 use seedelf_cli::display;
-use crate::setup;
+use seedelf_cli::setup;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
     display::preprod_text(network_flag);

@@ -1,4 +1,4 @@
-use crate::setup;
+use seedelf_cli::setup;
 use blstrs::Scalar;
 use clap::Args;
 use hex;
