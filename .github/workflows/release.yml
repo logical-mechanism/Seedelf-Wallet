@@ -35,7 +35,16 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          body: "Automated release of seedelf-cli."
+          body: |
+            ### New Release: ${{ github.ref_name }}
+
+            This release includes:
+            - Binaries and checksums for Linux, Windows, and MacOS.
+
+            Thank you for using `seedelf-cli`.
+            If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
+            
+          generate_release_notes: true
           files: seedelf-cli/seedelf-cli-linux.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
