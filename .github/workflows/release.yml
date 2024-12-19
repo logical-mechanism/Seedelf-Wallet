@@ -25,15 +25,18 @@ jobs:
         working-directory: seedelf-cli
         run: sha256sum target/release/seedelf-cli > seedelf-cli-linux.sha256
 
+      # Compress binary and checksum (Linux)
+      - name: Compress binary and checksum (Linux)
+        working-directory: seedelf-cli
+        run: tar -czvf seedelf-cli-linux.tar.gz target/release/seedelf-cli seedelf-cli-linux.sha256
+
       # Create GitHub Release and Upload Linux Assets
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           body: "Automated release of seedelf-cli."
-          files: |
-            seedelf-cli/target/release/seedelf-cli
-            seedelf-cli/seedelf-cli-linux.sha256
+          files: seedelf-cli/seedelf-cli-linux.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -58,14 +61,18 @@ jobs:
           $hash = Get-FileHash target\x86_64-pc-windows-gnu\release\seedelf-cli.exe -Algorithm SHA256
           $hash.Hash | Out-File -Encoding ASCII seedelf-cli-windows.sha256
 
+      # Compress binary and checksum (Windows)
+      - name: Compress binary and checksum (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: Compress-Archive -Path target\x86_64-pc-windows-gnu\release\seedelf-cli.exe,seedelf-cli-windows.sha256 -DestinationPath seedelf-cli-windows.zip
+
       # Add Windows Assets to Existing Release
       - name: Update GitHub Release with Windows Assets
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            seedelf-cli/target/x86_64-pc-windows-gnu/release/seedelf-cli.exe
-            seedelf-cli/seedelf-cli-windows.sha256
+          files: seedelf-cli/seedelf-cli-windows.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -86,16 +93,18 @@ jobs:
       - name: Generate checksum (macOS)
         shell: bash
         working-directory: seedelf-cli
-        run: |
-          shasum -a 256 target/release/seedelf-cli > seedelf-cli-macos.sha256
+        run: shasum -a 256 target/release/seedelf-cli > seedelf-cli-macos.sha256
+
+      # Compress binary and checksum (macOS)
+      - name: Compress binary and checksum (macOS)
+        working-directory: seedelf-cli
+        run: tar -czvf seedelf-cli-macos.tar.gz target/release/seedelf-cli seedelf-cli-macos.sha256
 
       # Add macOS Assets to Existing Release
       - name: Update GitHub Release with macOS Assets
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            seedelf-cli/target/release/seedelf-cli
-            seedelf-cli/seedelf-cli-macos.sha256
+          files: seedelf-cli/seedelf-cli-macos.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
