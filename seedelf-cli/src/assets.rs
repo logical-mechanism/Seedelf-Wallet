@@ -236,6 +236,13 @@ impl Assets {
     pub fn len(&self) -> u64 {
         self.items.len() as u64
     }
+
+    pub fn split(&self, k: usize) -> Vec<Self> {
+        self.items
+            .chunks(k) // Divide the `items` into slices of at most `k` elements
+            .map(|chunk| Assets { items: chunk.to_vec() }) // Convert each slice into an `Assets` struct
+            .collect()
+    }
 }
 
 /// Converts a string into a `u64` value.

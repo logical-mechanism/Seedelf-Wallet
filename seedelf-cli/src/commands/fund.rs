@@ -8,9 +8,10 @@ use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
+use seedelf_cli::constants::MAXIMUM_TOKENS_PER_UTXO;
 use seedelf_cli::koios::{extract_bytes_with_logging, UtxoResponse};
 use seedelf_cli::register::Register;
-use seedelf_cli::transaction;
+use seedelf_cli::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_cli::utxos;
 use seedelf_cli::web_server;
 
@@ -80,7 +81,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     }
 
     let minimum_lovelace: u64 =
-        transaction::wallet_minimum_lovelace_with_assets(selected_tokens.clone());
+        wallet_minimum_lovelace_with_assets(selected_tokens.clone());
     if args.lovelace.is_some_and(|l| l < minimum_lovelace) {
         return Err("Not Enough Lovelace On UTxO".to_string());
     }
@@ -155,18 +156,43 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             .unwrap();
     }
 
-    let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tmp_fee);
-    for asset in change_tokens.items.clone() {
-        change_output = change_output
-            .add_asset(asset.policy_id, asset.token_name, asset.amount)
-            .unwrap();
-    }
-
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(fund_output)
-        .output(change_output)
         .fee(tmp_fee);
+
+    // a max tokens per change output here
+    let change_token_per_utxo: Vec<Assets> = change_tokens.clone().split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
+    let number_of_change_utxo: usize = change_token_per_utxo.len();
+    let mut lovelace_amount: u64 = total_lovelace.clone();
+    for (i, change) in change_token_per_utxo.iter().enumerate() {
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
+        let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
+            // this is the last one or the only one
+            lovelace_amount = lovelace_amount - lovelace - tmp_fee;
+            lovelace_amount
+        } else {
+            // its additional tokens going back
+            lovelace_amount = lovelace_amount - minimum;
+            minimum
+        };
+
+        let mut change_output: Output = Output::new(addr.clone(), change_lovelace);
+        for asset in change.items.clone() {
+            change_output = change_output
+                .add_asset(asset.policy_id, asset.token_name, asset.amount)
+                .unwrap();
+        }
+        draft_tx = draft_tx.output(change_output);
+    }
+
+    // let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tmp_fee);
+    // for asset in change_tokens.items.clone() {
+    //     change_output = change_output
+    //         .add_asset(asset.policy_id, asset.token_name, asset.amount)
+    //         .unwrap();
+    // }
+    // draft_tx = draft_tx.output(change_output);
 
     let mut raw_tx: StagingTransaction = draft_tx.clone().remove_output(1).clear_fee();
     // build an intermediate tx for fee estimation
@@ -188,14 +214,40 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!("\nTx Size Fee: {:?}", tx_fee);
 
-    let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tx_fee);
-    for asset in change_tokens.items.clone() {
-        change_output = change_output
-            .add_asset(asset.policy_id, asset.token_name, asset.amount)
-            .unwrap();
+    // a max tokens per change output here
+    let change_token_per_utxo: Vec<Assets> = change_tokens.clone().split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
+    let number_of_change_utxo: usize = change_token_per_utxo.len();
+    let mut lovelace_amount: u64 = total_lovelace.clone();
+    for (i, change) in change_token_per_utxo.iter().enumerate() {
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
+        let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
+            // this is the last one or the only one
+            lovelace_amount = lovelace_amount - lovelace - tx_fee;
+            lovelace_amount
+        } else {
+            // its additional tokens going back
+            lovelace_amount = lovelace_amount - minimum;
+            minimum
+        };
+
+        let mut change_output: Output = Output::new(addr.clone(), change_lovelace);
+        for asset in change.items.clone() {
+            change_output = change_output
+                .add_asset(asset.policy_id, asset.token_name, asset.amount)
+                .unwrap();
+        }
+        raw_tx = raw_tx.output(change_output);
     }
-    // build out the rest of the draft tx with the tmp fee
-    raw_tx = raw_tx.output(change_output).fee(tx_fee);
+    raw_tx = raw_tx.fee(tx_fee);
+
+    // let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tx_fee);
+    // for asset in change_tokens.items.clone() {
+    //     change_output = change_output
+    //         .add_asset(asset.policy_id, asset.token_name, asset.amount)
+    //         .unwrap();
+    // }
+    // // build out the rest of the draft tx with the tmp fee
+    // raw_tx = raw_tx.output(change_output).fee(tx_fee);
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 

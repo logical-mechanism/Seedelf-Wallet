@@ -264,7 +264,8 @@ pub fn  select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> V
             } else {
                 1
             };
-            if current_lovelace_sum - minimum >= lovelace {
+            // we need lovelace for the goal and the change here
+            if current_lovelace_sum - multiplier * minimum >= lovelace {
                 // it is!
                 found_enough = true;
                 break;
