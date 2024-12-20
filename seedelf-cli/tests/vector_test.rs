@@ -25,3 +25,11 @@ fn test_split_vector_with_at_most_len_k_elements2() {
         println!("Part {}: {:?}", i + 1, part);
     }
 }
+
+#[test]
+fn backwards_loop() {
+    let n = 5;
+    for i in 0..n {
+        println!("Iteration {} {}", i, n - i);
+    }
+}

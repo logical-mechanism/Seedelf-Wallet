@@ -186,15 +186,11 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         draft_tx = draft_tx.output(change_output);
     }
 
-    // let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tmp_fee);
-    // for asset in change_tokens.items.clone() {
-    //     change_output = change_output
-    //         .add_asset(asset.policy_id, asset.token_name, asset.amount)
-    //         .unwrap();
-    // }
-    // draft_tx = draft_tx.output(change_output);
-
-    let mut raw_tx: StagingTransaction = draft_tx.clone().remove_output(1).clear_fee();
+    let mut raw_tx: StagingTransaction = draft_tx.clone().clear_fee();
+    for i in 0..number_of_change_utxo {
+        raw_tx = raw_tx.remove_output(number_of_change_utxo - i);
+    }
+    // let mut raw_tx: StagingTransaction = draft_tx.clone().remove_output(1).clear_fee();
     // build an intermediate tx for fee estimation
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
@@ -239,15 +235,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         raw_tx = raw_tx.output(change_output);
     }
     raw_tx = raw_tx.fee(tx_fee);
-
-    // let mut change_output: Output = Output::new(addr.clone(), total_lovelace - lovelace - tx_fee);
-    // for asset in change_tokens.items.clone() {
-    //     change_output = change_output
-    //         .add_asset(asset.policy_id, asset.token_name, asset.amount)
-    //         .unwrap();
-    // }
-    // // build out the rest of the draft tx with the tmp fee
-    // raw_tx = raw_tx.output(change_output).fee(tx_fee);
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
