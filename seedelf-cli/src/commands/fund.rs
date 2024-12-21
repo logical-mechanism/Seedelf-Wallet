@@ -67,7 +67,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             );
         }
 
-        
         for ((pid, tkn), amt) in policy_id
         .into_iter()
         .zip(token_name.into_iter())
