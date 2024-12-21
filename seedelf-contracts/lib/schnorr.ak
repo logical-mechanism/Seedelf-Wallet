@@ -76,7 +76,7 @@ test cheapest_hash() {
   crypto.blake2b_224(s) == #"0c97d8d889acb1d65d23e44212b0a4e16a57fc0ebcfea8f5f965f8ba"
 }
 
-/// A Schnorr proof to prove knowledge of the secret value x without revealing 
+/// Schnorr's Σ-protocol to prove knowledge of the secret value x without revealing 
 /// the value in the process. The proof uses, in multiplicative form, 
 /// g^z = g^r * u^c, where z = r + c * x and u = g^x. This function uses the 
 /// Fiat-Shamir heuristic for non-interactivity.
@@ -99,7 +99,7 @@ pub fn prove(
   //                        = g^r * u^c
   //
   expect Some(z): Option<Scalar> = scalar.from_bytearray_big_endian(z_b)
-  let g_z: G1Element = g1.decompress(generator) |> g1.scale(z)
+  let g_z: G1Element = generator |> g1.decompress |> g1.scale(z)
   //
   // use the fiat-shamir heuristic to calculate the challenge then convert it to an integer
   expect Some(c): Option<Scalar> =
@@ -107,7 +107,7 @@ pub fn prove(
       |> scalar.from_bytearray_big_endian()
   //
   // the u^c computation: u^c = (g^x)^c = g^(x * c)
-  let u_c: G1Element = g1.decompress(public_value) |> g1.scale(c)
+  let u_c: G1Element = public_value |> g1.decompress |> g1.scale(c)
   //
   // check if equation: g^z = g^r * u^c is true
   //
