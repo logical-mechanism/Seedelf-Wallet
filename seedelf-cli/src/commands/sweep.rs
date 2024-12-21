@@ -123,7 +123,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         owned_utxos
     } else {
         // we will assume that the change will required ~2 ADA and the fee about ~0.5 ADA
-        utxos::select(owned_utxos, lovelace_goal + 2_500_000, selected_tokens.clone())
+        utxos::select(owned_utxos, lovelace_goal, selected_tokens.clone())
     };
 
     if usuable_utxos.is_empty() {
@@ -237,15 +237,6 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             }
             draft_tx = draft_tx.output(change_output);
         }
-        // let mut change_output: Output = Output::new(
-        //     wallet_addr.clone(),
-        //     total_lovelace_found - lovelace_goal - tmp_fee,
-        // )
-        // for asset in change_tokens.items.clone() {
-        //     change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        //     .unwrap();
-        // }
-        // draft_tx = draft_tx.output(change_output)
     }
 
     // Use zip to pair elements from the two lists
@@ -395,17 +386,6 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             }
             raw_tx = raw_tx.output(change_output);
         }
-        // let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        // let mut change_output: Output = Output::new(
-        //     wallet_addr.clone(),
-        //     total_lovelace_found - lovelace_goal - total_fee,
-        // )
-        // .set_inline_datum(datum_vector.clone());
-        // for asset in change_tokens.items.clone() {
-        //     change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        //     .unwrap();
-        // }
-        // raw_tx = raw_tx.output(change_output)
     }
 
     for ((input, datum), (cpu, mem)) in input_vector.clone()

@@ -138,7 +138,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let (total_lovelace, tokens) = utxos::assets_of(usuable_utxos);
     // tokens tha need to be put into the change output
     let change_tokens: Assets = tokens.separate(selected_tokens.clone());
-
     // if the seedelf isn't found then error
     if total_lovelace < lovelace_goal {
         return Err("Not Enough Lovelace/Tokens".to_string());
@@ -206,7 +205,8 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         .len()
         .try_into()
         .unwrap();
-    let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    // floor division means its safer to just add 1 lovelace
+    let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default())) + 1;
     println!("\nTx Size Fee: {:?}", tx_fee);
 
     // a max tokens per change output here
