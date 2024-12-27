@@ -1,3 +1,4 @@
+use aiken/collection/list
 use aiken/primitive/bytearray
 use cardano/assets.{AssetName}
 use cardano/transaction.{TransactionId}
@@ -87,4 +88,16 @@ test rollover_attack() fail {
       #"acab",
     )
   tkn1 == tkn2
+}
+
+test expect_head() {
+  let x: List<Int> = [0, 1, 2, 3]
+  expect Some(int) = list.head(x)
+  int == 0
+}
+
+test force_head() {
+  let x: List<Int> = [0, 1, 2, 3]
+  expect [int, ..] = x
+  int == 0
 }

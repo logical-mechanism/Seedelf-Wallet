@@ -1,7 +1,7 @@
 use blstrs::Scalar;
 
 use crate::assets::{string_to_u64, Asset, Assets};
-use crate::constants::{MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
+use crate::constants::{MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH, MAXIMUM_TOKENS_PER_UTXO};
 use crate::koios::{
     address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging, UtxoResponse,
 };
@@ -249,18 +249,29 @@ pub fn  select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> V
             found_assets = found_assets.merge(utxo_assets);
         }
 
+        
+
         // we know we found enough lovelace and assets
         if current_lovelace_sum >= lovelace && found_assets.contains(tokens.clone()) {
             // but is it enough to account for the min ada for the token change as we will assume there will always be a change utxo
             let change_assets: Assets = found_assets.separate(tokens.clone());
-            let minimum: u64 = wallet_minimum_lovelace_with_assets(change_assets);
-            if current_lovelace_sum - minimum >= lovelace {
+            let number_of_change_assets: u64 = change_assets.len();
+            let minimum: u64 = wallet_minimum_lovelace_with_assets(change_assets.clone());
+            // we need to calculate how many multiple change utxos we need
+            let multiplier: u64 = if number_of_change_assets > MAXIMUM_TOKENS_PER_UTXO {
+                // add one due to floor division
+                (number_of_change_assets / MAXIMUM_TOKENS_PER_UTXO) + 1
+            } else {
+                1
+            };
+            // we need lovelace for the goal and the change here
+            if current_lovelace_sum - multiplier * minimum >= lovelace {
                 // it is!
                 found_enough = true;
                 break;
             } else {
                 // its not, try again but increase the lovelace by the minimum we would need
-                select(utxos.clone(), lovelace + minimum, tokens.clone());
+                select(utxos.clone(), lovelace + multiplier * minimum, tokens.clone());
             }
         }
     }

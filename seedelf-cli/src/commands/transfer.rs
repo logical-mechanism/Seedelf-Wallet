@@ -10,7 +10,7 @@ use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::{
-    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY
+    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, MAXIMUM_TOKENS_PER_UTXO
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::koios::{
@@ -19,31 +19,31 @@ use seedelf_cli::koios::{
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
-use seedelf_cli::transaction;
+use seedelf_cli::transaction::{wallet_minimum_lovelace_with_assets, collateral_input, wallet_reference_utxo, extract_budgets, total_computation_fee};
 use seedelf_cli::utxos;
-use crate::setup;
+use seedelf_cli::setup;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct TransforArgs {
     /// Seedelf to send funds too
-    #[arg(long, help = "The Seedelf receiving funds.")]
+    #[arg(short = 's', long, help = "The Seedelf receiving funds.", display_order = 1)]
     seedelf: String,
 
     /// The amount of ADA to send
-    #[arg(long, help = "The amount of ADA being sent to the Seedelf.")]
+    #[arg(short = 'l', long, help = "The amount of ADA being sent to the Seedelf.", display_order = 2)]
     lovelace: Option<u64>,
 
     /// Optional repeated `policy-id`
-    #[arg(long = "policy-id", help = "The policy id for the asset.")]
+    #[arg(long = "policy-id", help = "The policy id for the asset.", display_order = 3)]
     policy_id: Option<Vec<String>>,
 
     /// Optional repeated `token-name`
-    #[arg(long = "token-name", help = "The token name for the asset")]
+    #[arg(long = "token-name", help = "The token name for the asset", display_order = 4)]
     token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
-    #[arg(long = "amount", help = "The amount for the asset")]
+    #[arg(long = "amount", help = "The amount for the asset", display_order = 5)]
     amount: Option<Vec<u64>>,
 }
 
@@ -80,8 +80,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
         }
     }
 
-    let minimum_lovelace: u64 =
-        transaction::wallet_minimum_lovelace_with_assets(selected_tokens.clone());
+    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(selected_tokens.clone());
     
     if args.lovelace.is_some_and(|x| x < minimum_lovelace) {
         return Err("Amount Too Small For Min UTxO".to_string());
@@ -135,16 +134,6 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
         pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
     let pkh: String = hex::encode(public_key_hash);
 
-    let mut change_output: Output = Output::new(
-        wallet_addr.clone(),
-        total_lovelace_found - lovelace_goal - tmp_fee,
-    )
-    .set_inline_datum(Register::create(scalar).rerandomize().to_vec());
-    for asset in change_tokens.items.clone() {
-        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        .unwrap();
-    }
-
     let mut transfer_output: Output = Output::new(
         wallet_addr.clone(),
             lovelace_goal,
@@ -157,14 +146,13 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(transfer_output)
-        .output(change_output)
-        .collateral_input(transaction::collateral_input(network_flag))
+        .collateral_input(collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
             5_000_000 - (tmp_fee) * 3 / 2,
         ))
         .fee(tmp_fee)
-        .reference_input(transaction::wallet_reference_utxo(network_flag))
+        .reference_input(wallet_reference_utxo(network_flag))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),
@@ -182,6 +170,34 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
                 .expect("Not Correct Length"),
         ));
     
+    // add in the change outputs here
+    let change_token_per_utxo: Vec<Assets> = change_tokens.clone().split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
+    let number_of_change_utxo: usize = change_token_per_utxo.len();
+    // a max tokens per change output here
+    let mut lovelace_amount: u64 = total_lovelace_found.clone();
+    for (i, change) in change_token_per_utxo.iter().enumerate() {
+        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
+        let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
+            // this is the last one or the only one
+            lovelace_amount = lovelace_amount - lovelace_goal - tmp_fee;
+            lovelace_amount
+        } else {
+            // its additional tokens going back
+            lovelace_amount = lovelace_amount - minimum;
+            minimum
+        };
+
+        let mut change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
+        .set_inline_datum(datum_vector.clone());
+        for asset in change.items.clone() {
+            change_output = change_output
+                .add_asset(asset.policy_id, asset.token_name, asset.amount)
+                .unwrap();
+        }
+        draft_tx = draft_tx.output(change_output);
+    }
+
     // Use zip to pair elements from the two lists
     for (input, datum) in input_vector.clone()
         .into_iter()
@@ -203,8 +219,10 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     let mut raw_tx: StagingTransaction = draft_tx
         .clone()
         .clear_fee()
-        .clear_collateral_output()
-        .remove_output(1);
+        .clear_collateral_output();
+    for i in 0..number_of_change_utxo {
+        raw_tx = raw_tx.remove_output(number_of_change_utxo - i);
+    }
 
     // Use zip to pair elements from the two lists
     for input in input_vector.clone()
@@ -224,7 +242,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
                 println!("{:?}", execution_units);
                 std::process::exit(1);
             }
-            budgets = transaction::extract_budgets(&execution_units)
+            budgets = extract_budgets(&execution_units)
         }
         Err(err) => {
             eprintln!("Failed to evaluate transaction: {}", err);
@@ -249,7 +267,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     println!("\nTx Size Fee: {:?}", tx_fee);
 
     // This probably should be a function
-    let compute_fee: u64 = transaction::total_computation_fee(budgets.clone());
+    let compute_fee: u64 = total_computation_fee(budgets.clone());
     println!("Compute Fee: {:?}", compute_fee);
 
     // 587 for mint, 633 for spend
@@ -266,24 +284,40 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     };
     println!("Total Fee: {:?}", total_fee);
 
-    let mut change_output: Output = Output::new(
-        wallet_addr.clone(),
-        total_lovelace_found - lovelace_goal - total_fee,
-    )
-    .set_inline_datum(Register::create(scalar).rerandomize().to_vec());
-
-    for asset in change_tokens.items.clone() {
-        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        .unwrap();
-    }
-
     raw_tx = raw_tx
-        .output(change_output)
         .collateral_output(Output::new(
             collat_addr.clone(),
             5_000_000 - (total_fee) * 3 / 2,
         ))
         .fee(total_fee);
+
+    // add in the change outputs here
+    let change_token_per_utxo: Vec<Assets> = change_tokens.clone().split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
+    let number_of_change_utxo: usize = change_token_per_utxo.len();
+    // a max tokens per change output here
+    let mut lovelace_amount: u64 = total_lovelace_found.clone();
+    for (i, change) in change_token_per_utxo.iter().enumerate() {
+        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
+        let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
+            // this is the last one or the only one
+            lovelace_amount = lovelace_amount - lovelace_goal - total_fee;
+            lovelace_amount
+        } else {
+            // its additional tokens going back
+            lovelace_amount = lovelace_amount - minimum;
+            minimum
+        };
+
+        let mut change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
+        .set_inline_datum(datum_vector.clone());
+        for asset in change.items.clone() {
+            change_output = change_output
+                .add_asset(asset.policy_id, asset.token_name, asset.amount)
+                .unwrap();
+        }
+        raw_tx = raw_tx.output(change_output);
+    }
     
     for ((input, datum), (cpu, mem)) in input_vector.clone()
         .into_iter()

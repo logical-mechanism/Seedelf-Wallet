@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 mod commands;
-mod setup;
+use seedelf_cli::setup;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
@@ -17,24 +17,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Displays the Seedelf welcome message
+    /// Displays the seedelf-cli welcome message
     Welcome,
-    /// Displays wallet information
-    WalletInfo,
-    /// Displays the current wallet balance
+    /// Create a new Seedelf in the wallet
+    Create(commands::create::LabelArgs),
+    /// Remove a Seedelf from the wallet
+    Remove(commands::remove::RemoveArgs),
+    /// Displays the current wallet information, seedelfs, and balance
     Balance,
-    /// An address sends ADA to a Seedelf
+    /// An address sends funds to a Seedelf
     Fund(commands::fund::FundArgs),
-    /// A Seedelf sends ADA to a Seedelf
+    /// A Seedelf sends funds to a Seedelf
     Transfer(commands::transfer::TransforArgs),
-    /// A Seedelf sends ADA to an address
+    /// A Seedelf sends funds to an address
     Sweep(commands::sweep::SweepArgs),
-    /// Create a new Seedelf
-    SeedelfNew(commands::seedelf_new::LabelArgs),
-    /// Display all Seedelfs
-    SeedelfAll,
-    /// Remove a Seedelf
-    SeedelfRemove(commands::seedelf_remove::RemoveArgs),
 }
 
 #[tokio::main]
@@ -50,9 +46,6 @@ async fn main() {
     match cli.command {
         Some(Commands::Welcome) => {
             commands::welcome::run();
-        }
-        Some(Commands::WalletInfo) => {
-            commands::wallet_info::run();
         }
         Some(Commands::Balance) => {
             if let Err(err) = commands::balance::run(cli.preprod).await {
@@ -74,21 +67,17 @@ async fn main() {
                 eprintln!("Error: {}", err);
             }
         }
-        Some(Commands::SeedelfAll) => {
-            if let Err(err) = commands::seedelf_all::run(cli.preprod).await {
+        Some(Commands::Create(args)) => {
+            if let Err(err) = commands::create::run(args, cli.preprod).await {
                 eprintln!("Error: {}", err);
             }
         }
-        Some(Commands::SeedelfNew(args)) => {
-            if let Err(err) = commands::seedelf_new::run(args, cli.preprod).await {
+        Some(Commands::Remove(args)) => {
+            if let Err(err) = commands::remove::run(args, cli.preprod).await {
                 eprintln!("Error: {}", err);
             }
         }
-        Some(Commands::SeedelfRemove(args)) => {
-            if let Err(err) = commands::seedelf_remove::run(args, cli.preprod).await {
-                eprintln!("Error: {}", err);
-            }
-        }
+        // catch the no command state
         None => {
             println!("No subcommand provided. Use --help for more information.");
         }
