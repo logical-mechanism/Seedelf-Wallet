@@ -98,6 +98,7 @@ test expect_head() {
 
 test force_head() {
   let x: List<Int> = [0, 1, 2, 3]
+  // this is cheaper
   expect [int, ..] = x
   int == 0
 }

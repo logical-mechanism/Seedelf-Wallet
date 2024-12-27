@@ -3,7 +3,7 @@
 /// minting a token, never both.
 ///
 /// ```aiken
-/// xor(a, b)
+/// logic.xor(a, b)
 /// ```
 pub fn xor(a: Bool, b: Bool) -> Bool {
   // `xor` is actually an `and` of an `or` and `not and`

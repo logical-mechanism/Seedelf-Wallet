@@ -73,6 +73,7 @@ fn randomize(datum: Register, s: Scalar) -> Register {
 test cheapest_hash() {
   let s: ByteArray =
     #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  // must use blake2b_224
   crypto.blake2b_224(s) == #"0c97d8d889acb1d65d23e44212b0a4e16a57fc0ebcfea8f5f965f8ba"
 }
 
@@ -144,11 +145,11 @@ test valid_schnorr_proof() {
   // the z value
   let z: Scalar = scalar.mul(c, x) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
-  trace datum.generator
-  trace datum.public_value
-  trace z_b
-  trace g_r_b
-  trace bound
+  // trace datum.generator
+  // trace datum.public_value
+  // trace z_b
+  // trace g_r_b
+  // trace bound
   prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }
 
@@ -194,11 +195,11 @@ test randomized_valid_schnorr_proof() {
   // the z value
   let z: Scalar = scalar.mul(c, x) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
-  trace datum_rng.generator
-  trace datum_rng.public_value
-  trace z_b
-  trace g_r_b
-  trace bound
+  // trace datum_rng.generator
+  // trace datum_rng.public_value
+  // trace z_b
+  // trace g_r_b
+  // trace bound
   prove(datum_rng.generator, datum_rng.public_value, z_b, g_r_b, bound)
 }
 
@@ -272,6 +273,6 @@ test simple_regsiter() {
       generator: g1.generator |> g1.compress,
       public_value: g1.generator |> g1.scale(x) |> g1.compress,
     }
-  trace datum
+  // trace datum
   datum == datum
 }

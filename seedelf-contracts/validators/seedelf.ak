@@ -12,8 +12,8 @@
 use aiken/primitive/bytearray
 use cardano/assets.{AssetName, PolicyId}
 use cardano/transaction.{Input, OutputReference, Transaction, TransactionId}
+use logic.{xor}
 use token_name.{generate, seedelf}
-use xor.{xor}
 
 validator contract(_any: Data) {
   mint(personal_tag: ByteArray, policy_id: PolicyId, transaction: Transaction) {
