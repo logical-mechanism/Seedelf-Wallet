@@ -19,7 +19,7 @@ pub const MAINNET_COLLATERAL_UTXO: &str = "";
 
 // This maximum is estimated
 pub const MAXIMUM_WALLET_UTXOS: u64 = 20;
-pub const MAXIMUM_TOKENS_PER_UTXO: u64 = 1;
+pub const MAXIMUM_TOKENS_PER_UTXO: u64 = 20;
 
 // protocol parameters
 pub const OVERHEAD_COST: u64 = 160;

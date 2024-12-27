@@ -220,7 +220,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
         .clone()
         .clear_fee()
         .clear_collateral_output();
-    for i in 0..number_of_change_utxo+1 {
+    for i in 0..number_of_change_utxo {
         raw_tx = raw_tx.remove_output(number_of_change_utxo - i);
     }
 
