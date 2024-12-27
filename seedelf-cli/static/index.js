@@ -119,7 +119,13 @@ async function waitForCardano() {
 function populateWalletDropdown(cardano) {
     // auto populate the dropdown with the installed wallets
     const walletDropdown = document.getElementById('wallet_dropdown');
-    for (const key in cardano) {
+    const sortedWallets = Object.keys(cardano)
+        .sort()  // Sort keys alphabetically
+        .reduce((acc, key) => {
+            acc[key] = cardano[key];  // Rebuild the object with sorted keys
+            return acc;
+        }, {});
+    for (const key in sortedWallets) {
         try {
             const _wallet = window.cardano[key];
             if (_wallet === undefined) continue;
