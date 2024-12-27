@@ -77,6 +77,7 @@ async fn main() {
                 eprintln!("Error: {}", err);
             }
         }
+        // catch the no command state
         None => {
             println!("No subcommand provided. Use --help for more information.");
         }
