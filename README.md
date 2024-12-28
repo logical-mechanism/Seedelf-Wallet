@@ -203,3 +203,7 @@ The `seedelf-cli` uses the [Cardano collateral provider](https://giveme.my/). Ev
 ## The **seedelf-cli**
 
 Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/).
+
+## Contact
+
+For questions, suggestions, or concerns, please reach out to support@logicalmechanism.io.

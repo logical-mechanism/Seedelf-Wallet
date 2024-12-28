@@ -19,5 +19,10 @@ git push origin ${version}
 Publish to crates.io
 
 ```bash
+cargo package
 cargo publish --dry-run
 ```
+
+## Recompiling
+
+If a recompile is required and it changes the contract hashes then the README inside of seedelf-contracts must be updated before release.
