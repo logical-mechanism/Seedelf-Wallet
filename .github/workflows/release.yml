@@ -42,6 +42,7 @@ jobs:
             - Binaries and checksums for Linux, Windows, and MacOS.
 
             Thank you for using `seedelf-cli`.
+
             If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
             
           generate_release_notes: true
