@@ -54,8 +54,14 @@ Options:
 
 ### Basic Usage
 
+Get started with the wallet using the `welcome` command.
+
+```bash
+seedelf-cli welcome
+```
+
 Create a Seedelf with the `create` command. The Seedelf is funded with the `fund` command. Send funds to another Seedelf with the `transfer` command. Funds can be send to an address with the `sweep` command. Use the `--help` option to see more information.
 
 **Some commands will prompt to open a localhost for cip30 wallet interaction.**
 
-The wallet will create a secret key file on the local machine inside the home directory under the .seedelf folder. The wallet will prompt the user at first use to name the secrey key file. Keep this file safe!
+The wallet will create an encrypted secret key file on the local machine inside the home directory under the `$HOME/.seedelf` folder. The wallet will prompt the user for a password and a name for the secrey key file. Keep this file safe!
