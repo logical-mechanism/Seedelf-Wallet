@@ -98,16 +98,21 @@ jobs:
       - name: Build (macOS)
         working-directory: seedelf-cli
         run: cargo build --release --target x86_64-apple-darwin
+      
+      # Install the required target for macOS
+      - name: Install x86_64-apple-darwin target
+        run: rustup target add x86_64-apple-darwin
 
       - name: Generate checksum (macOS)
         shell: bash
         working-directory: seedelf-cli
-        run: shasum -a 256 target/release/seedelf-cli > seedelf-cli-macos.sha256
+        run: shasum -a 256 target/x86_64-apple-darwin/release/seedelf-cli > seedelf-cli-macos.sha256
 
       # Compress binary and checksum (macOS)
       - name: Compress binary and checksum (macOS)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-macos.tar.gz target/release/seedelf-cli seedelf-cli-macos.sha256
+        run: tar -czvf seedelf-cli-macos.tar.gz target/x86_64-apple-darwin/release/seedelf-cli seedelf-cli-macos.sha256
+
 
       # Add macOS Assets to Existing Release
       - name: Update GitHub Release with macOS Assets
