@@ -94,7 +94,7 @@ fn create_wallet(wallet_path: &PathBuf) {
     }
 
     let salt: SaltString = SaltString::generate(&mut OsRng);
-    let mut output_key_material: [u8; 32] = [0u8; 32]; // Can be any desired size
+    let mut output_key_material: [u8; 32] = [0u8; 32];
     let _ = Argon2::default().hash_password_into(
         password.as_bytes(),
         salt.to_string().as_bytes(),
