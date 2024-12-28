@@ -2,7 +2,7 @@
 
 **Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It is not possible to deduce the intended receiver or spender of UTxOs inside this wallet. The [seedelf-cli](./seedelf-cli/README.md) is available on Linux, Windows, and MacOS.
 
-## What is a Seedelf token?
+## What is a Seedelf?
 
 The wallet name, **Seedelf**, comes from the prefix of the identifier token used to locate the datum of a UTxO inside the wallet contract. A seedelf allows the root datum to be easily located and provides a personalized touch while maintaining privacy. It is similar to how ADAHandle works but with a slight twist.
 
@@ -71,7 +71,7 @@ pub type Register {
 }
 ```
 
-A UTxO is spendable if the transaction can provide proof of knowledge of the secret key using a non-interactive zero knowledge Schnorr proof. A valid Schnorr proof has the form:
+A UTxO is spendable if the transaction can provide proof of knowledge of the secret key using a non-interactive zero knowledge Schnorr proof. A valid proof has the form:
 
 $$
 g^{z} = g^r u^c,
@@ -144,7 +144,7 @@ This register would become unspendable, resulting in lost funds.
 
 ### De-Anonymizing Attacks
 
-Three attacks are known to break the privacy of this wallet. The first attack comes from picking a bad $d$ value. A small $d$ value may be able to be brute-forced. The brute-force attack is circumvented by selecting a $d$ value on the order of $2^{254}$. The second attack comes from not properly destroying the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users then it becomes trivial to invert the register into the original form thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the collateral UTxO by definition isn't anonymous and the ownership is known the entire time. This means that an outside user could track a user's actions by simply watching which collaterals were used during transactions.
+There exist multiple attacks that are known to break the privacy of this wallet. The first attack comes from picking a bad $d$ value. A small $d$ value may be able to be brute-forced. The brute-force attack is circumvented by selecting a $d$ value on the order of $2^{254}$. The second attack comes from not properly destroying the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users then it becomes trivial to invert the register into the original form thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral must be put into a transaction to be taken if the transaction fails when being placed into the block. The collateral has to be on a payment credential which means that the collateral UTxO by definition isn't anonymous and the ownership is known the entire time. This means that an outside user could track a user's actions by simply watching which collaterals were used during transactions.
 
 Privacy is preserved as long as $d$ is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner.
 
@@ -203,3 +203,7 @@ The `seedelf-cli` uses the [Cardano collateral provider](https://giveme.my/). Ev
 ## The **seedelf-cli**
 
 Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/).
+
+## Contact
+
+For questions, suggestions, or concerns, please reach out to support@logicalmechanism.io.

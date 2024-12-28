@@ -18,7 +18,7 @@ pub async fn block_number_and_time(network_flag: bool) {
 
 pub fn preprod_text(network_flag: bool) {
     if network_flag {
-        println!("\nRunning In Preprod Environment");
+        println!("\nRunning On The Pre-Production Network");
     }
 }
 
