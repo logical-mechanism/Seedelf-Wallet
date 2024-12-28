@@ -23,7 +23,8 @@ use hex::FromHex;
 ///
 /// * If the label cannot be converted into a valid hex string.
 pub fn create_mint_redeemer(label: String) -> Vec<u8> {
-    let label_hex: String = hex::encode(label);
+    let mut label_hex: String = hex::encode(label);
+    label_hex.truncate(30);
     let lb: Vec<u8> = Vec::from_hex(&label_hex).expect("Invalid hex string");
     let d: PlutusData = PlutusData::BoundedBytes(BoundedBytes::from(lb));
     d.encode_fragment().unwrap()

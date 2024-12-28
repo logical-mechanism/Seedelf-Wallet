@@ -145,7 +145,8 @@ pub fn wallet_reference_utxo(network_flag: bool) -> Input {
 ///
 /// * `Vec<u8>` - A vector of bytes representing the constructed token name.
 pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8> {
-    let label_hex: String = hex::encode(label);
+    let mut label_hex: String = hex::encode(label);
+    label_hex.truncate(30);
     // find the smallest input, first in lexicogrpahical order
     let smallest_input: &Input = inputs
         .and_then(|inputs| {
