@@ -1,5 +1,5 @@
 name = "logical-mechanism/Seedelf-Wallet"
-version = "0.2.1"
+version = "0.3.0"
 compiler = "v1.1.9"
 plutus = "v3"
 license = "MIT"
