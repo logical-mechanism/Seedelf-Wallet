@@ -13,6 +13,7 @@ use seedelf_cli::constants::{
     plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, MAXIMUM_TOKENS_PER_UTXO
 };
 use seedelf_cli::data_structures;
+use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{
     evaluate_transaction, extract_bytes_with_logging,
     submit_tx, witness_collateral, UtxoResponse
@@ -52,9 +53,7 @@ pub struct SweepArgs {
 }
 
 pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
-    if network_flag {
-        println!("\nRunning In Preprod Environment");
-    }
+    preprod_text(network_flag);
 
     // need to check about if all then assets is none too etc
     if  !args.all && (args.lovelace.is_none() && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())) {

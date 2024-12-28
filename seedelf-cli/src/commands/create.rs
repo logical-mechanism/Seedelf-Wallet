@@ -12,6 +12,7 @@ use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
 use seedelf_cli::constants::{plutus_v3_cost_model, SEEDELF_POLICY_ID};
 use seedelf_cli::data_structures;
+use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{address_utxos, evaluate_transaction, UtxoResponse};
 use seedelf_cli::register::Register;
 use seedelf_cli::transaction;
@@ -30,9 +31,7 @@ pub struct LabelArgs {
 
 pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // if preprod then print the preprod message
-    if network_flag {
-        println!("\nRunning In Preprod Environment");
-    }
+    preprod_text(network_flag);
 
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();

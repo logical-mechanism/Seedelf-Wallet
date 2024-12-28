@@ -13,6 +13,7 @@ use seedelf_cli::constants::{
     plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_POLICY_ID,
 };
 use seedelf_cli::data_structures;
+use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{
     evaluate_transaction, extract_bytes_with_logging,
     submit_tx, witness_collateral, UtxoResponse
@@ -34,9 +35,7 @@ pub struct RemoveArgs {
 }
 
 pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
-    if network_flag {
-        println!("\nRunning In Preprod Environment");
-    }
+    preprod_text(network_flag);
 
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();

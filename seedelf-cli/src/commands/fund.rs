@@ -9,11 +9,13 @@ use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::MAXIMUM_TOKENS_PER_UTXO;
+use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{extract_bytes_with_logging, UtxoResponse};
 use seedelf_cli::register::Register;
 use seedelf_cli::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_cli::utxos;
 use seedelf_cli::web_server;
+
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -44,9 +46,7 @@ pub struct FundArgs {
 }
 
 pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
-    if network_flag {
-        println!("\nRunning In Preprod Environment");
-    }
+    preprod_text(network_flag);
 
     // its ok not to define lovelace but in that case an asset has to be define
     if args.lovelace.is_none()

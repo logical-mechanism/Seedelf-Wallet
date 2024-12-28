@@ -9,7 +9,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
 
-    println!("\nSeedelf Wallet Information");
+    println!("\nSeedelf Wallet Information:");
     
     let scalar: Scalar = setup::load_wallet();
     
