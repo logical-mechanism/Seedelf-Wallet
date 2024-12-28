@@ -15,3 +15,9 @@ git push origin main
 git tag ${version}
 git push origin ${version}
 ```
+
+Publish to crates.io
+
+```bash
+cargo publish --dry-run
+```

@@ -1,10 +1,16 @@
 # **seedelf-cli**
 
-The `seedelf-cli` is a rust implementation of the stealth wallet. It uses [Cardano collateral provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal base but it does use a static HTML web interface for CIP30 funding when required.
+The `seedelf-cli` is a rust implementation of the Seedelf stealth wallet protocol. It uses [Cardano collateral provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal base but it does use a static HTML web interface for CIP30 funding when required.
 
 **Wallet is currently in Alpha**
 
 ## Installation
+
+Precompile binaries are available for Linux, Windows, and MacOS. These may be found in the latest release. 
+
+The seedelf-cli will eventually be on crates.io.
+
+### Building From Source
 
 First, clone the repo and enter the cli subfolder.
 ```bash
@@ -24,12 +30,14 @@ cargo build --release
 
 Running it locally:
 ```bash
-cargo build
+cargo run -- help
 ```
 
-Precompile binaries are available for Linux, Windows, and MacOS. These may be found in the latest release.
-
 ## Using The Seedelf CLI
+
+```bash
+seedelf-cli help
+```
 
 ```bash
 A Cardano Stealth Wallet

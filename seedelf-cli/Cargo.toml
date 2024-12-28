@@ -21,6 +21,7 @@ ff = "0.13.0"
 blake2 = "0.10.6"
 tokio = { version = "1.41.1", features = ["full"] }
 reqwest = { version = "0.12.9", features = ["json"] }
+# can publish until pallas updates
 pallas-addresses = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
 pallas-crypto = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
 pallas-codec = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
