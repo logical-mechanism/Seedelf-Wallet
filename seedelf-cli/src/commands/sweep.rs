@@ -10,7 +10,7 @@ use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::{
-    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, MAXIMUM_TOKENS_PER_UTXO
+    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, MAXIMUM_TOKENS_PER_UTXO, WALLET_CONTRACT_SIZE
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
@@ -314,8 +314,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let compute_fee: u64 = total_computation_fee(budgets.clone());
     println!("Compute Fee: {:?}", compute_fee);
 
-    // 587 for mint, 633 for spend
-    let script_reference_fee: u64 = 633 * 15;
+    let script_reference_fee: u64 = WALLET_CONTRACT_SIZE * 15;
     println!("Script Reference Fee: {:?}", script_reference_fee);
 
     // total fee is the sum of everything

@@ -22,7 +22,7 @@ aiken build --trace-level silent --trace-filter user-defined
 # aiken build --trace-level verbose --trace-filter all
 
 # some random string to make the contracts unique
-rand="fadecafe"
+rand="acabcafe"
 rand_cbor=$(python3 -c "import cbor2; print(cbor2.dumps(bytes.fromhex('${rand}')).hex())")
 echo "Random Seed:" ${rand}
 

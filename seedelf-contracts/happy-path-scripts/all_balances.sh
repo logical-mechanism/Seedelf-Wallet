@@ -56,12 +56,12 @@ done
 
 
 ${cli} conway query ref-script-size \
-    --tx-in "46d48857d704091e19f28818363e5b44bffac53379aa703811d88bc3c0276319#1" \
+    --tx-in "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4#1" \
     ${network} \
     --output-json
 
 
 ${cli} conway query ref-script-size \
-    --tx-in "4ec8f5a0eed8e5567db96b43de59b57c3dc8a8abd88c70ca26f8989346e31889#1" \
+    --tx-in "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6#1" \
     ${network} \
     --output-json

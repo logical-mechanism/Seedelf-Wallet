@@ -10,7 +10,7 @@ use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{
-    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_POLICY_ID,
+    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_POLICY_ID, SEEDELF_CONTRACT_SIZE, WALLET_CONTRACT_SIZE
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
@@ -219,8 +219,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     let compute_fee: u64 = transaction::computation_fee(mint_mem_units, mint_cpu_units) + transaction::computation_fee(spend_mem_units, spend_cpu_units);
     println!("Compute Fee: {:?}", compute_fee);
 
-    // 587 for mint, 633 for spend
-    let script_reference_fee: u64 = 587 * 15 + 633 * 15;
+    let script_reference_fee: u64 = SEEDELF_CONTRACT_SIZE * 15 + WALLET_CONTRACT_SIZE * 15;
     println!("Script Reference Fee: {:?}", script_reference_fee);
     
     // total fee is the sum of everything
