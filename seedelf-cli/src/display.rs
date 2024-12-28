@@ -58,9 +58,40 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
     if !seedelfs.is_empty() {
         println!("\nCurrent Seedelf:\n");
         for seedelf in seedelfs {
-            println!("Seedelf: {}", seedelf);
+            println!("\nSeedelf: {}", seedelf);
+            let substring: String = seedelf[8..38].to_string();
+            let label: String = hex_to_ascii(&substring).unwrap();
+            if label.chars().next() != Some('.') {
+                let cleaned: String = label.chars().filter(|&c| c != '.').collect();
+                println!("Label: {}", cleaned)
+            }
     
         }
 
     }
+}
+
+pub fn hex_to_ascii(hex: &str) -> Result<String, &'static str> {
+    // Ensure the length of the hex string is even
+    if hex.len() % 2 != 0 {
+        return Err("Hex string must have an even length");
+    }
+    
+    let ascii = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Invalid hex string")?
+        .into_iter()
+        .map(|b| {
+            if b.is_ascii_graphic() || b.is_ascii_whitespace() {
+                char::from(b)
+            } else {
+                '.'
+            }
+        })
+        .map(|c| if c == '\n' || c == '\r' || c == '\t' { '.' } else { c }) // Replace control characters
+        .collect::<String>();
+    
+    Ok(ascii)
 }
