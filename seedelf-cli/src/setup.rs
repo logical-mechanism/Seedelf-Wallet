@@ -66,7 +66,12 @@ fn prompt_wallet_name() -> String {
     io::stdin()
         .read_line(&mut wallet_name)
         .expect("Failed to read wallet name");
-    wallet_name.trim().to_string()
+    let final_name: String = wallet_name.trim().to_string();
+    if final_name.len() == 0 {
+        println!("Wallet must not have empty name.");
+        prompt_wallet_name();
+    }
+    final_name
 }
 
 /// Create a wallet file and save a random private key
@@ -86,8 +91,23 @@ fn create_wallet(wallet_path: &PathBuf) {
     // Prompt user for an encryption password
     println!("\nEnter a password to encrypt the wallet file:");
     let password: String = read_password().expect("Failed to read password");
+
+    // check for basic password complexity
+    if password_complexity_check(password.clone()) == false {
+        println!("Passwords must contain the following:\n
+                  Minimum Length: At least 14 characters.
+                  Uppercase Letter: Requires at least one uppercase character.
+                  Lowercase Letter: Requires at least one lowercase character.
+                  Number: Requires at least one digit.
+                  Special Character: Requires at least one special symbol.\n"
+        );
+        create_wallet(wallet_path);
+    }
+
     println!("Re-enter the password:");
     let password_copy: String = read_password().expect("Failed to read password");
+    // this is just a simple way to check if the user typed it in correctly
+    // if they do it twice then they probably mean it
     if password != password_copy {
         println!("Passwords do not match; try again!");
         create_wallet(wallet_path);
@@ -199,4 +219,35 @@ pub fn load_wallet() -> Scalar {
             load_wallet()
         }
     }
+}
+
+pub fn password_complexity_check(password: String) -> bool {
+    // length check, 14 for now
+    if password.len() < 14 {
+        return false;
+    }
+
+    // must contain uppercase
+    if !password.chars().any(|c| c.is_uppercase()) {
+        return false;
+    }
+
+    // must contain lowercase
+    if !password.chars().any(|c| c.is_lowercase()) {
+        return false;
+    }
+
+    // must contain number
+    if !password.chars().any(|c| c.is_digit(10)) {
+        return false;
+    }
+
+    // must contain special character
+    if !password
+        .chars()
+        .any(|c| r#"~!@#$%^&*()_-+=<>?/|{}[]:;"'.,"#.contains(c))
+    {
+        return false;
+    }
+    true
 }
