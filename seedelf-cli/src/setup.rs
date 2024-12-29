@@ -30,6 +30,7 @@ struct EncryptedData {
 
 /// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
 pub fn check_and_prepare_seedelf() {
+    println!("Checking For Existing Seedelf Wallet");
     // this may only work on ubuntu
     let seedelf_path: PathBuf = Path::new("/home").join(whoami::username()).join(".seedelf");
 
