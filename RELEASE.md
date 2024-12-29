@@ -4,13 +4,13 @@ Change the version then run the command in the parent folder.
 
 ```bash
 # set the version
-version="0.3.0"
+version="0.3.1"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-cli/Cargo.toml
 # add, commit, and tag out
 git add .
-git commit -m "chore: tagging new release"
+git commit -m "chore: tagging ${version} release"
 git push origin main
 git tag ${version}
 git push origin ${version}
