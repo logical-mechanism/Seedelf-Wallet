@@ -1,6 +1,7 @@
 use seedelf_cli::setup;
 use blstrs::Scalar;
 use clap::Args;
+use colored::Colorize;
 use hex;
 use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::SecretKey;
@@ -125,10 +126,10 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // lets build the seelfelf token
     let token_name: Vec<u8> =
         transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref());
-    println!("\nCreating Seedelf: {}", hex::encode(token_name.clone()));
+    println!("{} {}", "\nCreating Seedelf:".bright_blue(), hex::encode(token_name.clone()).bright_white());
 
     let min_utxo: u64 = transaction::seedelf_minimum_lovelace();
-    println!("\nMinimum Required Lovelace: {:?}", min_utxo);
+    println!("{} {}", "\nMinimum Required Lovelace:".bright_blue(), min_utxo.to_string().bright_white());
 
     let mut change_output: Output = Output::new(
         addr.clone(),
