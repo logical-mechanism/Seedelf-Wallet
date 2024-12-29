@@ -8,10 +8,10 @@ pub async fn block_number_and_time(network_flag: bool) {
         Ok(tips) => {
             if let Some(tip) = tips.get(0) {
                 println!(
-                    "\n{} {} @ {} {}",
+                    "\n{} {}\n{} {}",
                     "Block Number:".bold().bright_blue(),
                     tip.block_no.to_string().yellow(),
-                    "Time:".bold().bright_green(),
+                    "Time:".bold().bright_blue(),
                     tip.block_time.to_string().yellow()
                 );
             }
@@ -65,7 +65,7 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
     if !seedelfs.is_empty() {
         println!("{}", "\nCurrent Seedelf:\n".bright_green());
         for seedelf in seedelfs {
-            println!("\nSeedelf: {}", seedelf.bright_white());
+            println!("\nSeedelf: {}", seedelf.white());
             let substring: String = seedelf[8..38].to_string();
             let label: String = hex_to_ascii(&substring).unwrap();
             if label.chars().next() != Some('.') {

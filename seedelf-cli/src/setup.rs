@@ -218,7 +218,7 @@ pub fn load_wallet() -> Scalar {
                 .expect("Failed to reconstruct Scalar from bytes");
         }
         Err(_) => {
-            println!("Failed to decrypt; try again!");
+            eprintln!("{}", "Failed To Decrypt; Try Again!".red());
             return load_wallet();
         }
     }

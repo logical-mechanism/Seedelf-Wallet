@@ -243,14 +243,14 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("\nTx Size Fee: {:?}", tx_fee);
+    println!("{} {}", "\nTx Size Fee:".bright_blue(), tx_fee.to_string().bright_white());    
 
     // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
-    println!("Compute Fee: {:?}", compute_fee);
+    println!("{} {}", "Compute Fee:".bright_blue(), compute_fee.to_string().bright_white());
 
     let script_reference_fee: u64 = SEEDELF_CONTRACT_SIZE * 15;
-    println!("Script Reference Fee: {:?}", script_reference_fee);
+    println!("{} {}", "Script Reference Fee:".bright_blue(), script_reference_fee.to_string().bright_white());
 
     // total fee is the sum
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
@@ -260,7 +260,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     } else {
         total_fee
     };
-    println!("Total Fee: {:?}", total_fee);
+    println!("{} {}", "Total Fee:".bright_blue(), total_fee.to_string().bright_white());
 
     let mut change_output: Output = Output::new(
         addr.clone(),
@@ -293,7 +293,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
     let tx_cbor: String = hex::encode(tx.tx_bytes);
-    println!("\nTx Cbor: {:?}", tx_cbor.clone());
+    println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
     // inject the tx cbor into the local webserver to prompt the wallet
     web_server::run_web_server(tx_cbor, network_flag).await;
