@@ -1,15 +1,15 @@
 use std::fs;
 use std::net::SocketAddr;
 use warp::Filter;
-
+use colored::Colorize;
 /// Start a web server and inject a dynamic message into the HTML.
 ///
 /// # Arguments
 /// - `message`: The dynamic message to replace in the `injected-data` script.
 pub async fn run_web_server(message: String, network_flag: bool) {
     let addr: SocketAddr = ([127, 0, 0, 1], 44203).into();
-    println!("\nStarting server at http://{}/", addr);
-    println!("Hit Ctrl-C To Stop Server\n");
+    println!("{} {}", "\nStarting server at".bright_cyan(), format!("http://{}/", addr.to_string()).bright_white());
+    println!("{}", "Hit Ctrl-C To Stop Server".bright_yellow());
 
     // Serve index.html with dynamic content
     let html_route = warp::path::end().map(move || {
@@ -45,7 +45,7 @@ pub async fn run_web_server(message: String, network_flag: bool) {
     let (_, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, shutdown_signal());
     server.await;
 
-    println!("Server has stopped.");
+    println!("{}", "Server has stopped.".bright_purple());
 }
 
 /// Function to handle graceful shutdown via Ctrl-C
@@ -53,5 +53,5 @@ async fn shutdown_signal() {
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to install Ctrl-C handler");
-    println!("Shutdown signal received...");
+    println!("{}", "\nShutdown signal received...".red());
 }
