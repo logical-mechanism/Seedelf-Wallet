@@ -55,6 +55,20 @@ fn assets_can_split2() {
         println!("Part {}: {:?}", i + 1, part);
     }
     assert_eq!(total.len(), 1)
+}
 
+#[test]
+fn assets_split_empty() {
+    let total: Vec<Assets> = Assets::new().split(3);
+    assert_eq!(total, Vec::new())
     
+}
+
+#[test]
+fn asset_can_separate() {
+    let a: Asset = Asset::new("52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(), "74657374".to_string(), 22414);
+    let total: Assets = Assets::new().add(a);
+    let change: Assets = total.separate(total.clone());
+    assert_eq!(change, Assets::new());
+    assert_eq!(change.items.len(), 0)
 }
