@@ -1,4 +1,5 @@
 use blstrs::Scalar;
+use colored::Colorize;
 use crate::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
 use crate::koios::{tip, credential_utxos, extract_bytes_with_logging, contains_policy_id};
 
@@ -6,7 +7,13 @@ pub async fn block_number_and_time(network_flag: bool) {
     match tip(network_flag).await {
         Ok(tips) => {
             if let Some(tip) = tips.get(0) {
-                println!("\nBlock Number: {} @ Time: {}", tip.block_no, tip.block_time);
+                println!(
+                    "\n{} {}\n{} {}",
+                    "Block Number:".bold().bright_blue(),
+                    tip.block_no.to_string().yellow(),
+                    "Time:".bold().bright_blue(),
+                    tip.block_time.to_string().yellow()
+                );
             }
         }
         Err(err) => {
@@ -18,7 +25,7 @@ pub async fn block_number_and_time(network_flag: bool) {
 
 pub fn preprod_text(network_flag: bool) {
     if network_flag {
-        println!("\nRunning On The Pre-Production Network");
+        println!("{}", "\nRunning On The Pre-Production Network".cyan());
     }
 }
 
@@ -56,14 +63,14 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
         }
     }
     if !seedelfs.is_empty() {
-        println!("\nCurrent Seedelf:\n");
+        println!("{}", "\nCurrent Seedelf:\n".bright_green());
         for seedelf in seedelfs {
-            println!("\nSeedelf: {}", seedelf);
+            println!("\nSeedelf: {}", seedelf.white());
             let substring: String = seedelf[8..38].to_string();
             let label: String = hex_to_ascii(&substring).unwrap();
             if label.chars().next() != Some('.') {
                 let cleaned: String = label.chars().filter(|&c| c != '.').collect();
-                println!("Label: {}", cleaned)
+                println!("Label: {}", cleaned.bright_yellow())
             }
     
         }

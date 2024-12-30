@@ -1,5 +1,6 @@
 use crate::schnorr::random_scalar;
 use blstrs::Scalar;
+use colored::Colorize;
 use ff::PrimeField;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -30,7 +31,7 @@ struct EncryptedData {
 
 /// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
 pub fn check_and_prepare_seedelf() {
-    println!("Checking For Existing Seedelf Wallet");
+    println!("{}", "Checking For Existing Seedelf Wallet".bright_blue());
     // this may only work on ubuntu
     let seedelf_path: PathBuf = Path::new("/home").join(whoami::username()).join(".seedelf");
 
@@ -53,7 +54,7 @@ pub fn check_and_prepare_seedelf() {
     } else {
         for entry in &contents {
             if let Ok(file_name) = entry.file_name().into_string() {
-                println!("Loading Wallet: {}", file_name);
+                println!("Loading Wallet: {}", file_name.bright_cyan());
             }
         }
     }
@@ -62,17 +63,17 @@ pub fn check_and_prepare_seedelf() {
 /// Prompt the user to enter a wallet name
 fn prompt_wallet_name() -> String {
     let mut wallet_name = String::new();
-    println!("\nEnter a wallet name: ");
+    println!("{}", "\nEnter A Wallet Name:".bright_purple());
     io::stdout().flush().unwrap();
     io::stdin()
         .read_line(&mut wallet_name)
         .expect("Failed to read wallet name");
     let final_name: String = wallet_name.trim().to_string();
     if final_name.len() == 0 {
-        println!("Wallet must not have empty name.");
-        prompt_wallet_name();
+        println!("{}", "Wallet Must Not Have Empty Name.".red());
+        return prompt_wallet_name();
     }
-    final_name
+    return final_name;
 }
 
 /// Create a wallet file and save a random private key
@@ -90,28 +91,28 @@ fn create_wallet(wallet_path: &PathBuf) {
         serde_json::to_string_pretty(&wallet).expect("Failed to serialize wallet");
 
     // Prompt user for an encryption password
-    println!("\nEnter a password to encrypt the wallet file:");
+    println!("{}", "\nEnter A Password To Encrypt The Wallet:".bright_purple());
     let password: String = read_password().expect("Failed to read password");
 
     // check for basic password complexity
     if password_complexity_check(password.clone()) == false {
-        println!("Passwords must contain the following:\n
-                  Minimum Length: At least 14 characters.
-                  Uppercase Letter: Requires at least one uppercase character.
-                  Lowercase Letter: Requires at least one lowercase character.
-                  Number: Requires at least one digit.
-                  Special Character: Requires at least one special symbol.\n"
+        println!("{}", "Passwords Must Contain The Following:\n
+                  Minimum Length: At Least 14 Characters.
+                  Uppercase Letter: Requires At Least One Uppercase Character.
+                  Lowercase Letter: Requires At Least One Lowercase Character.
+                  Number: Requires At Least One Digit.
+                  Special Character: Requires At Least One Special Symbol.\n".red()
         );
-        create_wallet(wallet_path);
+        return create_wallet(wallet_path);
     }
 
-    println!("Re-enter the password:");
+    println!("{}", "Re-enter the password:".purple());
     let password_copy: String = read_password().expect("Failed to read password");
     // this is just a simple way to check if the user typed it in correctly
     // if they do it twice then they probably mean it
     if password != password_copy {
-        println!("Passwords do not match; try again!");
-        create_wallet(wallet_path);
+        println!("{}", "Passwords Do Not Match; Try Again!".red());
+        return create_wallet(wallet_path);
     }
 
     let salt: SaltString = SaltString::generate(&mut OsRng);
@@ -144,7 +145,8 @@ fn create_wallet(wallet_path: &PathBuf) {
 
     // Save to file
     fs::write(wallet_path, output_data).expect("Failed to write wallet file");
-    println!("Wallet created at: {}", wallet_path.display());
+    println!("Wallet Created At: {}", wallet_path.display().to_string().yellow());
+    return;
 }
 
 /// Load the wallet file and deserialize the private key into a Scalar
@@ -174,7 +176,7 @@ pub fn load_wallet() -> Scalar {
         serde_json::from_str(&wallet_data).expect("Failed to parse wallet JSON");
 
     // Prompt user for the decryption password
-    println!("\nEnter the password to decrypt the wallet file:");
+    println!("{}", "\nEnter The Password To Decrypt The Wallet:".bright_purple());
     let password: String = read_password().expect("Failed to read password");
 
     // Derive the decryption key using the provided salt
@@ -212,12 +214,12 @@ pub fn load_wallet() -> Scalar {
                 hex::decode(wallet.private_key).expect("Failed to decode private key hex");
 
             // Convert bytes to Scalar
-            Scalar::from_repr(private_key_bytes.try_into().expect("Invalid key length"))
-                .expect("Failed to reconstruct Scalar from bytes")
+            return Scalar::from_repr(private_key_bytes.try_into().expect("Invalid key length"))
+                .expect("Failed to reconstruct Scalar from bytes");
         }
         Err(_) => {
-            println!("Failed to decrypt; try again!");
-            load_wallet()
+            eprintln!("{}", "Failed To Decrypt; Try Again!".red());
+            return load_wallet();
         }
     }
 }

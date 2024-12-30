@@ -1,5 +1,6 @@
 use clap::Args;
 use blstrs::Scalar;
+use colored::Colorize;
 use hex;
 use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::{SecretKey, PublicKey};
@@ -213,14 +214,14 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("\nTx Size Fee: {:?}", tx_fee);
+    println!("{} {}", "\nTx Size Fee:".bright_blue(), tx_fee.to_string().bright_white());
     
     // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mint_mem_units, mint_cpu_units) + transaction::computation_fee(spend_mem_units, spend_cpu_units);
-    println!("Compute Fee: {:?}", compute_fee);
+    println!("{} {}", "Compute Fee:".bright_blue(), compute_fee.to_string().bright_white());
 
     let script_reference_fee: u64 = SEEDELF_CONTRACT_SIZE * 15 + WALLET_CONTRACT_SIZE * 15;
-    println!("Script Reference Fee: {:?}", script_reference_fee);
+    println!("{} {}", "Script Reference Fee:".bright_blue(), script_reference_fee.to_string().bright_white());
     
     // total fee is the sum of everything
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
@@ -230,7 +231,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     } else {
         total_fee
     };
-    println!("Total Fee: {:?}", total_fee);
+    println!("{} {}", "Total Fee:".bright_blue(), total_fee.to_string().bright_white());
 
     raw_tx = raw_tx
         .output(Output::new(addr.clone(), total_lovelace - total_fee))
@@ -284,8 +285,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .unwrap();
 
             println!(
-                "\nTx Cbor: {:?}",
-                hex::encode(signed_tx_cbor.tx_bytes.clone())
+                "\nTx Cbor: {}",
+                hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
             );
 
             match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
@@ -295,16 +296,16 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                         std::process::exit(1);
                     }
                     println!("\nTransaction Successfully Submitted!");
-                    println!("\nTx Hash: {}", response.as_str().unwrap_or("default"));
+                    println!("\nTx Hash: {}", response.as_str().unwrap_or("default").bright_cyan());
                     if network_flag {
-                        println!(
-                            "\nhttps://preprod.cardanoscan.io/transaction/{}",
-                            response.as_str().unwrap_or("default")
+                        println!("{}",
+                            format!("\nhttps://preprod.cardanoscan.io/transaction/{}",
+                            response.as_str().unwrap_or("default")).bright_purple()
                         );
                     } else {
-                        println!(
-                            "\nhttps://cardanoscan.io/transaction/{}",
-                            response.as_str().unwrap_or("default")
+                        println!("{}",
+                            format!("\nhttps://cardanoscan.io/transaction/{}",
+                            response.as_str().unwrap_or("default")).bright_purple()
                         );
                     }
                 }

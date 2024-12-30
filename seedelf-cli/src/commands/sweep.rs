@@ -1,5 +1,6 @@
-use clap::Args;
 use blstrs::Scalar;
+use clap::Args;
+use colored::Colorize;
 use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::{SecretKey, PublicKey};
 use pallas_primitives::Hash;
@@ -210,10 +211,10 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
 
     // need to check if there is change going back here
     let change_token_per_utxo: Vec<Assets> = change_tokens.clone().split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
-    let number_of_change_utxo: usize = change_token_per_utxo.len();
+    let mut number_of_change_utxo: usize = change_token_per_utxo.len();
+    let mut lovelace_amount: u64 = total_lovelace_found.clone();
     if !args.all {
         // a max tokens per change output here
-        let mut lovelace_amount: u64 = total_lovelace_found.clone();
         for (i, change) in change_token_per_utxo.iter().enumerate() {
             let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
             let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
@@ -236,6 +237,16 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             }
             draft_tx = draft_tx.output(change_output);
         }
+    }
+
+    if number_of_change_utxo == 0 && !args.all {
+        // no tokens so we just need to account for the lovelace going back
+        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+        let change_lovelace: u64 = lovelace_amount - lovelace_goal - tmp_fee;
+        let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
+        .set_inline_datum(datum_vector.clone());
+        draft_tx = draft_tx.output(change_output);
+        number_of_change_utxo += 1;
     }
 
     // Use zip to pair elements from the two lists
@@ -308,14 +319,14 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("\nTx Size Fee: {:?}", tx_fee);
+    println!("{} {}", "\nTx Size Fee:".bright_blue(), tx_fee.to_string().bright_white());
 
     // This probably should be a function
     let compute_fee: u64 = total_computation_fee(budgets.clone());
-    println!("Compute Fee: {:?}", compute_fee);
+    println!("{} {}", "Compute Fee:".bright_blue(), compute_fee.to_string().bright_white());
 
     let script_reference_fee: u64 = WALLET_CONTRACT_SIZE * 15;
-    println!("Script Reference Fee: {:?}", script_reference_fee);
+    println!("{} {}", "Script Reference Fee:".bright_blue(), script_reference_fee.to_string().bright_white());
 
     // total fee is the sum of everything
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
@@ -325,7 +336,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     } else {
         total_fee
     };
-    println!("Total Fee: {:?}", total_fee);
+    println!("{} {}", "Total Fee:".bright_blue(), total_fee.to_string().bright_white());
 
     let mut sweep_output: Output = Output::new(
         addr.clone(),
@@ -386,6 +397,15 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         }
     }
 
+    if number_of_change_utxo == 0 && !args.all {
+        // no tokens so we just need to account for the lovelace going back
+        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+        let change_lovelace: u64 = lovelace_amount - lovelace_goal - total_fee;
+        let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
+        .set_inline_datum(datum_vector.clone());
+        raw_tx = raw_tx.output(change_output);
+    }
+
     for ((input, datum), (cpu, mem)) in input_vector.clone()
         .into_iter()
         .zip(register_vector.clone().into_iter())
@@ -426,8 +446,8 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
                 .unwrap();
 
             println!(
-                "\nTx Cbor: {:?}",
-                hex::encode(signed_tx_cbor.tx_bytes.clone())
+                "\nTx Cbor: {}",
+                hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
             );
 
             match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
@@ -437,16 +457,16 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
                         std::process::exit(1);
                     }
                     println!("\nTransaction Successfully Submitted!");
-                    println!("\nTx Hash: {}", response.as_str().unwrap_or("default"));
+                    println!("\nTx Hash: {}", response.as_str().unwrap_or("default").bright_cyan());
                     if network_flag {
-                        println!(
-                            "\nhttps://preprod.cardanoscan.io/transaction/{}",
-                            response.as_str().unwrap_or("default")
+                        println!("{}",
+                            format!("\nhttps://preprod.cardanoscan.io/transaction/{}",
+                            response.as_str().unwrap_or("default")).bright_purple()
                         );
                     } else {
-                        println!(
-                            "\nhttps://cardanoscan.io/transaction/{}",
-                            response.as_str().unwrap_or("default")
+                        println!("{}",
+                            format!("\nhttps://cardanoscan.io/transaction/{}",
+                            response.as_str().unwrap_or("default")).bright_purple()
                         );
                     }
                 }
