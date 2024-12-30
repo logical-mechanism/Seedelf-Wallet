@@ -243,7 +243,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("{} {}", "\nTx Size Fee:".bright_blue(), tx_fee.to_string().bright_white());    
+    println!("{} {}", "\nTx Size Fee:".bright_blue(), tx_fee.to_string().bright_white());
 
     // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);

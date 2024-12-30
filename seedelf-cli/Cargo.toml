@@ -21,22 +21,22 @@ ff = "0.13.0"
 blake2 = "0.10.6"
 tokio = { version = "1.41.1", features = ["full"] }
 reqwest = { version = "0.12.9", features = ["json"] }
-# can't publish until pallas updates
-pallas-addresses = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-pallas-crypto = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-pallas-codec = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-pallas-txbuilder = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-pallas-traverse = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-pallas-wallet = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-pallas-primitives = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
+# use this if a custom build must occur
+#pallas-addresses = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
+#pallas-crypto = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
+#pallas-codec = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
+#pallas-txbuilder = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
+#pallas-traverse = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
+#pallas-wallet = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
+#pallas-primitives = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
 # update these when the new pallas version comes out
-#pallas-addresses = "0.31.0"
-#pallas-crypto = "0.31.0"
-#pallas-codec = "0.31.0"
-#pallas-txbuilder = "0.31.0"
-#pallas-traverse = "0.31.0"
-#pallas-wallet = "0.31.0"
-#pallas-primitives = "0.31.0"
+pallas-addresses = "0.32.0"
+pallas-crypto = "0.32.0"
+pallas-codec = "0.32.0"
+pallas-txbuilder = "0.32.0"
+pallas-traverse = "0.32.0"
+pallas-wallet = "0.32.0"
+pallas-primitives = "0.32.0"
 #
 warp = "0.3.7"
 # we need this stuff for encryption later
