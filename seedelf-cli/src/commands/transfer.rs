@@ -102,7 +102,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
 
     let (seedelf_datum, usuable_utxos) = utxos::find_seedelf_and_wallet_utxos(scalar, args.seedelf, network_flag).await;
     // the extra 2.5 ADA should account for the change and fee
-    let usuable_utxos = utxos::select(usuable_utxos, lovelace_goal + 2_500_000, Assets::new());
+    let usuable_utxos = utxos::select(usuable_utxos, lovelace_goal + 2_500_000, selected_tokens.clone());
     let (total_lovelace_found, tokens) = utxos::assets_of(usuable_utxos.clone());
     let change_tokens: Assets = tokens.separate(selected_tokens.clone());
 
