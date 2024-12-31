@@ -118,19 +118,19 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-linux
-          path: seedelf-cli-linux.tar.gz
+          path: .
 
       - name: Download Windows Artifact
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-windows
-          path: seedelf-cli-windows.zip
+          path: .
 
       - name: Download MacOS Artifact
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-macos
-          path: seedelf-cli-macos.tar.gz
+          path: .
 
 
       - name: Create GitHub Release
