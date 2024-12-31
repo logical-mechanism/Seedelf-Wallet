@@ -23,19 +23,50 @@ jobs:
         working-directory: seedelf-cli
         run: mv target/release/seedelf-cli seedelf-cli
 
-      - name: Generate Checksum (Linux)
+      - name: Import GPG Key
+        run: |
+          echo "${{ secrets.RELEASE_GPG_KEY }}" | gpg --batch --yes --import
+      
+      - name: Sign CLI Binary (Linux)
+        working-directory: seedelf-cli
+        run: |
+          gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+              --armor --detach-sign -o seedelf-cli.asc seedelf-cli
+
+      - name: Generate Binary Checksum (Linux)
         working-directory: seedelf-cli
         run: sha256sum seedelf-cli > seedelf-cli.sha256
 
       - name: Compress Binary and Checksum (Linux)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli seedelf-cli.sha256
+        run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli seedelf-cli.sha256 seedelf-cli.asc
+      
+      - name: Sign Tar File (Linux)
+        working-directory: seedelf-cli
+        run: |
+          gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+              --armor --detach-sign -o seedelf-cli-linux.tar.gz.asc seedelf-cli-linux.tar.gz
 
-      - name: Upload Linux Artifact
+      - name: Generate Compressed File Checksum (Linux)
+        working-directory: seedelf-cli
+        run: sha256sum seedelf-cli-linux.tar.gz > seedelf-cli-linux.tar.gz.sha256
+
+      - name: Create Unique Hashes File (Linux)
+        working-directory: seedelf-cli
+        run: |
+          echo "Linux Binary: $(cat seedelf-cli.sha256)" >> ../hashes-linux.txt
+          echo "Linux Compressed File: $(cat seedelf-cli-linux.tar.gz.sha256)" >> ../hashes-linux.txt
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: seedelf-cli-linux
-          path: seedelf-cli/seedelf-cli-linux.tar.gz
+          path: |
+            seedelf-cli-linux.tar.gz
+            seedelf-cli-linux.tar.gz.asc
+            hashes-linux.txt
 
   build-windows:
     runs-on: windows-latest
@@ -55,7 +86,20 @@ jobs:
         working-directory: seedelf-cli
         run: mv target\x86_64-pc-windows-gnu\release\seedelf-cli.exe seedelf-cli.exe
 
-      - name: Generate Checksum (Windows)
+      - name: Import GPG Key
+        shell: pwsh
+        run: |
+          $env:RELEASE_GPG_KEY | gpg --batch --yes --import  
+
+      - name: Sign CLI Binary (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: |
+          gpg --batch --yes --pinentry-mode loopback `
+              --passphrase "${{ secrets.GPG_PASSPHRASE }}" `
+              --armor --detach-sign -o seedelf-cli.exe.asc seedelf-cli.exe
+
+      - name: Generate Binary Checksum (Windows)
         shell: pwsh
         working-directory: seedelf-cli
         run: |
@@ -65,13 +109,38 @@ jobs:
       - name: Compress Binary and Checksum (Windows)
         shell: pwsh
         working-directory: seedelf-cli
-        run: Compress-Archive -Path seedelf-cli.exe,seedelf-cli.sha256 -DestinationPath seedelf-cli-windows.zip
+        run: Compress-Archive -Path seedelf-cli.exe,seedelf-cli.sha256,seedelf-cli.exe.asc -DestinationPath seedelf-cli-windows.zip
 
-      - name: Upload Windows Artifact
+      - name: Sign Zip File (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: |
+          gpg --batch --yes --pinentry-mode loopback `
+              --passphrase "${{ secrets.GPG_PASSPHRASE }}" `
+              --armor --detach-sign -o seedelf-cli-windows.zip.asc seedelf-cli-windows.zip
+
+      - name: Generate Compressed File Checksum (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: |
+          $hash = Get-FileHash seedelf-cli-windows.zip -Algorithm SHA256
+          $hash.Hash | Out-File -Encoding ASCII seedelf-cli-windows.zip.sha256
+
+      - name: Create Unique Hashes File (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: |
+          echo "Windows Binary: $(Get-Content seedelf-cli.sha256)" >> ..\hashes-windows.txt
+          echo "Windows Compressed File: $(Get-Content seedelf-cli-windows.zip.sha256)" >> ..\hashes-windows.txt
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: seedelf-cli-windows
-          path: seedelf-cli/seedelf-cli-windows.zip
+          path: |
+            seedelf-cli-windows.zip
+            seedelf-cli-windows.zip.asc
+            hashes-windows.txt
 
   build-mac:
     runs-on: macos-latest
@@ -92,20 +161,51 @@ jobs:
       - name: Move Binary (macOS)
         working-directory: seedelf-cli
         run: mv target/x86_64-apple-darwin/release/seedelf-cli seedelf-cli
+      
+      - name: Import GPG Key
+        run: |
+          echo "${{ secrets.RELEASE_GPG_KEY }}" | gpg --batch --yes --import
+      
+      - name: Sign Binary (MacOs)
+        working-directory: seedelf-cli
+        run: |
+          gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+              --armor --detach-sign -o seedelf-cli.asc seedelf-cli
 
-      - name: Generate Checksum (macOS)
+      - name: Generate Binary Checksum (macOS)
         working-directory: seedelf-cli
         run: shasum -a 256 seedelf-cli > seedelf-cli.sha256
 
       - name: Compress Binary and Checksum (macOS)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli seedelf-cli.sha256
+        run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli seedelf-cli.sha256 seedelf-cli.asc
+      
+      - name: Sign Tar File (MacOS)
+        working-directory: seedelf-cli
+        run: |
+          gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+              --armor --detach-sign -o seedelf-cli-macos.tar.gz.asc seedelf-cli-macos.tar.gz
 
-      - name: Upload MacOS Artifact
+      - name: Generate Compressed File Checksum (macOS)
+        working-directory: seedelf-cli
+        run: shasum -a 256 seedelf-cli-macos.tar.gz > seedelf-cli-macos.tar.gz.sha256
+
+      - name: Create Unique Hashes File (macOS)
+        working-directory: seedelf-cli
+        run: |
+          echo "macOS Binary: $(cat seedelf-cli.sha256)" >> ../hashes-macos.txt
+          echo "macOS Compressed File: $(cat seedelf-cli-macos.tar.gz.sha256)" >> ../hashes-macos.txt
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: seedelf-cli-macos
-          path: seedelf-cli/seedelf-cli-macos.tar.gz
+          path: |
+            seedelf-cli-macos.tar.gz
+            seedelf-cli-macos.tar.gz.asc
+            hashes-macos.txt
 
   finalize-release:
     runs-on: ubuntu-latest
@@ -114,24 +214,32 @@ jobs:
       - build-windows
       - build-mac
     steps:
-      - name: Download Linux Artifact
+      - name: Download Linux Artifacts
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-linux
           path: .
 
-      - name: Download Windows Artifact
+      - name: Download Windows Artifacts
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-windows
           path: .
 
-      - name: Download MacOS Artifact
+      - name: Download MacOS Artifacts
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-macos
           path: .
 
+      - name: Combine Hashes into All-Hashes
+        run: cat hashes-linux.txt hashes-windows.txt hashes-macos.txt > hashes.txt
+      
+      - name: Sign Hashes File (Linux)
+        run: |
+          gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+              --armor --detach-sign -o hashes.txt.asc hashes.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -144,13 +252,22 @@ jobs:
             This release includes:
             - Binaries and checksums for Linux, Windows, and macOS.
 
-            Thank you for using `seedelf-cli`.
+            Checksum file: hashes.txt
+
+            [Release Key](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelfwallet.asc)
+
+            Thank you for using `seedelf-cli`!
 
             If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
           generate_release_notes: true
           files: |
             seedelf-cli-linux.tar.gz
+            seedelf-cli-linux.tar.gz.asc
             seedelf-cli-windows.zip
+            seedelf-cli-windows.zip.asc
             seedelf-cli-macos.tar.gz
+            seedelf-cli-macos.tar.gz.asc
+            hashes.txt
+            hashes.txt.asc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
