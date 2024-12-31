@@ -251,6 +251,10 @@ jobs:
 
       - name: Combine Hashes into All-Hashes
         run: cat hashes-linux.txt hashes-windows.txt hashes-macos.txt > hashes.txt
+
+      - name: Import GPG Key
+        run: |
+          echo "${{ secrets.RELEASE_GPG_KEY }}" | gpg --batch --yes --import
       
       - name: Sign Hashes File (Linux)
         run: |
