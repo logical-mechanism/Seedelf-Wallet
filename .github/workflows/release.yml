@@ -15,39 +15,27 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Build for Linux
       - name: Build (Linux)
         working-directory: seedelf-cli
         run: cargo build --release
 
-      # Generate checksum (Linux)
-      - name: Generate checksum (Linux)
+      - name: Move Binary (Linux)
         working-directory: seedelf-cli
-        run: sha256sum target/release/seedelf-cli > seedelf-cli-linux.sha256
+        run: mv target/release/seedelf-cli seedelf-cli
 
-      # Compress binary and checksum (Linux)
-      - name: Compress binary and checksum (Linux)
+      - name: Generate Checksum (Linux)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-linux.tar.gz target/release/seedelf-cli seedelf-cli-linux.sha256
+        run: sha256sum seedelf-cli > seedelf-cli.sha256
 
-      # Create GitHub Release and Upload Linux Assets
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Compress Binary and Checksum (Linux)
+        working-directory: seedelf-cli
+        run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli seedelf-cli.sha256
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v3
         with:
-          tag_name: ${{ github.ref_name }}
-          body: |
-            ### New Release: ${{ github.ref_name }}
-
-            This release includes:
-            - Binaries and checksums for Linux, Windows, and MacOS.
-
-            Thank you for using `seedelf-cli`.
-
-            If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
-          generate_release_notes: true
-          files: seedelf-cli/seedelf-cli-linux.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: seedelf-cli-linux
+          path: seedelf-cli/seedelf-cli-linux.tar.gz
 
   build-windows:
     runs-on: windows-latest
@@ -58,32 +46,32 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Build for Windows
       - name: Build (Windows)
         working-directory: seedelf-cli
         run: cargo build --release --target x86_64-pc-windows-gnu
 
-      - name: Generate checksum (Windows)
+      - name: Move Binary (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: mv target\x86_64-pc-windows-gnu\release\seedelf-cli.exe seedelf-cli.exe
+
+      - name: Generate Checksum (Windows)
         shell: pwsh
         working-directory: seedelf-cli
         run: |
-          $hash = Get-FileHash target\x86_64-pc-windows-gnu\release\seedelf-cli.exe -Algorithm SHA256
-          $hash.Hash | Out-File -Encoding ASCII seedelf-cli-windows.sha256
+          $hash = Get-FileHash seedelf-cli.exe -Algorithm SHA256
+          $hash.Hash | Out-File -Encoding ASCII seedelf-cli.sha256
 
-      # Compress binary and checksum (Windows)
-      - name: Compress binary and checksum (Windows)
+      - name: Compress Binary and Checksum (Windows)
         shell: pwsh
         working-directory: seedelf-cli
-        run: Compress-Archive -Path target\x86_64-pc-windows-gnu\release\seedelf-cli.exe,seedelf-cli-windows.sha256 -DestinationPath seedelf-cli-windows.zip
+        run: Compress-Archive -Path seedelf-cli.exe,seedelf-cli.sha256 -DestinationPath seedelf-cli-windows.zip
 
-      # Add Windows Assets to Existing Release
-      - name: Update GitHub Release with Windows Assets
-        uses: softprops/action-gh-release@v1
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v3
         with:
-          tag_name: ${{ github.ref_name }}
-          files: seedelf-cli/seedelf-cli-windows.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: seedelf-cli-windows
+          path: seedelf-cli/seedelf-cli-windows.zip
 
   build-mac:
     runs-on: macos-latest
@@ -94,30 +82,75 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-        # Install the required target for macOS
-      - name: Install x86_64-apple-darwin target
+      - name: Install x86_64-apple-darwin Target
         run: rustup target add x86_64-apple-darwin
-      
-        # Build for macOS
+
       - name: Build (macOS)
         working-directory: seedelf-cli
         run: cargo build --release --target x86_64-apple-darwin
-      
-      - name: Generate checksum (macOS)
-        shell: bash
-        working-directory: seedelf-cli
-        run: shasum -a 256 target/x86_64-apple-darwin/release/seedelf-cli > seedelf-cli-macos.sha256
 
-      # Compress binary and checksum (macOS)
-      - name: Compress binary and checksum (macOS)
+      - name: Move Binary (macOS)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-macos.tar.gz target/x86_64-apple-darwin/release/seedelf-cli seedelf-cli-macos.sha256
+        run: mv target/x86_64-apple-darwin/release/seedelf-cli seedelf-cli
 
-      # Add macOS Assets to Existing Release
-      - name: Update GitHub Release with macOS Assets
+      - name: Generate Checksum (macOS)
+        working-directory: seedelf-cli
+        run: shasum -a 256 seedelf-cli > seedelf-cli.sha256
+
+      - name: Compress Binary and Checksum (macOS)
+        working-directory: seedelf-cli
+        run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli seedelf-cli.sha256
+
+      - name: Upload MacOS Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: seedelf-cli-macos
+          path: seedelf-cli/seedelf-cli-macos.tar.gz
+
+  finalize-release:
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-windows
+      - build-mac
+    steps:
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: seedelf-cli-linux
+          path: .
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: seedelf-cli-windows
+          path: .
+
+      - name: Download MacOS Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: seedelf-cli-macos
+          path: .
+
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: seedelf-cli/seedelf-cli-macos.tar.gz
+          draft: true
+          body: |
+            ### New Release: ${{ github.ref_name }}
+
+            This release includes:
+            - Binaries and checksums for Linux, Windows, and macOS.
+
+            Thank you for using `seedelf-cli`.
+
+            If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
+          generate_release_notes: true
+          files: |
+            seedelf-cli-linux.tar.gz
+            seedelf-cli-windows.zip
+            seedelf-cli-macos.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
