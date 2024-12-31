@@ -60,7 +60,7 @@ jobs:
           echo "Linux Compressed File: $(cat seedelf-cli-linux.tar.gz.sha256)" >> ../hashes-linux.txt
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: seedelf-cli-linux
           path: |
@@ -89,7 +89,10 @@ jobs:
       - name: Import GPG Key
         shell: pwsh
         run: |
-          $env:RELEASE_GPG_KEY | gpg --batch --yes --import  
+          $keyFile = "gpg-key.asc"
+          Set-Content -Path $keyFile -Value $env:RELEASE_GPG_KEY
+          gpg --batch --yes --import $keyFile
+          Remove-Item $keyFile
 
       - name: Sign CLI Binary (Windows)
         shell: pwsh
@@ -134,7 +137,7 @@ jobs:
           echo "Windows Compressed File: $(Get-Content seedelf-cli-windows.zip.sha256)" >> ..\hashes-windows.txt
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: seedelf-cli-windows
           path: |
@@ -199,7 +202,7 @@ jobs:
           echo "macOS Compressed File: $(cat seedelf-cli-macos.tar.gz.sha256)" >> ../hashes-macos.txt
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: seedelf-cli-macos
           path: |
@@ -215,19 +218,19 @@ jobs:
       - build-mac
     steps:
       - name: Download Linux Artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: seedelf-cli-linux
           path: .
 
       - name: Download Windows Artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: seedelf-cli-windows
           path: .
 
       - name: Download MacOS Artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: seedelf-cli-macos
           path: .

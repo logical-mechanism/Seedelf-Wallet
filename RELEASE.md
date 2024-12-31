@@ -26,3 +26,11 @@ cargo publish --dry-run
 ## Recompiling
 
 If a recompile is required and it changes the contract hashes then the README inside of seedelf-contracts must be updated before release.
+
+## Re-releasing Tag
+
+```bash
+version="0.3.4"
+git tag -d ${version}
+git push origin --delete ${version}
+```
