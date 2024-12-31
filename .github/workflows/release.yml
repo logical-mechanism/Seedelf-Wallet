@@ -254,7 +254,7 @@ jobs:
 
             Checksum file: hashes.txt
 
-            [Release Key](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelfwallet.asc)
+            [Release Key](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/util/pubkeys/seedelfwallet.asc)
 
             Thank you for using `seedelf-cli`!
 

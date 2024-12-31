@@ -10,7 +10,7 @@ Precompile binaries are available for Linux, Windows, and MacOS. These may be fo
 
 If you are running Linux, MacOS, or Unix-like OS then run the following command in your terminal and follow the instructions.
 ```bash
-curl -fsSL https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/refs/heads/main/seedelf-init.sh | bash
+curl -fsSL https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/refs/heads/main/util/seedelf-init.sh | bash
 ```
 
 The seedelf-cli will eventually be on crates.io.
