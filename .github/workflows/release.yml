@@ -23,7 +23,7 @@ jobs:
         working-directory: seedelf-cli
         run: mv target/release/seedelf-cli seedelf-cli
 
-      - name: Generate Checksum (Linux)
+      - name: Generate Binary Checksum (Linux)
         working-directory: seedelf-cli
         run: sha256sum seedelf-cli > seedelf-cli.sha256
 
@@ -31,11 +31,23 @@ jobs:
         working-directory: seedelf-cli
         run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli seedelf-cli.sha256
 
-      - name: Upload Linux Artifact
+      - name: Generate Compressed File Checksum (Linux)
+        working-directory: seedelf-cli
+        run: sha256sum seedelf-cli-linux.tar.gz > seedelf-cli-linux.tar.gz.sha256
+
+      - name: Create Unique Hashes File (Linux)
+        working-directory: seedelf-cli
+        run: |
+          echo "Linux Binary: $(cat seedelf-cli.sha256)" >> ../hashes-linux.txt
+          echo "Linux Compressed File: $(cat seedelf-cli-linux.tar.gz.sha256)" >> ../hashes-linux.txt
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: seedelf-cli-linux
-          path: seedelf-cli/seedelf-cli-linux.tar.gz
+          path: |
+            seedelf-cli/seedelf-cli-linux.tar.gz
+            hashes-linux.txt
 
   build-windows:
     runs-on: windows-latest
@@ -55,7 +67,7 @@ jobs:
         working-directory: seedelf-cli
         run: mv target\x86_64-pc-windows-gnu\release\seedelf-cli.exe seedelf-cli.exe
 
-      - name: Generate Checksum (Windows)
+      - name: Generate Binary Checksum (Windows)
         shell: pwsh
         working-directory: seedelf-cli
         run: |
@@ -67,11 +79,27 @@ jobs:
         working-directory: seedelf-cli
         run: Compress-Archive -Path seedelf-cli.exe,seedelf-cli.sha256 -DestinationPath seedelf-cli-windows.zip
 
-      - name: Upload Windows Artifact
+      - name: Generate Compressed File Checksum (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: |
+          $hash = Get-FileHash seedelf-cli-windows.zip -Algorithm SHA256
+          $hash.Hash | Out-File -Encoding ASCII seedelf-cli-windows.zip.sha256
+
+      - name: Create Unique Hashes File (Windows)
+        shell: pwsh
+        working-directory: seedelf-cli
+        run: |
+          echo "Windows Binary: $(Get-Content seedelf-cli.sha256)" >> ..\hashes-windows.txt
+          echo "Windows Compressed File: $(Get-Content seedelf-cli-windows.zip.sha256)" >> ..\hashes-windows.txt
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: seedelf-cli-windows
-          path: seedelf-cli/seedelf-cli-windows.zip
+          path: |
+            seedelf-cli/seedelf-cli-windows.zip
+            hashes-windows.txt
 
   build-mac:
     runs-on: macos-latest
@@ -93,7 +121,7 @@ jobs:
         working-directory: seedelf-cli
         run: mv target/x86_64-apple-darwin/release/seedelf-cli seedelf-cli
 
-      - name: Generate Checksum (macOS)
+      - name: Generate Binary Checksum (macOS)
         working-directory: seedelf-cli
         run: shasum -a 256 seedelf-cli > seedelf-cli.sha256
 
@@ -101,11 +129,23 @@ jobs:
         working-directory: seedelf-cli
         run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli seedelf-cli.sha256
 
-      - name: Upload MacOS Artifact
+      - name: Generate Compressed File Checksum (macOS)
+        working-directory: seedelf-cli
+        run: shasum -a 256 seedelf-cli-macos.tar.gz > seedelf-cli-macos.tar.gz.sha256
+
+      - name: Create Unique Hashes File (macOS)
+        working-directory: seedelf-cli
+        run: |
+          echo "macOS Binary: $(cat seedelf-cli.sha256)" >> ../hashes-macos.txt
+          echo "macOS Compressed File: $(cat seedelf-cli-macos.tar.gz.sha256)" >> ../hashes-macos.txt
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: seedelf-cli-macos
-          path: seedelf-cli/seedelf-cli-macos.tar.gz
+          path: |
+            seedelf-cli/seedelf-cli-macos.tar.gz
+            hashes-macos.txt
 
   finalize-release:
     runs-on: ubuntu-latest
@@ -114,24 +154,26 @@ jobs:
       - build-windows
       - build-mac
     steps:
-      - name: Download Linux Artifact
+      - name: Download Linux Artifacts
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-linux
           path: .
 
-      - name: Download Windows Artifact
+      - name: Download Windows Artifacts
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-windows
           path: .
 
-      - name: Download MacOS Artifact
+      - name: Download MacOS Artifacts
         uses: actions/download-artifact@v3
         with:
           name: seedelf-cli-macos
           path: .
 
+      - name: Combine Hashes into All-Hashes
+        run: cat hashes-linux.txt hashes-windows.txt hashes-macos.txt > hashes.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -144,6 +186,8 @@ jobs:
             This release includes:
             - Binaries and checksums for Linux, Windows, and macOS.
 
+            Checksum file: hashes.txt
+
             Thank you for using `seedelf-cli`.
 
             If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
@@ -152,5 +196,6 @@ jobs:
             seedelf-cli-linux.tar.gz
             seedelf-cli-windows.zip
             seedelf-cli-macos.tar.gz
+            hashes.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
