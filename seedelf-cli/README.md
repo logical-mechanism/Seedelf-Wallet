@@ -6,7 +6,12 @@ The `seedelf-cli` is a rust implementation of the Seedelf stealth wallet protoco
 
 ## Installation
 
-Precompile binaries are available for Linux, Windows, and MacOS. These may be found in the latest release. 
+Precompile binaries are available for Linux, Windows, and MacOS. These may be found in the [latest release](https://github.com/logical-mechanism/Seedelf-Wallet/releases/latest).
+
+If you are running Linux, MacOS, or Unix-like OS then run the following command in your terminal and follow the instructions.
+```bash
+curl -fsSL https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/refs/heads/main/seedelf-init.sh | sh
+```
 
 The seedelf-cli will eventually be on crates.io.
 
