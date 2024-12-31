@@ -90,7 +90,7 @@ jobs:
         shell: pwsh
         run: |
           $keyFile = "gpg-key.asc"
-          Set-Content -Path $keyFile -Value $env:RELEASE_GPG_KEY
+          $env:RELEASE_GPG_KEY | Out-File -FilePath $keyFile -Encoding ascii
           gpg --batch --yes --import $keyFile
           Remove-Item $keyFile
 
