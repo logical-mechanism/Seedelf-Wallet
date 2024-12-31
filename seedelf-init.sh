@@ -34,11 +34,10 @@ mkdir -p "$INSTALL_DIR"
 # Download binary
 echo "Downloading $LATEST_URL..."
 curl -L -o "$INSTALL_DIR/seedelf-cli.tar.gz" "$LATEST_URL"
-# THE WORKFLOW MUST BE FIXED HERE
-exit
 echo "Extracting the binary..."
-tar -xzf $INSTALL_DIR/cli.tar.gz -C /
+tar -xzf $INSTALL_DIR/seedelf-cli.tar.gz -C $INSTALL_DIR
 chmod +x "$INSTALL_DIR/seedelf-cli"
+rm "$INSTALL_DIR/seedelf-cli.sha256"
 
 # Check if the binary directory is in PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
