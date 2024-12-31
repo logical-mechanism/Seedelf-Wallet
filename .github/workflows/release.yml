@@ -90,9 +90,22 @@ jobs:
         shell: pwsh
         run: |
           $keyFile = "gpg-key.asc"
+          
+          # Write the multiline environment variable to a file
           $env:RELEASE_GPG_KEY | Out-File -FilePath $keyFile -Encoding ascii
+      
+          # Check if the file actually has content
+          Write-Host "Contents of $keyFile:"
+          Get-Content $keyFile
+      
+          # Import the key
           gpg --batch --yes --import $keyFile
+      
+          # Cleanup
           Remove-Item $keyFile
+        env:
+          RELEASE_GPG_KEY: ${{ secrets.RELEASE_GPG_KEY }}
+      
 
       - name: Sign CLI Binary (Windows)
         shell: pwsh
