@@ -1,6 +1,6 @@
 # **seedelf-cli**
 
-The `seedelf-cli` is a rust implementation of the Seedelf stealth wallet protocol. It uses [Cardano collateral provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal base but it does use a static HTML web interface for CIP30 interactions when required.
+The `seedelf-cli` is a Rust implementation of the Seedelf stealth wallet protocol. It uses [Cardano collateral provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal-base but it does use a static HTML web interface for CIP30 interactions when required.
 
 **Note: Wallet Is Currently In Alpha**
 
@@ -73,9 +73,9 @@ Get started with the wallet using the `welcome` command.
 seedelf-cli welcome
 ```
 
-Create a Seedelf with the `create` command. The Seedelf is funded with the `fund` command. Send funds to another Seedelf with the `transfer` command. Funds can be send to an address with the `sweep` command. Use the `--help` option to see more information.
+Create a Seedelf with the `create` command. A CIP30 wallet may fund a Seedelf address with the `fund` command. Funds may be sent to another Seedelf address using the `transfer` command. The' sweep' command can send funds to a CIP30 wallet. Use the `--help` option to see more information.
 
-The wallet will create an encrypted secret key file on the local machine inside the home directory under the `$HOME/.seedelf` folder. The wallet will prompt the user for a password and a name for the secrey key file. Keep this file safe!
+The wallet will create an encrypted secret key file on the local machine inside the home directory under the `$HOME/.seedelf` folder. The wallet will prompt the user for a password and a name for the secret key file. Keep this file safe!
 
 ## Contact
 
