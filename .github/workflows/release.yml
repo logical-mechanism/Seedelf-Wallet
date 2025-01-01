@@ -282,12 +282,12 @@ jobs:
             If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
           generate_release_notes: true
           files: |
-            seedelf-cli-linux.tar.gz
-            seedelf-cli-linux.tar.gz.asc
-            seedelf-cli-windows.zip
-            seedelf-cli-windows.zip.asc
-            seedelf-cli-macos.tar.gz
-            seedelf-cli-macos.tar.gz.asc
+            seedelf-cli/seedelf-cli-linux.tar.gz
+            seedelf-cli/seedelf-cli-linux.tar.gz.asc
+            seedelf-cli/seedelf-cli-windows.zip
+            seedelf-cli/seedelf-cli-windows.zip.asc
+            seedelf-cli/seedelf-cli-macos.tar.gz
+            seedelf-cli/seedelf-cli-macos.tar.gz.asc
             hashes.txt
             hashes.txt.asc
         env:
