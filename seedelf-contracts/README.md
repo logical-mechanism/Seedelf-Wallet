@@ -1,6 +1,6 @@
 # **seedelf-contracts**
 
-The folder holds the Seedelf wallet smart contracts. Seedelf is written in [Aiken](https://aiken-lang.org/). The folder contains the happy path scripts. These files are used for testing purposes only. Users wishing to use the Seedelf wallet are encouraged to use [seedelf-cli](../seedelf-cli/README.md).
+The folder holds the Seedelf wallet smart contracts. The **Seedelf** contracts are written in [Aiken](https://aiken-lang.org/). The folder contains the happy path scripts. These files are used for testing purposes only. Users wishing to use the Seedelf wallet are encouraged to use [seedelf-cli](../seedelf-cli/README.md).
 
 ## Building
 

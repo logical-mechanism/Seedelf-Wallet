@@ -16,7 +16,7 @@ git tag ${version}
 git push origin ${version}
 ```
 
-Publish to crates.io
+Publish to crates.io with this command.
 
 ```bash
 cargo package
@@ -25,9 +25,11 @@ cargo publish --dry-run
 
 ## Recompiling
 
-If a recompile is required and it changes the contract hashes then the README inside of seedelf-contracts must be updated before release.
+If a recompile is required to change the contract hashes, then the `seedelf-contracts/README.md` must be updated to reflect the changes. 
 
 ## Re-releasing Tag
+
+Removing a tagged release involves deleting it locally and deleting the tagged branch.
 
 ```bash
 version="0.3.4"

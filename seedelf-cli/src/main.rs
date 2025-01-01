@@ -36,7 +36,7 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     // Parse the command line arguments
-    let cli = Cli::parse();
+    let cli: Cli = Cli::parse();
 
     // Run setup only if the command is not `--help` or `--version`
     if cli.command.is_some() {
