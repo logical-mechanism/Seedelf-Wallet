@@ -64,8 +64,8 @@ jobs:
         with:
           name: seedelf-cli-linux
           path: |
-            seedelf-cli-linux.tar.gz
-            seedelf-cli-linux.tar.gz.asc
+            seedelf-cli/seedelf-cli-linux.tar.gz
+            seedelf-cli/seedelf-cli-linux.tar.gz.asc
             hashes-linux.txt
 
   build-windows:
@@ -155,8 +155,8 @@ jobs:
         with:
           name: seedelf-cli-windows
           path: |
-            seedelf-cli-windows.zip
-            seedelf-cli-windows.zip.asc
+            seedelf-cli/seedelf-cli-windows.zip
+            seedelf-cli/seedelf-cli-windows.zip.asc
             hashes-windows.txt
 
   build-mac:
@@ -220,8 +220,8 @@ jobs:
         with:
           name: seedelf-cli-macos
           path: |
-            seedelf-cli-macos.tar.gz
-            seedelf-cli-macos.tar.gz.asc
+            seedelf-cli/seedelf-cli-macos.tar.gz
+            seedelf-cli/seedelf-cli-macos.tar.gz.asc
             hashes-macos.txt
 
   finalize-release:
