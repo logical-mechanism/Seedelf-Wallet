@@ -1,12 +1,14 @@
 # Seedelf - A Cardano Stealth Wallet
 
-**Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It is not possible to deduce the intended receiver or spender of UTxOs inside this wallet. The [seedelf-cli](./seedelf-cli/README.md) is available on Linux, Windows, and MacOS.
+**Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It is not possible to deduce the intended receiver or spender of UTxOs inside this wallet.
+
+The [seedelf-cli](./seedelf-cli/README.md) is available on Linux, Windows, and MacOS.
 
 ## What is a Seedelf?
 
-The wallet name, **Seedelf**, comes from the prefix of the identifier token used to locate the datum of a UTxO inside the wallet contract. A seedelf allows the root datum to be easily located and provides a personalized touch while maintaining privacy. It is similar to how ADAHandle works but with a slight twist.
+The wallet name, **Seedelf**, comes from the prefix of the identifier token used to locate the datum of a UTxO inside the wallet contract. A seedelf allows the root datum to be easily located and provides a personalized touch while maintaining privacy.
 
-Its main purpose is for the ease of locating the datum for address generation. Alice can ask Bob to send funds to their seedelf. Bob can find the UTxO that holds the seedelf token and will use that datum to re-randomize a new datum for Alice. Bob will then send funds to the contract with this new randomized datum.
+Its main purpose is for the ease of locating the datum for re-randomization. Alice can ask Bob to send funds to their seedelf. Bob can find the UTxO that holds the seedelf token inside the contract and will use that datum to re-randomize a new datum for Alice. Bob will then send funds to the contract with this new randomized datum.
 
 ### Seedelf Personalization
 
@@ -40,7 +42,7 @@ username: 5b416e6369656e744b72616b656e5d
 display name: [AncientKraken]
 ```
 
-The stealth wallet contract is token agnostic, allowing any NFT to be the locator token. We suggest using a seedelf token.
+The purpose of the personal tag is to create a custom touch for a seedelf that can be used for search purposes.
 
 ## What is a Stealth Wallet?
 
@@ -56,7 +58,7 @@ A stealth wallet hides the receiver and spender of funds inside the contract. Be
 
 `Register`: The datum consisting the generator and the public value.
 
-`Re-Randomizing`: The construction of a new register from an existing register.
+`Re-randomizing`: The construction of a new register from an existing register.
 
 ### Spendability
 
@@ -92,7 +94,7 @@ $$
 
 ### Stealth Address
 
-A register defines a public address used to produce a private address. A user wishing to create a stealth address for another user will find their public address and re-randomize the register as the new datum of a future UTxO.
+A register defines a type of public address used to produce private addresses. A user wishing to create a stealth address for another user will find their public address and re-randomize the register as the new datum of a future UTxO.
 
 A user selects a random integer, $d$, and constructs a new register.
 
@@ -102,7 +104,7 @@ $$
 
 From the outside viewer, the new register appears random and can not be inverted back into the public register because we assume the Elliptic Curve Decisional-Diffie-Hellman (ECDDH) problem is hard. The scalar multiplication of the register maintains spendability while providing privacy about who owns the UTxO.
 
-#### Re-Randomization Spendability Proof
+#### Re-randomization Spendability Proof
 
 $$
 h^{z} = h^{r} v^{c}
@@ -148,9 +150,9 @@ There exist multiple attacks that are known to break the privacy of this wallet.
 
 Privacy is preserved as long as $d$ is large and destroyed after use and the collateral used in the transaction is unconnectable to the original owner.
 
-## Happy Path Testing Scripts
+## Happy Path Test Scripts
 
-The happy paths follow Alice and Bob as they interact with their seedelf wallets. The scripts will allow each user to create and delete seedelfs, send tokens to another seedelf, and remove their tokens. The happy path has very basic functionality but it does serve as an example as how a seedelf wallet would work.
+The happy path for testing follows Alice and Bob as they interact with their seedelf wallets. The scripts will allow each user to create and delete seedelfs, send tokens to another seedelf, and remove their tokens. The happy path has very basic functionality but it does serve as an example as how a seedelf wallet would work.
 
 ### Creating A seedelf
 
@@ -164,8 +166,6 @@ An example seedelf file is shown below.
   "secret": 50932149572198509980040270467982453407914038612833920156636550490899997953674
 }
 ```
-
-Be sure to keep it safe!
 
 ### Removing Funds
 
@@ -202,7 +202,7 @@ The `seedelf-cli` uses the [Cardano collateral provider](https://giveme.my/). Ev
 
 ## The **seedelf-cli**
 
-Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/).
+Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/README.md).
 
 ## Contact
 

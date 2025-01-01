@@ -29,6 +29,8 @@ If a recompile is required and it changes the contract hashes then the README in
 
 ## Re-releasing Tag
 
+If a tag needs to be removed then delete it locally and delete the tagged branch.
+
 ```bash
 version="0.3.4"
 git tag -d ${version}
