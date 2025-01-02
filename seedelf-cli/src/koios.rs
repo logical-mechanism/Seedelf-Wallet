@@ -1,5 +1,8 @@
 use crate::register::Register;
-use reqwest::{Error, Client, Response};
+use crate::constants::{MAINNET_ADA_HANDLE_POLICY_ID, PREPROD_ADA_HANDLE_POLICY_ID};
+use crate::address;
+use hex;
+use reqwest::{Client, Error, Response};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -30,11 +33,7 @@ pub struct BlockchainTip {
 /// * `Ok(Vec<BlockchainTip>)` - A vector containing the latest blockchain tip data.
 /// * `Err(Error)` - If the API request or JSON parsing fails.
 pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
-    let network: &str = if network_flag {
-        "preprod"
-    } else {
-        "api"
-    };
+    let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{}.koios.rest/api/v1/tip", network);
 
     // Make the GET request and parse the JSON response
@@ -100,12 +99,11 @@ pub struct UtxoResponse {
 ///
 /// The function paginates through the UTXO results, starting with an offset of zero
 /// and incrementing by 1000 until no further results are returned.
-pub async fn credential_utxos(payment_credential: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
-    let network: &str = if network_flag {
-        "preprod"
-    } else {
-        "api"
-    };
+pub async fn credential_utxos(
+    payment_credential: &str,
+    network_flag: bool,
+) -> Result<Vec<UtxoResponse>, Error> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
     // this is searching the wallet contract. We have to collect the entire utxo set to search it.
     let url: String = format!("https://{}.koios.rest/api/v1/credential_utxos", network);
     let client: Client = reqwest::Client::new();
@@ -129,7 +127,7 @@ pub async fn credential_utxos(payment_credential: &str, network_flag: bool) -> R
             .json(&payload)
             .send()
             .await?;
-    
+
         let mut utxos: Vec<UtxoResponse> = response.json().await?;
         // Break the loop if no more results
         if utxos.is_empty() {
@@ -168,11 +166,7 @@ pub async fn credential_utxos(payment_credential: &str, network_flag: bool) -> R
 /// The function assumes a maximum of 1000 UTXOs per address, as per CIP-30 wallets.
 /// If an address exceeds this limit, the wallet is likely mismanaged.
 pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
-    let network: &str = if network_flag {
-        "preprod"
-    } else {
-        "api"
-    };
+    let network: &str = if network_flag { "preprod" } else { "api" };
     // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
     // if you have 1000 utxos in that wallets that cannot pay for anything then something
     // is wrong in that wallet
@@ -269,7 +263,9 @@ pub fn contains_policy_id(asset_list: &Option<Vec<Asset>>, target_policy_id: &st
     asset_list
         .as_ref() // Convert Option<Vec<Asset>> to Option<&Vec<Asset>>
         .map_or(false, |assets| {
-            assets.iter().any(|asset| asset.policy_id == target_policy_id)
+            assets
+                .iter()
+                .any(|asset| asset.policy_id == target_policy_id)
         })
 }
 
@@ -296,11 +292,7 @@ pub fn contains_policy_id(asset_list: &Option<Vec<Asset>>, target_policy_id: &st
 /// The function constructs a JSON-RPC request payload and sends a POST request
 /// to the Koios Ogmios endpoint.
 pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
-    let network: &str = if network_flag {
-        "preprod"
-    } else {
-        "api"
-    };
+    let network: &str = if network_flag { "preprod" } else { "api" };
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -350,11 +342,7 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
 /// The function constructs a JSON payload containing the transaction body and sends
 /// it to the specified API endpoint using a POST request.
 pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
-    let network: &str = if network_flag {
-        "preprod"
-    } else {
-        "mainnet"
-    };
+    let network: &str = if network_flag { "preprod" } else { "mainnet" };
     let url: String = format!("https://www.giveme.my/{}/collateral/", network);
     let client: Client = reqwest::Client::new();
 
@@ -396,11 +384,7 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
 /// - Decodes the transaction CBOR hex string into raw binary data.
 /// - Sends the binary data as the body of a POST request with `Content-Type: application/cbor`.
 pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
-    let network: &str = if network_flag {
-        "preprod"
-    } else {
-        "mainnet"
-    };
+    let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{}.koios.rest/api/v1/submittx", network);
     let client: Client = reqwest::Client::new();
 
@@ -410,9 +394,44 @@ pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Err
     let response: Response = client
         .post(url)
         .header("Content-Type", "application/cbor")
-        .body(data)  // Send the raw binary data as the body of the request
+        .body(data) // Send the raw binary data as the body of the request
         .send()
         .await?;
 
     Ok(response.json().await?)
+}
+
+pub async fn nft_address(asset_name: String, network_flag: bool) -> Result<String, String> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
+    let policy_id: &str = if network_flag { PREPROD_ADA_HANDLE_POLICY_ID } else { MAINNET_ADA_HANDLE_POLICY_ID };
+    let url: String = format!("https://{}.koios.rest/api/v1/asset_nft_address?_asset_policy={}&_asset_name={}", network, policy_id, hex::encode(asset_name));
+    let client: Client = reqwest::Client::new();
+
+    let response: Response = match client
+        .get(url)
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        {
+            Ok(resp) => resp,
+            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+        };
+
+    let outcome: Value = response.json().await.unwrap();
+    let vec_outcome = serde_json::from_value::<Vec<serde_json::Value>>(outcome)
+        .expect("Failed to parse outcome as Vec<Value>");
+
+    // Borrow from the longer-lived variable
+    let payment_address = vec_outcome
+        .get(0)
+        .and_then(|obj| obj.get("payment_address"))
+        .and_then(|val| val.as_str())
+        .unwrap();
+    let wallet_addr = address::wallet_contract(network_flag).to_bech32().unwrap();
+
+    if payment_address == wallet_addr {
+        Err("ADA Handle Is In Wallet Address".to_string())
+    } else {
+        Ok(payment_address.to_string())
+    }
 }

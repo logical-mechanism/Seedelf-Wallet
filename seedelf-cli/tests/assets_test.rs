@@ -1,4 +1,5 @@
 use seedelf_cli::assets::{Asset, Assets};
+use hex;
 
 #[test]
 fn assets_can_clone_and_compare() {
@@ -71,4 +72,11 @@ fn asset_can_separate() {
     let change: Assets = total.separate(total.clone());
     assert_eq!(change, Assets::new());
     assert_eq!(change.items.len(), 0)
+}
+
+#[test]
+fn asset_to_hex() {
+    let name = "logic.mech";
+    let hex_name = "6c6f6769632e6d656368";
+    assert_eq!(hex::encode(name), hex_name)
 }
