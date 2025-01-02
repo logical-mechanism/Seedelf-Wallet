@@ -51,6 +51,10 @@ pub struct SweepArgs {
     /// Optional repeated `amount`
     #[arg(long = "amount", help = "The amount for the asset", display_order = 6)]
     amount: Option<Vec<u64>>,
+
+    /// Optional ADA Handle
+    #[arg(long = "ada-handle", help = "ADA handle without the $", display_order = 7)]
+    ada_handle: Option<String>
 }
 
 pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {

@@ -9,8 +9,8 @@ pub const MAINNET_WALLET_REFERENCE_UTXO: &str = "";
 pub const MAINNET_SEEDELF_REFERENCE_UTXO: &str = "";
 
 // support [LOGIC]
-pub const MAINNET_STAKE_HASH: &str = "07ac7dee6c82177096b70ccf21cfb8965c1fb08e079f9ca4af4b2b3e";
 pub const PREPROD_STAKE_HASH: &str = "86c769419aaa673c963da04e4b5bae448d490e2ceac902cb82e4da76";
+pub const MAINNET_STAKE_HASH: &str = "07ac7dee6c82177096b70ccf21cfb8965c1fb08e079f9ca4af4b2b3e";
 
 // collateral info for giveme.my
 pub const COLLATERAL_HASH: &str = "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4";
@@ -18,6 +18,10 @@ pub const COLLATERAL_PUBLIC_KEY: &str = "fa2025e788fae01ce10deffff386f992f62a311
 
 pub const PREPROD_COLLATERAL_UTXO: &str = "1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f";
 pub const MAINNET_COLLATERAL_UTXO: &str = "";
+
+// ADA Handle Policy Ids
+pub const PREPROD_ADA_HANDLE_POLICY_ID: &str = "8d18d786e92776c824607fd8e193ec535c79dc61ea2405ddf3b09fe3";
+pub const MAINNET_ADA_HANDLE_POLICY_ID: &str = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a";
 
 // script sizes
 pub const WALLET_CONTRACT_SIZE: u64 = 629;
