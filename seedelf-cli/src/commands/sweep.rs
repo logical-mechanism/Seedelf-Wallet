@@ -76,7 +76,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let outbound_address: String = if args.address.is_some() {
         args.address.unwrap()
     } else {
-        nft_address(args.ada_handle.unwrap(), network_flag).await.unwrap()
+        nft_address(args.ada_handle.unwrap(), network_flag, false).await.unwrap()
     };
     let addr: Address = Address::from_bech32(outbound_address.as_str()).unwrap();
 

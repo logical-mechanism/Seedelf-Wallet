@@ -1,6 +1,6 @@
-use crate::register::Register;
-use crate::constants::{MAINNET_ADA_HANDLE_POLICY_ID, PREPROD_ADA_HANDLE_POLICY_ID};
 use crate::address;
+use crate::constants::ADA_HANDLE_POLICY_ID;
+use crate::register::Register;
 use hex;
 use reqwest::{Client, Error, Response};
 use serde::Deserialize;
@@ -401,10 +401,16 @@ pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Err
     Ok(response.json().await?)
 }
 
-pub async fn nft_address(asset_name: String, network_flag: bool) -> Result<String, String> {
+pub async fn nft_address(asset_name: String, network_flag: bool, cip68_flag: bool) -> Result<String, String> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let policy_id: &str = if network_flag { PREPROD_ADA_HANDLE_POLICY_ID } else { MAINNET_ADA_HANDLE_POLICY_ID };
-    let url: String = format!("https://{}.koios.rest/api/v1/asset_nft_address?_asset_policy={}&_asset_name={}", network, policy_id, hex::encode(asset_name));
+    let token_name = if cip68_flag {"000de140".to_string() + &hex::encode(asset_name.clone())} else {hex::encode(asset_name.clone())};
+    let url: String = format!(
+        "https://{}.koios.rest/api/v1/asset_nft_address?_asset_policy={}&_asset_name={}",
+        network,
+        ADA_HANDLE_POLICY_ID,
+        // some have the 222 prefix
+        token_name
+    );
     let client: Client = reqwest::Client::new();
 
     let response: Response = match client
@@ -412,22 +418,32 @@ pub async fn nft_address(asset_name: String, network_flag: bool) -> Result<Strin
         .header("Content-Type", "application/json")
         .send()
         .await
-        {
-            Ok(resp) => resp,
-            Err(err) => return Err(format!("HTTP request failed: {}", err)),
-        };
+    {
+        Ok(resp) => resp,
+        Err(err) => return Err(format!("HTTP request failed: {}", err)),
+    };
 
     let outcome: Value = response.json().await.unwrap();
     let vec_outcome = serde_json::from_value::<Vec<serde_json::Value>>(outcome)
         .expect("Failed to parse outcome as Vec<Value>");
 
     // Borrow from the longer-lived variable
-    let payment_address = vec_outcome
+    let payment_address = match vec_outcome
         .get(0)
         .and_then(|obj| obj.get("payment_address"))
         .and_then(|val| val.as_str())
-        .unwrap();
-    let wallet_addr = address::wallet_contract(network_flag).to_bech32().unwrap();
+    {
+        Some(address) => address,
+        None => {
+            if cip68_flag {
+                return Err("Payment address not found".to_string())
+            } else {
+                return Box::pin(nft_address(asset_name, network_flag, !cip68_flag)).await;
+            }
+        }
+    };
+
+    let wallet_addr: String = address::wallet_contract(network_flag).to_bech32().unwrap();
 
     if payment_address == wallet_addr {
         Err("ADA Handle Is In Wallet Address".to_string())
