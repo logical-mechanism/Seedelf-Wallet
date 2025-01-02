@@ -5,8 +5,8 @@ use ff::PrimeField;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-
+use std::path::PathBuf;
+use dirs::home_dir;
 use aes_gcm::aead::{Aead, AeadCore, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::{password_hash::SaltString, Argon2};
@@ -32,8 +32,9 @@ struct EncryptedData {
 /// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
 pub fn check_and_prepare_seedelf() {
     println!("{}", "Checking For Existing Seedelf Wallet".bright_blue());
-    // this needs to be replaced with 
-    let seedelf_path: PathBuf = Path::new("/home").join(whoami::username()).join(".seedelf");
+
+    let home: PathBuf = home_dir().expect("Failed to get home directory");
+    let seedelf_path: PathBuf = home.join(".seedelf");
 
     // Check if `.seedelf` exists
     if !seedelf_path.exists() {
@@ -54,7 +55,7 @@ pub fn check_and_prepare_seedelf() {
     } else {
         for entry in &contents {
             if let Ok(file_name) = entry.file_name().into_string() {
-                println!("Loading Wallet: {}", file_name.bright_cyan());
+                println!("Found Wallet: {}", file_name.bright_cyan());
             }
         }
     }
@@ -151,8 +152,9 @@ fn create_wallet(wallet_path: &PathBuf) {
 
 /// Load the wallet file and deserialize the private key into a Scalar
 pub fn load_wallet() -> Scalar {
-    // Default `.seedelf` directory path
-    let seedelf_path: PathBuf = Path::new("/home").join(whoami::username()).join(".seedelf");
+
+    let home: PathBuf = home_dir().expect("Failed to get home directory");
+    let seedelf_path: PathBuf = home.join(".seedelf");
 
     // Get the list of files in `.seedelf`
     let contents: Vec<fs::DirEntry> = fs::read_dir(&seedelf_path)
