@@ -31,6 +31,8 @@ enum Commands {
     Transfer(commands::transfer::TransforArgs),
     /// A Seedelf sends funds to an address
     Sweep(commands::sweep::SweepArgs),
+    /// Update the seedelf-cli with the newest tagged release
+    Update
 }
 
 #[tokio::main]
@@ -74,6 +76,11 @@ async fn main() {
         }
         Some(Commands::Remove(args)) => {
             if let Err(err) = commands::remove::run(args, cli.preprod).await {
+                eprintln!("Error: {}", err);
+            }
+        }
+        Some(Commands::Update) => {
+            if let Err(err) = commands::update::run().await {
                 eprintln!("Error: {}", err);
             }
         }
