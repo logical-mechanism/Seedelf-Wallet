@@ -79,12 +79,14 @@ async fn main() {
                 eprintln!("Error: {}", err);
             }
         }
+        Some(Commands::Update) => {
+            if let Err(err) = commands::update::run().await {
+                eprintln!("Error: {}", err);
+            }
+        }
         // catch the no command state
         None => {
             println!("No subcommand provided. Use --help for more information.");
-        }
-        Some(Commands::Update) => {
-            commands::update::run();
         }
     }
 }
