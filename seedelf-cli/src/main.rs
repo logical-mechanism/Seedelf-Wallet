@@ -31,6 +31,8 @@ enum Commands {
     Transfer(commands::transfer::TransforArgs),
     /// A Seedelf sends funds to an address
     Sweep(commands::sweep::SweepArgs),
+    /// Update the seedelf-cli with the newest tagged release
+    Update
 }
 
 #[tokio::main]
@@ -80,6 +82,9 @@ async fn main() {
         // catch the no command state
         None => {
             println!("No subcommand provided. Use --help for more information.");
+        }
+        Some(Commands::Update) => {
+            commands::update::run();
         }
     }
 }

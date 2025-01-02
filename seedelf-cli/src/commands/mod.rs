@@ -5,3 +5,4 @@ pub mod remove;
 pub mod sweep;
 pub mod transfer;
 pub mod welcome;
+pub mod update;
