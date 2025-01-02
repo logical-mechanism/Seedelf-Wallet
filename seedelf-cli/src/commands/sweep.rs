@@ -69,6 +69,10 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         return Err("--address and --ada-handle cannot be used together.".to_string());
     }
 
+    if args.ada_handle.clone().is_some_and(|x| x.is_empty()) {
+        return Err("ADA Handle cannot be empty".to_string());
+    }
+
     let outbound_address: String = if args.address.is_some() {
         args.address.unwrap()
     } else {
