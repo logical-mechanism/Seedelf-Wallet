@@ -17,7 +17,7 @@ use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{
     evaluate_transaction, extract_bytes_with_logging,
-    submit_tx, witness_collateral, UtxoResponse
+    submit_tx, witness_collateral, UtxoResponse, nft_address
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
@@ -30,7 +30,7 @@ use seedelf_cli::setup;
 pub struct SweepArgs {
     /// address that receives the funds
     #[arg(short = 'a', long, help = "The address receiving funds.", display_order = 1)]
-    address: String,
+    address: Option<String>,
 
     /// The amount of ADA to send
     #[arg(short = 'l', long, help = "The amount of Lovelace being sent to the address. Cannt be used with --all", display_order = 2)]
@@ -51,10 +51,37 @@ pub struct SweepArgs {
     /// Optional repeated `amount`
     #[arg(long = "amount", help = "The amount for the asset", display_order = 6)]
     amount: Option<Vec<u64>>,
+
+    /// Optional ADA Handle
+    #[arg(long = "ada-handle", help = "ADA handle without the $", display_order = 7)]
+    ada_handle: Option<String>
 }
 
 pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     preprod_text(network_flag);
+
+    // address or ada handle must be found
+    if args.address.is_none() && args.ada_handle.is_none() {
+        return Err("Either --address or --ada-handle must be specified.".to_string());
+    }
+
+    if args.address.is_some() && args.ada_handle.is_some() {
+        return Err("--address and --ada-handle cannot be used together.".to_string());
+    }
+
+    if args.ada_handle.clone().is_some_and(|x| x.is_empty()) {
+        return Err("ADA Handle cannot be empty".to_string());
+    }
+
+    let outbound_address: String = if args.address.is_some() {
+        args.address.unwrap()
+    } else {
+        match nft_address(args.ada_handle.unwrap(), network_flag, false).await {
+            Err(err) => return Err(err),
+            Ok(potential_addr) => potential_addr,
+        }
+    };
+    let addr: Address = Address::from_bech32(outbound_address.as_str()).unwrap();
 
     // need to check about if all then assets is none too etc
     if  !args.all && (args.lovelace.is_none() && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())) {
@@ -89,12 +116,11 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
         }
     }
 
-    if args.lovelace.is_some_and(|x| x < address_minimum_lovelace_with_assets(&args.address, selected_tokens.clone())) {
+    if args.lovelace.is_some_and(|x| x < address_minimum_lovelace_with_assets(&outbound_address, selected_tokens.clone())) {
         return Err("lovelace Too Small For Min UTxO".to_string());
     }
 
     // we need to make sure that the network flag and the address provided makes sense here
-    let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
