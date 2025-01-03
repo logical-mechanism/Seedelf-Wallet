@@ -32,7 +32,9 @@ enum Commands {
     /// A Seedelf sends funds to an address
     Sweep(commands::sweep::SweepArgs),
     /// Update the seedelf-cli with the newest tagged release
-    Update
+    Update,
+    /// Utility functions for seedelf-cli
+    Util(commands::util::UtilArgs),
 }
 
 #[tokio::main]
@@ -83,6 +85,9 @@ async fn main() {
             if let Err(err) = commands::update::run().await {
                 eprintln!("Error: {}", err);
             }
+        }
+        Some(Commands::Util(util_command)) => {
+            commands::util::run(util_command);
         }
         // catch the no command state
         None => {
