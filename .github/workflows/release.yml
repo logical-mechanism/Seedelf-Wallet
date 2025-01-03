@@ -40,7 +40,7 @@ jobs:
 
       - name: Compress Binary and Checksum (Linux)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli seedelf-cli.sha256 seedelf-cli.asc
+        run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli
       
       - name: Sign Tar File (Linux)
         working-directory: seedelf-cli
@@ -126,7 +126,7 @@ jobs:
       - name: Compress Binary and Checksum (Windows)
         shell: pwsh
         working-directory: seedelf-cli
-        run: Compress-Archive -Path seedelf-cli.exe,seedelf-cli.sha256,seedelf-cli.exe.asc -DestinationPath seedelf-cli-windows.zip
+        run: Compress-Archive -Path seedelf-cli.exe -DestinationPath seedelf-cli-windows.zip
 
       - name: Sign Zip File (Windows)
         shell: pwsh
@@ -196,7 +196,7 @@ jobs:
 
       - name: Compress Binary and Checksum (macOS)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli seedelf-cli.sha256 seedelf-cli.asc
+        run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli
       
       - name: Sign Tar File (MacOS)
         working-directory: seedelf-cli
