@@ -58,13 +58,13 @@ Commands:
   transfer  A Seedelf sends funds to a Seedelf
   sweep     A Seedelf sends funds to an address
   update    Update the seedelf-cli with the newest tagged release
+  util      Utility functions for seedelf-cli
   help      Print this message or the help of the given subcommand(s)
 
 Options:
       --preprod  Use this flag to interact with the pre-production environment
   -h, --help     Print help
   -V, --version  Print version
-
 ```
 
 ### Basic Usage
