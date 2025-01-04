@@ -25,6 +25,11 @@ pub async fn run_web_server(message: String, network_flag: bool) {
                 r#"{ "network": "FADECAFE00000000" }"#,
                 format!(r#"{{ "network": "{}" }}"#, "preprod.").as_str(),
             );
+        } else {
+            html = html.replace(
+                r#"{ "network": "FADECAFE00000000" }"#,
+                format!(r#"{{ "network": "{}" }}"#, "").as_str(),
+            );
         }
         warp::reply::html(html)
     });
