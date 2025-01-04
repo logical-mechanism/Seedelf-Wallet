@@ -28,7 +28,7 @@ pub async fn run_web_server(message: String, network_flag: bool) {
         } else {
             html = html.replace(
                 r#"{ "network": "FADECAFE00000000" }"#,
-                format!(r#"{{ "network": "{}" }}"#, "").as_str(),
+                r#"{ "network": "" }"#,
             );
         }
         warp::reply::html(html)
