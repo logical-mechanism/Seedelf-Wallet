@@ -1,6 +1,6 @@
 use blstrs::Scalar;
 use colored::Colorize;
-use crate::display::hex_to_ascii;
+use crate::display::seedelf_label;
 use crate::assets::{string_to_u64, Asset, Assets};
 use crate::constants::{MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH, MAXIMUM_TOKENS_PER_UTXO};
 use crate::koios::{
@@ -332,12 +332,7 @@ pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool) {
                     if asset_name.to_lowercase().contains(&label.to_lowercase()) {
                         // we found it so print it
                         println!("\n{}: {}","Found Match:".bright_cyan(), asset_name.bright_white());
-                        let substring: String = asset_name[8..38].to_string();
-                        let label: String = hex_to_ascii(&substring).unwrap();
-                        if label.chars().next() != Some('.') {
-                            let cleaned: String = label.chars().filter(|&c| c != '.').collect();
-                            println!("Label: {}", cleaned.bright_yellow())
-                        }
+                        seedelf_label(asset_name.to_string());
                     }
                 }
             }
