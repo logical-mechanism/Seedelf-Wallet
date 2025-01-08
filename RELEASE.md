@@ -19,8 +19,10 @@ git push origin ${version}
 Publish to crates.io with this command.
 
 ```bash
+cd seedelf-cli
 cargo package
 cargo publish --dry-run
+cd ..
 ```
 
 ## Recompiling
