@@ -345,3 +345,24 @@ pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool) {
         }
     }
 }
+
+/// Find a seedelf that contains the label and print the match.
+pub async fn count_lovelace_and_utxos(network_flag: bool) {
+    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+        Ok(utxos) => {
+            let mut total_lovelace: u64 = 0;
+            for utxo in utxos.clone() {
+                let value: u64 = string_to_u64(utxo.value.clone()).unwrap();
+                total_lovelace += value;
+            }
+            println!("\nBalance: {} ₳", format!("{:.6}", total_lovelace as f64 / 1_000_000.0).bright_yellow());
+            println!("Contract Has {} UTxOs", utxos.len().to_string().bright_yellow());
+        }
+        Err(err) => {
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
+        }
+    }
+}
