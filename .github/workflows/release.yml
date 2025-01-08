@@ -272,9 +272,9 @@ jobs:
 
             This release includes binaries and checksums for Linux, Windows, and macOS.
 
-            Get the [release key here](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/util/pubkeys/seedelfwallet.asc)
+            Get the [release key here](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/util/pubkeys/seedelfwallet.asc).
 
-            Thank you for using `seedelf-cli`
+            Thank you for using `seedelf-cli`.
 
             If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
           generate_release_notes: true

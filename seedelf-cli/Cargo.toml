@@ -3,7 +3,7 @@ name = "seedelf-cli"
 version = "0.3.6"
 edition = "2021"
 license = "MIT"
-description = "A CLI for the Seedelf Wallet"
+description = "Seedelf: A Cardano Stealth Wallet"
 authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
 repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
 

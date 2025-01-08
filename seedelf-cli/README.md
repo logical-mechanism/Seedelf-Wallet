@@ -2,7 +2,7 @@
 
 The `seedelf-cli` is a Rust implementation of the Seedelf stealth wallet protocol. It uses [Cardano collateral provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal-base but it does use a static HTML web interface for CIP30 interactions when required.
 
-**Note: Wallet Is Currently In Alpha**
+**Note: Wallet Is Currently In Beta**
 
 ## Installation
 

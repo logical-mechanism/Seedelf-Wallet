@@ -3,7 +3,7 @@ version = "0.3.6"
 compiler = "v1.1.9"
 plutus = "v3"
 license = "MIT"
-description = "A Cardano Stealth Wallet"
+description = "Seedelf: A Cardano Stealth Wallet"
 
 [repository]
 user = "logical-mechanism"
