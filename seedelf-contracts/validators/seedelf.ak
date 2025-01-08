@@ -1,6 +1,6 @@
 //// The minter is used to define a specific registry in the wallet contract.
 //// Its an open policy for minting and burning but each token will always
-//// be unique. Its use case is as a locator for the root datum. A user can
+//// be unique. The token acts as a locator for the root datum. A user can
 //// display the token name as their address then another user may locate the
 //// UTxO that holds the nft and obtain the Register datum. This datum is then
 //// used to produce a private address for the user. A single user may have
