@@ -87,7 +87,7 @@ async fn main() {
             }
         }
         Some(Commands::Util(util_command)) => {
-            commands::util::run(util_command);
+            commands::util::run(util_command, cli.preprod).await
         }
         // catch the no command state
         None => {
