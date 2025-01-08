@@ -66,15 +66,18 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
         println!("{}", "\nCurrent Seedelf:\n".bright_green());
         for seedelf in seedelfs {
             println!("\nSeedelf: {}", seedelf.white());
-            let substring: String = seedelf[8..38].to_string();
-            let label: String = hex_to_ascii(&substring).unwrap();
-            if label.chars().next() != Some('.') {
-                let cleaned: String = label.chars().filter(|&c| c != '.').collect();
-                println!("Label: {}", cleaned.bright_yellow())
-            }
-    
+            seedelf_label(seedelf);
         }
 
+    }
+}
+
+pub fn seedelf_label(seedelf: String) {
+    let substring: String = seedelf[8..38].to_string();
+    let label: String = hex_to_ascii(&substring).unwrap();
+    if label.chars().next() != Some('.') {
+        let cleaned: String = label.chars().filter(|&c| c != '.').collect();
+        println!("Label: {}", cleaned.bright_yellow())
     }
 }
 

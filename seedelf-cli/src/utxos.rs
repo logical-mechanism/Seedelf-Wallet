@@ -1,5 +1,6 @@
 use blstrs::Scalar;
-
+use colored::Colorize;
+use crate::display::seedelf_label;
 use crate::assets::{string_to_u64, Asset, Assets};
 use crate::constants::{MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH, MAXIMUM_TOKENS_PER_UTXO};
 use crate::koios::{
@@ -310,4 +311,37 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
         }
     }
     (current_lovelace_sum, found_assets)
+}
+
+
+/// Find a seedelf that contains the label and print the match.
+pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool) {
+    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+        Ok(utxos) => {
+            for utxo in utxos {
+                if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                    let asset_name = utxo
+                        .asset_list
+                        .as_ref()
+                        .and_then(|vec| {
+                            vec.iter()
+                                .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
+                                .map(|asset| &asset.asset_name)
+                        })
+                        .unwrap();
+                    if asset_name.to_lowercase().contains(&label.to_lowercase()) {
+                        // we found it so print it
+                        println!("\n{}: {}","Found Match:".bright_cyan(), asset_name.bright_white());
+                        seedelf_label(asset_name.to_string());
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
+        }
+    }
 }
