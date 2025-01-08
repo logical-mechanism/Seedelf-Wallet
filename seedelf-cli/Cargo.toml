@@ -48,3 +48,5 @@ base64 = "0.22.1"
 colored = "2.2.0"
 # just for updating from github
 self_update = { version = "0.42.0", features = ["archive-tar", "archive-zip"] }
+# for static files
+include_dir = "0.7.4"

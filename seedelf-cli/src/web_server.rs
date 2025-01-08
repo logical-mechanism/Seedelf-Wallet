@@ -1,7 +1,10 @@
-use std::fs;
 use std::net::SocketAddr;
 use warp::Filter;
 use colored::Colorize;
+use include_dir::{include_dir, Dir};
+
+const STATIC_DIR: Dir = include_dir!("static");
+
 /// Start a web server and inject a dynamic message into the HTML.
 ///
 /// # Arguments
@@ -13,7 +16,8 @@ pub async fn run_web_server(message: String, network_flag: bool) {
 
     // Serve index.html with dynamic content
     let html_route = warp::path::end().map(move || {
-        let mut html = fs::read_to_string("static/index.html").expect("Failed to read HTML file");
+        let html_file = STATIC_DIR.get_file("index.html").expect("Failed to read HTML file");
+        let mut html = html_file.contents_utf8().expect("Failed to read HTML").to_string();
         // Replace the JSON content inside the injected-data script
         let dynamic_json = format!(r#"{{ "message": "{}" }}"#, message);
         html = html.replace(
@@ -35,13 +39,22 @@ pub async fn run_web_server(message: String, network_flag: bool) {
     });
 
     // Serve index.js as a static file
-    let js_route = warp::path("index.js").and(warp::fs::file("static/index.js"));
+    let js_route = warp::path("index.js").map(|| {
+        let file = STATIC_DIR.get_file("index.js").expect("JavaScript file not found");
+        warp::reply::with_header(file.contents(), "Content-Type", "application/javascript")
+    });
 
     // Serve favicon.ico
-    let favicon_route = warp::path("favicon.ico").and(warp::fs::file("static/favicon.ico"));
+    let favicon_route = warp::path("favicon.ico").map(|| {
+        let file = STATIC_DIR.get_file("favicon.ico").expect("Favicon not found");
+        warp::reply::with_header(file.contents(), "Content-Type", "image/x-icon")
+    });
 
     // Serve index.css
-    let css_route = warp::path("index.css").and(warp::fs::file("static/index.css"));
+    let css_route = warp::path("index.css").map(|| {
+        let file = STATIC_DIR.get_file("index.css").expect("CSS file not found");
+        warp::reply::with_header(file.contents(), "Content-Type", "text/css")
+    });
 
     // Combine all routes
     let routes = html_route.or(js_route).or(favicon_route).or(css_route);
