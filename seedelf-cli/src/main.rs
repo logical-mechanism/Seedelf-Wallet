@@ -31,8 +31,8 @@ enum Commands {
     Transfer(commands::transfer::TransforArgs),
     /// A Seedelf sends funds to an address
     Sweep(commands::sweep::SweepArgs),
-    /// Update the seedelf-cli with the newest tagged release
-    Update,
+    //// Update the seedelf-cli with the newest tagged release
+    // Update,
     /// Utility functions for seedelf-cli
     Util(commands::util::UtilArgs),
 }
@@ -81,11 +81,11 @@ async fn main() {
                 eprintln!("Error: {}", err);
             }
         }
-        Some(Commands::Update) => {
-            if let Err(err) = commands::update::run().await {
-                eprintln!("Error: {}", err);
-            }
-        }
+        // Some(Commands::Update) => {
+        //     if let Err(err) = commands::update::run().await {
+        //         eprintln!("Error: {}", err);
+        //     }
+        // }
         Some(Commands::Util(util_command)) => {
             commands::util::run(util_command, cli.preprod).await
         }
