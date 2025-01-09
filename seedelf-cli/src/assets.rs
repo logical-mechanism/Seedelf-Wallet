@@ -29,7 +29,7 @@ impl Asset {
                     .expect("Incorrect Length"),
             ),
             token_name: hex::decode(token_name).unwrap(),
-            amount: amount,
+            amount,
         }
     }
 
@@ -45,12 +45,12 @@ impl Asset {
     /// * `Err(String)` - If the `policy_id` or `token_name` do not match.
     pub fn add(&self, other: &Asset) -> Result<Self, String> {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
-            return Err(format!(
-                "Assets must have the same policy_id and token_name to be subtracted"
-            ));
+            return Err(
+                "Assets must have the same policy_id and token_name to be subtracted".to_string(),
+            );
         }
         Ok(Self {
-            policy_id: self.policy_id.clone(),
+            policy_id: self.policy_id,
             token_name: self.token_name.clone(),
             amount: self.amount + other.amount,
         })
@@ -68,12 +68,12 @@ impl Asset {
     /// * `Err(String)` - If the `policy_id` or `token_name` do not match.
     pub fn sub(&self, other: &Asset) -> Result<Self, String> {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
-            return Err(format!(
-                "Assets must have the same policy_id and token_name to be subtracted"
-            ));
+            return Err(
+                "Assets must have the same policy_id and token_name to be subtracted".to_string(),
+            );
         }
         Ok(Self {
-            policy_id: self.policy_id.clone(),
+            policy_id: self.policy_id,
             token_name: self.token_name.clone(),
             amount: self.amount - other.amount,
         })
@@ -103,6 +103,12 @@ impl Asset {
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Hash, Clone)]
 pub struct Assets {
     pub items: Vec<Asset>,
+}
+
+impl Default for Assets {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Assets {
@@ -158,8 +164,8 @@ impl Assets {
         let filtered_items: Vec<Asset> = self
             .items
             .iter()
-            .cloned()
             .filter(|asset| asset.amount > 0)
+            .cloned()
             .collect();
         Self {
             items: filtered_items,
@@ -181,7 +187,7 @@ impl Assets {
             }
             // if we didnt find it then false
             if !found {
-                return false
+                return false;
             }
         }
         // we found all the other tokens
@@ -191,15 +197,17 @@ impl Assets {
     /// Checks if any asset in `other` exists in this collection.
     pub fn any(&self, other: Assets) -> bool {
         if other.items.is_empty() {
-            return true
+            return true;
         }
         // search all other tokens and make sure they exist in these assets
         for other_token in other.items {
             // lets check all the assets in these assets
             for token in self.items.clone() {
                 // if its greater than or equal then break
-                if token.policy_id == other_token.policy_id && token.token_name == other_token.token_name {
-                    return true
+                if token.policy_id == other_token.policy_id
+                    && token.token_name == other_token.token_name
+                {
+                    return true;
                 }
             }
         }
@@ -210,22 +218,22 @@ impl Assets {
     /// Merges two collections of assets, combining amounts of matching assets.
     pub fn merge(&self, other: Assets) -> Self {
         let mut merged: Assets = self.clone(); // Clone the current `Assets` as a starting point
-    
+
         for other_asset in other.items {
             merged = merged.add(other_asset); // Use `add` to handle merging logic
         }
-    
+
         merged
     }
 
     /// Separates two collections of assets, subtracting amounts of matching assets.
     pub fn separate(&self, other: Assets) -> Self {
         let mut separated: Assets = self.clone(); // Clone the current `Assets` as a starting point
-    
+
         for other_asset in other.items {
             separated = separated.sub(other_asset); // Use `add` to handle merging logic
         }
-    
+
         separated
     }
 
@@ -240,7 +248,9 @@ impl Assets {
     pub fn split(&self, k: usize) -> Vec<Self> {
         self.items
             .chunks(k) // Divide the `items` into slices of at most `k` elements
-            .map(|chunk| Assets { items: chunk.to_vec() }) // Convert each slice into an `Assets` struct
+            .map(|chunk| Assets {
+                items: chunk.to_vec(),
+            }) // Convert each slice into an `Assets` struct
             .collect()
     }
 }

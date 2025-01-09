@@ -1,13 +1,15 @@
-use blstrs::Scalar;
-use colored::Colorize;
-use crate::display::seedelf_label;
 use crate::assets::{string_to_u64, Asset, Assets};
-use crate::constants::{MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH, MAXIMUM_TOKENS_PER_UTXO};
+use crate::constants::{
+    MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH,
+};
+use crate::display::seedelf_label;
 use crate::koios::{
     address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging, UtxoResponse,
 };
 use crate::register::Register;
 use crate::transaction::wallet_minimum_lovelace_with_assets;
+use blstrs::Scalar;
+use colored::Colorize;
 
 /// collects all the wallet utxos owned by some scalar.
 pub async fn collect_all_wallet_utxos(sk: Scalar, network_flag: bool) -> Vec<UtxoResponse> {
@@ -28,14 +30,21 @@ pub async fn collect_all_wallet_utxos(sk: Scalar, network_flag: bool) -> Vec<Utx
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
         }
     }
     all_utxos
 }
 
 /// Find a specific seedelf's datum and all the utxos owned by a scalar. The maximum amount of utxos is limited by a upper bound.
-pub async fn find_seedelf_and_wallet_utxos(sk: Scalar, seedelf: String, network_flag: bool) -> (Option<Register>, Vec<UtxoResponse>) {
+pub async fn find_seedelf_and_wallet_utxos(
+    sk: Scalar,
+    seedelf: String,
+    network_flag: bool,
+) -> (Option<Register>, Vec<UtxoResponse>) {
     let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
     let mut number_of_utxos: u64 = 0;
 
@@ -48,18 +57,18 @@ pub async fn find_seedelf_and_wallet_utxos(sk: Scalar, seedelf: String, network_
                 if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
                     if !found_seedelf && contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
                         let asset_name = utxo
-                                .asset_list
-                                .as_ref()
-                                .and_then(|vec| {
-                                    vec.iter()
-                                        .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
-                                        .map(|asset| &asset.asset_name)
-                                })
-                                .unwrap();
-                            if asset_name == &seedelf {
-                                found_seedelf = true;
-                                seedelf_datum = Some(inline_datum.clone());
-                            }
+                            .asset_list
+                            .as_ref()
+                            .and_then(|vec| {
+                                vec.iter()
+                                    .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
+                                    .map(|asset| &asset.asset_name)
+                            })
+                            .unwrap();
+                        if asset_name == &seedelf {
+                            found_seedelf = true;
+                            seedelf_datum = Some(inline_datum.clone());
+                        }
                     }
                     // utxo must be owned by this secret scaler
                     if inline_datum.is_owned(sk) {
@@ -188,7 +197,7 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
 
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
-pub fn  select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Vec<UtxoResponse> {
+pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Vec<UtxoResponse> {
     let mut selected_utxos: Vec<UtxoResponse> = Vec::new();
 
     let mut current_lovelace_sum: u64 = 0;
@@ -231,7 +240,6 @@ pub fn  select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> V
                     current_lovelace_sum += value;
                     found_assets = found_assets.merge(utxo_assets.clone());
                     added = true;
-
                 }
             } else {
                 // no tokens here just lovelace so add it
@@ -242,15 +250,13 @@ pub fn  select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> V
                 }
             }
         }
-        
+
         // the utxo is not pure ada and doesnt contain what you need but you need ada because you already found the tokens so add it
         if !added && current_lovelace_sum < lovelace && found_assets.contains(tokens.clone()) {
             selected_utxos.push(utxo.clone());
             current_lovelace_sum += value;
             found_assets = found_assets.merge(utxo_assets);
         }
-
-        
 
         // we know we found enough lovelace and assets
         if current_lovelace_sum >= lovelace && found_assets.contains(tokens.clone()) {
@@ -272,7 +278,11 @@ pub fn  select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> V
                 break;
             } else {
                 // its not, try again but increase the lovelace by the minimum we would need
-                select(utxos.clone(), lovelace + multiplier * minimum, tokens.clone());
+                select(
+                    utxos.clone(),
+                    lovelace + multiplier * minimum,
+                    tokens.clone(),
+                );
             }
         }
     }
@@ -313,7 +323,6 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
     (current_lovelace_sum, found_assets)
 }
 
-
 /// Find a seedelf that contains the label and print the match.
 pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool) {
     match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
@@ -331,7 +340,11 @@ pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool) {
                         .unwrap();
                     if asset_name.to_lowercase().contains(&label.to_lowercase()) {
                         // we found it so print it
-                        println!("\n{}: {}","Found Match:".bright_cyan(), asset_name.bright_white());
+                        println!(
+                            "\n{}: {}",
+                            "Found Match:".bright_cyan(),
+                            asset_name.bright_white()
+                        );
                         seedelf_label(asset_name.to_string());
                     }
                 }
@@ -355,8 +368,14 @@ pub async fn count_lovelace_and_utxos(network_flag: bool) {
                 let value: u64 = string_to_u64(utxo.value.clone()).unwrap();
                 total_lovelace += value;
             }
-            println!("\nBalance: {} ₳", format!("{:.6}", total_lovelace as f64 / 1_000_000.0).bright_yellow());
-            println!("Contract Has {} UTxOs", utxos.len().to_string().bright_yellow());
+            println!(
+                "\nBalance: {} ₳",
+                format!("{:.6}", total_lovelace as f64 / 1_000_000.0).bright_yellow()
+            );
+            println!(
+                "Contract Has {} UTxOs",
+                utxos.len().to_string().bright_yellow()
+            );
         }
         Err(err) => {
             eprintln!(

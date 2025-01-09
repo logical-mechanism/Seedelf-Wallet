@@ -1,4 +1,3 @@
-use seedelf_cli::setup;
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
@@ -11,11 +10,12 @@ use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
-use seedelf_cli::constants::{plutus_v3_cost_model, SEEDELF_POLICY_ID, SEEDELF_CONTRACT_SIZE};
+use seedelf_cli::constants::{plutus_v3_cost_model, SEEDELF_CONTRACT_SIZE, SEEDELF_POLICY_ID};
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{address_utxos, evaluate_transaction, UtxoResponse};
 use seedelf_cli::register::Register;
+use seedelf_cli::setup;
 use seedelf_cli::transaction;
 use seedelf_cli::utxos;
 use seedelf_cli::web_server;
@@ -23,10 +23,20 @@ use seedelf_cli::web_server;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct LabelArgs {
-    #[arg(short = 'a', long, help = "The address paying for the seedelf.", display_order = 1)]
+    #[arg(
+        short = 'a',
+        long,
+        help = "The address paying for the seedelf.",
+        display_order = 1
+    )]
     address: String,
 
-    #[arg(short = 'l', long, help = "The seedelf label / personal tag.", display_order = 2)]
+    #[arg(
+        short = 'l',
+        long,
+        help = "The seedelf label / personal tag.",
+        display_order = 2
+    )]
     label: Option<String>,
 }
 
@@ -55,7 +65,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     let mut found_collateral: bool = false;
 
     // if the label is none then just use the empty string
-    let label: String = args.label.unwrap_or(String::new());
+    let label: String = args.label.unwrap_or_default();
 
     // utxos
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
@@ -126,18 +136,24 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // lets build the seelfelf token
     let token_name: Vec<u8> =
         transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref());
-    println!("{} {}", "\nCreating Seedelf:".bright_blue(), hex::encode(token_name.clone()).bright_white());
+    println!(
+        "{} {}",
+        "\nCreating Seedelf:".bright_blue(),
+        hex::encode(token_name.clone()).bright_white()
+    );
 
     let min_utxo: u64 = transaction::seedelf_minimum_lovelace();
-    println!("{} {}", "\nMinimum Required Lovelace:".bright_blue(), min_utxo.to_string().bright_white());
-
-    let mut change_output: Output = Output::new(
-        addr.clone(),
-        total_lovelace - min_utxo - tmp_fee,
+    println!(
+        "{} {}",
+        "\nMinimum Required Lovelace:".bright_blue(),
+        min_utxo.to_string().bright_white()
     );
+
+    let mut change_output: Output = Output::new(addr.clone(), total_lovelace - min_utxo - tmp_fee);
     for asset in tokens.items.clone() {
-        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        .unwrap();
+        change_output = change_output
+            .add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
     }
 
     // build out the rest of the draft tx with the tmp fee
@@ -189,7 +205,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),
         );
-    
+
     // clone the tx but remove the tmp fee, collateral, change output, and fake redeemer
     let mut raw_tx: StagingTransaction = draft_tx
         .clone()
@@ -230,7 +246,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     };
 
     // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
     let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     // we need the script size here
@@ -243,14 +259,26 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("{} {}", "\nTx Size Fee:".bright_blue(), tx_fee.to_string().bright_white());
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
 
     // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
-    println!("{} {}", "Compute Fee:".bright_blue(), compute_fee.to_string().bright_white());
+    println!(
+        "{} {}",
+        "Compute Fee:".bright_blue(),
+        compute_fee.to_string().bright_white()
+    );
 
     let script_reference_fee: u64 = SEEDELF_CONTRACT_SIZE * 15;
-    println!("{} {}", "Script Reference Fee:".bright_blue(), script_reference_fee.to_string().bright_white());
+    println!(
+        "{} {}",
+        "Script Reference Fee:".bright_blue(),
+        script_reference_fee.to_string().bright_white()
+    );
 
     // total fee is the sum
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
@@ -260,15 +288,18 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     } else {
         total_fee
     };
-    println!("{} {}", "Total Fee:".bright_blue(), total_fee.to_string().bright_white());
-
-    let mut change_output: Output = Output::new(
-        addr.clone(),
-        total_lovelace - min_utxo - total_fee,
+    println!(
+        "{} {}",
+        "Total Fee:".bright_blue(),
+        total_fee.to_string().bright_white()
     );
+
+    let mut change_output: Output =
+        Output::new(addr.clone(), total_lovelace - min_utxo - total_fee);
     for asset in tokens.items.clone() {
-        change_output = change_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        .unwrap();
+        change_output = change_output
+            .add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
     }
 
     // build of the rest of the raw tx with the correct fee

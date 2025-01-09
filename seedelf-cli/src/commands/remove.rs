@@ -1,29 +1,29 @@
-use clap::Args;
 use blstrs::Scalar;
+use clap::Args;
 use colored::Colorize;
 use hex;
 use pallas_addresses::Address;
-use pallas_crypto::key::ed25519::{SecretKey, PublicKey};
+use pallas_crypto::key::ed25519::{PublicKey, SecretKey};
 use pallas_primitives::Hash;
 use pallas_traverse::fees;
-use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction, BuiltTransaction};
+use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::constants::{
-    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_POLICY_ID, SEEDELF_CONTRACT_SIZE, WALLET_CONTRACT_SIZE
+    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, SEEDELF_CONTRACT_SIZE,
+    SEEDELF_POLICY_ID, WALLET_CONTRACT_SIZE,
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{
-    evaluate_transaction, extract_bytes_with_logging,
-    submit_tx, witness_collateral, UtxoResponse
+    evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral, UtxoResponse,
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
+use seedelf_cli::setup;
 use seedelf_cli::transaction;
 use seedelf_cli::utxos;
-use seedelf_cli::setup;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -31,7 +31,12 @@ pub struct RemoveArgs {
     #[arg(short = 's', long, help = "The Seedelf to remove.", display_order = 1)]
     seedelf: String,
 
-    #[arg(short = 'a', long, help = "The address receiving the leftover ADA.", display_order = 2)]
+    #[arg(
+        short = 'a',
+        long,
+        help = "The address receiving the leftover ADA.",
+        display_order = 2
+    )]
     address: String,
 }
 
@@ -58,8 +63,13 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     // There is a single register here so we can do this
     let scalar: Scalar = setup::load_wallet();
 
-    let seedelf_utxo: UtxoResponse= utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag).await.ok_or("Seedelf Not Found".to_string()).unwrap();
-    let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum).ok_or("Not Register Type".to_string()).unwrap();
+    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag)
+        .await
+        .ok_or("Seedelf Not Found".to_string())
+        .unwrap();
+    let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
+        .ok_or("Not Register Type".to_string())
+        .unwrap();
     let total_lovelace: u64 = seedelf_utxo.value.parse::<u64>().expect("Invalid Lovelace");
     let seedelf_input: Input = Input::new(
         pallas_crypto::hash::Hash::new(
@@ -68,7 +78,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .try_into()
                 .expect("Failed to convert to 32-byte array"),
         ),
-        seedelf_utxo.tx_index.clone(),
+        seedelf_utxo.tx_index,
     );
     draft_tx = draft_tx.input(seedelf_input.clone());
     input_vector.push(seedelf_input.clone());
@@ -77,7 +87,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     let tmp_fee: u64 = 200_000;
 
     // we can fake the signature here to get the correct tx size
-    let one_time_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let one_time_secret_key: SecretKey = SecretKey::new(OsRng);
     let one_time_private_key: PrivateKey = PrivateKey::from(one_time_secret_key.clone());
     let public_key_hash: Hash<28> =
         pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
@@ -86,7 +96,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     // use the base register to rerandomize for the datum
 
     let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone());
-    let spend_redeemer_vector: Vec<u8> = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
+    let spend_redeemer_vector: Vec<u8> =
+        data_structures::create_spend_redeemer(z, g_r, pkh.clone());
     let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string());
 
     // build out the rest of the draft tx with the tmp fee
@@ -148,7 +159,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                 .try_into()
                 .expect("Not Correct Length"),
         ));
-    
+
     // this is what will be signed when the real fee is known
     let mut raw_tx: StagingTransaction = draft_tx
         .clone()
@@ -200,7 +211,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     };
 
     // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
     let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     let tx_size: u64 = intermediate_tx
@@ -214,15 +225,28 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!("{} {}", "\nTx Size Fee:".bright_blue(), tx_fee.to_string().bright_white());
-    
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
+
     // This probably should be a function
-    let compute_fee: u64 = transaction::computation_fee(mint_mem_units, mint_cpu_units) + transaction::computation_fee(spend_mem_units, spend_cpu_units);
-    println!("{} {}", "Compute Fee:".bright_blue(), compute_fee.to_string().bright_white());
+    let compute_fee: u64 = transaction::computation_fee(mint_mem_units, mint_cpu_units)
+        + transaction::computation_fee(spend_mem_units, spend_cpu_units);
+    println!(
+        "{} {}",
+        "Compute Fee:".bright_blue(),
+        compute_fee.to_string().bright_white()
+    );
 
     let script_reference_fee: u64 = SEEDELF_CONTRACT_SIZE * 15 + WALLET_CONTRACT_SIZE * 15;
-    println!("{} {}", "Script Reference Fee:".bright_blue(), script_reference_fee.to_string().bright_white());
-    
+    println!(
+        "{} {}",
+        "Script Reference Fee:".bright_blue(),
+        script_reference_fee.to_string().bright_white()
+    );
+
     // total fee is the sum of everything
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
     // total fee needs to be even for the collateral calculation to work
@@ -231,7 +255,11 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     } else {
         total_fee
     };
-    println!("{} {}", "Total Fee:".bright_blue(), total_fee.to_string().bright_white());
+    println!(
+        "{} {}",
+        "Total Fee:".bright_blue(),
+        total_fee.to_string().bright_white()
+    );
 
     raw_tx = raw_tx
         .output(Output::new(addr.clone(), total_lovelace - total_fee))
@@ -296,16 +324,27 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
                         std::process::exit(1);
                     }
                     println!("\nTransaction Successfully Submitted!");
-                    println!("\nTx Hash: {}", response.as_str().unwrap_or("default").bright_cyan());
+                    println!(
+                        "\nTx Hash: {}",
+                        response.as_str().unwrap_or("default").bright_cyan()
+                    );
                     if network_flag {
-                        println!("{}",
-                            format!("\nhttps://preprod.cardanoscan.io/transaction/{}",
-                            response.as_str().unwrap_or("default")).bright_purple()
+                        println!(
+                            "{}",
+                            format!(
+                                "\nhttps://preprod.cardanoscan.io/transaction/{}",
+                                response.as_str().unwrap_or("default")
+                            )
+                            .bright_purple()
                         );
                     } else {
-                        println!("{}",
-                            format!("\nhttps://cardanoscan.io/transaction/{}",
-                            response.as_str().unwrap_or("default")).bright_purple()
+                        println!(
+                            "{}",
+                            format!(
+                                "\nhttps://cardanoscan.io/transaction/{}",
+                                response.as_str().unwrap_or("default")
+                            )
+                            .bright_purple()
                         );
                     }
                 }
@@ -315,7 +354,10 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
         }
     }
 

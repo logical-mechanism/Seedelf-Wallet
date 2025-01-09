@@ -86,9 +86,7 @@ async fn main() {
         //         eprintln!("Error: {}", err);
         //     }
         // }
-        Some(Commands::Util(util_command)) => {
-            commands::util::run(util_command, cli.preprod).await
-        }
+        Some(Commands::Util(util_command)) => commands::util::run(util_command, cli.preprod).await,
         // catch the no command state
         None => {
             println!("No subcommand provided. Use --help for more information.");

@@ -1,7 +1,15 @@
-use crate::{constants::{
-    MAINNET_COLLATERAL_UTXO, MAINNET_SEEDELF_REFERENCE_UTXO, MAINNET_WALLET_REFERENCE_UTXO,
-    PREPROD_COLLATERAL_UTXO, PREPROD_SEEDELF_REFERENCE_UTXO, PREPROD_WALLET_REFERENCE_UTXO, SEEDELF_POLICY_ID, OVERHEAD_COST, UTXO_COST_PER_BYTE, MEM_COST_NUMERATOR, MEM_COST_DENOMINATOR, CPU_COST_NUMERATOR, CPU_COST_DENOMINATOR
-}, schnorr, address, register::Register, assets::Assets};
+use crate::{
+    address,
+    assets::Assets,
+    constants::{
+        CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, MAINNET_COLLATERAL_UTXO,
+        MAINNET_SEEDELF_REFERENCE_UTXO, MAINNET_WALLET_REFERENCE_UTXO, MEM_COST_DENOMINATOR,
+        MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO, PREPROD_SEEDELF_REFERENCE_UTXO,
+        PREPROD_WALLET_REFERENCE_UTXO, SEEDELF_POLICY_ID, UTXO_COST_PER_BYTE,
+    },
+    register::Register,
+    schnorr,
+};
 use pallas_addresses::Address;
 use pallas_crypto::hash::Hash;
 use pallas_primitives::Fragment;
@@ -181,7 +189,8 @@ pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8>
 ///
 /// * `u64` - The total computation fee as a sum of the memory and CPU costs.
 pub fn computation_fee(mem_units: u64, cpu_units: u64) -> u64 {
-    (MEM_COST_NUMERATOR * mem_units / MEM_COST_DENOMINATOR) + (CPU_COST_NUMERATOR * cpu_units / CPU_COST_DENOMINATOR)
+    (MEM_COST_NUMERATOR * mem_units / MEM_COST_DENOMINATOR)
+        + (CPU_COST_NUMERATOR * cpu_units / CPU_COST_DENOMINATOR)
 }
 
 /// Extracts CPU and memory budgets from a JSON value.
@@ -248,8 +257,8 @@ pub fn total_computation_fee(budgets: Vec<(u64, u64)>) -> u64 {
 /// - A long token name.
 /// - Inline datum.
 /// - A specific asset tied to a SeedElf policy ID.
-/// 
-/// The function then calculates the minimum required lovelace using the 
+///
+/// The function then calculates the minimum required lovelace using the
 /// `calculate_min_required_utxo` function.
 ///
 /// # Returns
@@ -257,9 +266,17 @@ pub fn total_computation_fee(budgets: Vec<(u64, u64)>) -> u64 {
 /// * `u64` - The minimum lovelace required for the transaction output.
 pub fn seedelf_minimum_lovelace() -> u64 {
     // a very long token name
-    let token_name: Vec<u8> = [94, 237, 14, 31, 1, 66, 250, 134, 20, 230, 198, 12, 121, 19, 73, 107, 154, 156, 226, 154, 138, 103, 76, 134, 93, 156, 23, 169, 169, 167, 201, 55].to_vec();
+    let token_name: Vec<u8> = [
+        94, 237, 14, 31, 1, 66, 250, 134, 20, 230, 198, 12, 121, 19, 73, 107, 154, 156, 226, 154,
+        138, 103, 76, 134, 93, 156, 23, 169, 169, 167, 201, 55,
+    ]
+    .to_vec();
     let staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
-        .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec())
+        .set_inline_datum(
+            Register::create(schnorr::random_scalar())
+                .rerandomize()
+                .to_vec(),
+        )
         .add_asset(
             Hash::new(
                 hex::decode(SEEDELF_POLICY_ID)
@@ -271,7 +288,7 @@ pub fn seedelf_minimum_lovelace() -> u64 {
             1,
         )
         .unwrap();
-    
+
     // use the staging output to calculate the minimum required lovelace
     calculate_min_required_utxo(staging_output)
 }
@@ -294,11 +311,16 @@ pub fn seedelf_minimum_lovelace() -> u64 {
 /// * `u64` - The minimum lovelace required for the transaction output.
 pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> u64 {
     let mut staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
-        .set_inline_datum(Register::create(schnorr::random_scalar()).rerandomize().to_vec());
+        .set_inline_datum(
+            Register::create(schnorr::random_scalar())
+                .rerandomize()
+                .to_vec(),
+        );
 
     for asset in tokens.items {
-        staging_output = staging_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        .unwrap();
+        staging_output = staging_output
+            .add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
     }
 
     // use the staging output to calculate the minimum required lovelace
@@ -324,8 +346,9 @@ pub fn address_minimum_lovelace_with_assets(address: &str, tokens: Assets) -> u6
     let mut staging_output: Output = Output::new(addr, 5_000_000);
 
     for asset in tokens.items {
-        staging_output = staging_output.add_asset(asset.policy_id, asset.token_name, asset.amount)
-        .unwrap();
+        staging_output = staging_output
+            .add_asset(asset.policy_id, asset.token_name, asset.amount)
+            .unwrap();
     }
 
     // use the staging output to calculate the minimum required lovelace
