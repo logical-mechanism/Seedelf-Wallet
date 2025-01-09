@@ -6,7 +6,6 @@ fn test_short_password() {
     assert_eq!(password_complexity_check(pw), false)
 }
 
-
 #[test]
 fn test_no_lowercase() {
     let pw: String = "I@G37XZM@QCGK3G".to_string();

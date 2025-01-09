@@ -1,10 +1,15 @@
 use blstrs::Scalar;
-use seedelf_cli::schnorr::{fiat_shamir_heuristic, prove, create_proof, random_scalar};
 use seedelf_cli::register::Register;
+use seedelf_cli::schnorr::{create_proof, fiat_shamir_heuristic, prove, random_scalar};
 
 #[test]
 fn test_empty_string() {
-    let proof = fiat_shamir_heuristic("".to_string(),"".to_string(),"".to_string(),"".to_string());
+    let proof = fiat_shamir_heuristic(
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+    );
     let outcome = "836cc68931c2e4e3e838602eca1902591d216837bafddfe6f0c8cb07";
     assert_eq!(proof, outcome);
 }
@@ -71,7 +76,13 @@ fn create_proof_and_test_it() {
 
     let bound = "acab";
     let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string());
-    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound))
+    assert!(prove(
+        &datum.generator,
+        &datum.public_value,
+        &z_b,
+        &g_r_b,
+        bound
+    ))
 }
 
 #[test]
@@ -80,7 +91,13 @@ fn create_random_proof_and_test_it() {
     let datum: Register = Register::create(sk);
     let bound = "acab";
     let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string());
-    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound))
+    assert!(prove(
+        &datum.generator,
+        &datum.public_value,
+        &z_b,
+        &g_r_b,
+        bound
+    ))
 }
 
 #[test]
@@ -89,7 +106,13 @@ fn create_random_proof_rerandomize_it_and_test_it() {
     let datum: Register = Register::create(sk).rerandomize();
     let bound = "acab";
     let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string());
-    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound))
+    assert!(prove(
+        &datum.generator,
+        &datum.public_value,
+        &z_b,
+        &g_r_b,
+        bound
+    ))
 }
 
 #[test]

@@ -220,7 +220,7 @@ pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<
     if let Some(datum) = inline_datum {
         if let Value::Object(ref value_map) = datum.value {
             if let Some(Value::Array(fields)) = value_map.get("fields") {
-                if let (Some(first), Some(second)) = (fields.get(0), fields.get(1)) {
+                if let (Some(first), Some(second)) = (fields.first(), fields.get(1)) {
                     let first_bytes: String = first.get("bytes")?.as_str()?.to_string();
                     let second_bytes: String = second.get("bytes")?.as_str()?.to_string();
                     return Some(Register::new(first_bytes, second_bytes));
@@ -317,7 +317,7 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
         .send()
         .await?;
 
-    Ok(response.json().await?)
+    response.json().await
 }
 
 /// Submits a transaction body to witness collateral using a specified API endpoint.
@@ -358,7 +358,7 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
         .send()
         .await?;
 
-    Ok(response.json().await?)
+    response.json().await
 }
 
 /// Submits a CBOR-encoded transaction to the Koios API.
@@ -398,12 +398,20 @@ pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Err
         .send()
         .await?;
 
-    Ok(response.json().await?)
+    response.json().await
 }
 
-pub async fn nft_address(asset_name: String, network_flag: bool, cip68_flag: bool) -> Result<String, String> {
+pub async fn nft_address(
+    asset_name: String,
+    network_flag: bool,
+    cip68_flag: bool,
+) -> Result<String, String> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let token_name = if cip68_flag {"000de140".to_string() + &hex::encode(asset_name.clone())} else {hex::encode(asset_name.clone())};
+    let token_name = if cip68_flag {
+        "000de140".to_string() + &hex::encode(asset_name.clone())
+    } else {
+        hex::encode(asset_name.clone())
+    };
     let url: String = format!(
         "https://{}.koios.rest/api/v1/asset_nft_address?_asset_policy={}&_asset_name={}",
         network,
@@ -429,14 +437,14 @@ pub async fn nft_address(asset_name: String, network_flag: bool, cip68_flag: boo
 
     // Borrow from the longer-lived variable
     let payment_address = match vec_outcome
-        .get(0)
+        .first()
         .and_then(|obj| obj.get("payment_address"))
         .and_then(|val| val.as_str())
     {
         Some(address) => address,
         None => {
             if cip68_flag {
-                return Err("Payment address not found".to_string())
+                return Err("Payment address not found".to_string());
             } else {
                 return Box::pin(nft_address(asset_name, network_flag, !cip68_flag)).await;
             }

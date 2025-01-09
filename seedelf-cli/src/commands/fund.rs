@@ -17,28 +17,50 @@ use seedelf_cli::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_cli::utxos;
 use seedelf_cli::web_server;
 
-
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct FundArgs {
     /// Seedelf to send funds too
-    #[arg(short = 'a', long, help = "The address sending funds to the Seedelf.", display_order = 1)]
+    #[arg(
+        short = 'a',
+        long,
+        help = "The address sending funds to the Seedelf.",
+        display_order = 1
+    )]
     address: String,
 
     /// Seedelf to send funds too
-    #[arg(short = 's', long, help = "The Seedelf receiving funds.", display_order = 2)]
+    #[arg(
+        short = 's',
+        long,
+        help = "The Seedelf receiving funds.",
+        display_order = 2
+    )]
     seedelf: String,
 
     /// The amount of Lovelace to send
-    #[arg(short = 'l', long, help = "The amount of Lovelace being sent to the Seedelf.", display_order = 3)]
+    #[arg(
+        short = 'l',
+        long,
+        help = "The amount of Lovelace being sent to the Seedelf.",
+        display_order = 3
+    )]
     lovelace: Option<u64>,
 
     /// Optional repeated `policy-id`
-    #[arg(long = "policy-id", help = "The policy id for the asset.", display_order = 4)]
+    #[arg(
+        long = "policy-id",
+        help = "The policy id for the asset.",
+        display_order = 4
+    )]
     policy_id: Option<Vec<String>>,
 
     /// Optional repeated `token-name`
-    #[arg(long = "token-name", help = "The token name for the asset", display_order = 5)]
+    #[arg(
+        long = "token-name",
+        help = "The token name for the asset",
+        display_order = 5
+    )]
     token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
@@ -69,19 +91,18 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         }
 
         for ((pid, tkn), amt) in policy_id
-        .into_iter()
-        .zip(token_name.into_iter())
-        .zip(amount.into_iter())
+            .into_iter()
+            .zip(token_name.into_iter())
+            .zip(amount.into_iter())
         {
-            if amt <= 0 {
+            if amt == 0 {
                 return Err("Error: Token Amount must be positive".to_string());
             }
             selected_tokens = selected_tokens.add(Asset::new(pid, tkn, amt));
         }
     }
 
-    let minimum_lovelace: u64 =
-        wallet_minimum_lovelace_with_assets(selected_tokens.clone());
+    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(selected_tokens.clone());
     if args.lovelace.is_some_and(|l| l < minimum_lovelace) {
         return Err("Not Enough Lovelace On UTxO".to_string());
     }
@@ -118,7 +139,6 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let usuable_utxos: Vec<UtxoResponse> =
         utxos::select(all_utxos, lovelace_goal, selected_tokens.clone());
 
-
     if usuable_utxos.is_empty() {
         return Err("Not Enough Lovelace/Tokens".to_string());
     }
@@ -148,7 +168,8 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let tmp_fee: u64 = 200_000;
 
     let datum_vector: Vec<u8> = seedelf_datum.rerandomize().to_vec();
-    let mut fund_output: Output = Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone());
+    let mut fund_output: Output =
+        Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone());
     for asset in selected_tokens.items.clone() {
         fund_output = fund_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -156,14 +177,14 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     }
 
     // build out the rest of the draft tx with the tmp fee
-    draft_tx = draft_tx
-        .output(fund_output)
-        .fee(tmp_fee);
+    draft_tx = draft_tx.output(fund_output).fee(tmp_fee);
 
     // a max tokens per change output here
-    let change_token_per_utxo: Vec<Assets> = change_tokens.clone().split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
+    let change_token_per_utxo: Vec<Assets> = change_tokens
+        .clone()
+        .split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
     let mut number_of_change_utxo: usize = change_token_per_utxo.len();
-    let mut lovelace_amount: u64 = total_lovelace.clone();
+    let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
         let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
@@ -172,7 +193,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             lovelace_amount
         } else {
             // its additional tokens going back
-            lovelace_amount = lovelace_amount - minimum;
+            lovelace_amount -= minimum;
             minimum
         };
 
@@ -203,7 +224,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
     // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(&mut OsRng);
+    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
     let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     // we need the script size here
@@ -216,13 +237,20 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
         .try_into()
         .unwrap();
     // floor division means its safer to just add 1 lovelace
-    let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default())) + 1;
-    println!("{} {}", "\nTx Size Fee:".bright_blue(), tx_fee.to_string().bright_white());
+    let tx_fee: u64 =
+        fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default())) + 1;
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
 
     // a max tokens per change output here
-    let change_token_per_utxo: Vec<Assets> = change_tokens.clone().split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
+    let change_token_per_utxo: Vec<Assets> = change_tokens
+        .clone()
+        .split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
     let number_of_change_utxo: usize = change_token_per_utxo.len();
-    let mut lovelace_amount: u64 = total_lovelace.clone();
+    let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
         let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
@@ -231,7 +259,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
             lovelace_amount
         } else {
             // its additional tokens going back
-            lovelace_amount = lovelace_amount - minimum;
+            lovelace_amount -= minimum;
             minimum
         };
 

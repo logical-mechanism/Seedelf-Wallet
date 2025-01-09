@@ -1,12 +1,12 @@
+use crate::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
+use crate::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
 use blstrs::Scalar;
 use colored::Colorize;
-use crate::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
-use crate::koios::{tip, credential_utxos, extract_bytes_with_logging, contains_policy_id};
 
 pub async fn block_number_and_time(network_flag: bool) {
     match tip(network_flag).await {
         Ok(tips) => {
-            if let Some(tip) = tips.get(0) {
+            if let Some(tip) = tips.first() {
                 println!(
                     "\n{} {}\n{} {}",
                     "Block Number:".bold().bright_blue(),
@@ -17,10 +17,12 @@ pub async fn block_number_and_time(network_flag: bool) {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch blockchain tip: {}\nWait a few moments and try again.", err);
+            eprintln!(
+                "Failed to fetch blockchain tip: {}\nWait a few moments and try again.",
+                err
+            );
         }
     }
-
 }
 
 pub fn preprod_text(network_flag: bool) {
@@ -36,11 +38,9 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
-                if let Some(inline_datum) =
-                    extract_bytes_with_logging(&utxo.inline_datum)
-                {
+                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
                     // utxo must be owned by this secret scaler
-                    if inline_datum.is_owned( sk) {
+                    if inline_datum.is_owned(sk) {
                         // its owned but lets not count the seedelf in the balance
                         if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
                             let asset_name: &String = utxo
@@ -59,7 +59,10 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}\nWait a few moments and try again.", err);
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
         }
     }
     if !seedelfs.is_empty() {
@@ -68,14 +71,13 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
             println!("\nSeedelf: {}", seedelf.white());
             seedelf_label(seedelf);
         }
-
     }
 }
 
 pub fn seedelf_label(seedelf: String) {
     let substring: String = seedelf[8..38].to_string();
     let label: String = hex_to_ascii(&substring).unwrap();
-    if label.chars().next() != Some('.') {
+    if !label.starts_with('.') {
         let cleaned: String = label.chars().filter(|&c| c != '.').collect();
         println!("Label: {}", cleaned.bright_yellow())
     }
@@ -86,7 +88,7 @@ pub fn hex_to_ascii(hex: &str) -> Result<String, &'static str> {
     if hex.len() % 2 != 0 {
         return Err("Hex string must have an even length");
     }
-    
+
     let ascii = (0..hex.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
@@ -100,8 +102,14 @@ pub fn hex_to_ascii(hex: &str) -> Result<String, &'static str> {
                 '.'
             }
         })
-        .map(|c| if c == '\n' || c == '\r' || c == '\t' { '.' } else { c }) // Replace control characters
+        .map(|c| {
+            if c == '\n' || c == '\r' || c == '\t' {
+                '.'
+            } else {
+                c
+            }
+        }) // Replace control characters
         .collect::<String>();
-    
+
     Ok(ascii)
 }

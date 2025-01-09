@@ -1,7 +1,7 @@
-use std::net::SocketAddr;
-use warp::Filter;
 use colored::Colorize;
 use include_dir::{include_dir, Dir};
+use std::net::SocketAddr;
+use warp::Filter;
 
 const STATIC_DIR: Dir = include_dir!("static");
 
@@ -11,19 +11,25 @@ const STATIC_DIR: Dir = include_dir!("static");
 /// - `message`: The dynamic message to replace in the `injected-data` script.
 pub async fn run_web_server(message: String, network_flag: bool) {
     let addr: SocketAddr = ([127, 0, 0, 1], 44203).into();
-    println!("{} {}", "\nStarting server at".bright_cyan(), format!("http://{}/", addr.to_string()).bright_white());
+    println!(
+        "{} {}",
+        "\nStarting server at".bright_cyan(),
+        format!("http://{}/", addr).bright_white()
+    );
     println!("{}", "Hit Ctrl-C To Stop Server".bright_yellow());
 
     // Serve index.html with dynamic content
     let html_route = warp::path::end().map(move || {
-        let html_file = STATIC_DIR.get_file("index.html").expect("Failed to read HTML file");
-        let mut html = html_file.contents_utf8().expect("Failed to read HTML").to_string();
+        let html_file = STATIC_DIR
+            .get_file("index.html")
+            .expect("Failed to read HTML file");
+        let mut html = html_file
+            .contents_utf8()
+            .expect("Failed to read HTML")
+            .to_string();
         // Replace the JSON content inside the injected-data script
         let dynamic_json = format!(r#"{{ "message": "{}" }}"#, message);
-        html = html.replace(
-            r#"{ "message": "ACAB000000000000" }"#,
-            &dynamic_json,
-        );
+        html = html.replace(r#"{ "message": "ACAB000000000000" }"#, &dynamic_json);
         if network_flag {
             html = html.replace(
                 r#"{ "network": "FADECAFE00000000" }"#,
@@ -40,19 +46,25 @@ pub async fn run_web_server(message: String, network_flag: bool) {
 
     // Serve index.js as a static file
     let js_route = warp::path("index.js").map(|| {
-        let file = STATIC_DIR.get_file("index.js").expect("JavaScript file not found");
+        let file = STATIC_DIR
+            .get_file("index.js")
+            .expect("JavaScript file not found");
         warp::reply::with_header(file.contents(), "Content-Type", "application/javascript")
     });
 
     // Serve favicon.ico
     let favicon_route = warp::path("favicon.ico").map(|| {
-        let file = STATIC_DIR.get_file("favicon.ico").expect("Favicon not found");
+        let file = STATIC_DIR
+            .get_file("favicon.ico")
+            .expect("Favicon not found");
         warp::reply::with_header(file.contents(), "Content-Type", "image/x-icon")
     });
 
     // Serve index.css
     let css_route = warp::path("index.css").map(|| {
-        let file = STATIC_DIR.get_file("index.css").expect("CSS file not found");
+        let file = STATIC_DIR
+            .get_file("index.css")
+            .expect("CSS file not found");
         warp::reply::with_header(file.contents(), "Content-Type", "text/css")
     });
 

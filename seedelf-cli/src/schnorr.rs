@@ -69,14 +69,22 @@ pub fn create_proof(datum: Register, sk: Scalar, bound: String) -> (String, Stri
 
     let g_r: G1Projective = G1Projective::from(g1) * r;
 
-    let c_hex: String = fiat_shamir_heuristic(datum.generator, hex::encode(g_r.to_compressed()),datum.public_value, bound);
+    let c_hex: String = fiat_shamir_heuristic(
+        datum.generator,
+        hex::encode(g_r.to_compressed()),
+        datum.public_value,
+        bound,
+    );
     let c_bytes: Vec<u8> = hex::decode(&c_hex).expect("Failed to decode Fiat-Shamir output");
     let mut c_array: [u8; 32] = [0u8; 32];
     c_array[(32 - c_bytes.len())..].copy_from_slice(&c_bytes);
     let c: Scalar = Scalar::from_bytes_be(&c_array).unwrap();
-    
+
     let z: Scalar = r + c * sk;
-    (hex::encode(z.to_bytes_be()), hex::encode(g_r.to_compressed()))
+    (
+        hex::encode(z.to_bytes_be()),
+        hex::encode(g_r.to_compressed()),
+    )
 }
 
 /// Used for testing
@@ -115,10 +123,15 @@ pub fn prove(generator: &str, public_value: &str, z_b: &str, g_r_b: &str, bound:
     let z: Scalar = Scalar::from_bytes_be(&z_array).unwrap();
 
     // Compute g^z = g1 * z
-    let g_z: G1Projective = (g1 * z).into(); // Convert to G1Affine for comparison
+    let g_z: G1Projective = g1 * z; // Convert to G1Affine for comparison
 
     // Calculate challenge `c` using the Fiat-Shamir heuristic
-    let c_hex: String = fiat_shamir_heuristic(generator.to_string(), g_r_b.to_string(), public_value.to_string(), bound.to_string());
+    let c_hex: String = fiat_shamir_heuristic(
+        generator.to_string(),
+        g_r_b.to_string(),
+        public_value.to_string(),
+        bound.to_string(),
+    );
     let c_bytes: Vec<u8> = hex::decode(&c_hex).expect("Failed to decode Fiat-Shamir output");
     let mut c_array = [0u8; 32];
     c_array[(32 - c_bytes.len())..].copy_from_slice(&c_bytes);
@@ -128,5 +141,5 @@ pub fn prove(generator: &str, public_value: &str, z_b: &str, g_r_b: &str, bound:
     let u_c: G1Projective = u * c;
 
     // Verify g^z = g^r * u^c
-    g_z == (G1Projective::from(g_r) + u_c).into()
+    g_z == (G1Projective::from(g_r) + u_c)
 }

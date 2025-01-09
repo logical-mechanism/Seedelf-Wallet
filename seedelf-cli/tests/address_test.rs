@@ -9,5 +9,8 @@ fn test_preprod_wallet_contract() {
 #[test]
 fn test_preprod_collateral_address() {
     let addr = address::collateral_address(true);
-    assert_eq!(addr.to_bech32().unwrap(), "addr_test1vp7zfs3drhp995clvq307gkvequv92ur53s3wttu9khxraqvfs7zk")
+    assert_eq!(
+        addr.to_bech32().unwrap(),
+        "addr_test1vp7zfs3drhp995clvq307gkvequv92ur53s3wttu9khxraqvfs7zk"
+    )
 }

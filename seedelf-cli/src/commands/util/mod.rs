@@ -34,7 +34,6 @@ pub async fn run(args: UtilArgs, preprod_flag: bool) {
             if let Err(err) = statistics::run(preprod_flag).await {
                 eprintln!("Error: {}", err);
             }
-            
         }
     }
 }
