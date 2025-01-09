@@ -4,7 +4,7 @@ Change the version then run the command in the parent folder.
 
 ```bash
 # set the version
-version="0.3.7"
+version="0.4.0"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-cli/Cargo.toml
@@ -25,7 +25,7 @@ cargo test --release
 cargo clippy -- -D warnings
 cargo fmt -- --check
 cargo package
-cargo publish --dry-run
+cargo publish
 cd ..
 ```
 
@@ -38,7 +38,7 @@ If a recompile is required and the contract hashes change then the [seedelf-cont
 Removing a tagged release involves deleting it locally and deleting the tagged branch.
 
 ```bash
-version="0.3.7"
+version="0.4.0"
 git tag -d ${version}
 git push origin --delete ${version}
 ```
