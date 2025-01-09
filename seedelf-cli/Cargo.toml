@@ -21,15 +21,6 @@ ff = "0.13.0"
 blake2 = "0.10.6"
 tokio = { version = "1.41.1", features = ["full"] }
 reqwest = { version = "0.12.9", features = ["json"] }
-# use this if a custom build must occur
-#pallas-addresses = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-crypto = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-codec = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-txbuilder = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-traverse = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-wallet = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-#pallas-primitives = { git = "https://github.com/logicalmechanism/pallas", branch = "main" }
-# update these when the new pallas version comes out
 pallas-addresses = "0.32.0"
 pallas-crypto = "0.32.0"
 pallas-codec = "0.32.0"
@@ -37,16 +28,12 @@ pallas-txbuilder = "0.32.0"
 pallas-traverse = "0.32.0"
 pallas-wallet = "0.32.0"
 pallas-primitives = "0.32.0"
-#
 warp = "0.3.7"
-# we need this stuff for encryption later
 rpassword = "7.3.1"
 aes-gcm = "0.10.3"
 argon2 = "0.5.3"
 base64 = "0.22.1"
-# just for pretty printing
 colored = "2.2.0"
-# just for updating from github
-self_update = { version = "0.42.0", features = ["archive-tar", "archive-zip"] }
-# for static files
 include_dir = "0.7.4"
+# just for updating from github, this may change when update is fixed
+self_update = { version = "0.42.0", features = ["archive-tar", "archive-zip"] }
