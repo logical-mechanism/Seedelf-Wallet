@@ -11,7 +11,7 @@ pub struct FindArgs {
         short = 'l',
         long,
         help = "The seedelf label / personal tag.",
-        display_order = 0
+        display_order = 1
     )]
     label: String,
 }
