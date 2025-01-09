@@ -20,6 +20,9 @@ Publish to crates.io with this command.
 
 ```bash
 cd seedelf-cli
+cargo test
+cargo clippy
+cargo fmt
 cargo package
 cargo publish --dry-run
 cd ..
