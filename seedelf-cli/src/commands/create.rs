@@ -58,8 +58,8 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // we need about 2 ada for the utxo and another 2 for change so make it 5 as it should account for change
-    let lovelace_goal: u64 = 5_000_000;
+    // we need about 2 ada for the utxo
+    let lovelace_goal: u64 = 2_000_000;
 
     // there may be many collateral utxos, we just need one
     let mut found_collateral: bool = false;
@@ -78,7 +78,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 // get the lovelace on this utxo
                 let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
                 if lovelace == 5_000_000 {
-                    // its probably a collateral utxo
+                    // lets assume this is a collateral utxo
                     if !found_collateral {
                         draft_tx = draft_tx.collateral_input(Input::new(
                             pallas_crypto::hash::Hash::new(
