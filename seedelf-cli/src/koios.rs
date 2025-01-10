@@ -45,7 +45,7 @@ pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
     Ok(response)
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct Asset {
     pub decimals: u8,
     pub quantity: String,
@@ -54,13 +54,13 @@ pub struct Asset {
     pub fingerprint: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct InlineDatum {
     pub bytes: String,
     pub value: Value, // Flexible for arbitrary JSON
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct UtxoResponse {
     pub tx_hash: String,
     pub tx_index: u64,
@@ -458,4 +458,33 @@ pub async fn nft_address(
     } else {
         Ok(payment_address.to_string())
     }
+}
+
+
+pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
+    // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
+    // if you have 1000 utxos in that wallets that cannot pay for anything then something
+    // is wrong in that wallet
+    let url: String = format!("https://{}.koios.rest/api/v1/utxo_info", network);
+    let client: Client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let payload: Value = serde_json::json!({
+        "_utxo_refs": [utxo],
+        "_extended": true
+    });
+
+    // Make the POST request
+    let response: Response = client
+        .post(url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    let utxos: Vec<UtxoResponse> = response.json().await?;
+
+    Ok(utxos)
 }
