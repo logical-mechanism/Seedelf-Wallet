@@ -197,7 +197,15 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
 
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
-pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Vec<UtxoResponse> {
+pub fn select(utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Vec<UtxoResponse> {
+    do_select(utxos, lovelace, tokens, lovelace)
+}
+pub fn do_select(
+    mut utxos: Vec<UtxoResponse>,
+    lovelace: u64,
+    tokens: Assets,
+    lovelace_goal: u64,
+) -> Vec<UtxoResponse> {
     let mut selected_utxos: Vec<UtxoResponse> = Vec::new();
 
     let mut current_lovelace_sum: u64 = 0;
@@ -272,16 +280,17 @@ pub fn select(mut utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Ve
                 1
             };
             // we need lovelace for the goal and the change here
-            if current_lovelace_sum - multiplier * minimum >= lovelace {
+            if current_lovelace_sum - multiplier * minimum >= lovelace_goal {
                 // it is!
                 found_enough = true;
                 break;
             } else {
                 // its not, try again but increase the lovelace by the minimum we would need
-                select(
+                return do_select(
                     utxos.clone(),
                     lovelace + multiplier * minimum,
                     tokens.clone(),
+                    lovelace_goal,
                 );
             }
         }

@@ -59,7 +59,8 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
     // we need about 2 ada for the utxo
-    let lovelace_goal: u64 = 2_000_000;
+    let tmp_fee: u64 = 205_000;
+    let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace() + tmp_fee;
 
     // there may be many collateral utxos, we just need one
     let mut found_collateral: bool = false;
@@ -77,21 +78,18 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             for utxo in utxos {
                 // get the lovelace on this utxo
                 let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                if lovelace == 5_000_000 {
-                    // lets assume this is a collateral utxo
-                    if !found_collateral {
-                        draft_tx = draft_tx.collateral_input(Input::new(
-                            pallas_crypto::hash::Hash::new(
-                                hex::decode(utxo.tx_hash.clone())
-                                    .expect("Invalid hex string")
-                                    .try_into()
-                                    .expect("Failed to convert to 32-byte array"),
-                            ),
-                            utxo.tx_index,
-                        ));
-                        // we just want a single collateral here
-                        found_collateral = true;
-                    }
+                if lovelace == 5_000_000 && !found_collateral {
+                    draft_tx = draft_tx.collateral_input(Input::new(
+                        pallas_crypto::hash::Hash::new(
+                            hex::decode(utxo.tx_hash.clone())
+                                .expect("Invalid hex string")
+                                .try_into()
+                                .expect("Failed to convert to 32-byte array"),
+                        ),
+                        utxo.tx_index,
+                    ));
+                    // we just want a single collateral here
+                    found_collateral = true;
                 } else {
                     // its probably not a collateral utxo
                     all_utxos.push(utxo.clone());
@@ -102,7 +100,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             eprintln!("Failed to fetch UTxOs: {}", err);
         }
     }
-
     // lovelace goal here should account for the estimated fee
     let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, Assets::new());
     for utxo in selected_utxos.clone() {
@@ -124,9 +121,6 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     if total_lovelace < lovelace_goal {
         return Err("Not Enough Lovelace".to_string());
     }
-
-    // This is some semi legit fee to be used to estimate it
-    let tmp_fee: u64 = 200_000;
 
     // this is going to be the datum on the seedelf
     let sk: Scalar = setup::load_wallet();
