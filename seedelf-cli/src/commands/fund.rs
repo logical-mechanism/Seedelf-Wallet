@@ -123,7 +123,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
 
     // we need about 2 ada for change so just add that to the amount
     let lovelace: u64 = args.lovelace.unwrap_or(minimum_lovelace);
-    let lovelace_goal: u64 = 2_000_000 + lovelace;
+    let lovelace_goal: u64 = lovelace;
 
     // utxos
     let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag)
