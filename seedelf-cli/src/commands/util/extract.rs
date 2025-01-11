@@ -5,8 +5,12 @@ use clap::Args;
 use colored::Colorize;
 use seedelf_cli::address;
 use pallas_addresses::Address;
+use seedelf_cli::assets::Assets;
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{utxo_info, UtxoResponse};
+use seedelf_cli::transaction::address_minimum_lovelace_with_assets;
+use seedelf_cli::utxos;
+
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -45,6 +49,14 @@ pub async fn run(args: ExtractArgs, network_flag: bool) -> Result<(), String> {
         Ok(utxos) => {
             if !utxos.is_empty() {
                 empty_datum_utxo = utxos.first().unwrap().clone();
+                if empty_datum_utxo.inline_datum.is_some() {
+                    return Err("UTxO has datum".to_string());
+                }
+                let utxo_addr: Address = Address::from_bech32(&empty_datum_utxo.address).unwrap();
+                if utxo_addr != address::wallet_contract(network_flag) {
+                    return Err("UTxO not in wallet".to_string());
+                }
+                println!("{:?}", empty_datum_utxo);
             } else {
                 return Err("No UTxO Found".to_string());
             }
@@ -57,6 +69,14 @@ pub async fn run(args: ExtractArgs, network_flag: bool) -> Result<(), String> {
         }
     }
     println!("{:?}", empty_datum_utxo);
+    let (empty_utxo_lovelace, empty_utxo_tokens) = utxos::assets_of(vec![empty_datum_utxo]);
+    let minimum_lovelace: u64 = address_minimum_lovelace_with_assets(&args.address, empty_utxo_tokens);
+
+    let all_utxos: Vec<UtxoResponse> =
+        utxos::collect_address_utxos(&args.address, network_flag).await;
+    let usuable_utxos: Vec<UtxoResponse> =
+        utxos::select(all_utxos, minimum_lovelace, Assets::new());
+    let (total_lovelace, tokens) = utxos::assets_of(usuable_utxos);
 
 
     Ok(())
