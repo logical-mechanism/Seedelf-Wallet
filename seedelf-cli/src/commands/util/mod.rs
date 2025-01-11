@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
 
 pub mod expose_key;
+pub mod extract;
 pub mod find_seedelf;
 pub mod statistics;
 
@@ -12,6 +13,8 @@ pub enum UtilCommands {
     FindSeedelf(find_seedelf::FindArgs),
     /// Display statistics about seedelf
     Statistics,
+    /// Extracts a UTxO with an empty datum
+    Extract(extract::ExtractArgs),
 }
 
 #[derive(Args)]
@@ -32,6 +35,11 @@ pub async fn run(args: UtilArgs, preprod_flag: bool) {
         }
         UtilCommands::Statistics => {
             if let Err(err) = statistics::run(preprod_flag).await {
+                eprintln!("Error: {}", err);
+            }
+        }
+        UtilCommands::Extract(args) => {
+            if let Err(err) = extract::run(args, preprod_flag).await {
                 eprintln!("Error: {}", err);
             }
         }
