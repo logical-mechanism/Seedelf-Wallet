@@ -460,7 +460,6 @@ pub async fn nft_address(
     }
 }
 
-
 pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet

@@ -1,9 +1,9 @@
 use clap::{Args, Subcommand};
 
 pub mod expose_key;
+pub mod extract;
 pub mod find_seedelf;
 pub mod statistics;
-pub mod extract;
 
 #[derive(Subcommand)]
 pub enum UtilCommands {
@@ -14,7 +14,7 @@ pub enum UtilCommands {
     /// Display statistics about seedelf
     Statistics,
     /// Extracts a UTxO with an empty datum
-    Extract(extract::ExtractArgs)
+    Extract(extract::ExtractArgs),
 }
 
 #[derive(Args)]
