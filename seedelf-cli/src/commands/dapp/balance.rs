@@ -12,10 +12,10 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
 
-    println!("{}", "\ndApp Wallet Information:".bright_white());
+    println!("{}", "\ndApp Wallet:".bright_white());
     println!(
         "{}",
-        "\nThis wallet should only receive funds from smart contracts.".bright_yellow()
+        "\nThis wallet should only receive funds from smart contracts. This address should not be public.".bright_yellow()
     );
 
     let scalar: Scalar = setup::load_wallet();
