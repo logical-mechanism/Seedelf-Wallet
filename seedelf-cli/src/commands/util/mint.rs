@@ -69,6 +69,9 @@ pub async fn run(args: MintArgs, network_flag: bool) -> Result<(), String> {
     let usuable_utxos: Vec<UtxoResponse> =
         utxos::select(owned_utxos, lovelace_goal, Assets::default());
 
+    if usuable_utxos.is_empty() {
+        return Err("Not Enough Lovelace".to_string());
+    }
     let (total_lovelace, change_tokens) = utxos::assets_of(usuable_utxos.clone());
 
     for utxo in usuable_utxos.clone() {
