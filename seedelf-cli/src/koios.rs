@@ -262,7 +262,7 @@ pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<
 pub fn contains_policy_id(asset_list: &Option<Vec<Asset>>, target_policy_id: &str) -> bool {
     asset_list
         .as_ref() // Convert Option<Vec<Asset>> to Option<&Vec<Asset>>
-        .map_or(false, |assets| {
+        .is_some_and(|assets| {
             assets
                 .iter()
                 .any(|asset| asset.policy_id == target_policy_id)

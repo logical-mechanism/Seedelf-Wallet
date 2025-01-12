@@ -257,7 +257,6 @@ pub async fn run(args: MintArgs, network_flag: bool) -> Result<(), String> {
         raw_tx = raw_tx.remove_output(number_of_change_utxo - i);
     }
 
-    // Use zip to pair elements from the two lists
     for input in input_vector.clone().into_iter() {
         raw_tx = raw_tx.remove_spend_redeemer(input);
     }
@@ -292,6 +291,7 @@ pub async fn run(args: MintArgs, network_flag: bool) -> Result<(), String> {
         .len()
         .try_into()
         .unwrap();
+
     let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!(
         "{} {}",
@@ -299,7 +299,6 @@ pub async fn run(args: MintArgs, network_flag: bool) -> Result<(), String> {
         tx_fee.to_string().bright_white()
     );
 
-    // This probably should be a function
     let compute_fee: u64 = total_computation_fee(budgets.clone());
     println!(
         "{} {}",
@@ -374,6 +373,7 @@ pub async fn run(args: MintArgs, network_flag: bool) -> Result<(), String> {
         raw_tx = raw_tx.output(change_output);
     }
 
+    // split the budgets up into the spending and the minting.
     let (minting, spending) = budgets.split_last().unwrap();
     for ((input, datum), (cpu, mem)) in input_vector
         .clone()
@@ -408,9 +408,9 @@ pub async fn run(args: MintArgs, network_flag: bool) -> Result<(), String> {
     );
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
-    // need to witness it now
     let tx_cbor: String = hex::encode(tx.tx_bytes.as_ref());
 
+    // need to witness it now
     let public_key_vector: [u8; 32] = hex::decode(COLLATERAL_PUBLIC_KEY)
         .unwrap()
         .try_into()

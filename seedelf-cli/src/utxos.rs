@@ -217,8 +217,8 @@ pub fn do_select(
     // sort by largest ada first
     // (empty asset lists first)
     utxos.sort_by(|a, b| {
-        let a_group_key = a.asset_list.as_ref().map_or(false, |list| list.is_empty());
-        let b_group_key = b.asset_list.as_ref().map_or(false, |list| list.is_empty());
+        let a_group_key = a.asset_list.as_ref().is_some_and(|list| list.is_empty());
+        let b_group_key = b.asset_list.as_ref().is_some_and(|list| list.is_empty());
 
         b_group_key
             .cmp(&a_group_key)
