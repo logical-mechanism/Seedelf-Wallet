@@ -142,3 +142,42 @@ pub fn collateral_address(network_flag: bool) -> Address {
     // Convert the Shelley address to the generic Address type.
     Address::from(shelly_wallet_address.clone())
 }
+
+pub fn dapp_address(public_key: String, network_flag: bool) -> Address {
+    // Construct the Shelley wallet address based on the network flag.
+    let shelly_wallet_address: ShelleyAddress = if network_flag {
+        ShelleyAddress::new(
+            Network::Testnet,
+            ShelleyPaymentPart::Key(PaymentKeyHash::new(
+                hex::decode(public_key)
+                    .unwrap()
+                    .try_into()
+                    .expect("Incorrect Length"),
+            )),
+            ShelleyDelegationPart::Key(StakeKeyHash::new(
+                hex::decode(PREPROD_STAKE_HASH)
+                    .unwrap()
+                    .try_into()
+                    .expect("Incorrect Length"),
+            )),
+        )
+    } else {
+        ShelleyAddress::new(
+            Network::Mainnet,
+            ShelleyPaymentPart::Key(PaymentKeyHash::new(
+                hex::decode(public_key)
+                    .unwrap()
+                    .try_into()
+                    .expect("Incorrect Length"),
+            )),
+            ShelleyDelegationPart::Key(StakeKeyHash::new(
+                hex::decode(MAINNET_STAKE_HASH)
+                    .unwrap()
+                    .try_into()
+                    .expect("Incorrect Length"),
+            )),
+        )
+    };
+    // we need this as the address type and not the shelley
+    Address::from(shelly_wallet_address.clone())
+}
