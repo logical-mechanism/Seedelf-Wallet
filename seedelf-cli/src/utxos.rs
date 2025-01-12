@@ -195,6 +195,27 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
     usuable_utxos
 }
 
+/// Collect all the address utxos that are not an assumed collateral utxo.
+pub async fn collect_all_address_utxos(address: &str, network_flag: bool) -> Vec<UtxoResponse> {
+    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
+    // This should probably be some generalized function later
+    match address_utxos(address, network_flag).await {
+        Ok(utxos) => {
+            // loop all the utxos found from the address
+            for utxo in utxos {
+                usuable_utxos.push(utxo);
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
+                err
+            );
+        }
+    }
+    usuable_utxos
+}
+
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
 pub fn select(utxos: Vec<UtxoResponse>, lovelace: u64, tokens: Assets) -> Vec<UtxoResponse> {

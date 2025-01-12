@@ -143,13 +143,12 @@ pub fn collateral_address(network_flag: bool) -> Address {
     Address::from(shelly_wallet_address.clone())
 }
 
-
 pub fn dapp_address(public_key: String, network_flag: bool) -> Address {
     // Construct the Shelley wallet address based on the network flag.
     let shelly_wallet_address: ShelleyAddress = if network_flag {
         ShelleyAddress::new(
             Network::Testnet,
-            ShelleyPaymentPart::Script(ScriptHash::new(
+            ShelleyPaymentPart::Key(PaymentKeyHash::new(
                 hex::decode(public_key)
                     .unwrap()
                     .try_into()
@@ -165,7 +164,7 @@ pub fn dapp_address(public_key: String, network_flag: bool) -> Address {
     } else {
         ShelleyAddress::new(
             Network::Mainnet,
-            ShelleyPaymentPart::Script(ScriptHash::new(
+            ShelleyPaymentPart::Key(PaymentKeyHash::new(
                 hex::decode(public_key)
                     .unwrap()
                     .try_into()
