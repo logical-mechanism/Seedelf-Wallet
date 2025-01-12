@@ -35,6 +35,8 @@ enum Commands {
     // Update,
     /// Utility functions for seedelf-cli
     Util(commands::util::UtilArgs),
+    /// dApp functions for seedelf-cli
+    Dapp(commands::dapp::DappArgs),
 }
 
 #[tokio::main]
@@ -87,6 +89,7 @@ async fn main() {
         //     }
         // }
         Some(Commands::Util(util_command)) => commands::util::run(util_command, cli.preprod).await,
+        Some(Commands::Dapp(dapp_command)) => commands::dapp::run(dapp_command, cli.preprod).await,
         // catch the no command state
         None => {
             println!("No subcommand provided. Use --help for more information.");

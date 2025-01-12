@@ -1,5 +1,6 @@
 pub mod balance;
 pub mod create;
+pub mod dapp;
 pub mod fund;
 pub mod remove;
 pub mod sweep;
