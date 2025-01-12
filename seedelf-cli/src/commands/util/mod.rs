@@ -3,6 +3,7 @@ use clap::{Args, Subcommand};
 pub mod expose_key;
 pub mod extract;
 pub mod find_seedelf;
+pub mod mint;
 pub mod statistics;
 
 #[derive(Subcommand)]
@@ -15,6 +16,8 @@ pub enum UtilCommands {
     Statistics,
     /// Extracts a UTxO with an empty datum
     Extract(extract::ExtractArgs),
+    /// Mint a seedelf from existing UTxOs
+    Mint(mint::MintArgs),
 }
 
 #[derive(Args)]
@@ -40,6 +43,11 @@ pub async fn run(args: UtilArgs, preprod_flag: bool) {
         }
         UtilCommands::Extract(args) => {
             if let Err(err) = extract::run(args, preprod_flag).await {
+                eprintln!("Error: {}", err);
+            }
+        }
+        UtilCommands::Mint(args) => {
+            if let Err(err) = mint::run(args, preprod_flag).await {
                 eprintln!("Error: {}", err);
             }
         }
