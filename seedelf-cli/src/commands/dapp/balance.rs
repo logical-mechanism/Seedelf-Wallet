@@ -15,7 +15,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
     println!("{}", "\ndApp Wallet Information:".bright_white());
     println!(
         "{}",
-        "\nThis wallet should only receive funds from smart contracts.".bright_yellow()
+        "\nThis wallet should only receive funds from smart contracts. This address should not be public.".bright_yellow()
     );
 
     let scalar: Scalar = setup::load_wallet();
