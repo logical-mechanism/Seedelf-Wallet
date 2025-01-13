@@ -196,4 +196,4 @@ Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/
 
 ## Contact
 
-For questions, suggestions, or concerns, please reach out to support@logicalmechanism.io.
+For questions, suggestions, or concerns, please reach out to support@logicalmechanism.io or join the Seedelf discord [here](https://discord.gg/r8VwV2jGBy).
