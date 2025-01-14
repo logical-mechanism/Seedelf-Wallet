@@ -2,6 +2,7 @@ use blake2::digest::core_api::RtVariableCoreWrapper;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use hex;
+use sha3::{Digest, Sha3_256};
 
 /// Computes the BLAKE2b-224 hash of the input data.
 ///
@@ -39,6 +40,16 @@ pub fn blake2b_224(data: &str) -> String {
     hasher
         .finalize_variable(&mut result)
         .expect("Failed to finalize hash");
+
+    // Convert to hex string
+    hex::encode(result)
+}
+
+pub fn sha3_256(data: &str) -> String {
+    let mut sha3_hasher = Sha3_256::new();
+    Digest::update(&mut sha3_hasher, hex::decode(data).unwrap_or_default());
+    // Retrieve the hash result
+    let result = sha3_hasher.finalize();
 
     // Convert to hex string
     hex::encode(result)
