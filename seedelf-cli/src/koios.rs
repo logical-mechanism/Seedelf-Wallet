@@ -488,9 +488,12 @@ pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoRespons
     Ok(utxos)
 }
 
-
 // make it so it only works for nfts
-pub async fn nft_utxo(policy_id: String, token_name: String, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
+pub async fn nft_utxo(
+    policy_id: String,
+    token_name: String,
+    network_flag: bool,
+) -> Result<Vec<UtxoResponse>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{}.koios.rest/api/v1/asset_utxos", network);
     let client: Client = reqwest::Client::new();
@@ -513,12 +516,11 @@ pub async fn nft_utxo(policy_id: String, token_name: String, network_flag: bool)
     let utxos: Vec<UtxoResponse> = response.json().await?;
 
     if utxos.len() > 1 {
-        return Ok(vec![])
+        return Ok(vec![]);
     }
 
     Ok(utxos)
 }
-
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct ResolvedDatum {
@@ -528,7 +530,10 @@ pub struct ResolvedDatum {
     pub bytes: Option<String>,
 }
 
-pub async fn datum_from_datum_hash(datum_hash: String, network_flag: bool) -> Result<Vec<ResolvedDatum>, Error> {
+pub async fn datum_from_datum_hash(
+    datum_hash: String,
+    network_flag: bool,
+) -> Result<Vec<ResolvedDatum>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{}.koios.rest/api/v1/datum_info", network);
     let client: Client = reqwest::Client::new();

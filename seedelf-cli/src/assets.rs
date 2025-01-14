@@ -272,8 +272,7 @@ pub fn string_to_u64(input: String) -> Result<u64, String> {
     }
 }
 
-
 pub fn asset_id_to_asset(asset_id: String) -> Asset {
     // Assume NFT for now
-    Asset::new(asset_id[..56].to_string(),  asset_id[56..].to_string(), 1)
+    Asset::new(asset_id[..56].to_string(), asset_id[56..].to_string(), 1)
 }
