@@ -34,6 +34,7 @@ fn test_string_sha3_256() {
 
 #[test]
 fn test_complex_string_sha3_256() {
+    // this is a good test for minswap 
     let asset_a_policy_id: &str = "";
     let asset_a_asset_name: &str = "";
     let asset_b_policy_id: &str = "29d222ce763455e3d7a09a665ce554f00ac89d2e99a1a83d267170c6";
