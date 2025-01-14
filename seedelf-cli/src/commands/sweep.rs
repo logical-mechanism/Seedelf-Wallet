@@ -17,8 +17,8 @@ use seedelf_cli::constants::{
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{
-    evaluate_transaction, extract_bytes_with_logging, nft_address, submit_tx, witness_collateral,
-    UtxoResponse,
+    ada_handle_address, evaluate_transaction, extract_bytes_with_logging, submit_tx,
+    witness_collateral, UtxoResponse,
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
@@ -106,7 +106,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let outbound_address: String = if args.address.is_some() {
         args.address.unwrap()
     } else {
-        match nft_address(args.ada_handle.unwrap(), network_flag, false).await {
+        match ada_handle_address(args.ada_handle.unwrap(), network_flag, false).await {
             Err(err) => return Err(err),
             Ok(potential_addr) => potential_addr,
         }
