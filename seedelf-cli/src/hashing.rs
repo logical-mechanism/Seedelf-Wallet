@@ -2,6 +2,7 @@ use blake2::digest::core_api::RtVariableCoreWrapper;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use hex;
+use sha3::{Digest, Sha3_256};
 
 /// Computes the BLAKE2b-224 hash of the input data.
 ///
@@ -39,6 +40,34 @@ pub fn blake2b_224(data: &str) -> String {
     hasher
         .finalize_variable(&mut result)
         .expect("Failed to finalize hash");
+
+    // Convert to hex string
+    hex::encode(result)
+}
+
+/// Computes the SHA3-256 hash of the input data.
+///
+/// This function accepts a string input, which is expected to be hex-encoded.
+/// If the input is not a valid hex string, it falls back to hashing an empty byte array.
+/// The resulting hash is 256 bits (32 bytes) and is returned as a hex-encoded string.
+///
+/// # Arguments
+///
+/// * `data` - A string slice representing the input data, expected to be hex-encoded.
+///
+/// # Returns
+///
+/// * `String` - The SHA3-256 hash of the input data, encoded as a hex string.
+///
+/// # Panics
+///
+/// * This function will not panic, but if `data` is not a valid hex string,
+///   it will hash an empty byte array.
+pub fn sha3_256(data: &str) -> String {
+    let mut sha3_hasher = Sha3_256::new();
+    Digest::update(&mut sha3_hasher, hex::decode(data).unwrap_or_default());
+    // Retrieve the hash result
+    let result = sha3_hasher.finalize();
 
     // Convert to hex string
     hex::encode(result)

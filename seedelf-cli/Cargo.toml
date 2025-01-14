@@ -36,5 +36,6 @@ base64 = "0.22.1"
 colored = "2.2.0"
 include_dir = "0.7.4"
 cryptoxide = "0.4.4"
+sha3 = "0.10.8"
 # just for updating from github, this may change when update is fixed
 self_update = { version = "0.42.0", features = ["archive-tar", "archive-zip"] }
