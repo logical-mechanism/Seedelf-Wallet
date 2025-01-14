@@ -401,13 +401,13 @@ pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Err
     response.json().await
 }
 
-pub async fn nft_address(
+pub async fn ada_handle_address(
     asset_name: String,
     network_flag: bool,
     cip68_flag: bool,
 ) -> Result<String, String> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let token_name = if cip68_flag {
+    let token_name: String = if cip68_flag {
         "000de140".to_string() + &hex::encode(asset_name.clone())
     } else {
         hex::encode(asset_name.clone())
@@ -446,7 +446,7 @@ pub async fn nft_address(
             if cip68_flag {
                 return Err("Payment address not found".to_string());
             } else {
-                return Box::pin(nft_address(asset_name, network_flag, !cip68_flag)).await;
+                return Box::pin(ada_handle_address(asset_name, network_flag, !cip68_flag)).await;
             }
         }
     };
@@ -486,4 +486,72 @@ pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoRespons
     let utxos: Vec<UtxoResponse> = response.json().await?;
 
     Ok(utxos)
+}
+
+// make it so it only works for nfts
+pub async fn nft_utxo(
+    policy_id: String,
+    token_name: String,
+    network_flag: bool,
+) -> Result<Vec<UtxoResponse>, Error> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
+    let url: String = format!("https://{}.koios.rest/api/v1/asset_utxos", network);
+    let client: Client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let payload: Value = serde_json::json!({
+        "_asset_list": [[policy_id, token_name]],
+        "_extended": true
+    });
+
+    // Make the POST request
+    let response: Response = client
+        .post(url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    let utxos: Vec<UtxoResponse> = response.json().await?;
+
+    if utxos.len() > 1 {
+        return Ok(vec![]);
+    }
+
+    Ok(utxos)
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ResolvedDatum {
+    pub datum_hash: Option<String>,
+    pub creation_tx_hash: String,
+    pub value: Value,
+    pub bytes: Option<String>,
+}
+
+pub async fn datum_from_datum_hash(
+    datum_hash: String,
+    network_flag: bool,
+) -> Result<Vec<ResolvedDatum>, Error> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
+    let url: String = format!("https://{}.koios.rest/api/v1/datum_info", network);
+    let client: Client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let payload: Value = serde_json::json!({
+        "_datum_hashes": [datum_hash],
+    });
+
+    // Make the POST request
+    let response: Response = client
+        .post(url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    let datums: Vec<ResolvedDatum> = response.json().await?;
+    Ok(datums)
 }
