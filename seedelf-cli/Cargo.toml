@@ -1,6 +1,6 @@
 [package]
 name = "seedelf-cli"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 license = "MIT"
 description = "Seedelf: A Cardano Stealth Wallet"
