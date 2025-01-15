@@ -16,7 +16,7 @@ use logic.{xor}
 use token_name.{generate, seedelf}
 
 validator contract(_any: Data) {
-  mint(personal_tag: ByteArray, policy_id: PolicyId, transaction: Transaction) {
+  mint(personal_tag: ByteArray, policy_id: PolicyId, self: Transaction) {
     //
     // Burn one xor mint one.
     //
@@ -26,7 +26,7 @@ validator contract(_any: Data) {
         // a single thing is being burned in this tx
         //
         expect [(pid, tkn, amt)]: List<(PolicyId, AssetName, Int)> =
-          transaction.mint
+          self.mint
             |> assets.flatten()
         //
         // Must burn one nft with the 5eed0e1f prefix.
@@ -44,7 +44,7 @@ validator contract(_any: Data) {
         //
         // we need the inputs and the mint value inside the transaction
         //
-        let Transaction { inputs, mint, .. } = transaction
+        let Transaction { inputs, mint, .. } = self
         //
         // a single thing is being minted in this tx
         //

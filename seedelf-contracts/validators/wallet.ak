@@ -20,8 +20,8 @@ validator contract(_any: Data) {
   spend(
     maybe_register: Option<Data>,
     proof: Proof,
-    _output_reference: OutputReference,
-    transaction: Transaction,
+    _utxo: OutputReference,
+    self: Transaction,
   ) {
     //
     // first do a data structure check
@@ -45,7 +45,7 @@ validator contract(_any: Data) {
               proof.vkh,
             )?,
             // forces a one time pad via a random key signature
-            list.has(transaction.extra_signatories, proof.vkh)?,
+            list.has(self.extra_signatories, proof.vkh)?,
           }
         } else {
           //
