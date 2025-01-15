@@ -1,4 +1,4 @@
-use seedelf_cli::hashing::{blake2b_224, sha3_256};
+use seedelf_cli::hashing::{blake2b_224, sha3_256, blake2b_256};
 
 #[test]
 fn test_empty_string_blake2b_224() {
@@ -17,7 +17,23 @@ fn test_random_hash_blake2b_224() {
 }
 
 #[test]
-fn test_simple_string_sha3_256() {
+fn test_empty_string_blake2b_256() {
+    let input = "";
+    let proof = blake2b_256(input);
+    let outcome = "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
+    assert_eq!(proof, outcome);
+}
+
+#[test]
+fn test_random_hash_blake2b_256() {
+    let input = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+    let proof = blake2b_256(input);
+    let outcome = "667f1e9b75c8eac1cccf77a2f82526a478b01ec0f26dd938b5b5b4ad0d856368";
+    assert_eq!(proof, outcome);
+}
+
+#[test]
+fn test_empty_string_sha3_256() {
     let input = "";
     let proof = sha3_256(input);
     let outcome = "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a";
