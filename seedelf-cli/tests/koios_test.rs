@@ -1,5 +1,5 @@
 use seedelf_cli::assets::{asset_id_to_asset, Asset};
-use seedelf_cli::koios::{ada_handle_address, datum_from_datum_hash, nft_utxo};
+use seedelf_cli::koios::{ada_handle_address, asset_history, datum_from_datum_hash, nft_utxo};
 use serde_json::Value;
 #[test]
 fn tx_hash_result() {
@@ -51,4 +51,12 @@ async fn find_datum() {
         String::from("21eed8a2f7e4298c95ded10c5d2544f3c24ac45396167d1024bb04e6720f5f6b");
     let datum = datum_from_datum_hash(datum_hash, false).await;
     println!("Cant Find Datum: {:?}", datum);
+}
+
+#[tokio::test]
+async fn test_asset_history() {
+    let pid: String = String::from("b3ad6187273d174b586b1c86d4c6c7eeefa7bdca6dd819f125d4dd06");
+    let tkn: String = String::from("74494147");
+    let history = asset_history(pid, tkn, true, 5).await;
+    assert_eq!(history.unwrap().len(), 5)
 }

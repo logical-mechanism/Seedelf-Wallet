@@ -555,3 +555,33 @@ pub async fn datum_from_datum_hash(
     let datums: Vec<ResolvedDatum> = response.json().await?;
     Ok(datums)
 }
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct History {
+    pub tx_hash: String,
+    pub epoch_no: u64,
+    pub block_height: Option<u64>,
+    pub block_time: u64,
+}
+
+pub async fn asset_history(
+    policy_id: String,
+    token_name: String,
+    network_flag: bool,
+    limit: u64,
+) -> Result<Vec<String>, Error> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
+    let url: String = format!("https://{}.koios.rest/api/v1/asset_txs?_asset_policy={}&_asset_name={}&_after_block_height=50000&_history=true&limit={}", network, policy_id, token_name, limit);
+    let client: Client = reqwest::Client::new();
+
+    // Make the POST request
+    let response: Response = client
+        .get(url)
+        .header("content-type", "application/json")
+        .send()
+        .await?;
+
+    let data: Vec<History> = response.json().await.unwrap();
+    let tx_hashes: Vec<String> = data.iter().map(|h| h.tx_hash.clone()).collect();
+    Ok(tx_hashes)
+}
