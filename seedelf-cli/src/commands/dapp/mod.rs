@@ -2,6 +2,7 @@ use clap::{Args, Subcommand};
 
 pub mod balance;
 pub mod sweep;
+pub mod newm;
 
 #[derive(Subcommand)]
 pub enum DappCommands {
