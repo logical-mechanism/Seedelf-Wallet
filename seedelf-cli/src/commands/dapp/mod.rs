@@ -10,6 +10,8 @@ pub enum DappCommands {
     Balance,
     /// Sweep All Dapp UTxOs Into The Wallet
     Sweep,
+    // NEWM related commands
+    Newm(newm::NEWMArgs),
 }
 
 #[derive(Args)]
@@ -27,6 +29,11 @@ pub async fn run(args: DappArgs, preprod_flag: bool) {
         }
         DappCommands::Sweep => {
             if let Err(err) = sweep::run(preprod_flag).await {
+                eprintln!("Error: {}", err);
+            }
+        }
+        DappCommands::Newm(newm_args) => {
+            if let Err(err) = newm::run(newm_args, preprod_flag).await {
                 eprintln!("Error: {}", err);
             }
         }
