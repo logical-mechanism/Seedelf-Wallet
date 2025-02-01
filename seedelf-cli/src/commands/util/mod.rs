@@ -5,6 +5,7 @@ pub mod extract;
 pub mod find_seedelf;
 pub mod mint;
 pub mod statistics;
+pub mod migrate;
 
 #[derive(Subcommand)]
 pub enum UtilCommands {
@@ -18,6 +19,8 @@ pub enum UtilCommands {
     Extract(extract::ExtractArgs),
     /// Mint a seedelf from existing UTxOs
     Mint(mint::MintArgs),
+    /// Migrate existing UTxOs into the newest version of the contract
+    Migrate(migrate::MigrateArgs),
 }
 
 #[derive(Args)]
@@ -48,6 +51,11 @@ pub async fn run(args: UtilArgs, preprod_flag: bool) {
         }
         UtilCommands::Mint(args) => {
             if let Err(err) = mint::run(args, preprod_flag).await {
+                eprintln!("Error: {}", err);
+            }
+        }
+        UtilCommands::Migrate(args) => {
+            if let Err(err) = migrate::run(args, preprod_flag) {
                 eprintln!("Error: {}", err);
             }
         }
