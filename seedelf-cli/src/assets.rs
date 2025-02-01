@@ -97,6 +97,21 @@ impl Asset {
             self.amount >= other.amount
         }
     }
+
+    pub fn quantity_of(&self, policy_id: String, token_name: String) -> Option<u64> {
+        let pid = Hash::new(
+            hex::decode(policy_id)
+                .unwrap()
+                .try_into()
+                .expect("Incorrect Length"),
+        );
+        let tkn = hex::decode(token_name).unwrap();
+        if self.policy_id == pid && self.token_name == tkn {
+            Some(self.amount)
+        } else {
+            None
+        }
+    }
 }
 
 /// Represents a collection of `Asset` instances.
@@ -192,6 +207,16 @@ impl Assets {
         }
         // we found all the other tokens
         true
+    }
+
+    pub fn quantity_of(&self, policy_id: String, token_name: String) -> Option<u64> {
+        for this_asset in &self.items {
+            match Asset::quantity_of(&this_asset, policy_id.clone(), token_name.clone()) {
+                Some(amount) => {return Some(amount);}
+                _ => continue
+            }
+        }
+        None
     }
 
     /// Checks if any asset in `other` exists in this collection.
