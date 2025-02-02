@@ -88,7 +88,10 @@ pub fn collateral_input(network_flag: bool) -> Input {
 ///
 /// * `Input` - A transaction input constructed from the specified reference UTXO.
 pub fn seedelf_reference_utxo(network_flag: bool, variant: u64) -> Input {
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
     Input::new(
         Hash::new(
             hex::decode(config.reference.seedelf_reference_utxo)
@@ -115,7 +118,10 @@ pub fn seedelf_reference_utxo(network_flag: bool, variant: u64) -> Input {
 ///
 /// * `Input` - A transaction input constructed from the specified wallet reference UTXO.
 pub fn wallet_reference_utxo(network_flag: bool, variant: u64) -> Input {
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     Input::new(
         Hash::new(

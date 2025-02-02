@@ -73,7 +73,10 @@ pub struct TransforArgs {
 pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     if args.lovelace.is_none()
         && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())

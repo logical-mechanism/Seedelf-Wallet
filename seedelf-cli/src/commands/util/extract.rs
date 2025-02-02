@@ -39,7 +39,10 @@ pub struct ExtractArgs {
 pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     let collat_addr: Address = address::collateral_address(network_flag);
     // we need to make sure that the network flag and the address provided makes sense here

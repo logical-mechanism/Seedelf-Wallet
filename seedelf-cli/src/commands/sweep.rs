@@ -90,7 +90,10 @@ pub struct SweepArgs {
 pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     // address or ada handle must be found
     if args.address.is_none() && args.ada_handle.is_none() {

@@ -17,7 +17,10 @@ pub async fn collect_all_wallet_utxos(
 ) -> Vec<UtxoResponse> {
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
 
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
@@ -51,7 +54,10 @@ pub async fn find_seedelf_and_wallet_utxos(
     network_flag: bool,
     variant: u64,
 ) -> (Option<Register>, Vec<UtxoResponse>) {
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
     let mut number_of_utxos: u64 = 0;
@@ -115,7 +121,10 @@ pub async fn find_seedelf_utxo(
     network_flag: bool,
     variant: u64,
 ) -> Option<UtxoResponse> {
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
@@ -152,7 +161,10 @@ pub async fn collect_wallet_utxos(
     network_flag: bool,
     variant: u64,
 ) -> Vec<UtxoResponse> {
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
     let mut number_of_utxos: u64 = 0;
 
     let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
@@ -379,7 +391,10 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
 
 /// Find a seedelf that contains the label and print the match.
 pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool, variant: u64) {
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
@@ -416,7 +431,10 @@ pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool, vari
 
 /// Find a seedelf that contains the label and print the match.
 pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {

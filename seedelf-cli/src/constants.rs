@@ -52,7 +52,7 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
     }
 }
 
-// support [LOGIC]
+// support the [LOGIC] stakepool
 pub const PREPROD_STAKE_HASH: &str = "86c769419aaa673c963da04e4b5bae448d490e2ceac902cb82e4da76";
 pub const MAINNET_STAKE_HASH: &str = "fcfc7701b1df42061202efa9c96968a481bbd6a0676efb7afa87ebf1";
 

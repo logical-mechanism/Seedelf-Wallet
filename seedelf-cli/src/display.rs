@@ -34,7 +34,10 @@ pub fn preprod_text(network_flag: bool) {
 pub async fn all_seedelfs(sk: Scalar, network_flag: bool, variant: u64) {
     let mut seedelfs: Vec<String> = Vec::new();
 
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {

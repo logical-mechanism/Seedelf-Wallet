@@ -45,7 +45,10 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     // if preprod then print the preprod message
     preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     // we need this as the address type and not the shelley
     let wallet_addr: Address = address::wallet_contract(network_flag, variant);
