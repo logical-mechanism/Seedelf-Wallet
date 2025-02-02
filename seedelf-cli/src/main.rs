@@ -9,11 +9,11 @@ use seedelf_cli::setup;
 #[command(about = "A Cardano Stealth Wallet", long_about = None)]
 struct Cli {
     /// Use this flag to interact with the pre-production environment
-    #[arg(long, global = true)]
+    #[arg(long, global = true, display_order = 98)]
     preprod: bool,
 
     /// Use this for different variants of the contract, defaults to most recent variant
-    #[arg(long, global = true, default_value_t = VARIANT)]
+    #[arg(long, global = true, default_value_t = VARIANT, display_order = 99)]
     variant: u64,
 
     #[command(subcommand)]
