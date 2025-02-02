@@ -3,9 +3,9 @@ use crate::{
     assets::Assets,
     constants::{
         CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, MAINNET_COLLATERAL_UTXO,
-        MAINNET_SEEDELF_REFERENCE_UTXO, MAINNET_WALLET_REFERENCE_UTXO, MEM_COST_DENOMINATOR,
-        MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO, PREPROD_SEEDELF_REFERENCE_UTXO,
-        PREPROD_WALLET_REFERENCE_UTXO, SEEDELF_POLICY_ID, UTXO_COST_PER_BYTE,
+        MEM_COST_DENOMINATOR,
+        MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO,
+        SEEDELF_POLICY_ID, UTXO_COST_PER_BYTE, get_config, Config
     },
     register::Register,
     schnorr,
@@ -88,15 +88,11 @@ pub fn collateral_input(network_flag: bool) -> Input {
 /// # Returns
 ///
 /// * `Input` - A transaction input constructed from the specified reference UTXO.
-pub fn seedelf_reference_utxo(network_flag: bool) -> Input {
-    let utxo: &str = if network_flag {
-        PREPROD_SEEDELF_REFERENCE_UTXO
-    } else {
-        MAINNET_SEEDELF_REFERENCE_UTXO
-    };
+pub fn seedelf_reference_utxo(network_flag: bool, variant: u64) -> Input {
+    let config: Config = get_config(variant, network_flag).unwrap();
     Input::new(
         Hash::new(
-            hex::decode(utxo)
+            hex::decode(config.reference.seedelf_reference_utxo)
                 .expect("Invalid hex string")
                 .try_into()
                 .expect("Failed to convert to 32-byte array"),
@@ -119,15 +115,13 @@ pub fn seedelf_reference_utxo(network_flag: bool) -> Input {
 /// # Returns
 ///
 /// * `Input` - A transaction input constructed from the specified wallet reference UTXO.
-pub fn wallet_reference_utxo(network_flag: bool) -> Input {
-    let utxo: &str = if network_flag {
-        PREPROD_WALLET_REFERENCE_UTXO
-    } else {
-        MAINNET_WALLET_REFERENCE_UTXO
-    };
+pub fn wallet_reference_utxo(network_flag: bool, variant: u64) -> Input {
+
+    let config: Config = get_config(variant, network_flag).unwrap();
+
     Input::new(
         Hash::new(
-            hex::decode(utxo)
+            hex::decode(config.reference.wallet_reference_utxo)
                 .expect("Invalid hex string")
                 .try_into()
                 .expect("Failed to convert to 32-byte array"),
@@ -271,7 +265,7 @@ pub fn seedelf_minimum_lovelace() -> u64 {
         138, 103, 76, 134, 93, 156, 23, 169, 169, 167, 201, 55,
     ]
     .to_vec();
-    let staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
+    let staging_output: Output = Output::new(address::wallet_contract(true, 1), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
                 .rerandomize()
@@ -310,7 +304,7 @@ pub fn seedelf_minimum_lovelace() -> u64 {
 ///
 /// * `u64` - The minimum lovelace required for the transaction output.
 pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> u64 {
-    let mut staging_output: Output = Output::new(address::wallet_contract(true), 5_000_000)
+    let mut staging_output: Output = Output::new(address::wallet_contract(true, 1), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
                 .rerandomize()

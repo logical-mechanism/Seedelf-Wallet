@@ -70,7 +70,7 @@ pub struct TransforArgs {
     amount: Option<Vec<u64>>,
 }
 
-pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
 
     if args.lovelace.is_none()
@@ -110,7 +110,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     }
 
     let collat_addr: Address = address::collateral_address(network_flag);
-    let wallet_addr: Address = address::wallet_contract(network_flag);
+    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -124,7 +124,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
     let scalar: Scalar = setup::load_wallet();
 
     let (seedelf_datum, usuable_utxos) =
-        utxos::find_seedelf_and_wallet_utxos(scalar, args.seedelf, network_flag).await;
+        utxos::find_seedelf_and_wallet_utxos(scalar, args.seedelf, network_flag, variant).await;
     // the extra 2.5 ADA should account for the change and fee
     let usuable_utxos = utxos::select(usuable_utxos, lovelace_goal, selected_tokens.clone());
     let (total_lovelace_found, tokens) = utxos::assets_of(usuable_utxos.clone());
@@ -184,7 +184,7 @@ pub async fn run(args: TransforArgs, network_flag: bool) -> Result<(), String> {
             5_000_000 - (tmp_fee) * 3 / 2,
         ))
         .fee(tmp_fee)
-        .reference_input(wallet_reference_utxo(network_flag))
+        .reference_input(wallet_reference_utxo(network_flag, variant))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),

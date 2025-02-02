@@ -405,6 +405,7 @@ pub async fn ada_handle_address(
     asset_name: String,
     network_flag: bool,
     cip68_flag: bool,
+    variant: u64,
 ) -> Result<String, String> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let token_name: String = if cip68_flag {
@@ -446,12 +447,12 @@ pub async fn ada_handle_address(
             if cip68_flag {
                 return Err("Payment address not found".to_string());
             } else {
-                return Box::pin(ada_handle_address(asset_name, network_flag, !cip68_flag)).await;
+                return Box::pin(ada_handle_address(asset_name, network_flag, !cip68_flag, variant)).await;
             }
         }
     };
 
-    let wallet_addr: String = address::wallet_contract(network_flag).to_bech32().unwrap();
+    let wallet_addr: String = address::wallet_contract(network_flag, variant).to_bech32().unwrap();
 
     if payment_address == wallet_addr {
         Err("ADA Handle Is In Wallet Address".to_string())

@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 mod commands;
 use seedelf_cli::setup;
+use seedelf_cli::constants::VARIANT;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
@@ -10,6 +11,10 @@ struct Cli {
     /// Use this flag to interact with the pre-production environment
     #[arg(long, global = true)]
     preprod: bool,
+
+    /// Use this for different variants of the contract, defaults to most recent variant
+    #[arg(long, global = true, default_value_t = VARIANT)]
+    variant: u64,
 
     #[command(subcommand)]
     command: Option<Commands>, // Make command optional
@@ -31,8 +36,6 @@ enum Commands {
     Transfer(commands::transfer::TransforArgs),
     /// A Seedelf sends funds to an address
     Sweep(commands::sweep::SweepArgs),
-    //// Update the seedelf-cli with the newest tagged release
-    // Update,
     /// Utility functions for seedelf-cli
     Util(commands::util::UtilArgs),
     /// dApp functions for seedelf-cli
@@ -54,40 +57,35 @@ async fn main() {
             commands::welcome::run();
         }
         Some(Commands::Balance) => {
-            if let Err(err) = commands::balance::run(cli.preprod).await {
+            if let Err(err) = commands::balance::run(cli.preprod, cli.variant).await {
                 eprintln!("Error: {}", err);
             }
         }
         Some(Commands::Transfer(args)) => {
-            if let Err(err) = commands::transfer::run(args, cli.preprod).await {
+            if let Err(err) = commands::transfer::run(args, cli.preprod, cli.variant).await {
                 eprintln!("Error: {}", err);
             }
         }
         Some(Commands::Sweep(args)) => {
-            if let Err(err) = commands::sweep::run(args, cli.preprod).await {
+            if let Err(err) = commands::sweep::run(args, cli.preprod, cli.variant).await {
                 eprintln!("Error: {}", err);
             }
         }
         Some(Commands::Fund(args)) => {
-            if let Err(err) = commands::fund::run(args, cli.preprod).await {
+            if let Err(err) = commands::fund::run(args, cli.preprod, cli.variant).await {
                 eprintln!("Error: {}", err);
             }
         }
         Some(Commands::Create(args)) => {
-            if let Err(err) = commands::create::run(args, cli.preprod).await {
+            if let Err(err) = commands::create::run(args, cli.preprod, cli.variant).await {
                 eprintln!("Error: {}", err);
             }
         }
         Some(Commands::Remove(args)) => {
-            if let Err(err) = commands::remove::run(args, cli.preprod).await {
+            if let Err(err) = commands::remove::run(args, cli.preprod, cli.variant).await {
                 eprintln!("Error: {}", err);
             }
         }
-        // Some(Commands::Update) => {
-        //     if let Err(err) = commands::update::run().await {
-        //         eprintln!("Error: {}", err);
-        //     }
-        // }
         Some(Commands::Util(util_command)) => commands::util::run(util_command, cli.preprod).await,
         Some(Commands::Dapp(dapp_command)) => commands::dapp::run(dapp_command, cli.preprod).await,
         // catch the no command state

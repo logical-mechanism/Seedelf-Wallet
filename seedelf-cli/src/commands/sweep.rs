@@ -87,7 +87,7 @@ pub struct SweepArgs {
     ada_handle: Option<String>,
 }
 
-pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
 
     // address or ada handle must be found
@@ -106,7 +106,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     let outbound_address: String = if args.address.is_some() {
         args.address.unwrap()
     } else {
-        match ada_handle_address(args.ada_handle.unwrap(), network_flag, false).await {
+        match ada_handle_address(args.ada_handle.unwrap(), network_flag, false, variant).await {
             Err(err) => return Err(err),
             Ok(potential_addr) => potential_addr,
         }
@@ -168,7 +168,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     }
 
     let collat_addr: Address = address::collateral_address(network_flag);
-    let wallet_addr: Address = address::wallet_contract(network_flag);
+    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -183,7 +183,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
 
-    let owned_utxos: Vec<UtxoResponse> = utxos::collect_wallet_utxos(scalar, network_flag).await;
+    let owned_utxos: Vec<UtxoResponse> = utxos::collect_wallet_utxos(scalar, network_flag, variant).await;
     let usuable_utxos: Vec<UtxoResponse> = if args.all {
         owned_utxos
     } else {
@@ -260,7 +260,7 @@ pub async fn run(args: SweepArgs, network_flag: bool) -> Result<(), String> {
             5_000_000 - (tmp_fee) * 3 / 2,
         ))
         .fee(tmp_fee)
-        .reference_input(wallet_reference_utxo(network_flag))
+        .reference_input(wallet_reference_utxo(network_flag, variant))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),

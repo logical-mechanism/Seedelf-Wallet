@@ -40,7 +40,7 @@ pub struct LabelArgs {
     label: Option<String>,
 }
 
-pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     // if preprod then print the preprod message
     preprod_text(network_flag);
 
@@ -53,7 +53,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     }
 
     // we need this as the address type and not the shelley
-    let wallet_addr: Address = address::wallet_contract(network_flag);
+    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -181,7 +181,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             1,
         )
         .unwrap()
-        .reference_input(transaction::seedelf_reference_utxo(network_flag))
+        .reference_input(transaction::seedelf_reference_utxo(network_flag, variant))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
                 hex::decode(SEEDELF_POLICY_ID)

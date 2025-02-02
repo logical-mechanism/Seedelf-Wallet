@@ -1,6 +1,6 @@
 use crate::assets::{string_to_u64, Asset, Assets};
 use crate::constants::{
-    MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH,
+    MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH, get_config, Config
 };
 use crate::display::seedelf_label;
 use crate::koios::{
@@ -44,24 +44,28 @@ pub async fn find_seedelf_and_wallet_utxos(
     sk: Scalar,
     seedelf: String,
     network_flag: bool,
+    variant: u64,
 ) -> (Option<Register>, Vec<UtxoResponse>) {
+
+    let config: Config = get_config(variant, network_flag).unwrap();
+
     let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
     let mut number_of_utxos: u64 = 0;
 
     let mut seedelf_datum: Option<Register> = None;
     let mut found_seedelf: bool = false;
-    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
                 if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-                    if !found_seedelf && contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                    if !found_seedelf && contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
                         let asset_name = utxo
                             .asset_list
                             .as_ref()
                             .and_then(|vec| {
                                 vec.iter()
-                                    .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
+                                    .find(|asset| asset.policy_id == config.contract.seedelf_policy_id)
                                     .map(|asset| &asset.asset_name)
                             })
                             .unwrap();
@@ -73,7 +77,7 @@ pub async fn find_seedelf_and_wallet_utxos(
                     // utxo must be owned by this secret scaler
                     if inline_datum.is_owned(sk) {
                         // its owned but it can't hold a seedelf
-                        if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                        if !contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
                             if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
                                 // we hit the max utxos allowed in a single tx
                                 println!("Maximum UTxOs");
@@ -97,17 +101,19 @@ pub async fn find_seedelf_and_wallet_utxos(
 }
 
 /// Find a specific seedelf.
-pub async fn find_seedelf_utxo(seedelf: String, network_flag: bool) -> Option<UtxoResponse> {
-    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+pub async fn find_seedelf_utxo(seedelf: String, network_flag: bool, variant: u64) -> Option<UtxoResponse> {
+
+    let config: Config = get_config(variant, network_flag).unwrap();
+    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
-                if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                if contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
                     let asset_name = utxo
                         .asset_list
                         .as_ref()
                         .and_then(|vec| {
                             vec.iter()
-                                .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
+                                .find(|asset| asset.policy_id == config.contract.seedelf_policy_id)
                                 .map(|asset| &asset.asset_name)
                         })
                         .unwrap();
@@ -129,12 +135,14 @@ pub async fn find_seedelf_utxo(seedelf: String, network_flag: bool) -> Option<Ut
 }
 
 // Find wallet utxos owned by some scalar. The maximum amount of utxos is limited by a upper bound.
-pub async fn collect_wallet_utxos(sk: Scalar, network_flag: bool) -> Vec<UtxoResponse> {
+pub async fn collect_wallet_utxos(sk: Scalar, network_flag: bool, variant: u64) -> Vec<UtxoResponse> {
+
+    let config: Config = get_config(variant, network_flag).unwrap();
     let mut number_of_utxos: u64 = 0;
 
     let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
 
-    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
@@ -142,7 +150,7 @@ pub async fn collect_wallet_utxos(sk: Scalar, network_flag: bool) -> Vec<UtxoRes
                     // utxo must be owned by this secret scaler
                     if inline_datum.is_owned(sk) {
                         // its owned but it can't hold a seedelf
-                        if !contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                        if !contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
                             if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
                                 // we hit the max utxos allowed in a single tx
                                 println!("Maximum UTxOs");

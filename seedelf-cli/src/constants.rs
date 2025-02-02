@@ -1,6 +1,52 @@
+pub const VARIANT: u64 = 1;
+
+pub struct Contract {
+    pub wallet_contract_hash: &'static str,
+    pub seedelf_policy_id: &'static str,
+}
+
+pub struct Reference {
+    pub wallet_reference_utxo: &'static str,
+    pub seedelf_reference_utxo: &'static str,
+}
+
+pub struct Config {
+    pub contract: Contract,
+    pub reference: Reference,
+}
+
+/// We can store all variants of the contracts inside this function then call it whenever we need it.
+pub fn get_config(variant: u64, network: bool) -> Option<Config> {
+    match variant {
+        1 => {
+            let reference: Reference = if network {
+                Reference {
+                    wallet_reference_utxo: "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6",
+                    seedelf_reference_utxo: "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4",
+                }
+            } else {
+                Reference {
+                    wallet_reference_utxo: "51f12c1a5c2b0558a284628d81b06dee50b27693242fe35618c5f921730c0527",
+                    seedelf_reference_utxo: "f3955f42f660fae8b3e4dcf664011876cf769d87aa8450dc73171b4f6b5f520b",
+                }
+            };
+            let contract: Contract = Contract {
+                wallet_contract_hash: "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+                seedelf_policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255",
+            };
+            Some(Config {
+                contract,
+                reference,
+            })
+        }
+        _ => None, // unsupported variant
+    }
+}
+
+
+// contract hashes
 pub const WALLET_CONTRACT_HASH: &str = "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469";
 pub const SEEDELF_POLICY_ID: &str = "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255";
-pub const SCRIPT_REFERENCE_HASH: &str = "6777ba4dc8c3043377201624502d92636381144700d49983258b75db";
 
 pub const PREPROD_WALLET_REFERENCE_UTXO: &str =
     "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6";

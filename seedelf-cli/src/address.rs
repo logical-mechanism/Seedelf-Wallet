@@ -1,5 +1,5 @@
 use crate::constants::{
-    COLLATERAL_HASH, MAINNET_STAKE_HASH, PREPROD_STAKE_HASH, WALLET_CONTRACT_HASH,
+    COLLATERAL_HASH, MAINNET_STAKE_HASH, PREPROD_STAKE_HASH, get_config, Config
 };
 use pallas_addresses::{
     Address, Network, PaymentKeyHash, ScriptHash, ShelleyAddress, ShelleyDelegationPart,
@@ -60,13 +60,16 @@ pub fn is_not_a_script(addr: Address) -> bool {
 /// # Returns
 ///
 /// * `Address` - The wallet contract address for the specified network.
-pub fn wallet_contract(network_flag: bool) -> Address {
+pub fn wallet_contract(network_flag: bool, variant: u64) -> Address {
+
+    let config: Config = get_config(variant, network_flag).unwrap();
+
     // Construct the Shelley wallet address based on the network flag.
     let shelly_wallet_address: ShelleyAddress = if network_flag {
         ShelleyAddress::new(
             Network::Testnet,
             ShelleyPaymentPart::Script(ScriptHash::new(
-                hex::decode(WALLET_CONTRACT_HASH)
+                hex::decode(config.contract.wallet_contract_hash)
                     .unwrap()
                     .try_into()
                     .expect("Incorrect Length"),
@@ -82,7 +85,7 @@ pub fn wallet_contract(network_flag: bool) -> Address {
         ShelleyAddress::new(
             Network::Mainnet,
             ShelleyPaymentPart::Script(ScriptHash::new(
-                hex::decode(WALLET_CONTRACT_HASH)
+                hex::decode(config.contract.wallet_contract_hash)
                     .unwrap()
                     .try_into()
                     .expect("Incorrect Length"),

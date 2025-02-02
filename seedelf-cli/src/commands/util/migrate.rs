@@ -15,7 +15,7 @@ pub struct MigrateArgs {
     version: String,
 }
 
-pub fn run(args: MigrateArgs, network_flag: bool) -> Result<(), String> {
+pub fn run(_args: MigrateArgs, network_flag: bool) -> Result<(), String> {
     preprod_text(network_flag);
     println!(
         "\n{}\n",

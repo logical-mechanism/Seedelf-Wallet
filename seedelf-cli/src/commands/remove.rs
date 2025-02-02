@@ -40,7 +40,7 @@ pub struct RemoveArgs {
     address: String,
 }
 
-pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
 
     // we need to make sure that the network flag and the address provided makes sense here
@@ -63,7 +63,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
     // There is a single register here so we can do this
     let scalar: Scalar = setup::load_wallet();
 
-    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag)
+    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag, variant)
         .await
         .ok_or("Seedelf Not Found".to_string())
         .unwrap();
@@ -120,8 +120,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool) -> Result<(), String> {
             -1,
         )
         .unwrap()
-        .reference_input(transaction::seedelf_reference_utxo(network_flag))
-        .reference_input(transaction::wallet_reference_utxo(network_flag))
+        .reference_input(transaction::seedelf_reference_utxo(network_flag, variant))
+        .reference_input(transaction::wallet_reference_utxo(network_flag, variant))
         .add_spend_redeemer(
             input_vector.clone().remove(0),
             spend_redeemer_vector.clone(),
