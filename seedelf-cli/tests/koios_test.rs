@@ -17,7 +17,7 @@ fn tx_hash_result() {
 #[tokio::test]
 async fn find_ada_handle() {
     let name: String = "logic.mech".to_string();
-    let payment_address = ada_handle_address(name, false, false).await.unwrap();
+    let payment_address = ada_handle_address(name, false, false, 1).await.unwrap();
     assert_eq!(payment_address, "addr1q8rdcfvj5a27gmp04q5c4nuly385mseam09y777xa8mjn40ax0z9yaxg2mjj3ctg4uj6ggwsc6nja0kj446w2gv5zcvqjk47zh")
 }
 

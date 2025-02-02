@@ -3,6 +3,8 @@ pub const VARIANT: u64 = 1;
 pub struct Contract {
     pub wallet_contract_hash: &'static str,
     pub seedelf_policy_id: &'static str,
+    pub wallet_contract_size: u64,
+    pub seedelf_contract_size: u64,
 }
 
 pub struct Reference {
@@ -21,18 +23,24 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
         1 => {
             let reference: Reference = if network {
                 Reference {
-                    wallet_reference_utxo: "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6",
-                    seedelf_reference_utxo: "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4",
+                    wallet_reference_utxo:
+                        "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6",
+                    seedelf_reference_utxo:
+                        "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4",
                 }
             } else {
                 Reference {
-                    wallet_reference_utxo: "51f12c1a5c2b0558a284628d81b06dee50b27693242fe35618c5f921730c0527",
-                    seedelf_reference_utxo: "f3955f42f660fae8b3e4dcf664011876cf769d87aa8450dc73171b4f6b5f520b",
+                    wallet_reference_utxo:
+                        "51f12c1a5c2b0558a284628d81b06dee50b27693242fe35618c5f921730c0527",
+                    seedelf_reference_utxo:
+                        "f3955f42f660fae8b3e4dcf664011876cf769d87aa8450dc73171b4f6b5f520b",
                 }
             };
             let contract: Contract = Contract {
                 wallet_contract_hash: "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
                 seedelf_policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255",
+                wallet_contract_size: 629,
+                seedelf_contract_size: 519,
             };
             Some(Config {
                 contract,
@@ -42,21 +50,6 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
         _ => None, // unsupported variant
     }
 }
-
-
-// contract hashes
-pub const WALLET_CONTRACT_HASH: &str = "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469";
-pub const SEEDELF_POLICY_ID: &str = "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255";
-
-pub const PREPROD_WALLET_REFERENCE_UTXO: &str =
-    "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6";
-pub const PREPROD_SEEDELF_REFERENCE_UTXO: &str =
-    "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4";
-
-pub const MAINNET_WALLET_REFERENCE_UTXO: &str =
-    "51f12c1a5c2b0558a284628d81b06dee50b27693242fe35618c5f921730c0527";
-pub const MAINNET_SEEDELF_REFERENCE_UTXO: &str =
-    "f3955f42f660fae8b3e4dcf664011876cf769d87aa8450dc73171b4f6b5f520b";
 
 // support [LOGIC]
 pub const PREPROD_STAKE_HASH: &str = "86c769419aaa673c963da04e4b5bae448d490e2ceac902cb82e4da76";
@@ -74,10 +67,6 @@ pub const MAINNET_COLLATERAL_UTXO: &str =
 
 // ADA Handle Policy Ids
 pub const ADA_HANDLE_POLICY_ID: &str = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a";
-
-// script sizes
-pub const WALLET_CONTRACT_SIZE: u64 = 629;
-pub const SEEDELF_CONTRACT_SIZE: u64 = 519;
 
 // these maximums are estimated
 pub const MAXIMUM_WALLET_UTXOS: u64 = 20;

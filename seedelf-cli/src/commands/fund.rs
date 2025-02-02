@@ -126,10 +126,11 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
     let lovelace_goal: u64 = lovelace;
 
     // utxos
-    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag, variant)
-        .await
-        .ok_or("Seedelf Not Found".to_string())
-        .unwrap();
+    let seedelf_utxo: UtxoResponse =
+        utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag, variant)
+            .await
+            .ok_or("Seedelf Not Found".to_string())
+            .unwrap();
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or("Not Register Type".to_string())
         .unwrap();

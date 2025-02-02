@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 mod commands;
-use seedelf_cli::setup;
 use seedelf_cli::constants::VARIANT;
+use seedelf_cli::setup;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
@@ -86,8 +86,12 @@ async fn main() {
                 eprintln!("Error: {}", err);
             }
         }
-        Some(Commands::Util(util_command)) => commands::util::run(util_command, cli.preprod).await,
-        Some(Commands::Dapp(dapp_command)) => commands::dapp::run(dapp_command, cli.preprod).await,
+        Some(Commands::Util(util_command)) => {
+            commands::util::run(util_command, cli.preprod, cli.variant).await
+        }
+        Some(Commands::Dapp(dapp_command)) => {
+            commands::dapp::run(dapp_command, cli.preprod, cli.variant).await
+        }
         // catch the no command state
         None => {
             println!("No subcommand provided. Use --help for more information.");

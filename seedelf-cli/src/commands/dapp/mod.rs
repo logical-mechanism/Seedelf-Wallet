@@ -1,8 +1,8 @@
 use clap::{Args, Subcommand};
 
 pub mod balance;
-pub mod sweep;
 pub mod newm;
+pub mod sweep;
 
 #[derive(Subcommand)]
 pub enum DappCommands {
@@ -20,7 +20,7 @@ pub struct DappArgs {
     pub command: DappCommands,
 }
 
-pub async fn run(args: DappArgs, preprod_flag: bool) {
+pub async fn run(args: DappArgs, preprod_flag: bool, variant: u64) {
     match args.command {
         DappCommands::Balance => {
             if let Err(err) = balance::run(preprod_flag).await {
@@ -28,7 +28,7 @@ pub async fn run(args: DappArgs, preprod_flag: bool) {
             }
         }
         DappCommands::Sweep => {
-            if let Err(err) = sweep::run(preprod_flag).await {
+            if let Err(err) = sweep::run(preprod_flag, variant).await {
                 eprintln!("Error: {}", err);
             }
         }

@@ -2,10 +2,9 @@ use crate::{
     address,
     assets::Assets,
     constants::{
-        CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, MAINNET_COLLATERAL_UTXO,
-        MEM_COST_DENOMINATOR,
-        MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO,
-        SEEDELF_POLICY_ID, UTXO_COST_PER_BYTE, get_config, Config
+        get_config, Config, CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, MAINNET_COLLATERAL_UTXO,
+        MEM_COST_DENOMINATOR, MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO,
+        UTXO_COST_PER_BYTE,
     },
     register::Register,
     schnorr,
@@ -116,7 +115,6 @@ pub fn seedelf_reference_utxo(network_flag: bool, variant: u64) -> Input {
 ///
 /// * `Input` - A transaction input constructed from the specified wallet reference UTXO.
 pub fn wallet_reference_utxo(network_flag: bool, variant: u64) -> Input {
-
     let config: Config = get_config(variant, network_flag).unwrap();
 
     Input::new(
@@ -265,6 +263,11 @@ pub fn seedelf_minimum_lovelace() -> u64 {
         138, 103, 76, 134, 93, 156, 23, 169, 169, 167, 201, 55,
     ]
     .to_vec();
+    let policy_id: Vec<u8> = [
+        94, 237, 14, 31, 1, 66, 250, 134, 20, 230, 198, 12, 121, 19, 73, 107, 154, 156, 226, 154,
+        138, 103, 76, 134, 93, 156, 23, 169,
+    ]
+    .to_vec();
     let staging_output: Output = Output::new(address::wallet_contract(true, 1), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
@@ -272,12 +275,7 @@ pub fn seedelf_minimum_lovelace() -> u64 {
                 .to_vec(),
         )
         .add_asset(
-            Hash::new(
-                hex::decode(SEEDELF_POLICY_ID)
-                    .unwrap()
-                    .try_into()
-                    .expect("Not Correct Length"),
-            ),
+            Hash::new(policy_id.try_into().expect("Not Correct Length")),
             token_name,
             1,
         )

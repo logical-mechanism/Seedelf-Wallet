@@ -35,7 +35,7 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool, variant: u64) {
     let mut seedelfs: Vec<String> = Vec::new();
 
     let config: Config = get_config(variant, network_flag).unwrap();
-    
+
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
@@ -50,7 +50,9 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool, variant: u64) {
                                 .as_ref()
                                 .and_then(|vec| {
                                     vec.iter()
-                                        .find(|asset| asset.policy_id == config.contract.seedelf_policy_id)
+                                        .find(|asset| {
+                                            asset.policy_id == config.contract.seedelf_policy_id
+                                        })
                                         .map(|asset| &asset.asset_name)
                                 })
                                 .unwrap();

@@ -11,7 +11,7 @@ use seedelf_cli::koios::{address_utxos, evaluate_transaction, utxo_info, UtxoRes
 
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
-use seedelf_cli::constants::{plutus_v3_cost_model, WALLET_CONTRACT_SIZE};
+use seedelf_cli::constants::{get_config, plutus_v3_cost_model, Config};
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::transaction::{
     address_minimum_lovelace_with_assets, extract_budgets, total_computation_fee,
@@ -36,8 +36,11 @@ pub struct ExtractArgs {
     address: String,
 }
 
-pub async fn run(args: ExtractArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
+
+    let config: Config = get_config(variant, network_flag).unwrap();
+
     let collat_addr: Address = address::collateral_address(network_flag);
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
@@ -56,7 +59,7 @@ pub async fn run(args: ExtractArgs, network_flag: bool) -> Result<(), String> {
                     return Err("UTxO has datum".to_string());
                 }
                 let utxo_addr: Address = Address::from_bech32(&empty_datum_utxo.address).unwrap();
-                if utxo_addr != address::wallet_contract(network_flag) {
+                if utxo_addr != address::wallet_contract(network_flag, variant) {
                     return Err("UTxO not in wallet".to_string());
                 }
                 if empty_datum_utxo.is_spent {
@@ -171,7 +174,7 @@ pub async fn run(args: ExtractArgs, network_flag: bool) -> Result<(), String> {
         .output(extract_output)
         .collateral_output(Output::new(addr.clone(), 5_000_000 - (tmp_fee) * 3 / 2))
         .fee(tmp_fee)
-        .reference_input(wallet_reference_utxo(network_flag))
+        .reference_input(wallet_reference_utxo(network_flag, variant))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),
@@ -224,7 +227,7 @@ pub async fn run(args: ExtractArgs, network_flag: bool) -> Result<(), String> {
         compute_fee.to_string().bright_white()
     );
 
-    let script_reference_fee: u64 = WALLET_CONTRACT_SIZE * 15;
+    let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
     println!(
         "{} {}",
         "Script Reference Fee:".bright_blue(),

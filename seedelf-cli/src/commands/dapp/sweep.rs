@@ -17,11 +17,11 @@ use seedelf_cli::setup;
 use seedelf_cli::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_cli::utxos;
 
-pub async fn run(network_flag: bool) -> Result<(), String> {
+pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
     println!("\n{}", "Sweeping All dApp UTxOs".bright_blue(),);
 
-    let wallet_addr: Address = address::wallet_contract(network_flag);
+    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();

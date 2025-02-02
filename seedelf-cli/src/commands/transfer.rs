@@ -11,8 +11,8 @@ use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::{
-    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, MAXIMUM_TOKENS_PER_UTXO,
-    WALLET_CONTRACT_SIZE,
+    get_config, plutus_v3_cost_model, Config, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY,
+    MAXIMUM_TOKENS_PER_UTXO,
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
@@ -72,6 +72,8 @@ pub struct TransforArgs {
 
 pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
+
+    let config: Config = get_config(variant, network_flag).unwrap();
 
     if args.lovelace.is_none()
         && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())
@@ -316,7 +318,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         compute_fee.to_string().bright_white()
     );
 
-    let script_reference_fee: u64 = WALLET_CONTRACT_SIZE * 15;
+    let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
     println!(
         "{} {}",
         "Script Reference Fee:".bright_blue(),

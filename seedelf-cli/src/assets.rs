@@ -211,9 +211,11 @@ impl Assets {
 
     pub fn quantity_of(&self, policy_id: String, token_name: String) -> Option<u64> {
         for this_asset in &self.items {
-            match Asset::quantity_of(&this_asset, policy_id.clone(), token_name.clone()) {
-                Some(amount) => {return Some(amount);}
-                _ => continue
+            match Asset::quantity_of(this_asset, policy_id.clone(), token_name.clone()) {
+                Some(amount) => {
+                    return Some(amount);
+                }
+                _ => continue,
             }
         }
         None

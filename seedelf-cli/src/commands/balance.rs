@@ -16,7 +16,8 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
 
     display::all_seedelfs(scalar, network_flag, variant).await;
 
-    let all_utxos: Vec<UtxoResponse> = utxos::collect_all_wallet_utxos(scalar, network_flag).await;
+    let all_utxos: Vec<UtxoResponse> =
+        utxos::collect_all_wallet_utxos(scalar, network_flag, variant).await;
     let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone());
 
     println!(

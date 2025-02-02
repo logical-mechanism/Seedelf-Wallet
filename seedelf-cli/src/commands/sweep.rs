@@ -11,8 +11,8 @@ use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::{
-    plutus_v3_cost_model, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, MAXIMUM_TOKENS_PER_UTXO,
-    WALLET_CONTRACT_SIZE,
+    get_config, plutus_v3_cost_model, Config, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY,
+    MAXIMUM_TOKENS_PER_UTXO,
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
@@ -89,6 +89,8 @@ pub struct SweepArgs {
 
 pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
+
+    let config: Config = get_config(variant, network_flag).unwrap();
 
     // address or ada handle must be found
     if args.address.is_none() && args.ada_handle.is_none() {
@@ -183,7 +185,8 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
 
-    let owned_utxos: Vec<UtxoResponse> = utxos::collect_wallet_utxos(scalar, network_flag, variant).await;
+    let owned_utxos: Vec<UtxoResponse> =
+        utxos::collect_wallet_utxos(scalar, network_flag, variant).await;
     let usuable_utxos: Vec<UtxoResponse> = if args.all {
         owned_utxos
     } else {
@@ -398,7 +401,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         compute_fee.to_string().bright_white()
     );
 
-    let script_reference_fee: u64 = WALLET_CONTRACT_SIZE * 15;
+    let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
     println!(
         "{} {}",
         "Script Reference Fee:".bright_blue(),
