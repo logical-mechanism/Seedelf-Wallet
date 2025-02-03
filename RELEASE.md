@@ -42,3 +42,9 @@ version="0.4.1"
 git tag -d ${version}
 git push origin --delete ${version}
 ```
+
+## Checking for new versions of dependencies
+
+```bash
+cargo outdated
+```

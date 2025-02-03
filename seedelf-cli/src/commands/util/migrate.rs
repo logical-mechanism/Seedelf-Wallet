@@ -1,7 +1,7 @@
-use colored::Colorize;
 use clap::Args;
-use seedelf_cli::display::preprod_text;
+use colored::Colorize;
 use seedelf_cli::constants::VARIANT;
+use seedelf_cli::display::preprod_text;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -12,7 +12,8 @@ pub struct MigrateArgs {
 }
 
 pub fn run(args: MigrateArgs, network_flag: bool) -> Result<(), String> {
-    if args.from_variant <= 0 || args.from_variant >= VARIANT {
+    // starts a variant 1
+    if args.from_variant == 0 || args.from_variant >= VARIANT {
         return Err("Incorrect Migration Variant".to_string());
     }
 
@@ -20,9 +21,11 @@ pub fn run(args: MigrateArgs, network_flag: bool) -> Result<(), String> {
 
     println!(
         "{}",
-        format!("\nMigrating Variant: {} to Variant: {}",
-        args.from_variant,
-        VARIANT).bright_cyan()
+        format!(
+            "\nMigrating Variant: {} to Variant: {}",
+            args.from_variant, VARIANT
+        )
+        .bright_cyan()
     );
 
     // its basically sweep
