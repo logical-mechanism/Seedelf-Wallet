@@ -119,6 +119,7 @@ async function waitForCardano() {
 function populateWalletDropdown(cardano) {
     // auto populate the dropdown with the installed wallets
     const walletDropdown = document.getElementById('wallet_dropdown');
+    // thank you meshjs for this
     const sortedWallets = Object.keys(cardano)
         .sort()  // Sort keys alphabetically
         .reduce((acc, key) => {
