@@ -68,7 +68,7 @@ pub struct FundArgs {
     amount: Option<Vec<u64>>,
 }
 
-pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
 
     // its ok not to define lovelace but in that case an asset has to be define
@@ -116,7 +116,7 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     }
 
     // we need this as the address type and not the shelley
-    let wallet_addr: Address = address::wallet_contract(network_flag);
+    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -126,10 +126,11 @@ pub async fn run(args: FundArgs, network_flag: bool) -> Result<(), String> {
     let lovelace_goal: u64 = lovelace;
 
     // utxos
-    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag)
-        .await
-        .ok_or("Seedelf Not Found".to_string())
-        .unwrap();
+    let seedelf_utxo: UtxoResponse =
+        utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag, variant)
+            .await
+            .ok_or("Seedelf Not Found".to_string())
+            .unwrap();
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or("Not Register Type".to_string())
         .unwrap();

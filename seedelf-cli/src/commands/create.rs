@@ -10,7 +10,7 @@ use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
-use seedelf_cli::constants::{plutus_v3_cost_model, SEEDELF_CONTRACT_SIZE, SEEDELF_POLICY_ID};
+use seedelf_cli::constants::{get_config, plutus_v3_cost_model, Config};
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{address_utxos, evaluate_transaction, UtxoResponse};
@@ -40,9 +40,14 @@ pub struct LabelArgs {
     label: Option<String>,
 }
 
-pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     // if preprod then print the preprod message
     preprod_text(network_flag);
+
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
@@ -53,7 +58,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
     }
 
     // we need this as the address type and not the shelley
-    let wallet_addr: Address = address::wallet_contract(network_flag);
+    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -157,7 +162,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
                 .set_inline_datum(datum_vector.clone())
                 .add_asset(
                     pallas_crypto::hash::Hash::new(
-                        hex::decode(SEEDELF_POLICY_ID)
+                        hex::decode(config.contract.seedelf_policy_id)
                             .unwrap()
                             .try_into()
                             .expect("Not Correct Length"),
@@ -172,7 +177,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
-                hex::decode(SEEDELF_POLICY_ID)
+                hex::decode(config.contract.seedelf_policy_id)
                     .unwrap()
                     .try_into()
                     .expect("Not Correct Length"),
@@ -181,10 +186,10 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
             1,
         )
         .unwrap()
-        .reference_input(transaction::seedelf_reference_utxo(network_flag))
+        .reference_input(transaction::seedelf_reference_utxo(network_flag, variant))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
-                hex::decode(SEEDELF_POLICY_ID)
+                hex::decode(config.contract.seedelf_policy_id)
                     .expect("Invalid hex string")
                     .try_into()
                     .expect("Failed to convert to 32-byte array"),
@@ -207,7 +212,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .clear_collateral_output()
         .remove_output(1)
         .remove_mint_redeemer(pallas_crypto::hash::Hash::new(
-            hex::decode(SEEDELF_POLICY_ID)
+            hex::decode(config.contract.seedelf_policy_id)
                 .expect("Invalid hex string")
                 .try_into()
                 .expect("Failed to convert to 32-byte array"),
@@ -267,7 +272,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         compute_fee.to_string().bright_white()
     );
 
-    let script_reference_fee: u64 = SEEDELF_CONTRACT_SIZE * 15;
+    let script_reference_fee: u64 = config.contract.seedelf_contract_size * 15;
     println!(
         "{} {}",
         "Script Reference Fee:".bright_blue(),
@@ -303,7 +308,7 @@ pub async fn run(args: LabelArgs, network_flag: bool) -> Result<(), String> {
         .fee(total_fee)
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
-                hex::decode(SEEDELF_POLICY_ID)
+                hex::decode(config.contract.seedelf_policy_id)
                     .expect("Invalid hex string")
                     .try_into()
                     .expect("Failed to convert to 32-byte array"),

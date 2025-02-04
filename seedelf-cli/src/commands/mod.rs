@@ -5,6 +5,5 @@ pub mod fund;
 pub mod remove;
 pub mod sweep;
 pub mod transfer;
-pub mod update;
 pub mod util;
 pub mod welcome;

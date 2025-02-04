@@ -16,13 +16,13 @@ pub struct FindArgs {
     label: String,
 }
 
-pub async fn run(args: FindArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
     println!(
         "\n{} {}",
         "Finding All Seedelfs Containing:".bright_blue(),
         args.label.bright_green()
     );
-    find_and_print_all_seedelfs(args.label, network_flag).await;
+    find_and_print_all_seedelfs(args.label, network_flag, variant).await;
     Ok(())
 }

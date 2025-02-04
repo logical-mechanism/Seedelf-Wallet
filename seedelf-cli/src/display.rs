@@ -1,4 +1,4 @@
-use crate::constants::{SEEDELF_POLICY_ID, WALLET_CONTRACT_HASH};
+use crate::constants::{get_config, Config};
 use crate::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
 use blstrs::Scalar;
 use colored::Colorize;
@@ -31,10 +31,15 @@ pub fn preprod_text(network_flag: bool) {
     }
 }
 
-pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
+pub async fn all_seedelfs(sk: Scalar, network_flag: bool, variant: u64) {
     let mut seedelfs: Vec<String> = Vec::new();
 
-    match credential_utxos(WALLET_CONTRACT_HASH, network_flag).await {
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
+
+    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
@@ -42,13 +47,15 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool) {
                     // utxo must be owned by this secret scaler
                     if inline_datum.is_owned(sk) {
                         // its owned but lets not count the seedelf in the balance
-                        if contains_policy_id(&utxo.asset_list, SEEDELF_POLICY_ID) {
+                        if contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
                             let asset_name: &String = utxo
                                 .asset_list
                                 .as_ref()
                                 .and_then(|vec| {
                                     vec.iter()
-                                        .find(|asset| asset.policy_id == SEEDELF_POLICY_ID)
+                                        .find(|asset| {
+                                            asset.policy_id == config.contract.seedelf_policy_id
+                                        })
                                         .map(|asset| &asset.asset_name)
                                 })
                                 .unwrap();

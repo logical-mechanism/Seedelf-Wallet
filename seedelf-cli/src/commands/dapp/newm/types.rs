@@ -30,7 +30,7 @@ pub struct SaleDatum {
 }
 
 pub fn extract_token(inline_datum: &Option<InlineDatum>, bundle_flag: bool) -> Option<Token> {
-    let position: usize = if bundle_flag {1} else {2};
+    let position: usize = if bundle_flag { 1 } else { 2 };
     inline_datum
         .as_ref()
         .and_then(|datum| match &datum.value {
@@ -48,13 +48,17 @@ pub fn extract_token(inline_datum: &Option<InlineDatum>, bundle_flag: bool) -> O
         .and_then(|fields| match fields {
             Value::Array(fields) => {
                 // Extract the pid, tkn, and amt fields
-                let pid = fields.get(0).and_then(|field| match field {
-                    Value::Object(obj) => obj.get("bytes").and_then(|b| b.as_str().map(String::from)),
+                let pid = fields.first().and_then(|field| match field {
+                    Value::Object(obj) => {
+                        obj.get("bytes").and_then(|b| b.as_str().map(String::from))
+                    }
                     _ => None,
                 })?;
 
                 let tkn = fields.get(1).and_then(|field| match field {
-                    Value::Object(obj) => obj.get("bytes").and_then(|b| b.as_str().map(String::from)),
+                    Value::Object(obj) => {
+                        obj.get("bytes").and_then(|b| b.as_str().map(String::from))
+                    }
                     _ => None,
                 })?;
 

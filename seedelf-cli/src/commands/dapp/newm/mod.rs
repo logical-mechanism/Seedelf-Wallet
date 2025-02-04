@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 pub mod constants;
-pub mod view_sale;
 pub mod types;
+pub mod view_sale;
 
 #[derive(Subcommand)]
 pub enum NEWMCommands {
@@ -17,9 +17,6 @@ pub struct NEWMArgs {
 
 pub async fn run(args: NEWMArgs, preprod_flag: bool) -> Result<(), String> {
     match args.command {
-        NEWMCommands::View(args) => {
-            view_sale::run(args, preprod_flag).await 
-        }
-        
+        NEWMCommands::View(args) => view_sale::run(args, preprod_flag).await,
     }
 }

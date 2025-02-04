@@ -62,12 +62,14 @@ Commands:
   transfer  A Seedelf sends funds to a Seedelf
   sweep     A Seedelf sends funds to an address
   util      Utility functions for seedelf-cli
+  dapp      dApp functions for seedelf-cli
   help      Print this message or the help of the given subcommand(s)
 
 Options:
-      --preprod  Use this flag to interact with the pre-production environment
-  -h, --help     Print help
-  -V, --version  Print version
+      --preprod            Use this flag to interact with the pre-production environment
+      --variant <VARIANT>  Use this for different variants of the contract, defaults to most recent variant [default: 1]
+  -h, --help               Print help
+  -V, --version            Print version
 ```
 
 ### Basic Usage
