@@ -6,6 +6,26 @@ use pallas_addresses::{
     ShelleyPaymentPart, StakeKeyHash,
 };
 
+/// Returns the [LOGIC] stake used during address generation
+///
+/// /// # Arguments
+///
+/// * `network_flag` - A boolean flag indicating the expected network:
+///    - `true` checks for Testnet.
+///    - `false` checks for Mainnet.
+///
+/// /// # Returns
+///
+/// * `str` - The stake key in hex.
+pub fn stake_key(network_flag: bool) -> &'static str {
+    if network_flag {
+        PREPROD_STAKE_HASH
+    } else {
+        MAINNET_STAKE_HASH
+    }
+}
+
+
 /// Determines whether the given address belongs to the correct Cardano network.
 ///
 /// Checks if the provided address matches the expected network based on the `network_flag`.

@@ -12,19 +12,21 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
 
-    println!("{}", "\ndApp Wallet:".bright_white());
     println!(
-        "{}",
-        "\nThis wallet should only receive funds from smart contracts. This address should not be public.".bright_yellow()
+        "{}: {} {}",
+        "\nThe dApp Wallet".bright_white(),
+        "This wallet should only receive funds from smart contracts.".bright_yellow(),
+        "This address should not be public.".bright_red()
     );
 
     let scalar: Scalar = setup::load_wallet();
 
     let vkey = convert::secret_key_to_public_key(scalar);
     println!("Public Key Hash: {}", vkey.bright_blue());
+    println!("Stake Key Hash: {}", address::stake_key(network_flag).bright_blue());
     let addr = address::dapp_address(vkey, network_flag);
     let addr_bech32 = addr.to_bech32().unwrap();
-    println!("Address: {}", addr_bech32.bright_blue());
+    println!("\nAddress: {}", addr_bech32.bright_blue());
 
     let all_utxos: Vec<UtxoResponse> =
         utxos::collect_all_address_utxos(&addr_bech32, network_flag).await;
