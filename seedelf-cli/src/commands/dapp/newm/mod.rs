@@ -6,9 +6,10 @@ pub mod guide;
 
 #[derive(Subcommand)]
 pub enum NEWMCommands {
+    /// A Basic How-To Guide For dApp Interactions
+    Guide,
     /// View Sale Information
     View(view_sale::ViewSaleArgs),
-    Guide,
 }
 
 #[derive(Args)]
