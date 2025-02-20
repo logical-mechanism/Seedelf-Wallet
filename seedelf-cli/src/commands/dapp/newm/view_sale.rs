@@ -7,7 +7,7 @@ use colored::Colorize;
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::utxos;
 
-use seedelf_cli::koios::{nft_utxo, UtxoResponse};
+use seedelf_cli::koios::{UtxoResponse, nft_utxo};
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct ViewSaleArgs {

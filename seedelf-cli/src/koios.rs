@@ -580,7 +580,10 @@ pub async fn asset_history(
     limit: u64,
 ) -> Result<Vec<String>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{}.koios.rest/api/v1/asset_txs?_asset_policy={}&_asset_name={}&_after_block_height=50000&_history=true&limit={}", network, policy_id, token_name, limit);
+    let url: String = format!(
+        "https://{}.koios.rest/api/v1/asset_txs?_asset_policy={}&_asset_name={}&_after_block_height=50000&_history=true&limit={}",
+        network, policy_id, token_name, limit
+    );
     let client: Client = reqwest::Client::new();
 
     // Make the POST request

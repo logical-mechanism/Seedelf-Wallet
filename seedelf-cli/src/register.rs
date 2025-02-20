@@ -3,8 +3,8 @@ use blstrs::{G1Affine, G1Projective, Scalar};
 use hex;
 use hex::FromHex;
 use pallas_primitives::{
-    alonzo::{Constr, MaybeIndefArray, PlutusData},
     BoundedBytes, Fragment,
+    alonzo::{Constr, MaybeIndefArray, PlutusData},
 };
 use serde::{Deserialize, Serialize};
 

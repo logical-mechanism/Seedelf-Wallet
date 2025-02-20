@@ -1,5 +1,5 @@
 use crate::constants::{
-    get_config, Config, COLLATERAL_HASH, MAINNET_STAKE_HASH, PREPROD_STAKE_HASH,
+    COLLATERAL_HASH, Config, MAINNET_STAKE_HASH, PREPROD_STAKE_HASH, get_config,
 };
 use pallas_addresses::{
     Address, Network, PaymentKeyHash, ScriptHash, ShelleyAddress, ShelleyDelegationPart,
@@ -24,7 +24,6 @@ pub fn stake_key(network_flag: bool) -> &'static str {
         MAINNET_STAKE_HASH
     }
 }
-
 
 /// Determines whether the given address belongs to the correct Cardano network.
 ///

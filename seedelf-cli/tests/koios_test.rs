@@ -1,4 +1,4 @@
-use seedelf_cli::assets::{asset_id_to_asset, Asset};
+use seedelf_cli::assets::{Asset, asset_id_to_asset};
 use seedelf_cli::koios::{ada_handle_address, asset_history, datum_from_datum_hash, nft_utxo};
 use serde_json::Value;
 #[test]
@@ -18,7 +18,10 @@ fn tx_hash_result() {
 async fn find_ada_handle() {
     let name: String = "logic.mech".to_string();
     let payment_address = ada_handle_address(name, false, false, 1).await.unwrap();
-    assert_eq!(payment_address, "addr1q8rdcfvj5a27gmp04q5c4nuly385mseam09y777xa8mjn40ax0z9yaxg2mjj3ctg4uj6ggwsc6nja0kj446w2gv5zcvqjk47zh")
+    assert_eq!(
+        payment_address,
+        "addr1q8rdcfvj5a27gmp04q5c4nuly385mseam09y777xa8mjn40ax0z9yaxg2mjj3ctg4uj6ggwsc6nja0kj446w2gv5zcvqjk47zh"
+    )
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-use seedelf_cli::assets::{string_to_u64, Asset, Assets};
+use seedelf_cli::assets::{Asset, Assets, string_to_u64};
 use seedelf_cli::utxos;
 
 #[tokio::test]

@@ -1,6 +1,6 @@
+use blake2::Blake2bVar;
 use blake2::digest::core_api::RtVariableCoreWrapper;
 use blake2::digest::{Update, VariableOutput};
-use blake2::Blake2bVar;
 use hex;
 use sha3::{Digest, Sha3_256};
 
