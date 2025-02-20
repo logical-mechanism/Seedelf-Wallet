@@ -1,8 +1,8 @@
-use crate::assets::{string_to_u64, Asset, Assets};
-use crate::constants::{get_config, Config, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS};
+use crate::assets::{Asset, Assets, string_to_u64};
+use crate::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, get_config};
 use crate::display::seedelf_label;
 use crate::koios::{
-    address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging, UtxoResponse,
+    UtxoResponse, address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
 };
 use crate::register::Register;
 use crate::transaction::wallet_minimum_lovelace_with_assets;

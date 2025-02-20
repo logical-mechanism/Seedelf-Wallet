@@ -11,14 +11,14 @@ use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::{
-    get_config, plutus_v3_cost_model, Config, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY,
-    MAXIMUM_TOKENS_PER_UTXO,
+    COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO, get_config,
+    plutus_v3_cost_model,
 };
 use seedelf_cli::data_structures;
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::koios::{
-    ada_handle_address, evaluate_transaction, extract_bytes_with_logging, submit_tx,
-    witness_collateral, UtxoResponse,
+    UtxoResponse, ada_handle_address, evaluate_transaction, extract_bytes_with_logging, submit_tx,
+    witness_collateral,
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;

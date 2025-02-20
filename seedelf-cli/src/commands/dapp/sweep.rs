@@ -11,7 +11,7 @@ use seedelf_cli::assets::Assets;
 use seedelf_cli::constants::MAXIMUM_TOKENS_PER_UTXO;
 use seedelf_cli::convert;
 use seedelf_cli::display::preprod_text;
-use seedelf_cli::koios::{submit_tx, UtxoResponse};
+use seedelf_cli::koios::{UtxoResponse, submit_tx};
 use seedelf_cli::register::Register;
 use seedelf_cli::setup;
 use seedelf_cli::transaction::wallet_minimum_lovelace_with_assets;

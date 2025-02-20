@@ -1,7 +1,7 @@
 use hex::FromHex;
 use pallas_primitives::{
-    alonzo::{Constr, MaybeIndefArray, PlutusData},
     BoundedBytes, Fragment,
+    alonzo::{Constr, MaybeIndefArray, PlutusData},
 };
 
 #[test]
@@ -20,7 +20,10 @@ fn test_register_datum() {
         ]),
     });
     let x = hex::encode(d.encode_fragment().unwrap());
-    assert_eq!(x, "d8799f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb5830aafdf5aaed4bae8122d02990b67b9030c8fe352dc40c5823cce4588ed981e89ec7057e1c057a9657a934f310e8c0851aff")
+    assert_eq!(
+        x,
+        "d8799f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb5830aafdf5aaed4bae8122d02990b67b9030c8fe352dc40c5823cce4588ed981e89ec7057e1c057a9657a934f310e8c0851aff"
+    )
 }
 
 #[test]

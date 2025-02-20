@@ -1,9 +1,9 @@
 use crate::schnorr::random_scalar;
 use aes_gcm::aead::{Aead, AeadCore, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use argon2::{password_hash::SaltString, Argon2};
-use base64::engine::general_purpose::STANDARD;
+use argon2::{Argon2, password_hash::SaltString};
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use blstrs::Scalar;
 use colored::Colorize;
 use dirs::home_dir;

@@ -7,11 +7,11 @@ use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTran
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::data_structures;
-use seedelf_cli::koios::{address_utxos, evaluate_transaction, utxo_info, UtxoResponse};
+use seedelf_cli::koios::{UtxoResponse, address_utxos, evaluate_transaction, utxo_info};
 
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
-use seedelf_cli::constants::{get_config, plutus_v3_cost_model, Config};
+use seedelf_cli::constants::{Config, get_config, plutus_v3_cost_model};
 use seedelf_cli::display::preprod_text;
 use seedelf_cli::transaction::{
     address_minimum_lovelace_with_assets, extract_budgets, total_computation_fee,

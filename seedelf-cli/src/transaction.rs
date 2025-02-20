@@ -2,9 +2,9 @@ use crate::{
     address,
     assets::Assets,
     constants::{
-        get_config, Config, CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, MAINNET_COLLATERAL_UTXO,
+        CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, Config, MAINNET_COLLATERAL_UTXO,
         MEM_COST_DENOMINATOR, MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO,
-        UTXO_COST_PER_BYTE,
+        UTXO_COST_PER_BYTE, get_config,
     },
     register::Register,
     schnorr,

@@ -1,4 +1,4 @@
-use crate::constants::{get_config, Config};
+use crate::constants::{Config, get_config};
 use crate::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
 use blstrs::Scalar;
 use colored::Colorize;
