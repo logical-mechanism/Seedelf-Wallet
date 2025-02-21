@@ -439,7 +439,13 @@ pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             let mut total_lovelace: u64 = 0;
+            let mut total_seedelfs: u64 = 0;
             for utxo in utxos.clone() {
+                // count if a utxo holds a seedelf policy id
+                if contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
+                    total_seedelfs += 1;
+                }
+                // count the lovelace on the utxo
                 let value: u64 = string_to_u64(utxo.value.clone()).unwrap();
                 total_lovelace += value;
             }
@@ -450,6 +456,10 @@ pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
             println!(
                 "Contract Has {} UTxOs",
                 utxos.len().to_string().bright_yellow()
+            );
+            println!(
+                "Contract Has {} Seedelfs",
+                total_seedelfs.to_string().bright_yellow()
             );
         }
         Err(err) => {
