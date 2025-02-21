@@ -60,13 +60,13 @@ pub struct TransforArgs {
     /// Optional repeated `token-name`
     #[arg(
         long = "token-name",
-        help = "The token name for the asset",
+        help = "The token name for the asset.",
         display_order = 4
     )]
     token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
-    #[arg(long = "amount", help = "The amount for the asset", display_order = 5)]
+    #[arg(long = "amount", help = "The amount for the asset.", display_order = 5)]
     amount: Option<Vec<u64>>,
 }
 

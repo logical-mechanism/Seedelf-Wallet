@@ -73,7 +73,7 @@ pub type Register {
 }
 ```
 
-A UTxO is spendable if the transaction can prove the secret key's knowledge using a non-interactive zero-knowledge Schnorr proof. A valid proof has the form:
+A UTxO is spendable if the transaction can prove the secret key's knowledge using a non-interactive zero-knowledge Schnorr Σ-protocol. A valid proof has the form:
 
 $$
 g^{z} = g^r u^c,
@@ -126,7 +126,7 @@ $$
 \blacksquare
 $$
 
-The proof of re-randomization reduces to proving the original Schnorr proof.
+The proof of re-randomization reduces to proving the original Schnorr Σ-protocol.
 
 ### Finding Spendable UTxOs From The Set
 

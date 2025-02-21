@@ -15,6 +15,6 @@ pub fn run() {
     );
     println!(
         "{}",
-        "\nYour wallet file will be stored in your home directory in the .seedelf folder.".white()
+        "\nYou may find the wallet file in your home directory in the .seedelf folder.".white()
     );
 }
