@@ -4,9 +4,9 @@
 
 Please do not open an issue to report security issues.
 
-To report a vulnerability email to support@logicalmechanism.io
+To report a vulnerability, send an email to support@logicalmechanism.io
 
-The following keys may be used to communicate sensitive information to developers:
+If you need to communicate sensitive information to the developers, use the following keys.
 
 | Name                        | Fingerprint                                       |
 |-----------------------------|---------------------------------------------------|
@@ -16,26 +16,26 @@ The support key can be found in [here](./util/pubkeys/support.asc).
 
 ## Bug Bounty Program
 
-A bounty may be rewarded to a vulnerability report **if and only if** the issue can result in **a loss of funds**.
+A vulnerability report may result in a bounty **if and only if** the issue can result in **a loss of funds**.
 
 You must describe a **plausible scenario** in which a loss of funds can occur (or has occurred) that **isn't solely attributable to user error**.
 
 Only **the code** of the **latest tagged release** of **[this repository](https://github.com/logical-mechanism/Seedelf-Wallet/)** is in scope.
 
-**The bounty can only be rewarded in ADA**. The bounty amount for your report is determined by the maintainers and ranges from USD 1 to USD 10,000 (in terms of ADA) and depends on the severity of the issue and other factors.
+**The bounty can only be rewarded in ADA**. The maintainers determine the bounty amount for your report, which depends on the severity of the issue and other factors and ranges from 1 USD to 10,000 USD (in terms of ADA).
 
 Clarifications on scope:
 
 - Custom builds are out of scope.
-- The developers **must be able to reproduce and fix the issue**. If the issue cannot be fixed **in our code** for any reason, it is out of scope.
+- The developers **must be able to reproduce and fix the issue**. It is out of scope if the issue cannot be fixed **in our code** for any reason.
 - Loss of funds due to malware on the user's machine is out of scope.
 - Memory imaging, including cold boot attacks, is out of scope.
 - Social engineering against users is out of scope.
-- Any form of coercion, physical or psychological, is out of scope.
+- Any form of physical or psychological coercion is out of scope.
 - Vulnerabilities that are attributable to hardware are out of scope.
-- If the issue was fixed in the `main` branch before we receive your report, it is invalid and not eligible for a bounty from this program.
+- A report is invalid and not eligible for a bounty from this program if the developers fix the issue noted in the report in the `main` branch before we receive your report.
 - If the vulnerability involves binary exploitation, we may ask you to provide a proof of concept of secret key exfiltration.
-- Vulnerabilities that are present in Aiken but were not introduced by the Seedelf developers are not eligible for a bounty from this program.
-- Vulnerabilities that are present in any of our third-party dependencies must be reported upstream and are not eligible for a bounty from this program.
-- A bounty will not be awarded if the reported vulnerability was already known. We may make an exception if you demonstrate that the severity of the issue was underestimated and no immediate fix was planned.
-- If, during your research, you disrupt Seedelf's release infrastructure or services, or attempt to coerce its developers, you will not be awarded a bounty.
+- Vulnerabilities present in Aiken that the Seedelf developers have not introduced are not eligible for a bounty from this program.
+- Vulnerabilities present in any of our third-party dependencies must be reported upstream and are not eligible for a bounty from this program.
+- Known vulnerabilities will result in a bounty not being awarded. We might make an exception if the developers underestimated the severity of the reported issue without an immediate fix.
+- If, during your research, you disrupt Seedelf's release infrastructure or services or attempt to coerce its developers, you will not be awarded a bounty.
