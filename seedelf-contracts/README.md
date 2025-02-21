@@ -1,12 +1,12 @@
 # **seedelf-contracts**
 
-The folder holds the Seedelf wallet smart contracts. The **Seedelf** contracts are written in [Aiken](https://aiken-lang.org/). The folder contains the happy path scripts. These files are used for testing purposes only. Users wishing to use the Seedelf wallet are encouraged to use [seedelf-cli](../seedelf-cli/README.md).
+The folder holds the Seedelf wallet smart contracts. [Aiken](https://aiken-lang.org/) is used to write the **Seedelf** smart contracts. The folder contains the happy path scripts. These files are used for testing purposes only. Users wishing to use the Seedelf wallet are encouraged to use [seedelf-cli](../seedelf-cli/README.md).
 
 ## Building
 
-The contracts are built with the `complete_build.sh` script. 
+Compile the contracts with the `complete_build.sh` script. 
 
-The random seed is `acabcafe`.
+The random seed used in production is `acabcafe`.
 
 Contract Hashes:
 
@@ -17,7 +17,7 @@ seedelf: 84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255
 
 ## Testing
 
-The Aiken test can be ran with the command below.
+The command below will run all the tests.
 ```bash
 aiken check
 ```
