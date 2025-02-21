@@ -1,6 +1,6 @@
 # Release
 
-Change the version then run the command in the parent folder.
+Change the version, then run the command below in the parent folder.
 
 ```bash
 # set the version
@@ -16,7 +16,7 @@ git tag ${version}
 git push origin ${version}
 ```
 
-Publish to crates.io with this command.
+Wait for all checks to pass, then edit the tagged release body for proper formatting. Update the release from draft to latest, then publish to crates.io with the command below in the parent folder.
 
 ```bash
 cd seedelf-cli
@@ -31,7 +31,7 @@ cd ..
 
 ## Recompiling
 
-If a recompile is required and the contract hashes change then the [seedelf-contracts/README.md](./seedelf-contracts/README.md) must be updated to reflect the changes. 
+If a recompile is required and the contract hashes change, then the [seedelf-contracts/README.md](./seedelf-contracts/README.md) must be updated to reflect the changes.
 
 ## Re-releasing Tag
 
