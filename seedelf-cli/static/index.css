@@ -83,7 +83,7 @@ section {
     background-origin: border-box;
     background-clip: content-box, border-box;
     border-bottom-left-radius: 15px;
-    border-bottom-right-radius: 85px;
+    border-bottom-right-radius: 25px;
     -webkit-box-sizing: border-box;
     box-sizing: border-box;
 
@@ -138,8 +138,8 @@ section {
 }
 
 select {
-    padding-right: 16px;
-    padding-left: 16px;
+    padding-right: 12px;
+    padding-left: 12px;
     padding-top: 12px;
     padding-bottom: 12px;
     font-size: 16px;

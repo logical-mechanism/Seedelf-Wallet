@@ -27,12 +27,12 @@ async function initializePage() {
         const network_int = await wallet.getNetworkId();
         if (injectedNetwork.network === "preprod.") {
             if (network_int !== 0) {
-                statusElement.textContent = "Wallet is not using pre-production. Please switch to the pre-production network and try again.";
+                statusElement.textContent = "Wallet is not using the pre-production network. Please switch to the pre-production network and try again.";
                 return;
             }
         } else {
             if (network_int !== 1) {
-                statusElement.textContent = "Wallet is not using Mainnet. Please switch to mainnet and try again.";
+                statusElement.textContent = "Wallet is not using the mainnet network. Please switch to the mainnet network and try again.";
                 return;
             }
         }
@@ -62,10 +62,10 @@ async function initializePage() {
 
             statusElement.textContent = "Transaction successfully submitted! It will take a few moments to hit the chain. Please close this tab and crtl-c the server in the terminal. The transaction can be viewed on Cardanoscan by clicking the View Transaction On Cardanoscan button.";
         } catch (error) {
-            statusElement.textContent = "Failed to connect wallet: " + error.message;
+            statusElement.textContent = "Refresh page and try again. Error: " + error.message;
         }
     } catch (error) {
-        statusElement.textContent = "Failed to connect wallet: " + error.message;
+        statusElement.textContent = "Refresh page and try again. Error: " + error.message;
     }
 }
 

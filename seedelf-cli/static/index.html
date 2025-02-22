@@ -24,21 +24,20 @@
 <body>
     <nav class="nav-bar">
         <h1 class="nav-left">Seedelf Wallet</h1>
-        <!-- <h3 class="nav-right">Currently only Eternl is supported.</h3> -->
         <div class="nav-right">
             <select id="wallet_dropdown" name="options">
-                <option value="" selected>Connect A Wallet</option>
+                <option value="" selected disabled>Select A Wallet</option>
             </select>
         </div>
     </nav>
 
     <header class="centered">
-        <h3>This page will prompt you to sign a transaction with the wallet of your choice.</h3>
+        <h3>Please select a wallet from the dropdown. This page will prompt you to sign a transaction with the wallet of your choice.</h3>
     </header>
 
     <main>
         <section class="centered">
-            <p id="status" class="centered">Waiting for wallet to load...</p>
+            <p id="status" class="centered">Waiting for wallet selection...</p>
             <a id="tx_link" href="" class="link-button" target="_blank" rel="noopener noreferrer"></a>
         </section>
 
@@ -49,7 +48,7 @@
     </main>
 
     <footer class="centered">
-        <p>© 2024 Logical Mechanism LLC</p>
+        <p>© 2024-2025 Logical Mechanism LLC</p>
     </footer>
 </body>
 
