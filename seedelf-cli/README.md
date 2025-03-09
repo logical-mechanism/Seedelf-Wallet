@@ -96,7 +96,7 @@ At this point, the wallet may receive funds from other CIP30 wallets or Seedelfs
 seedelf-cli fund [OPTIONS] --address <ADDRESS> --seedelf <SEEDELF>
 ```
 
-The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter used in the `fund` command is the address supplying the value and paying for the transaction. The `<SEEDELF>` is the Seedelf receiving the funds. The `fund` command is similar to the `create` command as it generates a local website for dapp interactions.
+The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter used in the `fund` command is the address supplying the value and paying for the transaction. The `<SEEDELF>` parameter is the Seedelf receiving the funds. The `fund` command is similar to the `create` command as it generates a local website for dapp interactions.
 
 The user may send funds to another Seedelf address using the `transfer` command and back to a CIP30 wallet using the `sweep` command.
 
