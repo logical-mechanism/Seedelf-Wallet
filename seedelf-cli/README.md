@@ -13,7 +13,7 @@ If you are running Linux, MacOS, or Unix-like OS, run the following command on y
 curl -fsSL https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/refs/heads/main/util/seedelf-init.sh | bash
 ```
 
-If you have [rust/cargo installed] (https://www.rust-lang.org/tools/install), the seedelf-cli can be installed directly from [crates.io](https://crates.io/).
+If you have [rust/cargo installed](https://www.rust-lang.org/tools/install), the seedelf-cli can be installed directly from [crates.io](https://crates.io/).
 
 ```bash
 cargo install seedelf-cli
