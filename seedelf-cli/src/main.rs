@@ -38,8 +38,8 @@ enum Commands {
     Sweep(commands::sweep::SweepArgs),
     /// Utility functions for seedelf-cli
     Util(commands::util::UtilArgs),
-    /// dApp functions for seedelf-cli
-    Dapp(commands::dapp::DappArgs),
+    /// External wallet functions for seedelf-cli
+    External(commands::external::ExternalArgs),
 }
 
 #[tokio::main]
@@ -89,8 +89,8 @@ async fn main() {
         Some(Commands::Util(util_command)) => {
             commands::util::run(util_command, cli.preprod, cli.variant).await
         }
-        Some(Commands::Dapp(dapp_command)) => {
-            commands::dapp::run(dapp_command, cli.preprod, cli.variant).await
+        Some(Commands::External(external_command)) => {
+            commands::external::run(external_command, cli.preprod, cli.variant).await
         }
         // catch the no command state
         None => {

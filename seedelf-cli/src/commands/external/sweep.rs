@@ -19,7 +19,7 @@ use seedelf_cli::utxos;
 
 pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
-    println!("\n{}", "Sweeping All dApp UTxOs".bright_blue(),);
+    println!("\n{}", "Sweeping All External UTxOs".bright_blue(),);
 
     let wallet_addr: Address = address::wallet_contract(network_flag, variant);
 
@@ -29,9 +29,9 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
 
-    let vkey = convert::secret_key_to_public_key(scalar);
-    let addr = address::dapp_address(vkey.clone(), network_flag);
-    let addr_bech32 = addr.to_bech32().unwrap();
+    let vkey: String = convert::secret_key_to_public_key(scalar);
+    let addr: Address = address::dapp_address(vkey.clone(), network_flag);
+    let addr_bech32: String = addr.to_bech32().unwrap();
 
     let all_utxos: Vec<UtxoResponse> =
         utxos::collect_all_address_utxos(&addr_bech32, network_flag).await;

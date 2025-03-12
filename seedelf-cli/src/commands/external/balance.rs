@@ -13,10 +13,9 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
     display::block_number_and_time(network_flag).await;
 
     println!(
-        "{}: {} {}",
-        "\nThe dApp Wallet".bright_white(),
-        "This wallet should only receive funds from smart contracts.".bright_yellow(),
-        "This address should not be public.".bright_red()
+        "{}: {}",
+        "\nThe External Wallet".bright_white(),
+        "This wallet may receive funds without using the wallet contract.".bright_yellow()
     );
 
     let scalar: Scalar = setup::load_wallet();
