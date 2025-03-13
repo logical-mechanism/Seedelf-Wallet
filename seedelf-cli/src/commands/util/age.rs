@@ -1,0 +1,87 @@
+use chrono::Utc;
+use clap::Args;
+use colored::Colorize;
+use seedelf_cli::constants::{Config, get_config};
+use seedelf_cli::display::preprod_text;
+use seedelf_cli::koios::{asset_history, History};
+
+/// Struct to hold command-specific arguments
+#[derive(Args)]
+pub struct AgeArgs {
+    /// Seedelf to age check
+    #[arg(
+        short = 's',
+        long,
+        help = "The Seedelf getting age checked.",
+        display_order = 1
+    )]
+    seedelf: String,
+}
+
+fn format_duration(seconds: i64) -> String {
+    let weeks: i64 = seconds / 604800;
+    let days: i64 = (seconds % 604800) / 86400;
+    let hours: i64 = (seconds % 86400) / 3600;
+    let minutes: i64 = (seconds % 3600) / 60;
+    let seconds: i64 = seconds % 60;
+
+    let mut parts: Vec<String> = Vec::new();
+    if weeks > 0 {
+        parts.push(format!("{} weeks", weeks));
+    }
+    if days > 0 {
+        parts.push(format!("{} days", days));
+    }
+    if hours > 0 {
+        parts.push(format!("{} hours", hours));
+    }
+    if minutes > 0 {
+        parts.push(format!("{} mins", minutes));
+    }
+    if seconds > 0 {
+        parts.push(format!("{} secs", seconds));
+    }
+
+    if parts.is_empty() {
+        "just now".to_string()
+    } else {
+        format!("{} ago", parts.join(", "))
+    }
+}
+
+pub async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<(), String> {
+    preprod_text(network_flag);
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
+    println!(
+        "\n{} {}",
+        "Seedelf:".bright_blue(),
+        args.seedelf.bright_green()
+    );
+
+    let seedelf_history: Vec<History> = asset_history(
+        config.contract.seedelf_policy_id.to_string(),
+        args.seedelf,
+        network_flag,
+        5,
+    )
+    .await
+    .unwrap();
+
+    if seedelf_history.len() == 0 {
+        return Err("Seedelf Not Found".to_string());
+    }
+
+    let time_stamp: i64 = seedelf_history[0].block_time;
+    let current_time: i64 = Utc::now().timestamp();
+    let time_diff: i64 = current_time - time_stamp;
+
+    println!(
+        "{} {}",
+        "\nAge:".cyan(),
+        format_duration(time_diff).bright_magenta()
+    );
+    Ok(())
+}
