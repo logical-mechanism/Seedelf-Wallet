@@ -19,11 +19,12 @@ pub struct AgeArgs {
 }
 
 fn format_duration(seconds: i64) -> String {
-    let years: i64 = seconds / 31_536_000;
-    let weeks: i64 = (seconds % 31_536_000) / 604800;
-    let days: i64 = (seconds % 604800) / 86400;
-    let hours: i64 = (seconds % 86400) / 3600;
-    let minutes: i64 = (seconds % 3600) / 60;
+    // 365.256363004 * 24 * 60 * 60 -> seconds in year
+    let years: i64 = seconds / 31_558_149;
+    let weeks: i64 = (seconds % 31_558_149) / 604_800;
+    let days: i64 = (seconds % 604_800) / 86_400;
+    let hours: i64 = (seconds % 86_400) / 3_600;
+    let minutes: i64 = (seconds % 3_600) / 60;
     let seconds: i64 = seconds % 60;
 
     let mut parts: Vec<String> = Vec::new();
