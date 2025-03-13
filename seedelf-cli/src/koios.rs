@@ -570,7 +570,7 @@ pub struct History {
     pub tx_hash: String,
     pub epoch_no: u64,
     pub block_height: Option<u64>,
-    pub block_time: u64,
+    pub block_time: i64,
 }
 
 pub async fn asset_history(
@@ -578,7 +578,7 @@ pub async fn asset_history(
     token_name: String,
     network_flag: bool,
     limit: u64,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<History>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!(
         "https://{}.koios.rest/api/v1/asset_txs?_asset_policy={}&_asset_name={}&_after_block_height=50000&_history=true&limit={}",
@@ -594,6 +594,5 @@ pub async fn asset_history(
         .await?;
 
     let data: Vec<History> = response.json().await.unwrap();
-    let tx_hashes: Vec<String> = data.iter().map(|h| h.tx_hash.clone()).collect();
-    Ok(tx_hashes)
+    Ok(data)
 }
