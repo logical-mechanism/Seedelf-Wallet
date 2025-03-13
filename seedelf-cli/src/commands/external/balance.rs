@@ -1,5 +1,6 @@
 use blstrs::Scalar;
 use colored::Colorize;
+use pallas_addresses::Address;
 use reqwest::Error;
 use seedelf_cli::address;
 use seedelf_cli::convert;
@@ -26,7 +27,7 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
         "Stake Key Hash: {}",
         address::stake_key(network_flag).bright_blue()
     );
-    let addr: pallas_addresses::Address = address::dapp_address(vkey, network_flag);
+    let addr: Address = address::dapp_address(vkey, network_flag);
     let addr_bech32: String = addr.to_bech32().unwrap();
     println!("\nAddress: {}", addr_bech32.bright_blue());
 

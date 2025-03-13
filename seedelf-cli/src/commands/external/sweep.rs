@@ -26,7 +26,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // if there is change going back then we need this to rerandomize a datum
+    // we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
 
     let vkey: String = convert::secret_key_to_public_key(scalar);
@@ -173,7 +173,8 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
-    let signed_tx_cbor = tx.sign(convert::secret_key_to_private_key(scalar)).unwrap();
+    let signed_tx_cbor: BuiltTransaction =
+        tx.sign(convert::secret_key_to_private_key(scalar)).unwrap();
 
     println!(
         "\nTx Cbor: {}",
