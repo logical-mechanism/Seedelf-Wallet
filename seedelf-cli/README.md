@@ -58,7 +58,7 @@ Commands:
   transfer  A Seedelf sends funds to a Seedelf
   sweep     A Seedelf sends funds to an address
   util      Utility functions for seedelf-cli
-  external  external wallet functions for seedelf-cli
+  external  External wallet functions for seedelf-cli
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -66,7 +66,6 @@ Options:
       --variant <VARIANT>  Use this for different variants of the contract, defaults to most recent variant [default: 1]
   -h, --help               Print help
   -V, --version            Print version
-
 ```
 
 ### Basic Usage
