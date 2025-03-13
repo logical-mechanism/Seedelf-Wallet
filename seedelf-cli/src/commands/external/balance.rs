@@ -20,14 +20,14 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
 
     let scalar: Scalar = setup::load_wallet();
 
-    let vkey = convert::secret_key_to_public_key(scalar);
+    let vkey: String = convert::secret_key_to_public_key(scalar);
     println!("Public Key Hash: {}", vkey.bright_blue());
     println!(
         "Stake Key Hash: {}",
         address::stake_key(network_flag).bright_blue()
     );
-    let addr = address::dapp_address(vkey, network_flag);
-    let addr_bech32 = addr.to_bech32().unwrap();
+    let addr: pallas_addresses::Address = address::dapp_address(vkey, network_flag);
+    let addr_bech32: String = addr.to_bech32().unwrap();
     println!("\nAddress: {}", addr_bech32.bright_blue());
 
     let all_utxos: Vec<UtxoResponse> =
