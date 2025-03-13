@@ -3,7 +3,7 @@ use clap::Args;
 use colored::Colorize;
 use seedelf_cli::constants::{Config, get_config};
 use seedelf_cli::display::preprod_text;
-use seedelf_cli::koios::{asset_history, History};
+use seedelf_cli::koios::{History, asset_history};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -19,13 +19,17 @@ pub struct AgeArgs {
 }
 
 fn format_duration(seconds: i64) -> String {
-    let weeks: i64 = seconds / 604800;
+    let years: i64 = seconds / 31_536_000;
+    let weeks: i64 = (seconds % 31_536_000) / 604800;
     let days: i64 = (seconds % 604800) / 86400;
     let hours: i64 = (seconds % 86400) / 3600;
     let minutes: i64 = (seconds % 3600) / 60;
     let seconds: i64 = seconds % 60;
 
     let mut parts: Vec<String> = Vec::new();
+    if years > 0 {
+        parts.push(format!("{} years", years));
+    }
     if weeks > 0 {
         parts.push(format!("{} weeks", weeks));
     }
@@ -70,7 +74,7 @@ pub async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<(), 
     .await
     .unwrap();
 
-    if seedelf_history.len() == 0 {
+    if seedelf_history.is_empty() {
         return Err("Seedelf Not Found".to_string());
     }
 
