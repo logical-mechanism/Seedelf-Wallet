@@ -101,7 +101,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 
 ### dApp Interactions: The Sweep-Fund Flow
 
-We suggest the following flow to interact with dApps. This flow has the best user experience and uses the already existing tech stack on Cardano. It is called the sweep-fund flow. The idea is to use a new CIP30 wallet that is dapp enabled. The user will sweep funds from Seedelf into that new wallet. The user may interact with the dapp of choice. The resulting funds after interaction may fund your Seedelf. For simplicity, Seedelf provides an external wallet that may receive funds without invoking the contract. The `external sweep` command can return the funds to the contract. The user may send funds with the `fund` command.
+We suggest the following flow to interact with dApps. This flow has the best user experience and uses the already existing tech stack on Cardano. The idea is to use a new CIP30 wallet, which is wholly disconnected from the user's owned wallets and is dapp enabled. The user will sweep funds from Seedelf into that new wallet. The user may interact with the dApp of choice. The resulting funds after interaction may fund your Seedelf. For simplicity, Seedelf provides an external wallet that may receive funds without invoking the contract. The `external sweep` command can return the funds to the contract. The user may send funds with the `fund` command.
 
 Example: Purchase Tokens with 25 ADA From A Dex On Mainnet
 
@@ -125,6 +125,8 @@ The user may view the external wallet address with the `external balance` comman
 ```bash
 seedelf-cli external balance
 ```
+
+The benefit of the external wallet method is that it can be used to accumulate many UTxOs that can later be sent into the wallet.
 
 Privacy is preserved with this method because the new wallet address is funded directly from Seedelf, removing all linkability as ownership can only be assumed and not proven. Funding a seedelf from the new wallet is private as the new wallet is anonymous, and the contract does not link the UTxO to the seedelf. Privacy preservation is maintained when using the external address as long as the linkability of the original wallet and the external wallet is never connected or created. The flow `Seedelf -> New Wallet -> dAPP -> New Wallet -> Seedelf` and `Seedelf -> New Wallet -> dAPP -> New Wallet -> External Wallet -> Seedelf` will be private.
 
