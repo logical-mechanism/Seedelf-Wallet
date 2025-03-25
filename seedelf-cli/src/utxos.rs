@@ -42,6 +42,7 @@ pub async fn collect_all_wallet_utxos(
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
     all_utxos
@@ -110,6 +111,7 @@ pub async fn find_seedelf_and_wallet_utxos(
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
     (seedelf_datum, usuable_utxos)
@@ -150,6 +152,7 @@ pub async fn find_seedelf_utxo(
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
     None
@@ -196,6 +199,7 @@ pub async fn collect_wallet_utxos(
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
     usuable_utxos
@@ -226,6 +230,7 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
     usuable_utxos
@@ -247,6 +252,7 @@ pub async fn collect_all_address_utxos(address: &str, network_flag: bool) -> Vec
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
     usuable_utxos
@@ -425,6 +431,7 @@ pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool, vari
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
 }
@@ -467,6 +474,7 @@ pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
 }
