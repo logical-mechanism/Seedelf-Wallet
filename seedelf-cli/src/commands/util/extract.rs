@@ -190,17 +190,18 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     raw_tx = raw_tx.remove_output(0);
     raw_tx = raw_tx.remove_spend_redeemer(empty_input.clone());
 
-    let mut budgets: Vec<(u64, u64)> = Vec::new();
-    match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
+    let budgets: Vec<(u64, u64)> = match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
         Ok(execution_units) => {
             if let Some(_error) = execution_units.get("error") {
                 println!("{:?}", execution_units);
                 std::process::exit(1);
             }
-            budgets = extract_budgets(&execution_units)
+            let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
+            budgets
         }
         Err(err) => {
             eprintln!("Failed to evaluate transaction: {}", err);
+            std::process::exit(1);
         }
     };
 

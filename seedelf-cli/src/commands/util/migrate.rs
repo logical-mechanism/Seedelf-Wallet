@@ -28,6 +28,8 @@ pub fn run(args: MigrateArgs, network_flag: bool) -> Result<(), String> {
         .bright_cyan()
     );
 
+    // implement this when required
+    //
     // its basically sweep
     // spend all that we can in one go into the newest variant
     Ok(())
