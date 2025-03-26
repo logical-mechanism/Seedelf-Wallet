@@ -103,6 +103,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {}", err);
+            std::process::exit(1);
         }
     }
     // lovelace goal here should account for the estimated fee
@@ -222,27 +223,30 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
     // Lets evaluate the transaction to get the execution units
-    let mut cpu_units: u64 = 0u64;
-    let mut mem_units: u64 = 0u64;
-    match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
-        Ok(execution_units) => {
-            if let Some(_error) = execution_units.get("error") {
-                println!("Error: {:?}", execution_units);
+    let (cpu_units, mem_units) =
+        match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag)
+            .await
+        {
+            Ok(execution_units) => {
+                if let Some(_error) = execution_units.get("error") {
+                    println!("Error: {:?}", execution_units);
+                    std::process::exit(1);
+                }
+                let cpu_units: u64 = execution_units
+                    .pointer("/result/0/budget/cpu")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let mem_units: u64 = execution_units
+                    .pointer("/result/0/budget/memory")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                (cpu_units, mem_units)
+            }
+            Err(err) => {
+                eprintln!("Failed to evaluate transaction: {}", err);
                 std::process::exit(1);
             }
-            cpu_units = execution_units
-                .pointer("/result/0/budget/cpu")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            mem_units = execution_units
-                .pointer("/result/0/budget/memory")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-        }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
-        }
-    };
+        };
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);

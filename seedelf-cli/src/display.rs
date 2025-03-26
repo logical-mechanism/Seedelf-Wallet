@@ -21,6 +21,7 @@ pub async fn block_number_and_time(network_flag: bool) {
                 "Failed to fetch blockchain tip: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
 }
@@ -70,6 +71,7 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool, variant: u64) {
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
     if !seedelfs.is_empty() {

@@ -181,39 +181,44 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
 
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
-    let mut mint_cpu_units: u64 = 0u64;
-    let mut mint_mem_units: u64 = 0u64;
+    let (mint_cpu_units, mint_mem_units, spend_cpu_units, spend_mem_units) =
+        match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag)
+            .await
+        {
+            Ok(execution_units) => {
+                if let Some(_error) = execution_units.get("error") {
+                    println!("Error: {:?}", execution_units);
+                    std::process::exit(1);
+                }
+                let spend_cpu_units: u64 = execution_units
+                    .pointer("/result/0/budget/cpu")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let spend_mem_units: u64 = execution_units
+                    .pointer("/result/0/budget/memory")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
 
-    let mut spend_cpu_units: u64 = 0u64;
-    let mut spend_mem_units: u64 = 0u64;
-    match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
-        Ok(execution_units) => {
-            if let Some(_error) = execution_units.get("error") {
-                println!("Error: {:?}", execution_units);
+                let mint_cpu_units: u64 = execution_units
+                    .pointer("/result/1/budget/cpu")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let mint_mem_units: u64 = execution_units
+                    .pointer("/result/1/budget/memory")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                (
+                    mint_cpu_units,
+                    mint_mem_units,
+                    spend_cpu_units,
+                    spend_mem_units,
+                )
+            }
+            Err(err) => {
+                eprintln!("Failed to evaluate transaction: {}", err);
                 std::process::exit(1);
             }
-            spend_cpu_units = execution_units
-                .pointer("/result/0/budget/cpu")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            spend_mem_units = execution_units
-                .pointer("/result/0/budget/memory")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-
-            mint_cpu_units = execution_units
-                .pointer("/result/1/budget/cpu")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            mint_mem_units = execution_units
-                .pointer("/result/1/budget/memory")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-        }
-        Err(err) => {
-            eprintln!("Failed to evaluate transaction: {}", err);
-        }
-    };
+        };
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
@@ -356,6 +361,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                 }
                 Err(err) => {
                     eprintln!("Failed to submit tx: {}", err);
+                    std::process::exit(1);
                 }
             }
         }
@@ -364,6 +370,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
 
