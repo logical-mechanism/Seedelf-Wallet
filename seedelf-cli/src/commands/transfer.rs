@@ -278,19 +278,23 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
 
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
-    let mut budgets: Vec<(u64, u64)> = Vec::new();
-    match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
-        Ok(execution_units) => {
-            if let Some(_error) = execution_units.get("error") {
-                println!("{:?}", execution_units);
+    let budgets: Vec<(u64, u64)> =
+        match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag)
+            .await
+        {
+            Ok(execution_units) => {
+                if let Some(_error) = execution_units.get("error") {
+                    println!("{:?}", execution_units);
+                    std::process::exit(1);
+                }
+                let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
+                budgets
+            }
+            Err(err) => {
+                eprintln!("Failed to evaluate transaction: {}", err);
                 std::process::exit(1);
             }
-            budgets = extract_budgets(&execution_units)
-        }
-        Err(err) => {
-            eprintln!("Failed to evaluate transaction: {}", err);
-        }
-    };
+        };
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
