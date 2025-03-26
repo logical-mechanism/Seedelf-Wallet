@@ -596,3 +596,47 @@ pub async fn asset_history(
     let data: Vec<History> = response.json().await.unwrap();
     Ok(data)
 }
+
+/// Return transaction history of some address.
+pub async fn address_transactions(network_flag: bool, address: String) -> Result<Vec<String>, Error> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
+    let address_tx_url: String = format!(
+        "https://{}.koios.rest/api/v1/address_txs",
+        network
+    );
+
+    let tx_info_url: String = format!(
+        "https://{}.koios.rest/api/v1/tx_info",
+        network
+    );
+    let client: Client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let address_payload: Value = serde_json::json!({
+        "_addresses": [address],
+    });
+
+    let tx_info_payload: Value = serde_json::json!({
+        "_tx_hashes": [],
+          "_inputs": false,
+          "_metadata": false,
+          "_assets": false,
+          "_withdrawals": false,
+          "_certs": false,
+          "_scripts": true,
+          "_bytecode": false
+    });
+
+    let mut all_txs: Vec<History> = Vec::new();
+    let mut offset: i32 = 0;
+
+    let address_response: Response = client
+        .post(address_tx_url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .query(&[("offset", offset.to_string())])
+        .json(&address_payload)
+        .send()
+        .await?;
+    Ok(vec![])
+}
