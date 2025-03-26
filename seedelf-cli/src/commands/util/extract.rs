@@ -190,20 +190,23 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     raw_tx = raw_tx.remove_output(0);
     raw_tx = raw_tx.remove_spend_redeemer(empty_input.clone());
 
-    let budgets: Vec<(u64, u64)> = match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
-        Ok(execution_units) => {
-            if let Some(_error) = execution_units.get("error") {
-                println!("{:?}", execution_units);
+    let budgets: Vec<(u64, u64)> =
+        match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag)
+            .await
+        {
+            Ok(execution_units) => {
+                if let Some(_error) = execution_units.get("error") {
+                    println!("{:?}", execution_units);
+                    std::process::exit(1);
+                }
+                let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
+                budgets
+            }
+            Err(err) => {
+                eprintln!("Failed to evaluate transaction: {}", err);
                 std::process::exit(1);
             }
-            let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
-            budgets
-        }
-        Err(err) => {
-            eprintln!("Failed to evaluate transaction: {}", err);
-            std::process::exit(1);
-        }
-    };
+        };
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
@@ -286,33 +289,6 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
 
     // inject the tx cbor into the local webserver to prompt the wallet
     web_server::run_web_server(tx_cbor, network_flag).await;
-
-    // let public_key_vector: [u8; 32] = hex::decode(COLLATERAL_PUBLIC_KEY)
-    //     .unwrap()
-    //     .try_into()
-    //     .unwrap();
-    // let witness_public_key: PublicKey = PublicKey::from(public_key_vector);
-
-    // match witness_collateral(tx_cbor.clone(), network_flag).await {
-    //     Ok(witness) => {
-    //         let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
-    //         let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
-    //         let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
-
-    //         let signed_tx_cbor = tx
-    //             .sign(pallas_wallet::PrivateKey::from(one_time_secret_key.clone()))
-    //             .unwrap()
-    //             .add_signature(witness_public_key, witness_vector)
-    //             .unwrap();
-
-    //         // inject the tx cbor into the local webserver to prompt the wallet
-    //         web_server::run_web_server(tx_cbor, network_flag).await;
-
-    //     }
-    //     Err(err) => {
-    //         eprintln!("Failed to fetch UTxOs: {}", err);
-    //     }
-    // }
 
     Ok(())
 }

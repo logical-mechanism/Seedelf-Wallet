@@ -361,6 +361,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                 }
                 Err(err) => {
                     eprintln!("Failed to submit tx: {}", err);
+                    std::process::exit(1);
                 }
             }
         }
@@ -369,6 +370,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                 "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
                 err
             );
+            std::process::exit(1);
         }
     }
 

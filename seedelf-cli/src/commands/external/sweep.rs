@@ -214,6 +214,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
         }
         Err(err) => {
             eprintln!("Failed to submit tx: {}", err);
+            std::process::exit(1);
         }
     }
 

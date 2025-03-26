@@ -576,11 +576,13 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
                 }
                 Err(err) => {
                     eprintln!("Failed to submit tx: {}", err);
+                    std::process::exit(1);
                 }
             }
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {}", err);
+            std::process::exit(1);
         }
     }
 
