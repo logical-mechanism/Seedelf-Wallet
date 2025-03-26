@@ -223,27 +223,30 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
     // Lets evaluate the transaction to get the execution units
-    let (cpu_units, mem_units) = match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag).await {
-        Ok(execution_units) => {
-            if let Some(_error) = execution_units.get("error") {
-                println!("Error: {:?}", execution_units);
+    let (cpu_units, mem_units) =
+        match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag)
+            .await
+        {
+            Ok(execution_units) => {
+                if let Some(_error) = execution_units.get("error") {
+                    println!("Error: {:?}", execution_units);
+                    std::process::exit(1);
+                }
+                let cpu_units: u64 = execution_units
+                    .pointer("/result/0/budget/cpu")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let mem_units: u64 = execution_units
+                    .pointer("/result/0/budget/memory")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                (cpu_units, mem_units)
+            }
+            Err(err) => {
+                eprintln!("Failed to evaluate transaction: {}", err);
                 std::process::exit(1);
             }
-            let cpu_units: u64 = execution_units
-                .pointer("/result/0/budget/cpu")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let mem_units: u64 = execution_units
-                .pointer("/result/0/budget/memory")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            (cpu_units, mem_units)
-        }
-        Err(err) => {
-            eprintln!("Failed to evaluate transaction: {}", err);
-            std::process::exit(1);
-        }
-    };
+        };
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
