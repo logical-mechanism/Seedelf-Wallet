@@ -12,11 +12,11 @@ use seedelf_cli::setup;
 #[derive(Args)]
 pub struct HistoryArgs {
     /// Show spend only in history
-    #[arg(long, help = "Show Spend Only", display_order = 1)]
+    #[arg(long, help = "Show spend only", display_order = 1)]
     spend_only: bool,
 
     /// Show recieve only in history
-    #[arg(long, help = "Show Receive Only", display_order = 2)]
+    #[arg(long, help = "Show receive only", display_order = 2)]
     receive_only: bool,
 }
 
