@@ -25,8 +25,8 @@ pub enum UtilCommands {
     Mint(mint::MintArgs),
     /// Migrate existing UTxOs into the newest version of the contract
     Migrate(migrate::MigrateArgs),
-    /// Display send/receive transaction history for the wallet
-    History,
+    /// Display spend/receive transaction history for the wallet
+    History(history::HistoryArgs),
 }
 
 #[derive(Args)]
@@ -70,8 +70,8 @@ pub async fn run(args: UtilArgs, preprod_flag: bool, variant: u64) {
                 eprintln!("Error: {}", err);
             }
         }
-        UtilCommands::History => {
-            if let Err(err) = history::run(preprod_flag, variant).await {
+        UtilCommands::History(args) => {
+            if let Err(err) = history::run(args, preprod_flag, variant).await {
                 eprintln!("Error: {}", err);
             }
         }

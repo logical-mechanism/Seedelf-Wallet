@@ -1,4 +1,5 @@
 use blstrs::Scalar;
+use clap::Args;
 use colored::Colorize;
 use pallas_addresses::Address;
 use seedelf_cli::address;
@@ -7,7 +8,19 @@ use seedelf_cli::koios::TxResponse;
 use seedelf_cli::koios::address_transactions;
 use seedelf_cli::setup;
 
-pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
+/// Struct to hold command-specific arguments
+#[derive(Args)]
+pub struct HistoryArgs {
+    /// Show spend only in history
+    #[arg(long, help = "Show Spend Only", display_order = 1)]
+    spend_only: bool,
+
+    /// Show recieve only in history
+    #[arg(long, help = "Show Receive Only", display_order = 2)]
+    receive_only: bool,
+}
+
+pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     preprod_text(network_flag);
 
     let scalar: Scalar = setup::load_wallet();
@@ -22,15 +35,19 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
         let input_match = tx.input_registers.iter().any(|r| r.is_owned(scalar));
         let output_match = tx.output_registers.iter().any(|r| r.is_owned(scalar));
 
-        if input_match {
+        if (!args.receive_only || args.spend_only) && input_match {
             println!(
                 "Spend: {}, block height: {}",
                 tx.tx_hash.bright_cyan(),
                 tx.block_height.to_string().bright_white()
             );
-            continue;
+            // Continue if only showing spend
+            if args.spend_only {
+                continue;
+            }
         }
-        if output_match {
+
+        if (!args.spend_only || args.receive_only) && output_match {
             println!(
                 "Receive: {}, block height: {}",
                 tx.tx_hash.bright_yellow(),

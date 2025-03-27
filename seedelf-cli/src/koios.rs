@@ -737,7 +737,7 @@ pub async fn address_transactions(
         // Append the retrieved UTXOs to the main list
         all_txs.append(&mut tx_responses);
 
-        // Increment the offset by 1000 (page size)
+        // Increment the offset by shift
         offset += shift;
     }
 
