@@ -41,10 +41,7 @@ pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<
                 tx.tx_hash.bright_cyan(),
                 tx.block_height.to_string().bright_white()
             );
-            // Continue if only showing spend
-            if args.spend_only {
-                continue;
-            }
+            continue;
         }
 
         if (!args.spend_only || args.receive_only) && output_match {

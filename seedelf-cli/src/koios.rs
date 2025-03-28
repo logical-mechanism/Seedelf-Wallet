@@ -689,7 +689,7 @@ pub async fn address_transactions(
 
     let mut all_txs: Vec<TxResponse> = Vec::new();
     let mut offset: i32 = 0;
-    let shift: i32 = 50;
+    let shift: i32 = 65;
 
     loop {
         let address_response: Response = client
