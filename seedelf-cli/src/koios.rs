@@ -596,3 +596,150 @@ pub async fn asset_history(
     let data: Vec<History> = response.json().await.unwrap();
     Ok(data)
 }
+
+pub fn extract_bytes_from_value_with_logging(value: &Value) -> Option<Register> {
+    if value.is_null() {
+        // Don't log anything — null is expected sometimes
+        return None;
+    }
+    if let Value::Object(map) = value {
+        if let Some(Value::Object(val)) = map.get("value") {
+            if let Some(Value::Array(fields)) = val.get("fields") {
+                if let (Some(first), Some(second)) = (fields.first(), fields.get(1)) {
+                    let first_bytes = first.get("bytes")?.as_str()?.to_string();
+                    let second_bytes = second.get("bytes")?.as_str()?.to_string();
+                    return Some(Register::new(first_bytes, second_bytes));
+                } else {
+                    eprintln!("Inline datum fields array too short.");
+                }
+            } else {
+                eprintln!("`value.fields` is missing or not an array.");
+            }
+        } else {
+            eprintln!("`inline_datum.value` is missing or not an object.");
+        }
+    } else {
+        eprintln!("`inline_datum` is not an object.");
+    }
+    None
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct TxInfoResponse {
+    pub tx_hash: String,
+    pub block_height: u64,
+    pub inputs: Vec<serde_json::Value>,
+    pub outputs: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TxResponse {
+    pub tx_hash: String,
+    pub block_height: u64,
+    pub input_registers: Vec<Register>,
+    pub output_registers: Vec<Register>,
+}
+
+impl TxResponse {
+    pub fn from_info_response(info: TxInfoResponse) -> Self {
+        let input_registers = info
+            .inputs
+            .iter()
+            .filter_map(|input| {
+                input
+                    .get("inline_datum")
+                    .and_then(extract_bytes_from_value_with_logging)
+            })
+            .collect();
+
+        let output_registers = info
+            .outputs
+            .iter()
+            .filter_map(|output| {
+                output
+                    .get("inline_datum")
+                    .and_then(extract_bytes_from_value_with_logging)
+            })
+            .collect();
+
+        TxResponse {
+            tx_hash: info.tx_hash,
+            block_height: info.block_height,
+            input_registers,
+            output_registers,
+        }
+    }
+}
+
+/// Return transaction history of some address.
+pub async fn address_transactions(
+    network_flag: bool,
+    address: String,
+) -> Result<Vec<TxResponse>, Error> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
+    let address_tx_url: String = format!("https://{}.koios.rest/api/v1/address_txs", network);
+
+    let tx_info_url: String = format!("https://{}.koios.rest/api/v1/tx_info", network);
+    let client: Client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let address_payload: Value = serde_json::json!({
+        "_addresses": [address],
+    });
+
+    let mut all_txs: Vec<TxResponse> = Vec::new();
+    let mut offset: i32 = 0;
+    let shift: i32 = 65;
+
+    loop {
+        let address_response: Response = client
+            .post(address_tx_url.clone())
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .query(&[("offset", offset.to_string()), ("limit", shift.to_string())])
+            .json(&address_payload)
+            .send()
+            .await?;
+
+        let utxos: Vec<History> = address_response.json().await?;
+        // Break the loop if no more results
+        if utxos.is_empty() {
+            break;
+        }
+
+        let tx_hashes: Vec<String> = utxos.iter().map(|h| h.tx_hash.clone()).collect();
+
+        let tx_info_payload: Value = serde_json::json!({
+            "_tx_hashes": tx_hashes,
+            "_inputs": true,
+            "_metadata": false,
+            "_assets": false,
+            "_withdrawals": false,
+            "_certs": false,
+            "_scripts": true,
+            "_bytecode": false
+        });
+
+        let tx_info_response: Response = client
+            .post(tx_info_url.clone())
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .json(&tx_info_payload)
+            .send()
+            .await?;
+
+        let txs: Vec<TxInfoResponse> = tx_info_response.json().await?;
+        let mut tx_responses: Vec<TxResponse> = txs
+            .into_iter()
+            .map(TxResponse::from_info_response)
+            .collect();
+
+        // Append the retrieved UTXOs to the main list
+        all_txs.append(&mut tx_responses);
+
+        // Increment the offset by shift
+        offset += shift;
+    }
+
+    Ok(all_txs)
+}

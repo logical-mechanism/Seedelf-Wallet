@@ -4,6 +4,7 @@ pub mod age;
 pub mod expose_key;
 pub mod extract;
 pub mod find;
+pub mod history;
 pub mod migrate;
 pub mod mint;
 pub mod statistics;
@@ -24,6 +25,8 @@ pub enum UtilCommands {
     Mint(mint::MintArgs),
     /// Migrate existing UTxOs into the newest version of the contract
     Migrate(migrate::MigrateArgs),
+    /// Display spend/receive transaction history for the wallet
+    History(history::HistoryArgs),
 }
 
 #[derive(Args)]
@@ -64,6 +67,11 @@ pub async fn run(args: UtilArgs, preprod_flag: bool, variant: u64) {
         }
         UtilCommands::Migrate(args) => {
             if let Err(err) = migrate::run(args, preprod_flag) {
+                eprintln!("Error: {}", err);
+            }
+        }
+        UtilCommands::History(args) => {
+            if let Err(err) = history::run(args, preprod_flag, variant).await {
                 eprintln!("Error: {}", err);
             }
         }
