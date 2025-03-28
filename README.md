@@ -158,6 +158,8 @@ The first ITM is entering the wallet for the first time as a CIP30 wallet will h
 
 The second ITM is the linkability of sequential UTxOs via the transaction fee. The owner is hidden and unknown at the time of a transaction, but it is safe to assume that the UTxO that pays the transaction fee remains under the original owner's control. Thus, if the fee-paying UTxO chain ever returns to $\omega$, then the ownership could be implicitly linked. Entering and exiting with different wallets will break the linkability. Enter with $\omega$ then exit with $\omega^{'}$. Or even better, never leave Seedelf.
 
+The third ITM is a flood attack on the protocol itself. TODO
+
 ## Happy Path Test Scripts
 
 The happy path for testing follows Alice and Bob as they interact with their seedelf wallets. The scripts will allow users to create and delete seedelfs, send tokens to another seedelf, and remove their tokens. The happy path has basic functionality, but it does serve as an example of how a seedelf wallet would work.
