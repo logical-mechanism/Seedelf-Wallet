@@ -144,8 +144,7 @@ pub fn wallet_reference_utxo(network_flag: bool, variant: u64) -> Input {
 /// # Arguments
 ///
 /// * `label` - A string label to include in the token name.
-/// * `inputs` - An optional reference to a vector of `Input` structs. The smallest input is selected
-///              based on lexicographical order of the transaction hash and the index.
+/// * `inputs` - An optional reference to a vector of `Input` structs. The smallest input is selected based on lexicographical order of the transaction hash and the index.
 ///
 /// # Returns
 ///
