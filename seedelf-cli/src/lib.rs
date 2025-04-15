@@ -6,6 +6,7 @@ pub mod data_structures;
 pub mod display;
 pub mod hashing;
 pub mod koios;
+pub mod private_key;
 pub mod register;
 pub mod schnorr;
 pub mod setup;

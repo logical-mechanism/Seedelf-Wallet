@@ -6,7 +6,7 @@ use pallas_crypto::key::ed25519::{PublicKey, SecretKey};
 use pallas_primitives::Hash;
 use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use pallas_wallet::PrivateKey;
+use seedelf_cli::private_key::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
@@ -424,7 +424,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
             let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
 
             let signed_tx_cbor = tx
-                .sign(pallas_wallet::PrivateKey::from(one_time_secret_key.clone()))
+                .sign(PrivateKey::from(one_time_secret_key.clone()))
                 .unwrap()
                 .add_signature(witness_public_key, witness_vector)
                 .unwrap();

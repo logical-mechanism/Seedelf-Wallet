@@ -27,7 +27,6 @@ pallas-crypto = "0.32.0"
 pallas-primitives = "0.32.0"
 pallas-traverse = "0.32.0"
 pallas-txbuilder = "0.32.0"
-pallas-wallet = "0.32.0"
 rand_core = { version = "0.6.0", features = ["std"] }
 reqwest = { version = "0.12.9", features = ["json"] }
 rpassword = "7.3.1"
