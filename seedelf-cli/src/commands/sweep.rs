@@ -6,7 +6,6 @@ use pallas_crypto::key::ed25519::{PublicKey, SecretKey};
 use pallas_primitives::Hash;
 use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use seedelf_cli::private_key::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
@@ -20,6 +19,7 @@ use seedelf_cli::koios::{
     UtxoResponse, ada_handle_address, evaluate_transaction, extract_bytes_with_logging, submit_tx,
     witness_collateral,
 };
+use seedelf_cli::private_key::PrivateKey;
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
 use seedelf_cli::setup;
@@ -381,12 +381,11 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     let tx_size: u64 = intermediate_tx
-        .sign(one_time_private_key)
+        .sign(&one_time_secret_key.clone())
         .unwrap()
-        .sign(fake_signer_private_key)
+        .sign(&fake_signer_secret_key)
         .unwrap()
         .tx_bytes
         .0
@@ -533,7 +532,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
             let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
 
             let signed_tx_cbor = tx
-                .sign(PrivateKey::from(one_time_secret_key.clone()))
+                .sign(&one_time_secret_key.clone())
                 .unwrap()
                 .add_signature(witness_public_key, witness_vector)
                 .unwrap();

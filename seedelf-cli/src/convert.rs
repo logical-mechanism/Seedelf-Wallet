@@ -1,8 +1,8 @@
+use crate::private_key::PrivateKey;
 use blstrs::Scalar;
 use cryptoxide::ed25519;
 use pallas_crypto::key::ed25519::SecretKey;
 use pallas_primitives::Hash;
-use crate::private_key::PrivateKey;
 
 pub fn scalar_to_secret_key(scalar: Scalar) -> SecretKey {
     let scalar_bytes: [u8; 32] = scalar.to_bytes_be();

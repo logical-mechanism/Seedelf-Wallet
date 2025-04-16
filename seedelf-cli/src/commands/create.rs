@@ -6,7 +6,6 @@ use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use seedelf_cli::private_key::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
@@ -250,11 +249,10 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     // we need the script size here
     let tx_size: u64 = intermediate_tx
-        .sign(fake_signer_private_key)
+        .sign(&fake_signer_secret_key)
         .unwrap()
         .tx_bytes
         .0

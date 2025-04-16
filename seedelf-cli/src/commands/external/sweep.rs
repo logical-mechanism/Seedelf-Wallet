@@ -4,8 +4,6 @@ use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use seedelf_cli::private_key::PrivateKey;
-
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
@@ -114,10 +112,9 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
 
     // we can fake the signature here to get the correct tx size
     let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
 
     let tx_size: u64 = intermediate_tx
-        .sign(fake_signer_private_key)
+        .sign(&fake_signer_secret_key)
         .unwrap()
         .tx_bytes
         .0
@@ -174,8 +171,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
 
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
-    let signed_tx_cbor: BuiltTransaction =
-        tx.sign(convert::secret_key_to_private_key(scalar)).unwrap();
+    let signed_tx_cbor: BuiltTransaction = tx.sign(&convert::scalar_to_secret_key(scalar)).unwrap();
 
     println!(
         "\nTx Cbor: {}",
