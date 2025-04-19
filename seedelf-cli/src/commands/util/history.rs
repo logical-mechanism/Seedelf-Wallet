@@ -3,7 +3,7 @@ use clap::Args;
 use colored::Colorize;
 use pallas_addresses::Address;
 use seedelf_cli::address;
-use seedelf_cli::display::preprod_text;
+use seedelf_cli::display;
 use seedelf_cli::koios::TxResponse;
 use seedelf_cli::koios::address_transactions;
 use seedelf_cli::setup;
@@ -21,7 +21,8 @@ pub struct HistoryArgs {
 }
 
 pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<(), String> {
-    preprod_text(network_flag);
+    display::is_their_an_update().await;
+    display::preprod_text(network_flag);
 
     let scalar: Scalar = setup::load_wallet();
 

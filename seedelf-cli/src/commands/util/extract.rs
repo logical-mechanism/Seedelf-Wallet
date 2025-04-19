@@ -11,7 +11,7 @@ use seedelf_cli::koios::{UtxoResponse, address_utxos, evaluate_transaction, utxo
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
 use seedelf_cli::constants::{Config, get_config, plutus_v3_cost_model};
-use seedelf_cli::display::preprod_text;
+use seedelf_cli::display;
 use seedelf_cli::transaction::{
     address_minimum_lovelace_with_assets, extract_budgets, total_computation_fee,
     wallet_reference_utxo,
@@ -36,7 +36,8 @@ pub struct ExtractArgs {
 }
 
 pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<(), String> {
-    preprod_text(network_flag);
+    display::is_their_an_update().await;
+    display::preprod_text(network_flag);
 
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         eprintln!("Error: Invalid Variant");

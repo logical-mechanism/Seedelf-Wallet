@@ -1,4 +1,10 @@
-use seedelf_cli::display::hex_to_ascii;
+use seedelf_cli::display::{hex_to_ascii, is_their_an_update};
+
+#[tokio::test]
+async fn test_version_control_display() {
+    is_their_an_update().await
+}
+
 #[test]
 fn test_label_extraction() {
     let seedelf: String =

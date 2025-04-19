@@ -19,6 +19,8 @@ If you have [rust/cargo installed](https://www.rust-lang.org/tools/install), the
 cargo install seedelf-cli
 ```
 
+*The install command can be used to update the seedelf-cli!*
+
 ### Building From Source
 
 First, clone the repo and enter the cli subfolder.

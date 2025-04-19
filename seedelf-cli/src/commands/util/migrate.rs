@@ -1,7 +1,7 @@
 use clap::Args;
 use colored::Colorize;
 use seedelf_cli::constants::VARIANT;
-use seedelf_cli::display::preprod_text;
+use seedelf_cli::display;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -11,13 +11,14 @@ pub struct MigrateArgs {
     from_variant: u64,
 }
 
-pub fn run(args: MigrateArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: MigrateArgs, network_flag: bool) -> Result<(), String> {
     // starts a variant 1
     if args.from_variant == 0 || args.from_variant >= VARIANT {
         return Err("Incorrect Migration Variant".to_string());
     }
 
-    preprod_text(network_flag);
+    display::is_their_an_update().await;
+    display::preprod_text(network_flag);
 
     println!(
         "{}",

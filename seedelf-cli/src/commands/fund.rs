@@ -9,7 +9,7 @@ use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::{Asset, Assets};
 use seedelf_cli::constants::MAXIMUM_TOKENS_PER_UTXO;
-use seedelf_cli::display::preprod_text;
+use seedelf_cli::display;
 use seedelf_cli::koios::{UtxoResponse, extract_bytes_with_logging};
 use seedelf_cli::register::Register;
 use seedelf_cli::transaction::wallet_minimum_lovelace_with_assets;
@@ -68,7 +68,8 @@ pub struct FundArgs {
 }
 
 pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(), String> {
-    preprod_text(network_flag);
+    display::is_their_an_update().await;
+    display::preprod_text(network_flag);
 
     // its ok not to define lovelace but in that case an asset has to be define
     if args.lovelace.is_none()
