@@ -1,8 +1,8 @@
 use hex;
 use hex::FromHex;
 use pallas_primitives::{
-    BoundedBytes, Fragment,
-    alonzo::{Constr, MaybeIndefArray, PlutusData},
+    BoundedBytes, Fragment, MaybeIndefArray,
+    alonzo::{Constr, PlutusData},
 };
 
 /// Creates a mint redeemer for a Plutus script.
