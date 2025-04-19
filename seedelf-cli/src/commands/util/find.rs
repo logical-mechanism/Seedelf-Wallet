@@ -1,6 +1,6 @@
 use clap::Args;
 use colored::Colorize;
-use seedelf_cli::display::preprod_text;
+use seedelf_cli::display;
 use seedelf_cli::utxos::find_and_print_all_seedelfs;
 
 /// Struct to hold command-specific arguments
@@ -17,7 +17,8 @@ pub struct FindArgs {
 }
 
 pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<(), String> {
-    preprod_text(network_flag);
+    display::is_their_an_update().await;
+    display::preprod_text(network_flag);
     println!(
         "\n{} {}",
         "Finding All Seedelfs Containing:".bright_blue(),

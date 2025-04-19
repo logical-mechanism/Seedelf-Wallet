@@ -66,7 +66,7 @@ pub async fn run(args: UtilArgs, preprod_flag: bool, variant: u64) {
             }
         }
         UtilCommands::Migrate(args) => {
-            if let Err(err) = migrate::run(args, preprod_flag) {
+            if let Err(err) = migrate::run(args, preprod_flag).await {
                 eprintln!("Error: {}", err);
             }
         }
