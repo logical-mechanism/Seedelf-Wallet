@@ -2,7 +2,7 @@ use chrono::Utc;
 use clap::Args;
 use colored::Colorize;
 use seedelf_cli::constants::{Config, get_config};
-use seedelf_cli::display::preprod_text;
+use seedelf_cli::display;
 use seedelf_cli::koios::{History, asset_history};
 
 /// Struct to hold command-specific arguments
@@ -55,7 +55,8 @@ fn format_duration(seconds: i64) -> String {
 }
 
 pub async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<(), String> {
-    preprod_text(network_flag);
+    display::is_their_an_update().await;
+    display::preprod_text(network_flag);
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);

@@ -12,7 +12,7 @@ use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
 use seedelf_cli::constants::{Config, get_config, plutus_v3_cost_model};
 use seedelf_cli::data_structures;
-use seedelf_cli::display::preprod_text;
+use seedelf_cli::display;
 use seedelf_cli::koios::{UtxoResponse, address_utxos, evaluate_transaction};
 use seedelf_cli::register::Register;
 use seedelf_cli::setup;
@@ -41,8 +41,8 @@ pub struct LabelArgs {
 }
 
 pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<(), String> {
-    // if preprod then print the preprod message
-    preprod_text(network_flag);
+    display::is_their_an_update().await;
+    display::preprod_text(network_flag);
 
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         eprintln!("Error: Invalid Variant");

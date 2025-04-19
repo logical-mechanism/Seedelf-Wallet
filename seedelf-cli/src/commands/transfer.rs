@@ -15,7 +15,7 @@ use seedelf_cli::constants::{
     plutus_v3_cost_model,
 };
 use seedelf_cli::data_structures;
-use seedelf_cli::display::preprod_text;
+use seedelf_cli::display;
 use seedelf_cli::koios::{
     evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
 };
@@ -71,7 +71,8 @@ pub struct TransforArgs {
 }
 
 pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<(), String> {
-    preprod_text(network_flag);
+    display::is_their_an_update().await;
+    display::preprod_text(network_flag);
 
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         eprintln!("Error: Invalid Variant");

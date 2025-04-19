@@ -10,6 +10,7 @@ use seedelf_cli::setup;
 use seedelf_cli::utxos;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
+    display::is_their_an_update().await;
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
 

@@ -54,7 +54,7 @@ async fn main() {
 
     match cli.command {
         Some(Commands::Welcome) => {
-            commands::welcome::run();
+            commands::welcome::run().await;
         }
         Some(Commands::Balance) => {
             if let Err(err) = commands::balance::run(cli.preprod, cli.variant).await {

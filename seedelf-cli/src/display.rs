@@ -1,7 +1,32 @@
 use crate::constants::{Config, get_config};
 use crate::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
+use crate::version_control::{compare_versions, get_latest_version};
 use blstrs::Scalar;
 use colored::Colorize;
+
+pub async fn is_their_an_update() {
+    match get_latest_version().await {
+        Ok(tag) => {
+            if !compare_versions(env!("CARGO_PKG_VERSION"), &tag) {
+                println!(
+                    "\n{} {}\n{}",
+                    "A new version is available:".bold().bright_blue(),
+                    tag.yellow(),
+                    "Please update to the newest version of Seedelf"
+                        .bold()
+                        .bright_blue(),
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "Failed to fetch newest version: {}\nWait a few moments and try again.",
+                err
+            );
+            std::process::exit(1);
+        }
+    }
+}
 
 pub async fn block_number_and_time(network_flag: bool) {
     match tip(network_flag).await {
