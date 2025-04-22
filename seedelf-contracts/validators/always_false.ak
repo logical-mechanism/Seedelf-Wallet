@@ -3,8 +3,8 @@
 
 validator contract(_any: Data) {
   //
-  // (\(\    
-  // ( -.-)   
+  // (\(\
+  // ( -.-)
   // o_(")(")
   else(_) {
     fail @"I always fail :/"

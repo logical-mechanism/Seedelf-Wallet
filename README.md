@@ -132,7 +132,7 @@ The proof of re-randomization reduces to proving the original Schnorr Σ-protoco
 
 In the contract, there will be many UTxOs with unique registers. A user can always find their UTxOs by searching the UTxO set at the contract address and finding all the registers that satisfy $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ for the user's secret $x$.
 
-### Wallet Limitations
+## Wallet Limitations
 
 The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet, but instead of keeping the root key private and generating the address when asked, it is now public via a datum, and address generation is the sender's duty and not the receiver's.
 
@@ -149,6 +149,10 @@ This Register would become unspendable, resulting in lost funds.
 There exist multiple attacks that are known to break the privacy of this wallet. The first attack is picking a bad $d$ value. A small $d$ value may be able to be brute-forced. Selecting a $d$ value on the order of $2^{254}$ circumvents the brute-force attack. The second attack does not correctly destroy the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users, it becomes trivial to invert the Register into the original form, thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral UTxO must be placed into a transaction as it incentivizes block producers to validate a failed transaction from the mempool. The collateral UTxO has to be associated with a payment credential, which means that the collateral UTxO, by definition, isn't anonymous, and the ownership is known the entire time. An outside user can watch collateral UTxOs inside a transaction to reveal a user's actions.
 
 Privacy is preserved if $d$ is large and destroyed after use, and the collateral UTxO is shared.
+
+### Troll Attacks
+
+The design of the wallet contract opens users to a troll attack by overloading a UTxO with a large but useless reference script. Creating this UTxO results in the user, Alice, paying significantly more fees for that transaction, while Bob will pay more but less than Alice to spend that resulting UTxO. It's a useless troll attack that exists. The attack does not favor Alice and will cost her more to execute than it will be for Bob to spend the UTxO.
 
 ### Implicit Tracking Methods
 
