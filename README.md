@@ -132,7 +132,7 @@ The proof of re-randomization reduces to proving the original Schnorr Σ-protoco
 
 In the contract, there will be many UTxOs with unique registers. A user can always find their UTxOs by searching the UTxO set at the contract address and finding all the registers that satisfy $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ for the user's secret $x$.
 
-### Wallet Limitations
+## Wallet Limitations
 
 The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet, but instead of keeping the root key private and generating the address when asked, it is now public via a datum, and address generation is the sender's duty and not the receiver's.
 
