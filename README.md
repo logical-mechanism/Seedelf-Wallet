@@ -150,6 +150,10 @@ There exist multiple attacks that are known to break the privacy of this wallet.
 
 Privacy is preserved if $d$ is large and destroyed after use, and the collateral UTxO is shared.
 
+### Troll Attacks
+
+
+
 ### Implicit Tracking Methods
 
 As noted above, direct tracking methods are not feasible as long as the privacy-preserving techniques are followed. However, implicit tracking methods (ITMs) exist even under the assumption of privacy preservation.
