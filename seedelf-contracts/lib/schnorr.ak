@@ -94,8 +94,8 @@ pub fn prove(
 ) -> Bool {
   //
   // the z computation:
-  //                    g^z = g^(r + c * x) 
-  //                        = g^r * g^(c * x) 
+  //                    g^z = g^(r + c * x)
+  //                        = g^r * g^(c * x)
   //                        = g^r * (g^x)^c
   //                        = g^r * u^c
   //
