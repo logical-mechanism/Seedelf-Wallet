@@ -152,7 +152,7 @@ Privacy is preserved if $d$ is large and destroyed after use, and the collateral
 
 ### Troll Attacks
 
-
+The design of the wallet contract opens users to a troll attack by overloading a UTxO with a large but useless reference script. The creation of this UTxO results in the user, Alice, paying significantly more fees for that transaction, while Bob will pay more in fees but less than Alice to spend that resulting UTxO. It's a useless troll attack that exists. The attack is not in favor of Alice and will cost her more to execute than it will be for Bob.
 
 ### Implicit Tracking Methods
 
