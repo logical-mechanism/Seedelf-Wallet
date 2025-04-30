@@ -150,6 +150,12 @@ There exist multiple attacks that are known to break the privacy of this wallet.
 
 Privacy is preserved if $d$ is large and destroyed after use, and the collateral UTxO is shared.
 
+#### De-Anonymizing Via IP Tracking
+
+Seedelf communicates with third-party APIs such as `koios.rest` and `giveme.my`. These services track IP addresses as part of their abuse prevention and DoS protection mechanisms. `koios.rest` currently does not support access via Tor. Be aware that your public IP is linked with your Koios API requests. `giveme.my` does support Tor access, offering a more privacy-conscious alternative when needed but is not implemented at the CLI level. Consider routing traffic through a trusted VPN that doesn't log activity. Do not use Seedelf from a personal device or identifiable IP for maximum privacy when engaging in sensitive activity. 
+
+We're actively and continuously exploring options for Tor access to all services Seedelf depends on, ensuring a more secure future.
+
 ### Troll Attacks
 
 The design of the wallet contract opens users to a troll attack by overloading a UTxO with a large but useless reference script. Creating this UTxO results in the user, Alice, paying significantly more fees for that transaction, while Bob will pay more but less than Alice to spend that resulting UTxO. It's a useless troll attack that exists. The attack does not favor Alice and will cost her more to execute than it will be for Bob to spend the UTxO.
