@@ -156,6 +156,8 @@ Seedelf communicates with third-party APIs such as `koios.rest` and `giveme.my`.
 
 We're actively and continuously exploring options for Tor access to all services Seedelf depends on, ensuring a more secure future.
 
+**Please note that `crate.io` and `github.com` track IP addresses when using `cargo install` and `git clone`, respectively.**
+
 ### Troll Attacks
 
 The design of the wallet contract opens users to a troll attack by overloading a UTxO with a large but useless reference script. Creating this UTxO results in the user, Alice, paying significantly more fees for that transaction, while Bob will pay more but less than Alice to spend that resulting UTxO. It's a useless troll attack that exists. The attack does not favor Alice and will cost her more to execute than it will be for Bob to spend the UTxO.
@@ -217,4 +219,4 @@ Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/
 
 ## Contact
 
-For questions, suggestions, or concerns, please contact support@logicalmechanism.io or join the Seedelf discord [here](https://discord.gg/r8VwV2jGBy).
+For questions, suggestions, or concerns, please contact support@logicalmechanism.io or join the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
