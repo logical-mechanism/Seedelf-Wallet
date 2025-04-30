@@ -211,7 +211,7 @@ Spendability is always in the hands of the original owner. It is safe to assume 
 
 ## Defeating The Collateral Problem
 
-The `seedelf-cli` uses the [Cardano collateral provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem.
+The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem.
 
 ## The **seedelf-cli**
 
