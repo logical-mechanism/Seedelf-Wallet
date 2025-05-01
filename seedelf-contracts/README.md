@@ -8,7 +8,7 @@ Compile the contracts with the `complete_build.sh` script.
 
 The random seed used in production is `acabcafe`.
 
-Contract Hashes:
+### Contract Hashes:
 
 ```
 wallet:  94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469
