@@ -13,11 +13,11 @@ pub mod statistics;
 pub enum UtilCommands {
     /// Exposes the wallets secret key, use with caution!
     ExposeKey,
-    /// Find all Seedelfs by a label / personal tag
+    /// Find all seedelfs by a label / personal tag
     Find(find::FindArgs),
-    /// Calculate the age of a Seedelf
+    /// Calculate the age of a seedelf
     Age(age::AgeArgs),
-    /// Display statistics about seedelf
+    /// Display statistics about the Seedelf protocol
     Statistics,
     /// Extracts a UTxO with an empty datum
     Extract(extract::ExtractArgs),

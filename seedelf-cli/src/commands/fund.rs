@@ -20,20 +20,20 @@ use seedelf_cli::web_server;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct FundArgs {
-    /// Seedelf to send funds too
+    /// address sending funds
     #[arg(
         short = 'a',
         long,
-        help = "The address sending funds to the Seedelf.",
+        help = "The address sending funds to the seedelf.",
         display_order = 1
     )]
     address: String,
 
-    /// Seedelf to send funds too
+    /// seedelf to send funds too
     #[arg(
         short = 's',
         long,
-        help = "The Seedelf receiving funds.",
+        help = "The seedelf receiving funds.",
         display_order = 2
     )]
     seedelf: String,
@@ -42,7 +42,7 @@ pub struct FundArgs {
     #[arg(
         short = 'l',
         long,
-        help = "The amount of Lovelace being sent to the Seedelf.",
+        help = "The amount of Lovelace being sent to the seedelf.",
         display_order = 3
     )]
     lovelace: Option<u64>,

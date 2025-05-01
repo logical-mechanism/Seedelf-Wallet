@@ -24,17 +24,17 @@ struct Cli {
 enum Commands {
     /// Displays the seedelf-cli welcome message
     Welcome,
-    /// Create a new Seedelf in the wallet
+    /// Create a new seedelf in the wallet
     Create(commands::create::LabelArgs),
-    /// Remove a Seedelf from the wallet
+    /// Remove a seedelf from the wallet
     Remove(commands::remove::RemoveArgs),
     /// Displays the current wallet information, seedelfs, and balance
     Balance,
-    /// An address sends funds to a Seedelf
+    /// An address sends funds to a seedelf
     Fund(commands::fund::FundArgs),
-    /// A Seedelf sends funds to a Seedelf
+    /// A seedelf sends funds to a seedelf
     Transfer(commands::transfer::TransforArgs),
-    /// A Seedelf sends funds to an address
+    /// A seedelf sends funds to an address
     Sweep(commands::sweep::SweepArgs),
     /// Utility functions for seedelf-cli
     Util(commands::util::UtilArgs),

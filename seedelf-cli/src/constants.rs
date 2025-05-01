@@ -1,4 +1,4 @@
-/// The current variant of seedelf
+/// The current variant of Seedelf
 pub const VARIANT: u64 = 1;
 
 pub struct Contract {

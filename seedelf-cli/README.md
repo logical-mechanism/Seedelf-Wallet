@@ -13,7 +13,7 @@ If you are running Linux, MacOS, or Unix-like OS, run the following command on y
 curl -fsSL https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/refs/heads/main/util/seedelf-init.sh | bash
 ```
 
-If you have [rust/cargo installed](https://www.rust-lang.org/tools/install), the seedelf-cli can be installed directly from [crates.io](https://crates.io/crates/seedelf-cli).
+If you have [rust installed](https://www.rust-lang.org/tools/install) then the `seedelf-cli` may be installed directly from [crates.io](https://crates.io/crates/seedelf-cli).
 
 ```bash
 cargo install seedelf-cli
@@ -44,7 +44,13 @@ Running it locally:
 cargo run -- help
 ```
 
-## Using The Seedelf CLI
+## Using The CLI
+
+See all functions with the `help` command.
+
+```bash
+seedelf-cli help
+```
 
 ```bash
 A Cardano Stealth Wallet
@@ -53,12 +59,12 @@ Usage: seedelf-cli [OPTIONS] [COMMAND]
 
 Commands:
   welcome   Displays the seedelf-cli welcome message
-  create    Create a new Seedelf in the wallet
-  remove    Remove a Seedelf from the wallet
+  create    Create a new seedelf in the wallet
+  remove    Remove a seedelf from the wallet
   balance   Displays the current wallet information, seedelfs, and balance
-  fund      An address sends funds to a Seedelf
-  transfer  A Seedelf sends funds to a Seedelf
-  sweep     A Seedelf sends funds to an address
+  fund      An address sends funds to a seedelf
+  transfer  A seedelf sends funds to a seedelf
+  sweep     A seedelf sends funds to an address
   util      Utility functions for seedelf-cli
   external  External wallet functions for seedelf-cli
   help      Print this message or the help of the given subcommand(s)
