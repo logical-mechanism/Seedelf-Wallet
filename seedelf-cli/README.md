@@ -1,6 +1,6 @@
 # **seedelf-cli**
 
-The `seedelf-cli` is a Rust implementation of the Seedelf stealth wallet protocol. It uses [Cardano collateral provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal-based but uses a static HTML web interface for CIP30 interactions when required.
+The `seedelf-cli` is a Rust implementation of the Seedelf stealth wallet protocol. It uses [Cardano Collateral Provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal-based but uses a static HTML web interface for CIP30 interactions when required.
 
 **Note: Wallet Is Currently In Beta**
 
@@ -13,7 +13,7 @@ If you are running Linux, MacOS, or Unix-like OS, run the following command on y
 curl -fsSL https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/refs/heads/main/util/seedelf-init.sh | bash
 ```
 
-If you have [rust/cargo installed](https://www.rust-lang.org/tools/install), the seedelf-cli can be installed directly from [crates.io](https://crates.io/).
+If you have [rust/cargo installed](https://www.rust-lang.org/tools/install), the seedelf-cli can be installed directly from [crates.io](https://crates.io/crates/seedelf-cli).
 
 ```bash
 cargo install seedelf-cli
@@ -86,7 +86,7 @@ The following action will create a Seedelf token with the `create` command.
 seedelf-cli create [OPTIONS] --address <ADDRESS>
 ```
 
-The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter in the `create` command is the address paying for the Seedelf token mint transaction. This address must come from a CIP30-enabled wallet. The `create` command will use a local web server to generate a website at `http://127.0.0.1:44203/`. The website will ask the user to select a wallet from the dropdown in the top right corner. The website will prompt the user to enable the wallet and sign the transaction. The `Transaction CBOR` section shows the CBOR of the signed transaction.
+The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter in the `create` command is the address paying for the Seedelf token mint transaction. This address must come from a CIP30-enabled wallet. The `create` command will use a local web server to generate a website at [http://127.0.0.1:44203/](http://127.0.0.1:44203/). The website will ask the user to select a wallet from the dropdown in the top right corner. The website will prompt the user to enable the wallet and sign the transaction. The `Transaction CBOR` section shows the CBOR of the signed transaction.
 
 At this point, the wallet may receive funds from other CIP30 wallets or Seedelfs. Users may fund their own Seedelf and others by using the `fund` command.
 
@@ -104,7 +104,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 
 We suggest the following flow to interact with dApps. This flow has the best user experience and uses the already existing tech stack on Cardano. The idea is to use a new CIP30 wallet, which is wholly disconnected from the user's owned wallets and is dapp enabled. The user will sweep funds from Seedelf into that new wallet. The user may interact with the dApp of choice. The resulting funds after interaction may fund your Seedelf. For simplicity, Seedelf provides an external wallet that may receive funds without invoking the contract. The `external sweep` command can return the funds to the contract. The user may send funds with the `fund` command.
 
-Example: Purchase Tokens with 25 ADA From A Dex On Mainnet
+#### Example: Purchase Tokens with 25 ADA From A Dex On Mainnet
 
 Using the `fund` command:
 ```bash
