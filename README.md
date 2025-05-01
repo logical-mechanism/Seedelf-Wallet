@@ -152,9 +152,9 @@ Privacy is preserved if $d$ is large and destroyed after use, and the collateral
 
 #### De-Anonymizing Via IP Tracking
 
-Seedelf communicates with third-party APIs such as `koios.rest` and `giveme.my`. These services track IP addresses as part of their abuse prevention and DoS protection mechanisms. `koios.rest` currently does not support access via Tor. Be aware that your public IP is linked with your Koios API requests. `giveme.my` does support Tor access, offering a more privacy-conscious alternative when needed but is not implemented at the CLI level. Consider routing traffic through a trusted VPN that doesn't log activity. Do not use Seedelf from a personal device or identifiable IP for maximum privacy when engaging in sensitive activity. 
+Seedelf communicates with third-party APIs such as `koios.rest` and `giveme.my`. These services track IP addresses as part of their abuse prevention and DoS protection mechanisms. `koios.rest` does not support Tor access. `giveme.my` does support Tor access but is not implemented at the CLI level. Your public IP directly connects to your Koios API and GiveMeMy requests. Consider routing traffic through a trusted VPN that doesn't log activity, not using a personal device, or using an identifiable IP for maximum privacy when engaging in sensitive activity. 
 
-We're actively and continuously exploring options for Tor access to all services Seedelf depends on, ensuring a more secure future.
+We're actively and continuously exploring options for Tor access to all services Seedelf depends on to function.
 
 **Please note that `crate.io` and `github.com` track IP addresses when using `cargo install` and `git clone`, respectively.**
 
