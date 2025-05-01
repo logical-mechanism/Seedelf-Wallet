@@ -12,7 +12,7 @@ If you need to communicate sensitive information to the developers, use the foll
 |-----------------------------|---------------------------------------------------|
 | support@logicalmechanism.io | 8DF2 B3E9 B711 42BF E4F2 DF15 9C67 8E93 1E72 130D |
 
-The support key can be found in [here](./util/pubkeys/support.asc).
+The support key can be found in the [/util/pubkeys/support.asc](./util/pubkeys/support.asc) file.
 
 ## Bug Bounty Program
 
