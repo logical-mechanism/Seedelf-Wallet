@@ -31,7 +31,7 @@ cd ..
 
 ## Recompiling
 
-If a recompile is required and the contract hashes change, then the [seedelf-contracts/README.md](./seedelf-contracts/README.md) must be updated to reflect the changes.
+If a recompile is required and the contract hashes change, then the [seedelf-contracts/README.md](./seedelf-contracts/README.md) must be updated to reflect the changes. This will also introduce a new contract variant inside the [seedelf-cli](./seedelf-cli/README.md).
 
 ## Re-releasing Tag
 
