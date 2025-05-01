@@ -150,6 +150,14 @@ There exist multiple attacks that are known to break the privacy of this wallet.
 
 Privacy is preserved if $d$ is large and destroyed after use, and the collateral UTxO is shared.
 
+#### De-Anonymizing Via IP Tracking
+
+Seedelf communicates with third-party APIs such as `koios.rest` and `giveme.my`. These services track IP addresses as part of their abuse prevention and DoS protection mechanisms. `koios.rest` does not support Tor access. `giveme.my` does support Tor access but is not implemented at the CLI level. Your public IP directly connects to your Koios API and GiveMeMy requests. Consider routing traffic through a trusted VPN that doesn't log activity, not using a personal device, or using an identifiable IP for maximum privacy when engaging in sensitive activity. 
+
+We're actively and continuously exploring options for Tor access to all services Seedelf depends on to function.
+
+**Please note that `crate.io` and `github.com` track IP addresses when using `cargo install` and `git clone`, respectively.**
+
 ### Troll Attacks
 
 The design of the wallet contract opens users to a troll attack by overloading a UTxO with a large but useless reference script. Creating this UTxO results in the user, Alice, paying significantly more fees for that transaction, while Bob will pay more but less than Alice to spend that resulting UTxO. It's a useless troll attack that exists. The attack does not favor Alice and will cost her more to execute than it will be for Bob to spend the UTxO.
@@ -203,7 +211,7 @@ Spendability is always in the hands of the original owner. It is safe to assume 
 
 ## Defeating The Collateral Problem
 
-The `seedelf-cli` uses the [Cardano collateral provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem.
+The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem.
 
 ## The **seedelf-cli**
 
@@ -211,4 +219,4 @@ Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/
 
 ## Contact
 
-For questions, suggestions, or concerns, please contact support@logicalmechanism.io or join the Seedelf discord [here](https://discord.gg/r8VwV2jGBy).
+For questions, suggestions, or concerns, please contact support@logicalmechanism.io or join the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
