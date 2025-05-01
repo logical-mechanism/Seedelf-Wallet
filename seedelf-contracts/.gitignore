@@ -1,0 +1,5 @@
+artifacts/
+build/
+docs/
+plutus.json
+aiken.lock

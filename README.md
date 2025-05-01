@@ -66,9 +66,9 @@ The Register contains the generator and the public key for some UTxO.
 
 ```rust
 pub type Register {
-  /// the generator, #<Bls12_381, G1>
+  // the generator, #<Bls12_381, G1>
   generator: ByteArray,
-  /// the public value, #<Bls12_381, G1>
+  // the public value, #<Bls12_381, G1>
   public_value: ByteArray,
 }
 ```
