@@ -31,11 +31,11 @@ use seedelf_cli::utxos;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct TransforArgs {
-    /// Seedelf to send funds too
+    /// seedelf to send funds too
     #[arg(
         short = 's',
         long,
-        help = "The Seedelf receiving funds.",
+        help = "The seedelf receiving funds.",
         display_order = 1
     )]
     seedelf: String,
@@ -44,7 +44,7 @@ pub struct TransforArgs {
     #[arg(
         short = 'l',
         long,
-        help = "The amount of ADA being sent to the Seedelf.",
+        help = "The amount of ADA being sent to the seedelf.",
         display_order = 2
     )]
     lovelace: Option<u64>,

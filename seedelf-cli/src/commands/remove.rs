@@ -27,7 +27,7 @@ use seedelf_cli::utxos;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct RemoveArgs {
-    #[arg(short = 's', long, help = "The Seedelf to remove.", display_order = 1)]
+    #[arg(short = 's', long, help = "The seedelf to remove.", display_order = 1)]
     seedelf: String,
 
     #[arg(

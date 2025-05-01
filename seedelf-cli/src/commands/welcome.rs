@@ -12,7 +12,7 @@ pub async fn run() {
     println!("\n 😀\n");
     println!(
         "{}\n\n{}",
-        "Start your journey by creating a Seedelf with the cli command:".bright_purple(),
+        "Start your journey by creating a seedelf with the cli command:".bright_purple(),
         "seedelf-cli create --address <ADDRESS>".bright_cyan()
     );
     println!(

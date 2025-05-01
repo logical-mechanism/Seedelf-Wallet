@@ -8,11 +8,11 @@ use seedelf_cli::koios::{History, asset_history};
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct AgeArgs {
-    /// Seedelf to age check
+    /// seedelf to age check
     #[arg(
         short = 's',
         long,
-        help = "The Seedelf getting age checked.",
+        help = "The seedelf getting age checked.",
         display_order = 1
     )]
     seedelf: String,
