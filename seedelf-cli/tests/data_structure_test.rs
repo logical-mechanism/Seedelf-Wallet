@@ -1,7 +1,7 @@
 use hex::FromHex;
 use pallas_primitives::{
-    BoundedBytes, Fragment,
-    alonzo::{Constr, MaybeIndefArray, PlutusData},
+    BoundedBytes, Fragment, MaybeIndefArray,
+    alonzo::{Constr, PlutusData},
 };
 
 #[test]
