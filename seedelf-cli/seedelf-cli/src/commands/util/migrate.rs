@@ -1,7 +1,7 @@
 use clap::Args;
 use colored::Colorize;
-use seedelf_cli::constants::VARIANT;
 use seedelf_cli::display;
+use seedelf_core::constants::VARIANT;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]

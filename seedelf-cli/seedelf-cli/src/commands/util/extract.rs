@@ -11,7 +11,6 @@ use seedelf_cli::koios::{UtxoResponse, address_utxos, evaluate_transaction, utxo
 
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
-use seedelf_cli::constants::{Config, get_config, plutus_v3_cost_model};
 use seedelf_cli::display;
 use seedelf_cli::transaction::{
     address_minimum_lovelace_with_assets, extract_budgets, total_computation_fee,
@@ -19,6 +18,7 @@ use seedelf_cli::transaction::{
 };
 use seedelf_cli::utxos;
 use seedelf_cli::web_server;
+use seedelf_core::constants::{Config, get_config, plutus_v3_cost_model};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]

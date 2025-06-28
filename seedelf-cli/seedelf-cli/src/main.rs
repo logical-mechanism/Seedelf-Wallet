@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 mod commands;
-use seedelf_cli::constants::VARIANT;
 use seedelf_cli::setup;
+use seedelf_core::constants::VARIANT;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]

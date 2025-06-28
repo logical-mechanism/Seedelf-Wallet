@@ -1,7 +1,7 @@
 use crate::address;
-use crate::constants::ADA_HANDLE_POLICY_ID;
 use hex;
 use reqwest::{Client, Error, Response};
+use seedelf_core::constants::ADA_HANDLE_POLICY_ID;
 use seedelf_crypto::register::Register;
 use serde::Deserialize;
 use serde_json::Value;

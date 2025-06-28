@@ -1,9 +1,9 @@
 use chrono::Utc;
 use clap::Args;
 use colored::Colorize;
-use seedelf_cli::constants::{Config, get_config};
 use seedelf_cli::display;
 use seedelf_cli::koios::{History, asset_history};
+use seedelf_core::constants::{Config, get_config};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]

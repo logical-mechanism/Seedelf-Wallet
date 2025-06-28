@@ -39,3 +39,4 @@ tokio = { version = "1.41.1", features = ["full"] }
 warp = "0.3.7"
 # seedelf stuff
 seedelf-crypto = { path = "../seedelf-crypto" }
+seedelf-core = { path = "../seedelf-core" }

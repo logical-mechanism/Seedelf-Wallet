@@ -1,8 +1,8 @@
-use crate::constants::{Config, get_config};
 use crate::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
 use crate::version_control::{compare_versions, get_latest_version};
 use blstrs::Scalar;
 use colored::Colorize;
+use seedelf_core::constants::{Config, get_config};
 
 pub async fn is_their_an_update() {
     match get_latest_version().await {

@@ -1,5 +1,4 @@
 use crate::assets::{Asset, Assets, string_to_u64};
-use crate::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, get_config};
 use crate::display::seedelf_label;
 use crate::koios::{
     UtxoResponse, address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
@@ -7,6 +6,7 @@ use crate::koios::{
 use crate::transaction::wallet_minimum_lovelace_with_assets;
 use blstrs::Scalar;
 use colored::Colorize;
+use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, get_config};
 use seedelf_crypto::register::Register;
 
 /// collects all the wallet utxos owned by some scalar.

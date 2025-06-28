@@ -8,12 +8,12 @@ use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_cli::address;
 use seedelf_cli::assets::Assets;
-use seedelf_cli::constants::MAXIMUM_TOKENS_PER_UTXO;
 use seedelf_cli::display;
 use seedelf_cli::koios::{UtxoResponse, submit_tx};
 use seedelf_cli::setup;
 use seedelf_cli::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_cli::utxos;
+use seedelf_core::constants::MAXIMUM_TOKENS_PER_UTXO;
 use seedelf_crypto::convert;
 use seedelf_crypto::register::Register;
 
