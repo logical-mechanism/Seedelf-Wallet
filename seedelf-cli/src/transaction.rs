@@ -167,7 +167,7 @@ pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8>
     let formatted_index: String = format!("{:02x}", smallest_input.txo_index);
     let tx_hash_hex: String = hex::encode(smallest_input.tx_hash.0);
     let prefix: String = "5eed0e1f".to_string();
-    let concatenated: String = format!("{}{}{}{}", prefix, label_hex, formatted_index, tx_hash_hex);
+    let concatenated: String = format!("{prefix}{label_hex}{formatted_index}{tx_hash_hex}");
     hex::decode(&concatenated[..64.min(concatenated.len())]).unwrap()
 }
 

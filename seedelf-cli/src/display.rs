@@ -19,10 +19,7 @@ pub async fn is_their_an_update() {
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch newest version: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch newest version: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -42,10 +39,7 @@ pub async fn block_number_and_time(network_flag: bool) {
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch blockchain tip: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch blockchain tip: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -92,10 +86,7 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool, variant: u64) {
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }

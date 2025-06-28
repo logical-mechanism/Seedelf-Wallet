@@ -22,7 +22,7 @@ use rand_core::OsRng;
 /// * `String` - A hex-encoded BLAKE2b-224 hash of the concatenated input strings.
 pub fn fiat_shamir_heuristic(g_b: String, g_r_b: String, u_b: String, b: String) -> String {
     // Concatenate the strings
-    let concatenated: String = format!("{}{}{}{}", g_b, g_r_b, u_b, b);
+    let concatenated: String = format!("{g_b}{g_r_b}{u_b}{b}");
 
     // Convert to bytes and hash
     blake2b_224(&concatenated)

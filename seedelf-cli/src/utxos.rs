@@ -38,10 +38,7 @@ pub async fn collect_all_wallet_utxos(
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -107,10 +104,7 @@ pub async fn find_seedelf_and_wallet_utxos(
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -148,10 +142,7 @@ pub async fn find_seedelf_utxo(
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -195,10 +186,7 @@ pub async fn collect_wallet_utxos(
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -226,10 +214,7 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -248,10 +233,7 @@ pub async fn collect_all_address_utxos(address: &str, network_flag: bool) -> Vec
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -427,10 +409,7 @@ pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool, vari
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }
@@ -470,10 +449,7 @@ pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
             );
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }

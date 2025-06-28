@@ -58,32 +58,32 @@ async fn main() {
         }
         Some(Commands::Balance) => {
             if let Err(err) = commands::balance::run(cli.preprod, cli.variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         Some(Commands::Transfer(args)) => {
             if let Err(err) = commands::transfer::run(args, cli.preprod, cli.variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         Some(Commands::Sweep(args)) => {
             if let Err(err) = commands::sweep::run(args, cli.preprod, cli.variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         Some(Commands::Fund(args)) => {
             if let Err(err) = commands::fund::run(args, cli.preprod, cli.variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         Some(Commands::Create(args)) => {
             if let Err(err) = commands::create::run(args, cli.preprod, cli.variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         Some(Commands::Remove(args)) => {
             if let Err(err) = commands::remove::run(args, cli.preprod, cli.variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         Some(Commands::Util(util_command)) => {

@@ -185,7 +185,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
         Ok(response) => {
             if let Some(_error) = response.get("contents") {
-                println!("\nError: {}", response);
+                println!("\nError: {response}");
                 std::process::exit(1);
             }
             println!("\nTransaction Successfully Submitted!");
@@ -214,7 +214,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
             }
         }
         Err(err) => {
-            eprintln!("Failed to submit tx: {}", err);
+            eprintln!("Failed to submit tx: {err}");
             std::process::exit(1);
         }
     }

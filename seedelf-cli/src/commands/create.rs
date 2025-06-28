@@ -102,7 +102,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {err}");
             std::process::exit(1);
         }
     }
@@ -229,7 +229,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         {
             Ok(execution_units) => {
                 if let Some(_error) = execution_units.get("error") {
-                    println!("Error: {:?}", execution_units);
+                    println!("Error: {execution_units:?}");
                     std::process::exit(1);
                 }
                 let cpu_units: u64 = execution_units
@@ -243,7 +243,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
                 (cpu_units, mem_units)
             }
             Err(err) => {
-                eprintln!("Failed to evaluate transaction: {}", err);
+                eprintln!("Failed to evaluate transaction: {err}");
                 std::process::exit(1);
             }
         };

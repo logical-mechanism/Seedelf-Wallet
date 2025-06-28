@@ -42,37 +42,37 @@ pub async fn run(args: UtilArgs, preprod_flag: bool, variant: u64) {
         }
         UtilCommands::Find(args) => {
             if let Err(err) = find::run(args, preprod_flag, variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         UtilCommands::Age(args) => {
             if let Err(err) = age::run(args, preprod_flag, variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         UtilCommands::Statistics => {
             if let Err(err) = statistics::run(preprod_flag, variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         UtilCommands::Extract(args) => {
             if let Err(err) = extract::run(args, preprod_flag, variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         UtilCommands::Mint(args) => {
             if let Err(err) = mint::run(args, preprod_flag, variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         UtilCommands::Migrate(args) => {
             if let Err(err) = migrate::run(args, preprod_flag).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
         UtilCommands::History(args) => {
             if let Err(err) = history::run(args, preprod_flag, variant).await {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
             }
         }
     }
