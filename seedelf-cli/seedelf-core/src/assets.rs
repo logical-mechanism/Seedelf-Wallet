@@ -1,6 +1,6 @@
+use hex;
 use pallas_crypto::hash::Hash;
 use serde::{Deserialize, Serialize};
-
 /// Represents an asset in the Cardano blockchain.
 ///
 /// An `Asset` is identified by a `policy_id` and a `token_name`, and it tracks

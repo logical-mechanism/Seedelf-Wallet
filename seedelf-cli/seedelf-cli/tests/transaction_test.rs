@@ -1,4 +1,5 @@
-use seedelf_cli::{assets::Assets, transaction};
+use seedelf_cli::transaction;
+use seedelf_core::assets::Assets;
 
 #[test]
 fn test_seedelf_minimum_lovelace() {

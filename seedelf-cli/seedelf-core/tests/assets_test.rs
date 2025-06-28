@@ -1,5 +1,5 @@
 use hex;
-use seedelf_cli::assets::{Asset, Assets};
+use seedelf_core::assets::{Asset, Assets};
 
 #[test]
 fn default_assets_is_new_assets() {

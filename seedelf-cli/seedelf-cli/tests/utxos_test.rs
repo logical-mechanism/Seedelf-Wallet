@@ -1,5 +1,5 @@
-use seedelf_cli::assets::{Asset, Assets, string_to_u64};
 use seedelf_cli::utxos;
+use seedelf_core::assets::{Asset, Assets, string_to_u64};
 
 #[tokio::test]
 async fn find_first_large_utxo() {

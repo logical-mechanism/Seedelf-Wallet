@@ -1,5 +1,4 @@
 pub mod address;
-pub mod assets;
 pub mod data_structures;
 pub mod display;
 pub mod koios;
