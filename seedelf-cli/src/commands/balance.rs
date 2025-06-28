@@ -25,6 +25,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
         "\nWallet Has {} UTxOs",
         all_utxos.len().to_string().bright_yellow()
     );
+    // we may want to hide this behind an optional flag later
     for utxo in all_utxos {
         println!("UTxO: {}#{}", utxo.tx_hash, utxo.tx_index);
     }
