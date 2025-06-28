@@ -8,7 +8,6 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::data_structures;
 use seedelf_cli::display;
 use seedelf_cli::koios::{
     UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
@@ -26,6 +25,7 @@ use seedelf_core::constants::{
     COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO, get_config,
     plutus_v3_cost_model,
 };
+use seedelf_core::data_structures;
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::create_proof;
 
