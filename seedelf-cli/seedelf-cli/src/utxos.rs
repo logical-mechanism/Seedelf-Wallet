@@ -4,10 +4,10 @@ use crate::display::seedelf_label;
 use crate::koios::{
     UtxoResponse, address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
 };
-use crate::register::Register;
 use crate::transaction::wallet_minimum_lovelace_with_assets;
 use blstrs::Scalar;
 use colored::Colorize;
+use seedelf_crypto::register::Register;
 
 /// collects all the wallet utxos owned by some scalar.
 pub async fn collect_all_wallet_utxos(

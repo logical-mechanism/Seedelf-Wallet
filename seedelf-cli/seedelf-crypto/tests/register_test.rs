@@ -1,6 +1,6 @@
 use blstrs::Scalar;
-use seedelf_cli::register::Register;
-use seedelf_cli::schnorr::random_scalar;
+use seedelf_crypto::register::Register;
+use seedelf_crypto::schnorr::random_scalar;
 
 #[test]
 fn default_register() {

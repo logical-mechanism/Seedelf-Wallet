@@ -1,4 +1,4 @@
-use seedelf_cli::hashing::{blake2b_224, blake2b_256, sha3_256};
+use seedelf_crypto::hashing::{blake2b_224, blake2b_256, sha3_256};
 
 #[test]
 fn test_empty_string_blake2b_224() {

@@ -18,11 +18,11 @@ use seedelf_cli::display;
 use seedelf_cli::koios::{
     UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
 };
-use seedelf_cli::register::Register;
-use seedelf_cli::schnorr::create_proof;
 use seedelf_cli::setup;
 use seedelf_cli::transaction;
 use seedelf_cli::utxos;
+use seedelf_crypto::register::Register;
+use seedelf_crypto::schnorr::create_proof;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]

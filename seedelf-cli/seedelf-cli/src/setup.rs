@@ -1,4 +1,3 @@
-use crate::schnorr::random_scalar;
 use aes_gcm::aead::{Aead, AeadCore, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::{Argon2, password_hash::SaltString};
@@ -10,6 +9,7 @@ use dirs::home_dir;
 use ff::PrimeField;
 use rand_core::OsRng;
 use rpassword::read_password;
+use seedelf_crypto::schnorr::random_scalar;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};

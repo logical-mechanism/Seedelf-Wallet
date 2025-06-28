@@ -3,7 +3,7 @@ use include_dir::{Dir, include_dir};
 use std::net::SocketAddr;
 use warp::Filter;
 
-const STATIC_DIR: Dir = include_dir!("static");
+const STATIC_DIR: Dir = include_dir!("seedelf-cli/static");
 
 /// Start a web server and inject a dynamic message into the HTML.
 ///

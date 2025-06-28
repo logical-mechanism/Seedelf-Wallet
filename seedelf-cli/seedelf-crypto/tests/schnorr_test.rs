@@ -1,6 +1,6 @@
 use blstrs::Scalar;
-use seedelf_cli::register::Register;
-use seedelf_cli::schnorr::{create_proof, fiat_shamir_heuristic, prove, random_scalar};
+use seedelf_crypto::register::Register;
+use seedelf_crypto::schnorr::{create_proof, fiat_shamir_heuristic, prove, random_scalar};
 
 #[test]
 fn test_empty_string() {

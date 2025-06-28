@@ -1,4 +1,5 @@
-use crate::{hashing::blake2b_224, register::Register};
+use seedelf_crypto::hashing::blake2b_224;
+use crate::{register::Register};
 use blstrs::{G1Affine, G1Projective, Scalar};
 
 use ff::Field;

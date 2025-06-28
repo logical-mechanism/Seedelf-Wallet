@@ -6,13 +6,12 @@ use crate::{
         MEM_COST_DENOMINATOR, MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO,
         UTXO_COST_PER_BYTE, get_config,
     },
-    register::Register,
-    schnorr,
 };
 use pallas_addresses::Address;
 use pallas_crypto::hash::Hash;
 use pallas_primitives::Fragment;
 use pallas_txbuilder::{Input, Output};
+use seedelf_crypto::{register::Register, schnorr};
 use serde_json::Value;
 
 /// Calculates the minimum required UTXO for a given output.

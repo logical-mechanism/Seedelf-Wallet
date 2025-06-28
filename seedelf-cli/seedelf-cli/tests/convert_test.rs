@@ -1,6 +1,6 @@
 use seedelf_cli::address::dapp_address;
 use seedelf_cli::convert;
-use seedelf_cli::schnorr::random_scalar;
+use seedelf_crypto::schnorr::random_scalar;
 
 #[test]
 fn create_address_from_scalar() {
