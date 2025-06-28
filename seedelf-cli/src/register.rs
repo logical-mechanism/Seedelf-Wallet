@@ -161,4 +161,29 @@ impl Register {
 
         hex::encode(g_x.to_compressed()) == self.public_value
     }
+
+    pub fn is_valid(&self) -> bool {
+        // Decode and decompress generator
+        let g1: G1Affine = G1Affine::from_compressed(
+            &hex::decode(&self.generator)
+                .expect("Failed to decode generator hex")
+                .try_into()
+                .expect("Invalid generator length"),
+        )
+        .expect("Failed to decompress generator");
+
+        // Decode and decompress public_value
+        let u: G1Affine = G1Affine::from_compressed(
+            &hex::decode(&self.public_value)
+                .expect("Failed to decode public value hex")
+                .try_into()
+                .expect("Invalid public value length"),
+        )
+        .expect("Failed to decompress public value");
+
+        g1.is_on_curve().into()
+            && g1.is_torsion_free().into()
+            && u.is_on_curve().into()
+            && u.is_torsion_free().into()
+    }
 }

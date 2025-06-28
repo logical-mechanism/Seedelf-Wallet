@@ -39,6 +39,22 @@ pub struct MintArgs {
         display_order = 1
     )]
     label: Option<String>,
+
+    #[arg(
+        short = 'g',
+        long,
+        help = "A generator point in G1.",
+        display_order = 2
+    )]
+    generator: Option<String>,
+
+    #[arg(
+        short = 'p',
+        long,
+        help = "A public value computed as `generator * sk`",
+        display_order = 3
+    )]
+    public_value: Option<String>,
 }
 
 pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(), String> {
