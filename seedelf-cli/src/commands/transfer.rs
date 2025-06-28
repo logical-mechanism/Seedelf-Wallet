@@ -17,7 +17,7 @@ use seedelf_cli::constants::{
 use seedelf_cli::data_structures;
 use seedelf_cli::display;
 use seedelf_cli::koios::{
-    evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
+    UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
@@ -78,6 +78,10 @@ pub struct TransforArgs {
         requires = "policy_id"
     )]
     amount: Option<Vec<u64>>,
+
+    /// Optional repeated 'txId#txIdx'
+    #[arg(long = "utxo", help = "The utxos to spend.", display_order = 6)]
+    utxos: Option<Vec<String>>,
 }
 
 pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<(), String> {
@@ -139,14 +143,32 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
 
-    let (seedelf_datum, usuable_utxos) =
+    let (seedelf_datum, usable_utxos) =
         utxos::find_seedelf_and_wallet_utxos(scalar, args.seedelf, network_flag, variant).await;
     // the extra 2.5 ADA should account for the change and fee
-    let usuable_utxos = utxos::select(usuable_utxos, lovelace_goal, selected_tokens.clone());
-    let (total_lovelace_found, tokens) = utxos::assets_of(usuable_utxos.clone());
+    let usable_utxos: Vec<UtxoResponse> = if args.utxos.is_none() {
+        utxos::select(usable_utxos, lovelace_goal, selected_tokens.clone())
+    } else {
+        // assumes the utxos hold the correct tokens else it will error downstream
+        match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
+            Ok(parsed) => utxos::filter_utxos(usable_utxos, parsed),
+            Err(e) => {
+                eprintln!("Unable To Parse UTxOs Error: {e}");
+                // nothing works if you are not spending anything, this could be an exit
+                Vec::new()
+            }
+        }
+    };
+
+    if usable_utxos.is_empty() {
+        return Err("No Usuable UTxOs Found".to_string());
+    }
+
+    // let usable_utxos = utxos::select(usable_utxos, lovelace_goal, selected_tokens.clone());
+    let (total_lovelace_found, tokens) = utxos::assets_of(usable_utxos.clone());
     let change_tokens: Assets = tokens.separate(selected_tokens.clone());
 
-    for utxo in usuable_utxos.clone() {
+    for utxo in usable_utxos.clone() {
         let this_input: Input = Input::new(
             pallas_crypto::hash::Hash::new(
                 hex::decode(utxo.tx_hash.clone())

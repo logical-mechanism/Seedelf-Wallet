@@ -57,7 +57,7 @@ pub async fn find_seedelf_and_wallet_utxos(
         std::process::exit(1);
     });
 
-    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
+    let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
     let mut number_of_utxos: u64 = 0;
 
     let mut seedelf_datum: Option<Register> = None;
@@ -96,7 +96,7 @@ pub async fn find_seedelf_and_wallet_utxos(
                                 println!("Maximum UTxOs");
                                 break;
                             }
-                            usuable_utxos.push(utxo);
+                            usable_utxos.push(utxo);
                             number_of_utxos += 1;
                         }
                     }
@@ -108,7 +108,7 @@ pub async fn find_seedelf_and_wallet_utxos(
             std::process::exit(1);
         }
     }
-    (seedelf_datum, usuable_utxos)
+    (seedelf_datum, usable_utxos)
 }
 
 /// Find a specific seedelf.
@@ -161,7 +161,7 @@ pub async fn collect_wallet_utxos(
     });
     let mut number_of_utxos: u64 = 0;
 
-    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
+    let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
 
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
@@ -178,7 +178,7 @@ pub async fn collect_wallet_utxos(
                                 println!("Maximum UTxOs");
                                 break;
                             }
-                            usuable_utxos.push(utxo);
+                            usable_utxos.push(utxo);
                             number_of_utxos += 1;
                         }
                     }
@@ -190,12 +190,12 @@ pub async fn collect_wallet_utxos(
             std::process::exit(1);
         }
     }
-    usuable_utxos
+    usable_utxos
 }
 
 /// Collect all the address utxos that are not an assumed collateral utxo.
 pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<UtxoResponse> {
-    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
+    let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
     // This should probably be some generalized function later
     match address_utxos(address, network_flag).await {
         Ok(utxos) => {
@@ -208,7 +208,7 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
                         // its probably a collateral utxo
                     } else {
                         // its probably not a collateral utxo
-                        usuable_utxos.push(utxo);
+                        usable_utxos.push(utxo);
                     }
                 }
             }
@@ -218,18 +218,18 @@ pub async fn collect_address_utxos(address: &str, network_flag: bool) -> Vec<Utx
             std::process::exit(1);
         }
     }
-    usuable_utxos
+    usable_utxos
 }
 
 /// Collect all the address utxos that are not an assumed collateral utxo.
 pub async fn collect_all_address_utxos(address: &str, network_flag: bool) -> Vec<UtxoResponse> {
-    let mut usuable_utxos: Vec<UtxoResponse> = Vec::new();
+    let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
     // This should probably be some generalized function later
     match address_utxos(address, network_flag).await {
         Ok(utxos) => {
             // loop all the utxos found from the address
             for utxo in utxos {
-                usuable_utxos.push(utxo);
+                usable_utxos.push(utxo);
             }
         }
         Err(err) => {
@@ -237,7 +237,7 @@ pub async fn collect_all_address_utxos(address: &str, network_flag: bool) -> Vec
             std::process::exit(1);
         }
     }
-    usuable_utxos
+    usable_utxos
 }
 
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
@@ -453,4 +453,35 @@ pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
             std::process::exit(1);
         }
     }
+}
+
+pub fn parse_tx_utxos(utxos: Vec<String>) -> Result<Vec<(String, u64)>, String> {
+    utxos
+        .into_iter()
+        .map(|s| {
+            let parts: Vec<&str> = s.split('#').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid input format: {}", s));
+            }
+
+            let tx_hash = parts[0].to_string();
+            let index = parts[1]
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid index in input: {}", s))?;
+
+            Ok((tx_hash, index))
+        })
+        .collect()
+}
+
+pub fn filter_utxos(utxos: Vec<UtxoResponse>, targets: Vec<(String, u64)>) -> Vec<UtxoResponse> {
+    // For fast lookup, convert to a HashSet
+    use std::collections::HashSet;
+
+    let target_set: HashSet<(String, u64)> = targets.into_iter().collect();
+
+    utxos
+        .into_iter()
+        .filter(|u| target_set.contains(&(u.tx_hash.clone(), u.tx_index)))
+        .collect()
 }

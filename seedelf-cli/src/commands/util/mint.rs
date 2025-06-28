@@ -57,6 +57,10 @@ pub struct MintArgs {
         requires = "generator"
     )]
     public_value: Option<String>,
+
+    /// Optional repeated 'txId#txIdx'
+    #[arg(long = "utxo", help = "The utxos to spend.", display_order = 4)]
+    utxos: Option<Vec<String>>,
 }
 
 pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(), String> {
@@ -90,15 +94,27 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
 
     let owned_utxos: Vec<UtxoResponse> =
         utxos::collect_wallet_utxos(scalar, network_flag, variant).await;
-    let usuable_utxos: Vec<UtxoResponse> =
-        utxos::select(owned_utxos, lovelace_goal, Assets::default());
 
-    if usuable_utxos.is_empty() {
-        return Err("Not Enough Lovelace".to_string());
+    let usable_utxos: Vec<UtxoResponse> = if args.utxos.is_none() {
+        utxos::select(owned_utxos, lovelace_goal, Assets::default())
+    } else {
+        // assumes the utxos hold the correct tokens else it will error downstream
+        match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
+            Ok(parsed) => utxos::filter_utxos(owned_utxos, parsed),
+            Err(e) => {
+                eprintln!("Unable To Parse UTxOs Error: {e}");
+                // nothing works if you are not spending anything, this could be an exit
+                Vec::new()
+            }
+        }
+    };
+
+    if usable_utxos.is_empty() {
+        return Err("No Usuable UTxOs Found".to_string());
     }
-    let (total_lovelace, change_tokens) = utxos::assets_of(usuable_utxos.clone());
+    let (total_lovelace, change_tokens) = utxos::assets_of(usable_utxos.clone());
 
-    for utxo in usuable_utxos.clone() {
+    for utxo in usable_utxos.clone() {
         let this_input: Input = Input::new(
             pallas_crypto::hash::Hash::new(
                 hex::decode(utxo.tx_hash.clone())
