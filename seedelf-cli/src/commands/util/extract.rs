@@ -117,12 +117,11 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             std::process::exit(1);
         }
     }
-    let usuable_utxos: Vec<UtxoResponse> =
-        utxos::select(all_utxos, minimum_lovelace, Assets::new());
-    if usuable_utxos.is_empty() {
+    let usable_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, minimum_lovelace, Assets::new());
+    if usable_utxos.is_empty() {
         return Err("Not Enough Lovelace/Tokens".to_string());
     }
-    let (addr_lovelace, addr_tokens) = utxos::assets_of(usuable_utxos.clone());
+    let (addr_lovelace, addr_tokens) = utxos::assets_of(usable_utxos.clone());
 
     let total_lovelace: u64 = addr_lovelace + empty_utxo_lovelace;
     let total_tokens: Assets = addr_tokens.merge(empty_utxo_tokens);
@@ -151,7 +150,7 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
         }),
     );
 
-    for utxo in usuable_utxos.clone() {
+    for utxo in usable_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
             pallas_crypto::hash::Hash::new(
