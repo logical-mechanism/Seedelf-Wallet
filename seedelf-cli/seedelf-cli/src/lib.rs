@@ -1,4 +1,3 @@
-pub mod address;
 pub mod data_structures;
 pub mod display;
 pub mod koios;

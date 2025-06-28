@@ -1,4 +1,4 @@
-use seedelf_cli::address;
+use seedelf_core::address;
 
 #[test]
 fn test_preprod_wallet_contract() {

@@ -1,8 +1,8 @@
-use crate::address;
 use pallas_addresses::Address;
 use pallas_crypto::hash::Hash;
 use pallas_primitives::Fragment;
 use pallas_txbuilder::{Input, Output};
+use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::{
     CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, Config, MAINNET_COLLATERAL_UTXO,

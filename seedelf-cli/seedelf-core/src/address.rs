@@ -1,9 +1,9 @@
+use crate::constants::{
+    COLLATERAL_HASH, Config, MAINNET_STAKE_HASH, PREPROD_STAKE_HASH, get_config,
+};
 use pallas_addresses::{
     Address, Network, PaymentKeyHash, ScriptHash, ShelleyAddress, ShelleyDelegationPart,
     ShelleyPaymentPart, StakeKeyHash,
-};
-use seedelf_core::constants::{
-    COLLATERAL_HASH, Config, MAINNET_STAKE_HASH, PREPROD_STAKE_HASH, get_config,
 };
 
 /// Returns the [LOGIC] stake used during address generation
