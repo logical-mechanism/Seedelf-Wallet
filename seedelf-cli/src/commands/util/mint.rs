@@ -39,6 +39,24 @@ pub struct MintArgs {
         display_order = 1
     )]
     label: Option<String>,
+
+    #[arg(
+        short = 'g',
+        long,
+        help = "A generator point in G1.",
+        display_order = 2,
+        requires = "public_value"
+    )]
+    generator: Option<String>,
+
+    #[arg(
+        short = 'p',
+        long,
+        help = "A public value computed as `generator * sk`",
+        display_order = 3,
+        requires = "generator"
+    )]
+    public_value: Option<String>,
 }
 
 pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(), String> {
@@ -114,7 +132,22 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
         min_utxo.to_string().bright_white()
     );
 
-    let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+    // this is the new seedelf datum
+    let datum_vector: Vec<u8> = if args.generator.is_none() && args.public_value.is_none() {
+        Register::create(scalar).rerandomize().to_vec()
+    } else {
+        // both have to be some to get to this point
+        // requires should catch the mix cases
+        let new_register: Register = Register::new(
+            args.generator.unwrap_or_default(),
+            args.public_value.unwrap_or_default(),
+        );
+        if new_register.is_valid() {
+            new_register.to_vec()
+        } else {
+            return Err("Provided Register Is Invalid".to_string());
+        }
+    };
     let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone());
 
     let seedelf_output: Output = Output::new(wallet_addr.clone(), min_utxo)
