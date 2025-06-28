@@ -188,7 +188,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         {
             Ok(execution_units) => {
                 if let Some(_error) = execution_units.get("error") {
-                    println!("Error: {:?}", execution_units);
+                    println!("Error: {execution_units:?}");
                     std::process::exit(1);
                 }
                 let spend_cpu_units: u64 = execution_units
@@ -216,7 +216,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                 )
             }
             Err(err) => {
-                eprintln!("Failed to evaluate transaction: {}", err);
+                eprintln!("Failed to evaluate transaction: {err}");
                 std::process::exit(1);
             }
         };
@@ -332,7 +332,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
             match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
                 Ok(response) => {
                     if let Some(_error) = response.get("contents") {
-                        println!("\nError: {}", response);
+                        println!("\nError: {response}");
                         std::process::exit(1);
                     }
                     println!("\nTransaction Successfully Submitted!");
@@ -361,16 +361,13 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                     }
                 }
                 Err(err) => {
-                    eprintln!("Failed to submit tx: {}", err);
+                    eprintln!("Failed to submit tx: {err}");
                     std::process::exit(1);
                 }
             }
         }
         Err(err) => {
-            eprintln!(
-                "Failed to fetch UTxOs: {}\nWait a few moments and try again.",
-                err
-            );
+            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
             std::process::exit(1);
         }
     }

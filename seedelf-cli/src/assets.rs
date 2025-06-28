@@ -295,7 +295,7 @@ impl Assets {
 pub fn string_to_u64(input: String) -> Result<u64, String> {
     match input.parse::<u64>() {
         Ok(value) => Ok(value),
-        Err(e) => Err(format!("Failed to convert: {}", e)),
+        Err(err) => Err(format!("Failed to convert: {err}")),
     }
 }
 

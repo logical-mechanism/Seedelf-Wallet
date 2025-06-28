@@ -50,7 +50,7 @@ pub fn check_and_prepare_seedelf() {
     if contents.is_empty() {
         // Prompt the user for a wallet name
         let wallet_name = prompt_wallet_name();
-        let wallet_file_path = seedelf_path.join(format!("{}.wallet", wallet_name));
+        let wallet_file_path = seedelf_path.join(format!("{wallet_name}.wallet"));
         create_wallet(&wallet_file_path);
     } else {
         for entry in &contents {

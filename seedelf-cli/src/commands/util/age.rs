@@ -29,22 +29,22 @@ fn format_duration(seconds: i64) -> String {
 
     let mut parts: Vec<String> = Vec::new();
     if years > 0 {
-        parts.push(format!("{} years", years));
+        parts.push(format!("{years} years"));
     }
     if weeks > 0 {
-        parts.push(format!("{} weeks", weeks));
+        parts.push(format!("{weeks} weeks"));
     }
     if days > 0 {
-        parts.push(format!("{} days", days));
+        parts.push(format!("{days} days"));
     }
     if hours > 0 {
-        parts.push(format!("{} hours", hours));
+        parts.push(format!("{hours} hours"));
     }
     if minutes > 0 {
-        parts.push(format!("{} mins", minutes));
+        parts.push(format!("{minutes} mins"));
     }
     if seconds > 0 {
-        parts.push(format!("{} secs", seconds));
+        parts.push(format!("{seconds} secs"));
     }
 
     if parts.is_empty() {

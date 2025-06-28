@@ -285,14 +285,14 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         {
             Ok(execution_units) => {
                 if let Some(_error) = execution_units.get("error") {
-                    println!("{:?}", execution_units);
+                    println!("{execution_units:?}");
                     std::process::exit(1);
                 }
                 let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
                 budgets
             }
             Err(err) => {
-                eprintln!("Failed to evaluate transaction: {}", err);
+                eprintln!("Failed to evaluate transaction: {err}");
                 std::process::exit(1);
             }
         };
@@ -438,7 +438,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
             match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
                 Ok(response) => {
                     if let Some(_error) = response.get("contents") {
-                        println!("\nError: {}", response);
+                        println!("\nError: {response}");
                         std::process::exit(1);
                     }
                     println!("\nTransaction Successfully Submitted!");
@@ -467,13 +467,13 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
                     }
                 }
                 Err(err) => {
-                    eprintln!("Failed to submit tx: {}", err);
+                    eprintln!("Failed to submit tx: {err}");
                     std::process::exit(1);
                 }
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {}", err);
+            eprintln!("Failed to fetch UTxOs: {err}");
             std::process::exit(1);
         }
     }

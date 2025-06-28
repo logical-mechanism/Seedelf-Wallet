@@ -14,7 +14,7 @@ pub async fn run_web_server(message: String, network_flag: bool) {
     println!(
         "{} {}",
         "\nStarting server at".bright_cyan(),
-        format!("http://{}/", addr).bright_white()
+        format!("http://{addr}/").bright_white()
     );
     println!("{}", "Hit Ctrl-C To Stop Server".bright_yellow());
 
@@ -28,7 +28,7 @@ pub async fn run_web_server(message: String, network_flag: bool) {
             .expect("Failed to read HTML")
             .to_string();
         // Replace the JSON content inside the injected-data script
-        let dynamic_json = format!(r#"{{ "message": "{}" }}"#, message);
+        let dynamic_json = format!(r#"{{ "message": "{message}" }}"#);
         html = html.replace(r#"{ "message": "ACAB000000000000" }"#, &dynamic_json);
         if network_flag {
             html = html.replace(

@@ -34,7 +34,7 @@ pub struct BlockchainTip {
 /// * `Err(Error)` - If the API request or JSON parsing fails.
 pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{}.koios.rest/api/v1/tip", network);
+    let url: String = format!("https://{network}.koios.rest/api/v1/tip");
 
     // Make the GET request and parse the JSON response
     let response: Vec<BlockchainTip> = reqwest::get(&url)
@@ -105,7 +105,7 @@ pub async fn credential_utxos(
 ) -> Result<Vec<UtxoResponse>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     // this is searching the wallet contract. We have to collect the entire utxo set to search it.
-    let url: String = format!("https://{}.koios.rest/api/v1/credential_utxos", network);
+    let url: String = format!("https://{network}.koios.rest/api/v1/credential_utxos");
     let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
@@ -170,7 +170,7 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
     // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
     // if you have 1000 utxos in that wallets that cannot pay for anything then something
     // is wrong in that wallet
-    let url: String = format!("https://{}.koios.rest/api/v1/address_utxos", network);
+    let url: String = format!("https://{network}.koios.rest/api/v1/address_utxos");
     let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
@@ -305,7 +305,7 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
         }
     });
 
-    let url: String = format!("https://{}.koios.rest/api/v1/ogmios", network);
+    let url: String = format!("https://{network}.koios.rest/api/v1/ogmios");
     let client: Client = reqwest::Client::new();
 
     // Make the POST request
@@ -343,7 +343,7 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
 /// it to the specified API endpoint using a POST request.
 pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
     let network: &str = if network_flag { "preprod" } else { "mainnet" };
-    let url: String = format!("https://www.giveme.my/{}/collateral/", network);
+    let url: String = format!("https://www.giveme.my/{network}/collateral/");
     let client: Client = reqwest::Client::new();
 
     let payload: Value = serde_json::json!({
@@ -385,7 +385,7 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
 /// - Sends the binary data as the body of a POST request with `Content-Type: application/cbor`.
 pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{}.koios.rest/api/v1/submittx", network);
+    let url: String = format!("https://{network}.koios.rest/api/v1/submittx");
     let client: Client = reqwest::Client::new();
 
     // Decode the hex string into binary data
@@ -414,11 +414,7 @@ pub async fn ada_handle_address(
         hex::encode(asset_name.clone())
     };
     let url: String = format!(
-        "https://{}.koios.rest/api/v1/asset_nft_address?_asset_policy={}&_asset_name={}",
-        network,
-        ADA_HANDLE_POLICY_ID,
-        // some have the 222 prefix
-        token_name
+        "https://{network}.koios.rest/api/v1/asset_nft_address?_asset_policy={ADA_HANDLE_POLICY_ID}&_asset_name={token_name}",
     );
     let client: Client = reqwest::Client::new();
 
@@ -429,7 +425,7 @@ pub async fn ada_handle_address(
         .await
     {
         Ok(resp) => resp,
-        Err(err) => return Err(format!("HTTP request failed: {}", err)),
+        Err(err) => return Err(format!("HTTP request failed: {err}")),
     };
 
     let outcome: Value = response.json().await.unwrap();
@@ -474,7 +470,7 @@ pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoRespons
     // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
     // if you have 1000 utxos in that wallets that cannot pay for anything then something
     // is wrong in that wallet
-    let url: String = format!("https://{}.koios.rest/api/v1/utxo_info", network);
+    let url: String = format!("https://{network}.koios.rest/api/v1/utxo_info");
     let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
@@ -504,7 +500,7 @@ pub async fn nft_utxo(
     network_flag: bool,
 ) -> Result<Vec<UtxoResponse>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{}.koios.rest/api/v1/asset_utxos", network);
+    let url: String = format!("https://{network}.koios.rest/api/v1/asset_utxos");
     let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
@@ -544,7 +540,7 @@ pub async fn datum_from_datum_hash(
     network_flag: bool,
 ) -> Result<Vec<ResolvedDatum>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{}.koios.rest/api/v1/datum_info", network);
+    let url: String = format!("https://{network}.koios.rest/api/v1/datum_info");
     let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
@@ -581,8 +577,7 @@ pub async fn asset_history(
 ) -> Result<Vec<History>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!(
-        "https://{}.koios.rest/api/v1/asset_txs?_asset_policy={}&_asset_name={}&_after_block_height=50000&_history=true&limit={}",
-        network, policy_id, token_name, limit
+        "https://{network}.koios.rest/api/v1/asset_txs?_asset_policy={policy_id}&_asset_name={token_name}&_after_block_height=50000&_history=true&limit={limit}"
     );
     let client: Client = reqwest::Client::new();
 
@@ -677,9 +672,9 @@ pub async fn address_transactions(
     address: String,
 ) -> Result<Vec<TxResponse>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let address_tx_url: String = format!("https://{}.koios.rest/api/v1/address_txs", network);
+    let address_tx_url: String = format!("https://{network}.koios.rest/api/v1/address_txs");
 
-    let tx_info_url: String = format!("https://{}.koios.rest/api/v1/tx_info", network);
+    let tx_info_url: String = format!("https://{network}.koios.rest/api/v1/tx_info");
     let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
