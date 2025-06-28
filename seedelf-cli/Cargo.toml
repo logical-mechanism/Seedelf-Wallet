@@ -1,5 +1,5 @@
 [workspace]
 resolver = "3"
 members = [
-    "seedelf-cli", "seedelf-crypto"
+    "seedelf-cli", "seedelf-core", "seedelf-crypto"
 ]
