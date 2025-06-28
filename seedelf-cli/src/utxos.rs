@@ -454,3 +454,34 @@ pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
         }
     }
 }
+
+pub fn parse_tx_utxos(utxos: Vec<String>) -> Result<Vec<(String, u64)>, String> {
+    utxos
+        .into_iter()
+        .map(|s| {
+            let parts: Vec<&str> = s.split('#').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid input format: {}", s));
+            }
+
+            let tx_hash = parts[0].to_string();
+            let index = parts[1]
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid index in input: {}", s))?;
+
+            Ok((tx_hash, index))
+        })
+        .collect()
+}
+
+pub fn filter_utxos(utxos: Vec<UtxoResponse>, targets: Vec<(String, u64)>) -> Vec<UtxoResponse> {
+    // For fast lookup, convert to a HashSet
+    use std::collections::HashSet;
+
+    let target_set: HashSet<(String, u64)> = targets.into_iter().collect();
+
+    utxos
+        .into_iter()
+        .filter(|u| target_set.contains(&(u.tx_hash.clone(), u.tx_index)))
+        .collect()
+}

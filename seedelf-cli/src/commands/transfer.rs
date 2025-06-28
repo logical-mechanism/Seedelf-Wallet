@@ -78,6 +78,10 @@ pub struct TransforArgs {
         requires = "policy_id"
     )]
     amount: Option<Vec<u64>>,
+
+    /// Optional repeated 'txId#txIdx'
+    #[arg(long = "utxos", help = "The utxos to spend.", display_order = 6)]
+    utxos: Option<Vec<String>>,
 }
 
 pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<(), String> {
@@ -142,7 +146,18 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     let (seedelf_datum, usuable_utxos) =
         utxos::find_seedelf_and_wallet_utxos(scalar, args.seedelf, network_flag, variant).await;
     // the extra 2.5 ADA should account for the change and fee
-    let usuable_utxos = utxos::select(usuable_utxos, lovelace_goal, selected_tokens.clone());
+    let usuable_utxos = if args.utxos.is_none() {
+        utxos::select(usuable_utxos, lovelace_goal, selected_tokens.clone())
+    } else {
+        match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
+            Ok(parsed) => utxos::filter_utxos(usuable_utxos, parsed),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                Vec::new()
+            }
+        }
+    };
+    // let usuable_utxos = utxos::select(usuable_utxos, lovelace_goal, selected_tokens.clone());
     let (total_lovelace_found, tokens) = utxos::assets_of(usuable_utxos.clone());
     let change_tokens: Assets = tokens.separate(selected_tokens.clone());
 

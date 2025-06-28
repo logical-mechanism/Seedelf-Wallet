@@ -36,3 +36,15 @@ async fn find_nft_and_ada() {
         println!("nft {:?}", string_to_u64(utxo.value));
     }
 }
+
+#[test]
+fn parse_utxos_correct() {
+    let inputs = vec![
+        "f33b03d7230e333fb8f26a09b428ab1b3cb6074b1432e773aac353574f29e888#2".to_string(),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#0".to_string(),
+    ];
+    let parsed = utxos::parse_tx_utxos(inputs).unwrap();
+    println!("{parsed:?}");
+
+    assert_eq!(parsed.len(), 2)
+}
