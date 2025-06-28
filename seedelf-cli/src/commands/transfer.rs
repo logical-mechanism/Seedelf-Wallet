@@ -17,7 +17,7 @@ use seedelf_cli::constants::{
 use seedelf_cli::data_structures;
 use seedelf_cli::display;
 use seedelf_cli::koios::{
-    evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
+    UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
 };
 use seedelf_cli::register::Register;
 use seedelf_cli::schnorr::create_proof;
@@ -146,7 +146,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     let (seedelf_datum, usable_utxos) =
         utxos::find_seedelf_and_wallet_utxos(scalar, args.seedelf, network_flag, variant).await;
     // the extra 2.5 ADA should account for the change and fee
-    let usable_utxos = if args.utxos.is_none() {
+    let usable_utxos: Vec<UtxoResponse> = if args.utxos.is_none() {
         utxos::select(usable_utxos, lovelace_goal, selected_tokens.clone())
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
