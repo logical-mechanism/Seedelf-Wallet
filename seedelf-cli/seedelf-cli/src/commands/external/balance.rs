@@ -3,11 +3,11 @@ use colored::Colorize;
 use pallas_addresses::Address;
 use reqwest::Error;
 use seedelf_cli::address;
-use seedelf_cli::convert;
 use seedelf_cli::display;
 use seedelf_cli::koios::UtxoResponse;
 use seedelf_cli::setup;
 use seedelf_cli::utxos;
+use seedelf_crypto::convert;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
     display::is_their_an_update().await;
