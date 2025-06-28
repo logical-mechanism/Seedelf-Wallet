@@ -53,7 +53,9 @@ pub struct TransforArgs {
     #[arg(
         long = "policy-id",
         help = "The policy id for the asset.",
-        display_order = 3
+        display_order = 3,
+        requires = "token_name",
+        requires = "amount"
     )]
     policy_id: Option<Vec<String>>,
 
@@ -61,12 +63,20 @@ pub struct TransforArgs {
     #[arg(
         long = "token-name",
         help = "The token name for the asset.",
-        display_order = 4
+        display_order = 4,
+        requires = "policy_id",
+        requires = "amount"
     )]
     token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
-    #[arg(long = "amount", help = "The amount for the asset.", display_order = 5)]
+    #[arg(
+        long = "amount",
+        help = "The amount for the asset.",
+        display_order = 5,
+        requires = "token_name",
+        requires = "policy_id"
+    )]
     amount: Option<Vec<u64>>,
 }
 

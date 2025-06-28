@@ -8,12 +8,12 @@ pub async fn run() {
         "\nWelcome to seedelf-cli!".bright_white(),
         "A command line interface for the Seedelf stealth wallet protocol.".bright_yellow()
     );
-    println!("{}", "\nThe Seedelf wallet is a stealth wallet protocol that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation.".bright_green());
+    println!("{}", "\nThe Seedelf wallet is a stealth wallet protocol that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol.".bright_green());
     println!("\n 😀\n");
     println!(
         "{}\n\n{}",
         "Start your journey by creating a seedelf with the cli command:".bright_purple(),
-        "seedelf-cli create --address <ADDRESS>".bright_cyan()
+        "seedelf-cli create --address <CIP30_ADDRESS>".bright_cyan()
     );
     println!(
         "\n{} {}",

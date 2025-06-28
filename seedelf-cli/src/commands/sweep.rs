@@ -62,7 +62,9 @@ pub struct SweepArgs {
     #[arg(
         long = "policy-id",
         help = "The policy id for the asset.",
-        display_order = 4
+        display_order = 4,
+        requires = "token_name",
+        requires = "amount"
     )]
     policy_id: Option<Vec<String>>,
 
@@ -70,12 +72,20 @@ pub struct SweepArgs {
     #[arg(
         long = "token-name",
         help = "The token name for the asset.",
-        display_order = 5
+        display_order = 5,
+        requires = "policy_id",
+        requires = "amount"
     )]
     token_name: Option<Vec<String>>,
 
     /// Optional repeated `amount`
-    #[arg(long = "amount", help = "The amount for the asset.", display_order = 6)]
+    #[arg(
+        long = "amount",
+        help = "The amount for the asset.",
+        display_order = 6,
+        requires = "token_name",
+        requires = "policy_id"
+    )]
     amount: Option<Vec<u64>>,
 
     /// Optional ADA Handle
