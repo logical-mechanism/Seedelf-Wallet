@@ -136,7 +136,8 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     let datum_vector: Vec<u8> = if args.generator.is_none() && args.public_value.is_none() {
         Register::create(scalar).rerandomize().to_vec()
     } else {
-        // both have to be some
+        // both have to be some to get to this point
+        // requires should catch the mix cases
         let new_register: Register = Register::new(
             args.generator.unwrap_or_default(),
             args.public_value.unwrap_or_default(),
