@@ -13,17 +13,18 @@ pub struct FindArgs {
         help = "The seedelf label / personal tag.",
         display_order = 1
     )]
-    label: String,
+    label: Option<String>,
 }
 
 pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<(), String> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
+    let label: String = args.label.unwrap_or_default();
     println!(
         "\n{} {}",
         "Finding All Seedelfs Containing:".bright_blue(),
-        args.label.bright_green()
+        label.bright_green()
     );
-    find_and_print_all_seedelfs(args.label, network_flag, variant).await;
+    find_and_print_all_seedelfs(label, network_flag, variant).await;
     Ok(())
 }
