@@ -80,7 +80,7 @@ pub struct TransforArgs {
     amount: Option<Vec<u64>>,
 
     /// Optional repeated 'txId#txIdx'
-    #[arg(long = "utxos", help = "The utxos to spend.", display_order = 6)]
+    #[arg(long = "utxo", help = "The utxos to spend.", display_order = 6)]
     utxos: Option<Vec<String>>,
 }
 
