@@ -1,8 +1,8 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use hex;
 use pallas_crypto::hash::Hash;
 use serde::{Deserialize, Serialize};
-use std::num::ParseIntError;
+
 /// Represents an asset in the Cardano blockchain.
 ///
 /// An `Asset` is identified by a `policy_id` and a `token_name`, and it tracks
@@ -30,7 +30,7 @@ impl Asset {
                     .try_into()
                     .map_err(|e| anyhow::anyhow!("{e}"))?,
             ),
-            token_name: hex::decode(token_name).unwrap(),
+            token_name: hex::decode(token_name).context("Can't Decode Token Name")?,
             amount,
         })
     }
@@ -103,7 +103,7 @@ impl Asset {
                 .try_into()
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
         );
-        let tkn = hex::decode(token_name).unwrap();
+        let tkn = hex::decode(token_name).context("Can't Decode Token Name")?;
         if self.policy_id == pid && self.token_name == tkn {
             Ok(Some(self.amount))
         } else {
@@ -139,16 +139,16 @@ impl Assets {
     /// # Returns
     ///
     /// * A new `Assets` instance with the updated list of assets.
-    pub fn add(&self, other: Asset) -> Self {
+    pub fn add(&self, other: Asset) -> Result<Self> {
         let mut new_items: Vec<Asset> = self.items.clone();
         if let Some(existing) = new_items.iter_mut().find(|existing| {
             existing.policy_id == other.policy_id && existing.token_name == other.token_name
         }) {
-            *existing = existing.add(&other).unwrap();
+            *existing = existing.add(&other).context("Can't Add Asset To Assets")?;
         } else {
             new_items.push(other);
         }
-        Self { items: new_items }
+        Ok(Self { items: new_items })
     }
 
     /// Subtracts an asset from the collection, removing it if the amount becomes zero.
@@ -160,16 +160,18 @@ impl Assets {
     /// # Returns
     ///
     /// * A new `Assets` instance with updated asset amounts.
-    pub fn sub(&self, other: Asset) -> Self {
+    pub fn sub(&self, other: Asset) -> Result<Self> {
         let mut new_items: Vec<Asset> = self.items.clone();
         if let Some(existing) = new_items.iter_mut().find(|existing| {
             existing.policy_id == other.policy_id && existing.token_name == other.token_name
         }) {
-            *existing = existing.sub(&other).unwrap();
+            *existing = existing
+                .sub(&other)
+                .context("Can't Subtract Asset From Assets")?;
         } else {
             new_items.push(other);
         }
-        Self { items: new_items }.remove_zero_amounts()
+        Ok(Self { items: new_items }.remove_zero_amounts())
     }
 
     /// Removes assets with zero amounts from the collection.
@@ -239,25 +241,27 @@ impl Assets {
     }
 
     /// Merges two collections of assets, combining amounts of matching assets.
-    pub fn merge(&self, other: Assets) -> Self {
+    pub fn merge(&self, other: Assets) -> Result<Self> {
         let mut merged: Assets = self.clone(); // Clone the current `Assets` as a starting point
 
         for other_asset in other.items {
-            merged = merged.add(other_asset); // Use `add` to handle merging logic
+            merged = merged.add(other_asset).context("Can't Merge Assets")?; // Use `add` to handle merging logic
         }
 
-        merged
+        Ok(merged)
     }
 
     /// Separates two collections of assets, subtracting amounts of matching assets.
-    pub fn separate(&self, other: Assets) -> Self {
+    pub fn separate(&self, other: Assets) -> Result<Self> {
         let mut separated: Assets = self.clone(); // Clone the current `Assets` as a starting point
 
         for other_asset in other.items {
-            separated = separated.sub(other_asset); // Use `add` to handle merging logic
+            separated = separated
+                .sub(other_asset)
+                .context("Can't Separate Assets")?; // Use `add` to handle merging logic
         }
 
-        separated
+        Ok(separated)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -288,8 +292,8 @@ impl Assets {
 ///
 /// * `Ok(u64)` - If the conversion is successful.
 /// * `Err(String)` - If the conversion fails.
-pub fn string_to_u64(input: String) -> Result<u64, ParseIntError> {
-    input.parse::<u64>()
+pub fn string_to_u64(input: String) -> Result<u64> {
+    input.parse::<u64>().context("Failed To Parse u64")
 }
 
 pub fn asset_id_to_asset(asset_id: String) -> Result<Asset> {

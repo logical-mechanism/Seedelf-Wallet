@@ -9,7 +9,7 @@ use rand_core::OsRng;
 use seedelf_cli::setup;
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
-use seedelf_core::constants::MAXIMUM_TOKENS_PER_UTXO;
+use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};
 use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_core::utxos;
 use seedelf_crypto::convert;
@@ -22,7 +22,13 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     display::preprod_text(network_flag);
     println!("\n{}", "Sweeping All External UTxOs".bright_blue(),);
 
-    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
+
+    let wallet_addr: Address =
+        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();

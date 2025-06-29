@@ -28,14 +28,16 @@ async fn find_nft_and_ada() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
     let utxo_vector = utxos::collect_address_utxos(every_utxo).unwrap();
-    let tokens: Assets = Assets::new().add(
-        Asset::new(
-            "b0cbd7cde289d6aa694214fcd95a39e7f3ef52fc94d1171664210677".to_string(),
-            "acab".to_string(),
-            1,
+    let tokens: Assets = Assets::new()
+        .add(
+            Asset::new(
+                "b0cbd7cde289d6aa694214fcd95a39e7f3ef52fc94d1171664210677".to_string(),
+                "acab".to_string(),
+                1,
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    );
+        .unwrap();
     let selected_utxos = utxos::select(utxo_vector, 5_000_000, tokens).unwrap();
 
     for utxo in selected_utxos {

@@ -4,6 +4,7 @@ use colored::Colorize;
 use pallas_addresses::Address;
 use seedelf_cli::setup;
 use seedelf_core::address;
+use seedelf_core::constants::{Config, get_config};
 use seedelf_display::display;
 use seedelf_koios::koios::TxResponse;
 use seedelf_koios::koios::address_transactions;
@@ -25,9 +26,14 @@ pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<
     display::preprod_text(network_flag);
 
     let scalar: Scalar = setup::load_wallet();
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
 
     println!("\n{}\n", "Getting History..".bright_blue(),);
-    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
+    let wallet_addr: Address =
+        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
     let txs: Vec<TxResponse> = address_transactions(network_flag, wallet_addr.to_string())
         .await
         .map_err(|e| e.to_string())?;

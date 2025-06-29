@@ -58,7 +58,8 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
     }
 
     // we need this as the address type and not the shelley
-    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
+    let wallet_addr: Address =
+        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();

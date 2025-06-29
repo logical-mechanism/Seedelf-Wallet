@@ -1,6 +1,6 @@
 use seedelf_core::address;
 use seedelf_core::assets::{Asset, asset_id_to_asset};
-use seedelf_core::constants::ADA_HANDLE_POLICY_ID;
+use seedelf_core::constants::{ADA_HANDLE_POLICY_ID, Config, get_config};
 use seedelf_koios::koios::{ada_handle_address, asset_history, datum_from_datum_hash, nft_utxo};
 use serde_json::Value;
 #[test]
@@ -18,8 +18,11 @@ fn tx_hash_result() {
 
 #[tokio::test]
 async fn find_ada_handle() {
+    let config: Config = get_config(1, false).unwrap();
     let name: String = "logic.mech".to_string();
-    let wallet_addr: String = address::wallet_contract(false, 1).to_bech32().unwrap();
+    let wallet_addr: String = address::wallet_contract(false, config.contract.wallet_contract_hash)
+        .to_bech32()
+        .unwrap();
     let payment_address =
         ada_handle_address(name, false, false, 1, wallet_addr, ADA_HANDLE_POLICY_ID)
             .await

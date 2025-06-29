@@ -217,20 +217,24 @@ pub fn do_select(
         if let Some(assets) = utxo.clone().asset_list {
             if !assets.is_empty() {
                 for token in assets.clone() {
-                    utxo_assets = utxo_assets.add(
-                        Asset::new(
-                            token.policy_id,
-                            token.asset_name,
-                            string_to_u64(token.quantity).context("Invalid Asset Amount")?,
+                    utxo_assets = utxo_assets
+                        .add(
+                            Asset::new(
+                                token.policy_id,
+                                token.asset_name,
+                                string_to_u64(token.quantity).context("Invalid Asset Amount")?,
+                            )
+                            .context("Invalid Asset")?,
                         )
-                        .context("Invalid Asset")?,
-                    );
+                        .context("Can't Add Assets")?;
                 }
                 // if this utxo has the assets we need but we haven't found it all yet then add it
                 if utxo_assets.any(tokens.clone()) && !found_assets.contains(tokens.clone()) {
                     selected_utxos.push(utxo.clone());
                     current_lovelace_sum += value;
-                    found_assets = found_assets.merge(utxo_assets.clone());
+                    found_assets = found_assets
+                        .merge(utxo_assets.clone())
+                        .context("Can't Merge Assets")?;
                     added = true;
                 }
             } else {
@@ -247,13 +251,17 @@ pub fn do_select(
         if !added && current_lovelace_sum < lovelace && found_assets.contains(tokens.clone()) {
             selected_utxos.push(utxo.clone());
             current_lovelace_sum += value;
-            found_assets = found_assets.merge(utxo_assets);
+            found_assets = found_assets
+                .merge(utxo_assets)
+                .context("Can't Merge Assets")?;
         }
 
         // we know we found enough lovelace and assets
         if current_lovelace_sum >= lovelace && found_assets.contains(tokens.clone()) {
             // but is it enough to account for the min ada for the token change as we will assume there will always be a change utxo
-            let change_assets: Assets = found_assets.separate(tokens.clone());
+            let change_assets: Assets = found_assets
+                .separate(tokens.clone())
+                .context("Can't Separate Assets")?;
             let number_of_change_assets: u64 = change_assets.len();
             let minimum: u64 = wallet_minimum_lovelace_with_assets(change_assets.clone())
                 .context("Invalid Minimum Lovelace")?;
@@ -309,10 +317,12 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> Result<(u64, Assets)> {
                         string_to_u64(token.quantity).context("Invalid Token Quantity")?,
                     )
                     .context("Fail To Construct Asset")?;
-                    utxo_assets = utxo_assets.add(new_asset);
+                    utxo_assets = utxo_assets.add(new_asset).context("Can't Add Assets")?;
                 }
 
-                found_assets = found_assets.merge(utxo_assets.clone());
+                found_assets = found_assets
+                    .merge(utxo_assets.clone())
+                    .context("Can't Merge Assets")?;
             }
         }
     }

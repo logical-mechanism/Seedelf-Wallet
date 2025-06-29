@@ -62,7 +62,9 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
                     return Err("UTxO has datum".to_string());
                 }
                 let utxo_addr: Address = Address::from_bech32(&empty_datum_utxo.address).unwrap();
-                if utxo_addr != address::wallet_contract(network_flag, variant) {
+                if utxo_addr
+                    != address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
+                {
                     return Err("UTxO not in wallet".to_string());
                 }
                 if empty_datum_utxo.is_spent {
@@ -138,7 +140,10 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     });
 
     let total_lovelace: u64 = addr_lovelace + empty_utxo_lovelace;
-    let total_tokens: Assets = addr_tokens.merge(empty_utxo_tokens);
+    let total_tokens: Assets = addr_tokens.merge(empty_utxo_tokens).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
 
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;

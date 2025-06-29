@@ -123,7 +123,10 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
                 eprintln!("{e}");
                 std::process::exit(1);
             });
-            selected_tokens = selected_tokens.add(new_asset);
+            selected_tokens = selected_tokens.add(new_asset).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
         }
     }
 
@@ -138,7 +141,8 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     }
 
     let collat_addr: Address = address::collateral_address(network_flag);
-    let wallet_addr: Address = address::wallet_contract(network_flag, variant);
+    let wallet_addr: Address =
+        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -197,7 +201,12 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
             eprintln!("{e}");
             std::process::exit(1);
         });
-    let change_tokens: Assets = tokens.separate(selected_tokens.clone());
+    let change_tokens: Assets = tokens
+        .separate(selected_tokens.clone())
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
 
     for utxo in usable_utxos.clone() {
         let this_input: Input = Input::new(

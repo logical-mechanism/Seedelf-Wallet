@@ -216,7 +216,7 @@ pub fn seedelf_minimum_lovelace() -> Result<u64> {
     ]
     .to_vec();
     let policy_id: [u8; 28] = hex!("84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255");
-    let staging_output: Output = Output::new(address::wallet_contract(true, 1), 5_000_000)
+    let staging_output: Output = Output::new(address::dummy_base_address(), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
                 .rerandomize()
@@ -246,7 +246,7 @@ pub fn seedelf_minimum_lovelace() -> Result<u64> {
 ///
 /// * `u64` - The minimum lovelace required for the transaction output.
 pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> Result<u64> {
-    let mut staging_output: Output = Output::new(address::wallet_contract(true, 1), 5_000_000)
+    let mut staging_output: Output = Output::new(address::dummy_base_address(), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
                 .rerandomize()

@@ -40,8 +40,8 @@ fn assets_can_add() {
     )
     .unwrap();
 
-    let total: Assets = Assets::new().add(a).add(b);
-    let answer: Assets = Assets::new().add(combined);
+    let total: Assets = Assets::new().add(a).unwrap().add(b).unwrap();
+    let answer: Assets = Assets::new().add(combined).unwrap();
 
     assert_eq!(total, answer)
 }
@@ -61,7 +61,7 @@ fn assets_can_sub() {
     )
     .unwrap();
 
-    let total: Assets = Assets::new().add(a).sub(b);
+    let total: Assets = Assets::new().add(a).unwrap().sub(b).unwrap();
     let answer: Assets = Assets::new();
 
     assert_eq!(total, answer)
@@ -88,7 +88,14 @@ fn assets_can_split1() {
     )
     .unwrap();
 
-    let total: Vec<Assets> = Assets::new().add(a).add(b).add(c).split(1);
+    let total: Vec<Assets> = Assets::new()
+        .add(a)
+        .unwrap()
+        .add(b)
+        .unwrap()
+        .add(c)
+        .unwrap()
+        .split(1);
     // Print the resulting parts
     for (i, part) in total.iter().enumerate() {
         println!("Part {}: {:?}", i + 1, part);
@@ -117,7 +124,14 @@ fn assets_can_split2() {
     )
     .unwrap();
 
-    let total: Vec<Assets> = Assets::new().add(a).add(b).add(c).split(3);
+    let total: Vec<Assets> = Assets::new()
+        .add(a)
+        .unwrap()
+        .add(b)
+        .unwrap()
+        .add(c)
+        .unwrap()
+        .split(3);
     // Print the resulting parts
     for (i, part) in total.iter().enumerate() {
         println!("Part {}: {:?}", i + 1, part);
@@ -139,8 +153,8 @@ fn asset_can_separate() {
         22414,
     )
     .unwrap();
-    let total: Assets = Assets::new().add(a);
-    let change: Assets = total.separate(total.clone());
+    let total: Assets = Assets::new().add(a).unwrap();
+    let change: Assets = total.separate(total.clone()).unwrap();
     assert_eq!(change, Assets::new());
     assert_eq!(change.items.len(), 0)
 }
