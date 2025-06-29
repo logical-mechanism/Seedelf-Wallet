@@ -99,6 +99,7 @@ pub async fn all_seedelfs(
 /// Print each seedelf name in bright yellow.
 pub fn print_seedelfs(items: Vec<String>) {
     for item in items {
+        println!("Seedelf: {}", item.white());
         seedelf_label(item)
     }
 }

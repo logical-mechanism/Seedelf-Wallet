@@ -22,14 +22,14 @@ pub fn show_lovelace_and_utxos_counts(
 
     // UTxO count
     println!(
-        "{} {}",
+        "{} {} UTxOs",
         "Contract Has".bold().bright_blue(),
         total_utxos.to_string().bright_yellow()
     );
 
     // Seedelf count
     println!(
-        "{} {}",
+        "{} {} Seedelfs",
         "Contract Has".bold().bright_blue(),
         total_seedelfs.to_string().bright_yellow()
     );
