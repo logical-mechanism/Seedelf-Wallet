@@ -7,7 +7,12 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     display::preprod_text(network_flag);
     display_blue("Seedelf Statistics");
     let (total_utxos, total_lovelace, total_seedelfs) =
-        count_lovelace_and_utxos(network_flag, variant).await;
+        count_lovelace_and_utxos(network_flag, variant)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            });
     show_lovelace_and_utxos_counts(total_utxos, total_lovelace, total_seedelfs);
     // other things can go here
     Ok(())

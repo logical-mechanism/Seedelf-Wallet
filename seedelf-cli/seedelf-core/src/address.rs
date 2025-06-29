@@ -81,7 +81,6 @@ pub fn is_not_a_script(addr: Address) -> bool {
 /// * `Address` - The wallet contract address for the specified network.
 pub fn wallet_contract(network_flag: bool, variant: u64) -> Address {
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
 

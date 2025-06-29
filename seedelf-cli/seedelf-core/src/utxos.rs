@@ -1,6 +1,7 @@
 use crate::assets::{Asset, Assets, string_to_u64};
 use crate::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, get_config};
 use crate::transaction::wallet_minimum_lovelace_with_assets;
+use anyhow::{Context, Result};
 use blstrs::Scalar;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{
@@ -16,7 +17,6 @@ pub async fn collect_all_wallet_utxos(
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
 
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
 
@@ -51,7 +51,6 @@ pub async fn find_seedelf_and_wallet_utxos(
     variant: u64,
 ) -> (Option<Register>, Vec<UtxoResponse>) {
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
 
@@ -116,7 +115,6 @@ pub async fn find_seedelf_utxo(
     variant: u64,
 ) -> Option<UtxoResponse> {
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
@@ -154,7 +152,6 @@ pub async fn collect_wallet_utxos(
     variant: u64,
 ) -> Vec<UtxoResponse> {
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
     let mut number_of_utxos: u64 = 0;
@@ -263,9 +260,11 @@ pub fn do_select(
         let a_group_key = a.asset_list.as_ref().is_some_and(|list| list.is_empty());
         let b_group_key = b.asset_list.as_ref().is_some_and(|list| list.is_empty());
 
-        b_group_key
-            .cmp(&a_group_key)
-            .then_with(|| string_to_u64(b.value.clone()).cmp(&string_to_u64(a.value.clone())))
+        b_group_key.cmp(&a_group_key).then_with(|| {
+            string_to_u64(b.value.clone())
+                .into_iter()
+                .cmp(string_to_u64(a.value.clone()))
+        })
     });
 
     for utxo in utxos.clone() {
@@ -378,7 +377,6 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
 /// Find a seedelf that contains the label and print the match.
 pub async fn find_all_seedelfs(label: String, network_flag: bool, variant: u64) -> Vec<String> {
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
 
@@ -412,32 +410,29 @@ pub async fn find_all_seedelfs(label: String, network_flag: bool, variant: u64) 
 }
 
 /// Find a seedelf that contains the label and print the match.
-pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) -> (usize, u64, u64) {
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+pub async fn count_lovelace_and_utxos(
+    network_flag: bool,
+    variant: u64,
+) -> Result<(usize, u64, u64)> {
+    let config: Config = get_config(variant, network_flag).context("invalid variant")?;
 
-    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
-        Ok(utxos) => {
-            let mut total_lovelace: u64 = 0;
-            let mut total_seedelfs: u64 = 0;
-            for utxo in utxos.clone() {
-                // count if a utxo holds a seedelf policy id
-                if contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
-                    total_seedelfs += 1;
-                }
-                // count the lovelace on the utxo
-                let value: u64 = string_to_u64(utxo.value.clone()).unwrap();
-                total_lovelace += value;
-            }
-            (utxos.len(), total_lovelace, total_seedelfs)
+    let utxos = credential_utxos(config.contract.wallet_contract_hash, network_flag)
+        .await
+        .context("failed to fetch UTxOs")?;
+    let mut total_lovelace: u64 = 0;
+    let mut total_seedelfs: u64 = 0;
+
+    for utxo in utxos.clone() {
+        // count if a utxo holds a seedelf policy id
+        if contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
+            total_seedelfs += 1;
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
-            std::process::exit(1);
-        }
+        // count the lovelace on the utxo
+        let value: u64 =
+            string_to_u64(utxo.value.clone()).context("failed to parse lovelace value")?;
+        total_lovelace += value;
     }
+    Ok((utxos.len(), total_lovelace, total_seedelfs))
 }
 
 pub fn parse_tx_utxos(utxos: Vec<String>) -> Result<Vec<(String, u64)>, String> {

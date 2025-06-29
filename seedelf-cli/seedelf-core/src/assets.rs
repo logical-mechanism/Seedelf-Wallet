@@ -1,3 +1,5 @@
+use std::num::ParseIntError;
+
 use hex;
 use pallas_crypto::hash::Hash;
 use serde::{Deserialize, Serialize};
@@ -292,11 +294,8 @@ impl Assets {
 ///
 /// * `Ok(u64)` - If the conversion is successful.
 /// * `Err(String)` - If the conversion fails.
-pub fn string_to_u64(input: String) -> Result<u64, String> {
-    match input.parse::<u64>() {
-        Ok(value) => Ok(value),
-        Err(err) => Err(format!("Failed to convert: {err}")),
-    }
+pub fn string_to_u64(input: String) -> Result<u64, ParseIntError> {
+    input.parse::<u64>()
 }
 
 pub fn asset_id_to_asset(asset_id: String) -> Asset {
