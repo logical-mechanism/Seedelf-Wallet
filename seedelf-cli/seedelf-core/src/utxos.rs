@@ -12,41 +12,27 @@ use seedelf_koios::koios::{
 /// collects all the wallet utxos owned by some scalar.
 pub async fn collect_all_wallet_utxos(
     sk: Scalar,
+    wallet_contract_hash: [u8; 28],
+    seedelf_policy_id: &str,
     network_flag: bool,
-    variant: u64,
-) -> Vec<UtxoResponse> {
+) -> Result<Vec<UtxoResponse>> {
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        std::process::exit(1);
-    });
-
-    match credential_utxos(
-        hex::encode(config.contract.wallet_contract_hash).as_str(),
-        network_flag,
-    )
-    .await
-    {
-        Ok(utxos) => {
-            for utxo in utxos {
-                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-                    // utxo must be owned by this secret scaler
-                    if inline_datum.is_owned(sk) {
-                        // its owned but lets not count the seedelf in the balance
-                        if !contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id)
-                        {
-                            all_utxos.push(utxo.clone());
-                        }
-                    }
+    let utxos = credential_utxos(hex::encode(wallet_contract_hash).as_str(), network_flag)
+        .await
+        .context("Failed To Get Credential UTxOs")?;
+    for utxo in utxos {
+        if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
+            // utxo must be owned by this secret scaler
+            if inline_datum.is_owned(sk) {
+                // its owned but lets not count the seedelf in the balance
+                if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
+                    all_utxos.push(utxo.clone());
                 }
             }
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
-            std::process::exit(1);
-        }
     }
-    all_utxos
+    Ok(all_utxos)
 }
 
 /// Find a specific seedelf's datum and all the utxos owned by a scalar. The maximum amount of utxos is limited by a upper bound.
