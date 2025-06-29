@@ -1,0 +1,24 @@
+[package]
+name = "seedelf-core"
+version = "0.4.7"
+edition = "2024"
+license = "MIT"
+description = "Core Packages For Seedelf: A Cardano Stealth Wallet"
+authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
+repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
+
+[dependencies]
+anyhow = "1.0.98"
+blstrs = "0.7.1"
+hex = "0.4.3"
+hex-literal = "1.0.0"
+pallas-addresses = "0.32.0"
+pallas-crypto = "0.32.0"
+pallas-primitives = "0.32.0"
+pallas-txbuilder = "0.32.0"
+serde = { version = "1.0.215", features = ["derive"] }
+serde_json = "1.0.133"
+tokio = { version = "1.41.1", features = ["full"] }
+# seedelf stuff
+seedelf-crypto = { path = "../seedelf-crypto" }
+seedelf-koios = { path = "../seedelf-koios" }

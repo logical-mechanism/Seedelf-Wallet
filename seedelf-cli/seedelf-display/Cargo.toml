@@ -1,0 +1,18 @@
+[package]
+name = "seedelf-display"
+version = "0.4.7"
+edition = "2024"
+license = "MIT"
+description = "Display Packages For Seedelf: A Cardano Stealth Wallet"
+authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
+repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
+
+[dependencies]
+blstrs = "0.7.1"
+colored = "3.0.0"
+reqwest = { version = "0.12.9", features = ["json"] }
+semver = "1.0.26"
+serde_json = "1.0.133"
+tokio = { version = "1.41.1", features = ["full"] }
+# seedelf stuff
+seedelf-koios = { path = "../seedelf-koios" }
