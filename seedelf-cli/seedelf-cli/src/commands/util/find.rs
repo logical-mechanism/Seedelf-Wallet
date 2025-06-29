@@ -1,7 +1,9 @@
 use clap::Args;
 use colored::Colorize;
-use seedelf_core::utxos::find_all_seedelfs;
+use seedelf_core::constants::{Config, get_config};
+use seedelf_core::utxos;
 use seedelf_display::display;
+use seedelf_koios::koios::UtxoResponse;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -25,7 +27,25 @@ pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<(),
         "Finding All Seedelfs Containing:".bright_blue(),
         label.bright_green()
     );
-    let all_seedelfs = find_all_seedelfs(label, network_flag, variant).await;
+
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
+
+    let every_utxo: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+    let all_seedelfs =
+        utxos::find_all_seedelfs(label, config.contract.seedelf_policy_id, every_utxo)
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
     display::print_seedelfs(all_seedelfs);
     Ok(())
 }

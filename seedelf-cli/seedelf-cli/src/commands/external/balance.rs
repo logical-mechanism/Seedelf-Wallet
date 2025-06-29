@@ -35,8 +35,12 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
     let addr_bech32: String = addr.to_bech32().unwrap();
     println!("\nAddress: {}", addr_bech32.bright_blue());
 
-    let all_utxos: Vec<UtxoResponse> =
-        utxos::collect_all_address_utxos(&addr_bech32, network_flag).await;
+    let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone()).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1);

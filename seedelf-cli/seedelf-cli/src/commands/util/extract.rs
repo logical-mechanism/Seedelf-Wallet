@@ -124,7 +124,11 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             std::process::exit(1);
         }
     }
-    let usable_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, minimum_lovelace, Assets::new());
+    let usable_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, minimum_lovelace, Assets::new())
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     if usable_utxos.is_empty() {
         return Err("Not Enough Lovelace/Tokens".to_string());
     }

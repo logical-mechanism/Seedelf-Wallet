@@ -4,8 +4,9 @@ use seedelf_core::utxos;
 #[tokio::test]
 async fn find_first_large_utxo() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
-    let utxo_vector = utxos::collect_address_utxos(addr, true).await;
-    let selected_utxos = utxos::select(utxo_vector, 4_446_456, Assets::new());
+    let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
+    let utxo_vector = utxos::collect_address_utxos(every_utxo).unwrap();
+    let selected_utxos = utxos::select(utxo_vector, 4_446_456, Assets::new()).unwrap();
     for utxo in selected_utxos {
         println!("large {:?}", string_to_u64(utxo.value));
     }
@@ -14,8 +15,9 @@ async fn find_first_large_utxo() {
 #[tokio::test]
 async fn find_many_utxos() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
-    let utxo_vector = utxos::collect_address_utxos(addr, true).await;
-    let selected_utxos = utxos::select(utxo_vector, 2_000_000_000, Assets::new());
+    let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
+    let utxo_vector = utxos::collect_address_utxos(every_utxo).unwrap();
+    let selected_utxos = utxos::select(utxo_vector, 2_000_000_000, Assets::new()).unwrap();
     for utxo in selected_utxos {
         println!("many {:?}", string_to_u64(utxo.value));
     }
@@ -24,7 +26,8 @@ async fn find_many_utxos() {
 #[tokio::test]
 async fn find_nft_and_ada() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
-    let utxo_vector = utxos::collect_address_utxos(addr, true).await;
+    let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
+    let utxo_vector = utxos::collect_address_utxos(every_utxo).unwrap();
     let tokens: Assets = Assets::new().add(
         Asset::new(
             "b0cbd7cde289d6aa694214fcd95a39e7f3ef52fc94d1171664210677".to_string(),
@@ -33,7 +36,7 @@ async fn find_nft_and_ada() {
         )
         .unwrap(),
     );
-    let selected_utxos = utxos::select(utxo_vector, 5_000_000, tokens);
+    let selected_utxos = utxos::select(utxo_vector, 5_000_000, tokens).unwrap();
 
     for utxo in selected_utxos {
         println!("nft {:?}", string_to_u64(utxo.value));

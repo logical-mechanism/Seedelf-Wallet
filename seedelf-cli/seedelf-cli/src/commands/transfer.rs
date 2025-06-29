@@ -151,11 +151,30 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::load_wallet();
 
-    let (seedelf_datum, usable_utxos) =
-        utxos::find_seedelf_and_wallet_utxos(scalar, args.seedelf, network_flag, variant).await;
+    let every_utxo: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+
+    let (seedelf_datum, usable_utxos) = utxos::find_seedelf_and_wallet_utxos(
+        scalar,
+        args.seedelf,
+        config.contract.seedelf_policy_id,
+        every_utxo,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
     // the extra 2.5 ADA should account for the change and fee
     let usable_utxos: Vec<UtxoResponse> = if args.utxos.is_none() {
-        utxos::select(usable_utxos, lovelace_goal, selected_tokens.clone())
+        utxos::select(usable_utxos, lovelace_goal, selected_tokens.clone()).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        })
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
         match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {

@@ -29,17 +29,16 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
     )
     .await;
 
-    let all_utxos: Vec<UtxoResponse> = utxos::collect_all_wallet_utxos(
-        scalar,
-        config.contract.wallet_contract_hash,
-        config.contract.seedelf_policy_id,
-        network_flag,
-    )
-    .await
-    .unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let every_utxo: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+    let all_utxos: Vec<UtxoResponse> =
+        utxos::collect_all_wallet_utxos(scalar, config.contract.seedelf_policy_id, every_utxo);
+
     let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone()).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1);

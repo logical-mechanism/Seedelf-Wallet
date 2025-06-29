@@ -10,7 +10,7 @@ use rand_core::OsRng;
 use seedelf_cli::web_server;
 use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
-use seedelf_core::constants::MAXIMUM_TOKENS_PER_UTXO;
+use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};
 use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
@@ -89,6 +89,11 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
         return Err("No Lovelace or Assets Provided.".to_string());
     }
 
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
+
     // lets collect the tokens if they exist
     let mut selected_tokens: Assets = Assets::new();
     if let (Some(policy_id), Some(token_name), Some(amount)) =
@@ -145,19 +150,44 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
     let lovelace_goal: u64 = lovelace;
 
     // utxos
-    let seedelf_utxo: UtxoResponse =
-        utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag, variant)
+    let every_utxo: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
             .await
-            .ok_or("Seedelf Not Found".to_string())
-            .unwrap();
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
+        args.seedelf.clone(),
+        config.contract.seedelf_policy_id,
+        every_utxo,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    })
+    .ok_or("Seedelf Not Found".to_string())
+    .unwrap();
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or("Not Register Type".to_string())
         .unwrap();
 
+    let every_utxo: Vec<UtxoResponse> = utxos::get_address_utxos(&args.address, network_flag)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     let all_utxos: Vec<UtxoResponse> =
-        utxos::collect_address_utxos(&args.address, network_flag).await;
+        utxos::collect_address_utxos(every_utxo).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     let usable_utxos: Vec<UtxoResponse> =
-        utxos::select(all_utxos, lovelace_goal, selected_tokens.clone());
+        utxos::select(all_utxos, lovelace_goal, selected_tokens.clone()).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
 
     if usable_utxos.is_empty() {
         return Err("Not Enough Lovelace/Tokens".to_string());

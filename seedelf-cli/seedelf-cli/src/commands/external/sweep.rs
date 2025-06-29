@@ -37,8 +37,12 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     });
     let addr_bech32: String = addr.to_bech32().unwrap();
 
-    let all_utxos: Vec<UtxoResponse> =
-        utxos::collect_all_address_utxos(&addr_bech32, network_flag).await;
+    let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     if all_utxos.is_empty() {
         return Err("Not Enough Lovelace/Tokens".to_string());
     }

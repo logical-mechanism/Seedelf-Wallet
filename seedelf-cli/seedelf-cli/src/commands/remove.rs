@@ -68,11 +68,24 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     // There is a single register here so we can do this
     let scalar: Scalar = setup::load_wallet();
 
-    let seedelf_utxo: UtxoResponse =
-        utxos::find_seedelf_utxo(args.seedelf.clone(), network_flag, variant)
+    let every_utxo: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
             .await
-            .ok_or("Seedelf Not Found".to_string())
-            .unwrap();
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
+        args.seedelf.clone(),
+        config.contract.seedelf_policy_id,
+        every_utxo,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    })
+    .ok_or("Seedelf Not Found".to_string())
+    .unwrap();
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or("Not Register Type".to_string())
         .unwrap();
