@@ -13,7 +13,7 @@ pub fn show_lovelace_and_utxos_counts(
 ) {
     // Balance in ₳
     let ada = total_lovelace as f64 / 1_000_000.0;
-    let bal = format!("{:.6} ₳", ada);
+    let bal = format!("{ada:.6} ₳");
     println!(
         "\n{} {}",
         "Balance:".bold().bright_blue(),

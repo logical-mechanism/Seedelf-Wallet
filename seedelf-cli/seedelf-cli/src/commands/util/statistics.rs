@@ -10,7 +10,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
         count_lovelace_and_utxos(network_flag, variant)
             .await
             .unwrap_or_else(|e| {
-                eprintln!("{}", e);
+                eprintln!("{e}");
                 std::process::exit(1);
             });
     show_lovelace_and_utxos_counts(total_utxos, total_lovelace, total_seedelfs);

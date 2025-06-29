@@ -441,13 +441,13 @@ pub fn parse_tx_utxos(utxos: Vec<String>) -> Result<Vec<(String, u64)>, String> 
         .map(|s| {
             let parts: Vec<&str> = s.split('#').collect();
             if parts.len() != 2 {
-                return Err(format!("Invalid input format: {}", s));
+                return Err(format!("Invalid input format: {s}"));
             }
 
             let tx_hash = parts[0].to_string();
             let index = parts[1]
                 .parse::<u64>()
-                .map_err(|_| format!("Invalid index in input: {}", s))?;
+                .map_err(|_| format!("Invalid index in input: {s}"))?;
 
             Ok((tx_hash, index))
         })
