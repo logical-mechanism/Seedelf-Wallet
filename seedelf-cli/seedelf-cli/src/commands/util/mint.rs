@@ -17,9 +17,8 @@ use seedelf_core::constants::{
 };
 use seedelf_core::data_structures;
 use seedelf_core::transaction::{
-    collateral_input, extract_budgets, seedelf_minimum_lovelace, seedelf_reference_utxo,
+    collateral_input, extract_budgets, reference_utxo, seedelf_minimum_lovelace,
     seedelf_token_name, total_computation_fee, wallet_minimum_lovelace_with_assets,
-    wallet_reference_utxo,
 };
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
@@ -141,7 +140,11 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     }
 
     // lets build the seelfelf token
-    let token_name: Vec<u8> = seedelf_token_name(label.clone(), draft_tx.inputs.as_ref());
+    let token_name: Vec<u8> = seedelf_token_name(label.clone(), draft_tx.inputs.as_ref())
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     println!(
         "{} {}",
         "\nCreating Seedelf:".bright_blue(),
@@ -221,7 +224,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
             1,
         )
         .unwrap()
-        .reference_input(seedelf_reference_utxo(network_flag, variant))
+        .reference_input(reference_utxo(config.reference.seedelf_reference_utxo))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
                 hex::decode(config.contract.seedelf_policy_id)
@@ -235,7 +238,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
                 steps: 10_000_000_000,
             }),
         )
-        .reference_input(wallet_reference_utxo(network_flag, variant))
+        .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),
@@ -498,11 +501,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     let tx_cbor: String = hex::encode(tx.tx_bytes.as_ref());
 
     // need to witness it now
-    let public_key_vector: [u8; 32] = hex::decode(COLLATERAL_PUBLIC_KEY)
-        .unwrap()
-        .try_into()
-        .unwrap();
-    let witness_public_key: PublicKey = PublicKey::from(public_key_vector);
+    let witness_public_key: PublicKey = PublicKey::from(COLLATERAL_PUBLIC_KEY);
 
     match witness_collateral(tx_cbor.clone(), network_flag).await {
         Ok(witness) => {

@@ -133,8 +133,12 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
             -1,
         )
         .unwrap()
-        .reference_input(transaction::seedelf_reference_utxo(network_flag, variant))
-        .reference_input(transaction::wallet_reference_utxo(network_flag, variant))
+        .reference_input(transaction::reference_utxo(
+            config.reference.seedelf_reference_utxo,
+        ))
+        .reference_input(transaction::reference_utxo(
+            config.reference.wallet_reference_utxo,
+        ))
         .add_spend_redeemer(
             input_vector.clone().remove(0),
             spend_redeemer_vector.clone(),
@@ -308,11 +312,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     // need to witness it now
     let tx_cbor: String = hex::encode(tx.tx_bytes.as_ref());
 
-    let public_key_vector: [u8; 32] = hex::decode(COLLATERAL_PUBLIC_KEY)
-        .unwrap()
-        .try_into()
-        .unwrap();
-    let witness_public_key: PublicKey = PublicKey::from(public_key_vector);
+    let witness_public_key: PublicKey = PublicKey::from(COLLATERAL_PUBLIC_KEY);
 
     match witness_collateral(tx_cbor.clone(), network_flag).await {
         Ok(witness) => {

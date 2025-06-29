@@ -11,8 +11,8 @@ pub struct Contract {
 }
 
 pub struct Reference {
-    pub wallet_reference_utxo: &'static str,
-    pub seedelf_reference_utxo: &'static str,
+    pub wallet_reference_utxo: [u8; 32],
+    pub seedelf_reference_utxo: [u8; 32],
 }
 
 pub struct Config {
@@ -26,13 +26,21 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
         1 => {
             let reference: Reference = if network {
                 Reference {
-                    wallet_reference_utxo: "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6",
-                    seedelf_reference_utxo: "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4",
+                    wallet_reference_utxo: hex!(
+                        "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6"
+                    ),
+                    seedelf_reference_utxo: hex!(
+                        "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4"
+                    ),
                 }
             } else {
                 Reference {
-                    wallet_reference_utxo: "51f12c1a5c2b0558a284628d81b06dee50b27693242fe35618c5f921730c0527",
-                    seedelf_reference_utxo: "f3955f42f660fae8b3e4dcf664011876cf769d87aa8450dc73171b4f6b5f520b",
+                    wallet_reference_utxo: hex!(
+                        "51f12c1a5c2b0558a284628d81b06dee50b27693242fe35618c5f921730c0527"
+                    ),
+                    seedelf_reference_utxo: hex!(
+                        "f3955f42f660fae8b3e4dcf664011876cf769d87aa8450dc73171b4f6b5f520b"
+                    ),
                 }
             };
             let contract: Contract = Contract {
@@ -61,13 +69,13 @@ pub const MAINNET_STAKE_HASH: [u8; 28] =
 // collateral info for giveme.my
 pub const COLLATERAL_HASH: [u8; 28] =
     hex!("7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4");
-pub const COLLATERAL_PUBLIC_KEY: &str =
-    "fa2025e788fae01ce10deffff386f992f62a311758819e4e3792887396c171ba";
+pub const COLLATERAL_PUBLIC_KEY: [u8; 32] =
+    hex!("fa2025e788fae01ce10deffff386f992f62a311758819e4e3792887396c171ba");
 
-pub const PREPROD_COLLATERAL_UTXO: &str =
-    "1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f";
-pub const MAINNET_COLLATERAL_UTXO: &str =
-    "e62351eacbdd001aee77a91805840d2b81f77feebbf2439fb01b79e76c42c839";
+pub const PREPROD_COLLATERAL_UTXO: [u8; 32] =
+    hex!("1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f");
+pub const MAINNET_COLLATERAL_UTXO: [u8; 32] =
+    hex!("e62351eacbdd001aee77a91805840d2b81f77feebbf2439fb01b79e76c42c839");
 
 // ADA Handle Policy Ids
 pub const ADA_HANDLE_POLICY_ID: &str = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a";

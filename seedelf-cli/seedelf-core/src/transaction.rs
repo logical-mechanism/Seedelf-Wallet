@@ -1,11 +1,11 @@
 use crate::address;
 use crate::assets::Assets;
 use crate::constants::{
-    CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, Config, MAINNET_COLLATERAL_UTXO,
-    MEM_COST_DENOMINATOR, MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO,
-    UTXO_COST_PER_BYTE, get_config,
+    CPU_COST_DENOMINATOR, CPU_COST_NUMERATOR, MAINNET_COLLATERAL_UTXO, MEM_COST_DENOMINATOR,
+    MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO, UTXO_COST_PER_BYTE,
 };
 use anyhow::{Context, Result, anyhow};
+use hex_literal::hex;
 use pallas_addresses::Address;
 use pallas_crypto::hash::Hash;
 use pallas_primitives::Fragment;
@@ -55,20 +55,12 @@ pub fn calculate_min_required_utxo(output: Output) -> Result<u64> {
 ///
 /// * `Input` - A transaction input constructed from the specified collateral UTXO.
 pub fn collateral_input(network_flag: bool) -> Input {
-    let utxo: &str = if network_flag {
+    let utxo: [u8; 32] = if network_flag {
         PREPROD_COLLATERAL_UTXO
     } else {
         MAINNET_COLLATERAL_UTXO
     };
-    Input::new(
-        pallas_crypto::hash::Hash::new(
-            hex::decode(utxo)
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ),
-        0,
-    )
+    Input::new(pallas_crypto::hash::Hash::new(utxo), 0)
 }
 
 /// Creates a reference UTXO input for the Seedelf contract.
@@ -85,49 +77,8 @@ pub fn collateral_input(network_flag: bool) -> Input {
 /// # Returns
 ///
 /// * `Input` - A transaction input constructed from the specified reference UTXO.
-pub fn seedelf_reference_utxo(network_flag: bool, variant: u64) -> Input {
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        std::process::exit(1);
-    });
-    Input::new(
-        Hash::new(
-            hex::decode(config.reference.seedelf_reference_utxo)
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ),
-        1,
-    )
-}
-
-/// Creates a reference UTXO input for the wallet contract.
-///
-/// This function selects a pre-defined wallet reference UTXO based on the network flag
-/// and creates an `Input` using the UTXO hash and a fixed index of `1`.
-///
-/// # Arguments
-///
-/// * `network_flag` - A boolean flag specifying the network:
-///     - `true` for Preprod.
-///     - `false` for Mainnet.
-///
-/// # Returns
-///
-/// * `Input` - A transaction input constructed from the specified wallet reference UTXO.
-pub fn wallet_reference_utxo(network_flag: bool, variant: u64) -> Input {
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        std::process::exit(1);
-    });
-
-    Input::new(
-        Hash::new(
-            hex::decode(config.reference.wallet_reference_utxo)
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ),
-        1,
-    )
+pub fn reference_utxo(reference_utxo: [u8; 32]) -> Input {
+    Input::new(Hash::new(reference_utxo), 1)
 }
 
 /// Generates the SeedElf token name.
@@ -145,7 +96,7 @@ pub fn wallet_reference_utxo(network_flag: bool, variant: u64) -> Input {
 /// # Returns
 ///
 /// * `Vec<u8>` - A vector of bytes representing the constructed token name.
-pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8> {
+pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Result<Vec<u8>> {
     let mut label_hex: String = hex::encode(label);
     label_hex.truncate(30);
     // find the smallest input, first in lexicogrpahical order
@@ -158,13 +109,13 @@ pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Vec<u8>
                     .then(a.txo_index.cmp(&b.txo_index))
             })
         })
-        .unwrap();
+        .context("Smallest Input Not Found")?;
     // format the tx index
     let formatted_index: String = format!("{:02x}", smallest_input.txo_index);
     let tx_hash_hex: String = hex::encode(smallest_input.tx_hash.0);
     let prefix: String = "5eed0e1f".to_string();
     let concatenated: String = format!("{prefix}{label_hex}{formatted_index}{tx_hash_hex}");
-    hex::decode(&concatenated[..64.min(concatenated.len())]).unwrap()
+    hex::decode(&concatenated[..64.min(concatenated.len())]).context("Can Decode Token Name")
 }
 
 /// Computes the computation fee for a transaction.
@@ -264,23 +215,15 @@ pub fn seedelf_minimum_lovelace() -> Result<u64> {
         138, 103, 76, 134, 93, 156, 23, 169, 169, 167, 201, 55,
     ]
     .to_vec();
-    let policy_id: Vec<u8> = [
-        94, 237, 14, 31, 1, 66, 250, 134, 20, 230, 198, 12, 121, 19, 73, 107, 154, 156, 226, 154,
-        138, 103, 76, 134, 93, 156, 23, 169,
-    ]
-    .to_vec();
+    let policy_id: [u8; 28] = hex!("84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255");
     let staging_output: Output = Output::new(address::wallet_contract(true, 1), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
                 .rerandomize()
                 .to_vec(),
         )
-        .add_asset(
-            Hash::new(policy_id.try_into().expect("Not Correct Length")),
-            token_name,
-            1,
-        )
-        .unwrap();
+        .add_asset(Hash::new(policy_id), token_name, 1)
+        .context("Staging Output Failed")?;
 
     // use the staging output to calculate the minimum required lovelace
     calculate_min_required_utxo(staging_output)
@@ -313,7 +256,7 @@ pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> Result<u64> {
     for asset in tokens.items {
         staging_output = staging_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
-            .unwrap();
+            .context("Staging Output Failed")?;
     }
 
     // use the staging output to calculate the minimum required lovelace
@@ -335,13 +278,14 @@ pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> Result<u64> {
 ///
 /// * `u64` - The minimum lovelace required for the transaction output.
 pub fn address_minimum_lovelace_with_assets(address: &str, tokens: Assets) -> Result<u64> {
-    let addr: Address = Address::from_bech32(address).unwrap();
+    let addr: Address =
+        Address::from_bech32(address).context("Address Failed To Convert To Bech32")?;
     let mut staging_output: Output = Output::new(addr, 5_000_000);
 
     for asset in tokens.items {
         staging_output = staging_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
-            .unwrap();
+            .context("Staging Output Failed")?;
     }
 
     // use the staging output to calculate the minimum required lovelace

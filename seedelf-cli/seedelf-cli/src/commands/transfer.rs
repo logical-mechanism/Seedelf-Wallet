@@ -17,8 +17,8 @@ use seedelf_core::constants::{
 };
 use seedelf_core::data_structures;
 use seedelf_core::transaction::{
-    collateral_input, extract_budgets, total_computation_fee, wallet_minimum_lovelace_with_assets,
-    wallet_reference_utxo,
+    collateral_input, extract_budgets, reference_utxo, total_computation_fee,
+    wallet_minimum_lovelace_with_assets,
 };
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
@@ -234,7 +234,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
             5_000_000 - (tmp_fee) * 3 / 2,
         ))
         .fee(tmp_fee)
-        .reference_input(wallet_reference_utxo(network_flag, variant))
+        .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),
@@ -469,11 +469,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     // need to witness it now
     let tx_cbor: String = hex::encode(tx.tx_bytes.as_ref());
 
-    let public_key_vector: [u8; 32] = hex::decode(COLLATERAL_PUBLIC_KEY)
-        .unwrap()
-        .try_into()
-        .unwrap();
-    let witness_public_key: PublicKey = PublicKey::from(public_key_vector);
+    let witness_public_key: PublicKey = PublicKey::from(COLLATERAL_PUBLIC_KEY);
 
     match witness_collateral(tx_cbor.clone(), network_flag).await {
         Ok(witness) => {

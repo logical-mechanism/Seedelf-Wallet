@@ -14,8 +14,7 @@ use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, get_config, plutus_v3_cost_model};
 use seedelf_core::transaction::{
-    address_minimum_lovelace_with_assets, extract_budgets, total_computation_fee,
-    wallet_reference_utxo,
+    address_minimum_lovelace_with_assets, extract_budgets, reference_utxo, total_computation_fee,
 };
 use seedelf_core::utxos;
 use seedelf_display::display;
@@ -190,7 +189,7 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
         .output(extract_output)
         .collateral_output(Output::new(addr.clone(), 5_000_000 - (tmp_fee) * 3 / 2))
         .fee(tmp_fee)
-        .reference_input(wallet_reference_utxo(network_flag, variant))
+        .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),

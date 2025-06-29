@@ -145,7 +145,12 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
 
     // lets build the seelfelf token
     let token_name: Vec<u8> =
-        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref());
+        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref()).unwrap_or_else(
+            |e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            },
+        );
     println!(
         "{} {}",
         "\nCreating Seedelf:".bright_blue(),
@@ -200,7 +205,9 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
             1,
         )
         .unwrap()
-        .reference_input(transaction::seedelf_reference_utxo(network_flag, variant))
+        .reference_input(transaction::reference_utxo(
+            config.reference.seedelf_reference_utxo,
+        ))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
                 hex::decode(config.contract.seedelf_policy_id)
