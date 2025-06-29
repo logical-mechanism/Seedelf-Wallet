@@ -57,7 +57,8 @@ fn create_proof_and_test_it() {
     assert_eq!(datum.public_value, public_value_hex);
 
     let bound = "acab";
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string()).unwrap();
+    let r: Scalar = random_scalar();
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string(), r).unwrap();
     assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound).unwrap())
 }
 
@@ -66,7 +67,8 @@ fn create_random_proof_and_test_it() {
     let sk: Scalar = random_scalar();
     let datum: Register = Register::create(sk).unwrap();
     let bound = "acab";
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string()).unwrap();
+    let r: Scalar = random_scalar();
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string(), r).unwrap();
     assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound).unwrap())
 }
 
@@ -75,6 +77,7 @@ fn create_random_proof_rerandomize_it_and_test_it() {
     let sk: Scalar = random_scalar();
     let datum: Register = Register::create(sk).unwrap().rerandomize().unwrap();
     let bound = "acab";
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string()).unwrap();
+    let r: Scalar = random_scalar();
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string(), r).unwrap();
     assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound).unwrap())
 }

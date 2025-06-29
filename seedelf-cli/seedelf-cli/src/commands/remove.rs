@@ -19,7 +19,7 @@ use seedelf_core::data_structures;
 use seedelf_core::transaction;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr::create_proof;
+use seedelf_crypto::schnorr::{create_proof, random_scalar};
 use seedelf_display::display;
 use seedelf_koios::koios::{
     UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
@@ -106,7 +106,8 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
 
     // use the base register to rerandomize for the datum
 
-    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone())?;
+    let r: Scalar = random_scalar();
+    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone(), r)?;
     let spend_redeemer_vector: Vec<u8> =
         data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
     let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string())?;

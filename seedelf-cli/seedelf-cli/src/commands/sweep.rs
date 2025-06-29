@@ -23,7 +23,7 @@ use seedelf_core::transaction::{
 };
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr::create_proof;
+use seedelf_crypto::schnorr::{create_proof, random_scalar};
 use seedelf_display::display;
 use seedelf_koios::koios::{
     UtxoResponse, ada_handle_address, evaluate_transaction, extract_bytes_with_logging, submit_tx,
@@ -371,7 +371,8 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         .into_iter()
         .zip(register_vector.clone().into_iter())
     {
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
+        let r: Scalar = random_scalar();
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r)?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         draft_tx = draft_tx.add_spend_redeemer(
             input,
@@ -546,7 +547,8 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         .zip(register_vector.clone().into_iter())
         .zip(budgets.clone().into_iter())
     {
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
+        let r: Scalar = random_scalar();
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r)?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         raw_tx = raw_tx.add_spend_redeemer(
             input,

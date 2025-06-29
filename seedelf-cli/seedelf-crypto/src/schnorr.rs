@@ -59,8 +59,12 @@ pub fn random_scalar() -> Scalar {
 /// * `(String, String)` - A tuple containing:
 ///     - `z` - The response scalar as a hex-encoded string.
 ///     - `g_r` - The blinded generator (`g^r`) as a hex-encoded compressed point.
-pub fn create_proof(datum: Register, sk: Scalar, bound: String) -> Result<(String, String)> {
-    let r: Scalar = random_scalar();
+pub fn create_proof(
+    datum: Register,
+    sk: Scalar,
+    bound: String,
+    r: Scalar,
+) -> Result<(String, String)> {
     let g1: G1Affine = G1Affine::from_compressed(
         &hex::decode(&datum.generator)
             .context("Failed to decode generator hex")?
