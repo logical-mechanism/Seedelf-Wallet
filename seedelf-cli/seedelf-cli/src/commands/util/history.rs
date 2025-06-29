@@ -2,11 +2,11 @@ use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
 use pallas_addresses::Address;
-use seedelf_cli::display;
-use seedelf_cli::koios::TxResponse;
-use seedelf_cli::koios::address_transactions;
 use seedelf_cli::setup;
 use seedelf_core::address;
+use seedelf_display::display;
+use seedelf_koios::koios::TxResponse;
+use seedelf_koios::koios::address_transactions;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]

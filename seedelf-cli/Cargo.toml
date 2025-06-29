@@ -2,4 +2,4 @@
 resolver = "3"
 members = [
     "seedelf-cli", "seedelf-core", "seedelf-crypto"
-]
+, "seedelf-display", "seedelf-koios"]

@@ -1,7 +1,7 @@
 use clap::Args;
 use colored::Colorize;
-use seedelf_cli::display;
-use seedelf_cli::utxos::find_and_print_all_seedelfs;
+use seedelf_core::utxos::find_all_seedelfs;
+use seedelf_display::display;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -25,6 +25,7 @@ pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<(),
         "Finding All Seedelfs Containing:".bright_blue(),
         label.bright_green()
     );
-    find_and_print_all_seedelfs(label, network_flag, variant).await;
+    let all_seedelfs = find_all_seedelfs(label, network_flag, variant).await;
+    display::print_seedelfs(all_seedelfs);
     Ok(())
 }

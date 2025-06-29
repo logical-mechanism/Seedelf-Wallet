@@ -1,7 +1,5 @@
 use hex;
 use reqwest::{Client, Error, Response};
-use seedelf_core::address;
-use seedelf_core::constants::ADA_HANDLE_POLICY_ID;
 use seedelf_crypto::register::Register;
 use serde::Deserialize;
 use serde_json::Value;
@@ -406,6 +404,8 @@ pub async fn ada_handle_address(
     network_flag: bool,
     cip68_flag: bool,
     variant: u64,
+    wallet_addr: String,
+    ada_handle_policy_id: &str,
 ) -> Result<String, String> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let token_name: String = if cip68_flag {
@@ -414,7 +414,7 @@ pub async fn ada_handle_address(
         hex::encode(asset_name.clone())
     };
     let url: String = format!(
-        "https://{network}.koios.rest/api/v1/asset_nft_address?_asset_policy={ADA_HANDLE_POLICY_ID}&_asset_name={token_name}",
+        "https://{network}.koios.rest/api/v1/asset_nft_address?_asset_policy={ada_handle_policy_id}&_asset_name={token_name}",
     );
     let client: Client = reqwest::Client::new();
 
@@ -448,15 +448,13 @@ pub async fn ada_handle_address(
                     network_flag,
                     !cip68_flag,
                     variant,
+                    wallet_addr,
+                    ada_handle_policy_id,
                 ))
                 .await;
             }
         }
     };
-
-    let wallet_addr: String = address::wallet_contract(network_flag, variant)
-        .to_bech32()
-        .unwrap();
 
     if payment_address == wallet_addr {
         Err("ADA Handle Is In Wallet Address".to_string())

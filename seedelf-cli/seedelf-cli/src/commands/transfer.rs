@@ -8,16 +8,7 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::display;
-use seedelf_cli::koios::{
-    UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
-};
 use seedelf_cli::setup;
-use seedelf_cli::transaction::{
-    collateral_input, extract_budgets, total_computation_fee, wallet_minimum_lovelace_with_assets,
-    wallet_reference_utxo,
-};
-use seedelf_cli::utxos;
 use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::constants::{
@@ -25,8 +16,17 @@ use seedelf_core::constants::{
     plutus_v3_cost_model,
 };
 use seedelf_core::data_structures;
+use seedelf_core::transaction::{
+    collateral_input, extract_budgets, total_computation_fee, wallet_minimum_lovelace_with_assets,
+    wallet_reference_utxo,
+};
+use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::create_proof;
+use seedelf_display::display;
+use seedelf_koios::koios::{
+    UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
+};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]

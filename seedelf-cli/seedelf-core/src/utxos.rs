@@ -1,13 +1,11 @@
-use crate::display::seedelf_label;
-use crate::koios::{
-    UtxoResponse, address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
-};
+use crate::assets::{Asset, Assets, string_to_u64};
+use crate::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, get_config};
 use crate::transaction::wallet_minimum_lovelace_with_assets;
 use blstrs::Scalar;
-use colored::Colorize;
-use seedelf_core::assets::{Asset, Assets, string_to_u64};
-use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, get_config};
 use seedelf_crypto::register::Register;
+use seedelf_koios::koios::{
+    UtxoResponse, address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
+};
 
 /// collects all the wallet utxos owned by some scalar.
 pub async fn collect_all_wallet_utxos(
@@ -378,11 +376,13 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
 }
 
 /// Find a seedelf that contains the label and print the match.
-pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool, variant: u64) {
+pub async fn find_all_seedelfs(label: String, network_flag: bool, variant: u64) -> Vec<String> {
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
+
+    let mut matches = Vec::new();
     match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
@@ -398,15 +398,11 @@ pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool, vari
                         .unwrap();
                     if asset_name.to_lowercase().contains(&label.to_lowercase()) {
                         // we found it so print it
-                        println!(
-                            "\n{}: {}",
-                            "Found Match:".bright_cyan(),
-                            asset_name.bright_white()
-                        );
-                        seedelf_label(asset_name.to_string());
+                        matches.push(asset_name.to_string());
                     }
                 }
             }
+            matches
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
@@ -416,7 +412,7 @@ pub async fn find_and_print_all_seedelfs(label: String, network_flag: bool, vari
 }
 
 /// Find a seedelf that contains the label and print the match.
-pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
+pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) -> (usize, u64, u64) {
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
@@ -435,18 +431,7 @@ pub async fn count_lovelace_and_utxos(network_flag: bool, variant: u64) {
                 let value: u64 = string_to_u64(utxo.value.clone()).unwrap();
                 total_lovelace += value;
             }
-            println!(
-                "\nBalance: {} ₳",
-                format!("{:.6}", total_lovelace as f64 / 1_000_000.0).bright_yellow()
-            );
-            println!(
-                "Contract Has {} UTxOs",
-                utxos.len().to_string().bright_yellow()
-            );
-            println!(
-                "Contract Has {} Seedelfs",
-                total_seedelfs.to_string().bright_yellow()
-            );
+            (utxos.len(), total_lovelace, total_seedelfs)
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");

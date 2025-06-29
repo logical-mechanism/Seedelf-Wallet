@@ -6,16 +6,16 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::display;
-use seedelf_cli::koios::{UtxoResponse, submit_tx};
 use seedelf_cli::setup;
-use seedelf_cli::transaction::wallet_minimum_lovelace_with_assets;
-use seedelf_cli::utxos;
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::MAXIMUM_TOKENS_PER_UTXO;
+use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
+use seedelf_core::utxos;
 use seedelf_crypto::convert;
 use seedelf_crypto::register::Register;
+use seedelf_display::display;
+use seedelf_koios::koios::{UtxoResponse, submit_tx};
 
 pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     display::is_their_an_update().await;

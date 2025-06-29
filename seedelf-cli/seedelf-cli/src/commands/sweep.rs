@@ -8,26 +8,26 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::display;
-use seedelf_cli::koios::{
-    UtxoResponse, ada_handle_address, evaluate_transaction, extract_bytes_with_logging, submit_tx,
-    witness_collateral,
-};
 use seedelf_cli::setup;
-use seedelf_cli::transaction::{
-    address_minimum_lovelace_with_assets, collateral_input, extract_budgets, total_computation_fee,
-    wallet_minimum_lovelace_with_assets, wallet_reference_utxo,
-};
-use seedelf_cli::utxos;
 use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::constants::{
-    COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO, get_config,
-    plutus_v3_cost_model,
+    ADA_HANDLE_POLICY_ID, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO,
+    get_config, plutus_v3_cost_model,
 };
 use seedelf_core::data_structures;
+use seedelf_core::transaction::{
+    address_minimum_lovelace_with_assets, collateral_input, extract_budgets, total_computation_fee,
+    wallet_minimum_lovelace_with_assets, wallet_reference_utxo,
+};
+use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::create_proof;
+use seedelf_display::display;
+use seedelf_koios::koios::{
+    UtxoResponse, ada_handle_address, evaluate_transaction, extract_bytes_with_logging, submit_tx,
+    witness_collateral,
+};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -126,7 +126,19 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     let outbound_address: String = if args.address.is_some() {
         args.address.unwrap()
     } else {
-        match ada_handle_address(args.ada_handle.unwrap(), network_flag, false, variant).await {
+        let wallet_addr: String = address::wallet_contract(network_flag, variant)
+            .to_bech32()
+            .unwrap();
+        match ada_handle_address(
+            args.ada_handle.unwrap(),
+            network_flag,
+            false,
+            variant,
+            wallet_addr,
+            ADA_HANDLE_POLICY_ID,
+        )
+        .await
+        {
             Err(err) => return Err(err),
             Ok(potential_addr) => potential_addr,
         }

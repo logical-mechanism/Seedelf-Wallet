@@ -1,4 +1,4 @@
-use seedelf_cli::display::{hex_to_ascii, is_their_an_update};
+use seedelf_display::display::{hex_to_ascii, is_their_an_update};
 
 #[tokio::test]
 async fn test_version_control_display() {

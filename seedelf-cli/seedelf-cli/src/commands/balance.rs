@@ -1,10 +1,11 @@
 use blstrs::Scalar;
 use colored::Colorize;
 use reqwest::Error;
-use seedelf_cli::display;
-use seedelf_cli::koios::UtxoResponse;
 use seedelf_cli::setup;
-use seedelf_cli::utxos;
+use seedelf_core::constants::{Config, get_config};
+use seedelf_core::utxos;
+use seedelf_display::display;
+use seedelf_koios::koios::UtxoResponse;
 
 pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
     display::is_their_an_update().await;
@@ -15,7 +16,18 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
 
     let scalar: Scalar = setup::load_wallet();
 
-    display::all_seedelfs(scalar, network_flag, variant).await;
+    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
+        eprintln!("Error: Invalid Variant");
+        std::process::exit(1);
+    });
+
+    display::all_seedelfs(
+        scalar,
+        network_flag,
+        config.contract.wallet_contract_hash,
+        config.contract.seedelf_policy_id,
+    )
+    .await;
 
     let all_utxos: Vec<UtxoResponse> =
         utxos::collect_all_wallet_utxos(scalar, network_flag, variant).await;

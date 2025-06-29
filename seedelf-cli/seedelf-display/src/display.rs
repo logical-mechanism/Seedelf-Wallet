@@ -1,8 +1,7 @@
-use crate::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
 use crate::version_control::{compare_versions, get_latest_version};
 use blstrs::Scalar;
 use colored::Colorize;
-use seedelf_core::constants::{Config, get_config};
+use seedelf_koios::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
 
 pub async fn is_their_an_update() {
     match get_latest_version().await {
@@ -51,31 +50,29 @@ pub fn preprod_text(network_flag: bool) {
     }
 }
 
-pub async fn all_seedelfs(sk: Scalar, network_flag: bool, variant: u64) {
+pub async fn all_seedelfs(
+    sk: Scalar,
+    network_flag: bool,
+    wallet_contract_hash: &str,
+    seedelf_policy_id: &str,
+) {
     let mut seedelfs: Vec<String> = Vec::new();
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
-
-    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
+    match credential_utxos(wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
                 if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-                    // utxo must be owned by this secret scaler
+                    // utxo must be owned by this secret scalar
                     if inline_datum.is_owned(sk) {
                         // its owned but lets not count the seedelf in the balance
-                        if contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
+                        if contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                             let asset_name: &String = utxo
                                 .asset_list
                                 .as_ref()
                                 .and_then(|vec| {
                                     vec.iter()
-                                        .find(|asset| {
-                                            asset.policy_id == config.contract.seedelf_policy_id
-                                        })
+                                        .find(|asset| asset.policy_id == seedelf_policy_id)
                                         .map(|asset| &asset.asset_name)
                                 })
                                 .unwrap();
@@ -96,6 +93,13 @@ pub async fn all_seedelfs(sk: Scalar, network_flag: bool, variant: u64) {
             println!("\nSeedelf: {}", seedelf.white());
             seedelf_label(seedelf);
         }
+    }
+}
+
+/// Print each seedelf name in bright yellow.
+pub fn print_seedelfs(items: Vec<String>) {
+    for item in items {
+        seedelf_label(item)
     }
 }
 

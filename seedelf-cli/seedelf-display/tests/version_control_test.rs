@@ -1,4 +1,4 @@
-use seedelf_cli::version_control::{compare_versions, get_latest_version};
+use seedelf_display::version_control::{compare_versions, get_latest_version};
 
 #[test]
 fn same_version() {

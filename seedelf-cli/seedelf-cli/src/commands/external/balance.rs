@@ -2,12 +2,12 @@ use blstrs::Scalar;
 use colored::Colorize;
 use pallas_addresses::Address;
 use reqwest::Error;
-use seedelf_cli::display;
-use seedelf_cli::koios::UtxoResponse;
 use seedelf_cli::setup;
-use seedelf_cli::utxos;
 use seedelf_core::address;
+use seedelf_core::utxos;
 use seedelf_crypto::convert;
+use seedelf_display::display;
+use seedelf_koios::koios::UtxoResponse;
 
 pub async fn run(network_flag: bool) -> Result<(), Error> {
     display::is_their_an_update().await;

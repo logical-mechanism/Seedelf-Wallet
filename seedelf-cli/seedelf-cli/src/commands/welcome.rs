@@ -1,5 +1,5 @@
 use colored::Colorize;
-use seedelf_cli::display::is_their_an_update;
+use seedelf_display::display::is_their_an_update;
 
 pub async fn run() {
     is_their_an_update().await;
