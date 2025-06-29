@@ -1,12 +1,12 @@
 use blstrs::Scalar;
 use colored::Colorize;
+use hex;
 use reqwest::Error;
 use seedelf_cli::setup;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_core::utxos;
 use seedelf_display::display;
 use seedelf_koios::koios::UtxoResponse;
-
 pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
@@ -24,14 +24,17 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
     display::all_seedelfs(
         scalar,
         network_flag,
-        config.contract.wallet_contract_hash,
+        hex::encode(config.contract.wallet_contract_hash).as_str(),
         config.contract.seedelf_policy_id,
     )
     .await;
 
     let all_utxos: Vec<UtxoResponse> =
         utxos::collect_all_wallet_utxos(scalar, network_flag, variant).await;
-    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone());
+    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone()).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
 
     println!(
         "\nWallet Has {} UTxOs",

@@ -182,7 +182,12 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
             if amt == 0 {
                 return Err("Error: Token Amount must be positive".to_string());
             }
-            selected_tokens = selected_tokens.add(Asset::new(pid, tkn, amt));
+
+            let new_asset = Asset::new(pid, tkn, amt).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+            selected_tokens = selected_tokens.add(new_asset);
         }
     }
 
@@ -241,7 +246,11 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         return Err("No Usuable UTxOs Found".to_string());
     }
 
-    let (total_lovelace_found, tokens) = utxos::assets_of(usable_utxos.clone());
+    let (total_lovelace_found, tokens) =
+        utxos::assets_of(usable_utxos.clone()).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     let change_tokens: Assets = tokens.separate(selected_tokens.clone());
 
     for utxo in usable_utxos.clone() {

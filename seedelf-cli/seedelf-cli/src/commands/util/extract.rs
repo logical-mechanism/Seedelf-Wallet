@@ -77,7 +77,11 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             eprintln!("Failed to fetch UTxO: {err}\nWait a few moments and try again.");
         }
     }
-    let (empty_utxo_lovelace, empty_utxo_tokens) = utxos::assets_of(vec![empty_datum_utxo.clone()]);
+    let (empty_utxo_lovelace, empty_utxo_tokens) = utxos::assets_of(vec![empty_datum_utxo.clone()])
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     let minimum_lovelace: u64 =
         address_minimum_lovelace_with_assets(&args.address, empty_utxo_tokens.clone());
 
@@ -121,7 +125,10 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     if usable_utxos.is_empty() {
         return Err("Not Enough Lovelace/Tokens".to_string());
     }
-    let (addr_lovelace, addr_tokens) = utxos::assets_of(usable_utxos.clone());
+    let (addr_lovelace, addr_tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
 
     let total_lovelace: u64 = addr_lovelace + empty_utxo_lovelace;
     let total_tokens: Assets = addr_tokens.merge(empty_utxo_tokens);

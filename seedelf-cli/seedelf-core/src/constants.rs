@@ -1,8 +1,10 @@
+use hex_literal::hex;
+
 /// The current variant of Seedelf
 pub const VARIANT: u64 = 1;
 
 pub struct Contract {
-    pub wallet_contract_hash: &'static str,
+    pub wallet_contract_hash: [u8; 28],
     pub seedelf_policy_id: &'static str,
     pub wallet_contract_size: u64,
     pub seedelf_contract_size: u64,
@@ -34,7 +36,9 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
                 }
             };
             let contract: Contract = Contract {
-                wallet_contract_hash: "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+                wallet_contract_hash: hex!(
+                    "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469"
+                ),
                 seedelf_policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255",
                 wallet_contract_size: 629,
                 seedelf_contract_size: 519,
@@ -49,11 +53,14 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
 }
 
 // support the [LOGIC] stakepool
-pub const PREPROD_STAKE_HASH: &str = "86c769419aaa673c963da04e4b5bae448d490e2ceac902cb82e4da76";
-pub const MAINNET_STAKE_HASH: &str = "fcfc7701b1df42061202efa9c96968a481bbd6a0676efb7afa87ebf1";
+pub const PREPROD_STAKE_HASH: [u8; 28] =
+    hex!("86c769419aaa673c963da04e4b5bae448d490e2ceac902cb82e4da76");
+pub const MAINNET_STAKE_HASH: [u8; 28] =
+    hex!("fcfc7701b1df42061202efa9c96968a481bbd6a0676efb7afa87ebf1");
 
 // collateral info for giveme.my
-pub const COLLATERAL_HASH: &str = "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4";
+pub const COLLATERAL_HASH: [u8; 28] =
+    hex!("7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4");
 pub const COLLATERAL_PUBLIC_KEY: &str =
     "fa2025e788fae01ce10deffff386f992f62a311758819e4e3792887396c171ba";
 

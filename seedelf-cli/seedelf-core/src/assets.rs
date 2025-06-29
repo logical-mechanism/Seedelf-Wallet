@@ -1,8 +1,8 @@
-use std::num::ParseIntError;
-
+use anyhow::{Result, bail};
 use hex;
 use pallas_crypto::hash::Hash;
 use serde::{Deserialize, Serialize};
+use std::num::ParseIntError;
 /// Represents an asset in the Cardano blockchain.
 ///
 /// An `Asset` is identified by a `policy_id` and a `token_name`, and it tracks
@@ -22,17 +22,17 @@ impl Asset {
     /// * `policy_id` - A hex-encoded string representing the policy ID.
     /// * `token_name` - A hex-encoded string representing the token name.
     /// * `amount` - The amount of tokens for the asset.
-    pub fn new(policy_id: String, token_name: String, amount: u64) -> Self {
-        Self {
+    pub fn new(policy_id: String, token_name: String, amount: u64) -> Result<Self> {
+        Ok(Self {
             policy_id: Hash::new(
-                hex::decode(policy_id)
-                    .unwrap()
+                hex::decode(policy_id)?
+                    .as_slice()
                     .try_into()
-                    .expect("Incorrect Length"),
+                    .map_err(|e| anyhow::anyhow!("{e}"))?,
             ),
             token_name: hex::decode(token_name).unwrap(),
             amount,
-        }
+        })
     }
 
     /// Adds two assets together if they have the same `policy_id` and `token_name`.
@@ -45,11 +45,9 @@ impl Asset {
     ///
     /// * `Ok(Self)` - The resulting `Asset` with the combined amounts.
     /// * `Err(String)` - If the `policy_id` or `token_name` do not match.
-    pub fn add(&self, other: &Asset) -> Result<Self, String> {
+    pub fn add(&self, other: &Asset) -> Result<Self> {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
-            return Err(
-                "Assets must have the same policy_id and token_name to be subtracted".to_string(),
-            );
+            bail!("Assets must have the same policy_id and token_name to be subtracted")
         }
         Ok(Self {
             policy_id: self.policy_id,
@@ -68,11 +66,9 @@ impl Asset {
     ///
     /// * `Ok(Self)` - The resulting `Asset` after subtraction.
     /// * `Err(String)` - If the `policy_id` or `token_name` do not match.
-    pub fn sub(&self, other: &Asset) -> Result<Self, String> {
+    pub fn sub(&self, other: &Asset) -> Result<Self> {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
-            return Err(
-                "Assets must have the same policy_id and token_name to be subtracted".to_string(),
-            );
+            bail!("Assets must have the same policy_id and token_name to be subtracted")
         }
         Ok(Self {
             policy_id: self.policy_id,
@@ -100,18 +96,18 @@ impl Asset {
         }
     }
 
-    pub fn quantity_of(&self, policy_id: String, token_name: String) -> Option<u64> {
+    pub fn quantity_of(&self, policy_id: String, token_name: String) -> Result<Option<u64>> {
         let pid = Hash::new(
-            hex::decode(policy_id)
-                .unwrap()
+            hex::decode(policy_id)?
+                .as_slice()
                 .try_into()
-                .expect("Incorrect Length"),
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
         );
         let tkn = hex::decode(token_name).unwrap();
         if self.policy_id == pid && self.token_name == tkn {
-            Some(self.amount)
+            Ok(Some(self.amount))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -211,16 +207,14 @@ impl Assets {
         true
     }
 
-    pub fn quantity_of(&self, policy_id: String, token_name: String) -> Option<u64> {
+    pub fn quantity_of(&self, policy_id: String, token_name: String) -> Result<Option<u64>> {
         for this_asset in &self.items {
             match Asset::quantity_of(this_asset, policy_id.clone(), token_name.clone()) {
-                Some(amount) => {
-                    return Some(amount);
-                }
+                Ok(Some(amount)) => return Ok(Some(amount)),
                 _ => continue,
             }
         }
-        None
+        Ok(None)
     }
 
     /// Checks if any asset in `other` exists in this collection.
@@ -298,7 +292,7 @@ pub fn string_to_u64(input: String) -> Result<u64, ParseIntError> {
     input.parse::<u64>()
 }
 
-pub fn asset_id_to_asset(asset_id: String) -> Asset {
+pub fn asset_id_to_asset(asset_id: String) -> Result<Asset> {
     // Assume NFT for now
     Asset::new(asset_id[..56].to_string(), asset_id[56..].to_string(), 1)
 }

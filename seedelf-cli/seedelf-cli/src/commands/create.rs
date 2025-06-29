@@ -121,7 +121,10 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos);
+    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
 
     // if the seedelf isn't found then error
     if total_lovelace < lovelace_goal {

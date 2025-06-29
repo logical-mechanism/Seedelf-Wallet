@@ -109,7 +109,11 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
             if amt == 0 {
                 return Err("Error: Token Amount must be positive".to_string());
             }
-            selected_tokens = selected_tokens.add(Asset::new(pid, tkn, amt));
+            let new_asset = Asset::new(pid, tkn, amt).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+            selected_tokens = selected_tokens.add(new_asset);
         }
     }
 
@@ -168,7 +172,10 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(usable_utxos);
+    let (total_lovelace, tokens) = utxos::assets_of(usable_utxos).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
     // tokens tha need to be put into the change output
     let change_tokens: Assets = tokens.separate(selected_tokens.clone());
     // if the seedelf isn't found then error

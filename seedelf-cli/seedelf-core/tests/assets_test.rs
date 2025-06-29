@@ -14,7 +14,8 @@ fn assets_can_clone_and_compare() {
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         0,
-    );
+    )
+    .unwrap();
     assert_eq!(a.clone(), a)
 }
 
@@ -24,17 +25,20 @@ fn assets_can_add() {
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
     let b: Asset = Asset::new(
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
     let combined: Asset = Asset::new(
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         2,
-    );
+    )
+    .unwrap();
 
     let total: Assets = Assets::new().add(a).add(b);
     let answer: Assets = Assets::new().add(combined);
@@ -48,12 +52,14 @@ fn assets_can_sub() {
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
     let b: Asset = Asset::new(
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
 
     let total: Assets = Assets::new().add(a).sub(b);
     let answer: Assets = Assets::new();
@@ -67,17 +73,20 @@ fn assets_can_split1() {
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
     let b: Asset = Asset::new(
         "a2af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
     let c: Asset = Asset::new(
         "b2af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
 
     let total: Vec<Assets> = Assets::new().add(a).add(b).add(c).split(1);
     // Print the resulting parts
@@ -93,17 +102,20 @@ fn assets_can_split2() {
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
     let b: Asset = Asset::new(
         "a2af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
     let c: Asset = Asset::new(
         "b2af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         1,
-    );
+    )
+    .unwrap();
 
     let total: Vec<Assets> = Assets::new().add(a).add(b).add(c).split(3);
     // Print the resulting parts
@@ -125,7 +137,8 @@ fn asset_can_separate() {
         "52af77cf39fd08cf872f04dccf90f27b4fbf09252901f5e88f564ae5".to_string(),
         "74657374".to_string(),
         22414,
-    );
+    )
+    .unwrap();
     let total: Assets = Assets::new().add(a);
     let change: Assets = total.separate(total.clone());
     assert_eq!(change, Assets::new());

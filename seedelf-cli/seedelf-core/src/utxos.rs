@@ -3,6 +3,7 @@ use crate::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS, ge
 use crate::transaction::wallet_minimum_lovelace_with_assets;
 use anyhow::{Context, Result};
 use blstrs::Scalar;
+use hex;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{
     UtxoResponse, address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
@@ -20,7 +21,12 @@ pub async fn collect_all_wallet_utxos(
         std::process::exit(1);
     });
 
-    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
+    match credential_utxos(
+        hex::encode(config.contract.wallet_contract_hash).as_str(),
+        network_flag,
+    )
+    .await
+    {
         Ok(utxos) => {
             for utxo in utxos {
                 if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
@@ -59,7 +65,12 @@ pub async fn find_seedelf_and_wallet_utxos(
 
     let mut seedelf_datum: Option<Register> = None;
     let mut found_seedelf: bool = false;
-    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
+    match credential_utxos(
+        hex::encode(config.contract.wallet_contract_hash).as_str(),
+        network_flag,
+    )
+    .await
+    {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
@@ -117,7 +128,12 @@ pub async fn find_seedelf_utxo(
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         std::process::exit(1);
     });
-    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
+    match credential_utxos(
+        hex::encode(config.contract.wallet_contract_hash).as_str(),
+        network_flag,
+    )
+    .await
+    {
         Ok(utxos) => {
             for utxo in utxos {
                 if contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
@@ -158,7 +174,12 @@ pub async fn collect_wallet_utxos(
 
     let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
 
-    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
+    match credential_utxos(
+        hex::encode(config.contract.wallet_contract_hash).as_str(),
+        network_flag,
+    )
+    .await
+    {
         Ok(utxos) => {
             for utxo in utxos {
                 // Extract bytes
@@ -278,11 +299,17 @@ pub fn do_select(
         if let Some(assets) = utxo.clone().asset_list {
             if !assets.is_empty() {
                 for token in assets.clone() {
-                    utxo_assets = utxo_assets.add(Asset::new(
-                        token.policy_id,
-                        token.asset_name,
-                        string_to_u64(token.quantity).unwrap(),
-                    ));
+                    utxo_assets = utxo_assets.add(
+                        Asset::new(
+                            token.policy_id,
+                            token.asset_name,
+                            string_to_u64(token.quantity).unwrap(),
+                        )
+                        .unwrap_or_else(|e| {
+                            eprintln!("{e}");
+                            std::process::exit(1);
+                        }),
+                    );
                 }
                 // if this utxo has the assets we need but we haven't found it all yet then add it
                 if utxo_assets.any(tokens.clone()) && !found_assets.contains(tokens.clone()) {
@@ -347,7 +374,7 @@ pub fn do_select(
 }
 
 /// Calculate the total assets of a list of utxos.
-pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
+pub fn assets_of(utxos: Vec<UtxoResponse>) -> Result<(u64, Assets)> {
     let mut found_assets: Assets = Assets::new();
     let mut current_lovelace_sum: u64 = 0;
 
@@ -360,18 +387,20 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> (u64, Assets) {
                 let mut utxo_assets: Assets = Assets::new();
 
                 for token in assets.clone() {
-                    utxo_assets = utxo_assets.add(Asset::new(
+                    let new_asset = Asset::new(
                         token.policy_id,
                         token.asset_name,
-                        string_to_u64(token.quantity).unwrap(),
-                    ));
+                        string_to_u64(token.quantity).context("Invalid Token Quantity")?,
+                    )
+                    .context("Fail To Construct Asset")?;
+                    utxo_assets = utxo_assets.add(new_asset);
                 }
 
                 found_assets = found_assets.merge(utxo_assets.clone());
             }
         }
     }
-    (current_lovelace_sum, found_assets)
+    Ok((current_lovelace_sum, found_assets))
 }
 
 /// Find a seedelf that contains the label and print the match.
@@ -381,7 +410,12 @@ pub async fn find_all_seedelfs(label: String, network_flag: bool, variant: u64) 
     });
 
     let mut matches = Vec::new();
-    match credential_utxos(config.contract.wallet_contract_hash, network_flag).await {
+    match credential_utxos(
+        hex::encode(config.contract.wallet_contract_hash).as_str(),
+        network_flag,
+    )
+    .await
+    {
         Ok(utxos) => {
             for utxo in utxos {
                 if contains_policy_id(&utxo.asset_list, config.contract.seedelf_policy_id) {
@@ -416,9 +450,12 @@ pub async fn count_lovelace_and_utxos(
 ) -> Result<(usize, u64, u64)> {
     let config: Config = get_config(variant, network_flag).context("invalid variant")?;
 
-    let utxos = credential_utxos(config.contract.wallet_contract_hash, network_flag)
-        .await
-        .context("failed to fetch UTxOs")?;
+    let utxos = credential_utxos(
+        hex::encode(config.contract.wallet_contract_hash).as_str(),
+        network_flag,
+    )
+    .await
+    .context("failed to fetch UTxOs")?;
     let mut total_lovelace: u64 = 0;
     let mut total_seedelfs: u64 = 0;
 

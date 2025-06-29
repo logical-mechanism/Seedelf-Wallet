@@ -31,7 +31,10 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     let scalar: Scalar = setup::load_wallet();
 
     let vkey: String = convert::secret_key_to_public_key(scalar);
-    let addr: Address = address::dapp_address(vkey.clone(), network_flag);
+    let addr: Address = address::dapp_address(vkey.clone(), network_flag).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
     let addr_bech32: String = addr.to_bech32().unwrap();
 
     let all_utxos: Vec<UtxoResponse> =
@@ -39,7 +42,10 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     if all_utxos.is_empty() {
         return Err("Not Enough Lovelace/Tokens".to_string());
     }
-    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone());
+    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone()).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
 
     for utxo in all_utxos.clone() {
         let this_input: Input = Input::new(

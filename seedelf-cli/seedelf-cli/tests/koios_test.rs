@@ -35,7 +35,7 @@ async fn find_nft_utxo() {
     let asset_id: String = String::from(
         "b558ea5ecfa2a6e9701dab150248e94104402f789c090426eb60eb60536e656b6b696533363333",
     );
-    let asset: Asset = asset_id_to_asset(asset_id);
+    let asset: Asset = asset_id_to_asset(asset_id).unwrap();
     // println!("{} {}", asset.policy_id.to_string(), hex::encode(asset.token_name));
     let nft_utxo = nft_utxo(
         asset.policy_id.to_string(),

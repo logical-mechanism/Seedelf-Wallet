@@ -112,7 +112,11 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     if usable_utxos.is_empty() {
         return Err("No Usuable UTxOs Found".to_string());
     }
-    let (total_lovelace, change_tokens) = utxos::assets_of(usable_utxos.clone());
+    let (total_lovelace, change_tokens) =
+        utxos::assets_of(usable_utxos.clone()).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
 
     for utxo in usable_utxos.clone() {
         let this_input: Input = Input::new(
