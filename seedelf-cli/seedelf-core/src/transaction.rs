@@ -5,6 +5,7 @@ use crate::constants::{
     MEM_COST_DENOMINATOR, MEM_COST_NUMERATOR, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO,
     UTXO_COST_PER_BYTE, get_config,
 };
+use anyhow::{Context, Result, anyhow};
 use pallas_addresses::Address;
 use pallas_crypto::hash::Hash;
 use pallas_primitives::Fragment;
@@ -25,18 +26,18 @@ use serde_json::Value;
 /// # Returns
 ///
 /// * `u64` - The minimum required UTXO value in lovelace.
-pub fn calculate_min_required_utxo(output: Output) -> u64 {
+pub fn calculate_min_required_utxo(output: Output) -> Result<u64> {
     // we need the output in the post alonzo form so we can encode it
     let output_cbor_length: u64 = output
         .build_babbage_raw()
-        .unwrap()
+        .context("Failed To Construct Babbage CBOR")?
         .encode_fragment()
-        .unwrap()
+        .map_err(|e| anyhow!("Failed to encode PlutusData fragment: {e}"))?
         .len()
         .try_into()
-        .unwrap();
+        .context("Failed To Get CBOR Length")?;
     // sum the overhead and length times the cost per byte
-    (OVERHEAD_COST + output_cbor_length) * UTXO_COST_PER_BYTE
+    Ok((OVERHEAD_COST + output_cbor_length) * UTXO_COST_PER_BYTE)
 }
 
 /// Creates a collateral input for a transaction based on the network.
@@ -256,7 +257,7 @@ pub fn total_computation_fee(budgets: Vec<(u64, u64)>) -> u64 {
 /// # Returns
 ///
 /// * `u64` - The minimum lovelace required for the transaction output.
-pub fn seedelf_minimum_lovelace() -> u64 {
+pub fn seedelf_minimum_lovelace() -> Result<u64> {
     // a very long token name
     let token_name: Vec<u8> = [
         94, 237, 14, 31, 1, 66, 250, 134, 20, 230, 198, 12, 121, 19, 73, 107, 154, 156, 226, 154,
@@ -301,7 +302,7 @@ pub fn seedelf_minimum_lovelace() -> u64 {
 /// # Returns
 ///
 /// * `u64` - The minimum lovelace required for the transaction output.
-pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> u64 {
+pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> Result<u64> {
     let mut staging_output: Output = Output::new(address::wallet_contract(true, 1), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
@@ -333,7 +334,7 @@ pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> u64 {
 /// # Returns
 ///
 /// * `u64` - The minimum lovelace required for the transaction output.
-pub fn address_minimum_lovelace_with_assets(address: &str, tokens: Assets) -> u64 {
+pub fn address_minimum_lovelace_with_assets(address: &str, tokens: Assets) -> Result<u64> {
     let addr: Address = Address::from_bech32(address).unwrap();
     let mut staging_output: Output = Output::new(addr, 5_000_000);
 

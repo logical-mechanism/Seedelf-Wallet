@@ -83,7 +83,11 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             std::process::exit(1);
         });
     let minimum_lovelace: u64 =
-        address_minimum_lovelace_with_assets(&args.address, empty_utxo_tokens.clone());
+        address_minimum_lovelace_with_assets(&args.address, empty_utxo_tokens.clone())
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();

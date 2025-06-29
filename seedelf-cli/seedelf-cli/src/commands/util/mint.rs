@@ -84,7 +84,10 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
 
     // we need about 2 ada for the utxo
     let tmp_fee: u64 = 205_000;
-    let lovelace_goal: u64 = seedelf_minimum_lovelace() + tmp_fee;
+    let lovelace_goal: u64 = seedelf_minimum_lovelace().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }) + tmp_fee;
 
     // if the label is none then just use the empty string
     let label: String = args.label.unwrap_or_default();
@@ -145,7 +148,10 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
         hex::encode(token_name.clone()).bright_white()
     );
 
-    let min_utxo: u64 = seedelf_minimum_lovelace();
+    let min_utxo: u64 = seedelf_minimum_lovelace().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
     println!(
         "{} {}",
         "\nMinimum Required Lovelace:".bright_blue(),
@@ -251,7 +257,11 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     // a max tokens per change output here
     for (i, change) in change_token_per_utxo.iter().enumerate() {
         let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
+        let minimum: u64 =
+            wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - min_utxo - tmp_fee;
@@ -411,7 +421,11 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
         let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
+        let minimum: u64 =
+            wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - min_utxo - total_fee;

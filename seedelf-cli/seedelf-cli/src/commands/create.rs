@@ -65,7 +65,10 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
 
     // we need about 2 ada for the utxo
     let tmp_fee: u64 = 205_000;
-    let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace() + tmp_fee;
+    let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }) + tmp_fee;
 
     // there may be many collateral utxos, we just need one
     let mut found_collateral: bool = false;
@@ -149,7 +152,10 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         hex::encode(token_name.clone()).bright_white()
     );
 
-    let min_utxo: u64 = transaction::seedelf_minimum_lovelace();
+    let min_utxo: u64 = transaction::seedelf_minimum_lovelace().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
     println!(
         "{} {}",
         "\nMinimum Required Lovelace:".bright_blue(),

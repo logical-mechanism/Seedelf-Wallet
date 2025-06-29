@@ -340,7 +340,7 @@ pub fn do_select(
             // but is it enough to account for the min ada for the token change as we will assume there will always be a change utxo
             let change_assets: Assets = found_assets.separate(tokens.clone());
             let number_of_change_assets: u64 = change_assets.len();
-            let minimum: u64 = wallet_minimum_lovelace_with_assets(change_assets.clone());
+            let minimum: u64 = wallet_minimum_lovelace_with_assets(change_assets.clone()).unwrap();
             // we need to calculate how many multiple change utxos we need
             let multiplier: u64 = if number_of_change_assets > MAXIMUM_TOKENS_PER_UTXO {
                 // add one due to floor division

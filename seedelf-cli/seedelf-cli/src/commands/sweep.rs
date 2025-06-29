@@ -193,6 +193,10 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
 
     if args.lovelace.is_some_and(|x| {
         x < address_minimum_lovelace_with_assets(&outbound_address, selected_tokens.clone())
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            })
     }) {
         return Err("lovelace Too Small For Min UTxO".to_string());
     }
@@ -214,7 +218,11 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     let mut register_vector: Vec<Register> = Vec::new();
 
     // we will assume lovelace only right now
-    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(selected_tokens.clone());
+    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(selected_tokens.clone())
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
     let lovelace_goal: u64 = args.lovelace.unwrap_or(minimum_lovelace);
 
     // if there is change going back then we need this to rerandomize a datum
@@ -338,7 +346,11 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         // a max tokens per change output here
         for (i, change) in change_token_per_utxo.iter().enumerate() {
             let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-            let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
+            let minimum: u64 =
+                wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
             let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
                 // this is the last one or the only one
                 lovelace_amount = lovelace_amount - lovelace_goal - tmp_fee;
@@ -519,7 +531,11 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         let mut lovelace_amount: u64 = total_lovelace_found;
         for (i, change) in change_token_per_utxo.iter().enumerate() {
             let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-            let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone());
+            let minimum: u64 =
+                wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
             let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
                 // this is the last one or the only one
                 lovelace_amount = lovelace_amount - lovelace_goal - total_fee;
