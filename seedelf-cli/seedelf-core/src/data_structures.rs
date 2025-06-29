@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, anyhow};
 use hex;
 use hex::FromHex;
 use pallas_primitives::{
@@ -22,12 +23,13 @@ use pallas_primitives::{
 /// # Panics
 ///
 /// * If the label cannot be converted into a valid hex string.
-pub fn create_mint_redeemer(label: String) -> Vec<u8> {
+pub fn create_mint_redeemer(label: String) -> Result<Vec<u8>> {
     let mut label_hex: String = hex::encode(label);
     label_hex.truncate(30);
-    let lb: Vec<u8> = Vec::from_hex(&label_hex).expect("Invalid hex string");
+    let lb: Vec<u8> = Vec::from_hex(&label_hex).context("Invalid hex string")?;
     let d: PlutusData = PlutusData::BoundedBytes(BoundedBytes::from(lb));
-    d.encode_fragment().unwrap()
+    d.encode_fragment()
+        .map_err(|e| anyhow!("Failed to encode PlutusData fragment: {e}"))
 }
 
 /// Creates a spend redeemer for a Plutus script.
@@ -49,10 +51,10 @@ pub fn create_mint_redeemer(label: String) -> Vec<u8> {
 /// # Panics
 ///
 /// * If any input string cannot be converted into a valid hex string.
-pub fn create_spend_redeemer(z: String, g_r: String, pkh: String) -> Vec<u8> {
-    let zb: Vec<u8> = Vec::from_hex(z).expect("Invalid hex string");
-    let grb: Vec<u8> = Vec::from_hex(g_r).expect("Invalid hex string");
-    let pkhb: Vec<u8> = Vec::from_hex(pkh).expect("Invalid hex string");
+pub fn create_spend_redeemer(z: String, g_r: String, pkh: String) -> Result<Vec<u8>> {
+    let zb: Vec<u8> = Vec::from_hex(z).context("Invalid hex string")?;
+    let grb: Vec<u8> = Vec::from_hex(g_r).context("Invalid hex string")?;
+    let pkhb: Vec<u8> = Vec::from_hex(pkh).context("Invalid hex string")?;
     let d: PlutusData = PlutusData::Constr(Constr {
         tag: 121,
         any_constructor: None,
@@ -62,5 +64,6 @@ pub fn create_spend_redeemer(z: String, g_r: String, pkh: String) -> Vec<u8> {
             PlutusData::BoundedBytes(BoundedBytes::from(pkhb)),
         ]),
     });
-    d.encode_fragment().unwrap()
+    d.encode_fragment()
+        .map_err(|e| anyhow!("Failed to encode PlutusData fragment: {e}"))
 }

@@ -168,7 +168,11 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
             return Err("Provided Register Is Invalid".to_string());
         }
     };
-    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone());
+    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone())
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
 
     let seedelf_output: Output = Output::new(wallet_addr.clone(), min_utxo)
         .set_inline_datum(datum_vector.clone())
@@ -236,12 +240,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
                 .try_into()
                 .expect("Not Correct Length"),
         ))
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(COLLATERAL_HASH)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ));
+        .disclosed_signer(pallas_crypto::hash::Hash::new(COLLATERAL_HASH));
 
     // need to check if there is change going back here
     let change_token_per_utxo: Vec<Assets> = change_tokens
@@ -293,7 +292,12 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         draft_tx = draft_tx.add_spend_redeemer(
             input,
-            spend_redeemer_vector.clone(),
+            spend_redeemer_vector
+                .unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                })
+                .clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: 14_000_000,
                 steps: 10_000_000_000,
@@ -449,7 +453,12 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         raw_tx = raw_tx.add_spend_redeemer(
             input,
-            spend_redeemer_vector.clone(),
+            spend_redeemer_vector
+                .unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                })
+                .clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: *mem,
                 steps: *cpu,

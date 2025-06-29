@@ -241,12 +241,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
                 .try_into()
                 .expect("Not Correct Length"),
         ))
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(COLLATERAL_HASH)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ));
+        .disclosed_signer(pallas_crypto::hash::Hash::new(COLLATERAL_HASH));
 
     // add in the change outputs here
     let change_token_per_utxo: Vec<Assets> = change_tokens
@@ -298,7 +293,12 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         draft_tx = draft_tx.add_spend_redeemer(
             input,
-            spend_redeemer_vector.clone(),
+            spend_redeemer_vector
+                .unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                })
+                .clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: 14_000_000,
                 steps: 10_000_000_000,
@@ -443,7 +443,12 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         raw_tx = raw_tx.add_spend_redeemer(
             input,
-            spend_redeemer_vector.clone(),
+            spend_redeemer_vector
+                .unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                })
+                .clone(),
             Some(pallas_txbuilder::ExUnits { mem, steps: cpu }),
         )
     }

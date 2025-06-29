@@ -137,7 +137,11 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     let tmp_fee: u64 = 200_000;
 
     let spend_redeemer_vector =
-        data_structures::create_spend_redeemer(String::new(), String::new(), String::new());
+        data_structures::create_spend_redeemer(String::new(), String::new(), String::new())
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
     let empty_input: Input = Input::new(
         pallas_crypto::hash::Hash::new(
             hex::decode(empty_datum_utxo.tx_hash.clone())

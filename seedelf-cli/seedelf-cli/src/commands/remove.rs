@@ -103,8 +103,15 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
 
     let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone());
     let spend_redeemer_vector: Vec<u8> =
-        data_structures::create_spend_redeemer(z, g_r, pkh.clone());
-    let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string());
+        data_structures::create_spend_redeemer(z, g_r, pkh.clone()).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
+    let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string())
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
@@ -159,12 +166,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                 .try_into()
                 .expect("Not Correct Length"),
         ))
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(COLLATERAL_HASH)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ));
+        .disclosed_signer(pallas_crypto::hash::Hash::new(COLLATERAL_HASH));
 
     // this is what will be signed when the real fee is known
     let mut raw_tx: StagingTransaction = draft_tx
