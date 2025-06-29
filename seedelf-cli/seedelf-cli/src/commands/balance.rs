@@ -1,13 +1,14 @@
+use anyhow::Result;
 use blstrs::Scalar;
 use colored::Colorize;
 use hex;
-use reqwest::Error;
 use seedelf_cli::setup;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_core::utxos;
 use seedelf_display::display;
 use seedelf_koios::koios::UtxoResponse;
-pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
+
+pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
@@ -30,19 +31,11 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), Error> {
     .await;
 
     let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
-            .await
-            .unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let all_utxos: Vec<UtxoResponse> =
-        utxos::collect_all_wallet_utxos(scalar, config.contract.seedelf_policy_id, every_utxo);
+        utxos::collect_all_wallet_utxos(scalar, config.contract.seedelf_policy_id, every_utxo)?;
 
-    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone()).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone())?;
 
     println!(
         "\nWallet Has {} UTxOs",

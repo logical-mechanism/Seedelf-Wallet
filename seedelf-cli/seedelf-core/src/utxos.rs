@@ -32,12 +32,15 @@ pub fn collect_all_wallet_utxos(
     sk: Scalar,
     seedelf_policy_id: &str,
     utxos: Vec<UtxoResponse>,
-) -> Vec<UtxoResponse> {
+) -> Result<Vec<UtxoResponse>> {
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
     for utxo in utxos {
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
             // utxo must be owned by this secret scaler
-            if inline_datum.is_owned(sk) {
+            if inline_datum
+                .is_owned(sk)
+                .context("Failed To Construct Points")?
+            {
                 // its owned but lets not count the seedelf in the balance
                 if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                     all_utxos.push(utxo.clone());
@@ -45,7 +48,7 @@ pub fn collect_all_wallet_utxos(
             }
         }
     }
-    all_utxos
+    Ok(all_utxos)
 }
 
 /// Find a specific seedelf's datum and all the utxos owned by a scalar. The maximum amount of utxos is limited by a upper bound.
@@ -80,7 +83,10 @@ pub fn find_seedelf_and_wallet_utxos(
                 }
             }
             // utxo must be owned by this secret scaler
-            if inline_datum.is_owned(sk) {
+            if inline_datum
+                .is_owned(sk)
+                .context("Failed To Construct Points")?
+            {
                 // its owned but it can't hold a seedelf
                 if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                     if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
@@ -127,7 +133,7 @@ pub fn collect_wallet_utxos(
     sk: Scalar,
     seedelf_policy_id: &str,
     utxos: Vec<UtxoResponse>,
-) -> Vec<UtxoResponse> {
+) -> Result<Vec<UtxoResponse>> {
     let mut number_of_utxos: u64 = 0;
     let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
 
@@ -135,7 +141,10 @@ pub fn collect_wallet_utxos(
         // Extract bytes
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
             // utxo must be owned by this secret scaler
-            if inline_datum.is_owned(sk) {
+            if inline_datum
+                .is_owned(sk)
+                .context("Failed To Construct Points")?
+            {
                 // its owned but it can't hold a seedelf
                 if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                     if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
@@ -148,7 +157,7 @@ pub fn collect_wallet_utxos(
             }
         }
     }
-    usable_utxos
+    Ok(usable_utxos)
 }
 
 /// Collect all the address utxos that are not an assumed collateral utxo.

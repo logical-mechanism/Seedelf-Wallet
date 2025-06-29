@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use blake2::Blake2bVar;
 use blake2::digest::core_api::RtVariableCoreWrapper;
 use blake2::digest::{Update, VariableOutput};
@@ -22,7 +23,7 @@ use sha3::{Digest, Sha3_256};
 ///
 /// * If creating or finalizing the BLAKE2b hasher fails.
 /// * If the input hex string cannot be decoded.
-pub fn blake2b_224(data: &str) -> String {
+pub fn blake2b_224(data: &str) -> Result<String> {
     // Decode hex string to bytes if needed
     let decoded_data: Vec<u8> = if let Ok(decoded) = hex::decode(data) {
         decoded
@@ -32,17 +33,17 @@ pub fn blake2b_224(data: &str) -> String {
 
     // Create a BLAKE2b hasher with a 224-bit output
     let mut hasher: RtVariableCoreWrapper<blake2::Blake2bVarCore> =
-        Blake2bVar::new(28).expect("Failed to create BLAKE2b hasher");
+        Blake2bVar::new(28).context("Failed to create BLAKE2b hasher")?;
     hasher.update(&decoded_data);
 
     // Retrieve the hash result
     let mut result: [u8; 28] = [0u8; 28];
     hasher
         .finalize_variable(&mut result)
-        .expect("Failed to finalize hash");
+        .context("Failed to finalize hash")?;
 
     // Convert to hex string
-    hex::encode(result)
+    Ok(hex::encode(result))
 }
 
 /// Computes the BLAKE2b-256 hash of the input data.
@@ -63,7 +64,7 @@ pub fn blake2b_224(data: &str) -> String {
 ///
 /// * If creating or finalizing the BLAKE2b hasher fails.
 /// * If the input hex string cannot be decoded.
-pub fn blake2b_256(data: &str) -> String {
+pub fn blake2b_256(data: &str) -> Result<String> {
     // Decode hex string to bytes if needed
     let decoded_data: Vec<u8> = if let Ok(decoded) = hex::decode(data) {
         decoded
@@ -73,17 +74,17 @@ pub fn blake2b_256(data: &str) -> String {
 
     // Create a BLAKE2b hasher with a 256-bit output
     let mut hasher: RtVariableCoreWrapper<blake2::Blake2bVarCore> =
-        Blake2bVar::new(32).expect("Failed to create BLAKE2b hasher");
+        Blake2bVar::new(32).context("Failed to create BLAKE2b hasher")?;
     hasher.update(&decoded_data);
 
     // Retrieve the hash result
     let mut result: [u8; 32] = [0u8; 32];
     hasher
         .finalize_variable(&mut result)
-        .expect("Failed to finalize hash");
+        .context("Failed to finalize hash")?;
 
     // Convert to hex string
-    hex::encode(result)
+    Ok(hex::encode(result))
 }
 
 /// Computes the SHA3-256 hash of the input data.
@@ -104,12 +105,15 @@ pub fn blake2b_256(data: &str) -> String {
 ///
 /// * This function will not panic, but if `data` is not a valid hex string,
 ///   it will hash an empty byte array.
-pub fn sha3_256(data: &str) -> String {
+pub fn sha3_256(data: &str) -> Result<String> {
     let mut sha3_hasher = Sha3_256::new();
-    Digest::update(&mut sha3_hasher, hex::decode(data).unwrap_or_default());
+    Digest::update(
+        &mut sha3_hasher,
+        hex::decode(data).context("Invalid Input")?,
+    );
     // Retrieve the hash result
     let result = sha3_hasher.finalize();
 
     // Convert to hex string
-    hex::encode(result)
+    Ok(hex::encode(result))
 }

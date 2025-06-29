@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use chrono::Utc;
 use clap::Args;
 use colored::Colorize;
@@ -54,7 +55,7 @@ fn format_duration(seconds: i64) -> String {
     }
 }
 
-pub async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<(), String> {
+pub async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
@@ -77,7 +78,7 @@ pub async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<(), 
     .unwrap();
 
     if seedelf_history.is_empty() {
-        return Err("Seedelf Not Found".to_string());
+        bail!("Seedelf Not Found");
     }
 
     let time_stamp: i64 = seedelf_history[0].block_time;

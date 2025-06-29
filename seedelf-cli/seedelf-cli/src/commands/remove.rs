@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
@@ -39,7 +40,7 @@ pub struct RemoveArgs {
     address: String,
 }
 
-pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(), String> {
+pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
@@ -53,7 +54,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
-        return Err("Supplied Address Is Incorrect".to_string());
+        bail!("Supplied Address Is Incorrect");
     }
 
     // we need this as the address type and not the shelley
@@ -69,21 +70,12 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     let scalar: Scalar = setup::load_wallet();
 
     let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
-            .await
-            .unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
         args.seedelf.clone(),
         config.contract.seedelf_policy_id,
         every_utxo,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    })
+    )?
     .ok_or("Seedelf Not Found".to_string())
     .unwrap();
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
@@ -114,17 +106,10 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
 
     // use the base register to rerandomize for the datum
 
-    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone());
+    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone())?;
     let spend_redeemer_vector: Vec<u8> =
-        data_structures::create_spend_redeemer(z, g_r, pkh.clone()).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
-    let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string())
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+        data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
+    let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string())?;
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx

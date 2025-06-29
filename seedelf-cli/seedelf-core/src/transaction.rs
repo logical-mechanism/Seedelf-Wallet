@@ -219,8 +219,10 @@ pub fn seedelf_minimum_lovelace() -> Result<u64> {
     let staging_output: Output = Output::new(address::dummy_base_address(), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
+                .context("Failed To Construct Points")?
                 .rerandomize()
-                .to_vec(),
+                .context("Failed To Randomize Points")?
+                .to_vec()?,
         )
         .add_asset(Hash::new(policy_id), token_name, 1)
         .context("Staging Output Failed")?;
@@ -249,8 +251,10 @@ pub fn wallet_minimum_lovelace_with_assets(tokens: Assets) -> Result<u64> {
     let mut staging_output: Output = Output::new(address::dummy_base_address(), 5_000_000)
         .set_inline_datum(
             Register::create(schnorr::random_scalar())
+                .context("Failed To Construct Points")?
                 .rerandomize()
-                .to_vec(),
+                .context("Failed To Randomize Points")?
+                .to_vec()?,
         );
 
     for asset in tokens.items {

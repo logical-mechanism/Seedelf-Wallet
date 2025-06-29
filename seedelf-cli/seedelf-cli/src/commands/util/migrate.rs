@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use clap::Args;
 use colored::Colorize;
 use seedelf_core::constants::VARIANT;
@@ -11,10 +12,10 @@ pub struct MigrateArgs {
     from_variant: u64,
 }
 
-pub async fn run(args: MigrateArgs, network_flag: bool) -> Result<(), String> {
+pub async fn run(args: MigrateArgs, network_flag: bool) -> Result<()> {
     // starts a variant 1
     if args.from_variant == 0 || args.from_variant >= VARIANT {
-        return Err("Incorrect Migration Variant".to_string());
+        bail!("Incorrect Migration Variant");
     }
 
     display::is_their_an_update().await;

@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use blstrs::Scalar;
 use colored::Colorize;
 use pallas_addresses::Address;
@@ -17,7 +18,7 @@ use seedelf_crypto::register::Register;
 use seedelf_display::display;
 use seedelf_koios::koios::{UtxoResponse, submit_tx};
 
-pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
+pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
     println!("\n{}", "Sweeping All External UTxOs".bright_blue(),);
@@ -37,25 +38,14 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     let scalar: Scalar = setup::load_wallet();
 
     let vkey: String = convert::secret_key_to_public_key(scalar);
-    let addr: Address = address::dapp_address(vkey.clone(), network_flag).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let addr: Address = address::dapp_address(vkey.clone(), network_flag)?;
     let addr_bech32: String = addr.to_bech32().unwrap();
 
-    let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag).await?;
     if all_utxos.is_empty() {
-        return Err("Not Enough Lovelace/Tokens".to_string());
+        bail!("Not Enough Lovelace/Tokens");
     }
-    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone()).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone())?;
 
     for utxo in all_utxos.clone() {
         let this_input: Input = Input::new(
@@ -91,12 +81,8 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     let mut lovelace_amount: u64 = total_lovelace;
     // a max tokens per change output here
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let minimum: u64 =
-            wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount -= tmp_fee;
@@ -119,7 +105,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
 
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
         let change_lovelace: u64 = lovelace_amount - tmp_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
@@ -161,12 +147,8 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
     // a max tokens per change output here
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let minimum: u64 =
-            wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount -= tx_fee;
@@ -189,7 +171,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<(), String> {
 
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
         let change_lovelace: u64 = lovelace_amount - tx_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());

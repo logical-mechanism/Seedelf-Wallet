@@ -64,7 +64,7 @@ pub async fn all_seedelfs(
                 // Extract bytes
                 if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
                     // utxo must be owned by this secret scalar
-                    if inline_datum.is_owned(sk) {
+                    if inline_datum.is_owned(sk).unwrap() {
                         // its owned but lets not count the seedelf in the balance
                         if contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                             let asset_name: &String = utxo

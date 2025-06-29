@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
@@ -40,7 +41,7 @@ pub struct LabelArgs {
     label: Option<String>,
 }
 
-pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<(), String> {
+pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
@@ -54,7 +55,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
-        return Err("Supplied Address Is Incorrect".to_string());
+        bail!("Supplied Address Is Incorrect");
     }
 
     // we need this as the address type and not the shelley
@@ -66,10 +67,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
 
     // we need about 2 ada for the utxo
     let tmp_fee: u64 = 205_000;
-    let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace().unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    }) + tmp_fee;
+    let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace()? + tmp_fee;
 
     // there may be many collateral utxos, we just need one
     let mut found_collateral: bool = false;
@@ -111,11 +109,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         }
     }
     // lovelace goal here should account for the estimated fee
-    let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, Assets::new())
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, Assets::new())?;
     for utxo in selected_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
@@ -129,43 +123,28 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos)?;
 
     // if the seedelf isn't found then error
     if total_lovelace < lovelace_goal {
-        return Err("Not Enough Lovelace".to_string());
+        bail!("Not Enough Lovelace");
     }
 
     // this is going to be the datum on the seedelf
     let sk: Scalar = setup::load_wallet();
-    let datum_vector: Vec<u8> = Register::create(sk).rerandomize().to_vec();
-    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone())
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let datum_vector: Vec<u8> = Register::create(sk)?.rerandomize()?.to_vec()?;
+    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone())?;
 
     // lets build the seelfelf token
     let token_name: Vec<u8> =
-        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref()).unwrap_or_else(
-            |e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            },
-        );
+        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref())?;
     println!(
         "{} {}",
         "\nCreating Seedelf:".bright_blue(),
         hex::encode(token_name.clone()).bright_white()
     );
 
-    let min_utxo: u64 = transaction::seedelf_minimum_lovelace().unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let min_utxo: u64 = transaction::seedelf_minimum_lovelace()?;
     println!(
         "{} {}",
         "\nMinimum Required Lovelace:".bright_blue(),

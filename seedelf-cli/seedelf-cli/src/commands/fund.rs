@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use clap::Args;
 use colored::Colorize;
 use hex;
@@ -78,7 +79,7 @@ pub struct FundArgs {
     amount: Option<Vec<u64>>,
 }
 
-pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(), String> {
+pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
@@ -86,7 +87,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
     if args.lovelace.is_none()
         && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())
     {
-        return Err("No Lovelace or Assets Provided.".to_string());
+        bail!("No Lovelace or Assets Provided.");
     }
 
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
@@ -100,10 +101,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
         (args.policy_id, args.token_name, args.amount)
     {
         if policy_id.len() != token_name.len() || policy_id.len() != amount.len() {
-            return Err(
-                "Error: Each --policy-id must have a corresponding --token-name and --amount."
-                    .to_string(),
-            );
+            bail!("Error: Each --policy-id must have a corresponding --token-name and --amount.",);
         }
 
         for ((pid, tkn), amt) in policy_id
@@ -112,26 +110,16 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
             .zip(amount.into_iter())
         {
             if amt == 0 {
-                return Err("Error: Token Amount must be positive".to_string());
+                bail!("Error: Token Amount must be positive");
             }
-            let new_asset = Asset::new(pid, tkn, amt).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
-            selected_tokens = selected_tokens.add(new_asset).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+            let new_asset = Asset::new(pid, tkn, amt)?;
+            selected_tokens = selected_tokens.add(new_asset)?;
         }
     }
 
-    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(selected_tokens.clone())
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(selected_tokens.clone())?;
     if args.lovelace.is_some_and(|l| l < minimum_lovelace) {
-        return Err("Not Enough Lovelace On UTxO".to_string());
+        bail!("Not Enough Lovelace On UTxO");
     }
 
     // we need to make sure that the network flag and the address provided makes sense here
@@ -139,7 +127,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
-        return Err("Supplied Address Is Incorrect".to_string());
+        bail!("Supplied Address Is Incorrect");
     }
 
     // we need this as the address type and not the shelley
@@ -155,46 +143,26 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
 
     // utxos
     let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
-            .await
-            .unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
         args.seedelf.clone(),
         config.contract.seedelf_policy_id,
         every_utxo,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    })
+    )?
     .ok_or("Seedelf Not Found".to_string())
     .unwrap();
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or("Not Register Type".to_string())
         .unwrap();
 
-    let every_utxo: Vec<UtxoResponse> = utxos::get_address_utxos(&args.address, network_flag)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
-    let all_utxos: Vec<UtxoResponse> =
-        utxos::collect_address_utxos(every_utxo).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let every_utxo: Vec<UtxoResponse> =
+        utxos::get_address_utxos(&args.address, network_flag).await?;
+    let all_utxos: Vec<UtxoResponse> = utxos::collect_address_utxos(every_utxo)?;
     let usable_utxos: Vec<UtxoResponse> =
-        utxos::select(all_utxos, lovelace_goal, selected_tokens.clone()).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+        utxos::select(all_utxos, lovelace_goal, selected_tokens.clone())?;
 
     if usable_utxos.is_empty() {
-        return Err("Not Enough Lovelace/Tokens".to_string());
+        bail!("Not Enough Lovelace/Tokens");
     }
 
     for utxo in usable_utxos.clone() {
@@ -210,26 +178,18 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(usable_utxos).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let (total_lovelace, tokens) = utxos::assets_of(usable_utxos)?;
     // tokens tha need to be put into the change output
-    let change_tokens: Assets = tokens
-        .separate(selected_tokens.clone())
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let change_tokens: Assets = tokens.separate(selected_tokens.clone())?;
     // if the seedelf isn't found then error
     if total_lovelace < lovelace_goal {
-        return Err("Not Enough Lovelace/Tokens".to_string());
+        bail!("Not Enough Lovelace/Tokens");
     }
 
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
 
-    let datum_vector: Vec<u8> = seedelf_datum.rerandomize().to_vec();
+    let datum_vector: Vec<u8> = seedelf_datum.rerandomize()?.to_vec()?;
     let mut fund_output: Output =
         Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone());
     for asset in selected_tokens.items.clone() {
@@ -248,11 +208,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
     let mut number_of_change_utxo: usize = change_token_per_utxo.len();
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let minimum: u64 =
-            wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - lovelace - tmp_fee;
@@ -318,11 +274,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<(),
     let number_of_change_utxo: usize = change_token_per_utxo.len();
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let minimum: u64 =
-            wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - lovelace - tx_fee;

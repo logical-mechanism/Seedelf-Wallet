@@ -1,3 +1,4 @@
+use anyhow::Result;
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
@@ -21,7 +22,7 @@ pub struct HistoryArgs {
     receive_only: bool,
 }
 
-pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<(), String> {
+pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
@@ -34,13 +35,21 @@ pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<
     println!("\n{}\n", "Getting History..".bright_blue(),);
     let wallet_addr: Address =
         address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
-    let txs: Vec<TxResponse> = address_transactions(network_flag, wallet_addr.to_string())
-        .await
-        .map_err(|e| e.to_string())?;
+    let txs: Vec<TxResponse> = address_transactions(network_flag, wallet_addr.to_string()).await?;
     // println!("{:?}", txs);
     for tx in &txs {
-        let input_match = tx.input_registers.iter().any(|r| r.is_owned(scalar));
-        let output_match = tx.output_registers.iter().any(|r| r.is_owned(scalar));
+        let input_match = tx.input_registers.iter().any(|r| {
+            r.is_owned(scalar).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            })
+        });
+        let output_match = tx.output_registers.iter().any(|r| {
+            r.is_owned(scalar).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            })
+        });
 
         if (!args.receive_only || args.spend_only) && input_match {
             println!(

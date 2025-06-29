@@ -1,7 +1,7 @@
+use anyhow::Result;
 use blstrs::Scalar;
 use colored::Colorize;
 use pallas_addresses::Address;
-use reqwest::Error;
 use seedelf_cli::setup;
 use seedelf_core::address;
 use seedelf_core::utxos;
@@ -9,7 +9,7 @@ use seedelf_crypto::convert;
 use seedelf_display::display;
 use seedelf_koios::koios::UtxoResponse;
 
-pub async fn run(network_flag: bool) -> Result<(), Error> {
+pub async fn run(network_flag: bool) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
@@ -28,23 +28,12 @@ pub async fn run(network_flag: bool) -> Result<(), Error> {
         "Stake Key Hash: {}",
         address::stake_key(network_flag).bright_blue()
     );
-    let addr: Address = address::dapp_address(vkey, network_flag).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let addr: Address = address::dapp_address(vkey, network_flag)?;
     let addr_bech32: String = addr.to_bech32().unwrap();
     println!("\nAddress: {}", addr_bech32.bright_blue());
 
-    let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
-    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone()).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag).await?;
+    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone())?;
 
     println!(
         "\nWallet Has {} UTxOs",

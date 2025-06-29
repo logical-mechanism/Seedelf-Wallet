@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
@@ -27,7 +28,6 @@ use seedelf_display::display;
 use seedelf_koios::koios::{
     UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
 };
-
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct MintArgs {
@@ -62,7 +62,7 @@ pub struct MintArgs {
     utxos: Option<Vec<String>>,
 }
 
-pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(), String> {
+pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
@@ -84,10 +84,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
 
     // we need about 2 ada for the utxo
     let tmp_fee: u64 = 205_000;
-    let lovelace_goal: u64 = seedelf_minimum_lovelace().unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    }) + tmp_fee;
+    let lovelace_goal: u64 = seedelf_minimum_lovelace()? + tmp_fee;
 
     // if the label is none then just use the empty string
     let label: String = args.label.unwrap_or_default();
@@ -96,20 +93,12 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     let scalar: Scalar = setup::load_wallet();
 
     let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
-            .await
-            .unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let owned_utxos: Vec<UtxoResponse> =
-        utxos::collect_wallet_utxos(scalar, config.contract.seedelf_policy_id, every_utxo);
+        utxos::collect_wallet_utxos(scalar, config.contract.seedelf_policy_id, every_utxo)?;
 
     let usable_utxos: Vec<UtxoResponse> = if args.utxos.is_none() {
-        utxos::select(owned_utxos, lovelace_goal, Assets::default()).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        })
+        utxos::select(owned_utxos, lovelace_goal, Assets::default())?
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
         match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
@@ -123,13 +112,9 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     };
 
     if usable_utxos.is_empty() {
-        return Err("No Usuable UTxOs Found".to_string());
+        bail!("No Usuable UTxOs Found");
     }
-    let (total_lovelace, change_tokens) =
-        utxos::assets_of(usable_utxos.clone()).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let (total_lovelace, change_tokens) = utxos::assets_of(usable_utxos.clone())?;
 
     for utxo in usable_utxos.clone() {
         let this_input: Input = Input::new(
@@ -151,21 +136,14 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     }
 
     // lets build the seelfelf token
-    let token_name: Vec<u8> = seedelf_token_name(label.clone(), draft_tx.inputs.as_ref())
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let token_name: Vec<u8> = seedelf_token_name(label.clone(), draft_tx.inputs.as_ref())?;
     println!(
         "{} {}",
         "\nCreating Seedelf:".bright_blue(),
         hex::encode(token_name.clone()).bright_white()
     );
 
-    let min_utxo: u64 = seedelf_minimum_lovelace().unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let min_utxo: u64 = seedelf_minimum_lovelace()?;
     println!(
         "{} {}",
         "\nMinimum Required Lovelace:".bright_blue(),
@@ -174,7 +152,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
 
     // this is the new seedelf datum
     let datum_vector: Vec<u8> = if args.generator.is_none() && args.public_value.is_none() {
-        Register::create(scalar).rerandomize().to_vec()
+        Register::create(scalar)?.rerandomize()?.to_vec()?
     } else {
         // both have to be some to get to this point
         // requires should catch the mix cases
@@ -182,17 +160,13 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
             args.generator.unwrap_or_default(),
             args.public_value.unwrap_or_default(),
         );
-        if new_register.is_valid() {
-            new_register.to_vec()
+        if new_register.is_valid()? {
+            new_register.to_vec()?
         } else {
-            return Err("Provided Register Is Invalid".to_string());
+            bail!("Provided Register Is Invalid");
         }
     };
-    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone())
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone())?;
 
     let seedelf_output: Output = Output::new(wallet_addr.clone(), min_utxo)
         .set_inline_datum(datum_vector.clone())
@@ -270,12 +244,8 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     let mut lovelace_amount: u64 = total_lovelace;
     // a max tokens per change output here
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let minimum: u64 =
-            wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - min_utxo - tmp_fee;
@@ -298,7 +268,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
 
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
         let change_lovelace: u64 = lovelace_amount - min_utxo - tmp_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
@@ -312,16 +282,11 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
         .into_iter()
         .zip(register_vector.clone().into_iter())
     {
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone());
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         draft_tx = draft_tx.add_spend_redeemer(
             input,
-            spend_redeemer_vector
-                .unwrap_or_else(|e| {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                })
-                .clone(),
+            spend_redeemer_vector?.clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: 14_000_000,
                 steps: 10_000_000_000,
@@ -434,12 +399,8 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
     // a max tokens per change output here
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
-        let minimum: u64 =
-            wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - min_utxo - total_fee;
@@ -462,7 +423,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
 
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar).rerandomize().to_vec();
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
         let change_lovelace: u64 = lovelace_amount - min_utxo - total_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
@@ -477,16 +438,11 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<(),
         .zip(register_vector.clone().into_iter())
         .zip(spending.iter())
     {
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone());
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         raw_tx = raw_tx.add_spend_redeemer(
             input,
-            spend_redeemer_vector
-                .unwrap_or_else(|e| {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                })
-                .clone(),
+            spend_redeemer_vector?.clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: *mem,
                 steps: *cpu,

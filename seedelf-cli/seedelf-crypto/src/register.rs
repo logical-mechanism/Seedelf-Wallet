@@ -1,4 +1,5 @@
 use crate::schnorr::random_scalar;
+use anyhow::{Context, Result, anyhow};
 use blstrs::{G1Affine, G1Projective, Scalar};
 use hex;
 use hex::FromHex;
@@ -47,25 +48,26 @@ impl Register {
     /// # Returns
     ///
     /// * A new `Register` with compressed generator and public value.
-    pub fn create(sk: Scalar) -> Self {
+    pub fn create(sk: Scalar) -> Result<Self> {
         // Decode and decompress generator
         let compressed_g1_generator: &str = "97F1D3A73197D7942695638C4FA9AC0FC3688C4F9774B905A14E3A3F171BAC586C55E83FF97A1AEFFB3AF00ADB22C6BB";
 
         let g1_generator: G1Affine = G1Affine::from_compressed(
             &hex::decode(compressed_g1_generator)
-                .expect("Failed to decode generator hex")
+                .context("Failed to decode generator hex")?
                 .try_into()
-                .expect("Invalid generator length"),
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         )
-        .expect("Failed to decompress generator");
+        .into_option()
+        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
 
         let public_value: G1Projective = G1Projective::from(g1_generator) * sk;
 
         // Compress points and return them as hex strings
-        Self {
+        Ok(Self {
             generator: hex::encode(g1_generator.to_compressed()),
             public_value: hex::encode(public_value.to_compressed()),
-        }
+        })
     }
 
     /// Converts the `Register` into a serialized vector of bytes using PlutusData encoding.
@@ -77,11 +79,12 @@ impl Register {
     /// # Panics
     ///
     /// * If the generator or public value are invalid hex strings.
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub fn to_vec(&self) -> Result<Vec<u8>> {
         // convert the strings into vectors
-        let generator_vector: Vec<u8> = Vec::from_hex(&self.generator).expect("Invalid hex string");
+        let generator_vector: Vec<u8> =
+            Vec::from_hex(&self.generator).context("Invalid hex string")?;
         let public_value_vector: Vec<u8> =
-            Vec::from_hex(&self.public_value).expect("Invalid hex string");
+            Vec::from_hex(&self.public_value).context("Invalid hex string")?;
         // construct the plutus data
         let plutus_data: PlutusData = PlutusData::Constr(Constr {
             tag: 121,
@@ -91,7 +94,9 @@ impl Register {
                 PlutusData::BoundedBytes(BoundedBytes::from(public_value_vector)),
             ]),
         });
-        plutus_data.encode_fragment().unwrap()
+        plutus_data
+            .encode_fragment()
+            .map_err(|e| anyhow!("Failed to encode PlutusData fragment: {e}"))
     }
 
     /// Rerandomizes the `Register` using a new random scalar.
@@ -102,24 +107,26 @@ impl Register {
     /// # Returns
     ///
     /// * A new `Register` instance with rerandomized points.
-    pub fn rerandomize(self) -> Self {
+    pub fn rerandomize(self) -> Result<Self> {
         // Decode and decompress generator
         let g1: G1Affine = G1Affine::from_compressed(
             &hex::decode(self.generator)
-                .expect("Failed to decode generator hex")
+                .context("Failed to decode generator hex")?
                 .try_into()
-                .expect("Invalid generator length"),
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         )
-        .expect("Failed to decompress generator");
+        .into_option()
+        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
 
         // Decode and decompress public_value
         let u: G1Affine = G1Affine::from_compressed(
             &hex::decode(self.public_value)
-                .expect("Failed to decode public value hex")
+                .context("Failed to decode public value hex")?
                 .try_into()
-                .expect("Invalid public value length"),
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         )
-        .expect("Failed to decompress public value");
+        .into_option()
+        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
 
         // get a random scalar
         let d: Scalar = random_scalar();
@@ -129,10 +136,10 @@ impl Register {
         let u_randomized: G1Projective = G1Projective::from(u) * d;
 
         // Compress points and return them as hex strings
-        Self {
+        Ok(Self {
             generator: hex::encode(g1_randomized.to_compressed()),
             public_value: hex::encode(u_randomized.to_compressed()),
-        }
+        })
     }
 
     /// Verifies ownership of the `Register` using a provided scalar (`sk`).
@@ -148,42 +155,45 @@ impl Register {
     ///
     /// * `true` - If the scalar matches and proves ownership.
     /// * `false` - Otherwise.
-    pub fn is_owned(&self, sk: Scalar) -> bool {
+    pub fn is_owned(&self, sk: Scalar) -> Result<bool> {
         let g1: G1Affine = G1Affine::from_compressed(
             &hex::decode(&self.generator)
-                .expect("Failed to decode generator hex")
+                .context("Failed to decode generator hex")?
                 .try_into()
-                .expect("Invalid generator length"),
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         )
-        .expect("Failed to decompress generator");
+        .into_option()
+        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
 
         let g_x: G1Projective = G1Projective::from(g1) * sk;
 
-        hex::encode(g_x.to_compressed()) == self.public_value
+        Ok(hex::encode(g_x.to_compressed()) == self.public_value)
     }
 
-    pub fn is_valid(&self) -> bool {
+    pub fn is_valid(&self) -> Result<bool> {
         // Decode and decompress generator
         let g1: G1Affine = G1Affine::from_compressed(
             &hex::decode(&self.generator)
-                .expect("Failed to decode generator hex")
+                .context("Failed to decode generator hex")?
                 .try_into()
-                .expect("Invalid generator length"),
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         )
-        .expect("Failed to decompress generator");
+        .into_option()
+        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
 
         // Decode and decompress public_value
         let u: G1Affine = G1Affine::from_compressed(
             &hex::decode(&self.public_value)
-                .expect("Failed to decode public value hex")
+                .context("Failed to decode public value hex")?
                 .try_into()
-                .expect("Invalid public value length"),
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         )
-        .expect("Failed to decompress public value");
+        .into_option()
+        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
 
-        g1.is_on_curve().into()
+        Ok(g1.is_on_curve().into()
             && g1.is_torsion_free().into()
             && u.is_on_curve().into()
-            && u.is_torsion_free().into()
+            && u.is_torsion_free().into())
     }
 }

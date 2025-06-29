@@ -9,6 +9,7 @@ repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
 
 [dependencies]
 aes-gcm = "0.10.3"
+anyhow = "1.0.98"
 argon2 = "0.5.3"
 base64 = "0.22.1"
 blake2 = "0.10.6"

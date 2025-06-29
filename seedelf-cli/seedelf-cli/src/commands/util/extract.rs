@@ -9,6 +9,7 @@ use rand_core::OsRng;
 use seedelf_core::data_structures;
 use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction, utxo_info};
 
+use anyhow::{Result, bail};
 use seedelf_cli::web_server;
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
@@ -35,7 +36,7 @@ pub struct ExtractArgs {
     address: String,
 }
 
-pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<(), String> {
+pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
@@ -50,7 +51,7 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
-        return Err("Supplied Address Is Incorrect".to_string());
+        bail!("Supplied Address Is Incorrect");
     }
 
     let mut empty_datum_utxo = UtxoResponse::default();
@@ -59,36 +60,29 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             if !utxos.is_empty() {
                 empty_datum_utxo = utxos.first().unwrap().clone();
                 if empty_datum_utxo.inline_datum.is_some() {
-                    return Err("UTxO has datum".to_string());
+                    bail!("UTxO has datum");
                 }
                 let utxo_addr: Address = Address::from_bech32(&empty_datum_utxo.address).unwrap();
                 if utxo_addr
                     != address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
                 {
-                    return Err("UTxO not in wallet".to_string());
+                    bail!("UTxO not in wallet");
                 }
                 if empty_datum_utxo.is_spent {
-                    return Err("UTxO is spent".to_string());
+                    bail!("UTxO is spent");
                 }
             } else {
-                return Err("No UTxO Found".to_string());
+                bail!("No UTxO Found");
             }
         }
         Err(err) => {
             eprintln!("Failed to fetch UTxO: {err}\nWait a few moments and try again.");
         }
     }
-    let (empty_utxo_lovelace, empty_utxo_tokens) = utxos::assets_of(vec![empty_datum_utxo.clone()])
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let (empty_utxo_lovelace, empty_utxo_tokens) =
+        utxos::assets_of(vec![empty_datum_utxo.clone()])?;
     let minimum_lovelace: u64 =
-        address_minimum_lovelace_with_assets(&args.address, empty_utxo_tokens.clone())
-            .unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        address_minimum_lovelace_with_assets(&args.address, empty_utxo_tokens.clone())?;
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -126,34 +120,21 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             std::process::exit(1);
         }
     }
-    let usable_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, minimum_lovelace, Assets::new())
-        .unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        });
+    let usable_utxos: Vec<UtxoResponse> =
+        utxos::select(all_utxos, minimum_lovelace, Assets::new())?;
     if usable_utxos.is_empty() {
-        return Err("Not Enough Lovelace/Tokens".to_string());
+        bail!("Not Enough Lovelace/Tokens");
     }
-    let (addr_lovelace, addr_tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let (addr_lovelace, addr_tokens) = utxos::assets_of(usable_utxos.clone())?;
 
     let total_lovelace: u64 = addr_lovelace + empty_utxo_lovelace;
-    let total_tokens: Assets = addr_tokens.merge(empty_utxo_tokens).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let total_tokens: Assets = addr_tokens.merge(empty_utxo_tokens)?;
 
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
 
     let spend_redeemer_vector =
-        data_structures::create_spend_redeemer(String::new(), String::new(), String::new())
-            .unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        data_structures::create_spend_redeemer(String::new(), String::new(), String::new())?;
     let empty_input: Input = Input::new(
         pallas_crypto::hash::Hash::new(
             hex::decode(empty_datum_utxo.tx_hash.clone())
