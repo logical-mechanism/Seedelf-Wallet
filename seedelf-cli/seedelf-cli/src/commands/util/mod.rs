@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
 
 pub mod age;
+pub mod base;
 pub mod expose_key;
 pub mod extract;
 pub mod find;
@@ -27,6 +28,8 @@ pub enum UtilCommands {
     Migrate(migrate::MigrateArgs),
     /// Display spend/receive transaction history for the wallet
     History(history::HistoryArgs),
+    /// Display the base register for the wallet
+    Base,
 }
 
 #[derive(Args)]
@@ -74,6 +77,9 @@ pub async fn run(args: UtilArgs, preprod_flag: bool, variant: u64) {
             if let Err(err) = history::run(args, preprod_flag, variant).await {
                 eprintln!("Error: {err}");
             }
+        }
+        UtilCommands::Base => {
+            base::run();
         }
     }
 }
