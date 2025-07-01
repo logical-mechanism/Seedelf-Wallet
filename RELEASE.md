@@ -8,6 +8,10 @@ version="0.4.7"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^seedelf-core = ".*"/s//seedelf-core = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^seedelf-crypto = ".*"/s//seedelf-crypto = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^seedelf-display = ".*"/s//seedelf-display = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^seedelf-koios = ".*"/s//seedelf-koios = "'${version}'"/' seedelf-cli/Cargo.toml
 # add, commit, and tag out
 git add .
 git commit -m "chore: tagging ${version} release"
@@ -21,11 +25,18 @@ Wait for all checks to pass, then edit the tagged release body for proper format
 ```bash
 cd seedelf-cli
 cargo clean
-cargo test --release
-cargo clippy -- -D warnings
 cargo fmt -- --check
-cargo package
-cargo publish
+cargo clippy --workspace -- -D warnings
+cargo test --workspace --release
+cargo publish -p seedelf-crypto
+sleep 3
+cargo publish -p seedelf-koios
+sleep 3
+cargo publish -p seedelf-display
+sleep 3
+cargo publish -p seedelf-core
+sleep 3
+cargo publish -p seedelf-cli
 cd ..
 ```
 

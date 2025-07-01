@@ -1,6 +1,6 @@
 [package]
 name = "seedelf-cli"
-version = "0.4.7"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 description = "Seedelf: A Cardano Stealth Wallet"
@@ -39,7 +39,7 @@ sha3 = "0.10.8"
 tokio = { version = "1.41.1", features = ["full"] }
 warp = "0.3.7"
 # seedelf stuff
-seedelf-crypto = { path = "../seedelf-crypto" }
-seedelf-core = { path = "../seedelf-core" }
-seedelf-display = { path = "../seedelf-display" }
-seedelf-koios = { path = "../seedelf-koios" }
+seedelf-crypto = { workspace = true }
+seedelf-core = { workspace = true }
+seedelf-display = { workspace = true }
+seedelf-koios = { workspace = true }
