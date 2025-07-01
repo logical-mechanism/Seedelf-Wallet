@@ -1,5 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
-    "seedelf-cli", "seedelf-core", "seedelf-crypto"
-, "seedelf-display", "seedelf-koios"]
+    "seedelf-cli",
+    "seedelf-core",
+    "seedelf-crypto", 
+    "seedelf-display", 
+    "seedelf-koios"
+]
+
+[workspace.package]
+version = "0.4.7"
