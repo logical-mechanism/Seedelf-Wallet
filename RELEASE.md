@@ -49,7 +49,7 @@ If a recompile is required and the contract hashes change, then the [seedelf-con
 Removing a tagged release involves deleting it locally and deleting the tagged branch.
 
 ```bash
-version="0.4.7"
+version="0.4.8"
 git tag -d ${version}
 git push origin --delete ${version}
 ```
