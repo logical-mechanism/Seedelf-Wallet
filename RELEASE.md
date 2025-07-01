@@ -21,11 +21,14 @@ Wait for all checks to pass, then edit the tagged release body for proper format
 ```bash
 cd seedelf-cli
 cargo clean
-cargo test --release
-cargo clippy -- -D warnings
 cargo fmt -- --check
-cargo package
-cargo publish
+cargo clippy --workspace -- -D warnings
+cargo test --workspace --release
+cargo publish -p seedelf-crypto
+cargo publish -p seedelf-koios
+cargo publish -p seedelf-display
+cargo publish -p seedelf-core
+cargo publish -p seedelf-cli
 cd ..
 ```
 

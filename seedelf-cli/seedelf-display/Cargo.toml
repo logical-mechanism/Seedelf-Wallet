@@ -15,4 +15,4 @@ semver = "1.0.26"
 serde_json = "1.0.133"
 tokio = { version = "1.41.1", features = ["full"] }
 # seedelf stuff
-seedelf-koios = { path = "../seedelf-koios" }
+seedelf-koios = { workspace = true }
