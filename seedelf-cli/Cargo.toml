@@ -9,10 +9,10 @@ members = [
 ]
 
 [workspace.dependencies]
-seedelf-core = "0.4.7"
-seedelf-crypto = "0.4.7"
-seedelf-display = "0.4.7"
-seedelf-koios = "0.4.7"
+seedelf-core = "0.4.8"
+seedelf-crypto = "0.4.8"
+seedelf-display = "0.4.8"
+seedelf-koios = "0.4.8"
 
 [patch.crates-io]
 seedelf-core = { path = "seedelf-core" }
@@ -21,4 +21,4 @@ seedelf-display = { path = "seedelf-display" }
 seedelf-koios  = { path = "seedelf-koios" }
 
 [workspace.package]
-version = "0.4.7"
+version = "0.4.8"
