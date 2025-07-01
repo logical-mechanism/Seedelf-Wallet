@@ -4,10 +4,14 @@ Change the version, then run the command below in the parent folder.
 
 ```bash
 # set the version
-version="0.4.7"
+version="0.4.8"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^seedelf-core = ".*"/s//seedelf-core = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^seedelf-crypto = ".*"/s//seedelf-crypto = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^seedelf-display = ".*"/s//seedelf-display = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^seedelf-koios = ".*"/s//seedelf-koios = "'${version}'"/' seedelf-cli/Cargo.toml
 # add, commit, and tag out
 git add .
 git commit -m "chore: tagging ${version} release"
@@ -25,9 +29,13 @@ cargo fmt -- --check
 cargo clippy --workspace -- -D warnings
 cargo test --workspace --release
 cargo publish -p seedelf-crypto
+sleep 3
 cargo publish -p seedelf-koios
+sleep 3
 cargo publish -p seedelf-display
+sleep 3
 cargo publish -p seedelf-core
+sleep 3
 cargo publish -p seedelf-cli
 cd ..
 ```
