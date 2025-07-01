@@ -1,14 +1,21 @@
 use colored::Colorize;
-use include_dir::{Dir, include_dir};
+use mime_guess::MimeGuess;
+use rust_embed::RustEmbed;
 use std::net::SocketAddr;
-use warp::Filter;
+use warp::{Filter, http::Response};
 
-const STATIC_DIR: Dir = include_dir!("seedelf-cli/static");
+#[derive(RustEmbed)]
+#[folder = "static/"]
+struct Asset;
 
-/// Start a web server and inject a dynamic message into the HTML.
-///
-/// # Arguments
-/// - `message`: The dynamic message to replace in the `injected-data` script.
+/// Helper to build a `warp::http::Response<Vec<u8>>` with the correct Content-Type.
+fn serve_bytes(path: &'static str, data: Vec<u8>) -> impl warp::Reply {
+    let mime = MimeGuess::from_path(path).first_or_octet_stream();
+    Response::builder()
+        .header("content-type", mime.as_ref())
+        .body(data)
+}
+
 pub async fn run_web_server(message: String, network_flag: bool) {
     let addr: SocketAddr = ([127, 0, 0, 1], 44203).into();
     println!(
@@ -18,70 +25,49 @@ pub async fn run_web_server(message: String, network_flag: bool) {
     );
     println!("{}", "Hit Ctrl-C To Stop Server".bright_yellow());
 
-    // Serve index.html with dynamic content
-    let html_route = warp::path::end().map(move || {
-        let html_file = STATIC_DIR
-            .get_file("index.html")
-            .expect("Failed to read HTML file");
-        let mut html = html_file
-            .contents_utf8()
-            .expect("Failed to read HTML")
-            .to_string();
-        // Replace the JSON content inside the injected-data script
-        let dynamic_json = format!(r#"{{ "message": "{message}" }}"#);
-        html = html.replace(r#"{ "message": "ACAB000000000000" }"#, &dynamic_json);
-        if network_flag {
-            html = html.replace(
-                r#"{ "network": "FADECAFE00000000" }"#,
-                format!(r#"{{ "network": "{}" }}"#, "preprod.").as_str(),
-            );
+    // HTML route with injection
+    let html = warp::path::end().map(move || {
+        let file = Asset::get("index.html").expect("index.html not found");
+        let mut html = String::from_utf8(file.data.into_owned()).unwrap();
+
+        let dyn_msg = format!(r#"{{ "message": "{message}" }}"#);
+        html = html.replace(r#"{ "message": "ACAB000000000000" }"#, &dyn_msg);
+
+        let net_repl = if network_flag {
+            r#"{ "network": "preprod." }"#
         } else {
-            html = html.replace(
-                r#"{ "network": "FADECAFE00000000" }"#,
-                r#"{ "network": "" }"#,
-            );
-        }
+            r#"{ "network": "" }"#
+        };
+        html = html.replace(r#"{ "network": "FADECAFE00000000" }"#, net_repl);
+
         warp::reply::html(html)
     });
 
-    // Serve index.js as a static file
-    let js_route = warp::path("index.js").map(|| {
-        let file = STATIC_DIR
-            .get_file("index.js")
-            .expect("JavaScript file not found");
-        warp::reply::with_header(file.contents(), "Content-Type", "application/javascript")
+    // JS, CSS, and favicon routes
+    let js = warp::path("index.js").map(|| {
+        let file = Asset::get("index.js").expect("index.js not found");
+        serve_bytes("index.js", file.data.into_owned())
     });
-
-    // Serve favicon.ico
-    let favicon_route = warp::path("favicon.ico").map(|| {
-        let file = STATIC_DIR
-            .get_file("favicon.ico")
-            .expect("Favicon not found");
-        warp::reply::with_header(file.contents(), "Content-Type", "image/x-icon")
+    let css = warp::path("index.css").map(|| {
+        let file = Asset::get("index.css").expect("index.css not found");
+        serve_bytes("index.css", file.data.into_owned())
     });
-
-    // Serve index.css
-    let css_route = warp::path("index.css").map(|| {
-        let file = STATIC_DIR
-            .get_file("index.css")
-            .expect("CSS file not found");
-        warp::reply::with_header(file.contents(), "Content-Type", "text/css")
+    let ico = warp::path("favicon.ico").map(|| {
+        let file = Asset::get("favicon.ico").expect("favicon.ico not found");
+        serve_bytes("favicon.ico", file.data.into_owned())
     });
 
     // Combine all routes
-    let routes = html_route.or(js_route).or(favicon_route).or(css_route);
+    let routes = html.or(js).or(css).or(ico);
 
-    // Run the server with graceful shutdown
-    let (_, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, shutdown_signal());
+    // Run server with graceful shutdown
+    let (_addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl-C handler");
+        println!("\n{}", "Shutdown signal received...".red());
+    });
+
     server.await;
-
     println!("{}", "Server has stopped.".bright_purple());
-}
-
-/// Function to handle graceful shutdown via Ctrl-C
-async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install Ctrl-C handler");
-    println!("{}", "\nShutdown signal received...".red());
 }
