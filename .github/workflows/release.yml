@@ -21,7 +21,7 @@ jobs:
 
       - name: Move Binary (Linux)
         working-directory: seedelf-cli
-        run: mv target/release/seedelf-cli seedelf-cli
+        run: mv target/release/seedelf-cli seedelf-cli.bin
 
       - name: Import GPG Key
         run: |
@@ -32,15 +32,15 @@ jobs:
         run: |
           gpg --batch --yes --pinentry-mode loopback \
               --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-              --armor --detach-sign -o seedelf-cli.asc seedelf-cli
+              --armor --detach-sign -o seedelf-cli.bin.asc seedelf-cli.bin
 
       - name: Generate Binary Checksum (Linux)
         working-directory: seedelf-cli
-        run: sha256sum seedelf-cli > seedelf-cli.sha256
+        run: sha256sum seedelf-cli.bin > seedelf-cli.bin.sha256
 
       - name: Compress Binary and Checksum (Linux)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli
+        run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli.bin
       
       - name: Sign Tar File (Linux)
         working-directory: seedelf-cli
@@ -56,7 +56,7 @@ jobs:
       - name: Create Unique Hashes File (Linux)
         working-directory: seedelf-cli
         run: |
-          echo "Linux Binary: $(cat seedelf-cli.sha256)" >> ../hashes-linux.txt
+          echo "Linux Binary: $(cat seedelf-cli.bin.sha256)" >> ../hashes-linux.txt
           echo "Linux Compressed File: $(cat seedelf-cli-linux.tar.gz.sha256)" >> ../hashes-linux.txt
 
       - name: Upload Artifacts
@@ -177,7 +177,7 @@ jobs:
 
       - name: Move Binary (macOS)
         working-directory: seedelf-cli
-        run: mv target/x86_64-apple-darwin/release/seedelf-cli seedelf-cli
+        run: mv target/x86_64-apple-darwin/release/seedelf-cli seedelf-cli.bin
       
       - name: Import GPG Key
         run: |
@@ -188,15 +188,15 @@ jobs:
         run: |
           gpg --batch --yes --pinentry-mode loopback \
               --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-              --armor --detach-sign -o seedelf-cli.asc seedelf-cli
+              --armor --detach-sign -o seedelf-cli.bin.asc seedelf-cli.bin
 
       - name: Generate Binary Checksum (macOS)
         working-directory: seedelf-cli
-        run: shasum -a 256 seedelf-cli > seedelf-cli.sha256
+        run: shasum -a 256 seedelf-cli.bin > seedelf-cli.bin.sha256
 
       - name: Compress Binary and Checksum (macOS)
         working-directory: seedelf-cli
-        run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli
+        run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli.bin
       
       - name: Sign Tar File (MacOS)
         working-directory: seedelf-cli
@@ -212,7 +212,7 @@ jobs:
       - name: Create Unique Hashes File (macOS)
         working-directory: seedelf-cli
         run: |
-          echo "macOS Binary: $(cat seedelf-cli.sha256)" >> ../hashes-macos.txt
+          echo "macOS Binary: $(cat seedelf-cli.bin.sha256)" >> ../hashes-macos.txt
           echo "macOS Compressed File: $(cat seedelf-cli-macos.tar.gz.sha256)" >> ../hashes-macos.txt
 
       - name: Upload Artifacts
