@@ -6,6 +6,7 @@ license = "MIT"
 description = "Seedelf: A Cardano Stealth Wallet"
 authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
 repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
+readme = "../README.md"
 
 [dependencies]
 aes-gcm = "0.10.3"
