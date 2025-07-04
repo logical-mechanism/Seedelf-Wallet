@@ -7,11 +7,11 @@ Change the version, then run the command below in the parent folder.
 version="0.4.9"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
-sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-cli/Cargo.toml
-sed -i '0,/^seedelf-core = ".*"/s//seedelf-core = "'${version}'"/' seedelf-cli/Cargo.toml
-sed -i '0,/^seedelf-crypto = ".*"/s//seedelf-crypto = "'${version}'"/' seedelf-cli/Cargo.toml
-sed -i '0,/^seedelf-display = ".*"/s//seedelf-display = "'${version}'"/' seedelf-cli/Cargo.toml
-sed -i '0,/^seedelf-koios = ".*"/s//seedelf-koios = "'${version}'"/' seedelf-cli/Cargo.toml
+sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-platform/Cargo.toml
+sed -i '0,/^seedelf-core = ".*"/s//seedelf-core = "'${version}'"/' seedelf-platform/Cargo.toml
+sed -i '0,/^seedelf-crypto = ".*"/s//seedelf-crypto = "'${version}'"/' seedelf-platform/Cargo.toml
+sed -i '0,/^seedelf-display = ".*"/s//seedelf-display = "'${version}'"/' seedelf-platform/Cargo.toml
+sed -i '0,/^seedelf-koios = ".*"/s//seedelf-koios = "'${version}'"/' seedelf-platform/Cargo.toml
 # add, commit, and tag out
 git add .
 git commit -m "chore: tagging ${version} release"
@@ -23,7 +23,7 @@ git push origin ${version}
 Wait for all checks to pass, then edit the tagged release body for proper formatting. Update the release from draft to latest, then publish to crates.io with the command below in the parent folder.
 
 ```bash
-cd seedelf-cli
+cd seedelf-platform
 cargo clean
 cargo fmt -- --check
 cargo clippy --workspace -- -D warnings
@@ -42,7 +42,7 @@ cd ..
 
 ## Recompiling
 
-If a recompile is required and the contract hashes change, then the [seedelf-contracts/README.md](./seedelf-contracts/README.md) must be updated to reflect the changes. This will also introduce a new contract variant inside the [seedelf-cli](./seedelf-cli/README.md).
+If a recompile is required and the contract hashes change, then the [seedelf-contracts/README.md](./seedelf-contracts/README.md) must be updated to reflect the changes. This will also introduce a new contract variant inside the [seedelf-platform](./seedelf-platform/README.md).
 
 ## Re-releasing Tag
 
