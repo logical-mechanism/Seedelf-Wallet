@@ -1,7 +1,17 @@
-# Tauri + React + Typescript
+# Seedelf-gui
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Install dependencies.
+```bash
+npm install
+```
 
-## Recommended IDE Setup
+Running the application locally.
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+cargo tauri dev
+```
+
+Building the application.
+```bash
+npm run tauri build
+```
