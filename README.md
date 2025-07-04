@@ -2,7 +2,7 @@
 
 **Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It should be computationally infeasible to deduce the intended receiver or spender of UTxOs inside this wallet.
 
-The [seedelf-cli](./seedelf-cli/README.md) is available on Linux, Windows, and MacOS.
+The [seedelf-cli](./seedelf-platform/seedelf-cli/README.md) is available on Linux, Windows, and MacOS.
 
 ## What is a Seedelf?
 
@@ -213,9 +213,9 @@ Spendability is always in the hands of the original owner. It is safe to assume 
 
 The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem.
 
-## The **seedelf-cli**
+## The **seedelf-platform**
 
-Users can interact with the wallet protocol via the [seedelf-cli](./seedelf-cli/README.md).
+Users can interact with the wallet protocol via the [seedelf-platform](./seedelf-platform/README.md).
 
 ## Contact
 

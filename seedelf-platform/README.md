@@ -26,7 +26,7 @@ cargo install seedelf-cli
 First, clone the repo and enter the cli subfolder.
 ```bash
 git clone https://github.com/logical-mechanism/Seedelf-Wallet
-cd Seedelf-Wallet/seedelf-cli
+cd Seedelf-Wallet/seedelf-platform
 ```
 
 Installing on the path:
