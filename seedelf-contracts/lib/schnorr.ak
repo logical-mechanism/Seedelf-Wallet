@@ -276,3 +276,13 @@ test simple_regsiter() {
   // trace datum
   datum == datum
 }
+
+test torsion_point() fail {
+  // a torsion point
+  let point: ByteArray =
+    #"a000000000000000000000000054686973206973206120736563726574206d65737361676520666f7220416c6963652e"
+  // this fails for torsion points as they do not belong in the prime order group
+  let g: G1Element = g1.decompress(point)
+  let p: ByteArray = g1.compress(g)
+  point == p
+}
