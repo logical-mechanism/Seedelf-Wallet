@@ -5,6 +5,11 @@ Install dependencies.
 npm install
 ```
 
+Install tauri cli
+```bash
+cargo install create-tauri-app --locked
+```
+
 Running the application locally.
 
 ```bash
@@ -15,3 +20,7 @@ Building the application.
 ```bash
 npm run tauri build
 ```
+
+### Issues
+
+- Blank screen on GUI, force server to restart/reload.
