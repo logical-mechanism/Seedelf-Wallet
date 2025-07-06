@@ -144,6 +144,9 @@ $$
 
 This Register would become unspendable, resulting in lost funds.
 
+This wallet does not verify that the points supplied when you build a Register lie in the prime-order subgroup of BLS12-381.
+If you insert a point that carries any torsion component (i.e., it fails a subgroup membership check), the resulting on-chain Register becomes unspendable, as the validator will never consider it valid, resulting in lost funds. Always generate Registers with the supplied CLI commands (the points will always be torsion-free). If you decide to bring your points, you must run is_torsion_free() (or multiply by the cofactor) before submitting them to the wallet.
+
 ### De-Anonymizing Attacks
 
 There exist multiple attacks that are known to break the privacy of this wallet. The first attack is picking a bad $d$ value. A small $d$ value may be able to be brute-forced. Selecting a $d$ value on the order of $2^{254}$ circumvents the brute-force attack. The second attack does not correctly destroy the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users, it becomes trivial to invert the Register into the original form, thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral UTxO must be placed into a transaction as it incentivizes block producers to validate a failed transaction from the mempool. The collateral UTxO has to be associated with a payment credential, which means that the collateral UTxO, by definition, isn't anonymous, and the ownership is known the entire time. An outside user can watch collateral UTxOs inside a transaction to reveal a user's actions.
