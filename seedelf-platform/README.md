@@ -31,12 +31,14 @@ cd Seedelf-Wallet/seedelf-platform
 
 Installing on the path:
 ```bash
-cargo install --path .
+cargo install --path seedelf-cli --bin seedelf-cli
+seedelf-cli help
 ```
 
 Building for release:
 ```bash
 cargo build --release
+./target/release/seedelf-cli help
 ```
 
 Running it locally:
