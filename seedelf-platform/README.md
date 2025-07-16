@@ -37,7 +37,7 @@ seedelf-cli help
 
 Building for release:
 ```bash
-cargo build --release
+cargo build --release --bin seedelf-cli 
 ./target/release/seedelf-cli help
 ```
 

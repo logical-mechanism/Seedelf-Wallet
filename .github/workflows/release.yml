@@ -17,7 +17,7 @@ jobs:
 
       - name: Build (Linux)
         working-directory: seedelf-platform
-        run: cargo build --release
+        run: cargo build --release --bin seedelf-cli
 
       - name: Move Binary (Linux)
         working-directory: seedelf-platform
@@ -79,7 +79,7 @@ jobs:
 
       - name: Build (Windows)
         working-directory: seedelf-platform
-        run: cargo build --release --target x86_64-pc-windows-gnu
+        run: cargo build --release --bin seedelf-cli --target x86_64-pc-windows-gnu
 
       - name: Move Binary (Windows)
         shell: pwsh
@@ -173,7 +173,7 @@ jobs:
 
       - name: Build (macOS)
         working-directory: seedelf-platform
-        run: cargo build --release --target x86_64-apple-darwin
+        run: cargo build --release --bin seedelf-cli --target x86_64-apple-darwin
 
       - name: Move Binary (macOS)
         working-directory: seedelf-platform
