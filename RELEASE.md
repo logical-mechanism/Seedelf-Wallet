@@ -4,7 +4,7 @@ Change the version, then run the command below in the parent folder.
 
 ```bash
 # set the version
-version="0.4.9"
+version="0.4.10"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-platform/Cargo.toml
