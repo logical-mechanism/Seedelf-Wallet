@@ -55,8 +55,9 @@ async function initializePage() {
         complete_tx = injectedData.message.replace(redeemer_part, sig) + redeemer_part.slice(2);
       }
 
-      // lets use cardanoscan to view it
-      let tx_hash = await wallet.submitTx(complete_tx);
+      // submitTx can return an error here so we want to catch that else it returns the tx hash
+      const tx_hash = await wallet.submitTx(complete_tx);
+
       txLinkElement.href = "https://" + injectedNetwork.network + "cardanoscan.io/transaction/" + tx_hash; // Set the href attribute
       txLinkElement.textContent = "View Transaction On Cardanoscan";
 
