@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "seedelf-gui",
-        "width": 800,
-        "height": 600
+        "maximized": true,
+        "decorations": true,
+        "closable": true,
+        "resizable": true
       }
     ],
     "security": {
