@@ -1,10 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "opener:default"
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME/.seedelf" },
+        { "path": "$HOME/.seedelf/**/*" }
+      ]
+    },
+    { "identifier": "fs:allow-create", "allow": [{ "path": "$HOME/.seedelf/**/*" }] },
+    { "identifier": "fs:allow-read", "allow": [{ "path": "$HOME/.seedelf/**/*" }] },
+    { "identifier": "fs:allow-write", "allow": [{ "path": "$HOME/.seedelf/**/*" }] }
   ]
 }

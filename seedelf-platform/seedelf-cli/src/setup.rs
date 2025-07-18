@@ -29,12 +29,15 @@ struct EncryptedData {
     data: String,
 }
 
-/// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
-pub fn check_and_prepare_seedelf() {
-    println!("{}", "Checking For Existing Seedelf Wallet".bright_blue());
-
+pub fn seedelf_home_path() -> PathBuf {
     let home: PathBuf = home_dir().expect("Failed to get home directory");
     let seedelf_path: PathBuf = home.join(".seedelf");
+    seedelf_path
+}
+
+/// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
+pub fn check_and_prepare_seedelf() -> Option<String> {
+    let seedelf_path: PathBuf = seedelf_home_path();
 
     // Check if `.seedelf` exists
     if !seedelf_path.exists() {
@@ -48,21 +51,19 @@ pub fn check_and_prepare_seedelf() {
         .collect::<Vec<_>>();
 
     if contents.is_empty() {
-        // Prompt the user for a wallet name
-        let wallet_name = prompt_wallet_name();
-        let wallet_file_path = seedelf_path.join(format!("{wallet_name}.wallet"));
-        create_wallet(&wallet_file_path);
+        None
     } else {
         for entry in &contents {
             if let Ok(file_name) = entry.file_name().into_string() {
-                println!("Found Wallet: {}", file_name.bright_cyan());
+                return Some(file_name);
             }
         }
+        None
     }
 }
 
 /// Prompt the user to enter a wallet name
-fn prompt_wallet_name() -> String {
+pub fn prompt_wallet_name() -> String {
     let mut wallet_name = String::new();
     println!("{}", "\nEnter A Wallet Name:".bright_purple());
     io::stdout().flush().unwrap();
@@ -78,7 +79,7 @@ fn prompt_wallet_name() -> String {
 }
 
 /// Create a wallet file and save a random private key
-fn create_wallet(wallet_path: &PathBuf) {
+pub fn create_wallet(wallet_path: &PathBuf) {
     // Generate a random private key
     let sk: Scalar = random_scalar(); // Requires `Field` trait in scope
     let private_key_bytes: [u8; 32] = sk.to_repr(); // Use `to_repr()` to get canonical bytes
