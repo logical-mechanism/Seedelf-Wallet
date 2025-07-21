@@ -13,7 +13,6 @@ pub fn display_purple(text: &str) {
     println!("\n{}", text.bright_purple());
 }
 
-
 pub fn display_yellow(text: &str) {
     println!("\n{}", text.bright_yellow());
 }

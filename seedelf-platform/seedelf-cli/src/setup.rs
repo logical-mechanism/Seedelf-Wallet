@@ -111,7 +111,6 @@ pub fn is_valid_password() -> String {
     password
 }
 
-
 /// Create a wallet file and save a random private key
 pub fn create_wallet(wallet_name: String, password: String) {
     // Generate a random private key
@@ -157,7 +156,6 @@ pub fn create_wallet(wallet_name: String, password: String) {
 
     // Save to file
     fs::write(wallet_path.clone(), output_data).expect("Failed to write wallet file");
-    
 }
 
 /// Load the wallet file and deserialize the private key into a Scalar

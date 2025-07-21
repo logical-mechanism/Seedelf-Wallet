@@ -7,7 +7,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             // setup.rs
-            setup::check_if_wallet_exists, 
+            setup::check_if_wallet_exists,
             setup::check_password_complexity,
             setup::create_new_wallet,
         ])
