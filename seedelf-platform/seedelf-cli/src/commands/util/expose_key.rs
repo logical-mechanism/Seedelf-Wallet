@@ -11,6 +11,7 @@ pub fn run() {
         "\n{}\n",
         "This command will display your secret key. Press Crtl-C To Exit.".bright_yellow()
     );
-    let scalar: Scalar = setup::load_wallet();
+    let password: String = setup::enter_password();
+    let scalar: Scalar = setup::load_wallet(password);
     println!("\n{scalar}\n");
 }

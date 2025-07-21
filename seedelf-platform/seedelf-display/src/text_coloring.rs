@@ -5,6 +5,18 @@ pub fn display_blue(text: &str) {
     println!("\n{}", text.bright_blue());
 }
 
+pub fn display_cyan(text: &str) {
+    println!("\n{}", text.bright_cyan());
+}
+
+pub fn display_purple(text: &str) {
+    println!("\n{}", text.bright_purple());
+}
+
+pub fn display_yellow(text: &str) {
+    println!("\n{}", text.bright_yellow());
+}
+
 /// Print the UTxO & balance counts in a consistent, coloured style.
 pub fn show_lovelace_and_utxos_counts(
     total_utxos: usize,

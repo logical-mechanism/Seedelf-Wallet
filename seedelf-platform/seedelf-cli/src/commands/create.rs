@@ -131,8 +131,9 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
     }
 
     // this is going to be the datum on the seedelf
-    let sk: Scalar = setup::load_wallet();
-    let datum_vector: Vec<u8> = Register::create(sk)?.rerandomize()?.to_vec()?;
+    let password: String = setup::enter_password();
+    let scalar: Scalar = setup::load_wallet(password);
+    let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
     let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone())?;
 
     // lets build the seelfelf token
