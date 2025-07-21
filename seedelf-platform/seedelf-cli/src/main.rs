@@ -2,8 +2,8 @@ use clap::{Parser, Subcommand};
 mod commands;
 use seedelf_cli::setup;
 use seedelf_core::constants::VARIANT;
-use seedelf_display::text_coloring::{display_blue, display_cyan};
-use std::path::PathBuf;
+use seedelf_display::text_coloring::{display_blue, display_cyan, display_yellow};
+// use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
@@ -54,10 +54,10 @@ async fn main() {
         display_blue("Checking For Existing Seedelf Wallet");
         match setup::check_and_prepare_seedelf() {
             None => {
-                let seedelf_path: PathBuf = setup::seedelf_home_path();
                 let wallet_name: String = setup::prompt_wallet_name();
-                let wallet_file_path = seedelf_path.join(format!("{wallet_name}.wallet"));
-                setup::create_wallet(&wallet_file_path);
+                let password: String = setup::is_valid_password();
+                setup::create_wallet(wallet_name.clone(), password);
+                display_yellow(format!("Wallet Created: {wallet_name}").as_str());
             }
             Some(wallet_name) => display_cyan(format!("Found Wallet: {wallet_name}").as_str()),
         }

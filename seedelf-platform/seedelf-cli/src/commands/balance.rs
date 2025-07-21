@@ -15,7 +15,8 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
 
     println!("{}", "\nSeedelf Wallet Information:".bright_white());
 
-    let scalar: Scalar = setup::load_wallet();
+    let password: String = setup::enter_password();
+    let scalar: Scalar = setup::load_wallet(password);
 
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         eprintln!("Error: Invalid Variant");

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router";
 import { ShowNotification, NotificationVariant } from "@/components/ShowNotification";
 import { invoke } from "@tauri-apps/api/core";
 import { WalletExistsResult } from "@/types/wallet";
@@ -6,19 +7,23 @@ import { WalletExistsResult } from "@/types/wallet";
 export function LandingPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [variant, setVariant] = useState<NotificationVariant>("info");
+  const navigate = useNavigate();
 
   useEffect(() => {
 
     const checkWallet = async () => {
-      const result = await invoke<WalletExistsResult>("check_if_wallet_exists");
+      const walletExists = await invoke<WalletExistsResult>("check_if_wallet_exists");
 
-      if (result) {
-        setMessage(`Wallet Found: ${result}`);
+      if (walletExists) {
+        setMessage(`Wallet Found: ${walletExists}`);
         setVariant("success");
+        // this can now link to the wallet page now
       } else {
-        
+        setMessage(`Creating Wallet`);
+        setVariant("info");
+        // this needs to link to the form now
+        navigate("/wallet/new");
       }
-      console.log("check_if_wallet_exists", result);
     };
     checkWallet()
   }, []);
@@ -26,9 +31,6 @@ export function LandingPage() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center gap-4">
       <h1>Welcome to Seedelf</h1>
-      <button onClick={() => setMessage("This is a message.")} className="border px-3 py-1 rounded">
-        Click me
-      </button>
       <ShowNotification message={message} setMessage={setMessage} variant={variant} />
     </main>
   );

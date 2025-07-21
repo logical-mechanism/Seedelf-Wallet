@@ -35,7 +35,8 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
     // we need this to rerandomize a datum
-    let scalar: Scalar = setup::load_wallet();
+    let password: String = setup::enter_password();
+    let scalar: Scalar = setup::load_wallet(password);
 
     let vkey: String = convert::secret_key_to_public_key(scalar);
     let addr: Address = address::dapp_address(vkey.clone(), network_flag)?;

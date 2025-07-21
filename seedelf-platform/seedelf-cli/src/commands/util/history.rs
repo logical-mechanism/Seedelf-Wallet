@@ -26,7 +26,8 @@ pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
-    let scalar: Scalar = setup::load_wallet();
+    let password: String = setup::enter_password();
+    let scalar: Scalar = setup::load_wallet(password);
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
