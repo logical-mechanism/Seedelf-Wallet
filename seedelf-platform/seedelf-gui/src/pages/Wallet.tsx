@@ -45,7 +45,6 @@ export function WalletPage() {
                 variant={toastVariant}
             />
 
-            {/* password modal */}
             {!unlocked && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center">
                     <div className="w-full max-w-sm rounded-lg p-6 shadow-xl">
@@ -53,26 +52,34 @@ export function WalletPage() {
                             Unlock Wallet
                         </h2>
 
-                        <PasswordField
-                            label="Wallet password"
-                            value={password}
-                            onChange={setPassword}
-                        />
-
-                        <button
-                            onClick={tryUnlock}
-                            className="mt-4 w-full rounded bg-blue-600 py-2 text-sm text-white disabled:opacity-50"
-                            disabled={!password || unlocking}
+                        <form
+                            onSubmit={(e) => {
+                                e.preventDefault();
+                                tryUnlock();
+                            }}
                         >
-                            {unlocking ? "Unlocking…" : "Unlock"}
-                        </button>
+                            <PasswordField
+                                label="Wallet password"
+                                value={password}
+                                onChange={setPassword}
+                            />
+
+                            <button
+                                type="submit"
+                                className="mt-4 w-full rounded bg-blue-600 py-2 text-sm text-white disabled:opacity-50"
+                                disabled={!password || unlocking}
+                            >
+                                {unlocking ? "Unlocking…" : "Unlock"}
+                            </button>
+                        </form>
                     </div>
                 </div>
             )}
 
+
             {/* main wallet ui */}
             {unlocked && (
-                <div className="p-6">
+                <div>
                     <h1 className="text-2xl font-bold">Seedelf Wallet</h1>
                     <p className="mt-4 text-gray-700">
                         ✅ Wallet successfully unlocked. Build balances, UTxOs, etc. here.

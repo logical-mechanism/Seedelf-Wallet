@@ -17,12 +17,10 @@ export function LandingPage() {
       if (walletExists) {
         setMessage(`Loading Found Wallet: ${walletExists}`);
         setVariant("success");
-        // this can now link to the wallet page now
         setTimeout(() => navigate("/wallet/"), 2718);
       } else {
         setMessage(`Creating New Wallet`);
         setVariant("info");
-        // this needs to link to the form now
         setTimeout(() => navigate("/wallet/new"), 2718);
       }
     };
