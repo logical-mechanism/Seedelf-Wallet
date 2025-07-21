@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { invoke } from "@tauri-apps/api/core";
-import { ShowNotification } from "@/components/ShowNotification";
+import { ShowNotification, NotificationVariant } from "@/components/ShowNotification";
 import { TextField } from "@/components/TextField";
 import { PasswordField } from "@/components/PasswordField";
 import { WalletExistsResult } from "@/types/wallet";
@@ -10,35 +10,39 @@ export function NewWalletPage() {
     const [name, setName] = useState("");
     const [pw, setPw] = useState("");
     const [confirm, setConfirm] = useState("");
-    const [error, setError] = useState<string | null>(null);
+    const [message, setMessage] = useState<string | null>(null);
+    const [variant, setVariant] = useState<NotificationVariant>("error");
+    
     const navigate = useNavigate();
 
     const handleSubmit = async () => {
         // Simple custom rules – adjust as needed
-        if (!name.trim()) return setError("Wallet name is required.");
+        if (!name.trim()) return setMessage("Wallet name is required.");
 
         const isStrong = await invoke<boolean>("check_password_complexity", {password: pw});
-        if (!isStrong) return setError(`Passwords Must Contain The Following:
+        if (!isStrong) return setMessage(`Passwords Must Contain The Following:
                   Minimum Length: At Least 14 Characters.
                   Uppercase Letter: Requires At Least One Uppercase Character.
                   Lowercase Letter: Requires At Least One Lowercase Character.
                   Number: Requires At Least One Digit.
                   Special Character: Requires At Least One Special Symbol.`);
-        if (pw !== confirm) return setError("Passwords do not match.");
+        if (pw !== confirm) return setMessage("Passwords do not match.");
         try {
             await invoke("create_new_wallet", { walletName: name, password: pw });
             const walletExists = await invoke<WalletExistsResult>("check_if_wallet_exists");
             if (walletExists) {
                 // this can now link to the wallet page now
+                setMessage(`Wallet Was Created!`);
+                setVariant('success');
+                // setTimeout(() => navigate("/wallet/"), 2718);
             } else {
-                setError(`Error Creating Wallet`);
+                setMessage(`Error Creating Wallet`);
+                setVariant('error');
                 // this needs to link to the form now
-                navigate("/wallet/new");
+                setTimeout(() => navigate("/wallet/new"), 2718);
             }
-            
-            
         } catch (e: any) {
-            setError(e as string);
+            setMessage(e as string);
         }
     };
 
@@ -46,8 +50,7 @@ export function NewWalletPage() {
         <div className="mx-auto max-w-sm space-y-4 p-6">
             <h1 className="text-xl font-semibold text-center">Create A Seedelf Wallet</h1>
 
-            {error && <p className="rounded bg-red-100 p-2 text-sm text-red-700">{error}</p>}
-            <ShowNotification message={error} setMessage={setError} variant="error" />
+            <ShowNotification message={message} setMessage={setMessage} variant={variant} />
 
             <TextField label="Wallet name" value={name} onChange={(e) => setName(e.target.value)} />
 
