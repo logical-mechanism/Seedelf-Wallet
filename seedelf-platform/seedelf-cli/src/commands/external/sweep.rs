@@ -34,9 +34,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // we need this to rerandomize a datum
-    let password: String = setup::enter_password();
-    let scalar: Scalar = setup::load_wallet(password);
+    let scalar: Scalar = setup::unlock_wallet_interactive();
 
     let vkey: String = convert::secret_key_to_public_key(scalar);
     let addr: Address = address::dapp_address(vkey.clone(), network_flag)?;

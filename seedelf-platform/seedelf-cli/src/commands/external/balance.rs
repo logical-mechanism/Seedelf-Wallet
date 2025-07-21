@@ -20,8 +20,7 @@ pub async fn run(network_flag: bool) -> Result<()> {
         "This wallet may receive funds without using the wallet contract.".bright_yellow()
     );
 
-    let password: String = setup::enter_password();
-    let scalar: Scalar = setup::load_wallet(password);
+    let scalar: Scalar = setup::unlock_wallet_interactive();
 
     let vkey: String = convert::secret_key_to_public_key(scalar);
     println!("Public Key Hash: {}", vkey.bright_blue());

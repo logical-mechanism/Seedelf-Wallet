@@ -15,10 +15,10 @@ export function LandingPage() {
       const walletExists = await invoke<WalletExistsResult>("check_if_wallet_exists");
 
       if (walletExists) {
-        setMessage(`Wallet Found: ${walletExists}`);
+        setMessage(`Loading Found Wallet: ${walletExists}`);
         setVariant("success");
         // this can now link to the wallet page now
-        // setTimeout(() => navigate("/wallet/"), 2718);
+        setTimeout(() => navigate("/wallet/"), 2718);
       } else {
         setMessage(`Creating New Wallet`);
         setVariant("info");

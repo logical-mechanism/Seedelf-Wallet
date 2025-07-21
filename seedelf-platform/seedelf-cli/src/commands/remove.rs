@@ -67,8 +67,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     let mut input_vector: Vec<Input> = Vec::new();
 
     // There is a single register here so we can do this
-    let password: String = setup::enter_password();
-    let scalar: Scalar = setup::load_wallet(password);
+    let scalar: Scalar = setup::unlock_wallet_interactive();
 
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;

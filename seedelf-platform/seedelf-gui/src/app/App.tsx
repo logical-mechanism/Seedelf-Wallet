@@ -1,5 +1,6 @@
 import { LandingPage } from "@/pages/Landing";
 import { NewWalletPage } from "@/pages/NewWallet";
+import { WalletPage } from "@/pages/Wallet";
 import { useTauriReady } from "@/lib/useTauriReady";
 import { Routes, Route } from "react-router"; 
 
@@ -14,6 +15,7 @@ function App() {
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="/wallet/new" element={<NewWalletPage />} />
+      <Route path="/wallet/" element={<WalletPage />} />
       {/* wildcard falls back to landing; you can show a 404 instead */}
       <Route path="*" element={<LandingPage />} />
     </Routes>

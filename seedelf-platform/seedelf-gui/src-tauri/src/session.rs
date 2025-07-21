@@ -1,7 +1,7 @@
 use blstrs::Scalar;
 use once_cell::sync::OnceCell;
 use std::sync::RwLock;
-use zeroize::Zeroize;   // trait we’ll implement for the wrapper
+use zeroize::Zeroize; // trait we’ll implement for the wrapper
 
 /* ----------  SecretScalar: zeroes itself when dropped  ---------- */
 
@@ -22,7 +22,7 @@ impl Zeroize for SecretScalar {
 
 impl Drop for SecretScalar {
     fn drop(&mut self) {
-        self.zeroize();   // guaranteed wipe on drop
+        self.zeroize(); // guaranteed wipe on drop
     }
 }
 
@@ -56,7 +56,7 @@ where
         .read()
         .expect("poisoned lock")
         .as_ref()
-        .map(|s| f(&s.0))   // pass inner scalar to the closure
+        .map(|s| f(&s.0)) // pass inner scalar to the closure
         .ok_or("Wallet is locked")
 }
 

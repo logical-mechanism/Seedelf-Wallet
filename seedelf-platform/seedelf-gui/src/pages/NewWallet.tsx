@@ -34,7 +34,7 @@ export function NewWalletPage() {
                 // this can now link to the wallet page now
                 setMessage(`Wallet Was Created!`);
                 setVariant('success');
-                // setTimeout(() => navigate("/wallet/"), 2718);
+                setTimeout(() => navigate("/wallet/"), 2718);
             } else {
                 setMessage(`Error Creating Wallet`);
                 setVariant('error');

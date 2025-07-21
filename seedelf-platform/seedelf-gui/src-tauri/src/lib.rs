@@ -1,5 +1,5 @@
-pub mod setup;
 pub mod session;
+pub mod setup;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,6 +11,8 @@ pub fn run() {
             setup::check_if_wallet_exists,
             setup::check_password_complexity,
             setup::create_new_wallet,
+            setup::load_wallet_session,
+            setup::lock_wallet_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
