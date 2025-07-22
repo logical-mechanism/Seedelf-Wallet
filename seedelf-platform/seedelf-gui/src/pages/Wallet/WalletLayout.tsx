@@ -1,24 +1,35 @@
 // src/pages/Wallet.tsx
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { PasswordField } from "@/components/PasswordField";
 import {
     ShowNotification,
     NotificationVariant,
 } from "@/components/ShowNotification";
+import { TopNavBar } from "@/components/TopNavBar";
+import { Network, NetworkContext } from "@/types/network";
 
 export function WalletPage() {
-    /* ---------------- state ---------------- */
     const [password, setPassword] = useState("");
     const [unlocking, setUnlocking] = useState(false);
     const [unlocked, setUnlocked] = useState(false);
+
+    // network selector
+    const [network, setNetwork] = useState<Network>(
+        () => (localStorage.getItem("network") as Network) || "mainnet"
+    );
+
+    useEffect(() => {
+        localStorage.setItem("network", network);
+        setToastMsg(`Network: ${network}`);
+        setToastVariant('info');
+    }, [network]);
 
     // toast
     const [toastMsg, setToastMsg] = useState<string | null>(null);
     const [toastVariant, setToastVariant] =
         useState<NotificationVariant>("info");
 
-    /* ---------------- actions ---------------- */
     const tryUnlock = async () => {
         setUnlocking(true);
         try {
@@ -35,7 +46,7 @@ export function WalletPage() {
         }
     };
 
-    /* ---------------- ui ---------------- */
+
     return (
         <div className="h-full w-full">
             {/* global notifications */}
@@ -79,12 +90,12 @@ export function WalletPage() {
 
             {/* main wallet ui */}
             {unlocked && (
-                <div>
-                    <h1 className="text-2xl font-bold">Seedelf Wallet</h1>
-                    <p className="mt-4 text-gray-700">
-                        ✅ Wallet successfully unlocked. Build balances, UTxOs, etc. here.
-                    </p>
-                </div>
+                <NetworkContext.Provider value={{ network, setNetwork }}>
+                    <TopNavBar onLock={async () => {
+                        await invoke("lock_wallet_session");
+                        setUnlocked(false);
+                    }} />
+                </NetworkContext.Provider>
             )}
         </div>
     );

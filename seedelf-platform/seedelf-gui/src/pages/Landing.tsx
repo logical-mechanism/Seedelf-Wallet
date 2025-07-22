@@ -30,6 +30,9 @@ export function LandingPage() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center gap-4">
       <h1>Welcome to Seedelf</h1>
+      <h2>A Cardano Stealth Wallet</h2>
+      <br />
+      <footer>Created By Logical Mechanism LLC</footer>
       <ShowNotification message={message} setMessage={setMessage} variant={variant} />
     </main>
   );

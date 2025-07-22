@@ -1,6 +1,6 @@
 import { LandingPage } from "@/pages/Landing";
 import { NewWalletPage } from "@/pages/NewWallet";
-import { WalletPage } from "@/pages/Wallet";
+import { WalletPage } from "@/pages/Wallet/WalletLayout";
 import { useTauriReady } from "@/lib/useTauriReady";
 import { Routes, Route } from "react-router"; 
 
