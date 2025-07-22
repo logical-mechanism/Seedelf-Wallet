@@ -22,15 +22,17 @@ export function WalletPage() {
         () => (localStorage.getItem("network") as Network) || "mainnet"
     );
 
-    useEffect(() => {
-        localStorage.setItem("network", network);
-        setToastMsg(`Loading Network: ${network}`);
-        setToastVariant('info');
-        const checkWalletBalance = async () => {
+    const checkWalletBalance = async () => {
             setLovelace(0);
             const _lovelace = await getLovelaceBalance(network);
             setLovelace(_lovelace);
         }
+
+    useEffect(() => {
+        localStorage.setItem("network", network);
+        setToastMsg(`Loading Network: ${network}`);
+        setToastVariant('info');
+        
         checkWalletBalance();
     }, [network, unlocked]);
 
@@ -101,7 +103,10 @@ export function WalletPage() {
             {unlocked && (
                 <NetworkContext.Provider value={{ network, setNetwork }}>
                     <div className="flex flex-col hscreen">
-                        <TopNavBar lovelace={lovelace} onLock={async () => {
+                        <TopNavBar
+                            lovelace={lovelace}
+                            onRefresh={async () => {checkWalletBalance()}}
+                            onLock={async () => {
                             await invoke("lock_wallet_session");
                             setUnlocked(false);
                         }} />
