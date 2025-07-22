@@ -9,11 +9,13 @@ import {
 import { TopNavBar } from "@/components/TopNavBar";
 import { Network, NetworkContext } from "@/types/network";
 import { Sidebar } from "./Sidebar";
+import { getLovelaceBalance } from "./api";
 
 export function WalletPage() {
     const [password, setPassword] = useState("");
     const [unlocking, setUnlocking] = useState(false);
     const [unlocked, setUnlocked] = useState(false);
+    const [lovelace, setLovelace] = useState<number>(0);
 
     // network selector
     const [network, setNetwork] = useState<Network>(
@@ -22,9 +24,15 @@ export function WalletPage() {
 
     useEffect(() => {
         localStorage.setItem("network", network);
-        setToastMsg(`Network: ${network}`);
+        setToastMsg(`Loading Network: ${network}`);
         setToastVariant('info');
-    }, [network]);
+        const checkWalletBalance = async () => {
+            setLovelace(0);
+            const _lovelace = await getLovelaceBalance(network);
+            setLovelace(_lovelace);
+        }
+        checkWalletBalance();
+    }, [network, unlocked]);
 
     // toast
     const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -93,7 +101,7 @@ export function WalletPage() {
             {unlocked && (
                 <NetworkContext.Provider value={{ network, setNetwork }}>
                     <div className="flex flex-col hscreen">
-                        <TopNavBar onLock={async () => {
+                        <TopNavBar lovelace={lovelace} onLock={async () => {
                             await invoke("lock_wallet_session");
                             setUnlocked(false);
                         }} />

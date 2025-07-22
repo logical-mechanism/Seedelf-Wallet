@@ -1,5 +1,6 @@
 pub mod session;
 pub mod setup;
+pub mod wallet;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,6 +14,8 @@ pub fn run() {
             setup::create_new_wallet,
             setup::load_wallet_session,
             setup::lock_wallet_session,
+            // wallet.rs
+            wallet::get_lovelace_balance,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

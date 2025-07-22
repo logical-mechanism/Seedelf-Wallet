@@ -1,12 +1,13 @@
 import { useNetwork, Network } from "@/types/network";
 
-export function TopNavBar({ onLock }: { onLock: () => void }) {
+export function TopNavBar({ onLock, lovelace }: { onLock: () => void, lovelace: number }) {
     const { network, setNetwork } = useNetwork();
     return (
         <header className="flex items-center justify-between h-14 px-4 shadow">
             <span className="font-semibold">Seedelf</span>
 
             <div className="flex items-center gap-8">
+                <span>{lovelace} {network == "mainnet" ? "₳" : "t₳"}</span>
                 <select className="rounded border px-2 py-1 text-sm text-black" value={network} onChange={(e) => setNetwork(e.target.value as Network)}>
                     <option value="mainnet" selected>Mainnet</option>
                     <option value="preprod">Preprod</option>
