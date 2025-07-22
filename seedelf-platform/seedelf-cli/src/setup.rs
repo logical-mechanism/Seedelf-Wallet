@@ -159,17 +159,17 @@ pub fn create_wallet(wallet_name: String, password: String) {
 }
 
 /// Load the wallet file and deserialize the private key into a Scalar
-pub fn load_wallet(password: String) -> Scalar {
+pub fn load_wallet(password: String) -> Result<Scalar, String> {
     let seedelf_path: PathBuf = seedelf_home_path();
 
     // Get the list of files in `.seedelf`
     let contents: Vec<fs::DirEntry> = fs::read_dir(&seedelf_path)
-        .expect("Failed to read .seedelf directory")
+        .map_err(|_| "Failed to read .seedelf directory")?
         .filter_map(|entry| entry.ok())
         .collect::<Vec<_>>();
 
     if contents.is_empty() {
-        panic!("No wallet files found in .seedelf directory");
+        return Err("No wallet files found in .seedelf directory".into());
     }
 
     // Use the first file in the directory to build the wallet path
@@ -177,15 +177,16 @@ pub fn load_wallet(password: String) -> Scalar {
     let wallet_path: PathBuf = first_file.path();
 
     // Read the wallet file
-    let wallet_data: String = fs::read_to_string(&wallet_path).expect("Failed to read wallet file");
+    let wallet_data: String =
+        fs::read_to_string(&wallet_path).map_err(|_| "Failed to read wallet file")?;
 
     // Deserialize the wallet JSON
     let encrypted_wallet: EncryptedData =
-        serde_json::from_str(&wallet_data).expect("Failed to parse wallet JSON");
+        serde_json::from_str(&wallet_data).map_err(|_| "Failed to parse wallet JSON")?;
 
     // Derive the decryption key using the provided salt
     let salt: SaltString =
-        SaltString::from_b64(&encrypted_wallet.salt).expect("Invalid salt format");
+        SaltString::from_b64(&encrypted_wallet.salt).map_err(|_| "Invalid salt format")?;
     let mut output_key_material: [u8; 32] = [0u8; 32];
     let _ = Argon2::default().hash_password_into(
         password.as_bytes(),
@@ -199,31 +200,40 @@ pub fn load_wallet(password: String) -> Scalar {
     // Decode the nonce and encrypted data from base64
     let nonce_bytes = STANDARD
         .decode(&encrypted_wallet.nonce)
-        .expect("Failed to decode nonce");
+        .map_err(|_| "Failed to decode nonce")?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let encrypted_bytes = STANDARD
         .decode(&encrypted_wallet.data)
-        .expect("Failed to decode encrypted data");
+        .map_err(|_| "Failed to decode encrypted data")?;
 
-    // Decrypt the wallet data
-    match cipher.decrypt(nonce, encrypted_bytes.as_ref()) {
-        Ok(decrypted_data) => {
-            // Deserialize the decrypted wallet JSON
-            let wallet: Wallet = serde_json::from_slice(&decrypted_data)
-                .expect("Failed to parse decrypted wallet JSON");
+    /* ---- decrypt ---- */
+    let decrypted_data = cipher
+        .decrypt(nonce, encrypted_bytes.as_ref())
+        .map_err(|_| "Failed to decrypt")?;
 
-            // Decode the hex string back into bytes
-            let private_key_bytes: Vec<u8> =
-                hex::decode(wallet.private_key).expect("Failed to decode private key hex");
+    /* ---- deserialize inner JSON ---- */
+    let wallet: Wallet =
+        serde_json::from_slice(&decrypted_data).map_err(|_| "Failed to parse decrypted JSON")?;
 
-            // Convert bytes to Scalar
-            Scalar::from_repr(private_key_bytes.try_into().expect("Invalid key length"))
-                .expect("Failed to reconstruct Scalar from bytes")
-        }
-        Err(_) => {
-            eprintln!("{}", "Failed To Decrypt; Try Again!".red());
-            load_wallet(password)
+    /* ---- bytes -> Scalar ---- */
+    let key_bytes =
+        hex::decode(wallet.private_key).map_err(|_| "Failed to decode private key hex")?;
+
+    Scalar::from_repr(key_bytes.try_into().map_err(|_| "Invalid key length")?)
+        .into_option()
+        .ok_or("Failed to reconstruct Scalar from bytes".into())
+}
+
+pub fn unlock_wallet_interactive() -> Scalar {
+    loop {
+        let password: String = enter_password();
+
+        match load_wallet(password) {
+            Ok(scalar) => break scalar,
+            Err(e) => {
+                eprintln!("Error: {e}\nPlease Try Again");
+            }
         }
     }
 }

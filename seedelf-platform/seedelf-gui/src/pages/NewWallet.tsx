@@ -31,14 +31,12 @@ export function NewWalletPage() {
             await invoke("create_new_wallet", { walletName: name, password: pw });
             const walletExists = await invoke<WalletExistsResult>("check_if_wallet_exists");
             if (walletExists) {
-                // this can now link to the wallet page now
                 setMessage(`Wallet Was Created!`);
                 setVariant('success');
-                // setTimeout(() => navigate("/wallet/"), 2718);
+                setTimeout(() => navigate("/wallet/"), 2718);
             } else {
                 setMessage(`Error Creating Wallet`);
                 setVariant('error');
-                // this needs to link to the form now
                 setTimeout(() => navigate("/wallet/new"), 2718);
             }
         } catch (e: any) {

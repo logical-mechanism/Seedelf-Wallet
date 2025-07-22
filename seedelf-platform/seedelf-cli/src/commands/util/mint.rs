@@ -90,8 +90,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
     let label: String = args.label.unwrap_or_default();
 
     // if there is change going back then we need this to rerandomize a datum
-    let password: String = setup::enter_password();
-    let scalar: Scalar = setup::load_wallet(password);
+    let scalar: Scalar = setup::unlock_wallet_interactive();
 
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;

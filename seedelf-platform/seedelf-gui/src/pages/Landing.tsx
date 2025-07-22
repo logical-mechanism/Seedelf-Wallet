@@ -15,14 +15,12 @@ export function LandingPage() {
       const walletExists = await invoke<WalletExistsResult>("check_if_wallet_exists");
 
       if (walletExists) {
-        setMessage(`Wallet Found: ${walletExists}`);
+        setMessage(`Loading Found Wallet: ${walletExists}`);
         setVariant("success");
-        // this can now link to the wallet page now
-        // setTimeout(() => navigate("/wallet/"), 2718);
+        setTimeout(() => navigate("/wallet/"), 2718);
       } else {
         setMessage(`Creating New Wallet`);
         setVariant("info");
-        // this needs to link to the form now
         setTimeout(() => navigate("/wallet/new"), 2718);
       }
     };
@@ -32,6 +30,9 @@ export function LandingPage() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center gap-4">
       <h1>Welcome to Seedelf</h1>
+      <h2>A Cardano Stealth Wallet</h2>
+      <br />
+      <footer>Created By Logical Mechanism LLC</footer>
       <ShowNotification message={message} setMessage={setMessage} variant={variant} />
     </main>
   );

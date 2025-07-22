@@ -5,8 +5,7 @@ use seedelf_crypto::register::Register;
 
 pub fn run() {
     println!("\n{}", "Register Base Element".bright_cyan());
-    let password: String = setup::enter_password();
-    let scalar: Scalar = setup::load_wallet(password);
+    let scalar: Scalar = setup::unlock_wallet_interactive();
     let base: Register = Register::create(scalar).unwrap();
     println!(
         "\n{} {}",
