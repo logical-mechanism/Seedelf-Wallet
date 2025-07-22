@@ -1,5 +1,5 @@
-// src/pages/Wallet.tsx
 import { useEffect, useState } from "react";
+import { Outlet } from "react-router";
 import { invoke } from "@tauri-apps/api/core";
 import { PasswordField } from "@/components/PasswordField";
 import {
@@ -8,6 +8,7 @@ import {
 } from "@/components/ShowNotification";
 import { TopNavBar } from "@/components/TopNavBar";
 import { Network, NetworkContext } from "@/types/network";
+import { Sidebar } from "./Sidebar";
 
 export function WalletPage() {
     const [password, setPassword] = useState("");
@@ -91,10 +92,20 @@ export function WalletPage() {
             {/* main wallet ui */}
             {unlocked && (
                 <NetworkContext.Provider value={{ network, setNetwork }}>
-                    <TopNavBar onLock={async () => {
-                        await invoke("lock_wallet_session");
-                        setUnlocked(false);
-                    }} />
+                    <div className="flex flex-col hscreen">
+                        <TopNavBar onLock={async () => {
+                            await invoke("lock_wallet_session");
+                            setUnlocked(false);
+                        }} />
+
+                        <div className="flex flex-1 overflow-hidden">
+                            <Sidebar />
+                            <main className="flex-1 overflow-auto">
+                                <Outlet />
+                            </main>
+                        </div>
+
+                    </div>
                 </NetworkContext.Provider>
             )}
         </div>

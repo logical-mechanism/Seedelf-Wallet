@@ -9,7 +9,7 @@ export function TopNavBar({ onLock }: { onLock: () => void }) {
             <div className="flex items-center gap-8">
                 <select className="rounded border px-2 py-1 text-sm text-black" value={network} onChange={(e) => setNetwork(e.target.value as Network)}>
                     <option value="mainnet" selected>Mainnet</option>
-                    <option value="preprod">Pre‑prod</option>
+                    <option value="preprod">Preprod</option>
                 </select>
 
                 <button
