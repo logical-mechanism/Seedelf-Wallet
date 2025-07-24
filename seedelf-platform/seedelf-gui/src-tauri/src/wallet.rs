@@ -1,11 +1,65 @@
 use crate::session;
-use seedelf_core::constants::{Config, get_config};
+use crate::types::{TxResponseWithSide, UTxOSide};
+use blstrs::Scalar;
+use pallas_addresses::Address;
+use seedelf_core::address;
+use seedelf_core::constants::{Config, VARIANT, get_config};
 use seedelf_core::utxos;
-use seedelf_koios::koios::UtxoResponse;
+use seedelf_crypto::register::Register;
+use seedelf_koios::koios;
+use seedelf_koios::koios::{TxResponse, UtxoResponse};
+
+fn any_owned(regs: &[Register], scalar: &Scalar) -> bool {
+    regs.iter().any(|r| matches!(r.is_owned(*scalar), Ok(true)))
+}
+
+#[tauri::command(async)]
+pub async fn get_wallet_history(network_flag: bool) -> Vec<TxResponseWithSide> {
+    let config: Config = match get_config(VARIANT, network_flag) {
+        Some(c) => c,
+        None => {
+            return Vec::new();
+        }
+    };
+
+    let wallet_addr: Address =
+        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
+
+    let all_txs: Vec<TxResponse> =
+        match koios::address_transactions(network_flag, wallet_addr.to_string()).await {
+            Ok(v) => v,
+            Err(_) => {
+                return Vec::new();
+            }
+        };
+
+    session::with_key(|sk| {
+        let filtered: Vec<TxResponseWithSide> = all_txs
+            .into_iter()
+            .filter_map(|tx| {
+                if any_owned(&tx.input_registers, sk) {
+                    Some(TxResponseWithSide {
+                        side: UTxOSide::Input,
+                        tx,
+                    })
+                } else if any_owned(&tx.output_registers, sk) {
+                    Some(TxResponseWithSide {
+                        side: UTxOSide::Output,
+                        tx,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        filtered
+    })
+    .unwrap_or_default()
+}
 
 #[tauri::command(async)]
 pub async fn get_lovelace_balance(network_flag: bool) -> u64 {
-    let config: Config = match get_config(1, network_flag) {
+    let config: Config = match get_config(VARIANT, network_flag) {
         Some(c) => c,
         None => {
             return 0;

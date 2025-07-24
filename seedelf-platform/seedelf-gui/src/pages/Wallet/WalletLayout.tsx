@@ -8,24 +8,36 @@ import {
 } from "@/components/ShowNotification";
 import { TopNavBar } from "@/components/TopNavBar";
 import { Network, NetworkContext } from "@/types/network";
+import { TxResponseWithSide } from "@/types/wallet";
 import { Sidebar } from "./Sidebar";
-import { getLovelaceBalance } from "./api";
+import { getLovelaceBalance, getWalletHistory } from "./api";
 
 export function WalletPage() {
     const [password, setPassword] = useState("");
     const [unlocking, setUnlocking] = useState(false);
     const [unlocked, setUnlocked] = useState(false);
+
+    // wallet states
     const [lovelace, setLovelace] = useState<number>(0);
+    const [history, setHistory] = useState<TxResponseWithSide[]>([]);
 
     // network selector
     const [network, setNetwork] = useState<Network>(
         () => (localStorage.getItem("network") as Network) || "mainnet"
     );
 
-    const checkWalletBalance = async () => {
+    const gatherWalletInfo = async () => {
+            // initalize stuff
             setLovelace(0);
+            setHistory([])
+
+            // query stuff
             const _lovelace = await getLovelaceBalance(network);
+            const _history = await getWalletHistory(network);
+
+            // set stuff
             setLovelace(_lovelace);
+            setHistory(_history);
         }
 
     useEffect(() => {
@@ -33,7 +45,7 @@ export function WalletPage() {
         setToastMsg(`Loading Network: ${network}`);
         setToastVariant('info');
         
-        checkWalletBalance();
+        gatherWalletInfo();
     }, [network, unlocked]);
 
     // toast
@@ -105,7 +117,7 @@ export function WalletPage() {
                     <div className="flex flex-col hscreen">
                         <TopNavBar
                             lovelace={lovelace}
-                            onRefresh={async () => {checkWalletBalance()}}
+                            onRefresh={async () => {gatherWalletInfo()}}
                             onLock={async () => {
                             await invoke("lock_wallet_session");
                             setUnlocked(false);
@@ -114,7 +126,7 @@ export function WalletPage() {
                         <div className="flex flex-1 overflow-hidden">
                             <Sidebar />
                             <main className="flex-1 overflow-auto">
-                                <Outlet />
+                                <Outlet context={{lovelace, history}}/>
                             </main>
                         </div>
 
