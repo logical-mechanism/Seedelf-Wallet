@@ -64,13 +64,16 @@ pub fn check_and_prepare_seedelf() -> Option<String> {
 
 /// Prompt the user to enter a wallet name
 pub fn prompt_wallet_name() -> String {
-    let mut wallet_name = String::new();
+    let mut wallet_name: String = String::new();
     println!("{}", "\nEnter A Wallet Name:".bright_purple());
     io::stdout().flush().unwrap();
     io::stdin()
         .read_line(&mut wallet_name)
         .expect("Failed to read wallet name");
-    let final_name: String = wallet_name.trim().to_string();
+    let final_name: String = wallet_name
+        .split_whitespace() // breaks on any whitespace sequence
+        .collect::<Vec<_>>() // collect the pieces
+        .join("_");
     if final_name.is_empty() {
         println!("{}", "Wallet Must Not Have Empty Name.".red());
         return prompt_wallet_name();

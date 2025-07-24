@@ -12,12 +12,15 @@ export function NewWalletPage() {
     const [confirm, setConfirm] = useState("");
     const [message, setMessage] = useState<string | null>(null);
     const [variant, setVariant] = useState<NotificationVariant>("error");
+    const [submitting, setSubmitting] = useState(false);
     
     const navigate = useNavigate();
 
     const handleSubmit = async () => {
         // Simple custom rules – adjust as needed
         if (!name.trim()) return setMessage("Wallet name is required.");
+        // spaces should be underscores
+        const walletName: string = name.trim().replace(/\s+/g, "_");
 
         const isStrong = await invoke<boolean>("check_password_complexity", {password: pw});
         if (!isStrong) return setMessage(`Passwords Must Contain The Following:
@@ -27,10 +30,14 @@ export function NewWalletPage() {
                   Number: Requires At Least One Digit.
                   Special Character: Requires At Least One Special Symbol.`);
         if (pw !== confirm) return setMessage("Passwords do not match.");
+
+        setSubmitting(true);
+        let success = false;
         try {
-            await invoke("create_new_wallet", { walletName: name, password: pw });
+            await invoke("create_new_wallet", { walletName: walletName, password: pw });
             const walletExists = await invoke<WalletExistsResult>("check_if_wallet_exists");
             if (walletExists) {
+                success = true;
                 setMessage(`Wallet Was Created!`);
                 setVariant('success');
                 setTimeout(() => navigate("/wallet/"), 2718);
@@ -41,6 +48,8 @@ export function NewWalletPage() {
             }
         } catch (e: any) {
             setMessage(e as string);
+        } finally {
+            if (!success) setSubmitting(false);
         }
     };
 
@@ -50,10 +59,10 @@ export function NewWalletPage() {
 
             <ShowNotification message={message} setMessage={setMessage} variant={variant} />
 
-            <TextField label="Wallet name" value={name} onChange={(e) => setName(e.target.value)} />
+            <TextField label="Wallet name" value={name} onChange={(e) => setName(e.target.value)} disabled={submitting}/>
 
-            <PasswordField label="Password" value={pw} onChange={setPw} />
-            <PasswordField label="Confirm password" value={confirm} onChange={setConfirm} />
+            <PasswordField label="Password" value={pw} onChange={setPw} disabled={submitting}/>
+            <PasswordField label="Confirm password" value={confirm} onChange={setConfirm} disabled={submitting}/>
 
             <div className="flex items-center justify-between">
                 <button onClick={() => navigate("/")} className="rounded px-3 py-2 text-sm underline">
@@ -63,7 +72,7 @@ export function NewWalletPage() {
                 <button
                     onClick={handleSubmit}
                     className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
-                    disabled={!name || !pw || !confirm}
+                    disabled={submitting || !name || !pw || !confirm}
                 >
                     Create
                 </button>
