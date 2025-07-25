@@ -22,18 +22,23 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
         std::process::exit(1);
     });
 
-    display::all_seedelfs(
+    let seedelfs = display::all_seedelfs(
         scalar,
         network_flag,
         hex::encode(config.contract.wallet_contract_hash).as_str(),
-        config.contract.seedelf_policy_id,
+        &config.contract.seedelf_policy_id,
     )
     .await;
+
+    if !seedelfs.is_empty() {
+        println!("{}", "\nCurrent Seedelf:\n".bright_green());
+        display::print_seedelfs(seedelfs);
+    }
 
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let all_utxos: Vec<UtxoResponse> =
-        utxos::collect_all_wallet_utxos(scalar, config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::collect_all_wallet_utxos(scalar, &config.contract.seedelf_policy_id, every_utxo)?;
 
     let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone())?;
 

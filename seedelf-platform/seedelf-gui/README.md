@@ -21,6 +21,10 @@ Building the application.
 npm run tauri build
 ```
 
+format all the ts and tsx
+```bash
+npx prettier --write "src/**/*.{ts,tsx}"
+```
 ### Issues
 
 - Blank screen on GUI, force server to restart/reload.

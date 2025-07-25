@@ -16,7 +16,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let (total_utxos, total_lovelace, total_seedelfs) =
-        utxos::count_lovelace_and_utxos(config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::count_lovelace_and_utxos(&config.contract.seedelf_policy_id, every_utxo)?;
     show_lovelace_and_utxos_counts(total_utxos, total_lovelace, total_seedelfs);
     // other things can go here
     Ok(())

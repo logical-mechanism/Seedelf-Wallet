@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
-import { ShowNotification, NotificationVariant } from "@/components/ShowNotification";
+import {
+  ShowNotification,
+  NotificationVariant,
+} from "@/components/ShowNotification";
 import { invoke } from "@tauri-apps/api/core";
 import { WalletExistsResult } from "@/types/wallet";
 
@@ -10,9 +13,10 @@ export function LandingPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-
     const checkWallet = async () => {
-      const walletExists = await invoke<WalletExistsResult>("check_if_wallet_exists");
+      const walletExists = await invoke<WalletExistsResult>(
+        "check_if_wallet_exists",
+      );
 
       if (walletExists) {
         setMessage(`Loading Found Wallet: ${walletExists}`);
@@ -24,7 +28,7 @@ export function LandingPage() {
         setTimeout(() => navigate("/wallet/new"), 2718);
       }
     };
-    checkWallet()
+    checkWallet();
   }, []);
 
   return (
@@ -33,7 +37,11 @@ export function LandingPage() {
       <h2>A Cardano Stealth Wallet</h2>
       <br />
       <footer>Created By Logical Mechanism LLC</footer>
-      <ShowNotification message={message} setMessage={setMessage} variant={variant} />
+      <ShowNotification
+        message={message}
+        setMessage={setMessage}
+        variant={variant}
+      />
     </main>
   );
 }

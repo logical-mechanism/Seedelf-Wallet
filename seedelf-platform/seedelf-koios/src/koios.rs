@@ -1,7 +1,7 @@
 use hex;
 use reqwest::{Client, Error, Response};
 use seedelf_crypto::register::Register;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Represents the latest blockchain tip information from Koios.
@@ -43,7 +43,7 @@ pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
     Ok(response)
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Asset {
     pub decimals: u8,
     pub quantity: String,
@@ -52,13 +52,13 @@ pub struct Asset {
     pub fingerprint: String,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct InlineDatum {
     pub bytes: String,
     pub value: Value, // Flexible for arbitrary JSON
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct UtxoResponse {
     pub tx_hash: String,
     pub tx_index: u64,
@@ -625,7 +625,7 @@ pub struct TxInfoResponse {
     pub outputs: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TxResponse {
     pub tx_hash: String,
     pub block_height: u64,

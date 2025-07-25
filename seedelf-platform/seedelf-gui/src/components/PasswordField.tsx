@@ -7,8 +7,19 @@ interface PasswordFieldProps {
   disabled?: boolean;
 }
 
-export function PasswordField({ label, value, onChange, disabled }: PasswordFieldProps) {
+export function PasswordField({
+  label,
+  value,
+  onChange,
+  disabled,
+}: PasswordFieldProps) {
   const [show, setShow] = useState(false);
+  const [capsOn, setCapsOn] = useState(false);
+
+  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    setCapsOn(e.getModifierState("CapsLock"));
+  };
+
   return (
     <label className="flex flex-col gap-1 text-sm">
       {label}
@@ -18,6 +29,8 @@ export function PasswordField({ label, value, onChange, disabled }: PasswordFiel
           type={show ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onKeyDown={handleKey}
+          onKeyUp={handleKey}
           className="w-full rounded border px-3 py-2 pr-10 focus:outline-none focus:ring"
         />
         <button
@@ -29,6 +42,9 @@ export function PasswordField({ label, value, onChange, disabled }: PasswordFiel
           {show ? "Hide" : "Show"}
         </button>
       </div>
+      {capsOn && (
+        <span className="mt-1 text-xs text-red-500">Caps Lock is On</span>
+      )}
     </label>
   );
 }

@@ -37,7 +37,7 @@ pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<()>
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let all_seedelfs =
-        utxos::find_all_seedelfs(label, config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::find_all_seedelfs(label, &config.contract.seedelf_policy_id, every_utxo)?;
     display::print_seedelfs(all_seedelfs);
     Ok(())
 }
