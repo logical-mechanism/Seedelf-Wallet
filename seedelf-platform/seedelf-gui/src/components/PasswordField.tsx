@@ -7,7 +7,12 @@ interface PasswordFieldProps {
   disabled?: boolean;
 }
 
-export function PasswordField({ label, value, onChange, disabled }: PasswordFieldProps) {
+export function PasswordField({
+  label,
+  value,
+  onChange,
+  disabled,
+}: PasswordFieldProps) {
   const [show, setShow] = useState(false);
   return (
     <label className="flex flex-col gap-1 text-sm">

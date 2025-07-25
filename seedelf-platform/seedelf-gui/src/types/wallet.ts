@@ -20,7 +20,7 @@ export interface TxResponseWithSide {
 }
 
 export interface Asset {
-  decimals: number;        // u8
+  decimals: number; // u8
   quantity: string;
   policy_id: string;
   asset_name: string;
@@ -29,12 +29,12 @@ export interface Asset {
 
 export interface InlineDatum {
   bytes: string;
-  value: unknown;          // serde_json::Value
+  value: unknown; // serde_json::Value
 }
 
 export interface UtxoResponse {
   tx_hash: string;
-  tx_index: number;        // u64 (beware >2^53 precision)
+  tx_index: number; // u64 (beware >2^53 precision)
   address: string;
   value: string;
   stake_address: string | null;

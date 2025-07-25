@@ -48,12 +48,22 @@ const selectStyles = {
   valueContainer: (base: any) => ({ ...base, padding: "0 0.5rem" }),
 };
 
-export function TopNavBar({ onLock, onRefresh, lovelace, lastSync }: { onLock: () => void, onRefresh: () => void, lovelace: number, lastSync: number | null }) {
+export function TopNavBar({
+  onLock,
+  onRefresh,
+  lovelace,
+  lastSync,
+}: {
+  onLock: () => void;
+  onRefresh: () => void;
+  lovelace: number;
+  lastSync: number | null;
+}) {
   const { network, setNetwork } = useNetwork();
   const [ago, setAgo] = useState<string>("—");
 
   useEffect(() => {
-    setAgo("—")
+    setAgo("—");
     if (lastSync === null) return;
     const tick = () => setAgo(formatAgo(Date.now() - lastSync));
     tick();
@@ -66,7 +76,9 @@ export function TopNavBar({ onLock, onRefresh, lovelace, lastSync }: { onLock: (
       <span className="font-semibold">Seedelf</span>
 
       <div className="flex items-center gap-8">
-        <span>{lovelace} {network == "mainnet" ? "₳" : "t₳"}</span>
+        <span>
+          {lovelace} {network == "mainnet" ? "₳" : "t₳"}
+        </span>
 
         <button
           onClick={onRefresh}
@@ -78,7 +90,10 @@ export function TopNavBar({ onLock, onRefresh, lovelace, lastSync }: { onLock: (
       </div>
       <div className="flex items-center gap-8">
         <Select
-          value={{ value: network, label: network === "mainnet" ? "Mainnet" : "Pre-Production" }}
+          value={{
+            value: network,
+            label: network === "mainnet" ? "Mainnet" : "Pre-Production",
+          }}
           onChange={(opt) => setNetwork(opt!.value as Network)}
           options={[
             { value: "mainnet", label: "Mainnet" },
