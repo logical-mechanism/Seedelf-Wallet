@@ -55,7 +55,9 @@ export function WalletPage() {
     setHistory(_history);
 
     // set last sync time
-    setLastSync(Date.now());
+    if (unlocked) {
+        setLastSync(Date.now());
+    }
   };
 
   useEffect(() => {
