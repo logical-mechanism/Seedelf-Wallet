@@ -73,7 +73,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
         args.seedelf.clone(),
-        config.contract.seedelf_policy_id,
+        &config.contract.seedelf_policy_id,
         every_utxo,
     )?
     .ok_or("Seedelf Not Found".to_string())
@@ -123,7 +123,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .unwrap()
                     .try_into()
                     .expect("Not Correct Length"),
@@ -148,7 +148,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         )
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .expect("Invalid hex string")
                     .try_into()
                     .expect("Failed to convert to 32-byte array"),
@@ -179,7 +179,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         .remove_output(0)
         .remove_spend_redeemer(input_vector.clone().remove(0))
         .remove_mint_redeemer(pallas_crypto::hash::Hash::new(
-            hex::decode(config.contract.seedelf_policy_id)
+            hex::decode(&config.contract.seedelf_policy_id)
                 .expect("Invalid hex string")
                 .try_into()
                 .expect("Failed to convert to 32-byte array"),
@@ -295,7 +295,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         )
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .expect("Invalid hex string")
                     .try_into()
                     .expect("Failed to convert to 32-byte array"),

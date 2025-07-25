@@ -1,20 +1,24 @@
 use hex_literal::hex;
+use serde::{Deserialize, Serialize};
 
 /// The current variant of Seedelf
 pub const VARIANT: u64 = 1;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contract {
     pub wallet_contract_hash: [u8; 28],
-    pub seedelf_policy_id: &'static str,
+    pub seedelf_policy_id: String,
     pub wallet_contract_size: u64,
     pub seedelf_contract_size: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reference {
     pub wallet_reference_utxo: [u8; 32],
     pub seedelf_reference_utxo: [u8; 32],
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub contract: Contract,
     pub reference: Reference,
@@ -47,7 +51,7 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
                 wallet_contract_hash: hex!(
                     "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469"
                 ),
-                seedelf_policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255",
+                seedelf_policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255".to_string(),
                 wallet_contract_size: 629,
                 seedelf_contract_size: 519,
             };

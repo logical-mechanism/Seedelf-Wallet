@@ -16,6 +16,8 @@ pub fn run() {
             setup::load_wallet_session,
             setup::lock_wallet_session,
             // wallet.rs
+            wallet::get_every_utxo,
+            wallet::get_owned_utxo,
             wallet::get_lovelace_balance,
             wallet::get_wallet_history,
         ])

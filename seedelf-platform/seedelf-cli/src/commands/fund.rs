@@ -146,7 +146,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
         args.seedelf.clone(),
-        config.contract.seedelf_policy_id,
+        &config.contract.seedelf_policy_id,
         every_utxo,
     )?
     .ok_or("Seedelf Not Found".to_string())

@@ -95,7 +95,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let owned_utxos: Vec<UtxoResponse> =
-        utxos::collect_wallet_utxos(scalar, config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::collect_wallet_utxos(scalar, &config.contract.seedelf_policy_id, every_utxo)?;
 
     let usable_utxos: Vec<UtxoResponse> = if args.utxos.is_none() {
         utxos::select(owned_utxos, lovelace_goal, Assets::default())?
@@ -172,7 +172,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
         .set_inline_datum(datum_vector.clone())
         .add_asset(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .unwrap()
                     .try_into()
                     .expect("Not Correct Length"),
@@ -200,7 +200,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .unwrap()
                     .try_into()
                     .expect("Not Correct Length"),
@@ -212,7 +212,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
         .reference_input(reference_utxo(config.reference.seedelf_reference_utxo))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .expect("Invalid hex string")
                     .try_into()
                     .expect("Failed to convert to 32-byte array"),
@@ -300,7 +300,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
         .clear_fee()
         .clear_collateral_output()
         .remove_mint_redeemer(pallas_crypto::hash::Hash::new(
-            hex::decode(config.contract.seedelf_policy_id)
+            hex::decode(&config.contract.seedelf_policy_id)
                 .expect("Invalid hex string")
                 .try_into()
                 .expect("Failed to convert to 32-byte array"),
@@ -454,7 +454,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
 
     raw_tx = raw_tx.add_mint_redeemer(
         pallas_crypto::hash::Hash::new(
-            hex::decode(config.contract.seedelf_policy_id)
+            hex::decode(&config.contract.seedelf_policy_id)
                 .expect("Invalid hex string")
                 .try_into()
                 .expect("Failed to convert to 32-byte array"),

@@ -149,7 +149,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     let (seedelf_datum, usable_utxos) = utxos::find_seedelf_and_wallet_utxos(
         scalar,
         args.seedelf,
-        config.contract.seedelf_policy_id,
+        &config.contract.seedelf_policy_id,
         every_utxo,
     )?;
     // the extra 2.5 ADA should account for the change and fee

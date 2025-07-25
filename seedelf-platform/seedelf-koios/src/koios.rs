@@ -43,7 +43,7 @@ pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
     Ok(response)
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Asset {
     pub decimals: u8,
     pub quantity: String,
@@ -52,13 +52,13 @@ pub struct Asset {
     pub fingerprint: String,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct InlineDatum {
     pub bytes: String,
     pub value: Value, // Flexible for arbitrary JSON
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct UtxoResponse {
     pub tx_hash: String,
     pub tx_index: u64,

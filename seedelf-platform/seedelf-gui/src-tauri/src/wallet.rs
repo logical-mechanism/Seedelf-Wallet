@@ -57,37 +57,48 @@ pub async fn get_wallet_history(network_flag: bool) -> Vec<TxResponseWithSide> {
     .unwrap_or_default()
 }
 
+
 #[tauri::command(async)]
-pub async fn get_lovelace_balance(network_flag: bool) -> u64 {
+pub async fn get_every_utxo(network_flag: bool) -> Vec<UtxoResponse> {
     let config: Config = match get_config(VARIANT, network_flag) {
         Some(c) => c,
         None => {
-            return 0;
+            return Vec::new();
         }
     };
 
-    let every_utxo: Vec<UtxoResponse> =
+    // this is all the utxos in the contract
         match utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await
         {
-            Ok(v) => v,
+            Ok(v) => return v,
             Err(_) => {
-                return 0;
+                return Vec::new();
             }
         };
+}
 
-    let all_utxos: Vec<UtxoResponse> = match session::with_key(|sk| {
-        utxos::collect_all_wallet_utxos(*sk, config.contract.seedelf_policy_id, every_utxo)
-    }) {
-        Ok(Ok(v)) => v,
-        Ok(Err(_)) => {
-            return 0;
-        }
-        Err(_) => {
-            return 0;
+
+#[tauri::command]
+pub fn get_owned_utxo(network_flag: bool, every_utxo: Vec<UtxoResponse> ) -> Vec<UtxoResponse> {
+    let config: Config = match get_config(VARIANT, network_flag) {
+        Some(c) => c,
+        None => {
+            return Vec::new();
         }
     };
 
-    match utxos::assets_of(all_utxos) {
+    match session::with_key(|sk| {
+        utxos::collect_all_wallet_utxos(*sk, &config.contract.seedelf_policy_id, every_utxo)
+    }) {
+        Ok(Ok(v)) => v,
+        _ => Vec::new()
+    }
+}
+
+
+#[tauri::command]
+pub fn get_lovelace_balance(owned_utxos: Vec<UtxoResponse> ) -> u64 {
+    match utxos::assets_of(owned_utxos) {
         Ok((lovelace, _)) => lovelace,
         Err(_) => 0,
     }

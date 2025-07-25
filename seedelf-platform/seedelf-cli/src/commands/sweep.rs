@@ -220,7 +220,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let owned_utxos: Vec<UtxoResponse> =
-        utxos::collect_wallet_utxos(scalar, config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::collect_wallet_utxos(scalar, &config.contract.seedelf_policy_id, every_utxo)?;
     let usable_utxos: Vec<UtxoResponse> = if args.all {
         owned_utxos
     } else {

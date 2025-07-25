@@ -26,9 +26,9 @@ export function Dashboard() {
                 <div className="flex gap-16">
                     <NavLink
                         to="send"
-                        className="flex flex-col items-center text-blue-600 hover:text-blue-700 hover:scale-105"
+                        className="flex flex-col items-center text-indigo-600 hover:text-indigo-700 hover:scale-105"
                     >
-                        <div className="p-3 rounded-full bg-blue-600 text-white hover:bg-blue-700 transition">
+                        <div className="p-3 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition">
                             <ArrowUpRight className="w-10 h-10" />
                         </div>
                         <span className="mt-1 text-xs font-medium">Send</span>
@@ -36,9 +36,9 @@ export function Dashboard() {
 
                     <NavLink
                         to="receive"
-                        className="flex flex-col items-center text-green-600 hover:text-green-700 hover:scale-105"
+                        className="flex flex-col items-center text-teal-600 hover:text-teal-700 hover:scale-105"
                     >
-                        <div className="p-3 rounded-full bg-green-600 text-white hover:bg-green-700 transition">
+                        <div className="p-3 rounded-full bg-teal-600 text-white hover:bg-teal-700 transition">
                             <ArrowDownLeft className="w-10 h-10" />
                         </div>
                         <span className="mt-1 text-xs font-medium">Receive</span>
@@ -53,14 +53,20 @@ export function Dashboard() {
                 ) : (
                     <ul className="space-y-3 text-white">
                         {recent.map(h => (
-                            <li key={`${h.tx.tx_hash}-${h.side}`}>
-                                <span className="font-semibold mr-2">{h.side}</span>
-                                <button
-                                    onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
-                                    className="underline text-blue-400 hover:text-blue-500"
-                                >
-                                    {h.tx.tx_hash}
-                                </button>
+                            <li key={`${h.tx.tx_hash}-${h.side}`} className="mb-4 border rounded text-center p-4">
+                                <span className={`font-bold flex items-center gap-1 mb-4 ${h.side === "Input" ? "text-indigo-400" : "text-teal-400"}`}>
+                                    {h.side === "Input" ? <ArrowUpRight /> : <ArrowDownLeft/>}
+                                    {h.side === "Input" ? "Sent Funds" : "Received Funds"}
+                                </span>
+                                <div>
+                                    <span className={`font-semibold mr-8 ${h.side === "Input" ? "text-indigo-400" : "text-teal-400"}`}>{h.side}</span>
+                                    <button
+                                        onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
+                                        className="underline text-blue-400 hover:text-blue-500"
+                                    >
+                                        {h.tx.tx_hash}
+                                    </button>
+                                </div>
                             </li>
                         ))}
                     </ul>

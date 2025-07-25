@@ -1,7 +1,7 @@
 use crate::version_control::{compare_versions, get_latest_version};
 use blstrs::Scalar;
 use colored::Colorize;
-use seedelf_koios::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip};
+use seedelf_koios::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip, UtxoResponse};
 
 pub async fn is_their_an_update() {
     match get_latest_version().await {
@@ -50,48 +50,44 @@ pub fn preprod_text(network_flag: bool) {
     }
 }
 
+pub fn extract_all_owned_seedelfs(sk: Scalar, seedelf_policy_id: &str, utxos: Vec<UtxoResponse>) -> Vec<String> {
+    let mut seedelfs: Vec<String> = Vec::new();
+    for utxo in utxos {
+        // Extract bytes
+        if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
+            // utxo must be owned by this secret scalar
+            if inline_datum.is_owned(sk).unwrap() {
+                // its owned but lets not count the seedelf in the balance
+                if contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
+                    let asset_name: &String = utxo
+                        .asset_list
+                        .as_ref()
+                        .and_then(|vec| {
+                            vec.iter()
+                                .find(|asset| asset.policy_id == seedelf_policy_id)
+                                .map(|asset| &asset.asset_name)
+                        })
+                        .unwrap();
+                    seedelfs.push(asset_name.to_string());
+                }
+            }
+        }
+    }
+    seedelfs
+}
+
 pub async fn all_seedelfs(
     sk: Scalar,
     network_flag: bool,
     wallet_contract_hash: &str,
     seedelf_policy_id: &str,
-) {
-    let mut seedelfs: Vec<String> = Vec::new();
-
+) -> Vec<String> {
     match credential_utxos(wallet_contract_hash, network_flag).await {
         Ok(utxos) => {
-            for utxo in utxos {
-                // Extract bytes
-                if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-                    // utxo must be owned by this secret scalar
-                    if inline_datum.is_owned(sk).unwrap() {
-                        // its owned but lets not count the seedelf in the balance
-                        if contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
-                            let asset_name: &String = utxo
-                                .asset_list
-                                .as_ref()
-                                .and_then(|vec| {
-                                    vec.iter()
-                                        .find(|asset| asset.policy_id == seedelf_policy_id)
-                                        .map(|asset| &asset.asset_name)
-                                })
-                                .unwrap();
-                            seedelfs.push(asset_name.to_string());
-                        }
-                    }
-                }
-            }
+            return extract_all_owned_seedelfs(sk, seedelf_policy_id, utxos);
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
-            std::process::exit(1);
-        }
-    }
-    if !seedelfs.is_empty() {
-        println!("{}", "\nCurrent Seedelf:\n".bright_green());
-        for seedelf in seedelfs {
-            println!("\nSeedelf: {}", seedelf.white());
-            seedelf_label(seedelf);
+        Err(_) => {
+            return Vec::new();
         }
     }
 }

@@ -165,7 +165,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
                 .set_inline_datum(datum_vector.clone())
                 .add_asset(
                     pallas_crypto::hash::Hash::new(
-                        hex::decode(config.contract.seedelf_policy_id)
+                        hex::decode(&config.contract.seedelf_policy_id)
                             .unwrap()
                             .try_into()
                             .expect("Not Correct Length"),
@@ -180,7 +180,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .unwrap()
                     .try_into()
                     .expect("Not Correct Length"),
@@ -194,7 +194,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         ))
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .expect("Invalid hex string")
                     .try_into()
                     .expect("Failed to convert to 32-byte array"),
@@ -217,7 +217,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         .clear_collateral_output()
         .remove_output(1)
         .remove_mint_redeemer(pallas_crypto::hash::Hash::new(
-            hex::decode(config.contract.seedelf_policy_id)
+            hex::decode(&config.contract.seedelf_policy_id)
                 .expect("Invalid hex string")
                 .try_into()
                 .expect("Failed to convert to 32-byte array"),
@@ -316,7 +316,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         .fee(total_fee)
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
-                hex::decode(config.contract.seedelf_policy_id)
+                hex::decode(&config.contract.seedelf_policy_id)
                     .expect("Invalid hex string")
                     .try_into()
                     .expect("Failed to convert to 32-byte array"),

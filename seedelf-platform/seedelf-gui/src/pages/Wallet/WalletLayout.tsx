@@ -10,7 +10,7 @@ import { TopNavBar } from "@/components/TopNavBar";
 import { Network, NetworkContext } from "@/types/network";
 import { TxResponseWithSide } from "@/types/wallet";
 import { Sidebar } from "./Sidebar";
-import { getLovelaceBalance, getWalletHistory } from "./api";
+import { getLovelaceBalance, getWalletHistory, getEveryUtxo, getOwnedUtxo } from "./api";
 
 export function WalletPage() {
     const [password, setPassword] = useState("");
@@ -32,8 +32,12 @@ export function WalletPage() {
             setHistory([])
 
             // query stuff
-            const _lovelace = await getLovelaceBalance(network);
             const _history = await getWalletHistory(network);
+            const _every_utxo = await getEveryUtxo(network);
+            console.log(_every_utxo);
+            
+            const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
+            const _lovelace = await getLovelaceBalance(_owned_utxo);
 
             // set stuff
             setLovelace(_lovelace);

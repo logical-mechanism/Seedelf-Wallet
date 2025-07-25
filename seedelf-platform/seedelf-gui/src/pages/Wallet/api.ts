@@ -1,25 +1,33 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Network } from "@/types/network";
-import { TxResponseWithSide } from "@/types/wallet";
+import { TxResponseWithSide, UtxoResponse } from "@/types/wallet";
 
-export async function getLovelaceBalance(network: Network): Promise<number> {
-    let flag;
+function castNetwork(network: Network): boolean {
     if (network == "mainnet") {
-        flag = false
+        return false
     } else {
-        flag = true
+        return true
     }
-    const balance = await invoke<number>("get_lovelace_balance", { networkFlag: flag });
+}
+
+
+export async function getEveryUtxo(network: Network): Promise<UtxoResponse[]> {
+    const flag = castNetwork(network);
+    return await invoke<UtxoResponse[]>("get_every_utxo", { networkFlag: flag });
+}
+
+export function getOwnedUtxo(network: Network, everyUtxo: UtxoResponse[]): Promise<UtxoResponse[]> {
+    const flag = castNetwork(network);
+    return invoke<UtxoResponse[]>("get_owned_utxo", { networkFlag: flag, everyUtxo: everyUtxo });
+}
+
+export async function getLovelaceBalance(ownedUtxo: UtxoResponse[]): Promise<number> {
+    const balance = await invoke<number>("get_lovelace_balance", { ownedUtxos: ownedUtxo });
     const ada = balance ? balance / 1_000_000.0 : 0;
     return ada;
 }
 
 export async function getWalletHistory(network: Network): Promise<TxResponseWithSide[]> {
-    let flag;
-    if (network == "mainnet") {
-        flag = false
-    } else {
-        flag = true
-    }
+    const flag = castNetwork(network);
     return await invoke<TxResponseWithSide[]>("get_wallet_history", { networkFlag: flag })
 }
