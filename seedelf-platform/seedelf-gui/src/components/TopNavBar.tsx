@@ -42,7 +42,7 @@ export function TopNavBar({ onLock, onRefresh, lovelace }: { onLock: () => void,
     const { network, setNetwork } = useNetwork();
     return (
         <header className="flex items-center justify-between h-14 px-4 shadow">
-            <span className="font-semibold">Seedelf: A Cardano Stealth Wallet</span>
+            <span className="font-semibold">Seedelf</span>
 
             <div className="flex items-center gap-8">
                 <span>{lovelace} {network == "mainnet" ? "₳" : "t₳"}</span>

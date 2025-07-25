@@ -126,15 +126,21 @@ export function WalletPage() {
                     <div className="flex flex-col hscreen">
                         <TopNavBar
                             lovelace={lovelace}
-                            onRefresh={async () => {gatherWalletInfo()}}
+                            onRefresh={async () => {
+                                setToastMsg("Refreshing State");
+                                setToastVariant('info');
+                                gatherWalletInfo()
+                            }}
                             onLock={async () => {
                             await invoke("lock_wallet_session");
                             setUnlocked(false);
                         }} />
 
-                        <div className="flex flex-1 overflow-hidden">
-                            <Sidebar />
-                            <main className="flex-1 overflow-auto">
+                        <div className="flex h-full">
+                            <aside className="w-48 shrink-0 border-r">
+                                <Sidebar />
+                            </aside>
+                            <main className="flex-1 min-w-0 overflow-auto">
                                 <Outlet context={{lovelace, seedelfs, history}}/>
                             </main>
                         </div>
