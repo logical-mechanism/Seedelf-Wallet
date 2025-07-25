@@ -12,6 +12,21 @@ function txUrl(txHash: string, network: string) {
         : `https://preprod.cardanoscan.io/transaction/${txHash}`;
 }
 
+function IconAction({ to, color, icon, label }: { to: string; color: string; icon: React.ReactNode; label: string }) {
+  return (
+    <NavLink
+      to={to}
+      className={`flex flex-col items-center text-${color}-600 hover:text-${color}-700 hover:scale-105`}
+    >
+      <div className={`p-3 rounded-lg bg-${color}-600 text-white hover:bg-${color}-700 transition`}>
+        {icon}
+      </div>
+      <span className="mt-1 text-xs font-medium">{label}</span>
+    </NavLink>
+  );
+}
+
+
 export function Dashboard() {
     const [message, setMessage] = useState<string | null>(null);
     const { lovelace, seedelfs, history } = useOutletContext<OutletContextType>();
@@ -38,35 +53,9 @@ export function Dashboard() {
                 </span>
                     
                 <div className="flex gap-16">
-                    <NavLink
-                        to="send"
-                        className="flex flex-col items-center text-indigo-600 hover:text-indigo-700 hover:scale-105"
-                    >
-                        <div className="p-3 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition">
-                            <ArrowUpRight className="w-10 h-10" />
-                        </div>
-                        <span className="mt-1 text-xs font-medium">Send</span>
-                    </NavLink>
-
-                    <NavLink
-                        to="receive"
-                        className="flex flex-col items-center text-teal-600 hover:text-teal-700 hover:scale-105"
-                    >
-                        <div className="p-3 rounded-lg bg-teal-600 text-white hover:bg-teal-700 transition">
-                            <ArrowDownLeft className="w-10 h-10" />
-                        </div>
-                        <span className="mt-1 text-xs font-medium">Receive</span>
-                    </NavLink>
-
-                    <NavLink
-                        to="fund"
-                        className="flex flex-col items-center text-pink-600 hover:text-pink-700 hover:scale-105"
-                    >
-                        <div className="p-3 rounded-lg bg-pink-600 text-white hover:bg-pink-700 transition">
-                            <BanknoteArrowUp className="w-10 h-10" />
-                        </div>
-                        <span className="mt-1 text-xs font-medium">Add Funds</span>
-                    </NavLink>
+                    <IconAction to="send" color="indigo" icon={<ArrowUpRight className="w-10 h-10" />} label="Send" />
+                    <IconAction to="receive" color="teal" icon={<ArrowDownLeft className="w-10 h-10" />} label="Receive" />
+                    <IconAction to="fund" color="pink" icon={<BanknoteArrowUp className="w-10 h-10" />} label="Add Funds" />
                 </div>
 
                 <div className={`${elves.length === 0 ? "" : "border rounded"}`}>
@@ -81,6 +70,8 @@ export function Dashboard() {
                                             {h}
                                         </code>
                                         <button
+                                            type="button"
+                                            aria-label="Copy Seedelf Token name"
                                             onClick={() => copy(h)}
                                             className="hover:scale-105"
                                         >
@@ -90,15 +81,7 @@ export function Dashboard() {
                                 </li>
                             ))}
                             <li>
-                                <NavLink
-                                    to="manage"
-                                    className="flex flex-col items-center text-zinc-600 hover:text-zinc-700 hover:scale-105"
-                                >
-                                    <div className="p-3 rounded-lg bg-zinc-600 text-white hover:bg-zinc-700 transition">
-                                        <Ellipsis />
-                                    </div>
-                                    <span className="mt-1 text-xs font-medium">Manage</span>
-                                </NavLink>
+                                <IconAction to="manage" color="zinc" icon={<Ellipsis className="w-5 h-5" />} label="Manage" />
                             </li>
                         </ul>
                     )}
@@ -120,12 +103,16 @@ export function Dashboard() {
                                     <span className={`font-semibold mr-8 ${h.side === "Input" ? "text-indigo-400" : "text-teal-400"}`}>{h.side}</span>
                                     <code className="pr-4">{h.tx.tx_hash}</code>
                                     <button
+                                        type="button"
+                                        aria-label="Open on Cardanoscan"
                                         onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
                                         className="hover:scale-105 pr-4"
                                     >
                                         <Link />
                                     </button>
                                     <button
+                                        type="button"
+                                        aria-label="Copy Transaction Id"
                                         onClick={() => copy(h.tx.tx_hash)}
                                         className="hover:scale-105"
                                     >
@@ -135,20 +122,11 @@ export function Dashboard() {
                             </li>
                         ))}
                         <li>
-                            <NavLink
-                                to="history"
-                                className="flex flex-col items-center text-slate-600 hover:text-slate-700 hover:scale-105"
-                            >
-                                <div className="p-3 rounded-lg bg-slate-600 text-white hover:bg-slate-700 transition">
-                                    <Ellipsis />
-                                </div>
-                                <span className="mt-1 text-xs font-medium">History</span>
-                            </NavLink>
+                            <IconAction to="history" color="slate" icon={<Ellipsis className="w-5 h-5" />} label="History" />
                         </li>
                     </ul>
                 )}
             </div>
-
         </div>
     );
 }
