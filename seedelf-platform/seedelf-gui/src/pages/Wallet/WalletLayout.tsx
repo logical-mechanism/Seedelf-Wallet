@@ -39,7 +39,6 @@ export function WalletPage() {
             
             const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
             const _seedelfs = await getOwnedSeedelfs(network, _every_utxo);
-            console.log("Elves", _seedelfs);
             
             const _lovelace = await getLovelaceBalance(_owned_utxo);
 
@@ -51,8 +50,10 @@ export function WalletPage() {
 
     useEffect(() => {
         localStorage.setItem("network", network);
-        setToastMsg(`Loading Network: ${network}`);
-        setToastVariant('info');
+        if (unlocked) {
+            setToastMsg(`Loading Network: ${network}`);
+            setToastVariant('info');
+        }
         
         gatherWalletInfo();
     }, [network, unlocked]);

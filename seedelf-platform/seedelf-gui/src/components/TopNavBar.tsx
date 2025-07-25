@@ -20,9 +20,9 @@ const selectStyles = {
   option: (base: any, state: any) => ({
     ...base,
     backgroundColor: state.isSelected
-      ? "#6366f1"
-      : state.isFocused
       ? "#374151"
+      : state.isFocused
+      ? "#6366f1"
       : "#121212",
     color: "white",
     cursor: "pointer",
@@ -31,7 +31,7 @@ const selectStyles = {
   placeholder: (base: any) => ({ ...base, color: "#9ca3af" }),
   dropdownIndicator: (base: any, state: any) => ({
     ...base,
-    color: state.isFocused ? "#6366f1" : "#9ca3af",
+    color: state.isFocused ? "#9ca3af" : "#6366f1",
     "&:hover": { color: "#6366f1" },
   }),
   indicatorSeparator: () => ({ display: "none" }),

@@ -72,6 +72,7 @@ export function Dashboard() {
                                         <code className="min-w-0 truncate font-bold pr-16">{h}</code>
                                         <button
                                             type="button"
+                                            title="Copy"
                                             aria-label="Copy Seedelf Token name"
                                             onClick={() => copy(h)}
                                             className="hover:scale-105"
@@ -105,6 +106,7 @@ export function Dashboard() {
                                     <code className="pr-4 min-w-0 truncate ">{h.tx.tx_hash}</code>
                                     <button
                                         type="button"
+                                        title="Link"
                                         aria-label="Open on Cardanoscan"
                                         onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
                                         className="hover:scale-105 pr-4"
@@ -113,6 +115,7 @@ export function Dashboard() {
                                     </button>
                                     <button
                                         type="button"
+                                        title="Copy"
                                         aria-label="Copy Transaction Id"
                                         onClick={() => copy(h.tx.tx_hash)}
                                         className="hover:scale-105"

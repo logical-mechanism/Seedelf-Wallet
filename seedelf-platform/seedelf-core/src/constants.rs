@@ -51,7 +51,8 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
                 wallet_contract_hash: hex!(
                     "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469"
                 ),
-                seedelf_policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255".to_string(),
+                seedelf_policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255"
+                    .to_string(),
                 wallet_contract_size: 629,
                 seedelf_contract_size: 519,
             };

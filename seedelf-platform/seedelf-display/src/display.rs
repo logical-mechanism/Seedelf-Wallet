@@ -1,7 +1,9 @@
 use crate::version_control::{compare_versions, get_latest_version};
 use blstrs::Scalar;
 use colored::Colorize;
-use seedelf_koios::koios::{contains_policy_id, credential_utxos, extract_bytes_with_logging, tip, UtxoResponse};
+use seedelf_koios::koios::{
+    UtxoResponse, contains_policy_id, credential_utxos, extract_bytes_with_logging, tip,
+};
 
 pub async fn is_their_an_update() {
     match get_latest_version().await {
@@ -50,7 +52,11 @@ pub fn preprod_text(network_flag: bool) {
     }
 }
 
-pub fn extract_all_owned_seedelfs(sk: Scalar, seedelf_policy_id: &str, utxos: Vec<UtxoResponse>) -> Vec<String> {
+pub fn extract_all_owned_seedelfs(
+    sk: Scalar,
+    seedelf_policy_id: &str,
+    utxos: Vec<UtxoResponse>,
+) -> Vec<String> {
     let mut seedelfs: Vec<String> = Vec::new();
     for utxo in utxos {
         // Extract bytes
@@ -83,12 +89,8 @@ pub async fn all_seedelfs(
     seedelf_policy_id: &str,
 ) -> Vec<String> {
     match credential_utxos(wallet_contract_hash, network_flag).await {
-        Ok(utxos) => {
-            return extract_all_owned_seedelfs(sk, seedelf_policy_id, utxos);
-        }
-        Err(_) => {
-            return Vec::new();
-        }
+        Ok(utxos) => extract_all_owned_seedelfs(sk, seedelf_policy_id, utxos),
+        Err(_) => Vec::new(),
     }
 }
 
