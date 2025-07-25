@@ -27,7 +27,7 @@ enum Commands {
     /// Displays the seedelf-cli welcome message
     Welcome,
     /// Create a new seedelf in the wallet
-    Create(commands::create::LabelArgs),
+    Create(commands::create::CreateArgs),
     /// Remove a seedelf from the wallet
     Remove(commands::remove::RemoveArgs),
     /// Displays the current wallet information, seedelfs, and balance

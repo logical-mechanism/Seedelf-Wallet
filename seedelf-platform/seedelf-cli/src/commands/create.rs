@@ -23,7 +23,7 @@ use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct LabelArgs {
+pub struct CreateArgs {
     #[arg(
         short = 'a',
         long,
@@ -41,7 +41,7 @@ pub struct LabelArgs {
     label: Option<String>,
 }
 
-pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
