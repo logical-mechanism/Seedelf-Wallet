@@ -16,6 +16,7 @@ export function WalletPage() {
     const [password, setPassword] = useState("");
     const [unlocking, setUnlocking] = useState(false);
     const [unlocked, setUnlocked] = useState(false);
+    const [lastSync, setLastSync] = useState<number | null>(null); // unix ms
 
     // wallet states
     const [lovelace, setLovelace] = useState<number>(0);
@@ -46,6 +47,9 @@ export function WalletPage() {
             setLovelace(_lovelace);
             setSeedelfs(_seedelfs);
             setHistory(_history);
+            
+            // set last sync time
+            setLastSync(Date.now());
         }
 
     useEffect(() => {
@@ -126,6 +130,7 @@ export function WalletPage() {
                 <NetworkContext.Provider value={{ network, setNetwork }}>
                     <div className="flex flex-col hscreen">
                         <TopNavBar
+                            lastSync={lastSync}
                             lovelace={lovelace}
                             onRefresh={async () => {
                                 setToastMsg("Refreshing State");
