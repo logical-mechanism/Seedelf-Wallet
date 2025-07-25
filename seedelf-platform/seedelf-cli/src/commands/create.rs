@@ -18,7 +18,7 @@ use seedelf_core::data_structures;
 use seedelf_core::transaction;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
-use seedelf_display::display;
+use seedelf_display::{display, text_coloring};
 use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction};
 
 /// Struct to hold command-specific arguments
@@ -265,6 +265,7 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         .len()
         .try_into()
         .unwrap();
+
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
     println!(
         "{} {}",
@@ -272,7 +273,6 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
         tx_fee.to_string().bright_white()
     );
 
-    // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
     println!(
         "{} {}",
@@ -334,7 +334,9 @@ pub async fn run(args: LabelArgs, network_flag: bool, variant: u64) -> Result<()
     println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
     // inject the tx cbor into the local webserver to prompt the wallet
+    display::webserver_address();
     web_server::run_web_server(tx_cbor, network_flag).await;
+    text_coloring::display_purple("Server has stopped.");
 
     Ok(())
 }

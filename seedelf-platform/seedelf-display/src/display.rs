@@ -1,9 +1,16 @@
+use crate::text_coloring::{display_cyan, display_white, display_yellow};
 use crate::version_control::{compare_versions, get_latest_version};
 use blstrs::Scalar;
 use colored::Colorize;
 use seedelf_koios::koios::{
     UtxoResponse, contains_policy_id, credential_utxos, extract_bytes_with_logging, tip,
 };
+
+pub fn webserver_address() {
+    display_cyan("Starting Server At:");
+    display_white("http://127.0.0.1:44203/");
+    display_yellow("Hit Ctrl-C To Stop Server");
+}
 
 pub async fn is_their_an_update() {
     match get_latest_version().await {

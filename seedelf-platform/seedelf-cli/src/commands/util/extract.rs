@@ -18,7 +18,7 @@ use seedelf_core::transaction::{
     address_minimum_lovelace_with_assets, extract_budgets, reference_utxo, total_computation_fee,
 };
 use seedelf_core::utxos;
-use seedelf_display::display;
+use seedelf_display::{display, text_coloring};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -289,7 +289,9 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
     // inject the tx cbor into the local webserver to prompt the wallet
+    display::webserver_address();
     web_server::run_web_server(tx_cbor, network_flag).await;
+    text_coloring::display_purple("Server has stopped.");
 
     Ok(())
 }
