@@ -12,6 +12,14 @@
     },
     { "identifier": "fs:allow-create", "allow": [{ "path": "$HOME/.seedelf/**/*" }] },
     { "identifier": "fs:allow-read", "allow": [{ "path": "$HOME/.seedelf/**/*" }] },
-    { "identifier": "fs:allow-write", "allow": [{ "path": "$HOME/.seedelf/**/*" }] }
+    { "identifier": "fs:allow-write", "allow": [{ "path": "$HOME/.seedelf/**/*" }] },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://cardanoscan.io/*" },
+        { "url": "https://preprod.cardanoscan.io/*" },
+        { "url": "http://127.0.0.1:44203/" }
+      ]
+    }
   ]
 }

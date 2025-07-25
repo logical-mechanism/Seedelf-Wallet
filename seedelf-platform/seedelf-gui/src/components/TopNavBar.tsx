@@ -1,5 +1,5 @@
 import { useNetwork, Network } from "@/types/network";
-import { RefreshIcon } from "./RefreshIcon";
+import { RefreshCw } from "lucide-react";
 
 export function TopNavBar({ onLock, onRefresh, lovelace }: { onLock: () => void, onRefresh: () => void, lovelace: number }) {
     const { network, setNetwork } = useNetwork();
@@ -14,7 +14,7 @@ export function TopNavBar({ onLock, onRefresh, lovelace }: { onLock: () => void,
                     onClick={onRefresh}
                     className="rounded border border-white px-3 py-1"
                 >
-                    <RefreshIcon />
+                    <RefreshCw />
                 </button>
             </div>
             <div className="flex items-center gap-8">
