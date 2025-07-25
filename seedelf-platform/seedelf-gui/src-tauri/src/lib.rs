@@ -18,6 +18,7 @@ pub fn run() {
             // wallet.rs
             wallet::get_every_utxo,
             wallet::get_owned_utxo,
+            wallet::get_owned_seedelfs,
             wallet::get_lovelace_balance,
             wallet::get_wallet_history,
         ])

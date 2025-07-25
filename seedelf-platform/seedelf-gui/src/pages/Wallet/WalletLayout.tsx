@@ -10,7 +10,7 @@ import { TopNavBar } from "@/components/TopNavBar";
 import { Network, NetworkContext } from "@/types/network";
 import { TxResponseWithSide } from "@/types/wallet";
 import { Sidebar } from "./Sidebar";
-import { getLovelaceBalance, getWalletHistory, getEveryUtxo, getOwnedUtxo } from "./api";
+import { getLovelaceBalance, getWalletHistory, getEveryUtxo, getOwnedUtxo, getOwnedSeedelfs } from "./api";
 
 export function WalletPage() {
     const [password, setPassword] = useState("");
@@ -19,6 +19,7 @@ export function WalletPage() {
 
     // wallet states
     const [lovelace, setLovelace] = useState<number>(0);
+    const [seedelfs, setSeedelfs] = useState<string[]>([]);
     const [history, setHistory] = useState<TxResponseWithSide[]>([]);
 
     // network selector
@@ -29,18 +30,22 @@ export function WalletPage() {
     const gatherWalletInfo = async () => {
             // initalize stuff
             setLovelace(0);
-            setHistory([])
+            setSeedelfs([]);
+            setHistory([]);
 
             // query stuff
             const _history = await getWalletHistory(network);
             const _every_utxo = await getEveryUtxo(network);
-            console.log(_every_utxo);
             
             const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
+            const _seedelfs = await getOwnedSeedelfs(network, _every_utxo);
+            console.log("Elves", _seedelfs);
+            
             const _lovelace = await getLovelaceBalance(_owned_utxo);
 
             // set stuff
             setLovelace(_lovelace);
+            setSeedelfs(_seedelfs);
             setHistory(_history);
         }
 
@@ -130,7 +135,7 @@ export function WalletPage() {
                         <div className="flex flex-1 overflow-hidden">
                             <Sidebar />
                             <main className="flex-1 overflow-auto">
-                                <Outlet context={{lovelace, history}}/>
+                                <Outlet context={{lovelace, seedelfs, history}}/>
                             </main>
                         </div>
 

@@ -21,8 +21,13 @@ export function getOwnedUtxo(network: Network, everyUtxo: UtxoResponse[]): Promi
     return invoke<UtxoResponse[]>("get_owned_utxo", { networkFlag: flag, everyUtxo: everyUtxo });
 }
 
-export async function getLovelaceBalance(ownedUtxo: UtxoResponse[]): Promise<number> {
-    const balance = await invoke<number>("get_lovelace_balance", { ownedUtxos: ownedUtxo });
+export async function getOwnedSeedelfs(network: Network, everyUtxo: UtxoResponse[]): Promise<string[]> {
+    const flag = castNetwork(network);
+    return await invoke<string[]>("get_owned_seedelfs", { networkFlag: flag, everyUtxo: everyUtxo });
+}
+
+export async function getLovelaceBalance(ownedUtxos: UtxoResponse[]): Promise<number> {
+    const balance = await invoke<number>("get_lovelace_balance", { ownedUtxos: ownedUtxos});
     const ada = balance ? balance / 1_000_000.0 : 0;
     return ada;
 }

@@ -5,6 +5,7 @@ use pallas_addresses::Address;
 use seedelf_core::address;
 use seedelf_core::constants::{Config, VARIANT, get_config};
 use seedelf_core::utxos;
+use seedelf_display::display;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios;
 use seedelf_koios::koios::{TxResponse, UtxoResponse};
@@ -101,5 +102,23 @@ pub fn get_lovelace_balance(owned_utxos: Vec<UtxoResponse> ) -> u64 {
     match utxos::assets_of(owned_utxos) {
         Ok((lovelace, _)) => lovelace,
         Err(_) => 0,
+    }
+}
+
+
+#[tauri::command]
+pub fn get_owned_seedelfs(network_flag: bool, every_utxo: Vec<UtxoResponse> ) -> Vec<String> {
+    let config: Config = match get_config(VARIANT, network_flag) {
+        Some(c) => c,
+        None => {
+            return Vec::new();
+        }
+    };
+
+    match session::with_key(|sk| {
+        display::extract_all_owned_seedelfs(*sk, &config.contract.seedelf_policy_id, every_utxo)
+    }) {
+        Ok(v) => v,
+        _ => Vec::new()
     }
 }
