@@ -57,5 +57,5 @@ export async function getWalletHistory(
 }
 
 export async function isNotAScript(addr: string): Promise<boolean> {
-  return await invoke<boolean>("is_not_a_script", {addr: addr});
+  return await invoke<boolean>("is_not_a_script", { addr: addr });
 }
