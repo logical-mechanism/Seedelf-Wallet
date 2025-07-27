@@ -1,6 +1,7 @@
-use pallas_addresses::Address;
+use seedelf_cli::commands::create::{build_create_seedelf, CreateSeedelfOutput};
 use seedelf_core::constants::{Config, VARIANT, get_config};
-use seedelf_core::address;
+use crate::session;
+
 
 #[tauri::command(async)]
 pub async fn create_seedelf(network_flag: bool, addr: String, label: String) -> String {
@@ -11,8 +12,31 @@ pub async fn create_seedelf(network_flag: bool, addr: String, label: String) -> 
         }
     };
 
-    let addr: Address = Address::from_bech32(addr.as_str()).unwrap();
+    let CreateSeedelfOutput {
+        tx_cbor,
+        total_lovelace,
+        cpu_units,
+        mem_units,
+        ..
+    } = match session::with_key(|sk| {
+        build_create_seedelf(
+        config,
+        network_flag,
+        addr,
+        label,
+        *sk,
+    )
+    }) {
+        Ok(v) => v.await,
+        _ => return String::new(),
+    };
 
+    if total_lovelace < 1_954_860 {
+        return String::new();
+    }
+    if cpu_units == 0 || mem_units == 0 {
+        return String::new();
+    }
 
-    String::new()
+    tx_cbor
 }

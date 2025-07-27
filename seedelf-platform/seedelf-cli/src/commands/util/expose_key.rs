@@ -1,6 +1,6 @@
 use blstrs::Scalar;
 use colored::Colorize;
-use seedelf_cli::setup;
+use crate::setup;
 
 pub fn run() {
     println!(

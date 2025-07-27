@@ -8,7 +8,7 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::web_server;
+use crate::web_server;
 use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};

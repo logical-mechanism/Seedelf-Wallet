@@ -3,7 +3,7 @@ use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
 use pallas_addresses::Address;
-use seedelf_cli::setup;
+use crate::setup;
 use seedelf_core::address;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_display::display;

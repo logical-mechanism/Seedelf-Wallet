@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Network } from "@/types/network";
 import { TxResponseWithSide, UtxoResponse } from "@/types/wallet";
 
-function castNetwork(network: Network): boolean {
+export function castNetwork(network: Network): boolean {
   if (network == "mainnet") {
     return false;
   } else {

@@ -10,7 +10,7 @@ use seedelf_core::data_structures;
 use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction, utxo_info};
 
 use anyhow::{Result, bail};
-use seedelf_cli::web_server;
+use crate::web_server;
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, get_config, plutus_v3_cost_model};

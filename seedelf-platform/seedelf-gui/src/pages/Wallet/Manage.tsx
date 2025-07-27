@@ -10,6 +10,7 @@ import { TextField } from "@/components/TextField";
 import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
 import { useNetwork } from "@/types/network";
 import { Delete } from "lucide-react";
+import { createSeedelf } from "./transactions";
 
 export function Manage() {
   const [address, setAddress] = useState("");
@@ -57,6 +58,13 @@ export function Manage() {
     let success = false;
     try {
       // invoke the create or remove function
+      let tx_cbor;
+      if (mode == "Remove") {} else {
+        tx_cbor = await createSeedelf(network, address, label);
+        // this needs to trigger some modal that shows the link to the web server
+        // then a button that closes the web server
+        setMessage(tx_cbor);
+      }
     } catch (e: any) {
       setVariant("error");
       setMessage(e as string);
