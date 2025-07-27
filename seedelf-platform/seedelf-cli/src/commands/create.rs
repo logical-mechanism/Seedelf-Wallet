@@ -20,6 +20,21 @@ use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_display::{display, text_coloring};
 use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction};
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct CreateSeedelfOutput {
+    pub tx_cbor: String,
+    pub token_name_hex: String,
+    pub total_lovelace: u64,
+    pub min_utxo: u64,
+    pub tx_fee: u64,
+    pub compute_fee: u64,
+    pub script_reference_fee: u64,
+    pub total_fee: u64,
+    pub cpu_units: u64,
+    pub mem_units: u64,
+}
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -58,28 +73,99 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
         bail!("Supplied Address Is Incorrect");
     }
 
-    // we need this as the address type and not the shelley
-    let wallet_addr: Address =
-        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
+    let scalar: Scalar = setup::unlock_wallet_interactive();
 
-    // this is used to calculate the real fee
-    let mut draft_tx: StagingTransaction = StagingTransaction::new();
+    let CreateSeedelfOutput {
+        tx_cbor,
+        token_name_hex,
+        total_lovelace,
+        min_utxo,
+        tx_fee,
+        compute_fee,
+        script_reference_fee,
+        total_fee,
+        cpu_units,
+        mem_units,
+    } = build_create_seedelf(
+        config,
+        network_flag,
+        args.address,
+        args.label.unwrap_or_default(),
+        scalar,
+    )
+    .await;
 
-    // we need about 2 ada for the utxo
+    if cpu_units == 0 || mem_units == 0 {
+        bail!("Invalid Transaction");
+    }
+
+    // // we need about 2 ada for the utxo
     let tmp_fee: u64 = 205_000;
     let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace()? + tmp_fee;
 
+    // if the lovelace isn't enough then error
+    if total_lovelace < lovelace_goal {
+        bail!("Not Enough Lovelace");
+    }
+
+    println!(
+        "{} {}",
+        "\nCreating Seedelf:".bright_blue(),
+        token_name_hex.bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "\nMinimum Required Lovelace:".bright_blue(),
+        min_utxo.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Compute Fee:".bright_blue(),
+        compute_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Script Reference Fee:".bright_blue(),
+        script_reference_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Total Fee:".bright_blue(),
+        total_fee.to_string().bright_white()
+    );
+
+    println!("\nTx Cbor: {}", tx_cbor.clone().white());
+
+    // inject the tx cbor into the local webserver to prompt the wallet
+    display::webserver_address();
+    web_server::run_web_server(tx_cbor, network_flag).await;
+    text_coloring::display_purple("Server has stopped.");
+
+    Ok(())
+}
+
+pub async fn assign_collateral_and_get_utxos(
+    address: String,
+    network_flag: bool,
+    mut draft_tx: StagingTransaction,
+) -> (StagingTransaction, Vec<UtxoResponse>) {
+    // utxos
+    let mut all_utxos: Vec<UtxoResponse> = Vec::new();
     // there may be many collateral utxos, we just need one
     let mut found_collateral: bool = false;
 
-    // if the label is none then just use the empty string
-    let label: String = args.label.unwrap_or_default();
-
-    // utxos
-    let mut all_utxos: Vec<UtxoResponse> = Vec::new();
-
     // This should probably be some generalized function later
-    match address_utxos(&args.address, network_flag).await {
+    match address_utxos(&address, network_flag).await {
         Ok(utxos) => {
             // loop all the utxos found from the address
             for utxo in utxos {
@@ -103,13 +189,41 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
                 }
             }
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}");
-            std::process::exit(1);
+        Err(_) => {
+            return (draft_tx, Vec::new());
         }
     }
+    (draft_tx, all_utxos)
+}
+
+pub async fn build_create_seedelf(
+    config: Config,
+    network_flag: bool,
+    user_address: String,
+    label: String,
+    scalar: Scalar,
+) -> CreateSeedelfOutput {
+    // convert the user address to proper format
+    let addr: Address = Address::from_bech32(&user_address).unwrap();
+
+    // we need this as the address type and not the shelley
+    let wallet_addr: Address =
+        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
+
+    // this is used to calculate the real fee
+    let draft_tx: StagingTransaction = StagingTransaction::new();
+
+    // we need about 2 ada for the utxo
+    let tmp_fee: u64 = 205_000;
+    let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace().unwrap_or_default() + tmp_fee;
+
+    // This should probably be some generalized function later
+    let (mut draft_tx, all_utxos) =
+        assign_collateral_and_get_utxos(user_address, network_flag, draft_tx).await;
+
     // lovelace goal here should account for the estimated fee
-    let selected_utxos: Vec<UtxoResponse> = utxos::select(all_utxos, lovelace_goal, Assets::new())?;
+    let selected_utxos: Vec<UtxoResponse> =
+        utxos::select(all_utxos, lovelace_goal, Assets::new()).unwrap_or_default();
     for utxo in selected_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
@@ -123,33 +237,23 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos)?;
+    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos).unwrap_or_default();
 
-    // if the seedelf isn't found then error
-    if total_lovelace < lovelace_goal {
-        bail!("Not Enough Lovelace");
-    }
-
-    // this is going to be the datum on the seedelf
-    let scalar: Scalar = setup::unlock_wallet_interactive();
-    let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone())?;
+    let datum_vector: Vec<u8> = Register::create(scalar)
+        .unwrap_or_default()
+        .rerandomize()
+        .unwrap_or_default()
+        .to_vec()
+        .unwrap_or_default();
+    let redeemer_vector: Vec<u8> =
+        data_structures::create_mint_redeemer(label.clone()).unwrap_or_default();
 
     // lets build the seelfelf token
     let token_name: Vec<u8> =
-        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref())?;
-    println!(
-        "{} {}",
-        "\nCreating Seedelf:".bright_blue(),
-        hex::encode(token_name.clone()).bright_white()
-    );
+        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref())
+            .unwrap_or_default();
 
-    let min_utxo: u64 = transaction::seedelf_minimum_lovelace()?;
-    println!(
-        "{} {}",
-        "\nMinimum Required Lovelace:".bright_blue(),
-        min_utxo.to_string().bright_white()
-    );
+    let min_utxo: u64 = transaction::seedelf_minimum_lovelace().unwrap_or_default();
 
     let mut change_output: Output = Output::new(addr.clone(), total_lovelace - min_utxo - tmp_fee);
     for asset in tokens.items.clone() {
@@ -246,10 +350,7 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
                     .unwrap_or(0);
                 (cpu_units, mem_units)
             }
-            Err(err) => {
-                eprintln!("Failed to evaluate transaction: {err}");
-                std::process::exit(1);
-            }
+            Err(_) => (0, 0),
         };
 
     // we can fake the signature here to get the correct tx size
@@ -267,25 +368,8 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
         .unwrap();
 
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
-    );
-
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
-    println!(
-        "{} {}",
-        "Compute Fee:".bright_blue(),
-        compute_fee.to_string().bright_white()
-    );
-
     let script_reference_fee: u64 = config.contract.seedelf_contract_size * 15;
-    println!(
-        "{} {}",
-        "Script Reference Fee:".bright_blue(),
-        script_reference_fee.to_string().bright_white()
-    );
 
     // total fee is the sum
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
@@ -295,11 +379,6 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
     } else {
         total_fee
     };
-    println!(
-        "{} {}",
-        "Total Fee:".bright_blue(),
-        total_fee.to_string().bright_white()
-    );
 
     let mut change_output: Output =
         Output::new(addr.clone(), total_lovelace - min_utxo - total_fee);
@@ -331,12 +410,17 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
     let tx_cbor: String = hex::encode(tx.tx_bytes);
-    println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
-    // inject the tx cbor into the local webserver to prompt the wallet
-    display::webserver_address();
-    web_server::run_web_server(tx_cbor, network_flag).await;
-    text_coloring::display_purple("Server has stopped.");
-
-    Ok(())
+    CreateSeedelfOutput {
+        tx_cbor: tx_cbor,
+        token_name_hex: hex::encode(token_name.clone()),
+        total_lovelace: total_lovelace,
+        min_utxo: min_utxo,
+        tx_fee: tx_fee,
+        compute_fee: compute_fee,
+        script_reference_fee: script_reference_fee,
+        total_fee: total_fee,
+        cpu_units: cpu_units,
+        mem_units: mem_units,
+    }
 }

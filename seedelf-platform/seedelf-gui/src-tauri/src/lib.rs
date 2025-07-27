@@ -1,4 +1,5 @@
 pub mod address;
+mod commands;
 pub mod session;
 pub mod setup;
 pub mod types;
@@ -24,6 +25,8 @@ pub fn run() {
             wallet::get_wallet_history,
             // address.rs
             address::is_not_a_script,
+            // commands
+            commands::create::create_seedelf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
