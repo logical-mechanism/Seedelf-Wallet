@@ -1,6 +1,6 @@
+use crate::setup;
 use blstrs::Scalar;
 use colored::Colorize;
-use crate::setup;
 use seedelf_crypto::register::Register;
 
 pub fn run() {

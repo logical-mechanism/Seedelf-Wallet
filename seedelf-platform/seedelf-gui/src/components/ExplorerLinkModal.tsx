@@ -1,18 +1,31 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { stopWebServer } from "@pages/Wallet/webServer";
+import { useNetwork } from "@/types/network";
+import { ShowNotification } from "@/components/ShowNotification";
+
 import {
   Link,
   CircleQuestionMark,
+  Copy,
 } from "lucide-react";
 
-type WebServerModalProps = {
+type ExplorerModalProps = {
   open: boolean;
-  url: string;
+  txHash: string;
   onClose: () => void;
 };
 
-export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
+function txUrl(txHash: string, network: string) {
+  return network === "mainnet"
+    ? `https://cardanoscan.io/transaction/${txHash}`
+    : `https://preprod.cardanoscan.io/transaction/${txHash}`;
+}
+
+export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps) {
+  const { network } = useNetwork();
+    const [message, setMessage] = useState<string | null>(null);
+  
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -22,8 +35,18 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
 
   if (!open) return null;
 
+  const copy = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    setMessage(`${text} has been copied`);
+  };
+
   return (
     <div className="fixed inset-0 z-50 ">
+      <ShowNotification
+        message={message}
+        setMessage={setMessage}
+        variant={"info"}
+      />
       {/* Gray overlay */}
       <div className="absolute inset-0 bg-gray-800/70" aria-hidden="true" />
       {/* Centered dialog */}
@@ -36,28 +59,29 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
         >
           <h1><button disabled title="Cardano web wallets must interact through a web browser."><CircleQuestionMark /></button></h1>
           <h2 id="modal-title" className="mb-4 text-md font-semibold text-white text-center">
-            Starting Web Server At:
+            View Transaction
           </h2>
 
           <p className="my-8 break-all text-center gap-2">
             {/* Use Tauri opener so the link opens in the system browser */}
+            <code className="pr-4 min-w-0 truncate ">{txHash}</code>
             <button
                 type="button"
                 title="Link"
                 aria-label="Open local webserver"
-                onClick={() => openUrl(url)}
+                onClick={() => openUrl(txUrl(txHash, network))}
                 className="hover:scale-105 pr-4 text-white text-2xl"
               >
-                {url}
+                <Link />
             </button>
             <button
               type="button"
               title="Link"
               aria-label="Open on Cardanoscan"
-              onClick={() => openUrl(url)}
+              onClick={() => copy(txHash)}
               className="hover:scale-105"
             >
-              <Link />
+              <Copy />
             </button>
           </p>
 
@@ -65,12 +89,11 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
             <button
               type="button"
               onClick={ () => {
-                stopWebServer();
                 onClose();
               }}
               className="rounded-md border px-3 py-1.5 transition hover:scale-105 text-white"
             >
-              Stop Web Server
+              Close
             </button>
           </div>
         </div>

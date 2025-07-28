@@ -1,8 +1,8 @@
+use crate::setup;
 use anyhow::Result;
 use blstrs::Scalar;
 use colored::Colorize;
 use pallas_addresses::Address;
-use crate::setup;
 use seedelf_core::address;
 use seedelf_core::utxos;
 use seedelf_crypto::convert;

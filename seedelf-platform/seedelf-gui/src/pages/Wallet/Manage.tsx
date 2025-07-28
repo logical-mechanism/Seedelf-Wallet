@@ -9,6 +9,7 @@ import { isNotAScript } from "./api";
 import { TextField } from "@/components/TextField";
 import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
 import { WebServerModal } from "@/components/WebServerModal";
+import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
 import { useNetwork } from "@/types/network";
 import { Delete } from "lucide-react";
 import { createSeedelf, removeSeedelf } from "./transactions";
@@ -18,11 +19,18 @@ export function Manage() {
   const [address, setAddress] = useState("");
   const [label, setLabel] = useState("");
   const [seedelf, setSeedelf] = useState("");
+
+  const [txHash, setTxHash] = useState("");
+  
   const [message, setMessage] = useState<string | null>(null);
   const [variant, setVariant] = useState<NotificationVariant>("error");
+  
   const [submitting, setSubmitting] = useState(false);
+  
   const [showWebServerModal, setShowWebServerModal] = useState<boolean>(false);
+  const [showExplorerLinkModal, setShowExplorerLinkModal] = useState<boolean>(false);
   const [mode, setMode] = useState<ToggleMode>("Create");
+  
   const { network } = useNetwork();
   const { seedelfs } = useOutletContext<OutletContextType>();
 
@@ -61,23 +69,24 @@ export function Manage() {
     let success = false;
     try {
       // invoke the create or remove function
-      let tx_cbor = "";
       if (mode == "Remove") {
         setVariant("info");
         setMessage("Building Remove Seedelf Transaction");
 
-        tx_cbor = await removeSeedelf(network, address, label);
+        const _txHash = await removeSeedelf(network, address, label);
+        setTxHash(_txHash);
 
-        setShowWebServerModal(true)
-        await runWebServer(tx_cbor, network);
+        setShowWebServerModal(false);
+        setShowExplorerLinkModal(true);
       } else {
         setVariant("info");
         setMessage("Building Create Seedelf Transaction");
 
-        tx_cbor = await createSeedelf(network, address, label);
+        const txCbor = await createSeedelf(network, address, label);
 
-        setShowWebServerModal(true)
-        await runWebServer(tx_cbor, network);
+        setShowExplorerLinkModal(false);
+        setShowWebServerModal(true);
+        await runWebServer(txCbor, network);
       }
     } catch (e: any) {
       setVariant("error");
@@ -104,6 +113,14 @@ export function Manage() {
           setVariant("info");
           setMessage("Stopping Web Server..");
           setShowWebServerModal(false)
+        }}
+      />
+
+      <ExplorerLinkModal
+        open={showExplorerLinkModal} 
+        txHash={txHash} 
+        onClose={() => {
+          setShowExplorerLinkModal(false)
         }}
       />
 

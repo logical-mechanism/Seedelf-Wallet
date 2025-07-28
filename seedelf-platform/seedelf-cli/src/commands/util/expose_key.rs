@@ -1,6 +1,6 @@
+use crate::setup;
 use blstrs::Scalar;
 use colored::Colorize;
-use crate::setup;
 
 pub fn run() {
     println!(

@@ -1,3 +1,4 @@
+use crate::setup;
 use anyhow::{Result, bail};
 use blstrs::Scalar;
 use clap::Args;
@@ -9,7 +10,6 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use crate::setup;
 use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::constants::{

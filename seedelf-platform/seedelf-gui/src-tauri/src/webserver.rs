@@ -1,4 +1,4 @@
-use seedelf_cli::web_server::{run_web_server_non_blocking, WebServer};
+use seedelf_cli::web_server::{WebServer, run_web_server_non_blocking};
 use tokio::sync::Mutex;
 
 #[derive(Default)]

@@ -1,6 +1,5 @@
-
 #[tauri::command(async)]
-pub async fn remove_seedelf(network_flag: bool, addr: String, seedelf: String) -> String {
+pub async fn remove_seedelf(_network_flag: bool, _addr: String, _seedelf: String) -> String {
     // todo
     String::new()
 }

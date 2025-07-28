@@ -412,15 +412,15 @@ pub async fn build_create_seedelf(
     let tx_cbor: String = hex::encode(tx.tx_bytes);
 
     CreateSeedelfOutput {
-        tx_cbor: tx_cbor,
+        tx_cbor,
         token_name_hex: hex::encode(token_name.clone()),
-        total_lovelace: total_lovelace,
-        min_utxo: min_utxo,
-        tx_fee: tx_fee,
-        compute_fee: compute_fee,
-        script_reference_fee: script_reference_fee,
-        total_fee: total_fee,
-        cpu_units: cpu_units,
-        mem_units: mem_units,
+        total_lovelace,
+        min_utxo,
+        tx_fee,
+        compute_fee,
+        script_reference_fee,
+        total_fee,
+        cpu_units,
+        mem_units,
     }
 }

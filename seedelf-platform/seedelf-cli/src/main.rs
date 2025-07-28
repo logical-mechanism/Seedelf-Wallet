@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
+use seedelf_cli::commands;
 use seedelf_cli::setup;
 use seedelf_core::constants::VARIANT;
 use seedelf_display::text_coloring::{display_blue, display_cyan, display_yellow};
-use seedelf_cli::commands;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
