@@ -5,7 +5,6 @@ import { ShowNotification } from "@/components/ShowNotification";
 
 import {
   Link,
-  CircleQuestionMark,
   Copy,
 } from "lucide-react";
 
@@ -55,16 +54,15 @@ export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps)
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-title"
-          className="w-[90vw] max-w-md rounded-xl bg-gray-800 p-6 shadow-lg"
+          className="inline-block w-fit max-w-[90vw] rounded-xl bg-gray-800 p-6 shadow-lg"
         >
-          <h1><button disabled title="Cardano web wallets must interact through a web browser."><CircleQuestionMark /></button></h1>
           <h2 id="modal-title" className="mb-4 text-md font-semibold text-white text-center">
-            View Transaction
+            View Transaction On Cardanoscan
           </h2>
 
-          <p className="my-8 break-all text-center gap-2">
+          <p className="my-8 flex items-center justify-center gap-3">
             {/* Use Tauri opener so the link opens in the system browser */}
-            <code className="pr-4 min-w-0 truncate ">{txHash}</code>
+            <code className="pr-4 min-w-0 truncate">{txHash}</code>
             <button
                 type="button"
                 title="Link"

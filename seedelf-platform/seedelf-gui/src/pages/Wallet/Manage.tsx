@@ -75,6 +75,8 @@ export function Manage() {
 
         const _txHash = await removeSeedelf(network, address, label);
         setTxHash(_txHash);
+        // testing only
+        setTxHash("0269a19b796af29aebda8cabeadd6210f0ee03afa1943a7bf3c9c5197929eee1")
 
         setShowWebServerModal(false);
         setShowExplorerLinkModal(true);
