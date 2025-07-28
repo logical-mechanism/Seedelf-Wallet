@@ -7,9 +7,9 @@ use seedelf_koios::koios::{
 };
 
 pub fn webserver_address() {
-    display_cyan("Starting Server At:");
+    display_cyan("Starting Web Server At:");
     display_white("http://127.0.0.1:44203/");
-    display_yellow("Hit Ctrl-C To Stop Server");
+    display_yellow("Hit Ctrl-C To Stop Web Server");
 }
 
 pub async fn is_their_an_update() {

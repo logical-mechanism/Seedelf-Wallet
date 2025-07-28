@@ -63,12 +63,13 @@ export function Manage() {
       // invoke the create or remove function
       let tx_cbor;
       if (mode == "Remove") {} else {
+        setVariant("info");
+        setMessage("Creating Seedelf Transaction");
         tx_cbor = await createSeedelf(network, address, label);
-        setShowWebServerModal(true)
-        await runWebServer(tx_cbor, network);
         // this needs to trigger some modal that shows the link to the web server
         // then a button that closes the web server
-        setMessage(tx_cbor);
+        setShowWebServerModal(true)
+        await runWebServer(tx_cbor, network);
       }
     } catch (e: any) {
       setVariant("error");
@@ -88,7 +89,15 @@ export function Manage() {
         variant={variant}
       />
 
-      <WebServerModal open={showWebServerModal} url={"http://127.0.0.1:44203/"} onClose={() => {setShowWebServerModal(false)}}/>
+      <WebServerModal
+        open={showWebServerModal} 
+        url={"http://127.0.0.1:44203/"} 
+        onClose={() => {
+          setVariant("info");
+          setMessage("Stopping Web Server..");
+          setShowWebServerModal(false)
+        }}
+      />
 
       <CreateRemoveToggle value={mode} onChange={setMode} />
 

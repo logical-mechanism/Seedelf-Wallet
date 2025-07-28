@@ -61,7 +61,7 @@ async function initializePage() {
       txLinkElement.href = "https://" + injectedNetwork.network + "cardanoscan.io/transaction/" + tx_hash; // Set the href attribute
       txLinkElement.textContent = "View Transaction On Cardanoscan";
 
-      statusElement.textContent = "Transaction successfully submitted! It will take a few moments to hit the chain. Please close this tab and crtl-c the server in the terminal. The transaction can be viewed on Cardanoscan by clicking the View Transaction On Cardanoscan button.";
+      statusElement.textContent = "Transaction successfully submitted! It will take a few moments to hit the chain. Please close this tab and stop the web server. The transaction can be viewed on Cardanoscan by clicking the View Transaction On Cardanoscan button.";
     } catch (error) {
       statusElement.textContent = "Error: Sign and Submit Tx Failure. Message: " + error.message + ".  Refresh page and try again.";
     }
