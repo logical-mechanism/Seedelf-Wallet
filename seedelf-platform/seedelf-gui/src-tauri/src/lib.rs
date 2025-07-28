@@ -29,6 +29,7 @@ pub fn run() {
             address::is_not_a_script,
             // commands
             commands::create::create_seedelf,
+            commands::remove::remove_seedelf,
             // webserver.rs
             webserver::open_web_server,
             webserver::close_web_server

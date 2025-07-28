@@ -15,3 +15,16 @@ export async function createSeedelf(
     label: label
   });
 }
+
+export async function removeSeedelf(
+  network: Network,
+  addr: string,
+  seedelf: string,
+): Promise<string> {
+  const flag = castNetwork(network);
+  return await invoke<string>("remove_seedelf", {
+    networkFlag: flag,
+    addr: addr,
+    seedelf: seedelf
+  });
+}

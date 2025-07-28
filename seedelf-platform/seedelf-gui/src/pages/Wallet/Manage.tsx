@@ -11,7 +11,7 @@ import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
 import { WebServerModal } from "@/components/WebServerModal";
 import { useNetwork } from "@/types/network";
 import { Delete } from "lucide-react";
-import { createSeedelf } from "./transactions";
+import { createSeedelf, removeSeedelf } from "./transactions";
 import { runWebServer } from "./webServer";
 
 export function Manage() {
@@ -61,13 +61,21 @@ export function Manage() {
     let success = false;
     try {
       // invoke the create or remove function
-      let tx_cbor;
-      if (mode == "Remove") {} else {
+      let tx_cbor = "";
+      if (mode == "Remove") {
         setVariant("info");
-        setMessage("Creating Seedelf Transaction");
+        setMessage("Building Remove Seedelf Transaction");
+
+        tx_cbor = await removeSeedelf(network, address, label);
+
+        setShowWebServerModal(true)
+        await runWebServer(tx_cbor, network);
+      } else {
+        setVariant("info");
+        setMessage("Building Create Seedelf Transaction");
+
         tx_cbor = await createSeedelf(network, address, label);
-        // this needs to trigger some modal that shows the link to the web server
-        // then a button that closes the web server
+
         setShowWebServerModal(true)
         await runWebServer(tx_cbor, network);
       }
