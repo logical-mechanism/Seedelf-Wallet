@@ -105,3 +105,8 @@ pub async fn run_web_server(message: String, network_flag: bool) {
         let _ = join.await;
     }
 }
+
+pub async fn run_web_server_non_blocking(message: String, network_flag: bool) -> WebServer {
+    WebServer::start(message, network_flag).await
+}
+

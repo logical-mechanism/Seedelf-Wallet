@@ -8,9 +8,11 @@ import {
 import { isNotAScript } from "./api";
 import { TextField } from "@/components/TextField";
 import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
+import { WebServerModal } from "@/components/WebServerModal";
 import { useNetwork } from "@/types/network";
 import { Delete } from "lucide-react";
 import { createSeedelf } from "./transactions";
+import { runWebServer } from "./webServer";
 
 export function Manage() {
   const [address, setAddress] = useState("");
@@ -19,6 +21,7 @@ export function Manage() {
   const [message, setMessage] = useState<string | null>(null);
   const [variant, setVariant] = useState<NotificationVariant>("error");
   const [submitting, setSubmitting] = useState(false);
+  const [showWebServerModal, setShowWebServerModal] = useState<boolean>(false);
   const [mode, setMode] = useState<ToggleMode>("Create");
   const { network } = useNetwork();
   const { seedelfs } = useOutletContext<OutletContextType>();
@@ -61,6 +64,8 @@ export function Manage() {
       let tx_cbor;
       if (mode == "Remove") {} else {
         tx_cbor = await createSeedelf(network, address, label);
+        setShowWebServerModal(true)
+        await runWebServer(tx_cbor, network);
         // this needs to trigger some modal that shows the link to the web server
         // then a button that closes the web server
         setMessage(tx_cbor);
@@ -82,6 +87,8 @@ export function Manage() {
         setMessage={setMessage}
         variant={variant}
       />
+
+      <WebServerModal open={showWebServerModal} url={"http://127.0.0.1:44203/"} onClose={() => {setShowWebServerModal(false)}}/>
 
       <CreateRemoveToggle value={mode} onChange={setMode} />
 

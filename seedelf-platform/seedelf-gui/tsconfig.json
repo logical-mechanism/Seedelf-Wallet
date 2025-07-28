@@ -29,7 +29,6 @@
       "@features/*": ["src/features/*"],
       "@lib/*": ["src/lib/*"],
       "@pages/*": ["src/pages/*"],
-      "@wallet/*": ["src/pages/Wallet/*"],
       "@styles/*": ["src/styles/*"],
       "@types/*": ["src/types/*"]
     }
