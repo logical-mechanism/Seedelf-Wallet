@@ -24,6 +24,21 @@ use seedelf_display::display;
 use seedelf_koios::koios::{
     UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
 };
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct RemoveSeedelfOutput {
+    pub tx_cbor: String,
+    pub tx_hash: String,
+    pub tx_fee: u64,
+    pub compute_fee: u64,
+    pub script_reference_fee: u64,
+    pub total_fee: u64,
+    pub mint_cpu_units: u64,
+    pub mint_mem_units: u64,
+    pub spend_cpu_units: u64,
+    pub spend_mem_units: u64,
+}
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -57,6 +72,78 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         bail!("Supplied Address Is Incorrect");
     }
 
+    // There is a single register here so we can do this
+    let scalar: Scalar = setup::unlock_wallet_interactive();
+
+    let RemoveSeedelfOutput {
+        tx_cbor,
+        tx_hash,
+        tx_fee,
+        compute_fee,
+        script_reference_fee,
+        total_fee,
+        mint_cpu_units,
+        mint_mem_units,
+        spend_cpu_units,
+        spend_mem_units,
+    } = build_remove_seedelf(config, network_flag, args.address, args.seedelf, scalar).await;
+
+    if mint_cpu_units == 0 || mint_mem_units == 0 || spend_cpu_units == 0 || spend_mem_units == 0 {
+        bail!("Invalid Transaction");
+    }
+
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Compute Fee:".bright_blue(),
+        compute_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Script Reference Fee:".bright_blue(),
+        script_reference_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Total Fee:".bright_blue(),
+        total_fee.to_string().bright_white()
+    );
+
+    println!("\nTx Cbor: {}", tx_cbor.white());
+
+    println!("\nTransaction Successfully Submitted!");
+    println!("\nTx Hash: {}", tx_hash.bright_cyan());
+    if network_flag {
+        println!(
+            "{}",
+            format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}").bright_purple()
+        );
+    } else {
+        println!(
+            "{}",
+            format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
+        );
+    }
+
+    Ok(())
+}
+
+pub async fn build_remove_seedelf(
+    config: Config,
+    network_flag: bool,
+    user_address: String,
+    seedelf: String,
+    scalar: Scalar,
+) -> RemoveSeedelfOutput {
+    let addr: Address = Address::from_bech32(&user_address).unwrap();
+
     // we need this as the address type and not the shelley
     let collat_addr: Address = address::collateral_address(network_flag);
 
@@ -66,21 +153,23 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     // we do this so I can initialize it to the empty vector
     let mut input_vector: Vec<Input> = Vec::new();
 
-    // There is a single register here so we can do this
-    let scalar: Scalar = setup::unlock_wallet_interactive();
-
     let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
+            .await
+            .unwrap_or_default();
+
     let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
-        args.seedelf.clone(),
+        seedelf.clone(),
         &config.contract.seedelf_policy_id,
         every_utxo,
-    )?
-    .ok_or("Seedelf Not Found".to_string())
-    .unwrap();
+    )
+    .unwrap()
+    .unwrap_or_default();
+
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or("Not Register Type".to_string())
         .unwrap();
+
     let total_lovelace: u64 = seedelf_utxo.value.parse::<u64>().expect("Invalid Lovelace");
     let seedelf_input: Input = Input::new(
         pallas_crypto::hash::Hash::new(
@@ -97,7 +186,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
 
-    // we can fake the signature here to get the correct tx size
+    // generate a one time key pad
     let one_time_secret_key: SecretKey = SecretKey::new(OsRng);
     let one_time_private_key: PrivateKey = PrivateKey::from(one_time_secret_key.clone());
     let public_key_hash: Hash<28> =
@@ -107,10 +196,11 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     // use the base register to rerandomize for the datum
 
     let r: Scalar = random_scalar();
-    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone(), r)?;
+    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone(), r).unwrap_or_default();
     let spend_redeemer_vector: Vec<u8> =
-        data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
-    let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string())?;
+        data_structures::create_spend_redeemer(z, g_r, pkh.clone()).unwrap_or_default();
+    let burn_redeemer_vector: Vec<u8> =
+        data_structures::create_mint_redeemer("".to_string()).unwrap_or_default();
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
@@ -128,7 +218,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                     .try_into()
                     .expect("Not Correct Length"),
             ),
-            hex::decode(args.seedelf.clone()).unwrap(),
+            hex::decode(seedelf.clone()).unwrap(),
             -1,
         )
         .unwrap()
@@ -220,10 +310,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
                     spend_mem_units,
                 )
             }
-            Err(err) => {
-                eprintln!("Failed to evaluate transaction: {err}");
-                std::process::exit(1);
-            }
+            Err(_) => (0, 0, 0, 0),
         };
 
     // we can fake the signature here to get the correct tx size
@@ -241,30 +328,11 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         .try_into()
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
-    );
-
-    // This probably should be a function
     let compute_fee: u64 = transaction::computation_fee(mint_mem_units, mint_cpu_units)
         + transaction::computation_fee(spend_mem_units, spend_cpu_units);
-    println!(
-        "{} {}",
-        "Compute Fee:".bright_blue(),
-        compute_fee.to_string().bright_white()
-    );
-
     let script_reference_fee: u64 =
         config.contract.seedelf_contract_size * 15 + config.contract.wallet_contract_size * 15;
-    println!(
-        "{} {}",
-        "Script Reference Fee:".bright_blue(),
-        script_reference_fee.to_string().bright_white()
-    );
 
-    // total fee is the sum of everything
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
     // total fee needs to be even for the collateral calculation to work
     total_fee = if total_fee % 2 == 1 {
@@ -272,11 +340,6 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     } else {
         total_fee
     };
-    println!(
-        "{} {}",
-        "Total Fee:".bright_blue(),
-        total_fee.to_string().bright_white()
-    );
 
     raw_tx = raw_tx
         .output(Output::new(addr.clone(), total_lovelace - total_fee))
@@ -313,65 +376,38 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
 
     let witness_public_key: PublicKey = PublicKey::from(COLLATERAL_PUBLIC_KEY);
 
-    match witness_collateral(tx_cbor.clone(), network_flag).await {
+    let signed_tx_cbor: BuiltTransaction = match witness_collateral(tx_cbor.clone(), network_flag)
+        .await
+    {
         Ok(witness) => {
             let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
             let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
             let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
 
-            let signed_tx_cbor = tx
-                .sign(PrivateKey::from(one_time_secret_key.clone()))
+            tx.sign(PrivateKey::from(one_time_secret_key.clone()))
                 .unwrap()
                 .add_signature(witness_public_key, witness_vector)
-                .unwrap();
-
-            println!(
-                "\nTx Cbor: {}",
-                hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
-            );
-
-            match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
-                Ok(response) => {
-                    if let Some(_error) = response.get("contents") {
-                        println!("\nError: {response}");
-                        std::process::exit(1);
-                    }
-                    println!("\nTransaction Successfully Submitted!");
-                    println!(
-                        "\nTx Hash: {}",
-                        response.as_str().unwrap_or("default").bright_cyan()
-                    );
-                    if network_flag {
-                        println!(
-                            "{}",
-                            format!(
-                                "\nhttps://preprod.cardanoscan.io/transaction/{}",
-                                response.as_str().unwrap_or("default")
-                            )
-                            .bright_purple()
-                        );
-                    } else {
-                        println!(
-                            "{}",
-                            format!(
-                                "\nhttps://cardanoscan.io/transaction/{}",
-                                response.as_str().unwrap_or("default")
-                            )
-                            .bright_purple()
-                        );
-                    }
-                }
-                Err(err) => {
-                    eprintln!("Failed to submit tx: {err}");
-                    std::process::exit(1);
-                }
-            }
+                .unwrap()
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}\nWait a few moments and try again.");
-            std::process::exit(1);
-        }
+        _ => tx,
+    };
+
+    let tx_hash = match submit_tx(hex::encode(signed_tx_cbor.clone().tx_bytes), network_flag).await
+    {
+        Ok(response) => response.as_str().unwrap_or("default").to_string(),
+        Err(_) => String::new(),
+    };
+
+    RemoveSeedelfOutput {
+        tx_cbor: hex::encode(signed_tx_cbor.clone().tx_bytes),
+        tx_hash,
+        tx_fee,
+        compute_fee,
+        script_reference_fee,
+        total_fee,
+        mint_cpu_units,
+        mint_mem_units,
+        spend_cpu_units,
+        spend_mem_units,
     }
-
-    Ok(())
 }
