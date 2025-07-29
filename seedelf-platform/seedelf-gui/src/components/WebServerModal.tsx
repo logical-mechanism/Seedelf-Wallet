@@ -50,7 +50,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
         >
           <h1><button disabled title="Cardano web ( CIP30 ) wallets must interact through a web browser. Visit the URL to interact with the dapp."><CircleQuestionMark /></button></h1>
           <h2 id="modal-title" className="mb-4 text-md font-semibold text-white text-center">
-            Starting Web Server
+            Web Server Is Live
           </h2>
 
           <p className="my-8 flex items-center justify-center gap-3">
