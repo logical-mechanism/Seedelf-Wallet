@@ -56,9 +56,13 @@ export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps)
           aria-labelledby="modal-title"
           className="inline-block w-fit max-w-[90vw] rounded-xl bg-gray-800 p-6 shadow-lg"
         >
-          <h2 id="modal-title" className="mb-4 text-md font-semibold text-white text-center">
-            View Transaction On Cardanoscan
+          <h2 id="modal-title" className="mb-4 font-semibold text-white text-center">
+            Transaction Successfully Submitted!
           </h2>
+
+          <h3 id="modal-title" className="mb-4 font-semibold text-white text-center">
+            View Transaction On Cardanoscan
+          </h3>
 
           <p className="my-8 flex items-center justify-center gap-3">
             {/* Use Tauri opener so the link opens in the system browser */}

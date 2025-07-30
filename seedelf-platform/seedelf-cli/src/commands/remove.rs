@@ -158,19 +158,29 @@ pub async fn build_remove_seedelf(
             .await
             .unwrap_or_default();
 
-    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
+//     for (i, u) in every_utxo.iter().enumerate() {
+//     println!(
+//         "[GUI] UTxO {}: tx_hash={} datum={:?}",
+//         i,
+//         u.tx_hash,
+//         u.inline_datum
+//     );
+// }
+//     println!("Seedelf: {:}", seedelf);
+    let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
         seedelf.clone(),
         &config.contract.seedelf_policy_id,
         every_utxo,
-    )
-    .unwrap()
-    .unwrap_or_default();
+    ) {
+        Ok(Some(utxo)) => utxo,
+        _ => UtxoResponse::default()
+    };
 
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or("Not Register Type".to_string())
-        .unwrap();
+        .unwrap_or_default();
 
-    let total_lovelace: u64 = seedelf_utxo.value.parse::<u64>().expect("Invalid Lovelace");
+    let total_lovelace: u64 = seedelf_utxo.value.parse::<u64>().unwrap_or_default();
     let seedelf_input: Input = Input::new(
         pallas_crypto::hash::Hash::new(
             hex::decode(seedelf_utxo.tx_hash.clone())
