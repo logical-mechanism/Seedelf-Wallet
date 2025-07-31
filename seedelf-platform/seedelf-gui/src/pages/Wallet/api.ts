@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Network } from "@/types/network";
 import { TxResponseWithSide, UtxoResponse } from "@/types/wallet";
 
-function castNetwork(network: Network): boolean {
+export function castNetwork(network: Network): boolean {
   if (network == "mainnet") {
     return false;
   } else {
@@ -51,7 +51,14 @@ export async function getWalletHistory(
   network: Network,
 ): Promise<TxResponseWithSide[]> {
   const flag = castNetwork(network);
-  return await invoke<TxResponseWithSide[]>("get_wallet_history", {
+  const history = await invoke<TxResponseWithSide[]>("get_wallet_history", {
     networkFlag: flag,
   });
+  // force newest first
+  const sortedHistory = history.slice().sort((a, b) => b.tx.block_height - a.tx.block_height);
+  return sortedHistory;
+}
+
+export async function isNotAScript(addr: string): Promise<boolean> {
+  return await invoke<boolean>("is_not_a_script", { addr: addr });
 }

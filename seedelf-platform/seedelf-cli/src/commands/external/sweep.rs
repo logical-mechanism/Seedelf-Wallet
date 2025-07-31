@@ -1,3 +1,4 @@
+use crate::setup;
 use anyhow::{Result, bail};
 use blstrs::Scalar;
 use colored::Colorize;
@@ -7,7 +8,6 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::setup;
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};

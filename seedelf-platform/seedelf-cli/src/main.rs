@@ -1,9 +1,8 @@
 use clap::{Parser, Subcommand};
-mod commands;
+use seedelf_cli::commands;
 use seedelf_cli::setup;
 use seedelf_core::constants::VARIANT;
 use seedelf_display::text_coloring::{display_blue, display_cyan, display_yellow};
-// use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]
@@ -27,7 +26,7 @@ enum Commands {
     /// Displays the seedelf-cli welcome message
     Welcome,
     /// Create a new seedelf in the wallet
-    Create(commands::create::LabelArgs),
+    Create(commands::create::CreateArgs),
     /// Remove a seedelf from the wallet
     Remove(commands::remove::RemoveArgs),
     /// Displays the current wallet information, seedelfs, and balance

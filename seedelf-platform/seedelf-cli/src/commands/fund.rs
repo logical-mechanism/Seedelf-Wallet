@@ -1,3 +1,4 @@
+use crate::web_server;
 use anyhow::{Result, bail};
 use clap::Args;
 use colored::Colorize;
@@ -8,14 +9,13 @@ use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_cli::web_server;
 use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};
 use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
-use seedelf_display::display;
+use seedelf_display::{display, text_coloring};
 use seedelf_koios::koios::{UtxoResponse, extract_bytes_with_logging};
 
 /// Struct to hold command-specific arguments
@@ -310,7 +310,9 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
     // inject the tx cbor into the local webserver to prompt the wallet
+    display::webserver_address();
     web_server::run_web_server(tx_cbor, network_flag).await;
+    text_coloring::display_purple("Server has stopped.");
 
     Ok(())
 }

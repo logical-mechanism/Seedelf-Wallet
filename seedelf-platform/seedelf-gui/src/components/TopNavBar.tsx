@@ -11,7 +11,7 @@ function formatAgo(ms: number) {
   if (min < 60) return `${min}m ${sec % 60}s ago`;
 
   const hr = Math.floor(min / 60);
-  if (hr< 24) return `${hr}h ${min % 60}m ${sec % 60}s ago`;
+  if (hr < 24) return `${hr}h ${min % 60}m ${sec % 60}s ago`;
 
   const d = Math.floor(hr / 24);
   return `${d}d ${hr % 24}h ${min % 60}m ${sec % 60}s ago`;

@@ -56,7 +56,7 @@ export function WalletPage() {
 
     // set last sync time
     if (unlocked) {
-        setLastSync(Date.now());
+      setLastSync(Date.now());
     }
   };
 
