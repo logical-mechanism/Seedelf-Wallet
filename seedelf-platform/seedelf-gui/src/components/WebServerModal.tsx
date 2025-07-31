@@ -58,7 +58,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
             <code className="pr-4 min-w-0 truncate">{url}</code>
             <button
                 type="button"
-                title="Link"
+                title={url}
                 aria-label="Open local webserver"
                 onClick={() => openUrl(url)}
                 className="hover:scale-105 pr-4 text-white text-2xl"
@@ -67,8 +67,8 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
             </button>
             <button
               type="button"
-              title="Link"
-              aria-label="Open on Cardanoscan"
+              title="Copy"
+              aria-label="Copy URL"
               onClick={() => copy(url)}
               className="hover:scale-105"
             >
@@ -79,6 +79,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
           <div className="flex justify-center">
             <button
               type="button"
+              title="Stop the local web server"
               onClick={ () => {
                 stopWebServer();
                 onClose();

@@ -49,7 +49,7 @@ export function Dashboard() {
   const [message, setMessage] = useState<string | null>(null);
   const { lovelace, seedelfs, history } = useOutletContext<OutletContextType>();
   const { network } = useNetwork();
-  const recent = history.slice(-5).reverse();
+  const recent = history.slice(0, 5);
   const elves = useMemo(
     () => [...seedelfs].sort(() => Math.random() - 0.5).slice(0, 3),
     [seedelfs],
@@ -156,7 +156,7 @@ export function Dashboard() {
                   <code className="pr-4 min-w-0 truncate ">{h.tx.tx_hash}</code>
                   <button
                     type="button"
-                    title="Link"
+                    title={txUrl(h.tx.tx_hash, network)}
                     aria-label="Open on Cardanoscan"
                     onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
                     className="hover:scale-105 pr-4"

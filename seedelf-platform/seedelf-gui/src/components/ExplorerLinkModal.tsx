@@ -69,8 +69,8 @@ export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps)
             <code className="pr-4 min-w-0 truncate">{txHash}</code>
             <button
                 type="button"
-                title="Link"
-                aria-label="Open local webserver"
+                title={txUrl(txHash, network)}
+                aria-label="Open on Cardanoscan"
                 onClick={() => openUrl(txUrl(txHash, network))}
                 className="hover:scale-105 pr-4 text-white text-2xl"
               >
@@ -78,8 +78,8 @@ export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps)
             </button>
             <button
               type="button"
-              title="Link"
-              aria-label="Open on Cardanoscan"
+              title="Copy"
+              aria-label="Copy Tx Hash"
               onClick={() => copy(txHash)}
               className="hover:scale-105"
             >

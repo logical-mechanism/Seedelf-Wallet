@@ -51,9 +51,12 @@ export async function getWalletHistory(
   network: Network,
 ): Promise<TxResponseWithSide[]> {
   const flag = castNetwork(network);
-  return await invoke<TxResponseWithSide[]>("get_wallet_history", {
+  const history = await invoke<TxResponseWithSide[]>("get_wallet_history", {
     networkFlag: flag,
   });
+  // force newest first
+  const sortedHistory = history.slice().sort((a, b) => b.tx.block_height - a.tx.block_height);
+  return sortedHistory;
 }
 
 export async function isNotAScript(addr: string): Promise<boolean> {

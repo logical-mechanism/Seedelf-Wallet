@@ -76,20 +76,21 @@ export function Manage() {
         const _txHash = await removeSeedelf(network, address, seedelf);
         if (_txHash) {
           setTxHash(_txHash);
-  
           setShowWebServerModal(false);
           setShowExplorerLinkModal(true);
-          
+          handleClear();
         }
       } else {
         setVariant("info");
         setMessage("Building Create Seedelf Transaction");
 
         const txCbor = await createSeedelf(network, address, label);
-
-        setShowExplorerLinkModal(false);
-        setShowWebServerModal(true);
-        await runWebServer(txCbor, network);
+        if (txCbor) {
+          setShowExplorerLinkModal(false);
+          setShowWebServerModal(true);
+          await runWebServer(txCbor, network);
+          handleClear();
+        }
       }
     } catch (e: any) {
       setVariant("error");
