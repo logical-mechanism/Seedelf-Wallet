@@ -55,7 +55,9 @@ export async function getWalletHistory(
     networkFlag: flag,
   });
   // force newest first
-  const sortedHistory = history.slice().sort((a, b) => b.tx.block_height - a.tx.block_height);
+  const sortedHistory = history
+    .slice()
+    .sort((a, b) => b.tx.block_height - a.tx.block_height);
   return sortedHistory;
 }
 

@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { Network } from "@/types/network";
 import { castNetwork } from "./api";
 
-
 export async function createSeedelf(
   network: Network,
   addr: string,
@@ -12,7 +11,7 @@ export async function createSeedelf(
   return await invoke<string>("create_seedelf", {
     networkFlag: flag,
     addr: addr,
-    label: label
+    label: label,
   });
 }
 
@@ -25,6 +24,6 @@ export async function removeSeedelf(
   return await invoke<string>("remove_seedelf", {
     networkFlag: flag,
     addr: addr,
-    seedelf: seedelf
+    seedelf: seedelf,
   });
 }

@@ -3,10 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNetwork } from "@/types/network";
 import { ShowNotification } from "@/components/ShowNotification";
 
-import {
-  Link,
-  Copy,
-} from "lucide-react";
+import { Link, Copy } from "lucide-react";
 
 type ExplorerModalProps = {
   open: boolean;
@@ -20,10 +17,13 @@ function txUrl(txHash: string, network: string) {
     : `https://preprod.cardanoscan.io/transaction/${txHash}`;
 }
 
-export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps) {
+export function ExplorerLinkModal({
+  open,
+  txHash,
+  onClose,
+}: ExplorerModalProps) {
   const { network } = useNetwork();
-    const [message, setMessage] = useState<string | null>(null);
-  
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -56,11 +56,17 @@ export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps)
           aria-labelledby="modal-title"
           className="inline-block w-fit max-w-[90vw] rounded-xl bg-gray-800 p-6 shadow-lg"
         >
-          <h2 id="modal-title" className="mb-4 font-semibold text-white text-center">
+          <h2
+            id="modal-title"
+            className="mb-4 font-semibold text-white text-center"
+          >
             Transaction Successfully Submitted!
           </h2>
 
-          <h3 id="modal-title" className="mb-4 font-semibold text-white text-center">
+          <h3
+            id="modal-title"
+            className="mb-4 font-semibold text-white text-center"
+          >
             View Transaction On Cardanoscan
           </h3>
 
@@ -68,13 +74,13 @@ export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps)
             {/* Use Tauri opener so the link opens in the system browser */}
             <code className="pr-4 min-w-0 truncate">{txHash}</code>
             <button
-                type="button"
-                title={txUrl(txHash, network)}
-                aria-label="Open on Cardanoscan"
-                onClick={() => openUrl(txUrl(txHash, network))}
-                className="hover:scale-105 pr-4 text-white text-2xl"
-              >
-                <Link />
+              type="button"
+              title={txUrl(txHash, network)}
+              aria-label="Open on Cardanoscan"
+              onClick={() => openUrl(txUrl(txHash, network))}
+              className="hover:scale-105 pr-4 text-white text-2xl"
+            >
+              <Link />
             </button>
             <button
               type="button"
@@ -90,7 +96,7 @@ export function ExplorerLinkModal({ open, txHash, onClose }: ExplorerModalProps)
           <div className="flex justify-center">
             <button
               type="button"
-              onClick={ () => {
+              onClick={() => {
                 onClose();
               }}
               className="rounded-md border px-3 py-1.5 transition hover:scale-105 text-white"

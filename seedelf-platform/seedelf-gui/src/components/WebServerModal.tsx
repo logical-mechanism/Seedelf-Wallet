@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { stopWebServer } from "@pages/Wallet/webServer";
-import {
-  Link,
-  CircleQuestionMark,
-  Copy,
-} from "lucide-react";
+import { Link, CircleQuestionMark, Copy } from "lucide-react";
 import { ShowNotification } from "@/components/ShowNotification";
 
 type WebServerModalProps = {
@@ -16,7 +12,7 @@ type WebServerModalProps = {
 
 export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
   const [message, setMessage] = useState<string | null>(null);
-  
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -48,8 +44,18 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
           aria-labelledby="modal-title"
           className="inline-block w-fit max-w-[90vw] rounded-xl bg-gray-800 p-6 shadow-lg"
         >
-          <h1><button disabled title="Cardano web ( CIP30 ) wallets must interact through a web browser. Visit the URL to interact with the dapp."><CircleQuestionMark /></button></h1>
-          <h2 id="modal-title" className="mb-4 text-md font-semibold text-white text-center">
+          <h1>
+            <button
+              disabled
+              title="Cardano web ( CIP30 ) wallets must interact through a web browser. Visit the URL to interact with the dapp."
+            >
+              <CircleQuestionMark />
+            </button>
+          </h1>
+          <h2
+            id="modal-title"
+            className="mb-4 text-md font-semibold text-white text-center"
+          >
             Web Server Is Live
           </h2>
 
@@ -57,13 +63,13 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
             {/* Use Tauri opener so the link opens in the system browser */}
             <code className="pr-4 min-w-0 truncate">{url}</code>
             <button
-                type="button"
-                title={url}
-                aria-label="Open local webserver"
-                onClick={() => openUrl(url)}
-                className="hover:scale-105 pr-4 text-white text-2xl"
-              >
-                <Link />
+              type="button"
+              title={url}
+              aria-label="Open local webserver"
+              onClick={() => openUrl(url)}
+              className="hover:scale-105 pr-4 text-white text-2xl"
+            >
+              <Link />
             </button>
             <button
               type="button"
@@ -80,7 +86,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
             <button
               type="button"
               title="Stop the local web server"
-              onClick={ () => {
+              onClick={() => {
                 stopWebServer();
                 onClose();
               }}

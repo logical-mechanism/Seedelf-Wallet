@@ -21,16 +21,17 @@ export function Manage() {
   const [seedelf, setSeedelf] = useState("");
 
   const [txHash, setTxHash] = useState("");
-  
+
   const [message, setMessage] = useState<string | null>(null);
   const [variant, setVariant] = useState<NotificationVariant>("error");
-  
+
   const [submitting, setSubmitting] = useState(false);
-  
+
   const [showWebServerModal, setShowWebServerModal] = useState<boolean>(false);
-  const [showExplorerLinkModal, setShowExplorerLinkModal] = useState<boolean>(false);
+  const [showExplorerLinkModal, setShowExplorerLinkModal] =
+    useState<boolean>(false);
   const [mode, setMode] = useState<ToggleMode>("Create");
-  
+
   const { network } = useNetwork();
   const { seedelfs } = useOutletContext<OutletContextType>();
 
@@ -111,20 +112,20 @@ export function Manage() {
       />
 
       <WebServerModal
-        open={showWebServerModal} 
-        url={"http://127.0.0.1:44203/"} 
+        open={showWebServerModal}
+        url={"http://127.0.0.1:44203/"}
         onClose={() => {
           setVariant("info");
           setMessage("Stopping Web Server..");
-          setShowWebServerModal(false)
+          setShowWebServerModal(false);
         }}
       />
 
       <ExplorerLinkModal
-        open={showExplorerLinkModal} 
-        txHash={txHash} 
+        open={showExplorerLinkModal}
+        txHash={txHash}
         onClose={() => {
-          setShowExplorerLinkModal(false)
+          setShowExplorerLinkModal(false);
         }}
       />
 
