@@ -158,22 +158,22 @@ pub async fn build_remove_seedelf(
             .await
             .unwrap_or_default();
 
-//     for (i, u) in every_utxo.iter().enumerate() {
-//     println!(
-//         "[GUI] UTxO {}: tx_hash={} datum={:?}",
-//         i,
-//         u.tx_hash,
-//         u.inline_datum
-//     );
-// }
-//     println!("Seedelf: {:}", seedelf);
+    //     for (i, u) in every_utxo.iter().enumerate() {
+    //     println!(
+    //         "[GUI] UTxO {}: tx_hash={} datum={:?}",
+    //         i,
+    //         u.tx_hash,
+    //         u.inline_datum
+    //     );
+    // }
+    //     println!("Seedelf: {:}", seedelf);
     let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
         seedelf.clone(),
         &config.contract.seedelf_policy_id,
         every_utxo,
     ) {
         Ok(Some(utxo)) => utxo,
-        _ => UtxoResponse::default()
+        _ => UtxoResponse::default(),
     };
 
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)

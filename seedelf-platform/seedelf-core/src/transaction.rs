@@ -158,13 +158,13 @@ pub fn extract_budgets(value: &Value) -> Vec<(u64, u64)> {
     // Ensure the value contains the expected "result" array
     if let Some(result_array) = value.get("result").and_then(|r| r.as_array()) {
         for item in result_array {
-            if let Some(budget) = item.get("budget") {
-                if let (Some(cpu), Some(memory)) = (
+            if let Some(budget) = item.get("budget")
+                && let (Some(cpu), Some(memory)) = (
                     budget.get("cpu").and_then(|c| c.as_u64()),
                     budget.get("memory").and_then(|m| m.as_u64()),
-                ) {
-                    budgets.push((cpu, memory));
-                }
+                )
+            {
+                budgets.push((cpu, memory));
             }
         }
     }
