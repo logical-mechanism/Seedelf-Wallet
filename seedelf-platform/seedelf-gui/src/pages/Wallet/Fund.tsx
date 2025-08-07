@@ -8,6 +8,13 @@ import {
 import { NumberField } from "@/components/NumberField";
 import { useNetwork } from "@/types/network";
 import { isNotAScript } from "./api";
+import {
+  SearchCheck
+} from "lucide-react";
+import { useOutletContext } from "react-router";
+import { OutletContextType } from "@/types/layout";
+import { colorClasses } from "./colors";
+
 
 
 export function Fund() {
@@ -19,14 +26,35 @@ export function Fund() {
   const [ada, setAda] = useState(0);
 
   const { network } = useNetwork();
-  
+
   const [showWebServerModal, setShowWebServerModal] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const { seedelfs } = useOutletContext<OutletContextType>();
+  const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
+
 
   const handleClear = () => {
     setAddress("");
     setSeedelf("");
+    setSeedelfExist(false);
     setAda(0);
+  };
+
+  const handleSeedelfExist = () => {
+    if (!seedelf.trim()) return setMessage("Seedelf Is Required");
+    if (!seedelf.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
+    if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
+    if (seedelfs.includes(seedelf)) {
+      setVariant("info");
+      setMessage("Seedelf does exist");
+      setSeedelfExist(true);
+    } else {
+      setVariant("error");
+      setMessage("Seedelf does not exist");
+      setSeedelfExist(false);
+
+    }
   };
 
   const handleSubmit = async () => {
@@ -39,10 +67,12 @@ export function Fund() {
       return setMessage("Incorrect Pre-Production Address Format");
     const notScript = await isNotAScript(address);
     if (!notScript) return setMessage("Address Is A Script");
+    
     // seedelf checks
     if (!seedelf.trim()) return setMessage("Seedelf Is Required");
-    if (!seedelf.includes("5eed0e1f")) setMessage("Incorrect Seedelf Format");
-    if (seedelf.length != 64) setMessage("Incorrect Seedelf Length");
+    if (!seedelf.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
+    if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
+    
     const lovelace = ada * 1_000_000;
     console.log(address);
     console.log(seedelf);
@@ -91,15 +121,28 @@ export function Fund() {
         />
       </div>
 
-      <div className="my-4 max-w-5/8 mx-auto w-full">
-        <TextField
-          label="Seedelf"
-          value={seedelf}
-          onChange={(e) => setSeedelf(e.target.value)}
-          disabled={submitting}
-          maxLength={64}
-          minLength={64}
-        />
+      <div className="my-4 w-full">
+        <div className="relative mx-auto w-full max-w-5/8">
+          <TextField
+            label="Seedelf"
+            value={seedelf}
+            onChange={(e) => setSeedelf(e.target.value)}
+            disabled={submitting}
+            maxLength={64}
+            minLength={64}
+          />
+
+          {/* sits just outside the right edge of the 5/8 box */}
+          <button
+            type="button"
+            title="Verify the seedelf exists"
+            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelfExist ? colorClasses.green.text : ""}`}
+            onClick={handleSeedelfExist}
+            disabled={!confirm}
+          >
+            <SearchCheck />
+          </button>
+        </div>
       </div>
 
       <div className="my-4 max-w-5/8 mx-auto w-full">
