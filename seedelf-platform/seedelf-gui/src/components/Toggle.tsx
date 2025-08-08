@@ -6,6 +6,8 @@ interface CreateRemoveToggleProps {
   value: ToggleMode;
   onChange: (v: ToggleMode) => void;
   disabled?: boolean;
+  leftOption?: string;
+  rightOption?: string;
   className?: string;
 }
 
@@ -13,6 +15,8 @@ export function CreateRemoveToggle({
   value,
   onChange,
   disabled,
+  leftOption = "Create",
+  rightOption = "Remove",
   className = "",
 }: CreateRemoveToggleProps) {
   return (
@@ -31,7 +35,7 @@ export function CreateRemoveToggle({
           disabled:opacity-50`}
       >
         <Plus className="h-4 w-4" />
-        Create
+        {leftOption}
       </button>
 
       <button
@@ -44,7 +48,7 @@ export function CreateRemoveToggle({
           disabled:opacity-50`}
       >
         <Trash2 className="h-4 w-4" />
-        Remove
+        {rightOption}
       </button>
     </div>
   );

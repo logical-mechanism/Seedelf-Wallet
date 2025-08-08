@@ -31,6 +31,11 @@ export function WalletPage() {
   const [ownedSeedelfs, setOwnedSeedelfs] = useState<string[]>([]);
   const [history, setHistory] = useState<TxResponseWithSide[]>([]);
 
+  // toast
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toastDur, setToastDur] = useState<number>(2718);
+  const [toastVariant, setToastVariant] = useState<NotificationVariant>("info")
+
   // network selector
   const [network, setNetwork] = useState<Network>(
     () => (localStorage.getItem("network") as Network) || "mainnet",
@@ -43,14 +48,23 @@ export function WalletPage() {
     setHistory([]);
 
     // query stuff
+    setToastVariant("info");
+    setToastDur(10000)
+    setToastMsg("Getting Wallet History");
     const _history = await getWalletHistory(network);
+    setToastMsg("Querying Wallet UTxOs");
     const _every_utxo = await getEveryUtxo(network);
-
+    setToastMsg("Sorting Owned UTxOs");
     const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
+    setToastMsg("Sorting All Seedelfs");
     const _allSeedelfs = await getEverySeedelf(network, _every_utxo);
+    setToastMsg("Sorting Owned Seedelfs");
     const _ownedSeedelfs = await getOwnedSeedelfs(network, _every_utxo);
-
+    setToastMsg("Calculating Balance");
     const _lovelace = await getLovelaceBalance(_owned_utxo);
+    setToastVariant("success");
+    setToastDur(2718)
+    setToastMsg("Wallet Loaded");
 
     // set stuff
     setLovelace(_lovelace);
@@ -67,16 +81,14 @@ export function WalletPage() {
   useEffect(() => {
     localStorage.setItem("network", network);
     if (unlocked) {
-      setToastMsg(`Loading Network: ${network}`);
       setToastVariant("info");
+      setToastMsg(`Loading Network: ${network}`);
     }
 
     gatherWalletInfo();
   }, [network, unlocked]);
 
-  // toast
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
-  const [toastVariant, setToastVariant] = useState<NotificationVariant>("info");
+  ;
 
   const tryUnlock = async () => {
     setUnlocking(true);
@@ -101,6 +113,7 @@ export function WalletPage() {
         message={toastMsg}
         setMessage={setToastMsg}
         variant={toastVariant}
+        duration={toastDur}
       />
 
       {!unlocked && (
@@ -142,8 +155,8 @@ export function WalletPage() {
               lastSync={lastSync}
               lovelace={lovelace}
               onRefresh={async () => {
-                setToastMsg("Refreshing State");
                 setToastVariant("info");
+                setToastMsg("Refreshing State");
                 gatherWalletInfo();
               }}
               onLock={async () => {

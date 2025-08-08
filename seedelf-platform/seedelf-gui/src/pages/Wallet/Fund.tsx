@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { WebServerModal } from "@/components/WebServerModal";
 import { TextField } from "@/components/TextField";
 import {
@@ -14,7 +14,7 @@ import {
 import { useOutletContext } from "react-router";
 import { OutletContextType } from "@/types/layout";
 import { colorClasses } from "./colors";
-
+import { Checkbox } from "@/components/Checkbox";
 
 
 export function Fund() {
@@ -30,8 +30,15 @@ export function Fund() {
   const [showWebServerModal, setShowWebServerModal] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const { allSeedelfs } = useOutletContext<OutletContextType>();
+  const { allSeedelfs, ownedSeedelfs } = useOutletContext<OutletContextType>();
   const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
+  const [addressValid, setAddressValid] = useState<boolean>(false);
+  const [isSelfSend, setIsSelfSend] = useState<boolean>(false);
+  // randomly select a seedelf from the owned seedelfs.
+  const selfSeedelf = useMemo(
+      () => [...ownedSeedelfs].sort(() => Math.random() - 0.5).slice(0, 1),
+      [ownedSeedelfs],
+    )[0];
 
 
   const handleClear = () => {
@@ -39,13 +46,29 @@ export function Fund() {
     setSeedelf("");
     setSeedelfExist(false);
     setAda(0);
+    setIsSelfSend(false);
   };
 
-  const handleSeedelfExist = () => {
-    if (!seedelf.trim()) return setMessage("Seedelf Is Required");
-    if (!seedelf.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
-    if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
-    if (allSeedelfs.includes(seedelf)) {
+  const handleAddressValid = async (a: string) => {
+    setVariant("error");
+    if (!a.trim()) return setMessage("Wallet address is required.");
+    if (network == "mainnet" && !a.includes("addr1"))
+      return setMessage("Incorrect Mainnet Address Format");
+    if (network == "preprod" && !a.includes("addr_test1"))
+      return setMessage("Incorrect Pre-Production Address Format");
+    const notScript = await isNotAScript(a);
+    if (!notScript) return setMessage("Address Is A Script");
+    setVariant("info");
+    setMessage("Address is valid");
+    setAddressValid(true);
+  };
+
+  const handleSeedelfExist = (s: string) => {
+    setVariant("error");
+    if (!s.trim()) return setMessage("Seedelf Is Required");
+    if (!s.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
+    if (s.length != 64) return setMessage("Incorrect Seedelf Length");
+    if (allSeedelfs.includes(s)) {
       setVariant("info");
       setMessage("Seedelf does exist");
       setSeedelfExist(true);
@@ -74,6 +97,12 @@ export function Fund() {
     if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
     
     const lovelace = ada * 1_000_000;
+
+    // lovelace checks; simple hardcore for now
+    // this will need to be dynamic based off the tokens being sent later on
+    if (lovelace < 1_500_000) return setMessage(`Minimum is 1.5 ${network == "mainnet" ? "₳" : "t₳"}`);
+
+    // should be good to run the build tx function now
     console.log(address);
     console.log(seedelf);
     console.log(lovelace);
@@ -111,14 +140,29 @@ export function Fund() {
         }}
       />
 
-      <div className="my-4 max-w-5/8 mx-auto w-full">
-        <TextField
-          label="Address"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          disabled={submitting}
-          maxLength={108}
-        />
+      <div className="my-4 w-full">
+        <div className="relative mx-auto w-full max-w-5/8">
+          <TextField
+            label="Address"
+            value={address}
+            onChange={(e) => {
+              const next = e.target.value;
+              setAddress(next)
+              handleAddressValid(next)
+            }}
+            disabled={submitting}
+            maxLength={108}
+          />
+
+        <button
+            type="button"
+            title="Verify the address"
+            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${address ? (addressValid ? colorClasses.green.text : colorClasses.red.text): ""}`}
+            disabled
+          >
+            <SearchCheck />
+        </button>
+        </div>
       </div>
 
       <div className="my-4 w-full">
@@ -126,19 +170,21 @@ export function Fund() {
           <TextField
             label="Seedelf"
             value={seedelf}
-            onChange={(e) => setSeedelf(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setSeedelf(next);
+              handleSeedelfExist(next);
+            }}
             disabled={submitting}
             maxLength={64}
             minLength={64}
           />
 
-          {/* sits just outside the right edge of the 5/8 box */}
           <button
             type="button"
             title="Verify the seedelf exists"
-            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelfExist ? colorClasses.green.text : ""}`}
-            onClick={handleSeedelfExist}
-            disabled={!confirm}
+            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelf ? (seedelfExist ? colorClasses.green.text : colorClasses.red.text): ""}`}
+            disabled
           >
             <SearchCheck />
           </button>
@@ -154,27 +200,50 @@ export function Fund() {
         />
       </div>
 
-      <div className="flex items-center justify-center my-4 gap-4">
-        <button
-          type="button"
-          onClick={handleSubmit}
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
-          disabled={submitting || !address || !seedelf || !ada || !confirm}
-        >
-          Fund
-        </button>
+      <div className="grid grid-cols-3 items-center my-4 max-w-5/8 mx-auto w-full">
 
-        {(address.length != 0 || seedelf.length != 0 || ada > 0) && (
+        <Checkbox 
+          label="Send To Self?" 
+          checked={isSelfSend} 
+          onCheckedChange={() => {
+            if (isSelfSend) {
+              setSeedelf("");
+              setSeedelfExist(false);
+              setIsSelfSend(false);
+            } else {
+              setSeedelf(selfSeedelf);
+              setSeedelfExist(true);
+              setIsSelfSend(true);
+            }
+          }} 
+          baseColor={colorClasses.green.text}
+        />
+        
+        <div className="flex items-center justify-center gap-4">
           <button
             type="button"
-            onClick={handleClear}
-            className="rounded bg-slate-600 px-4 py-2 text-sm text-white disabled:opacity-50"
-            disabled={submitting || !confirm}
+            title="Fund an existing seedelf"
+            onClick={handleSubmit}
+            className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+            disabled={submitting || !address || !seedelf || !ada || !confirm}
           >
-            Clear
+            Fund
           </button>
-        )}
+
+          {(address.length != 0 || seedelf.length != 0 || ada > 0) && (
+            <button
+              type="button"
+              title="Clear all fields"
+              onClick={handleClear}
+              className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+              disabled={submitting || !confirm}
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
+
     </div>
   );
 }
