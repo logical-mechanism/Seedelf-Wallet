@@ -47,7 +47,8 @@ function IconAction({
 
 export function Dashboard() {
   const [message, setMessage] = useState<string | null>(null);
-  const { lovelace, ownedSeedelfs, history } = useOutletContext<OutletContextType>();
+  const { lovelace, ownedSeedelfs, history } =
+    useOutletContext<OutletContextType>();
   const { network } = useNetwork();
   const recent = history.slice(0, 5);
   const elves = useMemo(

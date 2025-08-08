@@ -5,7 +5,10 @@ type CheckboxProps = {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   baseColor: string;
-} & Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "checked" | "onChange">;
+} & Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "type" | "checked" | "onChange"
+>;
 
 export function Checkbox({
   label,

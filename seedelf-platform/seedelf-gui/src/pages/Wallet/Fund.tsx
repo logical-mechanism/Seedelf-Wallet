@@ -8,14 +8,13 @@ import {
 import { NumberField } from "@/components/NumberField";
 import { useNetwork } from "@/types/network";
 import { isNotAScript } from "./api";
-import {
-  SearchCheck
-} from "lucide-react";
+import { SearchCheck } from "lucide-react";
 import { useOutletContext } from "react-router";
 import { OutletContextType } from "@/types/layout";
 import { colorClasses } from "./colors";
 import { Checkbox } from "@/components/Checkbox";
-
+import { fundSeedelf } from "./transactions";
+import { runWebServer } from "./webServer";
 
 export function Fund() {
   const [message, setMessage] = useState<string | null>(null);
@@ -36,10 +35,9 @@ export function Fund() {
   const [isSelfSend, setIsSelfSend] = useState<boolean>(false);
   // randomly select a seedelf from the owned seedelfs.
   const selfSeedelf = useMemo(
-      () => [...ownedSeedelfs].sort(() => Math.random() - 0.5).slice(0, 1),
-      [ownedSeedelfs],
-    )[0];
-
+    () => [...ownedSeedelfs].sort(() => Math.random() - 0.5).slice(0, 1),
+    [ownedSeedelfs],
+  )[0];
 
   const handleClear = () => {
     setAddress("");
@@ -76,7 +74,6 @@ export function Fund() {
       setVariant("error");
       setMessage("Seedelf does not exist");
       setSeedelfExist(false);
-
     }
   };
 
@@ -90,35 +87,37 @@ export function Fund() {
       return setMessage("Incorrect Pre-Production Address Format");
     const notScript = await isNotAScript(address);
     if (!notScript) return setMessage("Address Is A Script");
-    
+
     // seedelf checks
     if (!seedelf.trim()) return setMessage("Seedelf Is Required");
-    if (!seedelf.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
+    if (!seedelf.includes("5eed0e1f"))
+      return setMessage("Incorrect Seedelf Format");
     if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
-    
+
     const lovelace = ada * 1_000_000;
 
     // lovelace checks; simple hardcore for now
     // this will need to be dynamic based off the tokens being sent later on
-    if (lovelace < 1_500_000) return setMessage(`Minimum is 1.5 ${network == "mainnet" ? "₳" : "t₳"}`);
+    if (lovelace < 1_500_000)
+      return setMessage(`Minimum is 1.5 ${network == "mainnet" ? "₳" : "t₳"}`);
 
     // should be good to run the build tx function now
-    console.log(address);
-    console.log(seedelf);
-    console.log(lovelace);
-
     try {
       setVariant("info");
       setMessage("Building Fund Seedelf Transaction");
-      handleClear();
+      const txCbor = await fundSeedelf(network, address, seedelf, lovelace);
+      if (txCbor) {
+        setShowWebServerModal(true);
+        await runWebServer(txCbor, network);
+        handleClear();
+      }
     } catch (e: any) {
       setVariant("error");
       setMessage(e as string);
     } finally {
       setSubmitting(false);
     }
-
-  }
+  };
 
   return (
     <div className="w-full p-6">
@@ -147,21 +146,21 @@ export function Fund() {
             value={address}
             onChange={(e) => {
               const next = e.target.value;
-              setAddress(next)
-              handleAddressValid(next)
+              setAddress(next);
+              handleAddressValid(next);
             }}
             disabled={submitting}
             maxLength={108}
           />
 
-        <button
+          <button
             type="button"
             title="Verify the address"
-            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${address ? (addressValid ? colorClasses.green.text : colorClasses.red.text): ""}`}
+            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${address ? (addressValid ? colorClasses.green.text : colorClasses.red.text) : ""}`}
             disabled
           >
             <SearchCheck />
-        </button>
+          </button>
         </div>
       </div>
 
@@ -183,7 +182,7 @@ export function Fund() {
           <button
             type="button"
             title="Verify the seedelf exists"
-            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelf ? (seedelfExist ? colorClasses.green.text : colorClasses.red.text): ""}`}
+            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelf ? (seedelfExist ? colorClasses.green.text : colorClasses.red.text) : ""}`}
             disabled
           >
             <SearchCheck />
@@ -192,19 +191,13 @@ export function Fund() {
       </div>
 
       <div className="my-4 max-w-5/8 mx-auto w-full">
-        <NumberField
-          label="Ada"
-          value={ada}
-          onChange={setAda}
-          min={0}
-        />
+        <NumberField label="Ada" value={ada} onChange={setAda} min={0} />
       </div>
 
       <div className="grid grid-cols-3 items-center my-4 max-w-5/8 mx-auto w-full">
-
-        <Checkbox 
-          label="Send To Self?" 
-          checked={isSelfSend} 
+        <Checkbox
+          label="Send To Self?"
+          checked={isSelfSend}
           onCheckedChange={() => {
             if (isSelfSend) {
               setSeedelf("");
@@ -215,10 +208,10 @@ export function Fund() {
               setSeedelfExist(true);
               setIsSelfSend(true);
             }
-          }} 
+          }}
           baseColor={colorClasses.green.text}
         />
-        
+
         <div className="flex items-center justify-center gap-4">
           <button
             type="button"
@@ -243,7 +236,6 @@ export function Fund() {
           )}
         </div>
       </div>
-
     </div>
   );
 }

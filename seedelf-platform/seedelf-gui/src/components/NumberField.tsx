@@ -9,11 +9,17 @@ type NumberFieldProps = {
 const DECIMALS = 6;
 const MAX = 45_000_000_000;
 
-const round6 = (n: number) => Math.floor(n * Math.pow(10, DECIMALS)) / Math.pow(10, DECIMALS);
+const round6 = (n: number) =>
+  Math.floor(n * Math.pow(10, DECIMALS)) / Math.pow(10, DECIMALS);
 const clamp = (n: number) => Math.min(Math.max(n, 0), MAX);
 const re = new RegExp(`^\\d*(?:\\.\\d{0,${DECIMALS}})?$`);
 
-export function NumberField({ label, value, onChange, ...props }: NumberFieldProps) {
+export function NumberField({
+  label,
+  value,
+  onChange,
+  ...props
+}: NumberFieldProps) {
   const [raw, setRaw] = useState("");
 
   useEffect(() => {
@@ -44,7 +50,11 @@ export function NumberField({ label, value, onChange, ...props }: NumberFieldPro
 
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     const s = e.target.value;
-    if (s === "") { setRaw(""); onChange(0); return; }
+    if (s === "") {
+      setRaw("");
+      onChange(0);
+      return;
+    }
     if (!re.test(s)) return;
 
     const n = Number(s);

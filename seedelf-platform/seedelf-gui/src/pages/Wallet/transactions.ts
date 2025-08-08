@@ -27,3 +27,18 @@ export async function removeSeedelf(
     seedelf: seedelf,
   });
 }
+
+export async function fundSeedelf(
+  network: Network,
+  addr: string,
+  seedelf: string,
+  lovelace: number,
+): Promise<string> {
+  const flag = castNetwork(network);
+  return await invoke<string>("fund_seedelf", {
+    networkFlag: flag,
+    userAddress: addr,
+    seedelf: seedelf,
+    lovelace: lovelace,
+  });
+}

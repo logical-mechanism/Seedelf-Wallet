@@ -34,7 +34,7 @@ export function WalletPage() {
   // toast
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [toastDur, setToastDur] = useState<number>(2718);
-  const [toastVariant, setToastVariant] = useState<NotificationVariant>("info")
+  const [toastVariant, setToastVariant] = useState<NotificationVariant>("info");
 
   // network selector
   const [network, setNetwork] = useState<Network>(
@@ -49,7 +49,7 @@ export function WalletPage() {
 
     // query stuff
     setToastVariant("info");
-    setToastDur(10000)
+    setToastDur(10000);
     setToastMsg("Getting Wallet History");
     const _history = await getWalletHistory(network);
     setToastMsg("Querying Wallet UTxOs");
@@ -63,7 +63,7 @@ export function WalletPage() {
     setToastMsg("Calculating Balance");
     const _lovelace = await getLovelaceBalance(_owned_utxo);
     setToastVariant("success");
-    setToastDur(2718)
+    setToastDur(2718);
     setToastMsg("Wallet Loaded");
 
     // set stuff
@@ -83,12 +83,9 @@ export function WalletPage() {
     if (unlocked) {
       setToastVariant("info");
       setToastMsg(`Loading Network: ${network}`);
+      gatherWalletInfo();
     }
-
-    gatherWalletInfo();
   }, [network, unlocked]);
-
-  ;
 
   const tryUnlock = async () => {
     setUnlocking(true);
@@ -170,7 +167,9 @@ export function WalletPage() {
                 <Sidebar />
               </aside>
               <main className="flex-1 min-w-0 overflow-auto">
-                <Outlet context={{ lovelace, allSeedelfs, ownedSeedelfs, history }} />
+                <Outlet
+                  context={{ lovelace, allSeedelfs, ownedSeedelfs, history }}
+                />
               </main>
             </div>
           </div>
