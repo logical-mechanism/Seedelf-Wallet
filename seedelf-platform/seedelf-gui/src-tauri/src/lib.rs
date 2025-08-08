@@ -34,6 +34,7 @@ pub fn run() {
             commands::create::create_seedelf,
             commands::remove::remove_seedelf,
             commands::fund::fund_seedelf,
+            commands::send::send_seedelf,
             // webserver.rs
             webserver::open_web_server,
             webserver::close_web_server

@@ -28,6 +28,18 @@ use seedelf_display::display;
 use seedelf_koios::koios::{
     UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
 };
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct TransferSeedelfOutput {
+    pub tx_cbor: String,
+    pub tx_hash: String,
+    pub tx_fee: u64,
+    pub compute_fee: u64,
+    pub script_reference_fee: u64,
+    pub total_fee: u64,
+    pub usable_utxos: Vec<UtxoResponse>,
+}
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -127,7 +139,88 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     if args.lovelace.is_some_and(|x| x < minimum_lovelace) {
         bail!("Amount Too Small For Min UTxO");
     }
+    // if there is change going back then we need this to rerandomize a datum
+    let scalar: Scalar = setup::unlock_wallet_interactive();
 
+    let TransferSeedelfOutput {
+        tx_cbor,
+        tx_hash,
+        tx_fee,
+        compute_fee,
+        script_reference_fee,
+        total_fee,
+        usable_utxos,
+    } = build_transfer_seedelf(
+        config,
+        network_flag,
+        args.seedelf,
+        args.lovelace.unwrap_or(minimum_lovelace),
+        selected_tokens,
+        args.utxos,
+        scalar,
+    )
+    .await;
+
+    if usable_utxos.is_empty() {
+        bail!("No Usuable UTxOs Found");
+    }
+
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Compute Fee:".bright_blue(),
+        compute_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Script Reference Fee:".bright_blue(),
+        script_reference_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Total Fee:".bright_blue(),
+        total_fee.to_string().bright_white()
+    );
+
+    println!("\nTx Cbor: {}", hex::encode(tx_cbor.clone()).white());
+
+    if tx_hash.is_empty() {
+        println!("\nTransaction Successfully Failed!");
+    } else {
+        println!("\nTransaction Successfully Submitted!");
+        println!("\nTx Hash: {}", tx_hash.bright_cyan());
+        if network_flag {
+            println!(
+                "{}",
+                format!("\nhttps://preprod.cardanoscan.io/transaction/{}", tx_hash).bright_purple()
+            );
+        } else {
+            println!(
+                "{}",
+                format!("\nhttps://cardanoscan.io/transaction/{}", tx_hash).bright_purple()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn build_transfer_seedelf(
+    config: Config,
+    network_flag: bool,
+    seedelf: String,
+    lovelace: u64,
+    selected_tokens: Assets,
+    selected_utxos: Option<Vec<String>>,
+    scalar: Scalar,
+) -> TransferSeedelfOutput {
     let collat_addr: Address = address::collateral_address(network_flag);
     let wallet_addr: Address =
         address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
@@ -138,42 +231,31 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     let mut input_vector: Vec<Input> = Vec::new();
     let mut register_vector: Vec<Register> = Vec::new();
 
-    let lovelace_goal: u64 = args.lovelace.unwrap_or(minimum_lovelace);
-
-    // if there is change going back then we need this to rerandomize a datum
-    let scalar: Scalar = setup::unlock_wallet_interactive();
-
-    let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
+    let every_utxo_at_script: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
+            .await
+            .unwrap_or_default();
 
     let (seedelf_datum, usable_utxos) = utxos::find_seedelf_and_wallet_utxos(
         scalar,
-        args.seedelf,
+        seedelf,
         &config.contract.seedelf_policy_id,
-        every_utxo,
-    )?;
-    // the extra 2.5 ADA should account for the change and fee
-    let usable_utxos: Vec<UtxoResponse> = if args.utxos.is_none() {
-        utxos::select(usable_utxos, lovelace_goal, selected_tokens.clone())?
+        every_utxo_at_script,
+    )
+    .unwrap_or_default();
+
+    let usable_utxos: Vec<UtxoResponse> = if selected_utxos.is_none() {
+        utxos::select(usable_utxos, lovelace, selected_tokens.clone()).unwrap_or_default()
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
-        match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
+        match utxos::parse_tx_utxos(selected_utxos.unwrap_or_default()) {
             Ok(parsed) => utxos::filter_utxos(usable_utxos, parsed),
-            Err(e) => {
-                eprintln!("Unable To Parse UTxOs Error: {e}");
-                // nothing works if you are not spending anything, this could be an exit
-                Vec::new()
-            }
+            Err(_) => Vec::new(),
         }
     };
 
-    if usable_utxos.is_empty() {
-        bail!("No Usuable UTxOs Found");
-    }
-
-    // let usable_utxos = utxos::select(usable_utxos, lovelace_goal, selected_tokens.clone());
-    let (total_lovelace_found, tokens) = utxos::assets_of(usable_utxos.clone())?;
-    let change_tokens: Assets = tokens.separate(selected_tokens.clone())?;
+    let (total_lovelace_found, tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_default();
+    let change_tokens: Assets = tokens.separate(selected_tokens.clone()).unwrap_or_default();
 
     for utxo in usable_utxos.clone() {
         let this_input: Input = Input::new(
@@ -205,15 +287,16 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
     let pkh: String = hex::encode(public_key_hash);
 
-    let mut transfer_output: Output = Output::new(wallet_addr.clone(), lovelace_goal)
-        .set_inline_datum(
-            seedelf_datum
-                .ok_or("Seedelf Not Found")
-                .unwrap()
-                .clone()
-                .rerandomize()?
-                .to_vec()?,
-        );
+    let mut transfer_output: Output = Output::new(wallet_addr.clone(), lovelace).set_inline_datum(
+        seedelf_datum
+            .ok_or("Seedelf Not Found")
+            .unwrap()
+            .clone()
+            .rerandomize()
+            .unwrap_or_default()
+            .to_vec()
+            .unwrap_or_default(),
+    );
     for asset in selected_tokens.items.clone() {
         transfer_output = transfer_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -250,11 +333,16 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     // a max tokens per change output here
     let mut lovelace_amount: u64 = total_lovelace_found;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
+        let datum_vector: Vec<u8> = Register::create(scalar)
+            .unwrap_or_default()
+            .rerandomize()
+            .unwrap_or_default()
+            .to_vec()
+            .unwrap_or_default();
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
-            lovelace_amount = lovelace_amount - lovelace_goal - tmp_fee;
+            lovelace_amount = lovelace_amount - lovelace - tmp_fee;
             lovelace_amount
         } else {
             // its additional tokens going back
@@ -274,8 +362,13 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
 
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let change_lovelace: u64 = lovelace_amount - lovelace_goal - tmp_fee;
+        let datum_vector: Vec<u8> = Register::create(scalar)
+            .unwrap_or_default()
+            .rerandomize()
+            .unwrap_or_default()
+            .to_vec()
+            .unwrap_or_default();
+        let change_lovelace: u64 = lovelace_amount - lovelace - tmp_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
         draft_tx = draft_tx.output(change_output);
@@ -289,11 +382,12 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         .zip(register_vector.clone().into_iter())
     {
         let r: Scalar = random_scalar();
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r)?;
-        let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r).unwrap_or_default();
+        let spend_redeemer_vector =
+            data_structures::create_spend_redeemer(z, g_r, pkh.clone()).unwrap_or_default();
         draft_tx = draft_tx.add_spend_redeemer(
             input,
-            spend_redeemer_vector?.clone(),
+            spend_redeemer_vector.clone(),
             Some(pallas_txbuilder::ExUnits {
                 mem: 14_000_000,
                 steps: 10_000_000_000,
@@ -347,26 +441,11 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         .try_into()
         .unwrap();
     let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
-    );
 
     // This probably should be a function
     let compute_fee: u64 = total_computation_fee(budgets.clone());
-    println!(
-        "{} {}",
-        "Compute Fee:".bright_blue(),
-        compute_fee.to_string().bright_white()
-    );
 
     let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
-    println!(
-        "{} {}",
-        "Script Reference Fee:".bright_blue(),
-        script_reference_fee.to_string().bright_white()
-    );
 
     // total fee is the sum of everything
     let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
@@ -376,11 +455,6 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     } else {
         total_fee
     };
-    println!(
-        "{} {}",
-        "Total Fee:".bright_blue(),
-        total_fee.to_string().bright_white()
-    );
 
     raw_tx = raw_tx
         .collateral_output(Output::new(
@@ -397,11 +471,16 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     // a max tokens per change output here
     let mut lovelace_amount: u64 = total_lovelace_found;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
+        let datum_vector: Vec<u8> = Register::create(scalar)
+            .unwrap_or_default()
+            .rerandomize()
+            .unwrap_or_default()
+            .to_vec()
+            .unwrap_or_default();
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
-            lovelace_amount = lovelace_amount - lovelace_goal - total_fee;
+            lovelace_amount = lovelace_amount - lovelace - total_fee;
             lovelace_amount
         } else {
             // its additional tokens going back
@@ -421,8 +500,13 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
 
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let change_lovelace: u64 = lovelace_amount - lovelace_goal - total_fee;
+        let datum_vector: Vec<u8> = Register::create(scalar)
+            .unwrap_or_default()
+            .rerandomize()
+            .unwrap_or_default()
+            .to_vec()
+            .unwrap_or_default();
+        let change_lovelace: u64 = lovelace_amount - lovelace - total_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
         raw_tx = raw_tx.output(change_output);
@@ -435,11 +519,12 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         .zip(budgets.clone().into_iter())
     {
         let r: Scalar = random_scalar();
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r)?;
-        let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r).unwrap_or_default();
+        let spend_redeemer_vector =
+            data_structures::create_spend_redeemer(z, g_r, pkh.clone()).unwrap_or_default();
         raw_tx = raw_tx.add_spend_redeemer(
             input,
-            spend_redeemer_vector?.clone(),
+            spend_redeemer_vector.clone(),
             Some(pallas_txbuilder::ExUnits { mem, steps: cpu }),
         )
     }
@@ -450,65 +535,35 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
 
     let witness_public_key: PublicKey = PublicKey::from(COLLATERAL_PUBLIC_KEY);
 
-    match witness_collateral(tx_cbor.clone(), network_flag).await {
+    let signed_tx_cbor: BuiltTransaction = match witness_collateral(tx_cbor.clone(), network_flag)
+        .await
+    {
         Ok(witness) => {
             let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
             let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
             let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
 
-            let signed_tx_cbor = tx
-                .sign(pallas_wallet::PrivateKey::from(one_time_secret_key.clone()))
+            tx.sign(PrivateKey::from(one_time_secret_key.clone()))
                 .unwrap()
                 .add_signature(witness_public_key, witness_vector)
-                .unwrap();
-
-            println!(
-                "\nTx Cbor: {}",
-                hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
-            );
-
-            match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
-                Ok(response) => {
-                    if let Some(_error) = response.get("contents") {
-                        println!("\nError: {response}");
-                        std::process::exit(1);
-                    }
-                    println!("\nTransaction Successfully Submitted!");
-                    println!(
-                        "\nTx Hash: {}",
-                        response.as_str().unwrap_or("default").bright_cyan()
-                    );
-                    if network_flag {
-                        println!(
-                            "{}",
-                            format!(
-                                "\nhttps://preprod.cardanoscan.io/transaction/{}",
-                                response.as_str().unwrap_or("default")
-                            )
-                            .bright_purple()
-                        );
-                    } else {
-                        println!(
-                            "{}",
-                            format!(
-                                "\nhttps://cardanoscan.io/transaction/{}",
-                                response.as_str().unwrap_or("default")
-                            )
-                            .bright_purple()
-                        );
-                    }
-                }
-                Err(err) => {
-                    eprintln!("Failed to submit tx: {err}");
-                    std::process::exit(1);
-                }
-            }
+                .unwrap()
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}");
-            std::process::exit(1);
-        }
+        _ => tx,
+    };
+
+    let tx_hash = match submit_tx(hex::encode(signed_tx_cbor.clone().tx_bytes), network_flag).await
+    {
+        Ok(response) => response.as_str().unwrap_or("default").to_string(),
+        Err(_) => String::new(),
+    };
+    //
+    TransferSeedelfOutput {
+        tx_cbor,
+        tx_hash,
+        tx_fee,
+        compute_fee,
+        script_reference_fee,
+        total_fee,
+        usable_utxos,
     }
-
-    Ok(())
 }
