@@ -80,7 +80,13 @@ export function Manage() {
           setShowWebServerModal(false);
           setShowExplorerLinkModal(true);
           handleClear();
-        }
+        } else {
+        setShowWebServerModal(false);
+        setShowExplorerLinkModal(false);
+        setVariant('error');
+        setMessage("Transaction Failed To Build")
+        handleClear();
+      }
       } else {
         setVariant("info");
         setMessage("Building Create Seedelf Transaction");

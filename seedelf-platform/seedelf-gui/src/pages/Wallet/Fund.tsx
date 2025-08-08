@@ -110,6 +110,12 @@ export function Fund() {
         setShowWebServerModal(true);
         await runWebServer(txCbor, network);
         handleClear();
+      } else {
+        setShowWebServerModal(false);
+        setVariant('error');
+        setMessage("Transaction Failed To Build")
+        handleClear();
+
       }
     } catch (e: any) {
       setVariant("error");

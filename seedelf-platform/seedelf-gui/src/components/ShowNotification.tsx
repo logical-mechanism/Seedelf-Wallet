@@ -51,7 +51,7 @@ export function ShowNotification({
 
   return (
     <div
-      className={`whitespace-pre-line fixed bottom-16 right-4 z-50 rounded shadow-lg px-4 py-3 flex items-center gap-2 transition-transform duration-150 ${variantClasses}`}
+      className={`whitespace-pre-line fixed bottom-16 right-4 z-51 rounded shadow-lg px-4 py-3 flex items-center gap-2 transition-transform duration-150 ${variantClasses}`}
       role={role}
       aria-live={ariaLive}
     >

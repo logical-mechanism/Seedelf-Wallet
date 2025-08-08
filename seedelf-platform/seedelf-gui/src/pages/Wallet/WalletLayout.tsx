@@ -18,12 +18,15 @@ import {
   getOwnedSeedelfs,
   getEverySeedelf,
 } from "./api";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
+
 
 export function WalletPage() {
   const [password, setPassword] = useState("");
   const [unlocking, setUnlocking] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [lastSync, setLastSync] = useState<number | null>(null); // unix ms
+  const [loading, setLoading] = useState(false);
 
   // wallet states
   const [lovelace, setLovelace] = useState<number>(0);
@@ -48,11 +51,14 @@ export function WalletPage() {
     setHistory([]);
 
     // query stuff
+    setLoading(true);
     setToastVariant("info");
     setToastDur(10000);
     setToastMsg("Getting Wallet History");
+    // this takes a long time
     const _history = await getWalletHistory(network);
     setToastMsg("Querying Wallet UTxOs");
+    // this takes a long time
     const _every_utxo = await getEveryUtxo(network);
     setToastMsg("Sorting Owned UTxOs");
     const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
@@ -62,6 +68,7 @@ export function WalletPage() {
     const _ownedSeedelfs = await getOwnedSeedelfs(network, _every_utxo);
     setToastMsg("Calculating Balance");
     const _lovelace = await getLovelaceBalance(_owned_utxo);
+    setLoading(false);
     setToastVariant("success");
     setToastDur(2718);
     setToastMsg("Wallet Loaded");
@@ -112,6 +119,8 @@ export function WalletPage() {
         variant={toastVariant}
         duration={toastDur}
       />
+
+      <LoadingOverlay show={loading}/>
 
       {!unlocked && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
