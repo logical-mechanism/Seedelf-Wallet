@@ -215,13 +215,11 @@ pub async fn build_fund_seedelf(
     // all non collateral utxos, assume 5 ada for collateral
     let every_non_collatreal_utxo: Vec<UtxoResponse> =
         utxos::collect_address_utxos(every_utxo_at_address).unwrap_or_default();
-    // assuming no tokens for now, todo add assets
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(every_non_collatreal_utxo, lovelace, selected_tokens.clone())
             .unwrap_or_default();
 
     let (total_lovelace, tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_default();
-    // assumes no tokens
     let change_tokens: Assets = tokens.separate(selected_tokens.clone()).unwrap_or_default();
 
     // add usable wallet utxos as inputs

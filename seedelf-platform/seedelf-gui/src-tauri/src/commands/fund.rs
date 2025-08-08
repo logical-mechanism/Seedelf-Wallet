@@ -15,7 +15,6 @@ pub async fn fund_seedelf(
             return String::new();
         }
     };
-
     let FundSeedelfOutput {
         tx_cbor,
         usable_utxos,
@@ -26,6 +25,7 @@ pub async fn fund_seedelf(
         user_address,
         seedelf,
         lovelace,
+        // todo add in assets
         Assets::new(),
     )
     .await;
