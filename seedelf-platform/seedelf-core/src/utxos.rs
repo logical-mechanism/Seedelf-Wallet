@@ -315,24 +315,24 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> Result<(u64, Assets)> {
         let value: u64 = string_to_u64(utxo.value.clone()).context("Invalid UTxO Value")?;
         current_lovelace_sum += value;
 
-        if let Some(assets) = utxo.clone().asset_list {
-            if !assets.is_empty() {
-                let mut utxo_assets: Assets = Assets::new();
+        if let Some(assets) = utxo.clone().asset_list
+            && !assets.is_empty()
+        {
+            let mut utxo_assets: Assets = Assets::new();
 
-                for token in assets.clone() {
-                    let new_asset = Asset::new(
-                        token.policy_id,
-                        token.asset_name,
-                        string_to_u64(token.quantity).context("Invalid Token Quantity")?,
-                    )
-                    .context("Fail To Construct Asset")?;
-                    utxo_assets = utxo_assets.add(new_asset).context("Can't Add Assets")?;
-                }
-
-                found_assets = found_assets
-                    .merge(utxo_assets.clone())
-                    .context("Can't Merge Assets")?;
+            for token in assets.clone() {
+                let new_asset = Asset::new(
+                    token.policy_id,
+                    token.asset_name,
+                    string_to_u64(token.quantity).context("Invalid Token Quantity")?,
+                )
+                .context("Fail To Construct Asset")?;
+                utxo_assets = utxo_assets.add(new_asset).context("Can't Add Assets")?;
             }
+
+            found_assets = found_assets
+                .merge(utxo_assets.clone())
+                .context("Can't Merge Assets")?;
         }
     }
     Ok((current_lovelace_sum, found_assets))

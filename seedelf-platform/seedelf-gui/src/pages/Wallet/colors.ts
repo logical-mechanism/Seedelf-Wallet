@@ -19,4 +19,12 @@ export const colorClasses: any = {
     text: "text-slate-600 hover:text-slate-700",
     bg: "bg-slate-600 hover:bg-slate-700",
   },
+  green: {
+    text: "text-green-600 hover:text-green-700",
+    bg: "bg-green-600 hover:bg-green-700",
+  },
+  red: {
+    text: "text-red-600 hover:text-red-700",
+    bg: "bg-red-600 hover:bg-red-700",
+  },
 };

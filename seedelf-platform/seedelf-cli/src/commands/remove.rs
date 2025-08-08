@@ -157,23 +157,13 @@ pub async fn build_remove_seedelf(
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
             .await
             .unwrap_or_default();
-
-//     for (i, u) in every_utxo.iter().enumerate() {
-//     println!(
-//         "[GUI] UTxO {}: tx_hash={} datum={:?}",
-//         i,
-//         u.tx_hash,
-//         u.inline_datum
-//     );
-// }
-//     println!("Seedelf: {:}", seedelf);
     let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
         seedelf.clone(),
         &config.contract.seedelf_policy_id,
         every_utxo,
     ) {
         Ok(Some(utxo)) => utxo,
-        _ => UtxoResponse::default()
+        _ => UtxoResponse::default(),
     };
 
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)

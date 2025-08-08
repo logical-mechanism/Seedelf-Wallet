@@ -17,6 +17,7 @@ function formatAgo(ms: number) {
   return `${d}d ${hr % 24}h ${min % 60}m ${sec % 60}s ago`;
 }
 
+// there has to be a better way for this and probably should align with colorClasses
 const selectStyles = {
   control: (base: any, state: any) => ({
     ...base,

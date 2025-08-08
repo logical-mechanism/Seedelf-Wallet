@@ -1,6 +1,6 @@
-use seedelf_core::constants::{Config, VARIANT, get_config};
 use crate::session;
-use seedelf_cli::commands::remove::{build_remove_seedelf, RemoveSeedelfOutput};
+use seedelf_cli::commands::remove::{RemoveSeedelfOutput, build_remove_seedelf};
+use seedelf_core::constants::{Config, VARIANT, get_config};
 
 #[tauri::command(async)]
 pub async fn remove_seedelf(network_flag: bool, addr: String, seedelf: String) -> String {
@@ -18,7 +18,8 @@ pub async fn remove_seedelf(network_flag: bool, addr: String, seedelf: String) -
         spend_cpu_units,
         spend_mem_units,
         ..
-    } = match session::with_key(|sk| build_remove_seedelf(config, network_flag, addr, seedelf, *sk)) {
+    } = match session::with_key(|sk| build_remove_seedelf(config, network_flag, addr, seedelf, *sk))
+    {
         Ok(v) => v.await,
         _ => return String::new(),
     };

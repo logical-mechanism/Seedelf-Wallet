@@ -17,6 +17,14 @@ use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_display::{display, text_coloring};
 use seedelf_koios::koios::{UtxoResponse, extract_bytes_with_logging};
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct FundSeedelfOutput {
+    pub tx_cbor: String,
+    pub tx_fee: u64,
+    pub usable_utxos: Vec<UtxoResponse>,
+}
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -130,6 +138,51 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
         bail!("Supplied Address Is Incorrect");
     }
 
+    let FundSeedelfOutput {
+        tx_cbor,
+        tx_fee,
+        usable_utxos,
+    } = build_fund_seedelf(
+        config,
+        network_flag,
+        args.address,
+        args.seedelf,
+        args.lovelace.unwrap_or(minimum_lovelace),
+        selected_tokens,
+    )
+    .await;
+
+    if usable_utxos.is_empty() {
+        bail!("Not Enough Lovelace/Tokens");
+    }
+
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
+
+    println!("\nTx Cbor: {}", tx_cbor.clone().white());
+
+    // inject the tx cbor into the local webserver to prompt the wallet
+    display::webserver_address();
+    web_server::run_web_server(tx_cbor, network_flag).await;
+    text_coloring::display_purple("Server has stopped.");
+
+    Ok(())
+}
+
+pub async fn build_fund_seedelf(
+    config: Config,
+    network_flag: bool,
+    user_address: String,
+    seedelf: String,
+    lovelace: u64,
+    selected_tokens: Assets,
+) -> FundSeedelfOutput {
+    // we need to make sure that the network flag and the address provided makes sense here
+    let addr: Address = Address::from_bech32(user_address.as_str()).unwrap();
+
     // we need this as the address type and not the shelley
     let wallet_addr: Address =
         address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
@@ -137,34 +190,39 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
 
-    // we need about 2 ada for change so just add that to the amount
-    let lovelace: u64 = args.lovelace.unwrap_or(minimum_lovelace);
-    let lovelace_goal: u64 = lovelace;
+    let every_utxo_at_script: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
+            .await
+            .unwrap_or_default();
 
-    // utxos
-    let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
-    let seedelf_utxo: UtxoResponse = utxos::find_seedelf_utxo(
-        args.seedelf.clone(),
+    let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
+        seedelf.clone(),
         &config.contract.seedelf_policy_id,
-        every_utxo,
-    )?
-    .ok_or("Seedelf Not Found".to_string())
-    .unwrap();
+        every_utxo_at_script,
+    ) {
+        Ok(Some(utxo)) => utxo,
+        _ => UtxoResponse::default(),
+    };
+
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or("Not Register Type".to_string())
-        .unwrap();
+        .unwrap_or_default();
 
-    let every_utxo: Vec<UtxoResponse> =
-        utxos::get_address_utxos(&args.address, network_flag).await?;
-    let all_utxos: Vec<UtxoResponse> = utxos::collect_address_utxos(every_utxo)?;
+    let every_utxo_at_address: Vec<UtxoResponse> =
+        utxos::get_address_utxos(&user_address, network_flag)
+            .await
+            .unwrap_or_default();
+    // all non collateral utxos, assume 5 ada for collateral
+    let every_non_collatreal_utxo: Vec<UtxoResponse> =
+        utxos::collect_address_utxos(every_utxo_at_address).unwrap_or_default();
     let usable_utxos: Vec<UtxoResponse> =
-        utxos::select(all_utxos, lovelace_goal, selected_tokens.clone())?;
+        utxos::select(every_non_collatreal_utxo, lovelace, selected_tokens.clone())
+            .unwrap_or_default();
 
-    if usable_utxos.is_empty() {
-        bail!("Not Enough Lovelace/Tokens");
-    }
+    let (total_lovelace, tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_default();
+    let change_tokens: Assets = tokens.separate(selected_tokens.clone()).unwrap_or_default();
 
+    // add usable wallet utxos as inputs
     for utxo in usable_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
@@ -178,18 +236,14 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(usable_utxos)?;
-    // tokens tha need to be put into the change output
-    let change_tokens: Assets = tokens.separate(selected_tokens.clone())?;
-    // if the seedelf isn't found then error
-    if total_lovelace < lovelace_goal {
-        bail!("Not Enough Lovelace/Tokens");
-    }
-
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
 
-    let datum_vector: Vec<u8> = seedelf_datum.rerandomize()?.to_vec()?;
+    let datum_vector: Vec<u8> = seedelf_datum
+        .rerandomize()
+        .unwrap_or_default()
+        .to_vec()
+        .unwrap_or_default();
     let mut fund_output: Output =
         Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone());
     for asset in selected_tokens.items.clone() {
@@ -208,7 +262,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     let mut number_of_change_utxo: usize = change_token_per_utxo.len();
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - lovelace - tmp_fee;
@@ -241,6 +295,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     for i in 0..number_of_change_utxo {
         raw_tx = raw_tx.remove_output(number_of_change_utxo - i);
     }
+
     // let mut raw_tx: StagingTransaction = draft_tx.clone().remove_output(1).clear_fee();
     // build an intermediate tx for fee estimation
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
@@ -261,11 +316,6 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     // floor division means its safer to just add 1 lovelace
     let tx_fee: u64 =
         fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default())) + 1;
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
-    );
 
     // a max tokens per change output here
     let change_token_per_utxo: Vec<Assets> = change_tokens
@@ -274,7 +324,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     let number_of_change_utxo: usize = change_token_per_utxo.len();
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - lovelace - tx_fee;
@@ -307,12 +357,11 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
 
     let tx_cbor: String = hex::encode(tx.tx_bytes);
-    println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
-    // inject the tx cbor into the local webserver to prompt the wallet
-    display::webserver_address();
-    web_server::run_web_server(tx_cbor, network_flag).await;
-    text_coloring::display_purple("Server has stopped.");
-
-    Ok(())
+    // fill this out as we need it
+    FundSeedelfOutput {
+        tx_cbor,
+        tx_fee,
+        usable_utxos,
+    }
 }

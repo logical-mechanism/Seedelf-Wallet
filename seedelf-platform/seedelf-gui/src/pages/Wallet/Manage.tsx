@@ -21,18 +21,19 @@ export function Manage() {
   const [seedelf, setSeedelf] = useState("");
 
   const [txHash, setTxHash] = useState("");
-  
+
   const [message, setMessage] = useState<string | null>(null);
   const [variant, setVariant] = useState<NotificationVariant>("error");
-  
+
   const [submitting, setSubmitting] = useState(false);
-  
+
   const [showWebServerModal, setShowWebServerModal] = useState<boolean>(false);
-  const [showExplorerLinkModal, setShowExplorerLinkModal] = useState<boolean>(false);
+  const [showExplorerLinkModal, setShowExplorerLinkModal] =
+    useState<boolean>(false);
   const [mode, setMode] = useState<ToggleMode>("Create");
-  
+
   const { network } = useNetwork();
-  const { seedelfs } = useOutletContext<OutletContextType>();
+  const { ownedSeedelfs } = useOutletContext<OutletContextType>();
 
   const selectSeedelf = async (text: string) => {
     setVariant("info");
@@ -111,20 +112,20 @@ export function Manage() {
       />
 
       <WebServerModal
-        open={showWebServerModal} 
-        url={"http://127.0.0.1:44203/"} 
+        open={showWebServerModal}
+        url={"http://127.0.0.1:44203/"}
         onClose={() => {
           setVariant("info");
           setMessage("Stopping Web Server..");
-          setShowWebServerModal(false)
+          setShowWebServerModal(false);
         }}
       />
 
       <ExplorerLinkModal
-        open={showExplorerLinkModal} 
-        txHash={txHash} 
+        open={showExplorerLinkModal}
+        txHash={txHash}
         onClose={() => {
-          setShowExplorerLinkModal(false)
+          setShowExplorerLinkModal(false);
         }}
       />
 
@@ -187,13 +188,13 @@ export function Manage() {
       </div>
 
       <div
-        className={`${seedelfs.length === 0 ? "" : "rounded flex items-center justify-center max-w-1/2 mx-auto mt-8"}`}
+        className={`${ownedSeedelfs.length === 0 ? "" : "rounded flex items-center justify-center max-w-1/2 mx-auto mt-8"}`}
       >
-        {seedelfs.length === 0 || mode == "Create" ? (
+        {ownedSeedelfs.length === 0 || mode == "Create" ? (
           <></>
         ) : (
           <ul className="space-y-3 text-white m-4 w-full max-[960px]:hidden">
-            {seedelfs.map((h) => (
+            {ownedSeedelfs.map((h) => (
               <li key={`${h}`} className="m-4 p-4">
                 <div className="flex items-center gap-2 w-full min-w-0">
                   <code className="min-w-0 truncate font-bold pr-16">{h}</code>
