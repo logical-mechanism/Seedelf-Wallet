@@ -15,6 +15,14 @@ export async function getEveryUtxo(network: Network): Promise<UtxoResponse[]> {
   return await invoke<UtxoResponse[]>("get_every_utxo", { networkFlag: flag });
 }
 
+export async function getEverySeedelf(network: Network, allUtxos: UtxoResponse[]): Promise<string[]> {
+  const flag = castNetwork(network);
+  return invoke<string[]>("get_every_seedelf", {
+    networkFlag: flag,
+    allUtxos: allUtxos,
+  });
+}
+
 export function getOwnedUtxo(
   network: Network,
   everyUtxo: UtxoResponse[],

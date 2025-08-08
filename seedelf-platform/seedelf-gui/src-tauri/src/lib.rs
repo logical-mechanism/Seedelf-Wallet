@@ -3,6 +3,7 @@ mod commands;
 pub mod session;
 pub mod setup;
 pub mod types;
+pub mod utxos;
 pub mod wallet;
 pub mod webserver;
 
@@ -25,6 +26,8 @@ pub fn run() {
             wallet::get_owned_seedelfs,
             wallet::get_lovelace_balance,
             wallet::get_wallet_history,
+            // utxos.rs
+            utxos::get_every_seedelf,
             // address.rs
             address::is_not_a_script,
             // commands

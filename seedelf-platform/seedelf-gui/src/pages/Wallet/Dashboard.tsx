@@ -47,12 +47,12 @@ function IconAction({
 
 export function Dashboard() {
   const [message, setMessage] = useState<string | null>(null);
-  const { lovelace, seedelfs, history } = useOutletContext<OutletContextType>();
+  const { lovelace, ownedSeedelfs, history } = useOutletContext<OutletContextType>();
   const { network } = useNetwork();
   const recent = history.slice(0, 5);
   const elves = useMemo(
-    () => [...seedelfs].sort(() => Math.random() - 0.5).slice(0, 3),
-    [seedelfs],
+    () => [...ownedSeedelfs].sort(() => Math.random() - 0.5).slice(0, 3),
+    [ownedSeedelfs],
   );
 
   const copy = async (text: string) => {

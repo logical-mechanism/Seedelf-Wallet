@@ -30,7 +30,7 @@ export function Fund() {
   const [showWebServerModal, setShowWebServerModal] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const { seedelfs } = useOutletContext<OutletContextType>();
+  const { allSeedelfs } = useOutletContext<OutletContextType>();
   const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
 
 
@@ -45,7 +45,7 @@ export function Fund() {
     if (!seedelf.trim()) return setMessage("Seedelf Is Required");
     if (!seedelf.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
     if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
-    if (seedelfs.includes(seedelf)) {
+    if (allSeedelfs.includes(seedelf)) {
       setVariant("info");
       setMessage("Seedelf does exist");
       setSeedelfExist(true);

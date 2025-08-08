@@ -16,6 +16,7 @@ import {
   getEveryUtxo,
   getOwnedUtxo,
   getOwnedSeedelfs,
+  getEverySeedelf,
 } from "./api";
 
 export function WalletPage() {
@@ -26,7 +27,8 @@ export function WalletPage() {
 
   // wallet states
   const [lovelace, setLovelace] = useState<number>(0);
-  const [seedelfs, setSeedelfs] = useState<string[]>([]);
+  const [allSeedelfs, setAllSeedelfs] = useState<string[]>([]);
+  const [ownedSeedelfs, setOwnedSeedelfs] = useState<string[]>([]);
   const [history, setHistory] = useState<TxResponseWithSide[]>([]);
 
   // network selector
@@ -37,7 +39,7 @@ export function WalletPage() {
   const gatherWalletInfo = async () => {
     // initalize stuff
     setLovelace(0);
-    setSeedelfs([]);
+    setOwnedSeedelfs([]);
     setHistory([]);
 
     // query stuff
@@ -45,13 +47,15 @@ export function WalletPage() {
     const _every_utxo = await getEveryUtxo(network);
 
     const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
-    const _seedelfs = await getOwnedSeedelfs(network, _every_utxo);
+    const _allSeedelfs = await getEverySeedelf(network, _every_utxo);
+    const _ownedSeedelfs = await getOwnedSeedelfs(network, _every_utxo);
 
     const _lovelace = await getLovelaceBalance(_owned_utxo);
 
     // set stuff
     setLovelace(_lovelace);
-    setSeedelfs(_seedelfs);
+    setOwnedSeedelfs(_ownedSeedelfs);
+    setAllSeedelfs(_allSeedelfs);
     setHistory(_history);
 
     // set last sync time
@@ -153,7 +157,7 @@ export function WalletPage() {
                 <Sidebar />
               </aside>
               <main className="flex-1 min-w-0 overflow-auto">
-                <Outlet context={{ lovelace, seedelfs, history }} />
+                <Outlet context={{ lovelace, allSeedelfs, ownedSeedelfs, history }} />
               </main>
             </div>
           </div>
