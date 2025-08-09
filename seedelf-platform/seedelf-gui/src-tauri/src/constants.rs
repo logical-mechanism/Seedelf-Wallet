@@ -6,6 +6,5 @@ pub async fn get_seedelf_policy_id(network_flag: bool) -> String {
         Some(c) => c,
         None => return String::new(),
     };
-
     config.contract.seedelf_policy_id
 }
