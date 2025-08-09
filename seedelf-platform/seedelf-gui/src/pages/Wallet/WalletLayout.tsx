@@ -20,7 +20,7 @@ import {
 } from "./api";
 import { LoadingOverlay } from "@/components/LoadingOverlay";
 
-export function WalletPage() {
+export function WalletLayout() {
   const [password, setPassword] = useState("");
   const [unlocking, setUnlocking] = useState(false);
   const [unlocked, setUnlocked] = useState(false);

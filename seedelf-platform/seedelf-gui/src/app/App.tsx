@@ -1,6 +1,6 @@
 import { LandingPage } from "@/pages/Landing";
 import { NewWalletPage } from "@/pages/NewWallet";
-import { WalletPage } from "@/pages/Wallet/WalletLayout";
+import { WalletLayout } from "@/pages/Wallet/WalletLayout";
 import { useTauriReady } from "@/lib/useTauriReady";
 import { Routes, Route } from "react-router";
 import { Dashboard } from "@/pages/Wallet/Dashboard";
@@ -22,7 +22,8 @@ function App() {
     <Routes>
       <Route index element={<LandingPage />} />
       <Route path="/wallet/new" element={<NewWalletPage />} />
-      <Route path="/wallet/" element={<WalletPage />}>
+      {/* WalletPage */}
+      <Route path="/wallet/" element={<WalletLayout />}>
         <Route index element={<Dashboard />} />
         <Route path="manage" element={<Manage />} />
         <Route path="fund" element={<Fund />} />
