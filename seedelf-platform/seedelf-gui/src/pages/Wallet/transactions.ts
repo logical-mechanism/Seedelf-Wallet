@@ -42,3 +42,16 @@ export async function fundSeedelf(
     lovelace: lovelace,
   });
 }
+
+export async function sendSeedelf(
+  network: Network,
+  seedelf: string,
+  lovelace: number,
+): Promise<string> {
+  const flag = castNetwork(network);
+  return await invoke<string>("send_seedelf", {
+    networkFlag: flag,
+    seedelf: seedelf,
+    lovelace: lovelace,
+  });
+}

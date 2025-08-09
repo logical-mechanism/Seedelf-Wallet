@@ -11,6 +11,10 @@ export const colorClasses: any = {
     text: "text-pink-600 hover:text-pink-700",
     bg: "bg-pink-600 hover:bg-pink-700",
   },
+  purple: {
+    text: "text-purple-600 hover:text-purple-700",
+    bg: "bg-purple-600 hover:bg-purple-700",
+  },
   zinc: {
     text: "text-zinc-600 hover:text-zinc-700",
     bg: "bg-zinc-600 hover:bg-zinc-700",
@@ -26,5 +30,9 @@ export const colorClasses: any = {
   red: {
     text: "text-red-600 hover:text-red-700",
     bg: "bg-red-600 hover:bg-red-700",
+  },
+  sky: {
+    text: "text-sky-600 hover:text-sky-700",
+    bg: "bg-sky-600 hover:bg-sky-700",
   },
 };

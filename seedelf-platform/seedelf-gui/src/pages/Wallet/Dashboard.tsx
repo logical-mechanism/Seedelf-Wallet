@@ -10,6 +10,7 @@ import {
   Copy,
   Ellipsis,
   BanknoteArrowUp,
+  BanknoteArrowDown,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { colorClasses } from "./colors";
@@ -92,6 +93,12 @@ export function Dashboard() {
             color="pink"
             icon={<BanknoteArrowUp className="w-10 h-10" />}
             label="Add Funds"
+          />
+          <IconAction
+            to="extract"
+            color="purple"
+            icon={<BanknoteArrowDown className="w-10 h-10" />}
+            label="Extract Funds"
           />
         </div>
 

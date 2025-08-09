@@ -110,6 +110,11 @@ export function Fund() {
         setShowWebServerModal(true);
         await runWebServer(txCbor, network);
         handleClear();
+      } else {
+        setShowWebServerModal(false);
+        setVariant("error");
+        setMessage("Transaction Failed To Build");
+        handleClear();
       }
     } catch (e: any) {
       setVariant("error");
@@ -217,7 +222,7 @@ export function Fund() {
             type="button"
             title="Fund an existing seedelf"
             onClick={handleSubmit}
-            className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+            className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !address || !seedelf || !ada || !confirm}
           >
             Fund
