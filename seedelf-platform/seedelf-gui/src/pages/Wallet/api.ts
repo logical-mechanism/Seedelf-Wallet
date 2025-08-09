@@ -75,3 +75,10 @@ export async function getWalletHistory(
 export async function isNotAScript(addr: string): Promise<boolean> {
   return await invoke<boolean>("is_not_a_script", { addr: addr });
 }
+
+export async function seedelfPolicyId(network: Network): Promise<string> {
+  const flag = castNetwork(network);
+  return await invoke<string>("get_seedelf_policy_id", {
+    networkFlag: flag,
+  });
+}

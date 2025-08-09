@@ -275,7 +275,7 @@ export function Manage() {
           <button
             type="button"
             onClick={handleClear}
-            className="rounded bg-slate-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+            className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !confirm}
           >
             Clear
