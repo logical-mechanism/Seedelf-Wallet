@@ -1,5 +1,6 @@
 pub mod address;
-mod commands;
+pub mod commands;
+pub mod constants;
 pub mod session;
 pub mod setup;
 pub mod types;
@@ -35,6 +36,8 @@ pub fn run() {
             commands::remove::remove_seedelf,
             commands::fund::fund_seedelf,
             commands::send::send_seedelf,
+            // constants
+            constants::get_seedelf_policy_id,
             // webserver.rs
             webserver::open_web_server,
             webserver::close_web_server
