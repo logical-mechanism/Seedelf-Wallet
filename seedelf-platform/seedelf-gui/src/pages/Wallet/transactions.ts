@@ -55,3 +55,17 @@ export async function sendSeedelf(
     lovelace: lovelace,
   });
 }
+
+
+export async function extractSeedelf(
+  network: Network,
+  address: string,
+  lovelace: number,
+): Promise<string> {
+  const flag = castNetwork(network);
+  return await invoke<string>("extract_seedelf", {
+    networkFlag: flag,
+    address: address,
+    lovelace: lovelace,
+  });
+}

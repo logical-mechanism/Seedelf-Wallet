@@ -30,6 +30,11 @@ use seedelf_koios::koios::{
     witness_collateral,
 };
 
+pub struct SweepSeedelfOutput {
+    pub tx_cbor: String,
+    pub tx_hash: String,
+}
+
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct SweepArgs {
@@ -624,4 +629,16 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     }
 
     Ok(())
+}
+
+pub async fn build_sweep_seedelf(
+    config: Config,
+    network_flag: bool,
+    address: String,
+    lovelace: u64,
+    selected_tokens: Assets,
+    selected_utxos: Option<Vec<String>>,
+    scalar: Scalar,
+) -> SweepSeedelfOutput {
+    SweepSeedelfOutput {tx_cbor: String::new(), tx_hash: String::new()}
 }

@@ -36,6 +36,7 @@ pub fn run() {
             commands::remove::remove_seedelf,
             commands::fund::fund_seedelf,
             commands::send::send_seedelf,
+            commands::extract::extract_seedelf,
             // constants
             constants::get_seedelf_policy_id,
             // webserver.rs
