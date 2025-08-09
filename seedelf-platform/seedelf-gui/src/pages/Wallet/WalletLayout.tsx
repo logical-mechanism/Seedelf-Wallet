@@ -20,7 +20,6 @@ import {
 } from "./api";
 import { LoadingOverlay } from "@/components/LoadingOverlay";
 
-
 export function WalletPage() {
   const [password, setPassword] = useState("");
   const [unlocking, setUnlocking] = useState(false);
@@ -120,7 +119,7 @@ export function WalletPage() {
         duration={toastDur}
       />
 
-      <LoadingOverlay show={loading}/>
+      <LoadingOverlay show={loading} />
 
       {!unlocked && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">

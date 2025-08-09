@@ -12,6 +12,7 @@ import { useOutletContext } from "react-router";
 import { OutletContextType } from "@/types/layout";
 import { colorClasses } from "./colors";
 import { sendSeedelf } from "./transactions";
+import { ConfirmationModal } from "@/components/ConfirmationModal";
 
 export function Send() {
   const [message, setMessage] = useState<string | null>(null);
@@ -27,6 +28,7 @@ export function Send() {
   const [showExplorerLinkModal, setShowExplorerLinkModal] =
     useState<boolean>(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showConfirmationModal, setShowConfirmationModal] = useState(false);
 
   const { allSeedelfs } = useOutletContext<OutletContextType>();
   const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
@@ -88,7 +90,7 @@ export function Send() {
 
   return (
     <div className="w-full p-6">
-      <h1 className="text-xl font-semibold text-center">Fund A Seedelf</h1>
+      <h1 className="text-xl font-semibold text-center">Send To A Seedelf</h1>
 
       <ShowNotification
         message={message}
@@ -101,6 +103,17 @@ export function Send() {
         txHash={txHash}
         onClose={() => {
           setShowExplorerLinkModal(false);
+        }}
+      />
+
+      <ConfirmationModal
+        open={showConfirmationModal}
+        onConfirm={() => {
+          handleSubmit();
+          setShowConfirmationModal(false);
+        }}
+        onCancel={() => {
+          setShowConfirmationModal(false);
         }}
       />
 
@@ -138,8 +151,10 @@ export function Send() {
         <button
           type="button"
           title="Fund an existing seedelf"
-          onClick={handleSubmit}
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+          onClick={() => {
+            setShowConfirmationModal(true);
+          }}
+          className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
           disabled={submitting || !seedelf || !ada || !confirm}
         >
           Send

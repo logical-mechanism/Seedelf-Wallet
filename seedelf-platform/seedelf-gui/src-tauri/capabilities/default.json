@@ -20,6 +20,8 @@
         { "url": "https://preprod.cardanoscan.io/*" },
         { "url": "http://127.0.0.1:44203/" }
       ]
-    }
+    },
+    { "identifier": "core:event:allow-listen" },
+    { "identifier": "core:event:allow-unlisten" }
   ]
 }

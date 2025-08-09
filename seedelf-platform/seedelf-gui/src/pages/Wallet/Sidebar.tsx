@@ -20,6 +20,9 @@ export function Sidebar() {
       <NavLink to="receive" className={linkCls}>
         Receive
       </NavLink>
+      <NavLink to="extract" className={linkCls}>
+        Extract
+      </NavLink>
       <NavLink to="history" className={linkCls}>
         History
       </NavLink>

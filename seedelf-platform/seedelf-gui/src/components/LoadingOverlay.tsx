@@ -3,7 +3,10 @@ type LoadingOverlayProps = {
   label?: string; // screen reader text
 };
 
-export function LoadingOverlay({ show, label = "Loading" }: LoadingOverlayProps) {
+export function LoadingOverlay({
+  show,
+  label = "Loading",
+}: LoadingOverlayProps) {
   if (!show) return null;
 
   return (
