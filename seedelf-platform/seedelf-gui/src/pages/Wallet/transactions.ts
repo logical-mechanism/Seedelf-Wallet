@@ -56,7 +56,6 @@ export async function sendSeedelf(
   });
 }
 
-
 export async function extractSeedelf(
   network: Network,
   address: string,
@@ -68,6 +67,6 @@ export async function extractSeedelf(
     networkFlag: flag,
     address: address,
     lovelace: lovelace,
-    sendAll: sendAll
+    sendAll: sendAll,
   });
 }

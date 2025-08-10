@@ -284,6 +284,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn build_sweep_seedelf(
     config: Config,
     network_flag: bool,

@@ -34,7 +34,8 @@ export function Extract() {
   const [txHash, setTxHash] = useState("");
 
   const [showConfirmationModal, setShowConfirmationModal] = useState(false);
-  const [showExplorerLinkModal, setShowExplorerLinkModal] = useState<boolean>(false);
+  const [showExplorerLinkModal, setShowExplorerLinkModal] =
+    useState<boolean>(false);
 
   const handleAddressValid = async (a: string) => {
     setVariant("error");
@@ -65,7 +66,12 @@ export function Extract() {
     try {
       setVariant("info");
       setMessage("Building Extract Seedelf Transaction");
-      const _txHash = await extractSeedelf(network, address, lovelace, isSendAll);
+      const _txHash = await extractSeedelf(
+        network,
+        address,
+        lovelace,
+        isSendAll,
+      );
       if (_txHash) {
         setTxHash(_txHash);
         setShowExplorerLinkModal(true);
@@ -81,7 +87,9 @@ export function Extract() {
 
   return (
     <div className="p-6 w-full">
-      <h1 className="text-xl font-semibold text-center">Extract From A Seedelf</h1>
+      <h1 className="text-xl font-semibold text-center">
+        Extract From A Seedelf
+      </h1>
 
       <ShowNotification
         message={message}
