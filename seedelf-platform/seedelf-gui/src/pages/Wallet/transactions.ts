@@ -61,11 +61,13 @@ export async function extractSeedelf(
   network: Network,
   address: string,
   lovelace: number,
+  sendAll: boolean,
 ): Promise<string> {
   const flag = castNetwork(network);
   return await invoke<string>("extract_seedelf", {
     networkFlag: flag,
     address: address,
     lovelace: lovelace,
+    sendAll: sendAll
   });
 }

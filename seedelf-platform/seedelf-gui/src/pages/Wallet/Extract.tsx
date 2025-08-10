@@ -64,8 +64,8 @@ export function Extract() {
     // should be good to run the build tx function now
     try {
       setVariant("info");
-      setMessage("Building Fund Seedelf Transaction");
-      const _txHash = await extractSeedelf(network, address, lovelace);
+      setMessage("Building Extract Seedelf Transaction");
+      const _txHash = await extractSeedelf(network, address, lovelace, isSendAll);
       if (_txHash) {
         setTxHash(_txHash);
         setShowExplorerLinkModal(true);
@@ -164,7 +164,7 @@ export function Extract() {
             className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !address || !ada || !confirm}
           >
-            Send
+            Extract
           </button>
 
           {(address.length != 0 || ada > 0) && (

@@ -73,7 +73,7 @@ export function Send() {
     // should be good to run the build tx function now
     try {
       setVariant("info");
-      setMessage("Building Fund Seedelf Transaction");
+      setMessage("Building Send Seedelf Transaction");
       const _txHash = await sendSeedelf(network, seedelf, lovelace);
       if (_txHash) {
         setTxHash(_txHash);

@@ -5,17 +5,19 @@ use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, VARIANT, get_config};
 
 #[tauri::command(async)]
-pub async fn extract_seedelf(network_flag: bool, address: String, lovelace: u64) -> String {
+pub async fn extract_seedelf(
+    network_flag: bool,
+    address: String,
+    lovelace: u64,
+    send_all: bool,
+) -> String {
     let config: Config = match get_config(VARIANT, network_flag) {
         Some(c) => c,
         None => {
             return String::new();
         }
     };
-    let SweepSeedelfOutput {
-        tx_hash,
-        ..
-    } = match session::with_key(|sk| {
+    let SweepSeedelfOutput { tx_hash, .. } = match session::with_key(|sk| {
         build_sweep_seedelf(
             config,
             network_flag,
@@ -24,6 +26,7 @@ pub async fn extract_seedelf(network_flag: bool, address: String, lovelace: u64)
             Assets::new(),
             None,
             *sk,
+            send_all,
         )
     }) {
         Ok(v) => v.await,
