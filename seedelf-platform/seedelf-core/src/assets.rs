@@ -14,6 +14,19 @@ pub struct Asset {
     pub amount: u64,
 }
 
+impl Default for Asset {
+    fn default() -> Self {
+        let blank = Hash::new([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        Self {
+            policy_id: blank,
+            token_name: blank.to_vec(),
+            amount: 0,
+        }
+    }
+}
+
 impl Asset {
     /// Creates a new `Asset` instance.
     ///
@@ -25,7 +38,8 @@ impl Asset {
     pub fn new(policy_id: String, token_name: String, amount: u64) -> Result<Self> {
         Ok(Self {
             policy_id: Hash::new(
-                hex::decode(policy_id)?
+                hex::decode(policy_id)
+                    .unwrap_or_default()
                     .as_slice()
                     .try_into()
                     .map_err(|e| anyhow::anyhow!("{e}"))?,
