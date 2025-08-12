@@ -58,11 +58,20 @@ export function History() {
     return history.slice(start, start + pageSize);
   }, [history, page, pageSize]);
 
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const onChangePageSize = (n: number) => {
     setPageSize(n);
     setPage(1); // reset to first page when size changes
     // optional: scroll to top for better UX
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    scrollToTop();
+  };
+
+  const onChangePageNumber = () => {
+    setPage((p) => Math.max(1, p - 1));
+    scrollToTop();
   };
 
   const FooterControls = () => (
@@ -90,7 +99,10 @@ export function History() {
       <div className="flex items-center gap-3">
         <button
           type="button"
-          onClick={() => setPage(1)}
+          onClick={() => {
+            setPage(1);
+            scrollToTop();
+          }}
           disabled={page === 1}
           className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="First page"
@@ -100,7 +112,7 @@ export function History() {
         </button>
         <button
           type="button"
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          onClick={() => onChangePageNumber()}
           disabled={page === 1}
           className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Previous page"
@@ -114,7 +126,7 @@ export function History() {
         </span>
         <button
           type="button"
-          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          onClick={() => onChangePageNumber()}
           disabled={page === totalPages}
           className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Next page"
@@ -124,7 +136,10 @@ export function History() {
         </button>
         <button
           type="button"
-          onClick={() => setPage(totalPages)}
+          onClick={() => {
+            setPage(totalPages);
+            scrollToTop();
+          }}
           disabled={page === totalPages}
           className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Last page"
