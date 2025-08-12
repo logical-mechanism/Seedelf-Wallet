@@ -34,7 +34,7 @@ pub async fn get_wallet_history(network_flag: bool) -> Vec<TxResponseWithSide> {
             }
         };
 
-    session::with_key(|sk| {
+    session::with_key_sync(|sk| {
         let filtered: Vec<TxResponseWithSide> = all_txs
             .into_iter()
             .filter_map(|tx| {
@@ -74,7 +74,10 @@ pub async fn get_every_utxo(network_flag: bool) -> Vec<UtxoResponse> {
 }
 
 #[tauri::command]
-pub fn get_owned_utxo(network_flag: bool, every_utxo: Vec<UtxoResponse>) -> Vec<UtxoResponse> {
+pub async fn get_owned_utxo(
+    network_flag: bool,
+    every_utxo: Vec<UtxoResponse>,
+) -> Vec<UtxoResponse> {
     let config: Config = match get_config(VARIANT, network_flag) {
         Some(c) => c,
         None => {
@@ -82,10 +85,10 @@ pub fn get_owned_utxo(network_flag: bool, every_utxo: Vec<UtxoResponse>) -> Vec<
         }
     };
 
-    match session::with_key(|sk| {
+    match session::with_key_sync(|sk| {
         utxos::collect_all_wallet_utxos(*sk, &config.contract.seedelf_policy_id, every_utxo)
     }) {
-        Ok(Ok(v)) => v,
+        Ok(v) => v.unwrap_or_default(),
         _ => Vec::new(),
     }
 }
@@ -99,7 +102,7 @@ pub fn get_lovelace_balance(owned_utxos: Vec<UtxoResponse>) -> u64 {
 }
 
 #[tauri::command]
-pub fn get_owned_seedelfs(network_flag: bool, every_utxo: Vec<UtxoResponse>) -> Vec<String> {
+pub async fn get_owned_seedelfs(network_flag: bool, every_utxo: Vec<UtxoResponse>) -> Vec<String> {
     let config: Config = match get_config(VARIANT, network_flag) {
         Some(c) => c,
         None => {
@@ -107,7 +110,7 @@ pub fn get_owned_seedelfs(network_flag: bool, every_utxo: Vec<UtxoResponse>) -> 
         }
     };
 
-    session::with_key(|sk| {
+    session::with_key_sync(|sk| {
         display::extract_all_owned_seedelfs(*sk, &config.contract.seedelf_policy_id, every_utxo)
     })
     .unwrap_or_default()

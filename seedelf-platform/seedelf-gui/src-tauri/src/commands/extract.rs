@@ -28,8 +28,10 @@ pub async fn extract_seedelf(
             *sk,
             send_all,
         )
-    }) {
-        Ok(v) => v.await,
+    })
+    .await
+    {
+        Ok(v) => v,
         _ => return String::new(),
     };
 
