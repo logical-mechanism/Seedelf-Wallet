@@ -78,6 +78,7 @@ export function NewWalletPage() {
 
       <TextField
         label="Wallet name"
+        title="The file name for the wallet"
         value={name}
         onChange={(e) => setName(e.target.value)}
         disabled={submitting}

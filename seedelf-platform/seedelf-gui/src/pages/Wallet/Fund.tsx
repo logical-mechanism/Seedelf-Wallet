@@ -148,6 +148,7 @@ export function Fund() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Address"
+            title="A CIP30 wallet address"
             value={address}
             onChange={(e) => {
               const next = e.target.value;
@@ -173,6 +174,7 @@ export function Fund() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Seedelf"
+            title="A seedelf token name"
             value={seedelf}
             onChange={(e) => {
               const next = e.target.value;
@@ -186,7 +188,7 @@ export function Fund() {
 
           <button
             type="button"
-            title="Verify the seedelf exists"
+            title="Verify the seedelf"
             className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelf ? (seedelfExist ? colorClasses.green.text : colorClasses.red.text) : ""}`}
             disabled
           >
@@ -215,6 +217,7 @@ export function Fund() {
             }
           }}
           baseColor={colorClasses.green.text}
+          title="Fund one of your existing seedelfs"
         />
 
         <div className="flex items-center justify-center gap-4">

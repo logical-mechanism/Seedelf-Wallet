@@ -120,6 +120,7 @@ export function Extract() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Address"
+            title="A CIP30 wallet address"
             value={address}
             onChange={(e) => {
               const next = e.target.value;
@@ -132,7 +133,7 @@ export function Extract() {
 
           <button
             type="button"
-            title="Verify the seedelf exists"
+            title="Verify the address"
             className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${address ? (addressValid ? colorClasses.green.text : colorClasses.red.text) : ""}`}
             disabled
           >
@@ -161,11 +162,12 @@ export function Extract() {
             }
           }}
           baseColor={colorClasses.green.text}
+          title="Send all non-seedelf assets"
         />
         <div className="flex items-center justify-center gap-2 my-4 max-w-5/8 mx-auto w-full">
           <button
             type="button"
-            title="Fund an existing seedelf"
+            title="Extract funds from the wallet"
             onClick={() => {
               setShowConfirmationModal(true);
             }}

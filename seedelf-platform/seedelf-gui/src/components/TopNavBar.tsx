@@ -89,6 +89,7 @@ export function TopNavBar({
         <button
           onClick={onRefresh}
           className="rounded border border-white px-3 py-1"
+          title="Refresh the current UTxO set to sync with chain tip"
         >
           <RefreshCw />
         </button>
@@ -111,6 +112,7 @@ export function TopNavBar({
         <button
           onClick={onLock}
           className="rounded border border-white px-3 py-1"
+          title="Locking a wallet will force a password to unlock it"
         >
           Lock
         </button>
