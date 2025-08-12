@@ -26,17 +26,20 @@ function IconAction({
   color,
   icon,
   label,
+  title
 }: {
   to: string;
   color: string;
   icon: React.ReactNode;
   label: string;
+  title: string;
 }) {
   const c = colorClasses[color];
   return (
     <NavLink
       to={to}
-      className={`flex flex-col items-center ${c.text} hover:scale-105`}
+      className={`flex flex-col items-center ${c.text} hover:scale-105 mx-auto w-fit`}
+      title={title}
     >
       <div className={`p-3 rounded-lg text-white ${c.bg} transition`}>
         {icon}
@@ -81,24 +84,28 @@ export function Dashboard() {
             color="indigo"
             icon={<ArrowUpRight className="w-10 h-10" />}
             label="Send"
+            title="Send funds to another seedelf"
           />
           <IconAction
             to="receive"
             color="teal"
             icon={<ArrowDownLeft className="w-10 h-10" />}
             label="Receive"
+            title="List of currently available seedelfs"
           />
           <IconAction
             to="fund"
             color="pink"
             icon={<BanknoteArrowUp className="w-10 h-10" />}
             label="Add Funds"
+            title="Add funds to the wallet"
           />
           <IconAction
             to="extract"
             color="purple"
             icon={<BanknoteArrowDown className="w-10 h-10" />}
             label="Extract Funds"
+            title="Extract funds from the wallet"
           />
         </div>
 
@@ -131,6 +138,7 @@ export function Dashboard() {
                   color="zinc"
                   icon={<Ellipsis className="w-5 h-5" />}
                   label="Manage"
+                  title="Create or remove your seedelfs"
                 />
               </li>
             </ul>
@@ -184,6 +192,7 @@ export function Dashboard() {
                 color="slate"
                 icon={<Ellipsis className="w-5 h-5" />}
                 label="History"
+                title="View your entire transaction history"
               />
             </li>
           </ul>
