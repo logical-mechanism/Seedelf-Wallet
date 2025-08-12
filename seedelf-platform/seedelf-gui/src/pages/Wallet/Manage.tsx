@@ -189,6 +189,7 @@ export function Manage() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Address"
+            title="A CIP30 wallet address"
             value={address}
             onChange={(e) => {
               const next = e.target.value;
@@ -214,6 +215,7 @@ export function Manage() {
         <div className="my-4 max-w-5/8 mx-auto w-full">
           <TextField
             label="Label (Optional)"
+            title="An optional seedelf label"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             disabled={submitting}
@@ -227,6 +229,7 @@ export function Manage() {
           <div className="relative mx-auto w-full max-w-5/8">
             <TextField
               label="Seedelf"
+              title="A seedelf token name"
               value={seedelf}
               onChange={(e) => {
                 const next = e.target.value;
@@ -267,6 +270,7 @@ export function Manage() {
             (mode == "Remove" ? !seedelf : true) ||
             !confirm
           }
+          title={`${mode} a seedelf`}
         >
           {mode}
         </button>

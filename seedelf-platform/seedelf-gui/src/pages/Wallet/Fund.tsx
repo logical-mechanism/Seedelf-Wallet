@@ -148,6 +148,7 @@ export function Fund() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Address"
+            title="A CIP30 wallet address"
             value={address}
             onChange={(e) => {
               const next = e.target.value;
@@ -173,6 +174,7 @@ export function Fund() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Seedelf"
+            title="A seedelf token name"
             value={seedelf}
             onChange={(e) => {
               const next = e.target.value;

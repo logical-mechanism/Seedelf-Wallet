@@ -120,6 +120,7 @@ export function Extract() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Address"
+            title="A CIP30 wallet address"
             value={address}
             onChange={(e) => {
               const next = e.target.value;

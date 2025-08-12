@@ -2,10 +2,11 @@ import { InputHTMLAttributes } from "react";
 
 export function TextField({
   label,
+  title,
   ...props
-}: { label: string } & InputHTMLAttributes<HTMLInputElement>) {
+}: { label: string, title: string } & InputHTMLAttributes<HTMLInputElement>) {
   return (
-    <label className="flex flex-col gap-1 text-sm">
+    <label className="flex flex-col gap-1 text-sm" title={title}>
       {label}
       <input
         {...props}

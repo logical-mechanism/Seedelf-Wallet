@@ -70,6 +70,7 @@ export function Receive() {
           <div className="flex-1">
             <TextField
               label="Search"
+              title="Search for some seedelf token name"
               value={query}
               onChange={(e) => {
                 const next = e.target.value;
