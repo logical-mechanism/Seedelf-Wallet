@@ -153,9 +153,9 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     } = build_transfer_seedelf(
         config,
         network_flag,
-        args.seedelf,
-        args.lovelace.unwrap_or(minimum_lovelace),
-        selected_tokens,
+        vec![args.seedelf],
+        vec![args.lovelace.unwrap_or(minimum_lovelace)],
+        vec![selected_tokens],
         args.utxos,
         scalar,
     )
@@ -215,9 +215,9 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
 pub async fn build_transfer_seedelf(
     config: Config,
     network_flag: bool,
-    seedelf: String,
-    lovelace: u64,
-    selected_tokens: Assets,
+    seedelfs: Vec<String>,
+    lovelaces: Vec<u64>,
+    selected_tokens: Vec<Assets>,
     selected_utxos: Option<Vec<String>>,
     scalar: Scalar,
 ) -> TransferSeedelfOutput {
@@ -242,17 +242,28 @@ pub async fn build_transfer_seedelf(
         every_utxo_at_script.clone(),
     )
     .unwrap_or_default();
-    
-    // if we had many seedelfs then this will be a list of options
-    let seedelf_datum = utxos::find_seedelf_datum(
-        seedelf,
-        &config.contract.seedelf_policy_id,
-        every_utxo_at_script,
-    )
-    .unwrap_or_default();
 
+    let seedelf_datums: Vec<Option<Register>> = seedelfs
+        .iter()
+        .map(|s| {
+            utxos::find_seedelf_datum(
+                s.to_string(),
+                &config.contract.seedelf_policy_id,
+                every_utxo_at_script.clone(),
+            )
+            .ok()
+            .flatten()
+        })
+        .collect();
+
+    let total_lovelace: u64 = lovelaces.iter().sum();
+    let total_selected_tokens: Assets = selected_tokens
+        .clone()
+        .into_iter()
+        .fold(Assets::new(), |acc, a| acc.merge(a).unwrap_or(acc));
     let usable_utxos: Vec<UtxoResponse> = if selected_utxos.is_none() {
-        utxos::select(usable_utxos, lovelace, selected_tokens.clone()).unwrap_or_default()
+        utxos::select(usable_utxos, total_lovelace, total_selected_tokens.clone())
+            .unwrap_or_default()
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
         match utxos::parse_tx_utxos(selected_utxos.unwrap_or_default()) {
@@ -262,7 +273,9 @@ pub async fn build_transfer_seedelf(
     };
 
     let (total_lovelace_found, tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_default();
-    let change_tokens: Assets = tokens.separate(selected_tokens.clone()).unwrap_or_default();
+    let change_tokens: Assets = tokens
+        .separate(total_selected_tokens.clone())
+        .unwrap_or_default();
 
     for utxo in usable_utxos.clone() {
         let this_input: Input = Input::new(
@@ -294,25 +307,31 @@ pub async fn build_transfer_seedelf(
         pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
     let pkh: String = hex::encode(public_key_hash);
 
-    let mut transfer_output: Output = Output::new(wallet_addr.clone(), lovelace).set_inline_datum(
-        seedelf_datum
-            .ok_or("Seedelf Not Found")
+    for ((lovelace, assets), datum_opt) in lovelaces
+        .into_iter()
+        .zip(selected_tokens.into_iter())
+        .zip(seedelf_datums.into_iter())
+    {
+        let inline = datum_opt
             .unwrap()
-            .clone()
             .rerandomize()
             .unwrap_or_default()
             .to_vec()
-            .unwrap_or_default(),
-    );
-    for asset in selected_tokens.items.clone() {
-        transfer_output = transfer_output
-            .add_asset(asset.policy_id, asset.token_name, asset.amount)
-            .unwrap();
+            .unwrap_or_default();
+
+        let mut out = Output::new(wallet_addr.clone(), lovelace).set_inline_datum(inline);
+
+        for asset in assets.items {
+            out = out
+                .add_asset(asset.policy_id, asset.token_name, asset.amount)
+                .unwrap();
+        }
+
+        draft_tx = draft_tx.output(out); // ← one .output per triplet
     }
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
-        .output(transfer_output)
         .collateral_input(collateral_input(network_flag))
         .collateral_output(Output::new(
             collat_addr.clone(),
@@ -349,7 +368,7 @@ pub async fn build_transfer_seedelf(
         let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
-            lovelace_amount = lovelace_amount - lovelace - tmp_fee;
+            lovelace_amount = lovelace_amount - total_lovelace - tmp_fee;
             lovelace_amount
         } else {
             // its additional tokens going back
@@ -375,7 +394,7 @@ pub async fn build_transfer_seedelf(
             .unwrap_or_default()
             .to_vec()
             .unwrap_or_default();
-        let change_lovelace: u64 = lovelace_amount - lovelace - tmp_fee;
+        let change_lovelace: u64 = lovelace_amount - total_lovelace - tmp_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
         draft_tx = draft_tx.output(change_output);
@@ -487,7 +506,7 @@ pub async fn build_transfer_seedelf(
         let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
-            lovelace_amount = lovelace_amount - lovelace - total_fee;
+            lovelace_amount = lovelace_amount - total_lovelace - total_fee;
             lovelace_amount
         } else {
             // its additional tokens going back
@@ -513,7 +532,7 @@ pub async fn build_transfer_seedelf(
             .unwrap_or_default()
             .to_vec()
             .unwrap_or_default();
-        let change_lovelace: u64 = lovelace_amount - lovelace - total_fee;
+        let change_lovelace: u64 = lovelace_amount - total_lovelace - total_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
         raw_tx = raw_tx.output(change_output);

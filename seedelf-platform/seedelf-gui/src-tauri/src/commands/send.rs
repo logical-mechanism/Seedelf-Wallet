@@ -20,9 +20,9 @@ pub async fn send_seedelf(network_flag: bool, seedelf: String, lovelace: u64) ->
         build_transfer_seedelf(
             config,
             network_flag,
-            seedelf,
-            lovelace,
-            Assets::new(),
+            vec![seedelf],
+            vec![lovelace],
+            vec![Assets::new()],
             None,
             *sk,
         )
