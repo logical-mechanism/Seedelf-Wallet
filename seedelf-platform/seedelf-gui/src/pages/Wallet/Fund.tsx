@@ -217,6 +217,7 @@ export function Fund() {
             }
           }}
           baseColor={colorClasses.green.text}
+          title="Fund one of your existing seedelfs"
         />
 
         <div className="flex items-center justify-center gap-4">

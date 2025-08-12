@@ -162,6 +162,7 @@ export function Extract() {
             }
           }}
           baseColor={colorClasses.green.text}
+          title="Send all non-seedelf assets"
         />
         <div className="flex items-center justify-center gap-2 my-4 max-w-5/8 mx-auto w-full">
           <button

@@ -26,7 +26,7 @@ function IconAction({
   color,
   icon,
   label,
-  title
+  title,
 }: {
   to: string;
   color: string;

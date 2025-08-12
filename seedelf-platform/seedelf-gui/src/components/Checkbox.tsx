@@ -5,6 +5,7 @@ type CheckboxProps = {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   baseColor: string;
+  title: string;
 } & Omit<
   InputHTMLAttributes<HTMLInputElement>,
   "type" | "checked" | "onChange"
@@ -15,10 +16,14 @@ export function Checkbox({
   checked,
   onCheckedChange,
   baseColor,
+  title,
   ...props
 }: CheckboxProps) {
   return (
-    <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+    <label
+      className="inline-flex items-center gap-2 cursor-pointer select-none"
+      title={title}
+    >
       <input
         type="checkbox"
         className="peer sr-only"
