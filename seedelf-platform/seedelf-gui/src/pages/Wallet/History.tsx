@@ -58,7 +58,7 @@ export function History() {
     return history.slice(start, start + pageSize);
   }, [history, page, pageSize]);
 
-  const scrollToTop = () => {
+  const scrollToTop = () =>{
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -66,11 +66,12 @@ export function History() {
     setPageSize(n);
     setPage(1); // reset to first page when size changes
     // optional: scroll to top for better UX
-    scrollToTop();
+    scrollToTop()
   };
 
-  const onChangePageNumber = () => {
-    setPage((p) => Math.max(1, p - 1));
+  const onChangePageNumber = (direction: boolean) => {
+    let d = direction? 1: -1;
+    setPage((p) => Math.max(1, p + d));
     scrollToTop();
   };
 
@@ -99,10 +100,7 @@ export function History() {
       <div className="flex items-center gap-3">
         <button
           type="button"
-          onClick={() => {
-            setPage(1);
-            scrollToTop();
-          }}
+          onClick={() => {setPage(1);scrollToTop()}}
           disabled={page === 1}
           className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="First page"
@@ -112,7 +110,7 @@ export function History() {
         </button>
         <button
           type="button"
-          onClick={() => onChangePageNumber()}
+          onClick={() => onChangePageNumber(false)}
           disabled={page === 1}
           className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Previous page"
@@ -126,7 +124,7 @@ export function History() {
         </span>
         <button
           type="button"
-          onClick={() => onChangePageNumber()}
+          onClick={() => onChangePageNumber(true)}
           disabled={page === totalPages}
           className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Next page"
@@ -136,10 +134,7 @@ export function History() {
         </button>
         <button
           type="button"
-          onClick={() => {
-            setPage(totalPages);
-            scrollToTop();
-          }}
+          onClick={() => {setPage(totalPages);scrollToTop()}}
           disabled={page === totalPages}
           className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Last page"
@@ -153,7 +148,7 @@ export function History() {
 
   return (
     <div className="p-6 w-full">
-      <h1 className="text-xl font-semibold text-center text-white">History</h1>
+      <h1 className="text-xl font-semibold text-center text-white">Transaction History</h1>
 
       <ShowNotification
         message={message}
