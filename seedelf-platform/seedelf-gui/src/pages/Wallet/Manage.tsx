@@ -243,7 +243,7 @@ export function Manage() {
 
             <button
               type="button"
-              title="Verify the seedelf exists"
+              title="Verify the seedelf"
               className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelf ? (seedelfExist ? colorClasses.green.text : colorClasses.red.text) : ""}`}
               disabled
             >
