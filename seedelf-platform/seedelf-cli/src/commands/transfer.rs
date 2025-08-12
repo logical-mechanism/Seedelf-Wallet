@@ -236,8 +236,15 @@ pub async fn build_transfer_seedelf(
             .await
             .unwrap_or_default();
 
-    let (seedelf_datum, usable_utxos) = utxos::find_seedelf_and_wallet_utxos(
+    let usable_utxos = utxos::collect_wallet_utxos(
         scalar,
+        &config.contract.seedelf_policy_id,
+        every_utxo_at_script.clone(),
+    )
+    .unwrap_or_default();
+    
+    // if we had many seedelfs then this will be a list of options
+    let seedelf_datum = utxos::find_seedelf_datum(
         seedelf,
         &config.contract.seedelf_policy_id,
         every_utxo_at_script,
