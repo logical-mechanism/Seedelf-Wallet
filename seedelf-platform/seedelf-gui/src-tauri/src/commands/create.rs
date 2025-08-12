@@ -18,8 +18,10 @@ pub async fn create_seedelf(network_flag: bool, addr: String, label: String) -> 
         cpu_units,
         mem_units,
         ..
-    } = match session::with_key(|sk| build_create_seedelf(config, network_flag, addr, label, *sk)) {
-        Ok(v) => v.await,
+    } = match session::with_key(|sk| build_create_seedelf(config, network_flag, addr, label, *sk))
+        .await
+    {
+        Ok(v) => v,
         _ => return String::new(),
     };
 

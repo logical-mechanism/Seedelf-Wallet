@@ -26,8 +26,10 @@ pub async fn send_seedelf(network_flag: bool, seedelf: String, lovelace: u64) ->
             None,
             *sk,
         )
-    }) {
-        Ok(v) => v.await,
+    })
+    .await
+    {
+        Ok(v) => v,
         _ => return String::new(),
     };
     if usable_utxos.is_empty() {

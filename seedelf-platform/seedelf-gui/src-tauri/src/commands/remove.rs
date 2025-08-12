@@ -19,8 +19,9 @@ pub async fn remove_seedelf(network_flag: bool, addr: String, seedelf: String) -
         spend_mem_units,
         ..
     } = match session::with_key(|sk| build_remove_seedelf(config, network_flag, addr, seedelf, *sk))
+        .await
     {
-        Ok(v) => v.await,
+        Ok(v) => v,
         _ => return String::new(),
     };
 
