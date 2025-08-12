@@ -143,7 +143,7 @@ export function Dashboard() {
         {recent.length === 0 ? (
           <p className="text-white">No Transactions Available.</p>
         ) : (
-          <ul className="space-y-3 text-white w-full max-[960px]:hidden">
+          <ul className="space-y-3 text-white w-full mx-auto max-[960px]:hidden">
             {recent.map((h) => (
               <li
                 key={`${h.tx.tx_hash}-${h.side}`}
@@ -155,12 +155,7 @@ export function Dashboard() {
                   {h.side === "Input" ? <ArrowUpRight /> : <ArrowDownLeft />}
                   {h.side === "Input" ? "Sent Funds" : "Received Funds"}
                 </span>
-                <div className="gap-1 flex w-full min-w-0">
-                  <span
-                    className={`font-semibold mr-4 ${h.side === "Input" ? "text-indigo-400" : "text-teal-400"}`}
-                  >
-                    {h.side}
-                  </span>
+                <div className="gap-1 flex w-full min-w-0  justify-center">
                   <code className="pr-4 min-w-0 truncate ">{h.tx.tx_hash}</code>
                   <button
                     type="button"
