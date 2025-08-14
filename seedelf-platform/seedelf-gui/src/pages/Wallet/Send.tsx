@@ -74,7 +74,7 @@ export function Send() {
     try {
       setVariant("info");
       setMessage("Building Send Seedelf Transaction");
-      const _txHash = await sendSeedelf(network, seedelf, lovelace);
+      const _txHash = await sendSeedelf(network, [seedelf], [lovelace]);
       if (_txHash) {
         setTxHash(_txHash);
         setShowExplorerLinkModal(true);

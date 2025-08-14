@@ -5,7 +5,11 @@ use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, VARIANT, get_config};
 
 #[tauri::command(async)]
-pub async fn send_seedelf(network_flag: bool, seedelf: String, lovelace: u64) -> String {
+pub async fn send_seedelf(
+    network_flag: bool,
+    seedelfs: Vec<String>,
+    lovelaces: Vec<u64>,
+) -> String {
     let config: Config = match get_config(VARIANT, network_flag) {
         Some(c) => c,
         None => {
@@ -20,9 +24,9 @@ pub async fn send_seedelf(network_flag: bool, seedelf: String, lovelace: u64) ->
         build_transfer_seedelf(
             config,
             network_flag,
-            vec![seedelf],
-            vec![lovelace],
-            vec![Assets::new()],
+            seedelfs.clone(),
+            lovelaces,
+            vec![Assets::new(); seedelfs.len()],
             None,
             *sk,
         )

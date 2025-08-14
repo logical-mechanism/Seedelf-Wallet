@@ -45,14 +45,14 @@ export async function fundSeedelf(
 
 export async function sendSeedelf(
   network: Network,
-  seedelf: string,
-  lovelace: number,
+  seedelfs: string[],
+  lovelaces: number[],
 ): Promise<string> {
   const flag = castNetwork(network);
   return await invoke<string>("send_seedelf", {
     networkFlag: flag,
-    seedelf: seedelf,
-    lovelace: lovelace,
+    seedelfs: seedelfs,
+    lovelaces: lovelaces,
   });
 }
 

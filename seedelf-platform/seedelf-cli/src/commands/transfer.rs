@@ -63,7 +63,8 @@ pub struct TransforArgs {
     lovelaces: Option<Vec<u64>>,
 
     /// repeated custom token string
-     #[arg(
+    /// "pid1:tkn1=amt1,pid2:tkn2=amt2"
+    #[arg(
         short = 't',
         long,
         action = clap::ArgAction::Append,      // collect occurrences
@@ -71,39 +72,6 @@ pub struct TransforArgs {
         default_missing_value = ""       // bare `--tokens` becomes ""
     )]
     pub tokens: Vec<String>,
-
-    // /// repeated `policy-ids`
-    // #[arg(
-    //     long = "policy-ids",
-    //     help = "The policy id for the asset.",
-    //     display_order = 3,
-    //     requires = "token_names",
-    //     requires = "amounts",
-    //     num_args = 0.., action = clap::ArgAction::Append
-    // )]
-    // policy_ids: Vec<Vec<String>>,
-
-    // /// repeated `token-names`
-    // #[arg(
-    //     long = "token-names",
-    //     help = "The token name for the asset.",
-    //     display_order = 4,
-    //     requires = "policy_ids",
-    //     requires = "amounts",
-    //     num_args = 0.., action = clap::ArgAction::Append,
-    // )]
-    // token_names: Vec<Vec<String>>,
-
-    // /// repeated `amounts`
-    // #[arg(
-    //     long = "amounts",
-    //     help = "The amount for the asset.",
-    //     display_order = 5,
-    //     requires = "token_names",
-    //     requires = "policy_ids",
-    //     num_args = 0.., action = clap::ArgAction::Append
-    // )]
-    // amounts: Vec<Vec<u64>>,
 
     /// Optional repeated 'txId#txIdx'
     #[arg(long = "utxo", help = "The utxos to spend.", display_order = 6)]
@@ -119,12 +87,6 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         std::process::exit(1);
     });
 
-    // if args.lovelaces.is_none()
-    //     && (args.policy_ids.is_none() || args.token_names.is_none() || args.amounts.is_none())
-    // {
-    //     bail!("Either --lovelace or a token must be specified.");
-    // }
-
     if args.seedelfs.is_empty() {
         bail!("Error: Must be sending to at least 1 seedelf.");
     }
@@ -135,50 +97,41 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     } else {
         // "pid1:tkn1=amt1,pid2:tkn2=amt2"
         for token in args.tokens {
-
             let mut selected_tokens: Assets = Assets::new();
             for part in token.split(',') {
                 let part = part.trim();
-                if part.is_empty() { continue; }
+                if part.is_empty() {
+                    continue;
+                }
 
                 let (lhs, amt_str) = part.split_once('=').unwrap_or_default();
                 let (pid, tkn) = lhs.split_once(':').unwrap_or_default();
                 let amt: u64 = amt_str.trim().parse().unwrap_or_default();
-                if pid.is_empty() || tkn.is_empty() || amt == 0 {continue;}
+                if pid.is_empty() || tkn.is_empty() || amt == 0 {
+                    continue;
+                }
                 let new_asset = Asset::new(pid.to_string(), tkn.to_string(), amt)?;
                 selected_tokens = selected_tokens.add(new_asset)?;
             }
             all_selected_tokens.push(selected_tokens);
         }
     }
+    // calculate all the required minimums then check the lovelace
+    let minimum_lovelaces: Vec<u64> = all_selected_tokens
+        .iter()
+        .map(|assets| wallet_minimum_lovelace_with_assets(assets.clone()).unwrap_or_default())
+        .collect();
+    let all_greater = args
+        .lovelaces
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .zip(minimum_lovelaces.iter())
+        .all(|(l, min)| l >= min);
 
-    // // lets collect the tokens if they exist
-    // let (policy_ids, token_names, amounts) = (args.policy_ids, args.token_names, args.amounts);
-    // if policy_ids.len() != token_names.len() || policy_ids.len() != amounts.len() {
-    //     bail!("Error: Each --policy-id must have a corresponding --token-name and --amount.");
-    // }
-
-    // for ((pids, tkns), amts) in policy_ids
-    //     .into_iter()
-    //     .zip(token_names.into_iter())
-    //     .zip(amounts.into_iter())
-    // {
-    //     if pids.len() != tkns.len() || pids.len() != amts.len() {
-    //         bail!("Error: Each --policy-id must have a corresponding --token-name and --amount.");
-    //     }
-    //     let mut selected_tokens: Assets = Assets::new();
-
-    //     for ((pid, tkn), amt) in pids.into_iter().zip(tkns.into_iter()).zip(amts.into_iter()) {
-    //         if !pid.is_empty() || !tkn.is_empty() {
-    //             if amt == 0 {
-    //                 bail!("Error: Token Amount must be positive");
-    //             }
-    //             let new_asset = Asset::new(pid, tkn, amt)?;
-    //             selected_tokens = selected_tokens.add(new_asset)?;
-    //         }
-    //     }
-    //     all_selected_tokens.push(selected_tokens);
-    // }
+    if !all_greater {
+        bail!("Minimum lovelace not met")
+    }
 
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::unlock_wallet_interactive();
@@ -630,7 +583,7 @@ pub async fn build_transfer_seedelf(
         Ok(response) => {
             // println!("{:?}", response.clone());
             response.as_str().unwrap_or("default").to_string()
-        },
+        }
         Err(_) => String::new(),
     };
     //
