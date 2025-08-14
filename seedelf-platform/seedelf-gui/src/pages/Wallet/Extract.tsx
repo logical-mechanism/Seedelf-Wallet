@@ -129,6 +129,7 @@ export function Extract() {
             }}
             disabled={submitting}
             maxLength={108}
+            size={108}
           />
 
           <button

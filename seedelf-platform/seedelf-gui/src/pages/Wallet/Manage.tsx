@@ -198,6 +198,7 @@ export function Manage() {
             }}
             disabled={submitting}
             maxLength={108}
+            size={108}
           />
 
           <button
@@ -220,6 +221,7 @@ export function Manage() {
             onChange={(e) => setLabel(e.target.value)}
             disabled={submitting}
             maxLength={15}
+            size={15}
           />
         </div>
       )}
@@ -239,6 +241,7 @@ export function Manage() {
               disabled={submitting}
               maxLength={64}
               minLength={64}
+              size={64}
             />
 
             <button

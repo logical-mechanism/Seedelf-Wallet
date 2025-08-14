@@ -1,20 +1,28 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
-import { TextField } from "@/components/TextField";
 import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
-import { NumberField } from "@/components/NumberField";
 import { useNetwork } from "@/types/network";
-import { SearchCheck } from "lucide-react";
+import { CirclePlus } from "lucide-react";
 import { useOutletContext } from "react-router";
 import { OutletContextType } from "@/types/layout";
 import { colorClasses } from "./colors";
 import { sendSeedelf } from "./transactions";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
+import { InputRow } from "@/components/InputRow";
+
+type ExtraRow = {
+  id: string;
+  seedelf: string;
+  ada: number;
+  exist: boolean;
+};
 
 export function Send() {
+  const [extras, setExtras] = useState<ExtraRow[]>([]);
+
   const [message, setMessage] = useState<string | null>(null);
   const [variant, setVariant] = useState<NotificationVariant>("error");
 
@@ -33,10 +41,36 @@ export function Send() {
   const { allSeedelfs } = useOutletContext<OutletContextType>();
   const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
 
+  const makeRow = (): ExtraRow => ({
+    id: crypto.randomUUID(),
+    seedelf: "",
+    ada: 0,
+    exist: false,
+  });
+
+  const addRow = () => setExtras((prev) => [...prev, makeRow()]);
+  const removeRow = (id: string) =>
+    setExtras((prev) => prev.filter((r) => r.id !== id));
+  const updateRow = (id: string, patch: Partial<ExtraRow>) =>
+    setExtras((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+    );
+
+  const isSeedelfValid = (value: string) => {
+    const validFormat = value.includes("5eed0e1f");
+    const validLen = value.length === 64;
+    const existsInIndex = allSeedelfs.includes(value);
+    return !!(validFormat && validLen && existsInIndex);
+  };
+  const validateRowSeedelf = (id: string, value: string) => {
+    updateRow(id, { exist: isSeedelfValid(value) });
+  };
+
   const handleClear = () => {
     setSeedelf("");
     setSeedelfExist(false);
     setAda(0);
+    setExtras([]);
   };
 
   const handleSeedelfExist = (s: string) => {
@@ -71,10 +105,13 @@ export function Send() {
       return setMessage(`Minimum is 1.5 ${network == "mainnet" ? "₳" : "t₳"}`);
 
     // should be good to run the build tx function now
+    const rows = [{ seedelf, ada }, ...extras];
+    const seedelfs = rows.map((r) => r.seedelf.trim());
+    const lovelaces = rows.map((r) => Math.round(r.ada * 1_000_000));
     try {
       setVariant("info");
       setMessage("Building Send Seedelf Transaction");
-      const _txHash = await sendSeedelf(network, [seedelf], [lovelace]);
+      const _txHash = await sendSeedelf(network, seedelfs, lovelaces);
       if (_txHash) {
         setTxHash(_txHash);
         setShowExplorerLinkModal(true);
@@ -87,6 +124,28 @@ export function Send() {
       setSubmitting(false);
     }
   };
+
+  const canSubmit = useMemo(() => {
+    const rows = [{ seedelf, ada }, ...extras];
+
+    const isFilled = (r: { seedelf: string; ada: number }) =>
+      r.seedelf.trim().length > 0 && r.ada > 0;
+    const isEmpty = (r: { seedelf: string; ada: number }) =>
+      r.seedelf.trim().length === 0 && r.ada === 0;
+
+    // No partial rows ever
+    if (rows.some((r) => !(isFilled(r) || isEmpty(r)))) return false;
+
+    // If any extras exist, require ALL rows filled (no empties allowed)
+    if (extras.length > 0 && rows.some(isEmpty)) return false;
+
+    // Otherwise (single-row mode): require at least one filled row
+    const active = rows.filter(isFilled);
+    if (active.length === 0) return false;
+
+    // Validate all filled rows
+    return active.every((r) => isSeedelfValid(r.seedelf) && r.ada >= 1.5);
+  }, [seedelf, ada, extras]);
 
   return (
     <div className="w-full p-6">
@@ -117,61 +176,70 @@ export function Send() {
         }}
       />
 
-      <div className="my-4 w-full">
-        <div className="relative mx-auto w-full max-w-5/8">
-          <TextField
-            label="Seedelf"
-            title="A seedelf token name"
-            value={seedelf}
-            onChange={(e) => {
-              const next = e.target.value;
-              setSeedelf(next);
-              handleSeedelfExist(next);
-            }}
-            disabled={submitting}
-            maxLength={64}
-            minLength={64}
-          />
+      <InputRow
+        seedelf={seedelf}
+        ada={ada}
+        seedelfExist={seedelfExist}
+        onSeedelfChange={setSeedelf}
+        onAdaChange={setAda}
+        onValidateSeedelf={handleSeedelfExist}
+        onRemove={() => {}}
+        colorClasses={colorClasses}
+      />
 
+      {/* extra rows */}
+      {extras.map((row) => (
+        <InputRow
+          key={row.id}
+          seedelf={row.seedelf}
+          ada={row.ada}
+          seedelfExist={row.exist}
+          onSeedelfChange={(next) => updateRow(row.id, { seedelf: next })}
+          onValidateSeedelf={(next) => validateRowSeedelf(row.id, next)}
+          onAdaChange={(n) => updateRow(row.id, { ada: n })}
+          onRemove={() => removeRow(row.id)}
+          colorClasses={colorClasses}
+          hideDelete={false}
+        />
+      ))}
+
+      <div className="flex items-center my-4 max-w-5/8 mx-auto w-full">
+        {/* Middle buttons */}
+        <div className="flex items-center gap-2 mx-auto">
           <button
             type="button"
-            title="Verify the seedelf"
-            className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelf ? (seedelfExist ? colorClasses.green.text : colorClasses.red.text) : ""}`}
-            disabled
+            title="Send funds to a seedelf"
+            onClick={() => {
+              setShowConfirmationModal(true);
+            }}
+            className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+            disabled={submitting || !canSubmit || !confirm}
           >
-            <SearchCheck />
+            Send
           </button>
+
+          {(seedelf.length !== 0 || ada > 0) && (
+            <button
+              type="button"
+              title="Clear all fields"
+              onClick={handleClear}
+              className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+              disabled={submitting || !confirm}
+            >
+              Clear
+            </button>
+          )}
         </div>
-      </div>
 
-      <div className="my-4 max-w-5/8 mx-auto w-full">
-        <NumberField label="Ada" value={ada} onChange={setAda} min={0} />
-      </div>
-
-      <div className="flex items-center justify-center gap-2 my-4 max-w-5/8 mx-auto w-full">
+        {/* Plus button pinned to far right */}
         <button
           type="button"
-          title="Send funds to a seedelf"
-          onClick={() => {
-            setShowConfirmationModal(true);
-          }}
-          className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
-          disabled={submitting || !seedelf || !ada || !confirm}
+          title="Add another seedelf?"
+          onClick={addRow}
+          className={`ml-auto p-2 ${colorClasses.pink.text}`}
         >
-          Send
+          <CirclePlus />
         </button>
-
-        {(seedelf.length != 0 || ada > 0) && (
-          <button
-            type="button"
-            title="Clear all fields"
-            onClick={handleClear}
-            className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
-            disabled={submitting || !confirm}
-          >
-            Clear
-          </button>
-        )}
       </div>
     </div>
   );

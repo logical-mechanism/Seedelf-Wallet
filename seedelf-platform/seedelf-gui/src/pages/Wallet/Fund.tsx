@@ -157,6 +157,7 @@ export function Fund() {
             }}
             disabled={submitting}
             maxLength={108}
+            size={108}
           />
 
           <button
@@ -184,6 +185,7 @@ export function Fund() {
             disabled={submitting}
             maxLength={64}
             minLength={64}
+            size={64}
           />
 
           <button

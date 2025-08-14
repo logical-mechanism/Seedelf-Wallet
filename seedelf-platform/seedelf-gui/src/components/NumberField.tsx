@@ -92,7 +92,6 @@ export function NumberField({
         onChange={handleChange}
         onBlur={handleBlur}
         placeholder="0.000000"
-        className="rounded border px-3 py-2 focus:outline-none focus:ring"
         {...props}
       />
     </label>
