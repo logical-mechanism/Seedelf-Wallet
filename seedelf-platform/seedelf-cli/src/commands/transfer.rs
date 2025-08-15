@@ -393,6 +393,9 @@ pub async fn build_transfer_seedelf(
             .unwrap_or_default()
             .to_vec()
             .unwrap_or_default();
+        // println!("{:}", lovelace_amount);
+        // println!("{:}", total_lovelace);
+        // println!("{:}", tmp_fee);
         let change_lovelace: u64 = lovelace_amount - total_lovelace - tmp_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());

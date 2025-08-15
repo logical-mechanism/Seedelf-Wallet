@@ -13,6 +13,9 @@ import { sendSeedelf } from "./transactions";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { InputRow } from "@/components/InputRow";
 
+const MAX_LOVELACE = 1_500_000;
+const TMP_FEE = 250_000;
+
 type ExtraRow = {
   id: string;
   seedelf: string;
@@ -38,7 +41,7 @@ export function Send() {
   const [submitting, setSubmitting] = useState(false);
   const [showConfirmationModal, setShowConfirmationModal] = useState(false);
 
-  const { allSeedelfs } = useOutletContext<OutletContextType>();
+  const { allSeedelfs, lovelace } = useOutletContext<OutletContextType>();
   const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
 
   const makeRow = (): ExtraRow => ({
@@ -97,17 +100,27 @@ export function Send() {
       return setMessage("Incorrect Seedelf Format");
     if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
 
-    const lovelace = ada * 1_000_000;
+    const cur_lovelace = ada * 1_000_000;
+    const tot_lovelace = lovelace * 1_000_000;
 
     // lovelace checks; simple hardcore for now
     // this will need to be dynamic based off the tokens being sent later on
-    if (lovelace < 1_500_000)
+    if (cur_lovelace < MAX_LOVELACE)
       return setMessage(`Minimum is 1.5 ${network == "mainnet" ? "₳" : "t₳"}`);
 
     // should be good to run the build tx function now
     const rows = [{ seedelf, ada }, ...extras];
     const seedelfs = rows.map((r) => r.seedelf.trim());
     const lovelaces = rows.map((r) => Math.round(r.ada * 1_000_000));
+
+    if (lovelaces.some((l) => l <= MAX_LOVELACE))
+      return setMessage(`Minimum is 1.5 ${network == "mainnet" ? "₳" : "t₳"}`);
+    if (
+      lovelaces.reduce((sum, c) => sum + c, 0) >
+      tot_lovelace - MAX_LOVELACE - TMP_FEE
+    )
+      return setMessage(`Not Enough Ada`);
+
     try {
       setVariant("info");
       setMessage("Building Send Seedelf Transaction");
@@ -149,7 +162,19 @@ export function Send() {
 
   return (
     <div className="w-full p-6">
-      <h1 className="text-xl font-semibold text-center">Send To A Seedelf</h1>
+      <div className="flex items-center my-4 max-w-5/8 mx-auto w-full">
+        <h1 className="text-xl font-semibold text-center flex items-center gap-2 mx-auto">
+          Send To A Seedelf
+        </h1>
+        <button
+          type="button"
+          title="Add another seedelf?"
+          onClick={addRow}
+          className={`ml-auto p-2 ${colorClasses.pink.text}`}
+        >
+          <CirclePlus />
+        </button>
+      </div>
 
       <ShowNotification
         message={message}
@@ -230,16 +255,6 @@ export function Send() {
             </button>
           )}
         </div>
-
-        {/* Plus button pinned to far right */}
-        <button
-          type="button"
-          title="Add another seedelf?"
-          onClick={addRow}
-          className={`ml-auto p-2 ${colorClasses.pink.text}`}
-        >
-          <CirclePlus />
-        </button>
       </div>
     </div>
   );
