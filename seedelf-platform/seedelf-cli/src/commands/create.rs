@@ -21,7 +21,10 @@ use seedelf_crypto::register::Register;
 use seedelf_display::{display, text_coloring};
 use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction};
 use serde::Serialize;
-
+//
+use pallas_codec::minicbor;
+use pallas_primitives::KeyValuePairs;
+use pallas_primitives::alonzo::{AuxiliaryData, Metadata, Metadatum};
 #[derive(Serialize)]
 pub struct CreateSeedelfOutput {
     pub tx_cbor: String,
@@ -262,6 +265,17 @@ pub async fn build_create_seedelf(
             .unwrap();
     }
 
+    // testing metadata
+    let md: Metadata = KeyValuePairs::from(vec![(
+        0u64,
+        Metadatum::Map(KeyValuePairs::from(vec![(
+            Metadatum::Int(44203.into()),
+            Metadatum::Text("acab".into()),
+        )])),
+    )]);
+    let aux: AuxiliaryData = AuxiliaryData::Shelley(md);
+    let md_bytes: Vec<u8> = minicbor::to_vec(&aux).unwrap_or_default();
+
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(
@@ -312,7 +326,8 @@ pub async fn build_create_seedelf(
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
             plutus_v3_cost_model(),
-        );
+        )
+        .add_auxiliary_data(md_bytes);
 
     // clone the tx but remove the tmp fee, collateral, change output, and fake redeemer
     let mut raw_tx: StagingTransaction = draft_tx

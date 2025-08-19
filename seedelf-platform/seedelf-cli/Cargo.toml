@@ -25,13 +25,21 @@ hex = "0.4.3"
 include_dir = "0.7.4"
 mime = "0.3.17"
 mime_guess = "2.0.5"
-pallas-addresses = "0.33.0"
-pallas-codec = "0.33.0"
-pallas-crypto = "0.33.0"
-pallas-primitives = "0.33.0"
-pallas-traverse = "0.33.0"
-pallas-txbuilder = "0.33.0"
-pallas-wallet = "0.33.0"
+#pallas-addresses = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+#pallas-codec = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+#pallas-crypto = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+#pallas-primitives = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+#pallas-traverse = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+#pallas-txbuilder = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+#pallas-wallet = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-addresses = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-codec = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-crypto = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-primitives = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-traverse = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-txbuilder = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-wallet = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
 rand_core = { version = "0.6.0", features = ["std"] }
 reqwest = { version = "0.12.9", features = ["json"] }
 rpassword = "7.3.1"
