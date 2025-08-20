@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = [] }
 blstrs = "0.7.1"
 libc = "0.2.175"
 once_cell = "1.21.3"
-pallas-addresses = "0.33.0"
+pallas-addresses = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
 parking_lot = "0.12.4"
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

@@ -12,10 +12,10 @@ anyhow = "1.0.98"
 blstrs = "0.7.1"
 hex = "0.4.3"
 hex-literal = "1.0.0"
-pallas-addresses = "0.33.0"
-pallas-crypto = "0.33.0"
-pallas-primitives = "0.33.0"
-pallas-txbuilder = "0.33.0"
+pallas-addresses = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-crypto = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-primitives = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-txbuilder = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 tokio = { version = "1.41.1", features = ["full"] }
