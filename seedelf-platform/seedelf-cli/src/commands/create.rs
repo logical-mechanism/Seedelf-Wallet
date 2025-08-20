@@ -15,16 +15,14 @@ use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, get_config, plutus_v3_cost_model};
 use seedelf_core::data_structures;
+use seedelf_core::metadata;
 use seedelf_core::transaction;
 use seedelf_core::utxos;
+use seedelf_crypto::ecies::Ecies;
 use seedelf_crypto::register::Register;
 use seedelf_display::{display, text_coloring};
 use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction};
 use serde::Serialize;
-//
-use pallas_codec::minicbor;
-use pallas_primitives::KeyValuePairs;
-use pallas_primitives::alonzo::{AuxiliaryData, Metadata, Metadatum};
 #[derive(Serialize)]
 pub struct CreateSeedelfOutput {
     pub tx_cbor: String,
@@ -266,15 +264,10 @@ pub async fn build_create_seedelf(
     }
 
     // testing metadata
-    let md: Metadata = KeyValuePairs::from(vec![(
-        0u64,
-        Metadatum::Map(KeyValuePairs::from(vec![(
-            Metadatum::Int(44203.into()),
-            Metadatum::Text("acab".into()),
-        )])),
-    )]);
-    let aux: AuxiliaryData = AuxiliaryData::Shelley(md);
-    let md_bytes: Vec<u8> = minicbor::to_vec(&aux).unwrap_or_default();
+    let user: Register = Register::create(scalar).unwrap_or_default();
+    let message: &'static str = "Place Secret Message Here";
+    let cypher: Ecies = Ecies::encrypt(message, &user).unwrap_or_default();
+    let md_bytes: Vec<u8> = metadata::create_ecies(cypher.r_hex, cypher.c_b64);
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx

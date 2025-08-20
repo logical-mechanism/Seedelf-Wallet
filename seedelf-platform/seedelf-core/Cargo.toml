@@ -13,6 +13,7 @@ blstrs = "0.7.1"
 hex = "0.4.3"
 hex-literal = "1.0.0"
 pallas-addresses = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
+pallas-codec = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
 pallas-crypto = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
 pallas-primitives = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
 pallas-txbuilder = { git = "https://github.com/logicalmechanism/pallas.git", branch = "adding-aux-data" }
