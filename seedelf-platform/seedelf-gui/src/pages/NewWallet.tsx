@@ -34,8 +34,7 @@ export function NewWalletPage() {
                          Uppercase Letter: Requires At Least One Uppercase Character
                          Lowercase Letter: Requires At Least One Lowercase Character
                          Number: Requires At Least One Digit
-                         Special Character: Requires At Least One Special Symbol`
-      );
+                         Special Character: Requires At Least One Special Symbol`);
     if (pw !== confirm) return setMessage("Passwords do not match.");
 
     setSubmitting(true);
@@ -100,10 +99,7 @@ export function NewWalletPage() {
       />
 
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => navigate("/")}
-          className="rounded px-3 py-2"
-        >
+        <button onClick={() => navigate("/")} className="rounded px-3 py-2">
           <MoveLeft />
         </button>
 

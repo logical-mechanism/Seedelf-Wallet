@@ -3,8 +3,8 @@ import { colorClasses } from "@/pages/Wallet/colors";
 type ConfirmationModalProps = {
   open: boolean;
   title?: string; // defaults to "Confirm?"
-  confirmLabel?: string; // defaults to "Confirm"
-  cancelLabel?: string; // defaults to "Cancel"
+  confirmButtonLabel?: string; // defaults to "Confirm"
+  cancelButtonLabel?: string; // defaults to "Cancel"
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -12,8 +12,8 @@ type ConfirmationModalProps = {
 export function ConfirmationModal({
   open,
   title = "Confirm?",
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
+  confirmButtonLabel = "Confirm",
+  cancelButtonLabel = "Cancel",
   onConfirm,
   onCancel,
 }: ConfirmationModalProps) {
@@ -39,7 +39,7 @@ export function ConfirmationModal({
       }}
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-gray-800/70" />
+      <div className="absolute inset-0 bg-slate-700/70" />
 
       {/* Centered dialog */}
       <div className="absolute inset-0 grid place-items-center p-4">
@@ -48,7 +48,7 @@ export function ConfirmationModal({
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-modal-title"
-          className="w-full max-w-sm rounded-xl shadow-lg bg-gray-800"
+          className={`w-full max-w-sm rounded-xl shadow-lg ${colorClasses.zinc.bg}`}
         >
           <div className="p-5">
             <h2
@@ -65,16 +65,16 @@ export function ConfirmationModal({
               <button
                 type="button"
                 onClick={onCancel}
-                className={`rounded-xl border border-gray-300 px-4 py-2 text-sm text-white`}
+                className={`rounded-xl border px-4 py-2 text-sm text-white`}
               >
-                {cancelLabel}
+                {cancelButtonLabel}
               </button>
               <button
                 type="button"
                 onClick={onConfirm}
                 className={`rounded-xl px-4 py-2 text-sm text-white ${colorClasses.sky.bg} focus:outline-none`}
               >
-                {confirmLabel}
+                {confirmButtonLabel}
               </button>
             </div>
           </div>

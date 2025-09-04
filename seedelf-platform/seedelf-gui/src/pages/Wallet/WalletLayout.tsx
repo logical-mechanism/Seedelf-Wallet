@@ -55,14 +55,14 @@ export function WalletLayout() {
     setToastVariant("info");
     setToastDur(10000);
     setToastMsg("Getting Wallet History");
-    
+
     // this takes a long time
     const _history = await getWalletHistory(network);
     setToastMsg("Querying Wallet UTxOs");
-    
+
     // this takes a long time
     const _every_utxo = await getEveryUtxo(network);
-    
+
     setToastMsg("Sorting Owned UTxOs");
     const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
     setToastMsg("Sorting All Seedelfs");
