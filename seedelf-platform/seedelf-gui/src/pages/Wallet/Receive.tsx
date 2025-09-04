@@ -1,24 +1,26 @@
 import { useState, useMemo, useEffect } from "react";
 import { useOutletContext } from "react-router";
+import { Copy, CircleQuestionMark, Link } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { OutletContextType } from "@/types/layout";
+import { useNetwork, Network } from "@/types/network";
 import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
-import { Copy, CircleQuestionMark, Link } from "lucide-react";
 import { TextField } from "@/components/TextField";
 import { colorClasses } from "./colors";
 import { seedelfPolicyId } from "./api";
-import { useNetwork, Network } from "@/types/network";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 export function Receive() {
   const [message, setMessage] = useState<string | null>(null);
   const [variant, setVariant] = useState<NotificationVariant>("error");
-  const { ownedSeedelfs } = useOutletContext<OutletContextType>();
   const [query, setQuery] = useState("");
-  const { network } = useNetwork();
   const [policyId, setPolicyId] = useState<string>("");
+  
+  const { ownedSeedelfs } = useOutletContext<OutletContextType>();
+  
+  const { network } = useNetwork();
 
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -103,7 +105,7 @@ export function Receive() {
                     title="Copy"
                     aria-label="Copy Seedelf Token name"
                     onClick={() => copy(h)}
-                    className="hover:scale-105"
+                    className="pr-4"
                   >
                     <Copy />
                   </button>
@@ -112,7 +114,7 @@ export function Receive() {
                     title={tokenUrl(h, network)}
                     aria-label="Open on Cardanoscan"
                     onClick={() => openUrl(tokenUrl(h, network))}
-                    className="hover:scale-105 pl-4"
+                    className=""
                   >
                     <Link />
                   </button>
