@@ -25,6 +25,6 @@ format all the ts and tsx
 ```bash
 npx prettier --write "src/**/*.{ts,tsx}"
 ```
-### Issues
+### Known Issues
 
-- Blank screen on GUI, force server to restart/reload.
+- Blank screen on GUI: force server to restart/reload.
