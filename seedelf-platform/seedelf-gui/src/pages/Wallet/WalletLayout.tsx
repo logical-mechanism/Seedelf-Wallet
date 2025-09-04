@@ -183,6 +183,7 @@ export function WalletLayout() {
               <aside className="w-48 shrink-0 border-r">
                 <Sidebar />
               </aside>
+              
               <main className="flex-1 min-w-0 overflow-auto">
                 <Outlet
                   context={{ lovelace, allSeedelfs, ownedSeedelfs, history }}
