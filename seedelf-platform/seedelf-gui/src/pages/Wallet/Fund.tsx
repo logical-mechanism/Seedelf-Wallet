@@ -205,7 +205,7 @@ export function Fund() {
           value={ada}
           onChange={setAda}
           min={0}
-          className="flex-1 min-w-0 text-center rounded border px-3 py-2 focus:outline-none focus:ring"
+          className="flex-1 min-w-0 text-center rounded-xl border px-3 py-2 focus:outline-none focus:ring"
         />
       </div>
 
@@ -233,7 +233,7 @@ export function Fund() {
             type="button"
             title="Fund an existing seedelf"
             onClick={handleSubmit}
-            className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !address || !seedelf || !ada || !confirm}
           >
             Fund
@@ -244,7 +244,7 @@ export function Fund() {
               type="button"
               title="Clear all fields"
               onClick={handleClear}
-              className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+              className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
               disabled={submitting || !confirm}
             >
               Clear

@@ -86,7 +86,7 @@ export function History() {
           id="pageSize"
           value={pageSize}
           onChange={(e) => onChangePageSize(Number(e.target.value))}
-          className="rounded border bg-transparent px-2 py-1 text-sm focus:outline-none focus:ring text-black"
+          className="rounded-xl border bg-transparent px-2 py-1 text-sm focus:outline-none focus:ring text-black"
         >
           {PAGE_SIZE_OPTIONS.map((opt) => (
             <option key={opt} value={opt} className="bg-gray-900">
@@ -105,7 +105,7 @@ export function History() {
             scrollToTop();
           }}
           disabled={page === 1}
-          className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
+          className="rounded-xl border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="First page"
           title="First page"
         >
@@ -115,7 +115,7 @@ export function History() {
           type="button"
           onClick={() => onChangePageNumber(false)}
           disabled={page === 1}
-          className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
+          className="rounded-xl border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Previous page"
           title="Previous page"
         >
@@ -129,7 +129,7 @@ export function History() {
           type="button"
           onClick={() => onChangePageNumber(true)}
           disabled={page === totalPages}
-          className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
+          className="rounded-xl border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Next page"
           title="Next page"
         >
@@ -142,7 +142,7 @@ export function History() {
             scrollToTop();
           }}
           disabled={page === totalPages}
-          className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
+          className="rounded-xl border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
           aria-label="Last page"
           title="Last page"
         >
@@ -177,7 +177,7 @@ export function History() {
             {paged.map((h) => (
               <li
                 key={`${h.tx.tx_hash}-${h.side}`}
-                className="mb-4 border rounded text-center p-4"
+                className="mb-4 border rounded-xl text-center p-4"
               >
                 <span
                   className={`font-bold flex items-center gap-1 mb-4 justify-center ${h.side === "Input" ? "text-indigo-400" : "text-teal-400"}`}

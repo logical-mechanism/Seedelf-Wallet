@@ -54,7 +54,7 @@ export function InputRow({
           value={ada}
           onChange={onAdaChange}
           min={0}
-          className="flex-1 min-w-0 text-center rounded border px-3 py-2 focus:outline-none focus:ring"
+          className="flex-1 min-w-0 text-center rounded-xl border px-3 py-2 focus:outline-none focus:ring"
         />
 
         <div className="flex items-center gap-2">

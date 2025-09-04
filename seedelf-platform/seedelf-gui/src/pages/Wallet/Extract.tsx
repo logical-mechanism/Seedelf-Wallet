@@ -149,7 +149,7 @@ export function Extract() {
           value={ada}
           onChange={setAda}
           min={0}
-          className="flex-1 min-w-0 text-center rounded border px-3 py-2 focus:outline-none focus:ring"
+          className="flex-1 min-w-0 text-center rounded-xl border px-3 py-2 focus:outline-none focus:ring"
         />
       </div>
 
@@ -179,7 +179,7 @@ export function Extract() {
             onClick={() => {
               setShowConfirmationModal(true);
             }}
-            className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !address || !ada || !confirm}
           >
             Extract
@@ -190,7 +190,7 @@ export function Extract() {
               type="button"
               title="Clear all fields"
               onClick={handleClear}
-              className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+              className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
               disabled={submitting || !confirm}
             >
               Clear

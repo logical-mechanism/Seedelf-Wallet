@@ -35,7 +35,7 @@ export function Checkbox({
       {/* Visual box */}
       <span
         className={[
-          "grid h-5 w-5 place-items-center rounded border transition-all",
+          "grid h-5 w-5 place-items-center rounded-xl border transition-all",
           "peer-focus:outline-none peer-focus:ring peer-focus:ring-offset-2",
           baseColor, // <-- your base color when unchecked
           // success state

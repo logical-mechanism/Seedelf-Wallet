@@ -266,7 +266,7 @@ export function Manage() {
               handleSubmit();
             }
           }}
-          className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+          className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
           disabled={
             submitting ||
             !address ||
@@ -282,7 +282,7 @@ export function Manage() {
           <button
             type="button"
             onClick={handleClear}
-            className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !confirm}
           >
             Clear
@@ -291,7 +291,7 @@ export function Manage() {
       </div>
 
       <div
-        className={`${ownedSeedelfs.length === 0 ? "" : "rounded flex items-center justify-center max-w-1/2 mx-auto mt-8"}`}
+        className={`${ownedSeedelfs.length === 0 ? "" : "rounded-xl flex items-center justify-center max-w-1/2 mx-auto mt-8"}`}
       >
         {ownedSeedelfs.length === 0 || mode == "Create" ? (
           <></>

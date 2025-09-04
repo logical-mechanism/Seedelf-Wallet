@@ -58,7 +58,7 @@ export function Receive() {
         variant={variant}
       />
 
-      <div className={`rounded w-full my-12`}>
+      <div className={`rounded-xl w-full my-12`}>
         <div className="flex flex-grow items-center gap-2 mx-auto w-full max-w-3/8">
           <button
             disabled
@@ -85,7 +85,7 @@ export function Receive() {
             onClick={() => {
               setQuery("");
             }}
-            className={`rounded ${colorClasses.slate.bg} px-4 py-2 mt-6 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 mt-6 text-sm text-white disabled:opacity-50`}
           >
             Clear
           </button>

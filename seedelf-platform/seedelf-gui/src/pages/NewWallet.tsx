@@ -99,13 +99,13 @@ export function NewWalletPage() {
       />
 
       <div className="flex items-center justify-between">
-        <button onClick={() => navigate("/")} className="rounded px-3 py-2">
+        <button onClick={() => navigate("/")} className="rounded-xl px-3 py-2">
           <MoveLeft />
         </button>
 
         <button
           onClick={handleSubmit}
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+          className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
           disabled={submitting || !name || !pw || !confirm}
         >
           Create

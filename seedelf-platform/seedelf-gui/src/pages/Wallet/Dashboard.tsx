@@ -109,7 +109,7 @@ export function Dashboard() {
           />
         </div>
 
-        <div className={`${elves.length === 0 ? "" : "border rounded w-full"}`}>
+        <div className={`${elves.length === 0 ? "" : "border rounded-xl w-full"}`}>
           {elves.length === 0 ? (
             <p className="text-white">No Seedelfs Available.</p>
           ) : (
@@ -155,7 +155,7 @@ export function Dashboard() {
             {recent.map((h) => (
               <li
                 key={`${h.tx.tx_hash}-${h.side}`}
-                className="mb-4 border rounded text-center p-4"
+                className="mb-4 border rounded-xl text-center p-4"
               >
                 <span
                   className={`font-bold flex items-center gap-1 mb-4 ${h.side === "Input" ? "text-indigo-400" : "text-teal-400"}`}
