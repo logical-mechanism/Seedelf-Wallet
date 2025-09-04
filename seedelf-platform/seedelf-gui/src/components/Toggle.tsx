@@ -1,5 +1,7 @@
+import { colorClasses } from "@/pages/Wallet/colors";
 import { Plus, Trash2 } from "lucide-react";
 
+// toggle is only used on the manage page so the toggle mode here reflects that
 export type ToggleMode = "Create" | "Remove";
 
 interface CreateRemoveToggleProps {
@@ -31,10 +33,10 @@ export function CreateRemoveToggle({
         disabled={disabled}
         onClick={() => onChange("Create")}
         className={`flex items-center gap-1 rounded-xl px-3 py-1 text-sm
-          ${value === "Create" ? "bg-teal-600 text-white" : "text-zinc-600 hover:bg-zinc-100"}
+          ${value === "Create" ? colorClasses.teal.bg : "hover:text-white"}
           disabled:opacity-50`}
       >
-        <Plus className="h-4 w-4" />
+        <Plus className="h-4 w-4 mb-1" />
         {leftOption}
       </button>
 
@@ -44,10 +46,10 @@ export function CreateRemoveToggle({
         disabled={disabled}
         onClick={() => onChange("Remove")}
         className={`ml-1 flex items-center gap-1 rounded-xl px-3 py-1 text-sm
-          ${value === "Remove" ? "bg-indigo-600 text-white" : "text-zinc-600 hover:bg-zinc-100"}
+          ${value === "Remove" ? colorClasses.indigo.bg : "hover:text-white"}
           disabled:opacity-50`}
       >
-        <Trash2 className="h-4 w-4" />
+        <Trash2 className="h-4 w-4 mb-1" />
         {rightOption}
       </button>
     </div>
