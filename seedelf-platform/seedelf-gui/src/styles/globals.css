@@ -39,12 +39,12 @@ body,
   box-sizing: border-box;
 }
 
-button {
+button:not(:disabled) {
   cursor: pointer;
   transition: transform 0.2s ease-in-out;
 }
 
-button:hover {
+button:not(:disabled):hover {
   transform: scale(1.05);
 }
 

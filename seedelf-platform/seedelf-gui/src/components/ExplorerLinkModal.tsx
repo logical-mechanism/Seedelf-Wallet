@@ -4,6 +4,7 @@ import { useNetwork } from "@/types/network";
 import { ShowNotification } from "@/components/ShowNotification";
 
 import { Link, Copy } from "lucide-react";
+import { colorClasses } from "@/pages/Wallet/colors";
 
 type ExplorerModalProps = {
   open: boolean;
@@ -47,14 +48,14 @@ export function ExplorerLinkModal({
         variant={"info"}
       />
       {/* Gray overlay */}
-      <div className="absolute inset-0 bg-gray-800/70" aria-hidden="true" />
+      <div className="absolute inset-0 bg-slate-700/70" />
       {/* Centered dialog */}
       <div className="absolute inset-0 grid place-items-center ">
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-title"
-          className="inline-block w-fit max-w-[90vw] rounded-xl bg-gray-800 p-6 shadow-lg"
+          className={`inline-block w-fit max-w-[90vw] rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
         >
           <h2
             id="modal-title"

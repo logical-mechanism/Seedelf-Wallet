@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { stopWebServer } from "@pages/Wallet/webServer";
 import { Link, CircleQuestionMark, Copy } from "lucide-react";
 import { ShowNotification } from "@/components/ShowNotification";
+import { colorClasses } from "@/pages/Wallet/colors";
 
 type WebServerModalProps = {
   open: boolean;
@@ -35,14 +36,14 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
         variant={"info"}
       />
       {/* Gray overlay */}
-      <div className="absolute inset-0 bg-gray-800/70" aria-hidden="true" />
+      <div className="absolute inset-0 bg-slate-700/70" aria-hidden="true" />
       {/* Centered dialog */}
       <div className="absolute inset-0 grid place-items-center ">
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-title"
-          className="inline-block w-fit max-w-[90vw] rounded-xl bg-gray-800 p-6 shadow-lg"
+          className={`inline-block w-fit max-w-[90vw] rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
         >
           <h1>
             <button
@@ -54,7 +55,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
           </h1>
           <h2
             id="modal-title"
-            className="mb-4 text-md font-semibold text-white text-center"
+            className="mb-4 text-center"
           >
             Web Server Is Live
           </h2>
@@ -67,7 +68,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
               title={url}
               aria-label="Open local webserver"
               onClick={() => openUrl(url)}
-              className="hover:scale-105 pr-4 text-white text-2xl"
+              className="pr-4"
             >
               <Link />
             </button>
@@ -76,7 +77,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
               title="Copy"
               aria-label="Copy URL"
               onClick={() => copy(url)}
-              className="hover:scale-105"
+              className=""
             >
               <Copy />
             </button>
@@ -90,7 +91,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
                 stopWebServer();
                 onClose();
               }}
-              className="rounded-md border px-3 py-1.5 transition hover:scale-105 text-white"
+              className="rounded-md border px-3 py-1.5"
             >
               Stop Web Server
             </button>

@@ -270,7 +270,7 @@ export function Manage() {
           disabled={
             submitting ||
             !address ||
-            (mode == "Remove" ? !seedelf : true) ||
+            (mode == "Remove" ? !seedelf : false) ||
             !confirm
           }
           title={`${mode} a seedelf`}

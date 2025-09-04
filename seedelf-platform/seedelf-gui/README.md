@@ -34,4 +34,5 @@ npx prettier --write "src/**/*.{ts,tsx}"
 
 ## Known Issues
 
-- Blank screen on GUI: force server to restart/reload.
+- Blank screen on GUI: force server to restart/reload
+- Local webserver is already running: restart wallet application
