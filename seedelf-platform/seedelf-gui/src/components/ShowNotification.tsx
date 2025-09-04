@@ -5,7 +5,7 @@ export type NotificationVariant = "success" | "error" | "info";
 const VARIANT_STYLES: Record<NotificationVariant, string> = {
   success: "bg-green-600 text-white",
   error: "bg-red-600 text-white",
-  info: "bg-blue-600 text-white",
+  info: "bg-sky-600 text-white",
 };
 
 function ariaForVariant(v: NotificationVariant) {

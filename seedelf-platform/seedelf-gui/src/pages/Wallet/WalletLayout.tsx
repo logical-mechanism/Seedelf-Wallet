@@ -19,6 +19,7 @@ import {
   getEverySeedelf,
 } from "./api";
 import { LoadingOverlay } from "@/components/LoadingOverlay";
+import { colorClasses } from "./colors";
 
 export function WalletLayout() {
   const [password, setPassword] = useState("");
@@ -54,11 +55,14 @@ export function WalletLayout() {
     setToastVariant("info");
     setToastDur(10000);
     setToastMsg("Getting Wallet History");
+    
     // this takes a long time
     const _history = await getWalletHistory(network);
     setToastMsg("Querying Wallet UTxOs");
+    
     // this takes a long time
     const _every_utxo = await getEveryUtxo(network);
+    
     setToastMsg("Sorting Owned UTxOs");
     const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
     setToastMsg("Sorting All Seedelfs");
@@ -67,10 +71,11 @@ export function WalletLayout() {
     const _ownedSeedelfs = await getOwnedSeedelfs(network, _every_utxo);
     setToastMsg("Calculating Balance");
     const _lovelace = await getLovelaceBalance(_owned_utxo);
+
     setLoading(false);
     setToastVariant("success");
     setToastDur(2718);
-    setToastMsg("Wallet Loaded");
+    setToastMsg("Wallet Loaded!");
 
     // set stuff
     setLovelace(_lovelace);
@@ -85,10 +90,12 @@ export function WalletLayout() {
   };
 
   useEffect(() => {
+    // store it locally
     localStorage.setItem("network", network);
     if (unlocked) {
       setToastVariant("info");
       setToastMsg(`Loading Network: ${network}`);
+      // run this as we need the current network data
       gatherWalletInfo();
     }
   }, [network, unlocked]);
@@ -119,8 +126,10 @@ export function WalletLayout() {
         duration={toastDur}
       />
 
+      {/* simple loading spinner */}
       <LoadingOverlay show={loading} />
 
+      {/* wallet login */}
       {!unlocked && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="w-full max-w-sm rounded-lg p-6 shadow-xl">
@@ -142,7 +151,7 @@ export function WalletLayout() {
 
               <button
                 type="submit"
-                className="mt-4 w-full rounded bg-blue-600 py-2 text-sm text-white disabled:opacity-50"
+                className={`mt-4 w-full rounded ${colorClasses.indigo.bg} py-2 text-sm text-white disabled:opacity-50`}
                 disabled={!password || unlocking}
               >
                 {unlocking ? "Unlocking…" : "Unlock"}
