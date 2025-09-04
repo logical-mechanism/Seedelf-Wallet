@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useOutletContext } from "react-router";
+import { Delete, SearchCheck } from "lucide-react";
 import { OutletContextType } from "@/types/layout";
+import { useNetwork } from "@/types/network";
 import {
   ShowNotification,
   NotificationVariant,
@@ -10,13 +12,10 @@ import { TextField } from "@/components/TextField";
 import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
 import { WebServerModal } from "@/components/WebServerModal";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
-import { useNetwork } from "@/types/network";
-import { Delete } from "lucide-react";
+import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { createSeedelf, removeSeedelf } from "./transactions";
 import { runWebServer } from "./webServer";
-import { SearchCheck } from "lucide-react";
 import { colorClasses } from "./colors";
-import { ConfirmationModal } from "@/components/ConfirmationModal";
 
 export function Manage() {
   const [address, setAddress] = useState("");
@@ -43,13 +42,18 @@ export function Manage() {
 
   const handleAddressValid = async (a: string) => {
     setVariant("error");
+
     if (!a.trim()) return setMessage("Wallet address is required.");
+
     if (network == "mainnet" && !a.includes("addr1"))
       return setMessage("Incorrect Mainnet Address Format");
+
     if (network == "preprod" && !a.includes("addr_test1"))
       return setMessage("Incorrect Pre-Production Address Format");
+
     const notScript = await isNotAScript(a);
     if (!notScript) return setMessage("Address Is A Script");
+
     setVariant("info");
     setMessage("Address is valid");
     setAddressValid(true);
@@ -57,9 +61,13 @@ export function Manage() {
 
   const handleSeedelfExist = (s: string) => {
     setVariant("error");
+
     if (!s.trim()) return setMessage("Seedelf Is Required");
+
     if (!s.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
+
     if (s.length != 64) return setMessage("Incorrect Seedelf Length");
+
     if (allSeedelfs.includes(s)) {
       setVariant("info");
       setMessage("Seedelf does exist");
@@ -76,6 +84,7 @@ export function Manage() {
     setMessage(`${text} has been selected`);
     setSeedelf(text);
     handleSeedelfExist(text);
+    // the list may be long so scroll back up to the inputs
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -87,54 +96,64 @@ export function Manage() {
 
   const handleSubmit = async () => {
     setVariant("error");
-    // Simple custom rules – adjust as needed
+    // Simple custom rules
     if (!address.trim()) return setMessage("Wallet address is required.");
+
     if (network == "mainnet" && !address.includes("addr1"))
       return setMessage("Incorrect Mainnet Address Format");
+
     if (network == "preprod" && !address.includes("addr_test1"))
       return setMessage("Incorrect Pre-Production Address Format");
+
     const notScript = await isNotAScript(address);
     if (!notScript) return setMessage("Address Is A Script");
 
     if (mode == "Remove") {
       if (!seedelf.trim()) return setMessage("Seedelf Is Required");
+
       if (!seedelf.includes("5eed0e1f")) setMessage("Incorrect Seedelf Format");
+
       if (seedelf.length != 64) setMessage("Incorrect Seedelf Length");
     }
-    // spaces should be underscores
 
+    // start the subbit process
     setSubmitting(true);
     let success = false;
     try {
       // invoke the create or remove function
       if (mode == "Remove") {
         setVariant("info");
-        setMessage("Building Remove Seedelf Transaction");
+        setMessage("Building Remove Transaction");
 
         const _txHash = await removeSeedelf(network, address, seedelf);
         if (_txHash) {
           setTxHash(_txHash);
           setShowWebServerModal(false);
           setShowExplorerLinkModal(true);
-          handleClear();
         } else {
           setShowWebServerModal(false);
           setShowExplorerLinkModal(false);
           setVariant("error");
           setMessage("Transaction Failed To Build");
-          handleClear();
         }
+        handleClear();
       } else {
+        // create a seedelf
         setVariant("info");
-        setMessage("Building Create Seedelf Transaction");
+        setMessage("Building Create Transaction");
 
         const txCbor = await createSeedelf(network, address, label);
         if (txCbor) {
           setShowExplorerLinkModal(false);
           setShowWebServerModal(true);
           await runWebServer(txCbor, network);
-          handleClear();
+        } else {
+          setShowExplorerLinkModal(false);
+          setShowWebServerModal(false);
+          setVariant("error");
+          setMessage("Transaction Failed To Build");
         }
+        handleClear();
       }
     } catch (e: any) {
       setVariant("error");
@@ -156,7 +175,7 @@ export function Manage() {
 
       <WebServerModal
         open={showWebServerModal}
-        url={"http://127.0.0.1:44203/"}
+        url={"http://127.0.0.1:44203/"} // local web server url
         onClose={() => {
           setVariant("info");
           setMessage("Stopping Web Server..");
@@ -266,11 +285,11 @@ export function Manage() {
               handleSubmit();
             }
           }}
-          className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+          className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
           disabled={
             submitting ||
             !address ||
-            (mode == "Remove" ? !seedelf : true) ||
+            (mode == "Remove" ? !seedelf : false) ||
             !confirm
           }
           title={`${mode} a seedelf`}
@@ -282,7 +301,7 @@ export function Manage() {
           <button
             type="button"
             onClick={handleClear}
-            className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !confirm}
           >
             Clear
@@ -291,7 +310,7 @@ export function Manage() {
       </div>
 
       <div
-        className={`${ownedSeedelfs.length === 0 ? "" : "rounded flex items-center justify-center max-w-1/2 mx-auto mt-8"}`}
+        className={`${ownedSeedelfs.length === 0 ? "" : "rounded-xl flex items-center justify-center max-w-1/2 mx-auto mt-8"}`}
       >
         {ownedSeedelfs.length === 0 || mode == "Create" ? (
           <></>
@@ -303,10 +322,10 @@ export function Manage() {
                   <code className="min-w-0 truncate font-bold pr-16">{h}</code>
                   <button
                     type="button"
-                    title="Delete"
+                    title="Select this seedelf to delete"
                     aria-label="Delete Seedelf"
                     onClick={() => selectSeedelf(h)}
-                    className="hover:scale-105"
+                    className=""
                   >
                     <Delete />
                   </button>

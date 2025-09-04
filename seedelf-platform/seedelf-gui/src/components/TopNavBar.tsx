@@ -3,6 +3,7 @@ import { useNetwork, Network } from "@/types/network";
 import { RefreshCw } from "lucide-react";
 import Select from "react-select";
 
+// tracks when the wallet was synced from koios
 function formatAgo(ms: number) {
   const sec = Math.floor(ms / 1000);
   if (sec < 60) return `${sec}s ago`;
@@ -17,38 +18,38 @@ function formatAgo(ms: number) {
   return `${d}d ${hr % 24}h ${min % 60}m ${sec % 60}s ago`;
 }
 
-// there has to be a better way for this and probably should align with colorClasses
+// colors here should match current color class well
 const selectStyles = {
   control: (base: any, state: any) => ({
     ...base,
     backgroundColor: "#121212",
-    borderColor: state.isFocused ? "#6366f1" : "#374151",
+    borderColor: state.isFocused ? "#4338ca" : "#334155",
     boxShadow: "none",
     minHeight: "2rem",
-    "&:hover": { borderColor: "#6366f1" },
+    "&:hover": { borderColor: "#4338ca" },
   }),
   menu: (base: any) => ({
     ...base,
     backgroundColor: "#121212",
-    border: "1px solid #374151",
+    border: "1px solid #334155",
     zIndex: 50,
   }),
   option: (base: any, state: any) => ({
     ...base,
     backgroundColor: state.isSelected
-      ? "#374151"
+      ? "#334155"
       : state.isFocused
-        ? "#6366f1"
+        ? "#4338ca"
         : "#121212",
     color: "white",
     cursor: "pointer",
   }),
   singleValue: (base: any) => ({ ...base, color: "white" }),
-  placeholder: (base: any) => ({ ...base, color: "#9ca3af" }),
+  placeholder: (base: any) => ({ ...base, color: "#3f3f46" }),
   dropdownIndicator: (base: any, state: any) => ({
     ...base,
-    color: state.isFocused ? "#9ca3af" : "#6366f1",
-    "&:hover": { color: "#6366f1" },
+    color: state.isFocused ? "#3f3f46" : "#4338ca",
+    "&:hover": { color: "#4338ca" },
   }),
   indicatorSeparator: () => ({ display: "none" }),
   valueContainer: (base: any) => ({ ...base, padding: "0 0.5rem" }),
@@ -78,7 +79,7 @@ export function TopNavBar({
   }, [lastSync]);
 
   return (
-    <header className="flex items-center justify-between h-14 px-4 shadow">
+    <header className="flex items-center justify-between h-14 px-4">
       <span className="font-semibold">Seedelf</span>
 
       <div className="flex items-center gap-8">
@@ -88,12 +89,17 @@ export function TopNavBar({
 
         <button
           onClick={onRefresh}
-          className="rounded border border-white px-3 py-1"
+          className="rounded-xl border border-white px-3 py-1"
           title="Refresh the current UTxO set to sync with chain tip"
         >
           <RefreshCw />
         </button>
-        <span className="text-sm text-gray-400">Last sync: {ago}</span>
+        <span
+          className="text-sm text-gray-400"
+          title="Time since the last wallet sync"
+        >
+          Last sync: {ago}
+        </span>
       </div>
       <div className="flex items-center gap-8">
         <Select
@@ -111,7 +117,7 @@ export function TopNavBar({
 
         <button
           onClick={onLock}
-          className="rounded border border-white px-3 py-1"
+          className="rounded-xl border border-white px-3 py-1"
           title="Locking a wallet will force a password to unlock it"
         >
           Lock

@@ -7,6 +7,7 @@ import {
   NotificationVariant,
 } from "@/components/ShowNotification";
 import { TopNavBar } from "@/components/TopNavBar";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
 import { Network, NetworkContext } from "@/types/network";
 import { TxResponseWithSide } from "@/types/wallet";
 import { Sidebar } from "./Sidebar";
@@ -18,7 +19,7 @@ import {
   getOwnedSeedelfs,
   getEverySeedelf,
 } from "./api";
-import { LoadingOverlay } from "@/components/LoadingOverlay";
+import { colorClasses } from "./colors";
 
 export function WalletLayout() {
   const [password, setPassword] = useState("");
@@ -54,11 +55,14 @@ export function WalletLayout() {
     setToastVariant("info");
     setToastDur(10000);
     setToastMsg("Getting Wallet History");
+
     // this takes a long time
     const _history = await getWalletHistory(network);
     setToastMsg("Querying Wallet UTxOs");
+
     // this takes a long time
     const _every_utxo = await getEveryUtxo(network);
+
     setToastMsg("Sorting Owned UTxOs");
     const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
     setToastMsg("Sorting All Seedelfs");
@@ -67,10 +71,11 @@ export function WalletLayout() {
     const _ownedSeedelfs = await getOwnedSeedelfs(network, _every_utxo);
     setToastMsg("Calculating Balance");
     const _lovelace = await getLovelaceBalance(_owned_utxo);
+
     setLoading(false);
     setToastVariant("success");
     setToastDur(2718);
-    setToastMsg("Wallet Loaded");
+    setToastMsg("Wallet Loaded!");
 
     // set stuff
     setLovelace(_lovelace);
@@ -85,10 +90,12 @@ export function WalletLayout() {
   };
 
   useEffect(() => {
+    // store it locally
     localStorage.setItem("network", network);
     if (unlocked) {
       setToastVariant("info");
       setToastMsg(`Loading Network: ${network}`);
+      // run this as we need the current network data
       gatherWalletInfo();
     }
   }, [network, unlocked]);
@@ -119,11 +126,13 @@ export function WalletLayout() {
         duration={toastDur}
       />
 
+      {/* simple loading spinner */}
       <LoadingOverlay show={loading} />
 
+      {/* wallet login */}
       {!unlocked && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="w-full max-w-sm rounded-lg p-6 shadow-xl">
+          <div className="w-full max-w-sm rounded-xl p-6">
             <h2 className="mb-4 text-lg font-semibold text-center">
               Unlock Wallet
             </h2>
@@ -142,7 +151,7 @@ export function WalletLayout() {
 
               <button
                 type="submit"
-                className="mt-4 w-full rounded bg-blue-600 py-2 text-sm text-white disabled:opacity-50"
+                className={`mt-4 w-full rounded-xl ${colorClasses.indigo.bg} py-2 text-sm text-white disabled:opacity-50`}
                 disabled={!password || unlocking}
               >
                 {unlocking ? "Unlocking…" : "Unlock"}
@@ -174,6 +183,7 @@ export function WalletLayout() {
               <aside className="w-48 shrink-0 border-r">
                 <Sidebar />
               </aside>
+
               <main className="flex-1 min-w-0 overflow-auto">
                 <Outlet
                   context={{ lovelace, allSeedelfs, ownedSeedelfs, history }}

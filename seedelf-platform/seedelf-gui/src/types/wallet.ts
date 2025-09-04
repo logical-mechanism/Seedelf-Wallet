@@ -1,7 +1,10 @@
+// if it exists then we have the wallet file name
 export type WalletExistsResult = string | null;
 
+// used in history to make assumptions of the trajectory
 export type UTxOSide = "Input" | "Output";
 
+// the datum is the register type
 export interface Register {
   generator: string;
   public_value: string;

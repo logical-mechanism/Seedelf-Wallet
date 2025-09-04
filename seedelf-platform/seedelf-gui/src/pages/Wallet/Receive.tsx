@@ -1,24 +1,26 @@
 import { useState, useMemo, useEffect } from "react";
 import { useOutletContext } from "react-router";
+import { Copy, CircleQuestionMark, Link } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { OutletContextType } from "@/types/layout";
+import { useNetwork, Network } from "@/types/network";
 import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
-import { Copy, CircleQuestionMark, Link } from "lucide-react";
 import { TextField } from "@/components/TextField";
 import { colorClasses } from "./colors";
 import { seedelfPolicyId } from "./api";
-import { useNetwork, Network } from "@/types/network";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 export function Receive() {
   const [message, setMessage] = useState<string | null>(null);
   const [variant, setVariant] = useState<NotificationVariant>("error");
-  const { ownedSeedelfs } = useOutletContext<OutletContextType>();
   const [query, setQuery] = useState("");
-  const { network } = useNetwork();
   const [policyId, setPolicyId] = useState<string>("");
+
+  const { ownedSeedelfs } = useOutletContext<OutletContextType>();
+
+  const { network } = useNetwork();
 
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -58,7 +60,7 @@ export function Receive() {
         variant={variant}
       />
 
-      <div className={`rounded w-full my-12`}>
+      <div className={`rounded-xl w-full my-12`}>
         <div className="flex flex-grow items-center gap-2 mx-auto w-full max-w-3/8">
           <button
             disabled
@@ -85,7 +87,7 @@ export function Receive() {
             onClick={() => {
               setQuery("");
             }}
-            className={`rounded ${colorClasses.slate.bg} px-4 py-2 mt-6 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 mt-6 text-sm text-white disabled:opacity-50`}
           >
             Clear
           </button>
@@ -103,7 +105,7 @@ export function Receive() {
                     title="Copy"
                     aria-label="Copy Seedelf Token name"
                     onClick={() => copy(h)}
-                    className="hover:scale-105"
+                    className="pr-4"
                   >
                     <Copy />
                   </button>
@@ -112,7 +114,7 @@ export function Receive() {
                     title={tokenUrl(h, network)}
                     aria-label="Open on Cardanoscan"
                     onClick={() => openUrl(tokenUrl(h, network))}
-                    className="hover:scale-105 pl-4"
+                    className=""
                   >
                     <Link />
                   </button>

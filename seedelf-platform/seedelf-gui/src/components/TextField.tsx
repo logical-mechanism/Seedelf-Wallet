@@ -16,7 +16,7 @@ export function TextField({
       <input
         {...props}
         size={size}
-        className="rounded border px-3 py-2 focus:outline-none focus:ring"
+        className="rounded-xl border px-3 py-2 focus:outline-none focus:ring"
       />
     </label>
   );

@@ -1,17 +1,17 @@
 import { useState, useMemo } from "react";
+import { useOutletContext } from "react-router";
+import { CirclePlus } from "lucide-react";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
 import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
+import { ConfirmationModal } from "@/components/ConfirmationModal";
+import { SeedelfInputRow } from "@/components/SeedelfInputRow";
 import { useNetwork } from "@/types/network";
-import { CirclePlus } from "lucide-react";
-import { useOutletContext } from "react-router";
 import { OutletContextType } from "@/types/layout";
 import { colorClasses } from "./colors";
 import { sendSeedelf } from "./transactions";
-import { ConfirmationModal } from "@/components/ConfirmationModal";
-import { InputRow } from "@/components/InputRow";
 
 const MAX_LOVELACE = 1_500_000;
 const TMP_FEE = 250_000;
@@ -45,15 +45,17 @@ export function Send() {
   const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
 
   const makeRow = (): ExtraRow => ({
-    id: crypto.randomUUID(),
+    id: crypto.randomUUID(), // makes unique rows
     seedelf: "",
     ada: 0,
     exist: false,
   });
 
   const addRow = () => setExtras((prev) => [...prev, makeRow()]);
+
   const removeRow = (id: string) =>
     setExtras((prev) => prev.filter((r) => r.id !== id));
+
   const updateRow = (id: string, patch: Partial<ExtraRow>) =>
     setExtras((prev) =>
       prev.map((r) => (r.id === id ? { ...r, ...patch } : r)),
@@ -65,6 +67,7 @@ export function Send() {
     const existsInIndex = allSeedelfs.includes(value);
     return !!(validFormat && validLen && existsInIndex);
   };
+
   const validateRowSeedelf = (id: string, value: string) => {
     updateRow(id, { exist: isSeedelfValid(value) });
   };
@@ -78,9 +81,13 @@ export function Send() {
 
   const handleSeedelfExist = (s: string) => {
     setVariant("error");
+
     if (!s.trim()) return setMessage("Seedelf Is Required");
+
     if (!s.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
+
     if (s.length != 64) return setMessage("Incorrect Seedelf Length");
+
     if (allSeedelfs.includes(s)) {
       setVariant("info");
       setMessage("Seedelf does exist");
@@ -96,8 +103,10 @@ export function Send() {
     setVariant("error");
     // seedelf checks
     if (!seedelf.trim()) return setMessage("Seedelf Is Required");
+
     if (!seedelf.includes("5eed0e1f"))
       return setMessage("Incorrect Seedelf Format");
+
     if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
 
     const cur_lovelace = ada * 1_000_000;
@@ -124,12 +133,17 @@ export function Send() {
     try {
       setVariant("info");
       setMessage("Building Send Seedelf Transaction");
+
       const _txHash = await sendSeedelf(network, seedelfs, lovelaces);
       if (_txHash) {
         setTxHash(_txHash);
+        setShowConfirmationModal(false);
         setShowExplorerLinkModal(true);
-        handleClear();
+      } else {
+        setShowConfirmationModal(false);
+        setShowExplorerLinkModal(false);
       }
+      handleClear();
     } catch (e: any) {
       setVariant("error");
       setMessage(e as string);
@@ -201,7 +215,7 @@ export function Send() {
         }}
       />
 
-      <InputRow
+      <SeedelfInputRow
         seedelf={seedelf}
         ada={ada}
         seedelfExist={seedelfExist}
@@ -214,7 +228,7 @@ export function Send() {
 
       {/* extra rows */}
       {extras.map((row) => (
-        <InputRow
+        <SeedelfInputRow
           key={row.id}
           seedelf={row.seedelf}
           ada={row.ada}
@@ -237,7 +251,7 @@ export function Send() {
             onClick={() => {
               setShowConfirmationModal(true);
             }}
-            className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !canSubmit || !confirm}
           >
             Send
@@ -248,7 +262,7 @@ export function Send() {
               type="button"
               title="Clear all fields"
               onClick={handleClear}
-              className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+              className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
               disabled={submitting || !confirm}
             >
               Clear

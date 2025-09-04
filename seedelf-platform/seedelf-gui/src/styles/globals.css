@@ -1,33 +1,36 @@
 @import url("https://fonts.googleapis.com/css2?family=Comfortaa:wght@300..700&display=swap");
-
 @import "tailwindcss";
 
 :root {
-    --seedelf-text: #feefee;
-    --seedelf-bg: #121212;
+  --seedelf-text: #feefee;
+  --seedelf-bg: #121212;
+  --seedelf-accent: #0acab0;
 
-    font-family: Comfortaa, Avenir, Helvetica, Arial, sans-serif;
-    font-size: 16px;
-    line-height: 24px;
-    font-weight: 400;
-    color: var(--seedelf-text);
+  color-scheme: dark;
+  accent-color: var(--seedelf-accent);
 
-    font-synthesis: none;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    -webkit-text-size-adjust: 100%;
+  font-family: Comfortaa, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--seedelf-text);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
 }
 
 html,
 body,
 #root {
-    width: 100%;
-    height: 100%;
-    margin: 0;
-    padding: 0;
-    background: var(--seedelf-bg);
-    color: var(--seedelf-text);
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--seedelf-bg);
+  color: var(--seedelf-text);
 }
 
 *,
@@ -36,25 +39,26 @@ body,
   box-sizing: border-box;
 }
 
-button {
-    cursor: pointer;
-    transition: transform 0.2s ease-in-out;
+button:not(:disabled) {
+  cursor: pointer;
+  transition: transform 0.2s ease-in-out;
 }
 
-button:hover {
-    transform: scale(1.05);
+button:not(:disabled):hover {
+  transform: scale(1.05);
 }
 
 code {
-    -webkit-user-select: all;
-    -moz-user-select: all;
-    user-select: all;
+  -webkit-user-select: all;
+  -moz-user-select: all;
+  user-select: all;
 }
 
 @media (prefers-reduced-motion: reduce) {
   button {
     transition: none;
   }
+
   button:hover {
     transform: none;
   }

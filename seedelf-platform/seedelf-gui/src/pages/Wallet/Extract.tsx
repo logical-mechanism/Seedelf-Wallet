@@ -1,21 +1,20 @@
 import { useState } from "react";
+import { useOutletContext } from "react-router";
+import { SearchCheck } from "lucide-react";
 import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
-import { useNetwork } from "@/types/network";
 import { TextField } from "@/components/TextField";
 import { NumberField } from "@/components/NumberField";
 import { Checkbox } from "@/components/Checkbox";
-import { SearchCheck } from "lucide-react";
+import { useNetwork } from "@/types/network";
+import { OutletContextType } from "@/types/layout";
 import { extractSeedelf } from "./transactions";
 import { colorClasses } from "./colors";
 import { isNotAScript } from "./api";
-
-import { useOutletContext } from "react-router";
-import { OutletContextType } from "@/types/layout";
 
 export function Extract() {
   const [message, setMessage] = useState<string | null>(null);
@@ -39,13 +38,18 @@ export function Extract() {
 
   const handleAddressValid = async (a: string) => {
     setVariant("error");
+
     if (!a.trim()) return setMessage("Wallet address is required.");
+
     if (network == "mainnet" && !a.includes("addr1"))
       return setMessage("Incorrect Mainnet Address Format");
+
     if (network == "preprod" && !a.includes("addr_test1"))
       return setMessage("Incorrect Pre-Production Address Format");
+
     const notScript = await isNotAScript(a);
     if (!notScript) return setMessage("Address Is A Script");
+
     setVariant("info");
     setMessage("Address is valid");
     setAddressValid(true);
@@ -66,6 +70,7 @@ export function Extract() {
     try {
       setVariant("info");
       setMessage("Building Extract Seedelf Transaction");
+
       const _txHash = await extractSeedelf(
         network,
         address,
@@ -74,9 +79,13 @@ export function Extract() {
       );
       if (_txHash) {
         setTxHash(_txHash);
+        setShowConfirmationModal(false);
         setShowExplorerLinkModal(true);
-        handleClear();
+      } else {
+        setShowConfirmationModal(false);
+        setShowExplorerLinkModal(false);
       }
+      handleClear();
     } catch (e: any) {
       setVariant("error");
       setMessage(e as string);
@@ -149,7 +158,7 @@ export function Extract() {
           value={ada}
           onChange={setAda}
           min={0}
-          className="flex-1 min-w-0 text-center rounded border px-3 py-2 focus:outline-none focus:ring"
+          className="flex-1 min-w-0 text-center rounded-xl border px-3 py-2 focus:outline-none focus:ring"
         />
       </div>
 
@@ -162,6 +171,7 @@ export function Extract() {
               setAddress("");
               setAddressValid(false);
               setIsSendAll(false);
+              setAda(0);
             } else {
               setAddress(address);
               setAda(lovelace);
@@ -178,7 +188,7 @@ export function Extract() {
             onClick={() => {
               setShowConfirmationModal(true);
             }}
-            className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !address || !ada || !confirm}
           >
             Extract
@@ -189,7 +199,7 @@ export function Extract() {
               type="button"
               title="Clear all fields"
               onClick={handleClear}
-              className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+              className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
               disabled={submitting || !confirm}
             >
               Clear

@@ -1,18 +1,18 @@
 import { useState, useMemo } from "react";
+import { useOutletContext } from "react-router";
+import { SearchCheck } from "lucide-react";
 import { WebServerModal } from "@/components/WebServerModal";
 import { TextField } from "@/components/TextField";
+import { NumberField } from "@/components/NumberField";
 import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
-import { NumberField } from "@/components/NumberField";
+import { Checkbox } from "@/components/Checkbox";
 import { useNetwork } from "@/types/network";
-import { isNotAScript } from "./api";
-import { SearchCheck } from "lucide-react";
-import { useOutletContext } from "react-router";
 import { OutletContextType } from "@/types/layout";
 import { colorClasses } from "./colors";
-import { Checkbox } from "@/components/Checkbox";
+import { isNotAScript } from "./api";
 import { fundSeedelf } from "./transactions";
 import { runWebServer } from "./webServer";
 
@@ -33,6 +33,7 @@ export function Fund() {
   const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
   const [addressValid, setAddressValid] = useState<boolean>(false);
   const [isSelfSend, setIsSelfSend] = useState<boolean>(false);
+
   // randomly select a seedelf from the owned seedelfs.
   const selfSeedelf = useMemo(
     () => [...ownedSeedelfs].sort(() => Math.random() - 0.5).slice(0, 1),
@@ -49,13 +50,18 @@ export function Fund() {
 
   const handleAddressValid = async (a: string) => {
     setVariant("error");
+
     if (!a.trim()) return setMessage("Wallet address is required.");
+
     if (network == "mainnet" && !a.includes("addr1"))
       return setMessage("Incorrect Mainnet Address Format");
+
     if (network == "preprod" && !a.includes("addr_test1"))
       return setMessage("Incorrect Pre-Production Address Format");
+
     const notScript = await isNotAScript(a);
     if (!notScript) return setMessage("Address Is A Script");
+
     setVariant("info");
     setMessage("Address is valid");
     setAddressValid(true);
@@ -63,9 +69,13 @@ export function Fund() {
 
   const handleSeedelfExist = (s: string) => {
     setVariant("error");
+
     if (!s.trim()) return setMessage("Seedelf Is Required");
+
     if (!s.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
+
     if (s.length != 64) return setMessage("Incorrect Seedelf Length");
+
     if (allSeedelfs.includes(s)) {
       setVariant("info");
       setMessage("Seedelf does exist");
@@ -79,19 +89,25 @@ export function Fund() {
 
   const handleSubmit = async () => {
     setVariant("error");
+
     // address stuff
     if (!address.trim()) return setMessage("Wallet address is required.");
+
     if (network == "mainnet" && !address.includes("addr1"))
       return setMessage("Incorrect Mainnet Address Format");
+
     if (network == "preprod" && !address.includes("addr_test1"))
       return setMessage("Incorrect Pre-Production Address Format");
+
     const notScript = await isNotAScript(address);
     if (!notScript) return setMessage("Address Is A Script");
 
     // seedelf checks
     if (!seedelf.trim()) return setMessage("Seedelf Is Required");
+
     if (!seedelf.includes("5eed0e1f"))
       return setMessage("Incorrect Seedelf Format");
+
     if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
 
     const lovelace = ada * 1_000_000;
@@ -105,17 +121,17 @@ export function Fund() {
     try {
       setVariant("info");
       setMessage("Building Fund Seedelf Transaction");
+
       const txCbor = await fundSeedelf(network, address, seedelf, lovelace);
       if (txCbor) {
         setShowWebServerModal(true);
         await runWebServer(txCbor, network);
-        handleClear();
       } else {
         setShowWebServerModal(false);
         setVariant("error");
         setMessage("Transaction Failed To Build");
-        handleClear();
       }
+      handleClear();
     } catch (e: any) {
       setVariant("error");
       setMessage(e as string);
@@ -205,7 +221,7 @@ export function Fund() {
           value={ada}
           onChange={setAda}
           min={0}
-          className="flex-1 min-w-0 text-center rounded border px-3 py-2 focus:outline-none focus:ring"
+          className="flex-1 min-w-0 text-center rounded-xl border px-3 py-2 focus:outline-none focus:ring"
         />
       </div>
 
@@ -233,7 +249,7 @@ export function Fund() {
             type="button"
             title="Fund an existing seedelf"
             onClick={handleSubmit}
-            className={`rounded ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
             disabled={submitting || !address || !seedelf || !ada || !confirm}
           >
             Fund
@@ -244,7 +260,7 @@ export function Fund() {
               type="button"
               title="Clear all fields"
               onClick={handleClear}
-              className={`rounded ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
+              className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 text-sm text-white disabled:opacity-50`}
               disabled={submitting || !confirm}
             >
               Clear

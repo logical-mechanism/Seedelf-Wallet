@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router";
-import { OutletContextType } from "@/types/layout";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowUpRight,
   ArrowDownLeft,
@@ -12,9 +12,10 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from "lucide-react";
+import { OutletContextType } from "@/types/layout";
 import { useNetwork } from "@/types/network";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { ShowNotification } from "@/components/ShowNotification";
+import { colorClasses } from "./colors";
 
 function txUrl(txHash: string, network: string) {
   return network === "mainnet"
@@ -64,8 +65,7 @@ export function History() {
 
   const onChangePageSize = (n: number) => {
     setPageSize(n);
-    setPage(1); // reset to first page when size changes
-    // optional: scroll to top for better UX
+    setPage(1);
     scrollToTop();
   };
 
@@ -86,10 +86,10 @@ export function History() {
           id="pageSize"
           value={pageSize}
           onChange={(e) => onChangePageSize(Number(e.target.value))}
-          className="rounded border bg-transparent px-2 py-1 text-sm focus:outline-none focus:ring text-black"
+          className="rounded-xl px-2 py-1 text-sm focus:outline-none focus:ring text-white"
         >
           {PAGE_SIZE_OPTIONS.map((opt) => (
-            <option key={opt} value={opt} className="bg-gray-900">
+            <option key={opt} value={opt} className="">
               {opt}
             </option>
           ))}
@@ -105,36 +105,40 @@ export function History() {
             scrollToTop();
           }}
           disabled={page === 1}
-          className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
+          className="rounded-xl border px-3 py-1 disabled:opacity-50"
           aria-label="First page"
           title="First page"
         >
           <ChevronsLeft className="inline-block" />
         </button>
+
         <button
           type="button"
           onClick={() => onChangePageNumber(false)}
           disabled={page === 1}
-          className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
+          className="rounded-xl border px-3 py-1 disabled:opacity-50"
           aria-label="Previous page"
           title="Previous page"
         >
           <ChevronLeft className="inline-block" />
         </button>
+
         <span className="text-sm opacity-80">
           Page <span className="font-semibold">{page}</span> of{" "}
           <span className="font-semibold">{totalPages}</span>
         </span>
+
         <button
           type="button"
           onClick={() => onChangePageNumber(true)}
           disabled={page === totalPages}
-          className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
+          className="rounded-xl border px-3 py-1 disabled:opacity-50"
           aria-label="Next page"
           title="Next page"
         >
           <ChevronRight className="inline-block" />
         </button>
+
         <button
           type="button"
           onClick={() => {
@@ -142,7 +146,7 @@ export function History() {
             scrollToTop();
           }}
           disabled={page === totalPages}
-          className="rounded border px-3 py-1 disabled:opacity-50 hover:scale-105 transition"
+          className="rounded-xl border px-3 py-1 disabled:opacity-50"
           aria-label="Last page"
           title="Last page"
         >
@@ -177,10 +181,10 @@ export function History() {
             {paged.map((h) => (
               <li
                 key={`${h.tx.tx_hash}-${h.side}`}
-                className="mb-4 border rounded text-center p-4"
+                className="mb-4 border rounded-xl text-center p-4"
               >
                 <span
-                  className={`font-bold flex items-center gap-1 mb-4 justify-center ${h.side === "Input" ? "text-indigo-400" : "text-teal-400"}`}
+                  className={`font-bold flex items-center gap-1 mb-4 justify-center ${h.side === "Input" ? colorClasses.indigo.text : colorClasses.teal.text}`}
                 >
                   {h.side === "Input" ? <ArrowUpRight /> : <ArrowDownLeft />}
                   {h.side === "Input" ? "Sent Funds" : "Received Funds"}
@@ -192,7 +196,7 @@ export function History() {
                     title={txUrl(h.tx.tx_hash, network)}
                     aria-label="Open on Cardanoscan"
                     onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
-                    className="hover:scale-105 pr-4"
+                    className="pr-4"
                   >
                     <LinkIcon />
                   </button>
@@ -201,7 +205,7 @@ export function History() {
                     title="Copy"
                     aria-label="Copy Transaction Id"
                     onClick={() => copy(h.tx.tx_hash)}
-                    className="hover:scale-105"
+                    className=""
                   >
                     <Copy />
                   </button>
@@ -222,7 +226,7 @@ export function History() {
           aria-label="Back to top"
           title="Back to top"
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-6 right-6 rounded-full p-3 border text-white bg-black/60 backdrop-blur hover:bg-black/80 transition"
+          className="fixed bottom-6 right-6 rounded-xl p-3 border text-white bg-black/60 backdrop-blur hover:bg-black/80"
         >
           <ArrowUp />
         </button>

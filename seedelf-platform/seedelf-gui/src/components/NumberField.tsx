@@ -7,7 +7,7 @@ type NumberFieldProps = {
 } & Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "value" | "onChange">;
 
 const DECIMALS = 6;
-const MAX = 45_000_000_000;
+const MAX = 45_000_000_000; // 45 billion ada
 
 const round6 = (n: number) =>
   Math.floor(n * Math.pow(10, DECIMALS)) / Math.pow(10, DECIMALS);
@@ -40,8 +40,10 @@ export function NumberField({
   };
 
   const handlePaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
+    // test with: 1.245678
     const input = e.currentTarget;
     const text = e.clipboardData.getData("text");
+
     const start = input.selectionStart ?? 0;
     const end = input.selectionEnd ?? start;
     const next = input.value.slice(0, start) + text + input.value.slice(end);

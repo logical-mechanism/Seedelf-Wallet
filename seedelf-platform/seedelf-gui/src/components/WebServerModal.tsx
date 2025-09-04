@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { stopWebServer } from "@pages/Wallet/webServer";
 import { Link, CircleQuestionMark, Copy } from "lucide-react";
 import { ShowNotification } from "@/components/ShowNotification";
+import { colorClasses } from "@/pages/Wallet/colors";
 
 type WebServerModalProps = {
   open: boolean;
@@ -13,9 +14,17 @@ type WebServerModalProps = {
 export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
   const [message, setMessage] = useState<string | null>(null);
 
+  const closeAndStop = useCallback(() => {
+    stopWebServer();
+    onClose();
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.key === "Escape") closeAndStop();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
@@ -35,14 +44,14 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
         variant={"info"}
       />
       {/* Gray overlay */}
-      <div className="absolute inset-0 bg-gray-800/70" aria-hidden="true" />
+      <div className="absolute inset-0 bg-slate-700/50" aria-hidden="true" />
       {/* Centered dialog */}
       <div className="absolute inset-0 grid place-items-center ">
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-title"
-          className="inline-block w-fit max-w-[90vw] rounded-xl bg-gray-800 p-6 shadow-lg"
+          className={`inline-block w-fit rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
         >
           <h1>
             <button
@@ -52,10 +61,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
               <CircleQuestionMark />
             </button>
           </h1>
-          <h2
-            id="modal-title"
-            className="mb-4 text-md font-semibold text-white text-center"
-          >
+          <h2 id="modal-title" className="mb-4 text-center">
             Web Server Is Live
           </h2>
 
@@ -67,7 +73,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
               title={url}
               aria-label="Open local webserver"
               onClick={() => openUrl(url)}
-              className="hover:scale-105 pr-4 text-white text-2xl"
+              className="pr-4"
             >
               <Link />
             </button>
@@ -76,7 +82,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
               title="Copy"
               aria-label="Copy URL"
               onClick={() => copy(url)}
-              className="hover:scale-105"
+              className=""
             >
               <Copy />
             </button>
@@ -86,11 +92,8 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
             <button
               type="button"
               title="Stop the local web server"
-              onClick={() => {
-                stopWebServer();
-                onClose();
-              }}
-              className="rounded-md border px-3 py-1.5 transition hover:scale-105 text-white"
+              onClick={closeAndStop}
+              className="rounded-xl border px-3 py-1.5"
             >
               Stop Web Server
             </button>

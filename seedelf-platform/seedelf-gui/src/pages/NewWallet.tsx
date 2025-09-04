@@ -8,6 +8,7 @@ import {
 import { TextField } from "@/components/TextField";
 import { PasswordField } from "@/components/PasswordField";
 import { WalletExistsResult } from "@/types/wallet";
+import { MoveLeft } from "lucide-react";
 
 export function NewWalletPage() {
   const [name, setName] = useState("");
@@ -20,21 +21,20 @@ export function NewWalletPage() {
   const navigate = useNavigate();
 
   const handleSubmit = async () => {
-    // Simple custom rules – adjust as needed
-    if (!name.trim()) return setMessage("Wallet name is required.");
     // spaces should be underscores
     const walletName: string = name.trim().replace(/\s+/g, "_");
 
+    // force users to use some kind of complex password here
     const isStrong = await invoke<boolean>("check_password_complexity", {
       password: pw,
     });
     if (!isStrong)
       return setMessage(`Passwords Must Contain The Following:
-                  Minimum Length: At Least 14 Characters.
-                  Uppercase Letter: Requires At Least One Uppercase Character.
-                  Lowercase Letter: Requires At Least One Lowercase Character.
-                  Number: Requires At Least One Digit.
-                  Special Character: Requires At Least One Special Symbol.`);
+                         Minimum Length: At Least 14 Characters
+                         Uppercase Letter: Requires At Least One Uppercase Character
+                         Lowercase Letter: Requires At Least One Lowercase Character
+                         Number: Requires At Least One Digit
+                         Special Character: Requires At Least One Special Symbol`);
     if (pw !== confirm) return setMessage("Passwords do not match.");
 
     setSubmitting(true);
@@ -99,16 +99,13 @@ export function NewWalletPage() {
       />
 
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => navigate("/")}
-          className="rounded px-3 py-2 text-sm underline"
-        >
-          ← Back
+        <button onClick={() => navigate("/")} className="rounded-xl px-3 py-2">
+          <MoveLeft />
         </button>
 
         <button
           onClick={handleSubmit}
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+          className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
           disabled={submitting || !name || !pw || !confirm}
         >
           Create
