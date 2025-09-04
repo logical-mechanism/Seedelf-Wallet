@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "seedelf-gui",
+        "title": "Seedelf: A Cardano Stealth Wallet",
         "maximized": true,
         "decorations": true,
         "closable": true,
