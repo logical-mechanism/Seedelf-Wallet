@@ -1,9 +1,11 @@
 import { createContext, useContext } from "react";
 
+// only support mainnet and pre-production
 export type Network = "mainnet" | "preprod";
 
 interface NetworkCtx {
   network: Network;
+  // we need a way to switch networks
   setNetwork: (n: Network) => void;
 }
 
