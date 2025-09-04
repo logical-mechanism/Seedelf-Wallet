@@ -162,6 +162,7 @@ export function Extract() {
               setAddress("");
               setAddressValid(false);
               setIsSendAll(false);
+              setAda(0);
             } else {
               setAddress(address);
               setAda(lovelace);
