@@ -1,11 +1,12 @@
+import { colorClasses } from "@/pages/Wallet/colors";
 import { useEffect, useState } from "react";
 
 export type NotificationVariant = "success" | "error" | "info";
 
 const VARIANT_STYLES: Record<NotificationVariant, string> = {
-  success: "bg-green-600 text-white",
-  error: "bg-red-600 text-white",
-  info: "bg-sky-600 text-white",
+  success: colorClasses.green.bg + " text-white",
+  error: colorClasses.red.bg + " text-white",
+  info: colorClasses.sky.bg + " text-white",
 };
 
 function ariaForVariant(v: NotificationVariant) {
@@ -42,7 +43,7 @@ export function ShowNotification({
       setMessage(null);
     }, duration);
     return () => clearTimeout(timer);
-  }, [message, setMessage, duration]);
+  }, [message, setMessage, duration, variant]);
 
   if (!show || localMsg == null) return null;
 
