@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useOutletContext } from "react-router";
+import { Delete, SearchCheck } from "lucide-react";
 import { OutletContextType } from "@/types/layout";
+import { useNetwork } from "@/types/network";
 import {
   ShowNotification,
   NotificationVariant,
@@ -10,13 +12,10 @@ import { TextField } from "@/components/TextField";
 import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
 import { WebServerModal } from "@/components/WebServerModal";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
-import { useNetwork } from "@/types/network";
-import { Delete } from "lucide-react";
+import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { createSeedelf, removeSeedelf } from "./transactions";
 import { runWebServer } from "./webServer";
-import { SearchCheck } from "lucide-react";
 import { colorClasses } from "./colors";
-import { ConfirmationModal } from "@/components/ConfirmationModal";
 
 export function Manage() {
   const [address, setAddress] = useState("");

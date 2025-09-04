@@ -1,8 +1,8 @@
 import { useState, useMemo } from "react";
 import { useOutletContext, NavLink } from "react-router";
 import { OutletContextType } from "@/types/layout";
-import { ShowNotification } from "@/components/ShowNotification";
 import { useNetwork } from "@/types/network";
+import { ShowNotification } from "@/components/ShowNotification";
 import {
   ArrowUpRight,
   ArrowDownLeft,

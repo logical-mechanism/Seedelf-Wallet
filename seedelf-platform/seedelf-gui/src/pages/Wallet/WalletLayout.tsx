@@ -7,6 +7,7 @@ import {
   NotificationVariant,
 } from "@/components/ShowNotification";
 import { TopNavBar } from "@/components/TopNavBar";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
 import { Network, NetworkContext } from "@/types/network";
 import { TxResponseWithSide } from "@/types/wallet";
 import { Sidebar } from "./Sidebar";
@@ -18,7 +19,6 @@ import {
   getOwnedSeedelfs,
   getEverySeedelf,
 } from "./api";
-import { LoadingOverlay } from "@/components/LoadingOverlay";
 import { colorClasses } from "./colors";
 
 export function WalletLayout() {
