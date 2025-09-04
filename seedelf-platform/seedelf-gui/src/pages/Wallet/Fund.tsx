@@ -50,18 +50,18 @@ export function Fund() {
 
   const handleAddressValid = async (a: string) => {
     setVariant("error");
-    
+
     if (!a.trim()) return setMessage("Wallet address is required.");
-    
+
     if (network == "mainnet" && !a.includes("addr1"))
       return setMessage("Incorrect Mainnet Address Format");
-    
+
     if (network == "preprod" && !a.includes("addr_test1"))
       return setMessage("Incorrect Pre-Production Address Format");
-    
+
     const notScript = await isNotAScript(a);
     if (!notScript) return setMessage("Address Is A Script");
-    
+
     setVariant("info");
     setMessage("Address is valid");
     setAddressValid(true);
@@ -69,13 +69,13 @@ export function Fund() {
 
   const handleSeedelfExist = (s: string) => {
     setVariant("error");
-    
+
     if (!s.trim()) return setMessage("Seedelf Is Required");
-    
+
     if (!s.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
-    
+
     if (s.length != 64) return setMessage("Incorrect Seedelf Length");
-    
+
     if (allSeedelfs.includes(s)) {
       setVariant("info");
       setMessage("Seedelf does exist");
@@ -89,25 +89,25 @@ export function Fund() {
 
   const handleSubmit = async () => {
     setVariant("error");
-    
+
     // address stuff
     if (!address.trim()) return setMessage("Wallet address is required.");
-    
+
     if (network == "mainnet" && !address.includes("addr1"))
       return setMessage("Incorrect Mainnet Address Format");
-    
+
     if (network == "preprod" && !address.includes("addr_test1"))
       return setMessage("Incorrect Pre-Production Address Format");
-    
+
     const notScript = await isNotAScript(address);
     if (!notScript) return setMessage("Address Is A Script");
 
     // seedelf checks
     if (!seedelf.trim()) return setMessage("Seedelf Is Required");
-    
+
     if (!seedelf.includes("5eed0e1f"))
       return setMessage("Incorrect Seedelf Format");
-    
+
     if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
 
     const lovelace = ada * 1_000_000;
@@ -121,7 +121,7 @@ export function Fund() {
     try {
       setVariant("info");
       setMessage("Building Fund Seedelf Transaction");
-      
+
       const txCbor = await fundSeedelf(network, address, seedelf, lovelace);
       if (txCbor) {
         setShowWebServerModal(true);
@@ -132,7 +132,6 @@ export function Fund() {
         setMessage("Transaction Failed To Build");
       }
       handleClear();
-
     } catch (e: any) {
       setVariant("error");
       setMessage(e as string);

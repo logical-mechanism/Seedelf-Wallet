@@ -52,10 +52,10 @@ export function Send() {
   });
 
   const addRow = () => setExtras((prev) => [...prev, makeRow()]);
-  
+
   const removeRow = (id: string) =>
     setExtras((prev) => prev.filter((r) => r.id !== id));
-  
+
   const updateRow = (id: string, patch: Partial<ExtraRow>) =>
     setExtras((prev) =>
       prev.map((r) => (r.id === id ? { ...r, ...patch } : r)),
@@ -67,7 +67,7 @@ export function Send() {
     const existsInIndex = allSeedelfs.includes(value);
     return !!(validFormat && validLen && existsInIndex);
   };
-  
+
   const validateRowSeedelf = (id: string, value: string) => {
     updateRow(id, { exist: isSeedelfValid(value) });
   };
@@ -81,13 +81,13 @@ export function Send() {
 
   const handleSeedelfExist = (s: string) => {
     setVariant("error");
-    
+
     if (!s.trim()) return setMessage("Seedelf Is Required");
-    
+
     if (!s.includes("5eed0e1f")) return setMessage("Incorrect Seedelf Format");
-    
+
     if (s.length != 64) return setMessage("Incorrect Seedelf Length");
-    
+
     if (allSeedelfs.includes(s)) {
       setVariant("info");
       setMessage("Seedelf does exist");
@@ -103,10 +103,10 @@ export function Send() {
     setVariant("error");
     // seedelf checks
     if (!seedelf.trim()) return setMessage("Seedelf Is Required");
-    
+
     if (!seedelf.includes("5eed0e1f"))
       return setMessage("Incorrect Seedelf Format");
-    
+
     if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
 
     const cur_lovelace = ada * 1_000_000;
@@ -133,7 +133,7 @@ export function Send() {
     try {
       setVariant("info");
       setMessage("Building Send Seedelf Transaction");
-      
+
       const _txHash = await sendSeedelf(network, seedelfs, lovelaces);
       if (_txHash) {
         setTxHash(_txHash);
@@ -144,7 +144,6 @@ export function Send() {
         setShowExplorerLinkModal(false);
       }
       handleClear();
-
     } catch (e: any) {
       setVariant("error");
       setMessage(e as string);

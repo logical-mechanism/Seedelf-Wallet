@@ -51,10 +51,10 @@ function IconAction({
 
 export function Dashboard() {
   const [message, setMessage] = useState<string | null>(null);
-  
+
   const { lovelace, ownedSeedelfs, history } =
     useOutletContext<OutletContextType>();
-  
+
   const { network } = useNetwork();
   const recent = history.slice(0, 5);
   const elves = useMemo(
@@ -129,7 +129,7 @@ export function Dashboard() {
                       title="Copy"
                       aria-label="Copy Seedelf Token name"
                       onClick={() => copy(h)}
-                      className="hover:scale-105"
+                      className=""
                     >
                       <Copy />
                     </button>
@@ -162,7 +162,7 @@ export function Dashboard() {
                 className="mb-4 border rounded-xl text-center p-4"
               >
                 <span
-                  className={`font-bold flex items-center gap-1 mb-4 ${h.side === "Input" ? "text-indigo-400" : "text-teal-400"}`}
+                  className={`font-bold flex items-center gap-1 mb-4 ${h.side === "Input" ? colorClasses.indigo.text : colorClasses.teal.text}`}
                 >
                   {h.side === "Input" ? <ArrowUpRight /> : <ArrowDownLeft />}
                   {h.side === "Input" ? "Sent Funds" : "Received Funds"}
@@ -174,7 +174,7 @@ export function Dashboard() {
                     title={txUrl(h.tx.tx_hash, network)}
                     aria-label="Open on Cardanoscan"
                     onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
-                    className="hover:scale-105 pr-4"
+                    className="pr-4"
                   >
                     <Link />
                   </button>
@@ -183,7 +183,7 @@ export function Dashboard() {
                     title="Copy"
                     aria-label="Copy Transaction Id"
                     onClick={() => copy(h.tx.tx_hash)}
-                    className="hover:scale-105"
+                    className=""
                   >
                     <Copy />
                   </button>

@@ -17,9 +17,9 @@ export function Receive() {
   const [variant, setVariant] = useState<NotificationVariant>("error");
   const [query, setQuery] = useState("");
   const [policyId, setPolicyId] = useState<string>("");
-  
+
   const { ownedSeedelfs } = useOutletContext<OutletContextType>();
-  
+
   const { network } = useNetwork();
 
   const copy = async (text: string) => {
