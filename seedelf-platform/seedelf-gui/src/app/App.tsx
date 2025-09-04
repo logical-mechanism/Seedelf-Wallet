@@ -1,8 +1,8 @@
+import { Routes, Route, Navigate } from "react-router";
+import { useTauriReady } from "@/lib/useTauriReady";
 import { LandingPage } from "@/pages/Landing";
 import { NewWalletPage } from "@/pages/NewWallet";
 import { WalletLayout } from "@/pages/Wallet/WalletLayout";
-import { useTauriReady } from "@/lib/useTauriReady";
-import { Routes, Route } from "react-router";
 import { Dashboard } from "@/pages/Wallet/Dashboard";
 import { Manage } from "@/pages/Wallet/Manage";
 import { Fund } from "@/pages/Wallet/Fund";
@@ -15,15 +15,17 @@ function App() {
   const isTauriReady = useTauriReady();
 
   if (!isTauriReady) {
-    return <div>Loading...</div>;
+    return <div className="min-h-screen flex flex-col items-center justify-center">Loading...</div>;
   }
 
   return (
     <Routes>
+      {/**/}
       <Route index element={<LandingPage />} />
+      {/* only shows if a wallet file does not exist */}
       <Route path="/wallet/new" element={<NewWalletPage />} />
-      {/* WalletPage */}
-      <Route path="/wallet/" element={<WalletLayout />}>
+      {/* wallet routes for existing wallets */}
+      <Route path="/wallet" element={<WalletLayout />}>
         <Route index element={<Dashboard />} />
         <Route path="manage" element={<Manage />} />
         <Route path="fund" element={<Fund />} />
@@ -32,8 +34,8 @@ function App() {
         <Route path="extract" element={<Extract />} />
         <Route path="history" element={<History />} />
       </Route>
-      {/* wildcard falls back to landing; you can show a 404 instead */}
-      <Route path="*" element={<LandingPage />} />
+      {/* wildcard falls back to landing */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

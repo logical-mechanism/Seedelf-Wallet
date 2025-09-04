@@ -1,23 +1,41 @@
-import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 
 export function useTauriReady(): boolean {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    let resolved = false;
+    let cancelled = false;
 
-    const unlistenPromise = listen("tauri://ready", () => {
-      resolved = true;
-      setReady(true);
-    });
+    (async () => {
+      const isTauri =
+        typeof window !== "undefined" &&
+        ("__TAURI__" in window || "__TAURI_INTERNALS__" in window);
 
-    setTimeout(() => {
-      if (!resolved) setReady(true);
-    }, 0);
+      if (!isTauri) {
+        setReady(true);
+        return;
+      }
+
+      const { listen } = await import("@tauri-apps/api/event");
+
+      let resolved = false;
+      const fallback = setTimeout(() => {
+        if (!cancelled && !resolved) setReady(true);
+      }, 1359);
+
+      const unlisten = await listen("tauri://ready", () => {
+        resolved = true;
+        clearTimeout(fallback);
+        if (!cancelled) setReady(true);
+      });
+
+      return () => {
+        unlisten();
+      };
+    })();
 
     return () => {
-      unlistenPromise.then((unlisten) => unlisten());
+      cancelled = true;
     };
   }, []);
 
