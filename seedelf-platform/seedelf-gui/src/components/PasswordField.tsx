@@ -22,9 +22,13 @@ export function PasswordField({
     setCapsOn(e.getModifierState("CapsLock"));
   };
 
-  const handleBlur = () => {setFocused(false)};
+  const handleBlur = () => {
+    setFocused(false);
+  };
 
-  const handleFocus = () => {setFocused(true)};
+  const handleFocus = () => {
+    setFocused(true);
+  };
 
   return (
     <label className="flex flex-col gap-1 text-sm">
@@ -51,7 +55,9 @@ export function PasswordField({
         </button>
       </div>
       {focused && capsOn && (
-        <span className={`mt-1 text-xs ${colorClasses.red.text}`}>Caps Lock is On</span>
+        <span className={`mt-1 text-xs ${colorClasses.red.text}`}>
+          Caps Lock is On
+        </span>
       )}
     </label>
   );

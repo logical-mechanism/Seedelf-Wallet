@@ -109,7 +109,9 @@ export function Dashboard() {
           />
         </div>
 
-        <div className={`${elves.length === 0 ? "" : "border rounded-xl w-full"}`}>
+        <div
+          className={`${elves.length === 0 ? "" : "border rounded-xl w-full"}`}
+        >
           {elves.length === 0 ? (
             <p className="text-white">No Seedelfs Available.</p>
           ) : (
