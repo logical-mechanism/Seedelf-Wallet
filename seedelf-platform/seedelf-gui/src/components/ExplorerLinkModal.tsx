@@ -61,7 +61,11 @@ export function ExplorerLinkModal({
             Transaction Successfully Submitted!
           </h2>
 
-          <h3 id="modal-sub-title" className="mb-4 text-center">
+          <h3
+            id="modal-sub-title"
+            className="mb-4 text-center"
+            title="It will take a few moments to hit the chain."
+          >
             View Transaction On Cardanoscan
           </h3>
 

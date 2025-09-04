@@ -11,7 +11,7 @@ import { OutletContextType } from "@/types/layout";
 import { colorClasses } from "./colors";
 import { sendSeedelf } from "./transactions";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
-import { InputRow } from "@/components/InputRow";
+import { SeedelfInputRow } from "@/components/SeedelfInputRow";
 
 const MAX_LOVELACE = 1_500_000;
 const TMP_FEE = 250_000;
@@ -201,7 +201,7 @@ export function Send() {
         }}
       />
 
-      <InputRow
+      <SeedelfInputRow
         seedelf={seedelf}
         ada={ada}
         seedelfExist={seedelfExist}
@@ -214,7 +214,7 @@ export function Send() {
 
       {/* extra rows */}
       {extras.map((row) => (
-        <InputRow
+        <SeedelfInputRow
           key={row.id}
           seedelf={row.seedelf}
           ada={row.ada}
