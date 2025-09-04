@@ -77,6 +77,7 @@ export function Receive() {
                 setQuery(next);
               }}
               className="w-full"
+              size={64}
             />
           </div>
           <button

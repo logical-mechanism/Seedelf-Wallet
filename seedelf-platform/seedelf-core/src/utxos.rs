@@ -1,7 +1,7 @@
 use crate::assets::{Asset, Assets, string_to_u64};
 use crate::constants::{MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS};
 use crate::transaction::wallet_minimum_lovelace_with_assets;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Ok, Result, anyhow, bail};
 use blstrs::Scalar;
 use hex;
 use seedelf_crypto::register::Register;
@@ -100,6 +100,35 @@ pub fn find_seedelf_and_wallet_utxos(
         }
     }
     Ok((seedelf_datum, usable_utxos))
+}
+
+pub fn find_seedelf_datum(
+    seedelf: String,
+    seedelf_policy_id: &str,
+    utxos: Vec<UtxoResponse>,
+) -> Result<Option<Register>> {
+    let mut seedelf_datum: Option<Register> = None;
+
+    for utxo in utxos {
+        // Extract bytes
+        if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum)
+            && contains_policy_id(&utxo.asset_list, seedelf_policy_id)
+        {
+            let asset_name = utxo
+                .asset_list
+                .as_ref()
+                .and_then(|vec| {
+                    vec.iter()
+                        .find(|asset| asset.policy_id == seedelf_policy_id)
+                        .map(|asset| &asset.asset_name)
+                })
+                .context("Can't Produce Asset Name")?;
+            if asset_name == &seedelf {
+                seedelf_datum = Some(inline_datum.clone());
+            }
+        }
+    }
+    Ok(seedelf_datum)
 }
 
 /// Find a specific seedelf.

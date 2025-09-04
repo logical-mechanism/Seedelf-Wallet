@@ -82,6 +82,7 @@ export function NewWalletPage() {
         value={name}
         onChange={(e) => setName(e.target.value)}
         disabled={submitting}
+        size={64}
       />
 
       <PasswordField

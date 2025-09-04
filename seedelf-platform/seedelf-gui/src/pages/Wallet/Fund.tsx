@@ -157,6 +157,7 @@ export function Fund() {
             }}
             disabled={submitting}
             maxLength={108}
+            size={108}
           />
 
           <button
@@ -184,6 +185,7 @@ export function Fund() {
             disabled={submitting}
             maxLength={64}
             minLength={64}
+            size={64}
           />
 
           <button
@@ -198,7 +200,13 @@ export function Fund() {
       </div>
 
       <div className="my-4 max-w-5/8 mx-auto w-full">
-        <NumberField label="Ada" value={ada} onChange={setAda} min={0} />
+        <NumberField
+          label="Ada"
+          value={ada}
+          onChange={setAda}
+          min={0}
+          className="flex-1 min-w-0 text-center rounded border px-3 py-2 focus:outline-none focus:ring"
+        />
       </div>
 
       <div className="grid grid-cols-3 items-center my-4 max-w-5/8 mx-auto w-full">
