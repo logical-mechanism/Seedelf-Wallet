@@ -53,10 +53,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
               <CircleQuestionMark />
             </button>
           </h1>
-          <h2
-            id="modal-title"
-            className="mb-4 text-center"
-          >
+          <h2 id="modal-title" className="mb-4 text-center">
             Web Server Is Live
           </h2>
 

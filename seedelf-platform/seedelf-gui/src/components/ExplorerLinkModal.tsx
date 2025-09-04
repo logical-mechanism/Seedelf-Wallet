@@ -57,17 +57,11 @@ export function ExplorerLinkModal({
           aria-labelledby="modal-title"
           className={`inline-block w-fit rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
         >
-          <h2
-            id="modal-title"
-            className="mb-4 font-semibold text-center"
-          >
+          <h2 id="modal-title" className="mb-4 font-semibold text-center">
             Transaction Successfully Submitted!
           </h2>
 
-          <h3
-            id="modal-sub-title"
-            className="mb-4 text-center"
-          >
+          <h3 id="modal-sub-title" className="mb-4 text-center">
             View Transaction On Cardanoscan
           </h3>
 
