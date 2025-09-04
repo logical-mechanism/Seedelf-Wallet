@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { stopWebServer } from "@pages/Wallet/webServer";
 import { Link, CircleQuestionMark, Copy } from "lucide-react";
@@ -14,9 +14,17 @@ type WebServerModalProps = {
 export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
   const [message, setMessage] = useState<string | null>(null);
 
+  const closeAndStop = useCallback(() => {
+    stopWebServer();
+    onClose();
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.key === "Escape") closeAndStop();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
@@ -84,10 +92,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
             <button
               type="button"
               title="Stop the local web server"
-              onClick={() => {
-                stopWebServer();
-                onClose();
-              }}
+              onClick={closeAndStop}
               className="rounded-xl border px-3 py-1.5"
             >
               Stop Web Server
