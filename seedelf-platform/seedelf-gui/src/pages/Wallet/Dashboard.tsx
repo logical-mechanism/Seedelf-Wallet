@@ -41,7 +41,7 @@ function IconAction({
       className={`flex flex-col items-center ${c.text} hover:scale-105 mx-auto w-fit`}
       title={title}
     >
-      <div className={`p-3 rounded-lg text-white ${c.bg} transition`}>
+      <div className={`p-3 rounded-xl text-white ${c.bg} transition`}>
         {icon}
       </div>
       <span className="mt-1 text-xs font-medium">{label}</span>

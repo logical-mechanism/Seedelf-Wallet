@@ -39,7 +39,7 @@ export function ConfirmationModal({
       }}
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-slate-700/70" />
+      <div className="absolute inset-0 bg-slate-700/50" />
 
       {/* Centered dialog */}
       <div className="absolute inset-0 grid place-items-center p-4">

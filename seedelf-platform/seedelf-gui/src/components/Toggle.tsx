@@ -23,14 +23,14 @@ export function CreateRemoveToggle({
     <div
       role="tablist"
       aria-label="Mode"
-      className={`inline-flex items-center justify-center rounded-lg border p-1 ${className}`}
+      className={`inline-flex items-center justify-center rounded-xl border p-1 ${className}`}
     >
       <button
         role="tab"
         aria-selected={value === "Create"}
         disabled={disabled}
         onClick={() => onChange("Create")}
-        className={`flex items-center gap-1 rounded-md px-3 py-1 text-sm
+        className={`flex items-center gap-1 rounded-xl px-3 py-1 text-sm
           ${value === "Create" ? "bg-teal-600 text-white" : "text-zinc-600 hover:bg-zinc-100"}
           disabled:opacity-50`}
       >
@@ -43,7 +43,7 @@ export function CreateRemoveToggle({
         aria-selected={value === "Remove"}
         disabled={disabled}
         onClick={() => onChange("Remove")}
-        className={`ml-1 flex items-center gap-1 rounded-md px-3 py-1 text-sm
+        className={`ml-1 flex items-center gap-1 rounded-xl px-3 py-1 text-sm
           ${value === "Remove" ? "bg-indigo-600 text-white" : "text-zinc-600 hover:bg-zinc-100"}
           disabled:opacity-50`}
       >

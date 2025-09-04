@@ -48,25 +48,25 @@ export function ExplorerLinkModal({
         variant={"info"}
       />
       {/* Gray overlay */}
-      <div className="absolute inset-0 bg-slate-700/70" />
+      <div className="absolute inset-0 bg-slate-700/50" />
       {/* Centered dialog */}
       <div className="absolute inset-0 grid place-items-center ">
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-title"
-          className={`inline-block w-fit max-w-[90vw] rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
+          className={`inline-block w-fit rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
         >
           <h2
             id="modal-title"
-            className="mb-4 font-semibold text-white text-center"
+            className="mb-4 font-semibold text-center"
           >
             Transaction Successfully Submitted!
           </h2>
 
           <h3
-            id="modal-title"
-            className="mb-4 font-semibold text-white text-center"
+            id="modal-sub-title"
+            className="mb-4 text-center"
           >
             View Transaction On Cardanoscan
           </h3>
@@ -79,7 +79,7 @@ export function ExplorerLinkModal({
               title={txUrl(txHash, network)}
               aria-label="Open on Cardanoscan"
               onClick={() => openUrl(txUrl(txHash, network))}
-              className="hover:scale-105 pr-4 text-white text-2xl"
+              className="pr-4"
             >
               <Link />
             </button>
@@ -88,7 +88,7 @@ export function ExplorerLinkModal({
               title="Copy"
               aria-label="Copy Tx Hash"
               onClick={() => copy(txHash)}
-              className="hover:scale-105"
+              className=""
             >
               <Copy />
             </button>
@@ -100,7 +100,7 @@ export function ExplorerLinkModal({
               onClick={() => {
                 onClose();
               }}
-              className="rounded-md border px-3 py-1.5 transition hover:scale-105 text-white"
+              className="rounded-xl border px-3 py-1.5"
             >
               Close
             </button>

@@ -132,7 +132,7 @@ export function WalletLayout() {
       {/* wallet login */}
       {!unlocked && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="w-full max-w-sm rounded-lg p-6 shadow-xl">
+          <div className="w-full max-w-sm rounded-xl p-6 shadow-xl">
             <h2 className="mb-4 text-lg font-semibold text-center">
               Unlock Wallet
             </h2>

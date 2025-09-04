@@ -36,14 +36,14 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
         variant={"info"}
       />
       {/* Gray overlay */}
-      <div className="absolute inset-0 bg-slate-700/70" aria-hidden="true" />
+      <div className="absolute inset-0 bg-slate-700/50" aria-hidden="true" />
       {/* Centered dialog */}
       <div className="absolute inset-0 grid place-items-center ">
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-title"
-          className={`inline-block w-fit max-w-[90vw] rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
+          className={`inline-block w-fit rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
         >
           <h1>
             <button
@@ -91,7 +91,7 @@ export function WebServerModal({ open, url, onClose }: WebServerModalProps) {
                 stopWebServer();
                 onClose();
               }}
-              className="rounded-md border px-3 py-1.5"
+              className="rounded-xl border px-3 py-1.5"
             >
               Stop Web Server
             </button>

@@ -17,7 +17,7 @@ export function LoadingOverlay({
       className="fixed inset-0 z-50 grid place-items-center bg-black/40 backdrop-blur-sm"
     >
       <div className="flex flex-col items-center gap-3">
-        <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/30 border-t-white" />
+        <div className="h-12 w-12 animate-spin rounded-xl border-4 border-white/30 border-t-white" />
         <span className="sr-only">{label}</span>
       </div>
     </div>

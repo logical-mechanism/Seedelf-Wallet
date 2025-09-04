@@ -222,7 +222,7 @@ export function History() {
           aria-label="Back to top"
           title="Back to top"
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-6 right-6 rounded-full p-3 border text-white bg-black/60 backdrop-blur hover:bg-black/80 transition"
+          className="fixed bottom-6 right-6 rounded-xl p-3 border text-white bg-black/60 backdrop-blur hover:bg-black/80 transition"
         >
           <ArrowUp />
         </button>
