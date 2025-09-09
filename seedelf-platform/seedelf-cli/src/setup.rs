@@ -140,7 +140,6 @@ pub fn create_wallet(wallet_name: String, password: String) {
     let cipher = Aes256Gcm::new(key);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
-    // let nonce = Nonce::from_slice();
     let encrypted_data = cipher
         .encrypt(&nonce, wallet_data.as_bytes())
         .expect("Encryption failed");
