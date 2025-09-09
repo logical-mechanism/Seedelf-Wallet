@@ -20,17 +20,17 @@ export function LoadingOverlay({
       <div className="flex flex-col items-center gap-2">
         <div
           className="
-            h-12 w-12 rounded-full border-[3px]
+            h-12 w-12 rounded-xl border-[3px]
             border-neutral-200/20
-            [border-top-color:transparent]
-            [border-right-color:transparent]
-            [border-bottom-color:transparent]
+            [border-top-color:border-neutral-200]
+            [border-right-color:border-neutral-200]
+            [border-bottom-color:border-neutral-200]
             [border-left-color:currentColor]
             text-[var(--seedelf-accent)]
             [transform:rotate(var(--r))_scale(var(--s))]
             will-change-transform
-            animate-[spinVar_2.718s_linear_infinite,pulseVar_1.812s_ease-in-out_infinite,quadSweep_1.359s_steps(4)_infinite]
-            drop-shadow-[0_0_8px_rgba(255,255,255,0.05)]
+            animate-[spinVar_2.718s_linear_infinite,pulseVar_2.718s_ease-in-out_infinite,quadSweep_2.718s_steps(4)_infinite]
+            drop-shadow-[0_0_8px_rgba(255,255,255,0.15)]
           "
         />
         <span className="sr-only">{label}</span>

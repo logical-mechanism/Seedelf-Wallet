@@ -82,26 +82,14 @@ code {
 @keyframes quadSweep {
   0%   {
     border-top-color:    currentColor;
-    border-right-color:  transparent;
-    border-bottom-color: transparent;
-    border-left-color:   transparent;
   }
-  15%  {
-    border-top-color:    transparent;
+  25%  {
     border-right-color:  currentColor;
-    border-bottom-color: transparent;
-    border-left-color:   transparent;
   }
   50%  {
-    border-top-color:    transparent;
-    border-right-color:  transparent;
     border-bottom-color: currentColor;
-    border-left-color:   transparent;
   }
-  85%  {
-    border-top-color:    transparent;
-    border-right-color:  transparent;
-    border-bottom-color: transparent;
+  75%  {
     border-left-color:   currentColor;
   }
 }
