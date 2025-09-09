@@ -310,7 +310,7 @@ export function Manage() {
       </div>
 
       <div
-        className={`${ownedSeedelfs.length === 0 ? "" : "rounded-xl flex items-center justify-center max-w-1/2 mx-auto mt-8"}`}
+        className={`${ownedSeedelfs.length === 0 ? "" : `rounded-xl flex items-center justify-center max-w-1/2 mx-auto mt-12 + ${mode == "Remove" ? "border" : ""}`}`}
       >
         {ownedSeedelfs.length === 0 || mode == "Create" ? (
           <></>

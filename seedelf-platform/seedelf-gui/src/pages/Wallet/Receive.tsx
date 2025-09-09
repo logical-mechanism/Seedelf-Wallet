@@ -93,9 +93,9 @@ export function Receive() {
           </button>
         </div>
         {filtered.length === 0 ? (
-          <p className=" text-center mt-12">No Seedelfs Available.</p>
+          <p className="text-center mt-12">No Seedelfs Available.</p>
         ) : (
-          <ul className="space-y-3 m-4 mx-auto w-full">
+          <ul className="space-y-3 m-4 mt-12 mx-auto w-full border rounded-xl max-w-33/64">
             {filtered.map((h) => (
               <li key={`${h}`} className="m-4 p-4">
                 <div className="flex items-center justify-center gap-2 w-full min-w-0">
