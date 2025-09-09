@@ -65,6 +65,8 @@ code {
 }
 
 /* loading animation properties */
+@keyframes spin { to { transform: rotate(360deg); } }
+
 @property --r { syntax: "<angle>";  inherits: false; initial-value: 0deg; }
 @property --s { syntax: "<number>"; inherits: false; initial-value: 1; }
 

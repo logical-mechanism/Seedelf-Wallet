@@ -14,7 +14,8 @@ export function LoadingOverlay({
       role="status"
       aria-live="polite"
       aria-busy="true"
-      className="fixed inset-0 z-50 grid place-items-center bg-black/40 backdrop-blur-sm"
+      aria-label={label}
+      className="fixed inset-0 z-50 grid place-items-center bg-black/50 backdrop-blur-sm isolation-auto"
     >
       <div className="flex flex-col items-center gap-2">
         <div
@@ -27,6 +28,7 @@ export function LoadingOverlay({
             [border-left-color:currentColor]
             text-[var(--seedelf-accent)]
             [transform:rotate(var(--r))_scale(var(--s))]
+            will-change-transform
             animate-[spinVar_2.718s_linear_infinite,pulseVar_1.812s_ease-in-out_infinite,quadSweep_1.359s_steps(4)_infinite]
             drop-shadow-[0_0_8px_rgba(255,255,255,0.05)]
           "
