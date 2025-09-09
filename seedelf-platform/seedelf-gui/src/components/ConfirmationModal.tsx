@@ -51,28 +51,23 @@ export function ConfirmationModal({
           className={`w-full max-w-sm rounded-xl shadow-lg ${colorClasses.zinc.bg}`}
         >
           <div className="p-5">
-            <h2
-              id="confirm-modal-title"
-              className="text-lg font-semibold text-white"
-            >
+            <h2 id="confirm-modal-title" className="text-lg font-semibold">
               {title}
             </h2>
-            <p className="mt-2 text-sm text-white">
-              Are you sure you want to continue?
-            </p>
+            <p className="mt-2 text-sm">Are you sure you want to continue?</p>
 
             <div className="mt-5 flex justify-between gap-2">
               <button
                 type="button"
                 onClick={onCancel}
-                className={`rounded-xl border px-4 py-2 text-sm text-white`}
+                className={`rounded-xl border px-4 py-2 text-sm`}
               >
                 {cancelButtonLabel}
               </button>
               <button
                 type="button"
                 onClick={onConfirm}
-                className={`rounded-xl px-4 py-2 text-sm text-white ${colorClasses.sky.bg} focus:outline-none`}
+                className={`rounded-xl px-4 py-2 text-sm ${colorClasses.sky.bg} focus:outline-none`}
               >
                 {confirmButtonLabel}
               </button>

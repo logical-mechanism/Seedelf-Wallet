@@ -33,7 +33,7 @@ export function CreateRemoveToggle({
         disabled={disabled}
         onClick={() => onChange("Create")}
         className={`flex items-center gap-1 rounded-xl px-3 py-1 text-sm
-          ${value === "Create" ? colorClasses.teal.bg : "hover:text-white"}
+          ${value === "Create" ? colorClasses.teal.bg : colorClasses.white.text}
           disabled:opacity-50`}
       >
         <Plus className="h-4 w-4 mb-1" />
@@ -46,7 +46,7 @@ export function CreateRemoveToggle({
         disabled={disabled}
         onClick={() => onChange("Remove")}
         className={`ml-1 flex items-center gap-1 rounded-xl px-3 py-1 text-sm
-          ${value === "Remove" ? colorClasses.indigo.bg : "hover:text-white"}
+          ${value === "Remove" ? colorClasses.indigo.bg : colorClasses.white.text}
           disabled:opacity-50`}
       >
         <Trash2 className="h-4 w-4 mb-1" />

@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 export type NotificationVariant = "success" | "error" | "info";
 
 const VARIANT_STYLES: Record<NotificationVariant, string> = {
-  success: colorClasses.green.bg + " text-white",
-  error: colorClasses.red.bg + " text-white",
-  info: colorClasses.sky.bg + " text-white",
+  success: colorClasses.green.bg,
+  error: colorClasses.red.bg,
+  info: colorClasses.sky.bg,
 };
 
 function ariaForVariant(v: NotificationVariant) {

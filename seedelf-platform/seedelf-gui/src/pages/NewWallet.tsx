@@ -105,7 +105,7 @@ export function NewWalletPage() {
 
         <button
           onClick={handleSubmit}
-          className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+          className="rounded-xl bg-blue-600 px-4 py-2 text-sm disabled:opacity-50"
           disabled={submitting || !name || !pw || !confirm}
         >
           Create

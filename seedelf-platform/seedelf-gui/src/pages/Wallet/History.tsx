@@ -76,7 +76,7 @@ export function History() {
   };
 
   const FooterControls = () => (
-    <div className="mt-6 flex items-center justify-between gap-4 text-white mx-auto max-w-3xl">
+    <div className="mt-6 flex items-center justify-between gap-4 mx-auto max-w-3xl">
       {/* Page size */}
       <div className="flex items-center gap-2">
         <label htmlFor="pageSize" className="text-sm opacity-80">
@@ -86,7 +86,7 @@ export function History() {
           id="pageSize"
           value={pageSize}
           onChange={(e) => onChangePageSize(Number(e.target.value))}
-          className="rounded-xl px-2 py-1 text-sm focus:outline-none focus:ring text-white"
+          className="rounded-xl px-2 py-1 text-sm focus:outline-none focus:ring"
         >
           {PAGE_SIZE_OPTIONS.map((opt) => (
             <option key={opt} value={opt} className="">
@@ -158,9 +158,7 @@ export function History() {
 
   return (
     <div className="p-6 w-full">
-      <h1 className="text-xl font-semibold text-center text-white">
-        Transaction History
-      </h1>
+      <h1 className="text-xl font-semibold text-center">Transaction History</h1>
 
       <ShowNotification
         message={message}
@@ -169,15 +167,13 @@ export function History() {
       />
 
       {history.length === 0 ? (
-        <p className="text-white text-center mt-6">
-          No Transactions Available.
-        </p>
+        <p className=" text-center mt-6">No Transactions Available.</p>
       ) : (
         <>
           {/* Top controls */}
           <FooterControls />
 
-          <ul className="space-y-3 text-white w-full mx-auto max-w-3xl mt-4 max-[480px]:hidden">
+          <ul className="space-y-3 w-full mx-auto max-w-3xl mt-4 max-[480px]:hidden">
             {paged.map((h) => (
               <li
                 key={`${h.tx.tx_hash}-${h.side}`}
@@ -226,7 +222,7 @@ export function History() {
           aria-label="Back to top"
           title="Back to top"
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-6 right-6 rounded-xl p-3 border text-white bg-black/60 backdrop-blur hover:bg-black/80"
+          className="fixed bottom-6 right-6 rounded-xl p-3 border bg-black/60 backdrop-blur hover:bg-black/80"
         >
           <ArrowUp />
         </button>

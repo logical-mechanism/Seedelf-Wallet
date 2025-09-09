@@ -151,7 +151,7 @@ export function WalletLayout() {
 
               <button
                 type="submit"
-                className={`mt-4 w-full rounded-xl ${colorClasses.indigo.bg} py-2 text-sm text-white disabled:opacity-50`}
+                className={`mt-4 w-full rounded-xl ${colorClasses.indigo.bg} py-2 text-sm disabled:opacity-50`}
                 disabled={!password || unlocking}
               >
                 {unlocking ? "Unlocking…" : "Unlock"}
