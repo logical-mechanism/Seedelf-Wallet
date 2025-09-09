@@ -63,3 +63,33 @@ code {
     transform: none;
   }
 }
+
+/* loading animation properties */
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@property --r { syntax: "<angle>";  inherits: false; initial-value: 0deg; }
+@property --s { syntax: "<number>"; inherits: false; initial-value: 1; }
+
+@keyframes spinVar {
+  to { --r: 360deg; }
+}
+
+@keyframes pulseVar {
+  0%, 100% { --s: 0.95; }
+  50%      { --s: 1.05; }
+}
+
+@keyframes quadSweep {
+  0%   {
+    border-top-color:    currentColor;
+  }
+  25%  {
+    border-right-color:  currentColor;
+  }
+  50%  {
+    border-bottom-color: currentColor;
+  }
+  75%  {
+    border-left-color:   currentColor;
+  }
+}
