@@ -6,14 +6,14 @@ The `seedelf-cli` is a Rust implementation of the Seedelf stealth wallet protoco
 
 ## Installation
 
-Precompile binaries are available for Linux, Windows, and MacOS. These may be found in the [latest release](https://github.com/logical-mechanism/Seedelf-Wallet/releases/latest).
+Precompiled binaries are available for Linux, Windows, and macOS. These may be found in the [latest release](https://github.com/logical-mechanism/Seedelf-Wallet/releases/latest).
 
-If you are running Linux, MacOS, or Unix-like OS, run the following command on your terminal and follow the instructions.
+If you are running Linux, macOS, or a Unix-like OS, run the following command on your terminal and follow the instructions.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/refs/heads/main/util/seedelf-init.sh | bash
 ```
 
-If you have [rust installed](https://www.rust-lang.org/tools/install) then the `seedelf-cli` may be installed directly from [crates.io](https://crates.io/crates/seedelf-cli).
+If you have [rust installed](https://www.rust-lang.org/tools/install), then the `seedelf-cli` may be installed directly from [crates.io](https://crates.io/crates/seedelf-cli).
 
 ```bash
 cargo install seedelf-cli
@@ -102,7 +102,7 @@ At this point, the wallet may receive funds from other CIP30 wallets or Seedelfs
 seedelf-cli fund [OPTIONS] --address <ADDRESS> --seedelf <SEEDELF>
 ```
 
-The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter used in the `fund` command is the address supplying the value and paying for the transaction. The `<SEEDELF>` parameter is the Seedelf receiving the funds. The `fund` command is similar to the `create` command as it generates a local website for CIP30 interactions.
+The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter used in the `fund` command is the address supplying the value and paying for the transaction. The `<SEEDELF>` parameter is the Seedelf receiving the funds. The `fund` command is similar to the `create` command, as it generates a local website for CIP30 interactions.
 
 The user may send funds to another Seedelf address using the `transfer` command and back to a CIP30 wallet using the `sweep` command.
 
@@ -110,7 +110,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 
 ### dApp Interactions: The Sweep-Fund Flow
 
-We suggest the following flow to interact with dApps. This flow has the best user experience and uses the already existing tech stack on Cardano. The idea is to use a new CIP30 wallet, which is wholly disconnected from the user's owned wallets and is dapp enabled. The user will sweep funds from Seedelf into that new wallet. The user may interact with the dApp of choice. The resulting funds after interaction may fund your Seedelf. For simplicity, Seedelf provides an external wallet that may receive funds without invoking the contract. The `external sweep` command can return the funds to the contract. The user may send funds with the `fund` command.
+We suggest the following flow to interact with dApps. This flow has the best user experience and uses the already existing tech stack on Cardano. The idea is to use a new CIP30 wallet, which is completely disconnected from the user's existing wallets and is DApp-enabled. The user will sweep funds from Seedelf into that new wallet. The user can interact with the desired dApp. The resulting funds after interaction may fund your Seedelf. For simplicity, Seedelf provides an external wallet that may receive funds without invoking the contract. The `external sweep` command can return the funds to the contract. The user may send funds with the `fund` command.
 
 #### Example: Purchase Tokens with 25 ADA From A Dex On Mainnet
 
@@ -125,7 +125,7 @@ Using the external wallet:
 ```bash
 seedelf-cli sweep --address <NEW_WALLET_ADDRESS> --lovelace 25000000
 # Purchase tokens from dex with 25 ADA
-# Send tokens and remaining ada from the new wallet to the external wallet
+# Send tokens and remaining ADA from the new wallet to the external wallet
 seedelf-cli external sweep
 ```
 

@@ -27,6 +27,8 @@ Building the application.
 npm run tauri build
 ```
 
+## Formatting
+
 format all the ts and tsx
 ```bash
 npx prettier --write "src/**/*.{ts,tsx}"
@@ -35,4 +37,4 @@ npx prettier --write "src/**/*.{ts,tsx}"
 ## Known Issues
 
 - Blank screen on GUI: force server to restart/reload
-- Local webserver is already running: restart wallet application
+- Local webserver is already running: stop webserver process
