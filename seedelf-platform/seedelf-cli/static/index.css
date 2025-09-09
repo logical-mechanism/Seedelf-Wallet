@@ -18,7 +18,7 @@ body {
     margin: 0;
     padding: 0;
     background-color: #121212;
-    color: #FEEFEE;
+    color: #e5e5e5;
     font-family: 'Comfortaa', sans-serif;
     overflow-x: hidden;
 }
@@ -39,7 +39,6 @@ code {
     word-wrap: break-word;
     /* Breaks long words to wrap */
     overflow-wrap: break-word;
-    /* Ensures long words wrap in modern browsers */
 }
 
 footer {
@@ -105,10 +104,10 @@ section {
     color: white;
     text-align: center;
     text-decoration: none;
-    background-color: #007bff;
     /* Button background color */
-    border-radius: 5px;
+    background-color: #0284c7;
     /* Rounded corners */
+    border-radius: 5px;
     border: none;
     cursor: pointer;
     transition: background-color 0.3s ease, transform 0.2s ease;
@@ -119,17 +118,16 @@ section {
 }
 
 .link-button:hover {
-    background-color: #0056b3;
     /* Darker blue for hover effect */
-    transform: scale(1.05);
+    background-color: #0284c7;
     /* Slight zoom effect */
+    transform: scale(1.05);
 }
 
 .link-button:active {
-    background-color: #003f7f;
     /* Even darker for active state */
+    background-color: #0369a1;
     transform: scale(0.95);
-    /* Slightly shrink on click */
 }
 
 #status {
@@ -143,8 +141,8 @@ select {
     padding-top: 12px;
     padding-bottom: 12px;
     font-size: 16px;
-    background-color: #f9f9f9;
-    color: #333;
+    background-color: #e5e5e5;
+    color: #121212;
     outline: none;
     cursor: pointer;
     text-align: center;
@@ -153,9 +151,9 @@ select {
 
 /* Add hover and focus effects */
 select:hover {
-    background-color: #f0f0f0;
+    background-color: #d4d4d4;
 }
 
 select:focus {
-    border-color: #007bff;
+    border-color: #0284c7;
 }
