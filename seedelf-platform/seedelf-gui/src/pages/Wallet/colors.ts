@@ -35,4 +35,7 @@ export const colorClasses: any = {
     text: "text-sky-600 hover:text-sky-700",
     bg: "bg-sky-600 hover:bg-sky-700",
   },
+  white: {
+    text: "text-neutral-200 hover:text-neutral-300",
+  },
 };

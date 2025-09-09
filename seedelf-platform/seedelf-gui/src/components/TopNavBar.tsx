@@ -41,10 +41,10 @@ const selectStyles = {
       : state.isFocused
         ? "#4338ca"
         : "#121212",
-    color: "white",
+    color: "#e5e5e5",
     cursor: "pointer",
   }),
-  singleValue: (base: any) => ({ ...base, color: "white" }),
+  singleValue: (base: any) => ({ ...base, color: "#e5e5e5" }),
   placeholder: (base: any) => ({ ...base, color: "#3f3f46" }),
   dropdownIndicator: (base: any, state: any) => ({
     ...base,
@@ -89,7 +89,7 @@ export function TopNavBar({
 
         <button
           onClick={onRefresh}
-          className="rounded-xl border border-white px-3 py-1"
+          className="rounded-xl border border-neutral-300 px-3 py-1"
           title="Refresh the current UTxO set to sync with chain tip"
         >
           <RefreshCw />
@@ -117,7 +117,7 @@ export function TopNavBar({
 
         <button
           onClick={onLock}
-          className="rounded-xl border border-white px-3 py-1"
+          className="rounded-xl border border-neutral-300 px-3 py-1"
           title="Locking a wallet will force a password to unlock it"
         >
           Lock

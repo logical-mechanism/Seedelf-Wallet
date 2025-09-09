@@ -2,7 +2,7 @@
 @import "tailwindcss";
 
 :root {
-  --seedelf-text: #feefee;
+  --seedelf-text: #e5e5e5;
   --seedelf-bg: #121212;
   --seedelf-accent: #0acab0;
 

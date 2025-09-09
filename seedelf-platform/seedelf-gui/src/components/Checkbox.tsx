@@ -39,7 +39,7 @@ export function Checkbox({
           "peer-focus:outline-none peer-focus:ring peer-focus:ring-offset-2",
           baseColor, // <-- your base color when unchecked
           // success state
-          "peer-checked:bg-green-600 peer-checked:border-white-600 peer-checked:text-white",
+          "peer-checked:bg-green-600", // no peer checked used anywhere else or in color class
         ].join(" ")}
         aria-hidden
       />

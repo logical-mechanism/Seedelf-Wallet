@@ -87,15 +87,15 @@ export function Receive() {
             onClick={() => {
               setQuery("");
             }}
-            className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 mt-6 text-sm text-white disabled:opacity-50`}
+            className={`rounded-xl ${colorClasses.slate.bg} px-4 py-2 mt-6 text-sm disabled:opacity-50`}
           >
             Clear
           </button>
         </div>
         {filtered.length === 0 ? (
-          <p className="text-white text-center mt-12">No Seedelfs Available.</p>
+          <p className=" text-center mt-12">No Seedelfs Available.</p>
         ) : (
-          <ul className="space-y-3 text-white m-4 mx-auto w-full">
+          <ul className="space-y-3 m-4 mx-auto w-full">
             {filtered.map((h) => (
               <li key={`${h}`} className="m-4 p-4">
                 <div className="flex items-center justify-center gap-2 w-full min-w-0">

@@ -41,7 +41,9 @@ function IconAction({
       className={`flex flex-col items-center ${c.text} hover:scale-105 mx-auto w-fit`}
       title={title}
     >
-      <div className={`p-3 rounded-xl text-white ${c.bg} transition`}>
+      <div
+        className={`p-3 rounded-xl ${colorClasses.white.text} ${c.bg} transition`}
+      >
         {icon}
       </div>
       <span className="mt-1 text-xs font-medium">{label}</span>
@@ -115,9 +117,9 @@ export function Dashboard() {
           className={`${elves.length === 0 ? "" : "border rounded-xl w-full"}`}
         >
           {elves.length === 0 ? (
-            <p className="text-white">No Seedelfs Available.</p>
+            <p className="">No Seedelfs Available.</p>
           ) : (
-            <ul className="space-y-3 text-white m-4 w-full max-[960px]:hidden">
+            <ul className="space-y-3 m-4 w-full max-[960px]:hidden">
               {elves.map((h) => (
                 <li key={`${h}`} className="m-4 p-4">
                   <div className="flex items-center gap-2 w-full min-w-0">
@@ -153,9 +155,9 @@ export function Dashboard() {
       {/* Right column */}
       <div>
         {recent.length === 0 ? (
-          <p className="text-white">No Transactions Available.</p>
+          <p className="">No Transactions Available.</p>
         ) : (
-          <ul className="space-y-3 text-white w-full mx-auto max-[960px]:hidden">
+          <ul className="space-y-3 w-full mx-auto max-[960px]:hidden">
             {recent.map((h) => (
               <li
                 key={`${h.tx.tx_hash}-${h.side}`}
