@@ -63,3 +63,43 @@ code {
     transform: none;
   }
 }
+
+/* loading animation properties */
+@property --r { syntax: "<angle>";  inherits: false; initial-value: 0deg; }
+@property --s { syntax: "<number>"; inherits: false; initial-value: 1; }
+
+@keyframes spinVar {
+  to { --r: 360deg; }
+}
+
+@keyframes pulseVar {
+  0%, 100% { --s: 0.95; }
+  50%      { --s: 1.05; }
+}
+
+@keyframes quadSweep {
+  0%   {
+    border-top-color:    currentColor;
+    border-right-color:  transparent;
+    border-bottom-color: transparent;
+    border-left-color:   transparent;
+  }
+  15%  {
+    border-top-color:    transparent;
+    border-right-color:  currentColor;
+    border-bottom-color: transparent;
+    border-left-color:   transparent;
+  }
+  50%  {
+    border-top-color:    transparent;
+    border-right-color:  transparent;
+    border-bottom-color: currentColor;
+    border-left-color:   transparent;
+  }
+  85%  {
+    border-top-color:    transparent;
+    border-right-color:  transparent;
+    border-bottom-color: transparent;
+    border-left-color:   currentColor;
+  }
+}

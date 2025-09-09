@@ -1,6 +1,6 @@
 type LoadingOverlayProps = {
   show: boolean;
-  label?: string; // screen reader text
+  label?: string;
 };
 
 export function LoadingOverlay({
@@ -17,7 +17,20 @@ export function LoadingOverlay({
       className="fixed inset-0 z-50 grid place-items-center bg-black/40 backdrop-blur-sm"
     >
       <div className="flex flex-col items-center gap-2">
-        <div className="h-12 w-12 rounded-xl border-4 border-neutral-300/30 border-t-neutral animate-[spin_1.359s_steps(4)_infinite]" />
+        <div
+          className="
+            h-12 w-12 rounded-full border-[3px]
+            border-neutral-200/20
+            [border-top-color:transparent]
+            [border-right-color:transparent]
+            [border-bottom-color:transparent]
+            [border-left-color:currentColor]
+            text-[var(--seedelf-accent)]
+            [transform:rotate(var(--r))_scale(var(--s))]
+            animate-[spinVar_2.718s_linear_infinite,pulseVar_1.812s_ease-in-out_infinite,quadSweep_1.359s_steps(4)_infinite]
+            drop-shadow-[0_0_8px_rgba(255,255,255,0.05)]
+          "
+        />
         <span className="sr-only">{label}</span>
       </div>
     </div>
