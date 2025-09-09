@@ -221,7 +221,7 @@ export function Fund() {
           value={ada}
           onChange={setAda}
           min={0}
-          className="flex-1 min-w-0 text-center rounded-xl border px-3 py-2 focus:outline-none focus:ring"
+          className="flex-1 min-w-0 text-right rounded-xl border px-3 py-2 focus:outline-none focus:ring"
         />
       </div>
 

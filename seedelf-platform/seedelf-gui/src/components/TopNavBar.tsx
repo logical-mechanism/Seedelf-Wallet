@@ -95,7 +95,7 @@ export function TopNavBar({
           <RefreshCw />
         </button>
         <span
-          className="text-sm text-gray-400"
+          className="text-sm text-neutral-400"
           title="Time since the last wallet sync"
         >
           Last sync: {ago}
