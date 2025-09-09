@@ -73,7 +73,7 @@ pub type Register {
 }
 ```
 
-A UTxO is spendable if the transaction can prove the secret key's knowledge using a non-interactive zero-knowledge Schnorr Σ-protocol. A valid proof has the form:
+A UTxO is spendable if the transaction can prove the knowledge of the secret key using a non-interactive zero-knowledge Schnorr Σ-protocol. A valid proof has the form:
 
 $$
 g^{z} = g^r u^c,
@@ -177,7 +177,7 @@ The third ITM is a flood attack on the protocol itself. The stealthiness of the 
 
 ### Wallet File Storage
 
-During the create-a-wallet process, a file will be saved to the default `.seedelf` folder. This file is an encrypted file, via AES256GCM, requiring a password to decrypt. Using the CLI or GUI, seedelf will require the user to select a password with these requirements below.
+During the create-a-wallet process, a file will be saved to the default `$HOME/.seedelf` folder. This file is an encrypted file, via AES256GCM, requiring a password to decrypt. Using the CLI or GUI, seedelf will require the user to select a password with these requirements below.
 
 ```bash
 # Minimum Length: At Least 14 Characters.
@@ -197,7 +197,9 @@ Seedelf attempts to help the user with the password requirements above. Still, u
 }
 ```
 
-The wallet is generated randomly using the user's default randomness provided by their os. The user must store the file or file contents safely. Failure to do so may result in lost or corrupted files.
+The wallet is generated randomly using the user's default randomness provided by their os. The user must store the file or file contents safely. 
+
+Failure to do so may result in lost or corrupted files.
 
 ## Happy Path Test Scripts
 
@@ -232,7 +234,7 @@ These ZK elements, combined with a register, are the only required knowledge to 
 
 Sending funds works similarly to removing funds, but instead of sending funds out of the contract, they spend them back in the contract with a new re-randomized register by finding the Register on some other seedelf token. This act preserves privacy. An outside user should only see random UTxOs collected and sent to a new random register. The link between Alice and Bob should remain hidden.
 
-### Non-Mixability
+## Note On Non-Mixability
 
 Spendability is always in the hands of the original owner. It is safe to assume a singular owner if two UTxOs from the contract are inside the same transaction. If two different users spent UTxOs together inside a single transaction, then there would be no way to ensure that one of the parties does not lose or steal funds. If Alice and Bob work together, then either Alice or Bob will have the chance of losing funds. Inside real mixers, the possibility of losing funds does not exist as the spendability is arbitrary, thus ensuring the mixing probably exists. The seedelf wallet is purely for stealth, not for mixing.
 

@@ -94,7 +94,7 @@ The following action will create a Seedelf token with the `create` command.
 seedelf-cli create [OPTIONS] --address <ADDRESS>
 ```
 
-The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter in the `create` command is the address paying for the Seedelf token mint transaction. This address must come from a CIP30-enabled wallet. The `create` command will use a local web server to generate a website at [http://127.0.0.1:44203/](http://127.0.0.1:44203/). The website will ask the user to select a wallet from the dropdown in the top right corner. The website will prompt the user to enable the wallet and sign the transaction. The `Transaction CBOR` section shows the CBOR of the signed transaction.
+The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter in the `create` command is the address paying for the Seedelf token mint transaction. This address must come from a CIP30-enabled wallet. The `create` command will use a local web server to generate a website at [http://127.0.0.1:44203/](http://127.0.0.1:44203/). The website will ask the user to select a wallet from the dropdown in the top right corner. The website will prompt the user to enable the wallet and sign the transaction. The `Transaction CBOR` section shows the CBOR of the transaction.
 
 At this point, the wallet may receive funds from other CIP30 wallets or Seedelfs. Users may fund their own Seedelf and others by using the `fund` command.
 
