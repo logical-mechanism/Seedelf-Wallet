@@ -2,7 +2,7 @@
 
 **Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It should be computationally infeasible to deduce the intended receiver or spender of UTxOs inside this wallet.
 
-The [seedelf-cli](./seedelf-platform/README.md) is available on Linux, Windows, and MacOS.
+The [seedelf-cli](./seedelf-platform/README.md) is available on Linux, Windows, and macOS.
 
 ## What is a Seedelf?
 
@@ -52,7 +52,7 @@ A stealth wallet hides the receiver and spender of funds inside the contract. Be
 
 `G1`: The base $\mathbb{G}_{1}$ generator from BLS12-381.
 
-`Generator`: An element of the curve that will produce more curve elements with scalar multiplication.
+`Generator`: An element of the curve that produces more curve elements through scalar multiplication.
 
 `Public Value`: The user's public value element; this information is known publicly.
 
@@ -73,7 +73,7 @@ pub type Register {
 }
 ```
 
-A UTxO is spendable if the transaction can prove the secret key's knowledge using a non-interactive zero-knowledge Schnorr Σ-protocol. A valid proof has the form:
+A UTxO is spendable if the transaction can prove the knowledge of the secret key using a non-interactive zero-knowledge Schnorr Σ-protocol. A valid proof has the form:
 
 $$
 g^{z} = g^r u^c,
@@ -134,7 +134,7 @@ In the contract, there will be many UTxOs with unique registers. A user can alwa
 
 ## Wallet Limitations
 
-The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet, but instead of keeping the root key private and generating the address when asked, it is now public via a datum, and address generation is the sender's duty and not the receiver's.
+The wallet is just a smart contract. It is bound by the cpu and memory units of the underlying blockchain, meaning that a UTxO can only hold so many tokens before it becomes unspendable due to space and time limitations. In this implementation, the value is not hidden nor mixed in any way, shape, or fashion. This contract is equivalent to generating addresses using a hierarchical deterministic wallet. However, instead of keeping the root key private and generating the address when requested, it is now public via a datum. Consequently, address generation is the sender's responsibility, not the receiver's.
 
 Sending funds requires a correct and equal $d$ value applied to both register elements. Incorrectly applied $d$ values will result in a stuck UTxO inside the contract.
 
@@ -149,7 +149,7 @@ If you insert a point that carries any torsion component (i.e., it fails a subgr
 
 ### De-Anonymizing Attacks
 
-There exist multiple attacks that are known to break the privacy of this wallet. The first attack is picking a bad $d$ value. A small $d$ value may be able to be brute-forced. Selecting a $d$ value on the order of $2^{254}$ circumvents the brute-force attack. The second attack does not correctly destroy the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. If the $d$ values are known for some users, it becomes trivial to invert the Register into the original form, thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral UTxO must be placed into a transaction as it incentivizes block producers to validate a failed transaction from the mempool. The collateral UTxO has to be associated with a payment credential, which means that the collateral UTxO, by definition, isn't anonymous, and the ownership is known the entire time. An outside user can watch collateral UTxOs inside a transaction to reveal a user's actions.
+There exist multiple attacks that are known to break the privacy of this wallet. The first attack is picking a bad $d$ value. A small $d$ value may be able to be brute-forced. Selecting a $d$ value on the order of $2^{254}$ circumvents the brute-force attack. The second attack does not correctly destroy the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. Suppose the $d$ values are known for some users. In that case, it becomes trivial to invert the Register into the original form, thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral UTxO must be placed into a transaction as it incentivizes block producers to validate a failed transaction from the mempool. The collateral UTxO has to be associated with a payment credential, which means that the collateral UTxO, by definition, isn't anonymous, and the ownership is known the entire time. An outside user can watch collateral UTxOs inside a transaction to reveal a user's actions.
 
 Privacy is preserved if $d$ is large and destroyed after use, and the collateral UTxO is shared.
 
@@ -163,17 +163,43 @@ We're actively and continuously exploring options for Tor access to all services
 
 ### Troll Attacks
 
-The design of the wallet contract opens users to a troll attack by overloading a UTxO with a large but useless reference script. Creating this UTxO results in the user, Alice, paying significantly more fees for that transaction, while Bob will pay more but less than Alice to spend that resulting UTxO. It's a useless troll attack that exists. The attack does not favor Alice and will cost her more to execute than it will be for Bob to spend the UTxO.
+The design of the wallet contract opens users to a troll attack by overloading a UTxO with a large but useless reference script. Creating this UTxO results in the user, Alice, paying significantly more fees for that transaction. In contrast, Bob will pay more but less than Alice to spend that resulting UTxO. It's a useless troll attack that exists. The attack does not favor Alice and will cost her more to execute than it will be for Bob to spend the UTxO.
 
 ### Implicit Tracking Methods
 
 As noted above, direct tracking methods are not feasible as long as the privacy-preserving techniques are followed. However, implicit tracking methods (ITMs) exist even under the assumption of privacy preservation.
 
-The first ITM is entering the wallet for the first time as a CIP30 wallet will have to be used to mint the original seedelf. This requirement means that an outside wallet, $\omega$, is now linked to a seedelf, $\sigma$. The receivability and spendability of $\sigma$ remain hidden, but this linking will taint $\omega$ as a wallet that has interacted with the Seedelf protocol and is attempting to be stealthy. The user may use the `util mint` command to do a stealth seedelf mint producing $\sigma^{'}$, dropping all linkability with $\omega$, after the funding of $\sigma$. The original $\sigma$ may be removed after $\sigma^{'}$ is minted.
+The first ITM is entering the wallet for the first time, as a CIP30 wallet will have to be used to mint the original seedelf. This requirement means that an outside wallet, $\omega$, is now linked to a seedelf, $\sigma$. The receivability and spendability of $\sigma$ remain hidden. Still, this linking will taint $\omega$ as a wallet that has interacted with the Seedelf protocol and is attempting to be stealthy. The user may use the `util mint` command to do a stealth seedelf mint producing $\sigma^{'}$, dropping all linkability with $\omega$, after the funding of $\sigma$. The original $\sigma$ may be removed after $\sigma^{'}$ is minted.
 
-The second ITM is the linkability of sequential UTxOs via the transaction fee. The owner is hidden and unknown during a transaction, but it is safe to assume that the UTxO that pays the transaction fee remains under the original owner's control. Thus, the ownership could be implicitly linked if the fee-paying UTxO chain returns to $\omega$. Entering and exiting with different wallets will break the linkability. Enter with $\omega$ then exit with $\omega^{'}$. Or even better, never leave Seedelf.
+The second ITM is the linkability of sequential UTxOs via the transaction fee. The owner is hidden and unknown during a transaction. Still, it is safe to assume that the UTxO that pays the transaction fee remains under the original owner's control. Thus, the ownership could be implicitly linked if the fee-paying UTxO chain returns to $\omega$. Entering and exiting with different wallets will break the linkability. Enter with $\omega$ then exit with $\omega^{'}$. Or even better, never leave Seedelf.
 
-The third ITM is a flood attack on the protocol itself. The stealthiness of the Seedelf protocol relies on a healthy population of seedelfs as the probability of ownership, $\rho(o)$, should be proportional as $1 / \vert \sigma \vert$, where $\vert \sigma \vert$ is the number of seedelfs in the contract. In the ideal case, $\rho(o) \rightarrow 0$ because $\vert \sigma \vert \gg 1$. In practice, users will have many $\sigma$ such that the number of unique seedelfs is less than the total number of seedelfs though these two magnitudes should roughly be comparable, i.e., $\vert \sigma \vert \sim \vert \sigma_{u} \vert$, where $\vert \sigma_{u} \vert$ is the number of uniquely owned seedelfs, assuming an honest distribution and a healthy population of seedelfs. The issue here is any rich bad actor may own a significant portion of $\vert \sigma \vert$ causing a flood attack. In the flood attack case, users sending funds into the contract have a massively increased $\rho(o)$ because $\vert \sigma_{u} \vert$ tends towards $\vert \sigma_{0} \vert$, the absolute minimum amount of honest actors in the system thus in the worst case limit, $\rho(o) \rightarrow 1 / \vert \sigma_{0} \vert$. The only solution here is encouraging healthy and honest use of the Seedelf protocol, ensuring that $\vert \sigma_{0} \vert \sim \vert \sigma_{u} \vert \sim \vert \sigma \vert$.
+The third ITM is a flood attack on the protocol itself. The stealthiness of the Seedelf protocol relies on a healthy population of seedelfs as the probability of ownership, $\rho(o)$, should be proportional to $1 / \vert \sigma \vert$, where $\vert \sigma \vert$ is the number of seedelfs in the contract. In the ideal case, $\rho(o) \rightarrow 0$ because $\vert \sigma \vert \gg 1$. In practice, users will have many $\sigma$ such that the number of unique seedelfs is less than the total number of seedelfs. However, these two magnitudes should roughly be comparable, i.e., $\vert \sigma \vert \sim \vert \sigma_{u} \vert$, where $\vert \sigma_{u} \vert$ is the number of uniquely owned seedelfs, assuming an honest distribution and a healthy population of seedelfs. The issue here is that any rich bad actor may own a significant portion of $\vert \sigma \vert$, causing a flood attack. In the flood attack case, users sending funds into the contract have a massively increased $\rho(o)$ because $\vert \sigma_{u} \vert$ tends towards $\vert \sigma_{0} \vert$, the absolute minimum amount of honest actors in the system thus in the worst case limit, $\rho(o) \rightarrow 1 / \vert \sigma_{0} \vert$. The only solution here is encouraging healthy and honest use of the Seedelf protocol, ensuring that $\vert \sigma_{0} \vert \sim \vert \sigma_{u} \vert \sim \vert \sigma \vert$.
+
+### Wallet File Storage
+
+During the create-a-wallet process, a file will be saved to the default `$HOME/.seedelf` folder. This file is an encrypted file, via AES256GCM, requiring a password to decrypt. Using the CLI or GUI, seedelf will require the user to select a password with these requirements below.
+
+```bash
+# Minimum Length: At Least 14 Characters.
+# Uppercase Letter: Requires At Least One Uppercase Character.
+# Lowercase Letter: Requires At Least One Lowercase Character.
+# Number: Requires At Least One Digit.
+# Special Character: Requires At Least One Special Symbol.
+```
+
+Seedelf attempts to help the user with the password requirements above. Still, ultimately, it is up to the user to select a sufficiently complex password. The seedelf wallet file has this structure:
+
+```json
+{
+  "salt": "salt_here",
+  "nonce": "nonce here",
+  "data": "encrypted_data_here"
+}
+```
+
+The wallet is generated randomly using the user's default randomness provided by their os. The user must store the file or file contents safely. 
+
+Failure to do so may result in lost or corrupted files.
 
 ## Happy Path Test Scripts
 
@@ -185,7 +211,7 @@ A seedelf will be saved locally inside a file. This file is a simple way to stor
 
 ### Removing Funds
 
-Removing funds is a simple process. Given a secret value $x$, search the UTxO set for all registries that satisfy the condition that $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$ which do not contain your seedelf token. Each UTxO a user wishes to spend requires NIZK proof, as shown below.
+Removing funds is a simple process. Given a secret value $x$, search the UTxO set for all registries that satisfy the condition that $(\alpha, \beta) \rightarrow \alpha^{x} = \beta$, which do not contain your seedelf token. Each UTxO a user wishes to spend requires an NIZK proof, as shown below.
 
 ```rust
 /// The zero-knowledge elements required for the proof. The c value will be
@@ -202,13 +228,13 @@ pub type Proof {
 }
 ```
 
-These ZK elements combined with a register are the only required knowledge to spend a UTxO. The spent UTxOs can be sent to any non-seedelf wallet or recombined into a new UTxO inside the seedelf wallet with a new re-randomized register. A random key signature is required to create a one-time pad for the proof, as funds could be re-spent without it because a transaction can drop mempool during a rollback event, and a malicious user can pick off the proof and resubmit. The re-spending of the proof is entirely circumvented by having a random key sign the transaction and using that verification key hash inside the Fiat-Shamir transform.
+These ZK elements, combined with a register, are the only required knowledge to spend a UTxO. The spent UTxOs can be sent to any non-seedelf wallet or recombined into a new UTxO inside the seedelf wallet with a new re-randomized register. A random key signature is required to create a one-time pad for the proof, as funds could be re-spent without it because a transaction can drop mempool during a rollback event. A malicious user can pick off the proof and resubmit. The re-spending of the proof is entirely circumvented by having a random key sign the transaction and using that verification key hash inside the Fiat-Shamir transform.
 
 ### Sending Funds
 
 Sending funds works similarly to removing funds, but instead of sending funds out of the contract, they spend them back in the contract with a new re-randomized register by finding the Register on some other seedelf token. This act preserves privacy. An outside user should only see random UTxOs collected and sent to a new random register. The link between Alice and Bob should remain hidden.
 
-### Non-Mixability
+## Note On Non-Mixability
 
 Spendability is always in the hands of the original owner. It is safe to assume a singular owner if two UTxOs from the contract are inside the same transaction. If two different users spent UTxOs together inside a single transaction, then there would be no way to ensure that one of the parties does not lose or steal funds. If Alice and Bob work together, then either Alice or Bob will have the chance of losing funds. Inside real mixers, the possibility of losing funds does not exist as the spendability is arbitrary, thus ensuring the mixing probably exists. The seedelf wallet is purely for stealth, not for mixing.
 
@@ -222,4 +248,4 @@ Users can interact with the wallet protocol via the [seedelf-platform](./seedelf
 
 ## Contact
 
-For questions, suggestions, or concerns, please contact support@logicalmechanism.io or join the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
+For questions, suggestions, or concerns, please get in touch with support@logicalmechanism.io or join the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
