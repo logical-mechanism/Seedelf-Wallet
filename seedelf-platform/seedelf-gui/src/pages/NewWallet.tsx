@@ -28,14 +28,19 @@ export function NewWalletPage() {
     const isStrong = await invoke<boolean>("check_password_complexity", {
       password: pw,
     });
-    if (!isStrong)
+    if (!isStrong) {
+      setVariant("error");
       return setMessage(`Passwords Must Contain The Following:
                          Minimum Length: At Least 14 Characters
                          Uppercase Letter: Requires At Least One Uppercase Character
                          Lowercase Letter: Requires At Least One Lowercase Character
                          Number: Requires At Least One Digit
                          Special Character: Requires At Least One Special Symbol`);
-    if (pw !== confirm) return setMessage("Passwords do not match.");
+    }
+    if (pw !== confirm) {
+      setVariant("error");
+      return setMessage("Passwords do not match.");
+    }
 
     setSubmitting(true);
     let success = false;
@@ -49,12 +54,12 @@ export function NewWalletPage() {
       );
       if (walletExists) {
         success = true;
-        setMessage(`Wallet Was Created!`);
         setVariant("success");
+        setMessage(`Wallet Created`);
         setTimeout(() => navigate("/wallet/"), 2718);
       } else {
-        setMessage(`Error Creating Wallet`);
         setVariant("error");
+        setMessage(`Error Creating Wallet`);
         setTimeout(() => navigate("/wallet/new"), 2718);
       }
     } catch (e: any) {

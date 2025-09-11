@@ -132,7 +132,7 @@ export function Send() {
 
     try {
       setVariant("info");
-      setMessage("Building Send Seedelf Transaction");
+      setMessage("Building Send To Seedelf Transaction");
 
       const _txHash = await sendSeedelf(network, seedelfs, lovelaces);
       if (_txHash) {
