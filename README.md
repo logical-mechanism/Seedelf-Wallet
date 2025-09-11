@@ -203,7 +203,7 @@ Failure to do so may result in lost or corrupted files.
 
 ### Data Layer Reliance
 
-Seedelf does not contain a full peer-to-peer node. It relies heavily on `koios.rest` for the data layer, providing UTxO information and transaction evaluation. Though due to the wallet architecture, faking UTxO information should be impossible from the Koios side, as this would require knowledge of a user's secret key or the locally known seedelf. The worst case is restricting access to the data necessary. So as long as Koios exists and is fair, seedelf should be safe to use.
+Seedelf does not contain a full peer-to-peer node. It relies heavily on `koios.rest` for the data layer, providing UTxO information and transaction evaluation. Though due to the wallet architecture, faking UTxO information should be impossible from the Koios side, as this would require knowledge of a user's secret key or the locally known seedelf. The worst case for the data layer is Koios restricting access to the data necessary for Seedelf to function correctly. So as long as Koios exists and is fair, seedelf should be safe to use.
 
 ## Happy Path Test Scripts
 
