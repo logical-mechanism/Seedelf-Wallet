@@ -54,20 +54,20 @@ export function WalletLayout() {
     setLoading(true);
     setToastVariant("info");
     setToastDur(10000);
-    setToastMsg("Getting Wallet History");
 
     // this takes a long time
+    setToastMsg("Querying Wallet History");
     const _history = await getWalletHistory(network);
-    setToastMsg("Querying Wallet UTxOs");
 
     // this takes a long time
+    setToastMsg("Querying Wallet UTxOs");
     const _every_utxo = await getEveryUtxo(network);
 
-    setToastMsg("Sorting Owned UTxOs");
+    setToastMsg("Filtering Owned UTxOs");
     const _owned_utxo = await getOwnedUtxo(network, _every_utxo);
     setToastMsg("Sorting All Seedelfs");
     const _allSeedelfs = await getEverySeedelf(network, _every_utxo);
-    setToastMsg("Sorting Owned Seedelfs");
+    setToastMsg("Filtering Owned Seedelfs");
     const _ownedSeedelfs = await getOwnedSeedelfs(network, _every_utxo);
     setToastMsg("Calculating Balance");
     const _lovelace = await getLovelaceBalance(_owned_utxo);
@@ -75,7 +75,7 @@ export function WalletLayout() {
     setLoading(false);
     setToastVariant("success");
     setToastDur(2718);
-    setToastMsg("Wallet Loaded!");
+    setToastMsg("Wallet Loaded");
 
     // set stuff
     setLovelace(_lovelace);
