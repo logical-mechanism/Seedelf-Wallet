@@ -78,7 +78,7 @@ export function Dashboard() {
       />
       {/* Left column */}
       <div className="space-y-6 flex flex-col w-full items-center">
-        <span className="text-3xl font-semibold mb-8">
+        <span className="text-3xl font-semibold mb-12">
           {lovelace} {network === "mainnet" ? "₳" : "t₳"}
         </span>
 
@@ -114,7 +114,7 @@ export function Dashboard() {
         </div>
 
         <div
-          className={`${elves.length === 0 ? "" : "border rounded-xl w-full"}`}
+          className={`${elves.length === 0 ? "" : "border rounded-xl w-full mt-12"}`}
         >
           {elves.length === 0 ? (
             <p className="">No Seedelfs Available.</p>

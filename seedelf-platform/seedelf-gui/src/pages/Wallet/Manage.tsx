@@ -315,7 +315,7 @@ export function Manage() {
         {ownedSeedelfs.length === 0 || mode == "Create" ? (
           <></>
         ) : (
-          <ul className="space-y-3 m-4 w-full max-[960px]:hidden">
+          <ul className="space-y-3 m-4 max-[960px]:hidden">
             {ownedSeedelfs.map((h) => (
               <li key={`${h}`} className="m-4 p-4">
                 <div className="flex items-center gap-2 w-full min-w-0">
