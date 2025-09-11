@@ -78,7 +78,7 @@ export function NewWalletPage() {
 
       <TextField
         label="Wallet name"
-        title="The file name for the wallet"
+        title="The name for the wallet file, e.g. file_name.wallet."
         value={name}
         onChange={(e) => setName(e.target.value)}
         disabled={submitting}
@@ -87,6 +87,7 @@ export function NewWalletPage() {
 
       <PasswordField
         label="Password"
+        title="The wallet file will be encrypted with this password."
         value={pw}
         onChange={setPw}
         disabled={submitting}
@@ -107,6 +108,7 @@ export function NewWalletPage() {
           onClick={handleSubmit}
           className="rounded-xl bg-blue-600 px-4 py-2 text-sm disabled:opacity-50"
           disabled={submitting || !name || !pw || !confirm}
+          title="Create a wallet file inside the $HOME/.seedelf folder."
         >
           Create
         </button>
