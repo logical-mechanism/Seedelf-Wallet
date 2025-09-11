@@ -182,7 +182,7 @@ export function Send() {
         </h1>
         <button
           type="button"
-          title="Add another seedelf?"
+          title="Add another seedelf output?"
           onClick={addRow}
           className={`ml-auto p-2 ${colorClasses.pink.text}`}
         >
