@@ -14,7 +14,7 @@ export function PasswordField({
   value,
   onChange,
   title = "",
-  disabled =  false,
+  disabled = false,
 }: PasswordFieldProps) {
   const [show, setShow] = useState(false);
   const [capsOn, setCapsOn] = useState(false);
