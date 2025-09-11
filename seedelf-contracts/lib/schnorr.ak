@@ -3,10 +3,9 @@ use aiken/crypto/bls12_381/g1
 use aiken/crypto/bls12_381/scalar.{Scalar}
 use aiken/primitive/bytearray
 
-/// Alpha is the generator and beta is the public value. The pair is formed from
-/// the relationship g^x = u, where g is the generator and u is the public value.
-/// The value x is a secret integer used to create the public value from the 
-/// generator.
+/// The data pair is formed from the relationship g^x = u, where g is the 
+/// generator and u is the public value. The value x is a secret integer
+/// used to create the public value from the generator.
 pub type Register {
   // the generator, #<Bls12_381, G1>
   generator: ByteArray,
@@ -73,7 +72,7 @@ fn randomize(datum: Register, s: Scalar) -> Register {
 test cheapest_hash() {
   let s: ByteArray =
     #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-  // must use blake2b_224
+  // must use blake2b_224 to prevent costly modulo field prime arthmetic
   crypto.blake2b_224(s) == #"0c97d8d889acb1d65d23e44212b0a4e16a57fc0ebcfea8f5f965f8ba"
 }
 
@@ -278,7 +277,7 @@ test simple_regsiter() {
 }
 
 test torsion_point() fail {
-  // a torsion point
+  // a valid but torsion point
   let point: ByteArray =
     #"a000000000000000000000000054686973206973206120736563726574206d65737361676520666f7220416c6963652e"
   // this fails for torsion points as they do not belong in the prime order group
