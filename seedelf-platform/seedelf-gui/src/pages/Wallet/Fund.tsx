@@ -164,7 +164,7 @@ export function Fund() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Address"
-            title="A CIP30 wallet address"
+            title="A CIP30 wallet address that pays for the transaction."
             value={address}
             onChange={(e) => {
               const next = e.target.value;
@@ -178,7 +178,7 @@ export function Fund() {
 
           <button
             type="button"
-            title="Verify the address"
+            title="Is the address valid?"
             className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${address ? (addressValid ? colorClasses.green.text : colorClasses.red.text) : ""}`}
             disabled
           >
@@ -191,7 +191,7 @@ export function Fund() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Seedelf"
-            title="A seedelf token name"
+            title="The name of the seedelf token being funded."
             value={seedelf}
             onChange={(e) => {
               const next = e.target.value;
@@ -206,7 +206,7 @@ export function Fund() {
 
           <button
             type="button"
-            title="Verify the seedelf"
+            title="Is the seedelf token name valid?"
             className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelf ? (seedelfExist ? colorClasses.green.text : colorClasses.red.text) : ""}`}
             disabled
           >
@@ -222,6 +222,7 @@ export function Fund() {
           onChange={setAda}
           min={0}
           className="flex-1 min-w-0 text-right rounded-xl border px-3 py-2 focus:outline-none focus:ring"
+          title="Lovelace"
         />
       </div>
 
@@ -241,13 +242,13 @@ export function Fund() {
             }
           }}
           baseColor={colorClasses.green.text}
-          title="Fund one of your existing seedelfs"
+          title="Fund one of your existing seedelfs."
         />
 
         <div className="flex items-center justify-center gap-4">
           <button
             type="button"
-            title="Fund an existing seedelf"
+            title="Fund a seedelf register"
             onClick={handleSubmit}
             className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 text-sm disabled:opacity-50`}
             disabled={submitting || !address || !seedelf || !ada || !confirm}
