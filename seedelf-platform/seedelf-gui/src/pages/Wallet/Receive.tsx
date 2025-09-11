@@ -72,7 +72,7 @@ export function Receive() {
           <div className="flex-1">
             <TextField
               label="Search"
-              title="Search for some seedelf token name"
+              title="Search for a specific token name"
               value={query}
               onChange={(e) => {
                 const next = e.target.value;
@@ -84,6 +84,7 @@ export function Receive() {
           </div>
           <button
             type="button"
+            title="Clear field"
             onClick={() => {
               setQuery("");
             }}
@@ -102,8 +103,8 @@ export function Receive() {
                   <code className="min-w-0 truncate font-bold pr-16">{h}</code>
                   <button
                     type="button"
-                    title="Copy"
-                    aria-label="Copy Seedelf Token name"
+                    title="Copy the token name"
+                    aria-label="Copy the token name"
                     onClick={() => copy(h)}
                     className="pr-4"
                   >
@@ -111,8 +112,8 @@ export function Receive() {
                   </button>
                   <button
                     type="button"
-                    title={tokenUrl(h, network)}
-                    aria-label="Open on Cardanoscan"
+                    title="Open on Cardanoscan.io"
+                    aria-label="Open on Cardanoscan.io"
                     onClick={() => openUrl(tokenUrl(h, network))}
                     className=""
                   >
