@@ -1,12 +1,11 @@
-//// The minter defines a specific registry in the wallet contract.
-//// It's an open policy for minting and burning, but each token will always
+//// This is an open policy for minting and burning, but each token will always
 //// be unique. The token acts as a locator for the root datum. A user can
 //// display the token name as their address, then another user may locate the
-//// UTxO that holds the nft and obtains the Register datum. This datum is then
+//// UTxO that holds the nft and obtain the Register. This datum is then
 //// used to produce a private address for the user. A single user may have
 //// multiple 5eed0e1f addresses and can delete them whenever by simply burning
 //// the 5eed0e1f token. This token is more convenient than mandatory for the wallet
-//// to function properly, as any token can be the locator.
+//// to function properly, as any token can be the locator token.
 ////
 
 use aiken/primitive/bytearray
