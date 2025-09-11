@@ -69,7 +69,7 @@ export function Extract() {
     // should be good to run the build tx function now
     try {
       setVariant("info");
-      setMessage("Building Extract Seedelf Transaction");
+      setMessage("Building Extract From Seedelf Transaction");
 
       const _txHash = await extractSeedelf(
         network,

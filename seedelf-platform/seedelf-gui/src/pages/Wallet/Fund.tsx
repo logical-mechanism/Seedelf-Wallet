@@ -120,7 +120,7 @@ export function Fund() {
     // should be good to run the build tx function now
     try {
       setVariant("info");
-      setMessage("Building Fund Seedelf Transaction");
+      setMessage("Building Fund A Seedelf Transaction");
 
       const txCbor = await fundSeedelf(network, address, seedelf, lovelace);
       if (txCbor) {

@@ -19,12 +19,12 @@ export function LandingPage() {
       );
 
       if (walletExists) {
-        setMessage(`Loading Found Wallet: ${walletExists}`);
         setVariant("success");
+        setMessage(`Found Wallet: ${walletExists}`);
         setTimeout(() => navigate("/wallet/"), 2718);
       } else {
-        setMessage(`Creating New Wallet`);
         setVariant("info");
+        setMessage(`Creating New Wallet`);
         setTimeout(() => navigate("/wallet/new"), 2718);
       }
     };

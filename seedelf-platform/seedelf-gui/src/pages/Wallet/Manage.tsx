@@ -111,9 +111,10 @@ export function Manage() {
     if (mode == "Remove") {
       if (!seedelf.trim()) return setMessage("Seedelf Is Required");
 
-      if (!seedelf.includes("5eed0e1f")) setMessage("Incorrect Seedelf Format");
+      if (!seedelf.includes("5eed0e1f"))
+        return setMessage("Incorrect Seedelf Format");
 
-      if (seedelf.length != 64) setMessage("Incorrect Seedelf Length");
+      if (seedelf.length != 64) return setMessage("Incorrect Seedelf Length");
     }
 
     // start the subbit process
@@ -123,7 +124,7 @@ export function Manage() {
       // invoke the create or remove function
       if (mode == "Remove") {
         setVariant("info");
-        setMessage("Building Remove Transaction");
+        setMessage("Building Remove A Seedelf Transaction");
 
         const _txHash = await removeSeedelf(network, address, seedelf);
         if (_txHash) {
@@ -140,7 +141,7 @@ export function Manage() {
       } else {
         // create a seedelf
         setVariant("info");
-        setMessage("Building Create Transaction");
+        setMessage("Building Create A Seedelf Transaction");
 
         const txCbor = await createSeedelf(network, address, label);
         if (txCbor) {
