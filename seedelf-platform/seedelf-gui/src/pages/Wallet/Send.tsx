@@ -247,7 +247,7 @@ export function Send() {
         <div className="flex items-center gap-2 mx-auto">
           <button
             type="button"
-            title="Send funds to a seedelf"
+            title="Send funds"
             onClick={() => {
               setShowConfirmationModal(true);
             }}

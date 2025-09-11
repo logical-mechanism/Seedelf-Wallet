@@ -37,7 +37,7 @@ export function SeedelfInputRow({
         <div className="flex items-center gap-2">
           <TextField
             label="Seedelf"
-            title="Seedelf to pay"
+            title="Send funds to this seedelf token"
             value={seedelf}
             onChange={(e) => {
               const next = e.target.value;
@@ -73,12 +73,13 @@ export function SeedelfInputRow({
           onChange={onAdaChange}
           min={0}
           className="flex-1 min-w-0 text-right rounded-xl border px-3 py-2 focus:outline-none focus:ring"
+          title="Lovelace"
         />
 
         {onRemove && (
           <button
             type="button"
-            title="Remove row"
+            title="Remove entry"
             onClick={onRemove}
             className={`p-2 ${colorClasses.slate.text ?? ""} ${hideDelete ? "invisible" : ""}`}
           >
