@@ -145,6 +145,7 @@ export function WalletLayout() {
             >
               <PasswordField
                 label="Wallet password"
+                title="A valid wallet password is required to unlock the wallet."
                 value={password}
                 onChange={setPassword}
               />

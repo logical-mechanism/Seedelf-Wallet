@@ -208,7 +208,7 @@ export function Manage() {
         <div className="relative mx-auto w-full max-w-5/8">
           <TextField
             label="Address"
-            title="A CIP30 wallet address"
+            title="A CIP30 wallet address that pays for the transaction."
             value={address}
             onChange={(e) => {
               const next = e.target.value;
@@ -222,7 +222,7 @@ export function Manage() {
 
           <button
             type="button"
-            title="Verify the address"
+            title="Is the address valid?"
             className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${address ? (addressValid ? colorClasses.green.text : colorClasses.red.text) : ""}`}
             disabled
           >
@@ -235,7 +235,7 @@ export function Manage() {
         <div className="my-4 max-w-5/8 mx-auto w-full">
           <TextField
             label="Label (Optional)"
-            title="An optional seedelf label"
+            title="An optional seedelf label."
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             disabled={submitting}
@@ -250,7 +250,7 @@ export function Manage() {
           <div className="relative mx-auto w-full max-w-5/8">
             <TextField
               label="Seedelf"
-              title="A seedelf token name"
+              title="The name of the seedelf token being removed."
               value={seedelf}
               onChange={(e) => {
                 const next = e.target.value;
@@ -265,7 +265,7 @@ export function Manage() {
 
             <button
               type="button"
-              title="Verify the seedelf"
+              title="Is the seedelf token name valid?"
               className={`absolute bottom-0 right-0 translate-x-full ml-2 flex items-center justify-center p-2 ${seedelf ? (seedelfExist ? colorClasses.green.text : colorClasses.red.text) : ""}`}
               disabled
             >
@@ -322,7 +322,7 @@ export function Manage() {
                   <code className="min-w-0 truncate font-bold pr-16">{h}</code>
                   <button
                     type="button"
-                    title="Select this seedelf to delete"
+                    title="Select this seedelf token name to remove."
                     aria-label="Delete Seedelf"
                     onClick={() => selectSeedelf(h)}
                     className=""

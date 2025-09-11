@@ -90,13 +90,13 @@ export function TopNavBar({
         <button
           onClick={onRefresh}
           className="rounded-xl border border-neutral-300 px-3 py-1"
-          title="Refresh the current UTxO set to sync with chain tip"
+          title="Refresh and sync with chain tip."
         >
           <RefreshCw />
         </button>
         <span
           className="text-sm text-neutral-400"
-          title="Time since the last wallet sync"
+          title="The amount of time since the last chain sync."
         >
           Last sync: {ago}
         </span>
@@ -118,7 +118,7 @@ export function TopNavBar({
         <button
           onClick={onLock}
           className="rounded-xl border border-neutral-300 px-3 py-1"
-          title="Locking a wallet will force a password to unlock it"
+          title="Locking a wallet will force a password for unlocking."
         >
           Lock
         </button>

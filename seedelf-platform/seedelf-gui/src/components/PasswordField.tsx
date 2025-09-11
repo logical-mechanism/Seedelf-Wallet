@@ -5,6 +5,7 @@ interface PasswordFieldProps {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  title?: string;
   disabled?: boolean;
 }
 
@@ -12,7 +13,8 @@ export function PasswordField({
   label,
   value,
   onChange,
-  disabled,
+  title = "",
+  disabled = false,
 }: PasswordFieldProps) {
   const [show, setShow] = useState(false);
   const [capsOn, setCapsOn] = useState(false);
@@ -31,7 +33,7 @@ export function PasswordField({
   };
 
   return (
-    <label className="flex flex-col gap-1 text-sm">
+    <label className="flex flex-col gap-1 text-sm" title={title}>
       {label}
       <div className="relative">
         <input
