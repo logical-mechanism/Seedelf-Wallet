@@ -201,6 +201,10 @@ The wallet is generated randomly using the user's default randomness provided by
 
 Failure to do so may result in lost or corrupted files.
 
+### Data Layer Reliance
+
+Seedelf does not contain a full peer-to-peer node. It relies heavily on `koios.rest` for the data layer, providing UTxO information and transaction evaluation. Though due to the wallet architecture, faking UTxO information should be impossible from the Koios side, as this would require knowledge of a user's secret key or the locally known seedelf token name. The worst case for the data layer is Koios restricting access to the data necessary for Seedelf to function correctly. So as long as Koios exists and is fair, Seedelf should be safe to use.
+
 ## Happy Path Test Scripts
 
 The happy path for testing follows Alice and Bob as they interact with their seedelf wallets. The scripts will allow users to create and delete seedelfs, send tokens to another seedelf, and remove their tokens. The happy path has basic functionality, but it does serve as an example of how a seedelf wallet would work.
