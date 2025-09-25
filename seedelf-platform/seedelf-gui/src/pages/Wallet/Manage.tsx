@@ -7,14 +7,17 @@ import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
-import { isNotAScript } from "./api";
 import { TextField } from "@/components/TextField";
 import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
 import { WebServerModal } from "@/components/WebServerModal";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ToTopButton } from "@/components/ToTopButton";
+import {
+  CircleQuestionMark,
+} from "lucide-react";
 import { createSeedelf, removeSeedelf } from "./transactions";
+import { isNotAScript } from "./api";
 import { runWebServer } from "./webServer";
 import { colorClasses } from "./colors";
 import { display_ascii } from "./util";
@@ -205,6 +208,13 @@ export function Manage() {
         }}
       />
 
+      <button
+            disabled
+            title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
+            className="mr-2"
+          >
+            <CircleQuestionMark />
+          </button>
       <CreateRemoveToggle value={mode} onChange={setMode} />
 
       <div className="my-4 w-full">

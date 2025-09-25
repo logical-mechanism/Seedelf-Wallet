@@ -126,7 +126,7 @@ export function Dashboard() {
               <button
             disabled
             title="Seedelfs act like addresses inside the wallet. Other users may send funds to your seedelf."
-            className="pl-2 pt-2"
+            className="pl-2 pt-2  max-[960px]:hidden"
           >
             <CircleQuestionMark />
           </button>
@@ -174,7 +174,7 @@ export function Dashboard() {
             <button
             disabled
             title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
-            className="pt-2"
+            className="pt-2  max-[960px]:hidden"
           >
             <CircleQuestionMark />
           </button>
