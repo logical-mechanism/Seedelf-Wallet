@@ -8,7 +8,7 @@ export function ToTopButton() {
     () =>
       typeof window !== "undefined" &&
       window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches,
-    []
+    [],
   );
 
   useEffect(() => {
@@ -35,7 +35,10 @@ export function ToTopButton() {
       aria-label="Back to top"
       title="Back to top"
       onClick={() =>
-        window.scrollTo({ top: 0, behavior: prefersReduced ? "auto" : "smooth" })
+        window.scrollTo({
+          top: 0,
+          behavior: prefersReduced ? "auto" : "smooth",
+        })
       }
       className="fixed bottom-6 right-6 z-50 rounded-xl p-3 border bg-black/60 text-white backdrop-blur shadow-lg hover:bg-black/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
     >
