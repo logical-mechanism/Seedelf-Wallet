@@ -171,7 +171,11 @@ export function Manage() {
     <div className="w-full p-6">
       <button
         disabled
-        title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
+        title={
+          mode == "Create"
+            ? "Create a new seedelf token using a CIP30 web wallet."
+            : "Remove an existing seedelf token."
+        }
         className="mr-2"
       >
         <CircleQuestionMark />

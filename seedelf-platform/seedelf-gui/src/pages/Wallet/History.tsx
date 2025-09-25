@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  CircleQuestionMark,
 } from "lucide-react";
 import { OutletContextType } from "@/types/layout";
 import { useNetwork } from "@/types/network";
@@ -149,6 +150,13 @@ export function History() {
 
   return (
     <div className="p-6 w-full">
+      <button
+        disabled
+        title="Use one of these seedelfs to receive funds."
+        className=""
+      >
+        <CircleQuestionMark />
+      </button>
       <h1 className="text-xl font-semibold text-center">Transaction History</h1>
 
       <ShowNotification

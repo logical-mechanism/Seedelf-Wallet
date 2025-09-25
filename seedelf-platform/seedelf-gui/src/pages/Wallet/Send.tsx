@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useOutletContext } from "react-router";
-import { CirclePlus } from "lucide-react";
+import { CirclePlus, CircleQuestionMark } from "lucide-react";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
 import {
   ShowNotification,
@@ -177,6 +177,9 @@ export function Send() {
 
   return (
     <div className="w-full p-6">
+      <button disabled title="Send an existing seedelf." className="mr-2">
+        <CircleQuestionMark />
+      </button>
       <div className="flex items-center my-4 max-w-5/8 mx-auto w-full">
         <h1 className="text-xl font-semibold text-center flex items-center gap-2 mx-auto">
           Send To A Seedelf
