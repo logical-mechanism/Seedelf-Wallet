@@ -11,6 +11,7 @@ import {
 import { TextField } from "@/components/TextField";
 import { colorClasses } from "./colors";
 import { seedelfPolicyId } from "./api";
+import { display_ascii } from "./util";
 
 export function Receive() {
   const [message, setMessage] = useState<string | null>(null);
@@ -31,7 +32,12 @@ export function Receive() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return ownedSeedelfs;
-    return ownedSeedelfs.filter((h) => h.toLowerCase().includes(q));
+    // this needs to account for hex search and ascii search
+    return ownedSeedelfs.filter(
+      (h) =>
+        h.toLowerCase().includes(q) ||
+        display_ascii(h)?.toLowerCase().includes(q),
+    );
   }, [ownedSeedelfs, query]);
 
   const tokenUrl = (seedelf: string, network: Network) => {
@@ -64,7 +70,7 @@ export function Receive() {
         <div className="flex flex-grow items-center gap-2 mx-auto w-full max-w-3/8">
           <button
             disabled
-            title="Seedelfs act like addresses inside the wallet. Other users may send funds to a seedelf."
+            title="Seedelfs act like addresses inside the wallet. Other users may send funds to your seedelf."
             className="mt-5"
           >
             <CircleQuestionMark />
@@ -120,6 +126,7 @@ export function Receive() {
                     <Link />
                   </button>
                 </div>
+                <small>{display_ascii(h)}</small>
               </li>
             ))}
           </ul>
