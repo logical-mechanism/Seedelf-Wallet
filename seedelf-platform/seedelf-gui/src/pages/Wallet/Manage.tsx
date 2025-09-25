@@ -18,7 +18,6 @@ import { runWebServer } from "./webServer";
 import { colorClasses } from "./colors";
 import { display_ascii } from "./util";
 
-
 export function Manage() {
   const [address, setAddress] = useState("");
   const [label, setLabel] = useState("");

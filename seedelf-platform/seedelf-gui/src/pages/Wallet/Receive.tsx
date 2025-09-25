@@ -33,7 +33,11 @@ export function Receive() {
     const q = query.trim().toLowerCase();
     if (!q) return ownedSeedelfs;
     // this needs to account for hex search and ascii search
-    return ownedSeedelfs.filter((h) => h.toLowerCase().includes(q) || display_ascii(h)?.toLowerCase().includes(q));
+    return ownedSeedelfs.filter(
+      (h) =>
+        h.toLowerCase().includes(q) ||
+        display_ascii(h)?.toLowerCase().includes(q),
+    );
   }, [ownedSeedelfs, query]);
 
   const tokenUrl = (seedelf: string, network: Network) => {

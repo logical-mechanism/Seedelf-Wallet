@@ -29,9 +29,15 @@ npm run tauri build
 
 ## Formatting
 
-format all the ts and tsx
+Format all the ts and tsx.
 ```bash
 npx prettier --write "src/**/*.{ts,tsx}"
+```
+
+or
+
+```bash
+npm run lint
 ```
 
 ## Known Issues

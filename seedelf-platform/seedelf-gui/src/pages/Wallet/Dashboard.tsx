@@ -16,7 +16,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { colorClasses } from "./colors";
 import { display_ascii } from "./util";
 
-
 function txUrl(txHash: string, network: string) {
   return network === "mainnet"
     ? `https://cardanoscan.io/transaction/${txHash}`
