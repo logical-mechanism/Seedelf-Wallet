@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { colorClasses } from "./colors";
+import { display_ascii } from "./util";
+
 
 function txUrl(txHash: string, network: string) {
   return network === "mainnet"
@@ -136,6 +138,7 @@ export function Dashboard() {
                       <Copy />
                     </button>
                   </div>
+                  <small>{display_ascii(h)}</small>
                 </li>
               ))}
               <li>

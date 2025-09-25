@@ -16,6 +16,8 @@ import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { createSeedelf, removeSeedelf } from "./transactions";
 import { runWebServer } from "./webServer";
 import { colorClasses } from "./colors";
+import { display_ascii } from "./util";
+
 
 export function Manage() {
   const [address, setAddress] = useState("");
@@ -331,6 +333,7 @@ export function Manage() {
                     <Delete />
                   </button>
                 </div>
+                <small>{display_ascii(h)}</small>
               </li>
             ))}
           </ul>
