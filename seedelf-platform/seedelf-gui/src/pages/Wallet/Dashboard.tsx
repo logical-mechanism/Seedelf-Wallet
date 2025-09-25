@@ -11,6 +11,7 @@ import {
   Ellipsis,
   BanknoteArrowUp,
   BanknoteArrowDown,
+  CircleQuestionMark,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { colorClasses } from "./colors";
@@ -114,42 +115,52 @@ export function Dashboard() {
           />
         </div>
 
+        
         <div
           className={`${elves.length === 0 ? "" : "border rounded-xl w-full mt-12"}`}
         >
           {elves.length === 0 ? (
             <p className="">No Seedelfs Available.</p>
           ) : (
-            <ul className="space-y-3 m-4 w-full max-[960px]:hidden">
-              {elves.map((h) => (
-                <li key={`${h}`} className="m-4 p-4">
-                  <div className="flex items-center gap-2 w-full min-w-0">
-                    <code className="min-w-0 truncate font-bold pr-16">
-                      {h}
-                    </code>
-                    <button
-                      type="button"
-                      title="Copy"
-                      aria-label="Copy Seedelf Token name"
-                      onClick={() => copy(h)}
-                      className=""
-                    >
-                      <Copy />
-                    </button>
-                  </div>
-                  <small>{display_ascii(h)}</small>
+            <div className="relative">
+              <button
+            disabled
+            title="Seedelfs act like addresses inside the wallet. Other users may send funds to your seedelf."
+            className="pl-2 pt-2"
+          >
+            <CircleQuestionMark />
+          </button>
+              <ul className="space-y-3 m-4 w-full max-[960px]:hidden">
+                {elves.map((h) => (
+                  <li key={`${h}`} className="m-4 p-4">
+                    <div className="flex items-center gap-2 w-full min-w-0">
+                      <code className="min-w-0 truncate font-bold pr-16">
+                        {h}
+                      </code>
+                      <button
+                        type="button"
+                        title="Copy"
+                        aria-label="Copy Seedelf Token name"
+                        onClick={() => copy(h)}
+                        className=""
+                      >
+                        <Copy />
+                      </button>
+                    </div>
+                    <small>{display_ascii(h)}</small>
+                  </li>
+                ))}
+                <li>
+                  <IconAction
+                    to="manage"
+                    color="zinc"
+                    icon={<Ellipsis className="w-5 h-5" />}
+                    label="Manage"
+                    title="Create or remove your seedelfs"
+                  />
                 </li>
-              ))}
-              <li>
-                <IconAction
-                  to="manage"
-                  color="zinc"
-                  icon={<Ellipsis className="w-5 h-5" />}
-                  label="Manage"
-                  title="Create or remove your seedelfs"
-                />
-              </li>
-            </ul>
+              </ul>
+            </div>
           )}
         </div>
       </div>
@@ -159,51 +170,60 @@ export function Dashboard() {
         {recent.length === 0 ? (
           <p className="">No Transactions Available.</p>
         ) : (
-          <ul className="space-y-3 w-full mx-auto max-[960px]:hidden">
-            {recent.map((h) => (
-              <li
-                key={`${h.tx.tx_hash}-${h.side}`}
-                className="mb-4 border rounded-xl text-center p-4"
-              >
-                <span
-                  className={`font-bold flex items-center gap-1 mb-4 ${h.side === "Input" ? colorClasses.indigo.text : colorClasses.teal.text}`}
+          <div>
+            <button
+            disabled
+            title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
+            className="pt-2"
+          >
+            <CircleQuestionMark />
+          </button>
+            <ul className="space-y-3 w-full mx-auto max-[960px]:hidden">
+              {recent.map((h) => (
+                <li
+                  key={`${h.tx.tx_hash}-${h.side}`}
+                  className="mb-4 border rounded-xl text-center p-4"
                 >
-                  {h.side === "Input" ? <ArrowUpRight /> : <ArrowDownLeft />}
-                  {h.side === "Input" ? "Sent Funds" : "Received Funds"}
-                </span>
-                <div className="gap-1 flex w-full min-w-0  justify-center">
-                  <code className="pr-4 min-w-0 truncate ">{h.tx.tx_hash}</code>
-                  <button
-                    type="button"
-                    title={txUrl(h.tx.tx_hash, network)}
-                    aria-label="Open on Cardanoscan"
-                    onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
-                    className="pr-4"
+                  <span
+                    className={`font-bold flex items-center gap-1 mb-4 ${h.side === "Input" ? colorClasses.indigo.text : colorClasses.teal.text}`}
                   >
-                    <Link />
-                  </button>
-                  <button
-                    type="button"
-                    title="Copy"
-                    aria-label="Copy Transaction Id"
-                    onClick={() => copy(h.tx.tx_hash)}
-                    className=""
-                  >
-                    <Copy />
-                  </button>
-                </div>
+                    {h.side === "Input" ? <ArrowUpRight /> : <ArrowDownLeft />}
+                    {h.side === "Input" ? "Sent Funds" : "Received Funds"}
+                  </span>
+                  <div className="gap-1 flex w-full min-w-0  justify-center">
+                    <code className="pr-4 min-w-0 truncate ">{h.tx.tx_hash}</code>
+                    <button
+                      type="button"
+                      title={txUrl(h.tx.tx_hash, network)}
+                      aria-label="Open on Cardanoscan"
+                      onClick={() => openUrl(txUrl(h.tx.tx_hash, network))}
+                      className="pr-4"
+                    >
+                      <Link />
+                    </button>
+                    <button
+                      type="button"
+                      title="Copy"
+                      aria-label="Copy Transaction Id"
+                      onClick={() => copy(h.tx.tx_hash)}
+                      className=""
+                    >
+                      <Copy />
+                    </button>
+                  </div>
+                </li>
+              ))}
+              <li>
+                <IconAction
+                  to="history"
+                  color="slate"
+                  icon={<Ellipsis className="w-5 h-5" />}
+                  label="History"
+                  title="View your entire transaction history"
+                />
               </li>
-            ))}
-            <li>
-              <IconAction
-                to="history"
-                color="slate"
-                icon={<Ellipsis className="w-5 h-5" />}
-                label="History"
-                title="View your entire transaction history"
-              />
-            </li>
-          </ul>
+            </ul>
+          </div>
         )}
       </div>
     </div>
