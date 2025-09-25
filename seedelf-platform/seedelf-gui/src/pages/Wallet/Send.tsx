@@ -8,6 +8,7 @@ import {
 } from "@/components/ShowNotification";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { SeedelfInputRow } from "@/components/SeedelfInputRow";
+import { ToTopButton } from "@/components/ToTopButton";
 import { useNetwork } from "@/types/network";
 import { OutletContextType } from "@/types/layout";
 import { colorClasses } from "./colors";
@@ -270,6 +271,7 @@ export function Send() {
           )}
         </div>
       </div>
+      <ToTopButton />
     </div>
   );
 }

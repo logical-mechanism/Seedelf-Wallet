@@ -8,13 +8,13 @@ import {
   Copy,
   ChevronLeft,
   ChevronRight,
-  ArrowUp,
   ChevronsLeft,
   ChevronsRight,
 } from "lucide-react";
 import { OutletContextType } from "@/types/layout";
 import { useNetwork } from "@/types/network";
 import { ShowNotification } from "@/components/ShowNotification";
+import { ToTopButton } from "@/components/ToTopButton";
 import { colorClasses } from "./colors";
 
 function txUrl(txHash: string, network: string) {
@@ -32,7 +32,6 @@ export function History() {
   const [message, setMessage] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<number>(10);
   const [page, setPage] = useState<number>(1);
-  const [showTop, setShowTop] = useState<boolean>(false);
 
   const totalPages = Math.max(1, Math.ceil(history.length / pageSize));
 
@@ -40,14 +39,6 @@ export function History() {
   useEffect(() => {
     setPage((p) => Math.min(Math.max(1, p), totalPages));
   }, [totalPages]);
-
-  // Smooth "Top" button visibility
-  useEffect(() => {
-    const onScroll = () => setShowTop(window.scrollY > 200);
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
 
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -216,17 +207,7 @@ export function History() {
       )}
 
       {/* Floating Top button */}
-      {showTop && (
-        <button
-          type="button"
-          aria-label="Back to top"
-          title="Back to top"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-6 right-6 rounded-xl p-3 border bg-black/60 backdrop-blur hover:bg-black/80"
-        >
-          <ArrowUp />
-        </button>
-      )}
+      <ToTopButton />
     </div>
   );
 }
