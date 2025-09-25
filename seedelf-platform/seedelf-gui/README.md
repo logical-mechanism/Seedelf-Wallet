@@ -44,3 +44,4 @@ npm run lint
 
 - Blank screen on GUI: force server to restart/reload
 - Local webserver is already running: stop webserver process
+- Infinite Loading Screen: force gui to restart/reload

@@ -115,7 +115,6 @@ export function Dashboard() {
           />
         </div>
 
-        
         <div
           className={`${elves.length === 0 ? "" : "border rounded-xl w-full mt-12"}`}
         >
@@ -124,12 +123,12 @@ export function Dashboard() {
           ) : (
             <div className="relative">
               <button
-            disabled
-            title="Seedelfs act like addresses inside the wallet. Other users may send funds to your seedelf."
-            className="pl-2 pt-2  max-[960px]:hidden"
-          >
-            <CircleQuestionMark />
-          </button>
+                disabled
+                title="Seedelfs act like addresses inside the wallet. Other users may send funds to your seedelf."
+                className="pl-2 pt-2  max-[960px]:hidden"
+              >
+                <CircleQuestionMark />
+              </button>
               <ul className="space-y-3 m-4 w-full max-[960px]:hidden">
                 {elves.map((h) => (
                   <li key={`${h}`} className="m-4 p-4">
@@ -172,12 +171,12 @@ export function Dashboard() {
         ) : (
           <div>
             <button
-            disabled
-            title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
-            className="pt-2  max-[960px]:hidden"
-          >
-            <CircleQuestionMark />
-          </button>
+              disabled
+              title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
+              className="pt-2  max-[960px]:hidden"
+            >
+              <CircleQuestionMark />
+            </button>
             <ul className="space-y-3 w-full mx-auto max-[960px]:hidden">
               {recent.map((h) => (
                 <li
@@ -191,7 +190,9 @@ export function Dashboard() {
                     {h.side === "Input" ? "Sent Funds" : "Received Funds"}
                   </span>
                   <div className="gap-1 flex w-full min-w-0  justify-center">
-                    <code className="pr-4 min-w-0 truncate ">{h.tx.tx_hash}</code>
+                    <code className="pr-4 min-w-0 truncate ">
+                      {h.tx.tx_hash}
+                    </code>
                     <button
                       type="button"
                       title={txUrl(h.tx.tx_hash, network)}

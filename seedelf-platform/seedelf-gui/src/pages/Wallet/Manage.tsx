@@ -13,9 +13,7 @@ import { WebServerModal } from "@/components/WebServerModal";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ToTopButton } from "@/components/ToTopButton";
-import {
-  CircleQuestionMark,
-} from "lucide-react";
+import { CircleQuestionMark } from "lucide-react";
 import { createSeedelf, removeSeedelf } from "./transactions";
 import { isNotAScript } from "./api";
 import { runWebServer } from "./webServer";
@@ -171,6 +169,13 @@ export function Manage() {
 
   return (
     <div className="w-full p-6">
+      <button
+        disabled
+        title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
+        className="mr-2"
+      >
+        <CircleQuestionMark />
+      </button>
       <h1 className="text-xl font-semibold text-center">{mode} A Seedelf</h1>
 
       <ShowNotification
@@ -208,13 +213,6 @@ export function Manage() {
         }}
       />
 
-      <button
-            disabled
-            title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
-            className="mr-2"
-          >
-            <CircleQuestionMark />
-          </button>
       <CreateRemoveToggle value={mode} onChange={setMode} />
 
       <div className="my-4 w-full">
