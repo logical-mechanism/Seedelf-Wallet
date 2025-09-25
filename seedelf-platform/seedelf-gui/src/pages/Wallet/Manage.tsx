@@ -13,6 +13,7 @@ import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
 import { WebServerModal } from "@/components/WebServerModal";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
+import { ToTopButton } from "@/components/ToTopButton";
 import { createSeedelf, removeSeedelf } from "./transactions";
 import { runWebServer } from "./webServer";
 import { colorClasses } from "./colors";
@@ -338,6 +339,7 @@ export function Manage() {
           </ul>
         )}
       </div>
+      <ToTopButton />
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   NotificationVariant,
 } from "@/components/ShowNotification";
 import { TextField } from "@/components/TextField";
+import { ToTopButton } from "@/components/ToTopButton";
 import { colorClasses } from "./colors";
 import { seedelfPolicyId } from "./api";
 import { display_ascii } from "./util";
@@ -132,6 +133,7 @@ export function Receive() {
           </ul>
         )}
       </div>
+      <ToTopButton />
     </div>
   );
 }
