@@ -178,12 +178,19 @@ export function History() {
                 key={`${h.tx.tx_hash}-${h.side}`}
                 className="mb-4 border rounded-xl text-center p-4"
               >
-                <span
-                  className={`font-bold flex items-center gap-1 mb-4 justify-center ${h.side === "Input" ? colorClasses.indigo.text : colorClasses.teal.text}`}
+                <div
+                  className={`grid grid-cols-[auto_1fr_auto] items-center mb-4`}
                 >
-                  {h.side === "Input" ? <ArrowUpRight /> : <ArrowDownLeft />}
-                  {h.side === "Input" ? "Sent Funds" : "Received Funds"}
-                </span>
+                  <code className={`font-bold justify-self-start max-[720px]:hidden ${colorClasses.zinc.text}`}>Block {h.tx.block_height}</code>
+
+                  <span className={`font-bold flex items-center gap-2 justify-self-center ${h.side === "Input" ? colorClasses.indigo.text : colorClasses.teal.text}`}>
+                    {h.side === "Input" ? <ArrowUpRight /> : <ArrowDownLeft />}
+                    {h.side === "Input" ? "Sent Funds" : "Received Funds"}
+                  </span>
+
+                  {/* invisible clone to balance widths so center is truly centered */}
+                  <code className="opacity-0 select-none">Block {h.tx.block_height}</code>
+                </div>
                 <div className="gap-1 flex w-full min-w-0 justify-center">
                   <code className="pr-4 min-w-0 truncate">{h.tx.tx_hash}</code>
                   <button
