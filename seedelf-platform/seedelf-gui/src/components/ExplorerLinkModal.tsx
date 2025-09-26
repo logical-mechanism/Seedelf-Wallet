@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNetwork } from "@/types/network";
 import { ShowNotification } from "@/components/ShowNotification";
-
+import { transactionStatus } from "@/pages/Wallet/api";
 import { Link, Copy } from "lucide-react";
 import { colorClasses } from "@/pages/Wallet/colors";
 
@@ -25,6 +25,9 @@ export function ExplorerLinkModal({
 }: ExplorerModalProps) {
   const { network } = useNetwork();
   const [message, setMessage] = useState<string | null>(null);
+  const [numberConfirmations, setNumberConfirmations] = useState<number>(0);
+
+  const running = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -32,6 +35,37 @@ export function ExplorerLinkModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!open) return;
+
+    const tick = async () => {
+      if (running.current) return;
+      running.current = true;
+      try {
+        const n = await transactionStatus(network, txHash);
+
+        if (!cancelled) {
+          setNumberConfirmations(n ?? 0);
+        }
+      } catch (e) {
+        console.error("transactionStatus failed:", e);
+        if (!cancelled) setNumberConfirmations(0);
+      } finally {
+        running.current = false;
+      }
+    };
+
+    // kick off immediately, then every 10s
+    tick();
+    const id = setInterval(tick, 10_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [open, network, txHash]);
 
   if (!open) return null;
 
@@ -57,8 +91,16 @@ export function ExplorerLinkModal({
           aria-labelledby="modal-title"
           className={`inline-block w-fit rounded-xl ${colorClasses.zinc.bg} p-6 shadow-lg`}
         >
-          <h2 id="modal-title" className="mb-4 font-semibold text-center">
+          <h1 id="modal-title" className="mb-4 font-semibold text-center">
             Transaction Successfully Submitted!
+          </h1>
+
+          <h2
+            id="modal-sub-title"
+            className="mb-4 text-center"
+            title="It will take a few moments to hit the chain."
+          >
+            Number Of Confirmations: {numberConfirmations}
           </h2>
 
           <h3
