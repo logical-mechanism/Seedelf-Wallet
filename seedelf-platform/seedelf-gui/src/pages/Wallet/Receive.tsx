@@ -61,7 +61,7 @@ export function Receive() {
     <div className="p-6 w-full">
       <button
         disabled
-        title="Use one of these seedelfs to receive funds."
+        title="Use one of these seedelfs to receive funds from another user."
         className=""
       >
         <CircleQuestionMark />

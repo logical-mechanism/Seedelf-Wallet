@@ -152,7 +152,7 @@ export function History() {
     <div className="p-6 w-full">
       <button
         disabled
-        title="Use one of these seedelfs to receive funds."
+        title="The complete history of your wallet. Each transaction is labelled with receiving or sending in an attempt to identify the purpose."
         className=""
       >
         <CircleQuestionMark />

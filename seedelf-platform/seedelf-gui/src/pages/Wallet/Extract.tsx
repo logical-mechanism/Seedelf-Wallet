@@ -98,7 +98,7 @@ export function Extract() {
     <div className="p-6 w-full">
       <button
         disabled
-        title="Use one of these seedelfs to receive funds."
+        title="Extract funds from the wallet to some address."
         className=""
       >
         <CircleQuestionMark />

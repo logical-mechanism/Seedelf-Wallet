@@ -11,7 +11,6 @@ import {
   Ellipsis,
   BanknoteArrowUp,
   BanknoteArrowDown,
-  CircleQuestionMark,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { colorClasses } from "./colors";
@@ -83,7 +82,6 @@ export function Dashboard() {
         <span className="text-3xl font-semibold mb-12">
           {lovelace} {network === "mainnet" ? "₳" : "t₳"}
         </span>
-
         <div className="flex gap-16">
           <IconAction
             to="send"
@@ -122,13 +120,6 @@ export function Dashboard() {
             <p className="">No Seedelfs Available.</p>
           ) : (
             <div className="relative">
-              <button
-                disabled
-                title="Seedelfs act like addresses inside the wallet. Other users may send funds to your seedelf."
-                className="pl-2 pt-2  max-[960px]:hidden"
-              >
-                <CircleQuestionMark />
-              </button>
               <ul className="space-y-3 m-4 w-full max-[960px]:hidden">
                 {elves.map((h) => (
                   <li key={`${h}`} className="m-4 p-4">
@@ -170,13 +161,6 @@ export function Dashboard() {
           <p className="">No Transactions Available.</p>
         ) : (
           <div>
-            <button
-              disabled
-              title="Each transaction may be viewed at Cardanoscan or the TxId may be copied."
-              className="pt-2  max-[960px]:hidden"
-            >
-              <CircleQuestionMark />
-            </button>
             <ul className="space-y-3 w-full mx-auto max-[960px]:hidden">
               {recent.map((h) => (
                 <li
