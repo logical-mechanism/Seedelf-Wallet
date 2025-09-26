@@ -59,6 +59,13 @@ export function Receive() {
 
   return (
     <div className="p-6 w-full">
+      <button
+        disabled
+        title="Use one of these seedelfs to receive funds from another user."
+        className=""
+      >
+        <CircleQuestionMark />
+      </button>
       <h1 className="text-xl font-semibold text-center">Receive</h1>
 
       <ShowNotification
@@ -69,13 +76,6 @@ export function Receive() {
 
       <div className={`rounded-xl w-full my-12`}>
         <div className="flex flex-grow items-center gap-2 mx-auto w-full max-w-3/8">
-          <button
-            disabled
-            title="Seedelfs act like addresses inside the wallet. Other users may send funds to your seedelf."
-            className="mt-5"
-          >
-            <CircleQuestionMark />
-          </button>
           <div className="flex-1">
             <TextField
               label="Search"

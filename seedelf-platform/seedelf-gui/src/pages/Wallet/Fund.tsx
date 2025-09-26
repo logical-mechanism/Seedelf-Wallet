@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useOutletContext } from "react-router";
-import { SearchCheck } from "lucide-react";
+import { SearchCheck, CircleQuestionMark } from "lucide-react";
 import { WebServerModal } from "@/components/WebServerModal";
 import { TextField } from "@/components/TextField";
 import { NumberField } from "@/components/NumberField";
@@ -142,6 +142,13 @@ export function Fund() {
 
   return (
     <div className="w-full p-6">
+      <button
+        disabled
+        title="Fund an existing seedelf token using a CIP30 web wallet."
+        className="mr-2"
+      >
+        <CircleQuestionMark />
+      </button>
       <h1 className="text-xl font-semibold text-center">Fund A Seedelf</h1>
 
       <ShowNotification

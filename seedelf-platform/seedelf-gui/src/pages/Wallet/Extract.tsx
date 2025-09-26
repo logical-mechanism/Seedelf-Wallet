@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useOutletContext } from "react-router";
-import { SearchCheck } from "lucide-react";
+import { SearchCheck, CircleQuestionMark } from "lucide-react";
 import {
   ShowNotification,
   NotificationVariant,
@@ -96,6 +96,13 @@ export function Extract() {
 
   return (
     <div className="p-6 w-full">
+      <button
+        disabled
+        title="Extract funds from the wallet to some address."
+        className=""
+      >
+        <CircleQuestionMark />
+      </button>
       <h1 className="text-xl font-semibold text-center">
         Extract From A Seedelf
       </h1>

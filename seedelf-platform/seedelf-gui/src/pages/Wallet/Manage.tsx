@@ -7,14 +7,15 @@ import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
-import { isNotAScript } from "./api";
 import { TextField } from "@/components/TextField";
 import { CreateRemoveToggle, ToggleMode } from "@/components/Toggle";
 import { WebServerModal } from "@/components/WebServerModal";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ToTopButton } from "@/components/ToTopButton";
+import { CircleQuestionMark } from "lucide-react";
 import { createSeedelf, removeSeedelf } from "./transactions";
+import { isNotAScript } from "./api";
 import { runWebServer } from "./webServer";
 import { colorClasses } from "./colors";
 import { display_ascii } from "./util";
@@ -168,6 +169,17 @@ export function Manage() {
 
   return (
     <div className="w-full p-6">
+      <button
+        disabled
+        title={
+          mode == "Create"
+            ? "Create a new seedelf token using a CIP30 web wallet."
+            : "Remove an existing seedelf token."
+        }
+        className="mr-2"
+      >
+        <CircleQuestionMark />
+      </button>
       <h1 className="text-xl font-semibold text-center">{mode} A Seedelf</h1>
 
       <ShowNotification

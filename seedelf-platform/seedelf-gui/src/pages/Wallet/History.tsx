@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  CircleQuestionMark,
 } from "lucide-react";
 import { OutletContextType } from "@/types/layout";
 import { useNetwork } from "@/types/network";
@@ -149,6 +150,13 @@ export function History() {
 
   return (
     <div className="p-6 w-full">
+      <button
+        disabled
+        title="The complete history of your wallet. Each transaction is labelled with receiving or sending in an attempt to identify the purpose."
+        className=""
+      >
+        <CircleQuestionMark />
+      </button>
       <h1 className="text-xl font-semibold text-center">Transaction History</h1>
 
       <ShowNotification
