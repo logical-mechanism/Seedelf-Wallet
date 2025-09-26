@@ -3,6 +3,7 @@ pub mod commands;
 pub mod constants;
 pub mod session;
 pub mod setup;
+pub mod transaction;
 pub mod types;
 pub mod utxos;
 pub mod wallet;
@@ -31,17 +32,19 @@ pub fn run() {
             utxos::get_every_seedelf,
             // address.rs
             address::is_not_a_script,
-            // commands
+            // commands/
             commands::create::create_seedelf,
             commands::remove::remove_seedelf,
             commands::fund::fund_seedelf,
             commands::send::send_seedelf,
             commands::extract::extract_seedelf,
-            // constants
+            // constants.rs
             constants::get_seedelf_policy_id,
             // webserver.rs
             webserver::open_web_server,
-            webserver::close_web_server
+            webserver::close_web_server,
+            // transaction.rs
+            transaction::transaction_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
