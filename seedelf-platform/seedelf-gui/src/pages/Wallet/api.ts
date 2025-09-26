@@ -83,7 +83,10 @@ export async function seedelfPolicyId(network: Network): Promise<string> {
   });
 }
 
-export async function transactionStatus(network: Network, txHash: string): Promise<number> {
+export async function transactionStatus(
+  network: Network,
+  txHash: string,
+): Promise<number> {
   const flag = castNetwork(network);
   return await invoke<number>("transaction_status", {
     networkFlag: flag,

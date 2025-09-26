@@ -2,9 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNetwork } from "@/types/network";
 import { ShowNotification } from "@/components/ShowNotification";
-import {
-  transactionStatus
-} from "@/pages/Wallet/api";
+import { transactionStatus } from "@/pages/Wallet/api";
 import { Link, Copy } from "lucide-react";
 import { colorClasses } from "@/pages/Wallet/colors";
 
@@ -67,7 +65,7 @@ export function ExplorerLinkModal({
       cancelled = true;
       clearInterval(id);
     };
-  }, [open, network, txHash])
+  }, [open, network, txHash]);
 
   if (!open) return null;
 
