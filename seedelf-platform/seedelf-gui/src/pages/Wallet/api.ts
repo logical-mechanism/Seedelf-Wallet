@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Network } from "@/types/network";
-import { TxResponseWithSide, UtxoResponse } from "@/types/wallet";
+import { TxResponseWithSide, UtxoResponse, AddressAsset } from "@/types/wallet";
 
 export function castNetwork(network: Network): boolean {
   if (network == "mainnet") {
@@ -91,5 +91,16 @@ export async function transactionStatus(
   return await invoke<number>("transaction_status", {
     networkFlag: flag,
     txHash: txHash,
+  });
+}
+
+export async function addressAssets(
+  network: Network,
+  address: string,
+): Promise<AddressAsset> {
+  const flag = castNetwork(network);
+  return await invoke<AddressAsset>("address_assets", {
+    networkFlag: flag,
+    address: address,
   });
 }

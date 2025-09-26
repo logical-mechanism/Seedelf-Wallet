@@ -32,6 +32,7 @@ pub fn run() {
             utxos::get_every_seedelf,
             // address.rs
             address::is_not_a_script,
+            address::address_assets,
             // commands/
             commands::create::create_seedelf,
             commands::remove::remove_seedelf,

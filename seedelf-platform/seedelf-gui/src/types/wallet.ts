@@ -30,6 +30,15 @@ export interface Asset {
   fingerprint: string;
 }
 
+export interface AddressAsset {
+  address: string;
+  policy_id: string;
+  asset_name: string;
+  fingerprint: string;
+  decimals: number;
+  quantity: string;
+}
+
 export interface InlineDatum {
   bytes: string;
   value: unknown; // serde_json::Value

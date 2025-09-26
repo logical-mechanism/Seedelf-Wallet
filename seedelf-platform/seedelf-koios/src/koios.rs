@@ -773,3 +773,42 @@ pub async fn transaction_status(
     //
     Ok(status)
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressAssets {
+    address: String,
+    policy_id: String,
+    asset_name: String,
+    fingerprint: String,
+    decimals: u8,
+    quantity: String,
+}
+
+pub async fn address_assets(
+    network_flag: bool,
+    address: String,
+) -> Result<Vec<AddressAssets>, Error> {
+    let network: &str = if network_flag { "preprod" } else { "api" };
+
+    let tx_status_url: String = format!("https://{network}.koios.rest/api/v1/address_assets");
+
+    let client: Client = reqwest::Client::new();
+
+    // Prepare the request payload
+    let tx_payload: Value = serde_json::json!({
+        "_addresses": [address],
+    });
+
+    let response: Response = client
+        .post(tx_status_url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .json(&tx_payload)
+        .send()
+        .await?;
+
+    let status: Vec<AddressAssets> = response.json().await?;
+
+    //
+    Ok(status)
+}
