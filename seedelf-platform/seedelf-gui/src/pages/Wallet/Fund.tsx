@@ -65,6 +65,7 @@ export function Fund() {
     setVariant("info");
     setMessage("Address is valid");
     setAddressValid(true);
+    // This is where we should trigger the address asset query
   };
 
   const handleSeedelfExist = (s: string) => {
