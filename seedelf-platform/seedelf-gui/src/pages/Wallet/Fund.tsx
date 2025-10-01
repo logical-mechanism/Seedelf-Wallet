@@ -4,6 +4,7 @@ import { SearchCheck, CircleQuestionMark } from "lucide-react";
 import { WebServerModal } from "@/components/WebServerModal";
 import { TextField } from "@/components/TextField";
 import { NumberField } from "@/components/NumberField";
+import { AssetSelectorModal, SelectedAssetOut } from "@/components/AssetSelectorModal";
 import {
   ShowNotification,
   NotificationVariant,
@@ -11,8 +12,9 @@ import {
 import { Checkbox } from "@/components/Checkbox";
 import { useNetwork } from "@/types/network";
 import { OutletContextType } from "@/types/layout";
+import { AddressAsset } from "@/types/wallet";
 import { colorClasses } from "./colors";
-import { isNotAScript } from "./api";
+import { isNotAScript, addressAssets } from "./api";
 import { fundSeedelf } from "./transactions";
 import { runWebServer } from "./webServer";
 
@@ -34,6 +36,12 @@ export function Fund() {
   const [addressValid, setAddressValid] = useState<boolean>(false);
   const [isSelfSend, setIsSelfSend] = useState<boolean>(false);
 
+  const [showAssetSelectorModal, setShowAssetSelectorModal] = useState<boolean>(false);
+  const [thisAddressAssets, setThisAddressAssets] = useState<AddressAsset[]>([])
+  const [selectedAssets, setSelectedAssets] = useState<SelectedAssetOut[]>([]);
+
+  const initialSelection = useMemo(() => selectedAssets, [selectedAssets]);
+
   // randomly select a seedelf from the owned seedelfs.
   const selfSeedelf = useMemo(
     () => [...ownedSeedelfs].sort(() => Math.random() - 0.5).slice(0, 1),
@@ -46,6 +54,7 @@ export function Fund() {
     setSeedelfExist(false);
     setAda(0);
     setIsSelfSend(false);
+    setThisAddressAssets([])
   };
 
   const handleAddressValid = async (a: string) => {
@@ -65,7 +74,11 @@ export function Fund() {
     setVariant("info");
     setMessage("Address is valid");
     setAddressValid(true);
+
     // This is where we should trigger the address asset query
+    const _thisAddressAssets: AddressAsset[] = await addressAssets(network, a);
+    console.log((_thisAddressAssets));
+    setThisAddressAssets(_thisAddressAssets);
   };
 
   const handleSeedelfExist = (s: string) => {
@@ -165,6 +178,17 @@ export function Fund() {
           setVariant("info");
           setMessage("Stopping Web Server..");
           setShowWebServerModal(false);
+        }}
+      />
+
+      <AssetSelectorModal
+        open={showAssetSelectorModal}
+        assets={thisAddressAssets}
+        initialSelection={initialSelection}
+        onClose={() => setShowAssetSelectorModal(false)}
+        onConfirm={(chosen) => {
+          setSelectedAssets(chosen);   // make selection available to the parent
+          setShowAssetSelectorModal(false);
         }}
       />
 
@@ -275,6 +299,19 @@ export function Fund() {
               Clear
             </button>
           )}
+
+        </div>
+
+        <div className="flex items-right justity-right">
+          {(thisAddressAssets.length != 0) && (
+            <button
+              onClick={() => setShowAssetSelectorModal(true)}
+              className={`rounded-xl ${colorClasses.indigo.bg} px-4 py-2 text-sm`}
+            >
+              Select Assets
+            </button>
+          )}
+
         </div>
       </div>
     </div>

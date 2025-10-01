@@ -97,9 +97,9 @@ export async function transactionStatus(
 export async function addressAssets(
   network: Network,
   address: string,
-): Promise<AddressAsset> {
+): Promise<AddressAsset[]> {
   const flag = castNetwork(network);
-  return await invoke<AddressAsset>("address_assets", {
+  return await invoke<AddressAsset[]>("address_assets", {
     networkFlag: flag,
     address: address,
   });
