@@ -3,7 +3,9 @@ use crate::types::{TxResponseWithSide, UTxOSide};
 use blstrs::Scalar;
 use pallas_addresses::Address;
 use seedelf_core::address;
+use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, VARIANT, get_config};
+use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_display::display;
@@ -114,4 +116,9 @@ pub async fn get_owned_seedelfs(network_flag: bool, every_utxo: Vec<UtxoResponse
         display::extract_all_owned_seedelfs(*sk, &config.contract.seedelf_policy_id, every_utxo)
     })
     .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn get_minimum_lovelace(tokens: Assets) -> u64 {
+    wallet_minimum_lovelace_with_assets(tokens.clone()).unwrap_or(2_000_000)
 }

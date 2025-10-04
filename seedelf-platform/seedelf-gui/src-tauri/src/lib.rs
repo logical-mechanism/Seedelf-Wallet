@@ -28,6 +28,7 @@ pub fn run() {
             wallet::get_owned_seedelfs,
             wallet::get_lovelace_balance,
             wallet::get_wallet_history,
+            wallet::get_minimum_lovelace,
             // utxos.rs
             utxos::get_every_seedelf,
             // address.rs

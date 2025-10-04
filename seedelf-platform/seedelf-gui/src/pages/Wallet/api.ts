@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Network } from "@/types/network";
 import { TxResponseWithSide, UtxoResponse, AddressAsset } from "@/types/wallet";
+import { addressAssetsToTokens } from "./util";
 
 export function castNetwork(network: Network): boolean {
   if (network == "mainnet") {
@@ -102,5 +103,12 @@ export async function addressAssets(
   return await invoke<AddressAsset[]>("address_assets", {
     networkFlag: flag,
     address: address,
+  });
+}
+
+export async function minimumLovelace(tokens: AddressAsset[]): Promise<number> {
+  const assets = addressAssetsToTokens(tokens);
+  return await invoke<number>("get_minimum_lovelace", {
+    tokens: assets,
   });
 }

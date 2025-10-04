@@ -60,3 +60,13 @@ export interface UtxoResponse {
   asset_list: Asset[] | null;
   is_spent: boolean;
 }
+
+export interface Token {
+  policy_id: string;
+  token_name: Uint8Array;
+  amount: bigint;
+}
+
+export interface Tokens {
+  items: Token[];
+}

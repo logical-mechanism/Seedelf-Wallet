@@ -8,7 +8,6 @@ pub fn is_not_a_script(addr: &str) -> bool {
     !Address::has_script(&addr)
 }
 
-
 #[tauri::command(async)]
 pub async fn address_assets(network_flag: bool, address: String) -> Vec<AddressAssets> {
     koios::address_assets(network_flag, address)
