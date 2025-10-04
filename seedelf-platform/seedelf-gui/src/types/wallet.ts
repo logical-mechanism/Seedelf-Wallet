@@ -64,7 +64,7 @@ export interface UtxoResponse {
 export interface Token {
   policy_id: string;
   token_name: Uint8Array;
-  amount: bigint;
+  amount: number;
 }
 
 export interface Tokens {

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useOutletContext } from "react-router";
 import { SearchCheck, CircleQuestionMark } from "lucide-react";
 import { WebServerModal } from "@/components/WebServerModal";
@@ -17,7 +17,7 @@ import { useNetwork } from "@/types/network";
 import { OutletContextType } from "@/types/layout";
 import { AddressAsset } from "@/types/wallet";
 import { colorClasses } from "./colors";
-import { isNotAScript, addressAssets } from "./api";
+import { isNotAScript, addressAssets, minimumLovelace } from "./api";
 import { fundSeedelf } from "./transactions";
 import { runWebServer } from "./webServer";
 
@@ -27,7 +27,7 @@ export function Fund() {
 
   const [address, setAddress] = useState("");
   const [seedelf, setSeedelf] = useState("");
-  const [ada, setAda] = useState(0);
+  const [ada, setAda] = useState<number>(0);
 
   const { network } = useNetwork();
 
@@ -54,6 +54,38 @@ export function Fund() {
     [ownedSeedelfs],
   )[0];
 
+  const filteredAddressAssetsWithSelectedQty = useMemo(() => {
+    // Sum selected amounts by fingerprint
+    const byFp = selectedAssets.reduce<Map<string, bigint>>((m, s) => {
+      const amt = BigInt(s.amount ?? "0");
+      if (amt > 0n) m.set(s.fingerprint, (m.get(s.fingerprint) ?? 0n) + amt);
+      return m;
+    }, new Map());
+
+    // Keep only assets that were selected, and replace quantity with the selected amount
+    return thisAddressAssets.flatMap<AddressAsset>((a) => {
+      const sel = byFp.get(a.fingerprint) ?? 0n;
+      if (sel <= 0n) return [];
+      const have = BigInt(a.quantity ?? "0");
+      const qty = sel > have ? have : sel; // clamp to available; remove this line & use `sel` if you don't want clamping
+      return [{ ...a, quantity: qty.toString() }];
+    });
+  }, [thisAddressAssets, selectedAssets]);
+
+  useEffect(() => {
+    if (!filteredAddressAssetsWithSelectedQty.length) {
+      return;
+    }
+    if (ada == 0) {
+      (async () => {
+        const _minimum = await minimumLovelace(
+          filteredAddressAssetsWithSelectedQty,
+        );
+        setAda(_minimum / 1_000_000.0);
+      })();
+    }
+  }, [selectedAssets, filteredAddressAssetsWithSelectedQty]);
+
   const handleClear = () => {
     setAddress("");
     setSeedelf("");
@@ -61,6 +93,7 @@ export function Fund() {
     setAda(0);
     setIsSelfSend(false);
     setThisAddressAssets([]);
+    setSelectedAssets([]);
   };
 
   const handleAddressValid = async (a: string) => {
@@ -83,7 +116,6 @@ export function Fund() {
 
     // This is where we should trigger the address asset query
     const _thisAddressAssets: AddressAsset[] = await addressAssets(network, a);
-    console.log(_thisAddressAssets);
     setThisAddressAssets(_thisAddressAssets);
   };
 
@@ -191,7 +223,10 @@ export function Fund() {
         open={showAssetSelectorModal}
         assets={thisAddressAssets}
         initialSelection={initialSelection}
-        onClose={() => setShowAssetSelectorModal(false)}
+        onClose={() => {
+          setShowAssetSelectorModal(false);
+          setSelectedAssets([]);
+        }}
         onConfirm={(chosen) => {
           setSelectedAssets(chosen); // make selection available to the parent
           setShowAssetSelectorModal(false);
