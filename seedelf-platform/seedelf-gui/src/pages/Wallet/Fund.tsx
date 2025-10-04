@@ -4,7 +4,10 @@ import { SearchCheck, CircleQuestionMark } from "lucide-react";
 import { WebServerModal } from "@/components/WebServerModal";
 import { TextField } from "@/components/TextField";
 import { NumberField } from "@/components/NumberField";
-import { AssetSelectorModal, SelectedAssetOut } from "@/components/AssetSelectorModal";
+import {
+  AssetSelectorModal,
+  SelectedAssetOut,
+} from "@/components/AssetSelectorModal";
 import {
   ShowNotification,
   NotificationVariant,
@@ -36,8 +39,11 @@ export function Fund() {
   const [addressValid, setAddressValid] = useState<boolean>(false);
   const [isSelfSend, setIsSelfSend] = useState<boolean>(false);
 
-  const [showAssetSelectorModal, setShowAssetSelectorModal] = useState<boolean>(false);
-  const [thisAddressAssets, setThisAddressAssets] = useState<AddressAsset[]>([])
+  const [showAssetSelectorModal, setShowAssetSelectorModal] =
+    useState<boolean>(false);
+  const [thisAddressAssets, setThisAddressAssets] = useState<AddressAsset[]>(
+    [],
+  );
   const [selectedAssets, setSelectedAssets] = useState<SelectedAssetOut[]>([]);
 
   const initialSelection = useMemo(() => selectedAssets, [selectedAssets]);
@@ -54,7 +60,7 @@ export function Fund() {
     setSeedelfExist(false);
     setAda(0);
     setIsSelfSend(false);
-    setThisAddressAssets([])
+    setThisAddressAssets([]);
   };
 
   const handleAddressValid = async (a: string) => {
@@ -77,7 +83,7 @@ export function Fund() {
 
     // This is where we should trigger the address asset query
     const _thisAddressAssets: AddressAsset[] = await addressAssets(network, a);
-    console.log((_thisAddressAssets));
+    console.log(_thisAddressAssets);
     setThisAddressAssets(_thisAddressAssets);
   };
 
@@ -187,7 +193,7 @@ export function Fund() {
         initialSelection={initialSelection}
         onClose={() => setShowAssetSelectorModal(false)}
         onConfirm={(chosen) => {
-          setSelectedAssets(chosen);   // make selection available to the parent
+          setSelectedAssets(chosen); // make selection available to the parent
           setShowAssetSelectorModal(false);
         }}
       />
@@ -299,11 +305,10 @@ export function Fund() {
               Clear
             </button>
           )}
-
         </div>
 
         <div className="flex items-right justity-right">
-          {(thisAddressAssets.length != 0) && (
+          {thisAddressAssets.length != 0 && (
             <button
               onClick={() => setShowAssetSelectorModal(true)}
               className={`rounded-xl ${colorClasses.indigo.bg} px-4 py-2 text-sm`}
@@ -311,7 +316,6 @@ export function Fund() {
               Select Assets
             </button>
           )}
-
         </div>
       </div>
     </div>
