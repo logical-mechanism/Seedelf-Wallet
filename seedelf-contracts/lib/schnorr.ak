@@ -1,3 +1,6 @@
+////
+////
+
 use aiken/crypto.{VerificationKeyHash}
 use aiken/crypto/bls12_381/g1
 use aiken/crypto/bls12_381/scalar.{Scalar}
@@ -70,9 +73,9 @@ fn randomize(datum: Register, s: Scalar) -> Register {
 }
 
 test cheapest_hash() {
+  // blak2b_256 is the cheapest but we must blake2b_224 to prevent costly modulo field prime arthmetic
   let s: ByteArray =
     #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-  // must use blake2b_224 to prevent costly modulo field prime arthmetic
   crypto.blake2b_224(s) == #"0c97d8d889acb1d65d23e44212b0a4e16a57fc0ebcfea8f5f965f8ba"
 }
 
@@ -93,7 +96,7 @@ pub fn verify(
   z_b: ByteArray,
   // g^r (compressed G1)
   g_r_b: ByteArray,
-  // transcript binding
+  // a bound used to create one time pads
   bound: ByteArray,
 ) -> Bool {
   //
@@ -106,7 +109,7 @@ pub fn verify(
   expect Some(z): Option<Scalar> = scalar.from_bytearray_big_endian(z_b)
   let g_z: G1Element = generator |> g1.decompress |> g1.scale(z)
   //
-  // use the fiat-shamir heuristic to calculate the challenge then convert it to an integer
+  // use the fiat-shamir heuristic to calculate the challenge then convert it to an scalar
   expect Some(c): Option<Scalar> =
     fiat_shamir_heuristic(generator, g_r_b, public_value, bound)
       |> scalar.from_bytearray_big_endian()
