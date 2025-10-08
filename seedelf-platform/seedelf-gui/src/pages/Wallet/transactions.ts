@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Network } from "@/types/network";
 import { castNetwork } from "./api";
+import { AddressAsset } from "@/types/wallet";
+import { addressAssetsToTokens } from "./util";
 
 export async function createSeedelf(
   network: Network,
@@ -33,13 +35,16 @@ export async function fundSeedelf(
   addr: string,
   seedelf: string,
   lovelace: number,
+  tokens: AddressAsset[],
 ): Promise<string> {
   const flag = castNetwork(network);
+  const assets = addressAssetsToTokens(tokens);
   return await invoke<string>("fund_seedelf", {
     networkFlag: flag,
     userAddress: addr,
     seedelf: seedelf,
     lovelace: lovelace,
+    tokens: assets,
   });
 }
 

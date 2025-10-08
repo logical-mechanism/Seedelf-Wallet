@@ -41,8 +41,11 @@ export function Send() {
     useState<boolean>(false);
   const [submitting, setSubmitting] = useState(false);
   const [showConfirmationModal, setShowConfirmationModal] = useState(false);
+  const [showAssetSelectorModal, setShowAssetSelectorModal] =
+    useState<boolean>(false);
 
-  const { allSeedelfs, lovelace } = useOutletContext<OutletContextType>();
+  const { allSeedelfs, lovelace, tokens } =
+    useOutletContext<OutletContextType>();
   const [seedelfExist, setSeedelfExist] = useState<boolean>(false);
 
   const makeRow = (): ExtraRow => ({
@@ -66,6 +69,7 @@ export function Send() {
     const validFormat = value.includes("5eed0e1f");
     const validLen = value.length === 64;
     const existsInIndex = allSeedelfs.includes(value);
+
     return !!(validFormat && validLen && existsInIndex);
   };
 
@@ -276,6 +280,15 @@ export function Send() {
               Clear
             </button>
           )}
+        </div>
+        {/* this has to be a per row thing and not just here, leave for example later */}
+        <div className="flex items-right justity-right">
+          <button
+            onClick={() => setShowAssetSelectorModal(true)}
+            className={`rounded-xl ${colorClasses.indigo.bg} px-4 py-2 text-sm`}
+          >
+            Select Assets
+          </button>
         </div>
       </div>
       <ToTopButton />

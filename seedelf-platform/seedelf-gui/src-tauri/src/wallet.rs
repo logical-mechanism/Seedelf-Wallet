@@ -104,6 +104,14 @@ pub fn get_lovelace_balance(owned_utxos: Vec<UtxoResponse>) -> u64 {
 }
 
 #[tauri::command]
+pub fn get_token_balance(owned_utxos: Vec<UtxoResponse>) -> Assets {
+    match utxos::assets_of(owned_utxos) {
+        Ok((_, assets)) => assets,
+        Err(_) => Assets::new(),
+    }
+}
+
+#[tauri::command]
 pub async fn get_owned_seedelfs(network_flag: bool, every_utxo: Vec<UtxoResponse>) -> Vec<String> {
     let config: Config = match get_config(VARIANT, network_flag) {
         Some(c) => c,

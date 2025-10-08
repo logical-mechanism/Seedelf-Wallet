@@ -9,7 +9,7 @@ import {
 import { TopNavBar } from "@/components/TopNavBar";
 import { LoadingOverlay } from "@/components/LoadingOverlay";
 import { Network, NetworkContext } from "@/types/network";
-import { TxResponseWithSide } from "@/types/wallet";
+import { TxResponseWithSide, Tokens } from "@/types/wallet";
 import { Sidebar } from "./Sidebar";
 import {
   getLovelaceBalance,
@@ -18,6 +18,7 @@ import {
   getOwnedUtxo,
   getOwnedSeedelfs,
   getEverySeedelf,
+  getTokenBalance,
 } from "./api";
 import { colorClasses } from "./colors";
 
@@ -30,6 +31,7 @@ export function WalletLayout() {
 
   // wallet states
   const [lovelace, setLovelace] = useState<number>(0);
+  const [tokens, setTokens] = useState<Tokens>({ items: [] });
   const [allSeedelfs, setAllSeedelfs] = useState<string[]>([]);
   const [ownedSeedelfs, setOwnedSeedelfs] = useState<string[]>([]);
   const [history, setHistory] = useState<TxResponseWithSide[]>([]);
@@ -71,6 +73,7 @@ export function WalletLayout() {
     const _ownedSeedelfs = await getOwnedSeedelfs(network, _every_utxo);
     setToastMsg("Calculating Balance");
     const _lovelace = await getLovelaceBalance(_owned_utxo);
+    const _tokens = await getTokenBalance(_owned_utxo);
 
     setLoading(false);
     setToastVariant("success");
@@ -79,6 +82,7 @@ export function WalletLayout() {
 
     // set stuff
     setLovelace(_lovelace);
+    setTokens(_tokens);
     setOwnedSeedelfs(_ownedSeedelfs);
     setAllSeedelfs(_allSeedelfs);
     setHistory(_history);
@@ -187,7 +191,13 @@ export function WalletLayout() {
 
               <main className="flex-1 min-w-0 overflow-auto">
                 <Outlet
-                  context={{ lovelace, allSeedelfs, ownedSeedelfs, history }}
+                  context={{
+                    lovelace,
+                    tokens,
+                    allSeedelfs,
+                    ownedSeedelfs,
+                    history,
+                  }}
                 />
               </main>
             </div>

@@ -8,6 +8,7 @@ pub async fn fund_seedelf(
     user_address: String,
     seedelf: String,
     lovelace: u64,
+    tokens: Assets,
 ) -> String {
     let config: Config = match get_config(VARIANT, network_flag) {
         Some(c) => c,
@@ -25,8 +26,7 @@ pub async fn fund_seedelf(
         user_address,
         seedelf,
         lovelace,
-        // todo add in assets
-        Assets::new(),
+        tokens,
     )
     .await;
     if usable_utxos.is_empty() {

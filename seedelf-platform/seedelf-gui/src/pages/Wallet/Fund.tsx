@@ -173,8 +173,15 @@ export function Fund() {
     try {
       setVariant("info");
       setMessage("Building Fund A Seedelf Transaction");
+      console.log("Assets:", selectedAssets);
 
-      const txCbor = await fundSeedelf(network, address, seedelf, lovelace);
+      const txCbor = await fundSeedelf(
+        network,
+        address,
+        seedelf,
+        lovelace,
+        filteredAddressAssetsWithSelectedQty,
+      );
       if (txCbor) {
         setShowWebServerModal(true);
         await runWebServer(txCbor, network);

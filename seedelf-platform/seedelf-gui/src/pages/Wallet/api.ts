@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Network } from "@/types/network";
-import { TxResponseWithSide, UtxoResponse, AddressAsset } from "@/types/wallet";
+import {
+  TxResponseWithSide,
+  UtxoResponse,
+  AddressAsset,
+  Tokens,
+} from "@/types/wallet";
 import { addressAssetsToTokens } from "./util";
 
 export function castNetwork(network: Network): boolean {
@@ -57,6 +62,15 @@ export async function getLovelaceBalance(
   });
   const ada = balance ? balance / 1_000_000.0 : 0;
   return ada;
+}
+
+export async function getTokenBalance(
+  ownedUtxos: UtxoResponse[],
+): Promise<Tokens> {
+  const balance = await invoke<Tokens>("get_token_balance", {
+    ownedUtxos: ownedUtxos,
+  });
+  return balance;
 }
 
 export async function getWalletHistory(
