@@ -13,10 +13,10 @@ use cardano/transaction.{TransactionId}
 /// ```
 pub const seedelf: ByteArray = #"5eed0e1f"
 
-/// Generate a unique token name from a `TxId#Idx`, personal tag, and a prefix.
+/// Generate a unique token name from a `TxId#Idx`, a prefix, and personal tag.
 ///
 /// ```aiken
-/// token_name.generate(tx_id, tx_idx, #"", personal_tag)
+/// token_name.generate(txid, idx, seedelf, personal_tag)
 /// ```
 pub fn generate(
   txid: TransactionId,

@@ -4,7 +4,7 @@ The folder holds the Seedelf wallet smart contracts. [Aiken](https://aiken-lang.
 
 ## Building
 
-Compile the contracts with the `complete_build.sh` script. 
+Compile the contracts with the `compile.sh` script. 
 
 The random seed used in production is `acabcafe`.
 
