@@ -82,13 +82,18 @@ test cheapest_hash() {
 /// Fiat-Shamir heuristic for non-interactivity.
 ///
 /// ```aiken
-/// schnorr.prove(generator, public_value, z_b, g_r_b, bound)
+/// schnorr.verify(generator, public_value, z_b, g_r_b, bound)
 /// ```
-pub fn prove(
+pub fn verify(
+  // g (compressed G1)
   generator: ByteArray,
+  // u = g^x (compressed G1)
   public_value: ByteArray,
+  // z as BE scalar bytes
   z_b: ByteArray,
+  // g^r (compressed G1)
   g_r_b: ByteArray,
+  // transcript binding
   bound: ByteArray,
 ) -> Bool {
   //
@@ -149,7 +154,7 @@ test valid_schnorr_proof() {
   // trace z_b
   // trace g_r_b
   // trace bound
-  prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
+  verify(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }
 
 test randomized_valid_schnorr_proof() {
@@ -199,7 +204,7 @@ test randomized_valid_schnorr_proof() {
   // trace z_b
   // trace g_r_b
   // trace bound
-  prove(datum_rng.generator, datum_rng.public_value, z_b, g_r_b, bound)
+  verify(datum_rng.generator, datum_rng.public_value, z_b, g_r_b, bound)
 }
 
 test invalid_schnorr_proof() fail {
@@ -232,7 +237,7 @@ test invalid_schnorr_proof() fail {
   // the bad z value, it assumes the secret is the challenge
   let z: Scalar = scalar.mul(c, c) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
-  prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
+  verify(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }
 
 // shows how it is constant time
@@ -260,7 +265,7 @@ test simple_schnorr_proof() {
   // the z value
   let z: Scalar = scalar.mul(c, x) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
-  prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
+  verify(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }
 
 test simple_regsiter() {
