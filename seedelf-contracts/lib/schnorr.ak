@@ -1,3 +1,6 @@
+////
+////
+
 use aiken/crypto.{VerificationKeyHash}
 use aiken/crypto/bls12_381/g1
 use aiken/crypto/bls12_381/scalar.{Scalar}
@@ -70,9 +73,9 @@ fn randomize(datum: Register, s: Scalar) -> Register {
 }
 
 test cheapest_hash() {
+  // blak2b_256 is the cheapest but we must blake2b_224 to prevent costly modulo field prime arthmetic
   let s: ByteArray =
     #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-  // must use blake2b_224 to prevent costly modulo field prime arthmetic
   crypto.blake2b_224(s) == #"0c97d8d889acb1d65d23e44212b0a4e16a57fc0ebcfea8f5f965f8ba"
 }
 
@@ -82,13 +85,18 @@ test cheapest_hash() {
 /// Fiat-Shamir heuristic for non-interactivity.
 ///
 /// ```aiken
-/// schnorr.prove(generator, public_value, z_b, g_r_b, bound)
+/// schnorr.verify(generator, public_value, z_b, g_r_b, bound)
 /// ```
-pub fn prove(
+pub fn verify(
+  // g (compressed G1)
   generator: ByteArray,
+  // u = g^x (compressed G1)
   public_value: ByteArray,
+  // z as BE scalar bytes
   z_b: ByteArray,
+  // g^r (compressed G1)
   g_r_b: ByteArray,
+  // a bound used to create one time pads
   bound: ByteArray,
 ) -> Bool {
   //
@@ -101,7 +109,7 @@ pub fn prove(
   expect Some(z): Option<Scalar> = scalar.from_bytearray_big_endian(z_b)
   let g_z: G1Element = generator |> g1.decompress |> g1.scale(z)
   //
-  // use the fiat-shamir heuristic to calculate the challenge then convert it to an integer
+  // use the fiat-shamir heuristic to calculate the challenge then convert it to an scalar
   expect Some(c): Option<Scalar> =
     fiat_shamir_heuristic(generator, g_r_b, public_value, bound)
       |> scalar.from_bytearray_big_endian()
@@ -149,7 +157,7 @@ test valid_schnorr_proof() {
   // trace z_b
   // trace g_r_b
   // trace bound
-  prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
+  verify(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }
 
 test randomized_valid_schnorr_proof() {
@@ -199,7 +207,7 @@ test randomized_valid_schnorr_proof() {
   // trace z_b
   // trace g_r_b
   // trace bound
-  prove(datum_rng.generator, datum_rng.public_value, z_b, g_r_b, bound)
+  verify(datum_rng.generator, datum_rng.public_value, z_b, g_r_b, bound)
 }
 
 test invalid_schnorr_proof() fail {
@@ -232,7 +240,7 @@ test invalid_schnorr_proof() fail {
   // the bad z value, it assumes the secret is the challenge
   let z: Scalar = scalar.mul(c, c) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
-  prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
+  verify(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }
 
 // shows how it is constant time
@@ -260,7 +268,7 @@ test simple_schnorr_proof() {
   // the z value
   let z: Scalar = scalar.mul(c, x) |> scalar.add(r)
   let z_b: ByteArray = scalar.to_bytearray_big_endian(z, 0)
-  prove(datum.generator, datum.public_value, z_b, g_r_b, bound)
+  verify(datum.generator, datum.public_value, z_b, g_r_b, bound)
 }
 
 test simple_regsiter() {
