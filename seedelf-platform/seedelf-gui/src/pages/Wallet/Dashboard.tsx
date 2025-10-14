@@ -14,7 +14,8 @@ import {
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { colorClasses } from "./colors";
-import { display_ascii } from "./util";
+import { display_ascii, tokensToAddressAssets } from "./util";
+import { AssetSelectorModal } from "@/components/AssetSelectorModal";
 
 function txUrl(txHash: string, network: string) {
   return network === "mainnet"
@@ -55,8 +56,11 @@ function IconAction({
 export function Dashboard() {
   const [message, setMessage] = useState<string | null>(null);
 
-  const { lovelace, ownedSeedelfs, history } =
+  const { lovelace, tokens, ownedSeedelfs, history } =
     useOutletContext<OutletContextType>();
+
+  const [showAssetSelectorModal, setShowAssetSelectorModal] =
+    useState<boolean>(false);
 
   const { network } = useNetwork();
   const recent = history.slice(0, 5);
@@ -77,10 +81,32 @@ export function Dashboard() {
         setMessage={setMessage}
         variant={"info"}
       />
+
+      <AssetSelectorModal
+        open={showAssetSelectorModal}
+        assets={tokensToAddressAssets(tokens)}
+        initialSelection={[]}
+        onClose={() => {
+          setShowAssetSelectorModal(false);
+        }}
+        onConfirm={(_) => {
+          setShowAssetSelectorModal(false);
+        }}
+        title="Display Assets"
+        selectable={false}
+      />
       {/* Left column */}
       <div className="space-y-6 flex flex-col w-full items-center">
-        <span className="text-3xl font-semibold mb-12">
+        <span className="text-3xl font-semibold mb-12 inline-flex">
           {lovelace} {network === "mainnet" ? "₳" : "t₳"}
+          {tokens.items.length != 0 && (
+            <button
+              onClick={() => setShowAssetSelectorModal(true)}
+              className={`rounded-xl ${colorClasses.sky.bg} px-4 py-2 ml-8 text-sm`}
+            >
+              Display Assets
+            </button>
+          )}
         </span>
         <div className="flex gap-16">
           <IconAction

@@ -20,6 +20,8 @@ export interface AssetSelectorModalProps {
   lockBodyScroll?: boolean;
   /** Show a search filter (defaults true) */
   enableSearch?: boolean;
+  /** turns off selectability (defaults true) */
+  selectable?: boolean;
 }
 
 export function AssetSelectorModal({
@@ -31,6 +33,7 @@ export function AssetSelectorModal({
   title = "Select Assets",
   lockBodyScroll = true,
   enableSearch = true,
+  selectable = true,
 }: AssetSelectorModalProps) {
   const [selection, setSelection] = useState<InternalSelection>({});
   const [query, setQuery] = useState("");
@@ -247,11 +250,11 @@ export function AssetSelectorModal({
                   <button
                     type="button"
                     onClick={() => setQuery("")}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-xs border hover:bg-zinc-100"
+                    className={`absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-xs border hover:bg-zinc-100`}
                     aria-label="Clear search"
                     title="Clear search"
                   >
-                    Clear
+                    Clear Search
                   </button>
                 )}
               </div>
@@ -356,7 +359,7 @@ export function AssetSelectorModal({
                         <button
                           type="button"
                           onClick={() => handleAdd(a)}
-                          className="rounded-xl px-3 py-2 text-sm font-medium transition bg-zinc-100 text-zinc-800 hover:bg-zinc-200"
+                          className={`rounded-xl px-3 py-2 text-sm font-medium transition bg-zinc-100 text-zinc-800 hover:bg-zinc-200 ${selectable ? "" : "hidden"}`}
                           aria-pressed={false}
                         >
                           Add asset
@@ -388,14 +391,16 @@ export function AssetSelectorModal({
         <div className="sticky bottom-0 z-10 border-t bg-inherit px-6 py-4">
           <div className="grid grid-cols-3 items-center">
             {/* Left: status */}
-            <div className="text-sm">{selectedCount} selected</div>
+            <div className={`text-sm ${selectable ? "" : "hidden"}`}>
+              {selectedCount} selected
+            </div>
 
             {/* Middle: Clear + Select All (NFTs, only if present) */}
             <div className="flex items-center justify-center gap-2">
               <button
                 type="button"
                 onClick={clearAll}
-                className="rounded-xl px-3 py-2 text-sm border hover:bg-zinc-100"
+                className={`rounded-xl px-3 py-2 text-sm border hover:bg-zinc-100 ${selectable ? "" : "hidden"}`}
               >
                 Clear
               </button>
@@ -417,7 +422,7 @@ export function AssetSelectorModal({
                 type="button"
                 onClick={confirm}
                 disabled={!allValid}
-                className={`rounded-xl px-3 py-2 text-sm font-semibold transition
+                className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${selectable ? "" : "hidden"}
                   ${
                     allValid
                       ? `${colorClasses.indigo.bg}`

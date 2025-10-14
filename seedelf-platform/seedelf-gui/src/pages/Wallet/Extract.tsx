@@ -41,51 +41,52 @@ export function Extract() {
   const [showConfirmationModal, setShowConfirmationModal] = useState(false);
   const [showExplorerLinkModal, setShowExplorerLinkModal] =
     useState<boolean>(false);
-  
+
   const [showAssetSelectorModal, setShowAssetSelectorModal] =
-      useState<boolean>(false);
-  const [thisAddressAssets, setThisAddressAssets] = useState<AddressAsset[]>(tokensToAddressAssets(tokens));
+    useState<boolean>(false);
+  const [thisAddressAssets, setThisAddressAssets] = useState<AddressAsset[]>(
+    tokensToAddressAssets(tokens),
+  );
   const [selectedAssets, setSelectedAssets] = useState<SelectedAssetOut[]>([]);
 
   const initialSelection = useMemo(() => selectedAssets, [selectedAssets]);
 
   const filteredAddressAssetsWithSelectedQty = useMemo(() => {
-      // Sum selected amounts by fingerprint
-      const byFp = selectedAssets.reduce<Map<string, bigint>>((m, s) => {
-        const amt = BigInt(s.amount ?? "0");
-        if (amt > 0n) m.set(s.fingerprint, (m.get(s.fingerprint) ?? 0n) + amt);
-        return m;
-      }, new Map());
-  
-      // Keep only assets that were selected, and replace quantity with the selected amount
-      return thisAddressAssets.flatMap<AddressAsset>((a) => {
-        const sel = byFp.get(a.fingerprint) ?? 0n;
-        if (sel <= 0n) return [];
-        const have = BigInt(a.quantity ?? "0");
-        const qty = sel > have ? have : sel; // clamp to available; remove this line & use `sel` if you don't want clamping
-        return [{ ...a, quantity: qty.toString() }];
-      });
-    }, [thisAddressAssets, selectedAssets]);
-  
-    useEffect(() => {
-      if (!filteredAddressAssetsWithSelectedQty.length) {
-        return;
-      }
-      if (ada == 0) {
-        (async () => {
-          const _minimum = await minimumLovelace(
-            filteredAddressAssetsWithSelectedQty,
-          );
-          setAda(_minimum / 1_000_000.0);
-        })();
-      }
-    }, [selectedAssets, filteredAddressAssetsWithSelectedQty]);
+    // Sum selected amounts by fingerprint
+    const byFp = selectedAssets.reduce<Map<string, bigint>>((m, s) => {
+      const amt = BigInt(s.amount ?? "0");
+      if (amt > 0n) m.set(s.fingerprint, (m.get(s.fingerprint) ?? 0n) + amt);
+      return m;
+    }, new Map());
+
+    // Keep only assets that were selected, and replace quantity with the selected amount
+    return thisAddressAssets.flatMap<AddressAsset>((a) => {
+      const sel = byFp.get(a.fingerprint) ?? 0n;
+      if (sel <= 0n) return [];
+      const have = BigInt(a.quantity ?? "0");
+      const qty = sel > have ? have : sel; // clamp to available; remove this line & use `sel` if you don't want clamping
+      return [{ ...a, quantity: qty.toString() }];
+    });
+  }, [thisAddressAssets, selectedAssets]);
+
+  useEffect(() => {
+    if (!filteredAddressAssetsWithSelectedQty.length) {
+      return;
+    }
+    if (ada == 0) {
+      (async () => {
+        const _minimum = await minimumLovelace(
+          filteredAddressAssetsWithSelectedQty,
+        );
+        setAda(_minimum / 1_000_000.0);
+      })();
+    }
+  }, [selectedAssets, filteredAddressAssetsWithSelectedQty]);
 
   const handleAddressValid = async (a: string) => {
     console.log(tokens.items);
     console.log(...tokensToAddressAssets(tokens));
-    
-    
+
     setVariant("error");
 
     if (!a.trim()) return setMessage("Wallet address is required.");

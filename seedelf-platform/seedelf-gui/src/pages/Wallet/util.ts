@@ -20,18 +20,22 @@ export const display_ascii = (text: string) => {
   return chars;
 };
 
-function simpleFingerprintSync(policyIdHex: string, assetNameHex: string): string {
+function simpleFingerprintSync(
+  policyIdHex: string,
+  assetNameHex: string,
+): string {
   const policy = hexToBytes(policyIdHex.toLowerCase());
-  const asset  = hexToBytes(assetNameHex.toLowerCase());
+  const asset = hexToBytes(assetNameHex.toLowerCase());
   const buf = new Uint8Array(policy.length + asset.length);
-  buf.set(policy, 0); buf.set(asset, policy.length);
+  buf.set(policy, 0);
+  buf.set(asset, policy.length);
   const hash = sha256(buf); // Uint8Array
   const hex = bytesToHex(hash).slice(0, 40);
   return hex;
 }
 
 export function tokensToAddressAssets(tokens: Tokens): AddressAsset[] {
-  return tokens.items.map(t => {
+  return tokens.items.map((t) => {
     const assetNameHex = bytesToHex(t.token_name);
     const fp = simpleFingerprintSync(t.policy_id, assetNameHex);
     return {
