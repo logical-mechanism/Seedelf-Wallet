@@ -37,7 +37,7 @@ validator contract(_any: Data) {
           //
           and {
             // zk proof to spend the utxo
-            schnorr.prove(
+            schnorr.verify(
               register.generator,
               register.public_value,
               proof.z_b,
