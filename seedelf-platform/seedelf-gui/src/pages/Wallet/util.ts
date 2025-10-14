@@ -1,5 +1,6 @@
 /// store util functions here
 import { Tokens, Token, AddressAsset } from "@/types/wallet";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 export const display_ascii = (text: string) => {
   let hex = text.slice(8, 38);
@@ -18,6 +19,31 @@ export const display_ascii = (text: string) => {
 
   return chars;
 };
+
+function simpleFingerprintSync(policyIdHex: string, assetNameHex: string): string {
+  const policy = hexToBytes(policyIdHex.toLowerCase());
+  const asset  = hexToBytes(assetNameHex.toLowerCase());
+  const buf = new Uint8Array(policy.length + asset.length);
+  buf.set(policy, 0); buf.set(asset, policy.length);
+  const hash = sha256(buf); // Uint8Array
+  const hex = bytesToHex(hash).slice(0, 40);
+  return hex;
+}
+
+export function tokensToAddressAssets(tokens: Tokens): AddressAsset[] {
+  return tokens.items.map(t => {
+    const assetNameHex = bytesToHex(t.token_name);
+    const fp = simpleFingerprintSync(t.policy_id, assetNameHex);
+    return {
+      address: "",
+      policy_id: t.policy_id.toLowerCase(),
+      asset_name: assetNameHex,
+      fingerprint: fp,
+      decimals: 0,
+      quantity: String(t.amount),
+    };
+  });
+}
 
 // Matches your types: Token.token_name = Uint8Array, Token.amount = number.
 // Merges by (policy_id, token_name) and clamps to Number.MAX_SAFE_INTEGER.

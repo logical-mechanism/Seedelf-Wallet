@@ -11,6 +11,7 @@
     "lint": "npx prettier --write 'src/**/*.{ts,tsx}'"
   },
   "dependencies": {
+    "@noble/hashes": "^2.0.1",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-fs": "^2.4.0",
     "@tauri-apps/plugin-opener": "^2",

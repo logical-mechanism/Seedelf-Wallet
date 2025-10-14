@@ -9,6 +9,7 @@ pub async fn extract_seedelf(
     network_flag: bool,
     address: String,
     lovelace: u64,
+    tokens: Assets,
     send_all: bool,
 ) -> String {
     let config: Config = match get_config(VARIANT, network_flag) {
@@ -23,7 +24,7 @@ pub async fn extract_seedelf(
             network_flag,
             address,
             lovelace,
-            Assets::new(),
+            tokens,
             None,
             *sk,
             send_all,

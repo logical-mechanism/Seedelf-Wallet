@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useOutletContext } from "react-router";
 import { SearchCheck, CircleQuestionMark } from "lucide-react";
 import {
   ShowNotification,
   NotificationVariant,
 } from "@/components/ShowNotification";
+import {
+  AssetSelectorModal,
+  SelectedAssetOut,
+} from "@/components/AssetSelectorModal";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ExplorerLinkModal } from "@/components/ExplorerLinkModal";
 import { TextField } from "@/components/TextField";
@@ -12,9 +16,11 @@ import { NumberField } from "@/components/NumberField";
 import { Checkbox } from "@/components/Checkbox";
 import { useNetwork } from "@/types/network";
 import { OutletContextType } from "@/types/layout";
+import { AddressAsset } from "@/types/wallet";
 import { extractSeedelf } from "./transactions";
 import { colorClasses } from "./colors";
-import { isNotAScript } from "./api";
+import { isNotAScript, minimumLovelace } from "./api";
+import { tokensToAddressAssets } from "./util";
 
 export function Extract() {
   const [message, setMessage] = useState<string | null>(null);
@@ -28,15 +34,58 @@ export function Extract() {
   const [submitting, setSubmitting] = useState(false);
   const [isSendAll, setIsSendAll] = useState<boolean>(false);
 
-  const { lovelace } = useOutletContext<OutletContextType>();
+  const { lovelace, tokens } = useOutletContext<OutletContextType>();
 
   const [txHash, setTxHash] = useState("");
 
   const [showConfirmationModal, setShowConfirmationModal] = useState(false);
   const [showExplorerLinkModal, setShowExplorerLinkModal] =
     useState<boolean>(false);
+  
+  const [showAssetSelectorModal, setShowAssetSelectorModal] =
+      useState<boolean>(false);
+  const [thisAddressAssets, setThisAddressAssets] = useState<AddressAsset[]>(tokensToAddressAssets(tokens));
+  const [selectedAssets, setSelectedAssets] = useState<SelectedAssetOut[]>([]);
+
+  const initialSelection = useMemo(() => selectedAssets, [selectedAssets]);
+
+  const filteredAddressAssetsWithSelectedQty = useMemo(() => {
+      // Sum selected amounts by fingerprint
+      const byFp = selectedAssets.reduce<Map<string, bigint>>((m, s) => {
+        const amt = BigInt(s.amount ?? "0");
+        if (amt > 0n) m.set(s.fingerprint, (m.get(s.fingerprint) ?? 0n) + amt);
+        return m;
+      }, new Map());
+  
+      // Keep only assets that were selected, and replace quantity with the selected amount
+      return thisAddressAssets.flatMap<AddressAsset>((a) => {
+        const sel = byFp.get(a.fingerprint) ?? 0n;
+        if (sel <= 0n) return [];
+        const have = BigInt(a.quantity ?? "0");
+        const qty = sel > have ? have : sel; // clamp to available; remove this line & use `sel` if you don't want clamping
+        return [{ ...a, quantity: qty.toString() }];
+      });
+    }, [thisAddressAssets, selectedAssets]);
+  
+    useEffect(() => {
+      if (!filteredAddressAssetsWithSelectedQty.length) {
+        return;
+      }
+      if (ada == 0) {
+        (async () => {
+          const _minimum = await minimumLovelace(
+            filteredAddressAssetsWithSelectedQty,
+          );
+          setAda(_minimum / 1_000_000.0);
+        })();
+      }
+    }, [selectedAssets, filteredAddressAssetsWithSelectedQty]);
 
   const handleAddressValid = async (a: string) => {
+    console.log(tokens.items);
+    console.log(...tokensToAddressAssets(tokens));
+    
+    
     setVariant("error");
 
     if (!a.trim()) return setMessage("Wallet address is required.");
@@ -60,6 +109,8 @@ export function Extract() {
     setAddressValid(false);
     setAda(0);
     setIsSendAll(false);
+    setThisAddressAssets([]);
+    setSelectedAssets([]);
   };
 
   const handleSubmit = async () => {
@@ -75,6 +126,7 @@ export function Extract() {
         network,
         address,
         lovelace,
+        filteredAddressAssetsWithSelectedQty,
         isSendAll,
       );
       if (_txHash) {
@@ -129,6 +181,20 @@ export function Extract() {
         }}
         onCancel={() => {
           setShowConfirmationModal(false);
+        }}
+      />
+
+      <AssetSelectorModal
+        open={showAssetSelectorModal}
+        assets={thisAddressAssets}
+        initialSelection={initialSelection}
+        onClose={() => {
+          setShowAssetSelectorModal(false);
+          setSelectedAssets([]);
+        }}
+        onConfirm={(chosen) => {
+          setSelectedAssets(chosen); // make selection available to the parent
+          setShowAssetSelectorModal(false);
         }}
       />
 
@@ -211,6 +277,17 @@ export function Extract() {
               disabled={submitting || !confirm}
             >
               Clear
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-right justity-right">
+          {thisAddressAssets.length != 0 && (
+            <button
+              onClick={() => setShowAssetSelectorModal(true)}
+              className={`rounded-xl ${colorClasses.indigo.bg} px-4 py-2 text-sm`}
+            >
+              Select Assets
             </button>
           )}
         </div>
