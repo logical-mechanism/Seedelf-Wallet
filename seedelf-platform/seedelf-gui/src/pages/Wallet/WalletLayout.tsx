@@ -49,6 +49,7 @@ export function WalletLayout() {
   const gatherWalletInfo = async () => {
     // initalize stuff
     setLovelace(0);
+    setTokens({ items: [] })
     setOwnedSeedelfs([]);
     setHistory([]);
 

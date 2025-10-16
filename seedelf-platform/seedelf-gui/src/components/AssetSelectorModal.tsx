@@ -199,6 +199,16 @@ export function AssetSelectorModal({
     });
   };
 
+  const selectEverything = () => {
+    setSelection((prev) => {
+      const next = { ...prev };
+      for (const a of filteredAssets) {
+        next[a.fingerprint] = { amountBase: "1" };
+      }
+      return next;
+    });
+  };
+
   if (!open) return null;
 
   return (
@@ -395,8 +405,7 @@ export function AssetSelectorModal({
               {selectedCount} selected
             </div>
 
-            {/* Middle: Clear + Select All (NFTs, only if present) */}
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex items-center justify-center gap-3">
               <button
                 type="button"
                 onClick={clearAll}
@@ -404,14 +413,22 @@ export function AssetSelectorModal({
               >
                 Clear
               </button>
+              <button
+                  type="button"
+                  onClick={selectEverything}
+                  className={`whitespace-nowrap rounded-xl px-3 py-2 text-sm border hover:bg-zinc-100 ${selectable ? "" : "hidden"}`}
+                  title="Select all tokens"
+                >
+                  Select Everything
+                </button>
               {hasNFTsFiltered && (
                 <button
                   type="button"
                   onClick={selectAllNFTs}
-                  className="rounded-xl px-3 py-2 text-sm border hover:bg-zinc-100"
+                  className={`whitespace-nowrap rounded-xl px-3 py-2 text-sm border hover:bg-zinc-100 ${selectable ? "" : "hidden"}`}
                   title="Select all 1-of-1 NFTs"
                 >
-                  Select All (NFTs)
+                  Select All NFTs
                 </button>
               )}
             </div>
