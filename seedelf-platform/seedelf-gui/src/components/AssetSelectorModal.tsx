@@ -414,13 +414,13 @@ export function AssetSelectorModal({
                 Clear
               </button>
               <button
-                  type="button"
-                  onClick={selectEverything}
-                  className={`whitespace-nowrap rounded-xl px-3 py-2 text-sm border hover:bg-zinc-100 ${selectable ? "" : "hidden"}`}
-                  title="Select all tokens"
-                >
-                  Select Everything
-                </button>
+                type="button"
+                onClick={selectEverything}
+                className={`whitespace-nowrap rounded-xl px-3 py-2 text-sm border hover:bg-zinc-100 ${selectable ? "" : "hidden"}`}
+                title="Select all tokens"
+              >
+                Select Everything
+              </button>
               {hasNFTsFiltered && (
                 <button
                   type="button"
