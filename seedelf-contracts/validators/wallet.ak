@@ -24,7 +24,7 @@ validator contract(_any: Data) {
     self: Transaction,
   ) {
     //
-    // first do a data structure check
+    // do a data structure check
     when maybe_register is {
       Some(register) ->
         if register is Register {
