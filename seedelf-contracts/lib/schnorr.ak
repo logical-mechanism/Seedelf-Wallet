@@ -73,11 +73,42 @@ fn randomize(datum: Register, s: State<Scalar>) -> Register {
   Register { generator: g_s |> g1.compress, public_value: u_s |> g1.compress }
 }
 
-test cheapest_hash() {
-  // blak2b_256 is the cheapest but we must blake2b_224 to prevent costly modulo field prime arthmetic
+test cheapest_hash1() {
   let s: ByteArray =
     #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
   crypto.blake2b_224(s) == #"0c97d8d889acb1d65d23e44212b0a4e16a57fc0ebcfea8f5f965f8ba"
+}
+
+test cheapest_hash2() {
+  let s: ByteArray =
+    #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  crypto.blake2b_256(s) == #"667f1e9b75c8eac1cccf77a2f82526a478b01ec0f26dd938b5b5b4ad0d856368"
+}
+
+test blake2b_224_to_scaler() {
+  let s: ByteArray =
+    #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  let c: State<Scalar> =
+    crypto.blake2b_224(s)
+      |> scalar.from_bytes
+  let n: Int = scalar.to_int(c)
+  and {
+    n == 1326213754908867643386542832476386926406432000867097109721424197818,
+    scalar.field_prime > n,
+  }
+}
+
+test blake2b_256_to_scaler() {
+  let s: ByteArray =
+    #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  let c: State<Scalar> =
+    crypto.blake2b_256(s)
+      |> scalar.from_bytes
+  let n: Int = scalar.to_int(c)
+  and {
+    n == 46360511376306354142291113884986684445147634496658193575979966595181178086248,
+    scalar.field_prime > n,
+  }
 }
 
 /// Schnorr's Σ-protocol to prove knowledge of the secret value x without revealing 
