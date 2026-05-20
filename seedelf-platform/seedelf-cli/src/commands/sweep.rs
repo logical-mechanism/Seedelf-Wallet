@@ -375,9 +375,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
         {
             Ok(execution_units) => {
                 if execution_units.get("error").is_some() {
-
                     anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
-
                 }
                 let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
                 budgets

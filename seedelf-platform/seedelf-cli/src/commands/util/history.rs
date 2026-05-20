@@ -36,12 +36,14 @@ pub(crate) async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> 
     let txs: Vec<TxResponse> = address_transactions(network_flag, wallet_addr.to_string()).await?;
     // println!("{:?}", txs);
     for tx in &txs {
-        let input_match = tx.input_registers.iter().any(|r| {
-            r.is_owned(scalar).unwrap_or(false)
-        });
-        let output_match = tx.output_registers.iter().any(|r| {
-            r.is_owned(scalar).unwrap_or(false)
-        });
+        let input_match = tx
+            .input_registers
+            .iter()
+            .any(|r| r.is_owned(scalar).unwrap_or(false));
+        let output_match = tx
+            .output_registers
+            .iter()
+            .any(|r| r.is_owned(scalar).unwrap_or(false));
 
         if (!args.receive_only || args.spend_only) && input_match {
             println!(

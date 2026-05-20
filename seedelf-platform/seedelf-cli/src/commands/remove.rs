@@ -194,9 +194,7 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
         {
             Ok(execution_units) => {
                 if execution_units.get("error").is_some() {
-
                     anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
-
                 }
                 let spend_cpu_units: u64 = execution_units
                     .pointer("/result/0/budget/cpu")

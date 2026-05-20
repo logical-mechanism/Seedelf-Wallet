@@ -114,7 +114,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
                 }
             }
         }
-        Err(err) => anyhow::bail!("Failed to fetch UTxOs: {err}")
+        Err(err) => anyhow::bail!("Failed to fetch UTxOs: {err}"),
     }
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;
@@ -193,14 +193,12 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
         {
             Ok(execution_units) => {
                 if execution_units.get("error").is_some() {
-
                     anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
-
                 }
                 let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
                 budgets
             }
-            Err(err) => anyhow::bail!("Failed to evaluate transaction: {err}")
+            Err(err) => anyhow::bail!("Failed to evaluate transaction: {err}"),
         };
 
     let tx_size: u64 = intermediate_tx
