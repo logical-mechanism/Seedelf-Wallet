@@ -16,10 +16,8 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
 
     let scalar: Scalar = setup::unlock_wallet_interactive();
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
 
     let seedelfs = display::all_seedelfs(
         scalar,

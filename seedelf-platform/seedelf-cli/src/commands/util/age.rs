@@ -58,10 +58,8 @@ fn format_duration(seconds: i64) -> String {
 pub(crate) async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
     println!(
         "\n{} {}",
         "Seedelf:".bright_blue(),

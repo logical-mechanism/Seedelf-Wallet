@@ -27,8 +27,8 @@ pub async fn is_their_an_update() {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch newest version: {err}\nWait a few moments and try again.");
-            std::process::exit(1);
+            // Non-fatal — GitHub downtime should not block CLI usage.
+            eprintln!("Warning: failed to fetch newest version: {err}");
         }
     }
 }
@@ -47,8 +47,8 @@ pub async fn block_number_and_time(network_flag: bool) {
             }
         }
         Err(err) => {
-            eprintln!("Failed to fetch blockchain tip: {err}\nWait a few moments and try again.");
-            std::process::exit(1);
+            // Non-fatal — informational display only.
+            eprintln!("Warning: failed to fetch blockchain tip: {err}");
         }
     }
 }
@@ -68,20 +68,17 @@ fn extract_all_owned_seedelfs(
     for utxo in utxos {
         // Extract bytes
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scalar
-            if inline_datum.is_owned(sk).unwrap() {
+            // utxo must be owned by this secret scalar; malformed Koios datum is "not owned"
+            if inline_datum.is_owned(sk).unwrap_or(false) {
                 // its owned but lets not count the seedelf in the balance
-                if contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
-                    let asset_name: &String = utxo
-                        .asset_list
-                        .as_ref()
-                        .and_then(|vec| {
-                            vec.iter()
-                                .find(|asset| asset.policy_id == seedelf_policy_id)
-                                .map(|asset| &asset.asset_name)
-                        })
-                        .unwrap();
-                    seedelfs.push(asset_name.to_string());
+                if contains_policy_id(&utxo.asset_list, seedelf_policy_id)
+                    && let Some(asset_name) = utxo.asset_list.as_ref().and_then(|vec| {
+                        vec.iter()
+                            .find(|asset| asset.policy_id == seedelf_policy_id)
+                            .map(|asset| asset.asset_name.clone())
+                    })
+                {
+                    seedelfs.push(asset_name);
                 }
             }
         }
@@ -110,8 +107,14 @@ pub fn print_seedelfs(items: Vec<String>) {
 }
 
 fn seedelf_label(seedelf: String) {
-    let substring: String = seedelf[8..38].to_string();
-    let label: String = hex_to_ascii(&substring).unwrap();
+    // Seedelf asset names are 32 bytes (64 hex chars) with the label embedded at
+    // offset 8..38. Skip silently if Koios hands us a shorter or non-hex name.
+    if seedelf.len() < 38 {
+        return;
+    }
+    let Ok(label) = hex_to_ascii(&seedelf[8..38]) else {
+        return;
+    };
     if !label.starts_with('.') {
         let cleaned: String = label.chars().filter(|&c| c != '.').collect();
         println!("Label: {}", cleaned.bright_yellow())

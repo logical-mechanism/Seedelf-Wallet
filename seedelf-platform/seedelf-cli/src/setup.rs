@@ -15,11 +15,14 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-/// Data structure for storing wallet information
-#[derive(Serialize, Deserialize)]
+/// Data structure for storing wallet information. The decoded hex private
+/// key lives in `private_key`; `ZeroizeOnDrop` wipes it when this struct
+/// goes out of scope so the hex never lingers in memory.
+#[derive(Serialize, Deserialize, ZeroizeOnDrop)]
 struct Wallet {
-    private_key: String, // Store the scalar as a hex string
+    private_key: String,
 }
 
 /// Data structure for storing wallet information
@@ -137,29 +140,33 @@ pub(crate) fn is_valid_password() -> String {
 
 /// Create a wallet file and save a random private key
 pub(crate) fn create_wallet(wallet_name: String, password: String) -> Result<()> {
-    // Generate a random private key
-    let sk: Scalar = random_scalar(); // Requires `Field` trait in scope
-    let private_key_bytes: [u8; 32] = sk.to_repr(); // Use `to_repr()` to get canonical bytes
-    let private_key_hex: String = hex::encode(private_key_bytes);
+    // Treat the password as one-shot — wipe on scope exit.
+    let password = Zeroizing::new(password);
 
-    // Serialize the wallet
+    // Generate a random private key
+    let sk: Scalar = random_scalar();
+    let mut private_key_bytes: [u8; 32] = sk.to_repr();
     let wallet: Wallet = Wallet {
-        private_key: private_key_hex,
+        private_key: hex::encode(private_key_bytes),
     };
-    let wallet_data: String = serde_json::to_string_pretty(&wallet)
-        .map_err(|e| anyhow!("Failed to serialize wallet: {e}"))?;
+    private_key_bytes.zeroize();
+
+    let wallet_data: Zeroizing<String> = Zeroizing::new(
+        serde_json::to_string_pretty(&wallet)
+            .map_err(|e| anyhow!("Failed to serialize wallet: {e}"))?,
+    );
 
     let salt: SaltString = SaltString::generate(&mut OsRng);
-    let mut output_key_material: [u8; 32] = [0u8; 32];
+    let mut output_key_material: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
     Argon2::default()
         .hash_password_into(
             password.as_bytes(),
             salt.to_string().as_bytes(),
-            &mut output_key_material,
+            output_key_material.as_mut_slice(),
         )
         .map_err(|e| anyhow!("Argon2 key derivation failed: {e}"))?;
 
-    let key = Key::<Aes256Gcm>::from_slice(&output_key_material);
+    let key = Key::<Aes256Gcm>::from_slice(output_key_material.as_slice());
     let cipher = Aes256Gcm::new(key);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
@@ -187,6 +194,8 @@ pub(crate) fn create_wallet(wallet_name: String, password: String) -> Result<()>
 
 /// Load the wallet file and deserialize the private key into a Scalar
 fn load_wallet(password: String) -> Result<Scalar> {
+    let password = Zeroizing::new(password);
+
     let seedelf_path: PathBuf = seedelf_home_path();
     let wallets = list_wallet_files(&seedelf_path)?;
     let wallet_path: PathBuf = match wallets.len() {
@@ -203,16 +212,16 @@ fn load_wallet(password: String) -> Result<Scalar> {
 
     let salt: SaltString = SaltString::from_b64(&encrypted_wallet.salt)
         .map_err(|e| anyhow!("Invalid salt format: {e}"))?;
-    let mut output_key_material: [u8; 32] = [0u8; 32];
+    let mut output_key_material: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
     Argon2::default()
         .hash_password_into(
             password.as_bytes(),
             salt.to_string().as_bytes(),
-            &mut output_key_material,
+            output_key_material.as_mut_slice(),
         )
         .map_err(|e| anyhow!("Argon2 key derivation failed: {e}"))?;
 
-    let key = Key::<Aes256Gcm>::from_slice(&output_key_material);
+    let key = Key::<Aes256Gcm>::from_slice(output_key_material.as_slice());
     let cipher = Aes256Gcm::new(key);
 
     let nonce_bytes = STANDARD
@@ -224,23 +233,31 @@ fn load_wallet(password: String) -> Result<Scalar> {
         .decode(&encrypted_wallet.data)
         .map_err(|e| anyhow!("Failed to decode encrypted data: {e}"))?;
 
-    let decrypted_data = cipher
-        .decrypt(nonce, encrypted_bytes.as_ref())
-        .map_err(|_| anyhow!("Failed to decrypt — wrong password?"))?;
+    let decrypted_data: Zeroizing<Vec<u8>> = Zeroizing::new(
+        cipher
+            .decrypt(nonce, encrypted_bytes.as_ref())
+            .map_err(|_| anyhow!("Failed to decrypt — wrong password?"))?,
+    );
 
-    let wallet: Wallet = serde_json::from_slice(&decrypted_data)
+    let wallet: Wallet = serde_json::from_slice(decrypted_data.as_slice())
         .map_err(|e| anyhow!("Failed to parse decrypted JSON: {e}"))?;
 
-    let key_bytes = hex::decode(wallet.private_key)
-        .map_err(|e| anyhow!("Failed to decode private key hex: {e}"))?;
+    let key_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(
+        hex::decode(&wallet.private_key)
+            .map_err(|e| anyhow!("Failed to decode private key hex: {e}"))?,
+    );
 
-    Scalar::from_repr(
+    let mut repr_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
         key_bytes
+            .as_slice()
             .try_into()
             .map_err(|_| anyhow!("Invalid key length"))?,
-    )
-    .into_option()
-    .ok_or_else(|| anyhow!("Failed to reconstruct Scalar from bytes"))
+    );
+    let scalar = Scalar::from_repr(*repr_bytes)
+        .into_option()
+        .ok_or_else(|| anyhow!("Failed to reconstruct Scalar from bytes"))?;
+    repr_bytes.zeroize();
+    Ok(scalar)
 }
 
 pub(crate) fn unlock_wallet_interactive() -> Scalar {

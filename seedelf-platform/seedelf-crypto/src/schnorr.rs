@@ -65,6 +65,14 @@ pub fn create_proof(
     bound: String,
     r: Scalar,
 ) -> Result<(String, String)> {
+    // Defense-in-depth: the on-chain validator rejects non-prime-order points,
+    // and producing a proof for a torsion-tainted Register would yield a UTxO
+    // the chain cannot accept. The CLI normally enforces this, but check here
+    // so any future direct caller can't bypass it.
+    if !datum.is_valid()? {
+        anyhow::bail!("Register points are not in the prime-order subgroup");
+    }
+
     let g1: G1Affine = G1Affine::from_compressed(
         &hex::decode(&datum.generator)
             .context("Failed to decode generator hex")?

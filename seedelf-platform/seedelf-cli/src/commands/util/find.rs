@@ -29,10 +29,8 @@ pub(crate) async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Res
         label.bright_green()
     );
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
 
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;

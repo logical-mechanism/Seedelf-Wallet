@@ -39,10 +39,8 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
     let params = epoch_params(network_flag).await?;
 
     let collat_addr: Address = address::collateral_address(network_flag);
@@ -116,10 +114,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
                 }
             }
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}");
-            std::process::exit(1);
-        }
+        Err(err) => anyhow::bail!("Failed to fetch UTxOs: {err}")
     }
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;
@@ -178,7 +173,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(extract_output)
-        .collateral_output(Output::new(addr.clone(), 5_000_000 - (tmp_fee) * 3 / 2))
+        .collateral_output(fee::collateral_output(addr.clone(), tmp_fee))
         .fee(tmp_fee)
         .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
@@ -197,17 +192,15 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
             .await
         {
             Ok(execution_units) => {
-                if let Some(_error) = execution_units.get("error") {
-                    println!("{execution_units:?}");
-                    std::process::exit(1);
+                if execution_units.get("error").is_some() {
+
+                    anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
+
                 }
                 let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
                 budgets
             }
-            Err(err) => {
-                eprintln!("Failed to evaluate transaction: {err}");
-                std::process::exit(1);
-            }
+            Err(err) => anyhow::bail!("Failed to evaluate transaction: {err}")
         };
 
     let tx_size: u64 = intermediate_tx
@@ -239,14 +232,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
         script_reference_fee.to_string().bright_white()
     );
 
-    // total fee is the sum of everything
-    let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
-    // total fee needs to be even for the collateral calculation to work
-    total_fee = if total_fee % 2 == 1 {
-        total_fee + 1
-    } else {
-        total_fee
-    };
+    let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
     println!(
         "{} {}",
         "Total Fee:".bright_blue(),
@@ -262,10 +248,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
 
     raw_tx = raw_tx
         .output(extract_output)
-        .collateral_output(Output::new(
-            collat_addr.clone(),
-            5_000_000 - (total_fee) * 3 / 2,
-        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee))
         .fee(total_fee);
 
     let (cpu, mem) = budgets.first().unwrap();

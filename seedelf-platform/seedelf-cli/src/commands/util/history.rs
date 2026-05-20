@@ -27,10 +27,8 @@ pub(crate) async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> 
     display::preprod_text(network_flag);
 
     let scalar: Scalar = setup::unlock_wallet_interactive();
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
 
     println!("\n{}\n", "Getting History..".bright_blue(),);
     let wallet_addr: Address =
@@ -39,16 +37,10 @@ pub(crate) async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> 
     // println!("{:?}", txs);
     for tx in &txs {
         let input_match = tx.input_registers.iter().any(|r| {
-            r.is_owned(scalar).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            })
+            r.is_owned(scalar).unwrap_or(false)
         });
         let output_match = tx.output_registers.iter().any(|r| {
-            r.is_owned(scalar).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            })
+            r.is_owned(scalar).unwrap_or(false)
         });
 
         if (!args.receive_only || args.spend_only) && input_match {

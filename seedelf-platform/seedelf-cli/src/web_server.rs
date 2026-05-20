@@ -23,7 +23,10 @@ pub(crate) async fn run_web_server(message: String, network_flag: bool) {
         let file = Asset::get("index.html").expect("index.html not found");
         let mut html = String::from_utf8(file.data.into_owned()).unwrap();
 
-        let dyn_msg = format!(r#"{{ "message": "{message}" }}"#);
+        // Escape the message via serde_json so embedded quotes, backslashes,
+        // or angle brackets can't break out of the JSON literal or inject HTML.
+        let escaped = serde_json::to_string(&message).unwrap_or_else(|_| "\"\"".to_string());
+        let dyn_msg = format!(r#"{{ "message": {escaped} }}"#);
         html = html.replace(r#"{ "message": "ACAB000000000000" }"#, &dyn_msg);
 
         let net_repl = if network_flag {

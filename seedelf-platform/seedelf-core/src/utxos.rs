@@ -140,20 +140,23 @@ pub fn collect_wallet_utxos(
 }
 
 /// Collect all the address utxos that are not an assumed collateral utxo.
+///
+/// Koios reports a token-less outpoint as either `Some(vec![])` or `None`; treat
+/// them identically. An earlier version filtered on `Some(_)` and silently
+/// dropped every pure-ADA UTxO whose `asset_list` came back `None`.
 pub fn collect_address_utxos(utxos: Vec<UtxoResponse>) -> Result<Vec<UtxoResponse>> {
     let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
-    // loop all the utxos found from the address
     for utxo in utxos {
-        // get the lovelace on this utxo
         let lovelace: u64 = utxo.value.parse::<u64>().context("Invalid Lovelace")?;
-        if let Some(assets) = &utxo.asset_list {
-            if assets.is_empty() && lovelace == 5_000_000 {
-                // its probably a collateral utxo
-            } else {
-                // its probably not a collateral utxo
-                usable_utxos.push(utxo);
-            }
+        let is_empty_asset_list = utxo
+            .asset_list
+            .as_ref()
+            .is_none_or(|assets| assets.is_empty());
+        if is_empty_asset_list && lovelace == 5_000_000 {
+            // probably the collateral UTxO — skip
+            continue;
         }
+        usable_utxos.push(utxo);
     }
     Ok(usable_utxos)
 }

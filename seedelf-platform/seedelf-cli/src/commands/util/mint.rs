@@ -66,10 +66,8 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
     let params = epoch_params(network_flag).await?;
 
     // we need this as the address type and not the shelley
@@ -193,10 +191,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     draft_tx = draft_tx
         .output(seedelf_output)
         .collateral_input(collateral_input(network_flag))
-        .collateral_output(Output::new(
-            collat_addr.clone(),
-            5_000_000 - (tmp_fee) * 3 / 2,
-        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee))
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
@@ -321,17 +316,15 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
             .await
         {
             Ok(execution_units) => {
-                if let Some(_error) = execution_units.get("error") {
-                    println!("{execution_units:?}");
-                    std::process::exit(1);
+                if execution_units.get("error").is_some() {
+
+                    anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
+
                 }
                 let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
                 budgets
             }
-            Err(err) => {
-                eprintln!("Failed to evaluate transaction: {err}");
-                std::process::exit(1);
-            }
+            Err(err) => anyhow::bail!("Failed to evaluate transaction: {err}")
         };
 
     let tx_size: u64 = intermediate_tx
@@ -367,14 +360,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         script_reference_fee.to_string().bright_white()
     );
 
-    // total fee is the sum of everything
-    let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
-    // total fee needs to be even for the collateral calculation to work
-    total_fee = if total_fee % 2 == 1 {
-        total_fee + 1
-    } else {
-        total_fee
-    };
+    let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
     println!(
         "{} {}",
         "Total Fee:".bright_blue(),
@@ -382,10 +368,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     );
 
     raw_tx = raw_tx
-        .collateral_output(Output::new(
-            collat_addr.clone(),
-            5_000_000 - (total_fee) * 3 / 2,
-        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee))
         .fee(total_fee);
 
     // need to check if there is change going back here
@@ -491,47 +474,24 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
                 hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
             );
 
-            match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
-                Ok(response) => {
-                    if let Some(_error) = response.get("contents") {
-                        println!("\nError: {response}");
-                        std::process::exit(1);
-                    }
-                    println!("\nTransaction Successfully Submitted!");
-                    println!(
-                        "\nTx Hash: {}",
-                        response.as_str().unwrap_or("default").bright_cyan()
-                    );
-                    if network_flag {
-                        println!(
-                            "{}",
-                            format!(
-                                "\nhttps://preprod.cardanoscan.io/transaction/{}",
-                                response.as_str().unwrap_or("default")
-                            )
-                            .bright_purple()
-                        );
-                    } else {
-                        println!(
-                            "{}",
-                            format!(
-                                "\nhttps://cardanoscan.io/transaction/{}",
-                                response.as_str().unwrap_or("default")
-                            )
-                            .bright_purple()
-                        );
-                    }
-                }
-                Err(err) => {
-                    eprintln!("Failed to submit tx: {err}");
-                    std::process::exit(1);
-                }
+            let response = submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await?;
+            let tx_hash = fee::parse_submit_response(&response)?;
+            println!("\nTransaction Successfully Submitted!");
+            println!("\nTx Hash: {}", tx_hash.bright_cyan());
+            if network_flag {
+                println!(
+                    "{}",
+                    format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}")
+                        .bright_purple()
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
+                );
             }
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}");
-            std::process::exit(1);
-        }
+        Err(err) => anyhow::bail!("Failed to fetch UTxOs: {err}")
     }
 
     Ok(())

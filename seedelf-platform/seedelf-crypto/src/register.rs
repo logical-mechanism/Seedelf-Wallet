@@ -1,5 +1,5 @@
 use crate::schnorr::random_scalar;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use blstrs::{G1Affine, G1Projective, Scalar};
 use hex;
 use hex::FromHex;
@@ -127,6 +127,17 @@ impl Register {
         )
         .into_option()
         .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+
+        // Refuse to rerandomize a non-prime-order register — the on-chain
+        // validator rejects torsion points, and writing one back to chain
+        // produces a permanently-locked UTxO.
+        if !(bool::from(g1.is_on_curve())
+            && bool::from(g1.is_torsion_free())
+            && bool::from(u.is_on_curve())
+            && bool::from(u.is_torsion_free()))
+        {
+            bail!("Register points are not in the prime-order subgroup");
+        }
 
         // get a random scalar
         let d: Scalar = random_scalar();

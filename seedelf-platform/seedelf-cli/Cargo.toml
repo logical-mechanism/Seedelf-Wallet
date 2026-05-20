@@ -34,6 +34,7 @@ serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 tokio = { version = "1.41.1", features = ["full"] }
 warp = "0.3.7"
+zeroize = { version = "1.8", features = ["derive"] }
 # seedelf stuff
 seedelf-crypto = { workspace = true }
 seedelf-core = { workspace = true }

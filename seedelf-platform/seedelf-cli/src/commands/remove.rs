@@ -42,10 +42,8 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
     let params = epoch_params(network_flag).await?;
 
     // we need to make sure that the network flag and the address provided makes sense here
@@ -122,10 +120,7 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
     draft_tx = draft_tx
         .output(Output::new(addr.clone(), total_lovelace - tmp_fee))
         .collateral_input(transaction::collateral_input(network_flag))
-        .collateral_output(Output::new(
-            collat_addr.clone(),
-            5_000_000 - (tmp_fee) * 3 / 2,
-        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee))
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
@@ -198,9 +193,10 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
             .await
         {
             Ok(execution_units) => {
-                if let Some(_error) = execution_units.get("error") {
-                    println!("Error: {execution_units:?}");
-                    std::process::exit(1);
+                if execution_units.get("error").is_some() {
+
+                    anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
+
                 }
                 let spend_cpu_units: u64 = execution_units
                     .pointer("/result/0/budget/cpu")
@@ -253,10 +249,7 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
 
     raw_tx = raw_tx
         .output(Output::new(addr.clone(), total_lovelace - total_fee))
-        .collateral_output(Output::new(
-            collat_addr.clone(),
-            5_000_000 - (total_fee) * 3 / 2,
-        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee))
         .fee(total_fee)
         .add_spend_redeemer(
             input_vector.clone().remove(0),
@@ -309,10 +302,7 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
 
     let tx_cbor: String = hex::encode(signed_tx_cbor.clone().tx_bytes);
 
-    let tx_hash = match submit_tx(tx_cbor.clone(), network_flag).await {
-        Ok(response) => response.as_str().unwrap_or("default").to_string(),
-        Err(_) => String::new(),
-    };
+    let tx_hash = fee::parse_submit_response(&submit_tx(tx_cbor.clone(), network_flag).await?)?;
 
     println!(
         "{} {}",

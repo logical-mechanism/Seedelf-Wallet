@@ -64,10 +64,8 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
         bail!("No Lovelace or Assets Provided.");
     }
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
     let params = epoch_params(network_flag).await?;
 
     let mut selected_tokens: Assets = Assets::new();

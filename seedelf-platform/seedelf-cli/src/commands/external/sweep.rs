@@ -20,10 +20,8 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
     display::preprod_text(network_flag);
     println!("\n{}", "Sweeping All External UTxOs".bright_blue(),);
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
     let params = epoch_params(network_flag).await?;
 
     let wallet_addr: Address =
@@ -181,41 +179,20 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
         hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
     );
 
-    match submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await {
-        Ok(response) => {
-            if let Some(_error) = response.get("contents") {
-                println!("\nError: {response}");
-                std::process::exit(1);
-            }
-            println!("\nTransaction Successfully Submitted!");
-            println!(
-                "\nTx Hash: {}",
-                response.as_str().unwrap_or("default").bright_cyan()
-            );
-            if network_flag {
-                println!(
-                    "{}",
-                    format!(
-                        "\nhttps://preprod.cardanoscan.io/transaction/{}",
-                        response.as_str().unwrap_or("default")
-                    )
-                    .bright_purple()
-                );
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\nhttps://cardanoscan.io/transaction/{}",
-                        response.as_str().unwrap_or("default")
-                    )
-                    .bright_purple()
-                );
-            }
-        }
-        Err(err) => {
-            eprintln!("Failed to submit tx: {err}");
-            std::process::exit(1);
-        }
+    let response = submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await?;
+    let tx_hash = fee::parse_submit_response(&response)?;
+    println!("\nTransaction Successfully Submitted!");
+    println!("\nTx Hash: {}", tx_hash.bright_cyan());
+    if network_flag {
+        println!(
+            "{}",
+            format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}").bright_purple()
+        );
+    } else {
+        println!(
+            "{}",
+            format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
+        );
     }
 
     Ok(())

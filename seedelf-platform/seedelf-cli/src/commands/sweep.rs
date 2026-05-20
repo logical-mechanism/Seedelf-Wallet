@@ -86,10 +86,8 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config =
+        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
     let params = epoch_params(network_flag).await?;
 
     // address or ada handle must be found
@@ -266,10 +264,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
     draft_tx = draft_tx
         .output(sweep_output)
         .collateral_input(collateral_input(network_flag))
-        .collateral_output(Output::new(
-            collat_addr.clone(),
-            5_000_000 - (tmp_fee) * 3 / 2,
-        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee))
         .fee(tmp_fee)
         .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
@@ -379,9 +374,10 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
             .await
         {
             Ok(execution_units) => {
-                if let Some(_error) = execution_units.get("error") {
-                    println!("{execution_units:?}");
-                    std::process::exit(1);
+                if execution_units.get("error").is_some() {
+
+                    anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
+
                 }
                 let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
                 budgets
@@ -432,10 +428,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
 
     raw_tx = raw_tx
         .output(sweep_output)
-        .collateral_output(Output::new(
-            collat_addr.clone(),
-            5_000_000 - (total_fee) * 3 / 2,
-        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee))
         .fee(total_fee);
 
     // need to check if there is change going back here
@@ -533,11 +526,9 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
             Err(e) => bail!("Collateral Service Request Failed: {e}"),
         };
 
-    let tx_hash = match submit_tx(hex::encode(signed_tx_cbor.clone().tx_bytes), network_flag).await
-    {
-        Ok(response) => response.as_str().unwrap_or("default").to_string(),
-        Err(_) => String::new(),
-    };
+    let tx_hash = fee::parse_submit_response(
+        &submit_tx(hex::encode(signed_tx_cbor.clone().tx_bytes), network_flag).await?,
+    )?;
 
     println!(
         "{} {}",
@@ -565,22 +556,18 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
 
     println!("\nTx Cbor: {}", hex::encode(tx_cbor.clone()).white());
 
-    if tx_hash.is_empty() {
-        println!("\nTransaction Successfully Failed!");
+    println!("\nTransaction Successfully Submitted!");
+    println!("\nTx Hash: {}", tx_hash.bright_cyan());
+    if network_flag {
+        println!(
+            "{}",
+            format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}").bright_purple()
+        );
     } else {
-        println!("\nTransaction Successfully Submitted!");
-        println!("\nTx Hash: {}", tx_hash.bright_cyan());
-        if network_flag {
-            println!(
-                "{}",
-                format!("\nhttps://preprod.cardanoscan.io/transaction/{}", tx_hash).bright_purple()
-            );
-        } else {
-            println!(
-                "{}",
-                format!("\nhttps://cardanoscan.io/transaction/{}", tx_hash).bright_purple()
-            );
-        }
+        println!(
+            "{}",
+            format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
+        );
     }
 
     Ok(())
