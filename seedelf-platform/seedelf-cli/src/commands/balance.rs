@@ -2,7 +2,6 @@ use crate::setup;
 use anyhow::Result;
 use blstrs::Scalar;
 use colored::Colorize;
-use hex;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_core::utxos;
 use seedelf_display::display;

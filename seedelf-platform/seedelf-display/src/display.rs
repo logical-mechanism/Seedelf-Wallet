@@ -120,7 +120,7 @@ fn seedelf_label(seedelf: String) {
 
 pub fn hex_to_ascii(hex: &str) -> Result<String, &'static str> {
     // Ensure the length of the hex string is even
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err("Hex string must have an even length");
     }
 
