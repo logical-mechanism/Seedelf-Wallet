@@ -73,14 +73,14 @@ pub const MAINNET_STAKE_HASH: [u8; 28] =
 
 // collateral info for giveme.my
 pub const COLLATERAL_HASH: [u8; 28] =
-    hex!("7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4");
+    hex!("1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8");
 pub const COLLATERAL_PUBLIC_KEY: [u8; 32] =
-    hex!("fa2025e788fae01ce10deffff386f992f62a311758819e4e3792887396c171ba");
+    hex!("754c1db51aaee2e939b05b529ff5e210d8469afebcd2e487dae6f125fd500356");
 
 pub const PREPROD_COLLATERAL_UTXO: [u8; 32] =
-    hex!("1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f");
+    hex!("ef18e00c412c06b74606c5e68901693c3974b2073dbec1dfd8b74f01af3102a1");
 pub const MAINNET_COLLATERAL_UTXO: [u8; 32] =
-    hex!("e62351eacbdd001aee77a91805840d2b81f77feebbf2439fb01b79e76c42c839");
+    hex!("1c2fbce4e3974f721b27226645c7a35d648698c77f62bc337b40bc2cd294e9cd");
 
 // ADA Handle Policy Ids
 pub const ADA_HANDLE_POLICY_ID: &str = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a";
