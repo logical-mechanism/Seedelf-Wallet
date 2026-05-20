@@ -108,7 +108,9 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
     // calculate all the required minimums then check the lovelace
     let minimum_lovelaces: Vec<u64> = all_selected_tokens
         .iter()
-        .map(|assets| wallet_minimum_lovelace_with_assets(&params, assets.clone()).unwrap_or_default())
+        .map(|assets| {
+            wallet_minimum_lovelace_with_assets(&params, assets.clone()).unwrap_or_default()
+        })
         .collect();
     let lovelaces: Vec<u64> = args.lovelaces.unwrap_or_default();
     let all_greater = lovelaces
@@ -169,8 +171,13 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         .into_iter()
         .fold(Assets::new(), |acc, a| acc.merge(a).unwrap_or(acc));
     let usable_utxos: Vec<UtxoResponse> = if selected_utxos.is_none() {
-        utxos::select(&params, usable_utxos, total_lovelace, total_selected_tokens.clone())
-            .unwrap_or_default()
+        utxos::select(
+            &params,
+            usable_utxos,
+            total_lovelace,
+            total_selected_tokens.clone(),
+        )
+        .unwrap_or_default()
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
         match utxos::parse_tx_utxos(selected_utxos.unwrap_or_default()) {
@@ -281,7 +288,8 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
             .unwrap_or_default()
             .to_vec()
             .unwrap_or_default();
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
+        let minimum: u64 =
+            wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - total_lovelace - tmp_fee;
@@ -411,7 +419,8 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
             .unwrap_or_default()
             .to_vec()
             .unwrap_or_default();
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
+        let minimum: u64 =
+            wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - total_lovelace - total_fee;

@@ -794,4 +794,3 @@ pub async fn epoch_params(network_flag: bool) -> Result<ProtocolParameters> {
         cost_model_v3,
     })
 }
-

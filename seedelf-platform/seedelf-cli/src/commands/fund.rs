@@ -114,7 +114,8 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
         }
     }
 
-    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(&params, selected_tokens.clone())?;
+    let minimum_lovelace: u64 =
+        wallet_minimum_lovelace_with_assets(&params, selected_tokens.clone())?;
     if args.lovelace.is_some_and(|l| l < minimum_lovelace) {
         bail!("Not Enough Lovelace On UTxO");
     }
@@ -161,9 +162,13 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
     // all non collateral utxos, assume 5 ada for collateral
     let every_non_collatreal_utxo: Vec<UtxoResponse> =
         utxos::collect_address_utxos(every_utxo_at_address).unwrap_or_default();
-    let usable_utxos: Vec<UtxoResponse> =
-        utxos::select(&params, every_non_collatreal_utxo, lovelace, selected_tokens.clone())
-            .unwrap_or_default();
+    let usable_utxos: Vec<UtxoResponse> = utxos::select(
+        &params,
+        every_non_collatreal_utxo,
+        lovelace,
+        selected_tokens.clone(),
+    )
+    .unwrap_or_default();
 
     if usable_utxos.is_empty() {
         bail!("Not Enough Lovelace/Tokens");
@@ -212,7 +217,8 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
     let mut number_of_change_utxo: usize = change_token_per_utxo.len();
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
+        let minimum: u64 =
+            wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - lovelace - tmp_fee;
@@ -268,7 +274,8 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
     let number_of_change_utxo: usize = change_token_per_utxo.len();
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
+        let minimum: u64 =
+            wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - lovelace - tx_fee;

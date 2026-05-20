@@ -201,7 +201,8 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
         bail!("Supplied Address Is Incorrect");
     }
 
-    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(&params, selected_tokens.clone())?;
+    let minimum_lovelace: u64 =
+        wallet_minimum_lovelace_with_assets(&params, selected_tokens.clone())?;
     let scalar: Scalar = setup::unlock_wallet_interactive();
 
     let lovelace: u64 = args.lovelace.unwrap_or(minimum_lovelace);

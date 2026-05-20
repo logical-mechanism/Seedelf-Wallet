@@ -33,18 +33,24 @@ fn test_wallet_minimum_lovelace() {
 #[test]
 fn test_base_address_minimum_lovelace() {
     let address: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
-    let minimum: u64 =
-        transaction::address_minimum_lovelace_with_assets(&fixture_params(), address, Assets::new())
-            .unwrap();
+    let minimum: u64 = transaction::address_minimum_lovelace_with_assets(
+        &fixture_params(),
+        address,
+        Assets::new(),
+    )
+    .unwrap();
     assert_eq!(minimum, 978_370)
 }
 
 #[test]
 fn test_enterprise_address_minimum_lovelace() {
     let address: &str = "addr_test1wp4rlm30ulytuz4j2jrj35ma9maram24kw43cnewphndzsqgdm9k0";
-    let minimum: u64 =
-        transaction::address_minimum_lovelace_with_assets(&fixture_params(), address, Assets::new())
-            .unwrap();
+    let minimum: u64 = transaction::address_minimum_lovelace_with_assets(
+        &fixture_params(),
+        address,
+        Assets::new(),
+    )
+    .unwrap();
     assert_eq!(minimum, 857_690)
 }
 
@@ -67,7 +73,11 @@ fn token_name_picks_lexicographically_smallest_input() {
     let hex = hex::encode(&name);
     // prefix + empty label + formatted index "09" + tx_hash (truncated to 64 hex total)
     assert!(hex.starts_with("5eed0e1f"));
-    assert_eq!(&hex[8..10], "09", "index byte should be from the 0x11... input");
+    assert_eq!(
+        &hex[8..10],
+        "09",
+        "index byte should be from the 0x11... input"
+    );
     assert!(
         hex[10..].starts_with("1111"),
         "tx_hash bytes should be from the 0x11... input, got {hex}"
@@ -87,7 +97,11 @@ fn token_name_is_independent_of_input_ordering() {
     let a = input(0x11, 9);
     let b = input(0x22, 1);
     let c = input(0x33, 5);
-    let n1 = transaction::seedelf_token_name("label".to_string(), Some(&vec![a.clone(), b.clone(), c.clone()])).unwrap();
+    let n1 = transaction::seedelf_token_name(
+        "label".to_string(),
+        Some(&vec![a.clone(), b.clone(), c.clone()]),
+    )
+    .unwrap();
     let n2 = transaction::seedelf_token_name("label".to_string(), Some(&vec![c, b, a])).unwrap();
     assert_eq!(n1, n2);
 }
@@ -95,8 +109,7 @@ fn token_name_is_independent_of_input_ordering() {
 #[test]
 fn token_name_is_exactly_32_bytes() {
     let inputs = vec![input(0xab, 0)];
-    let name =
-        transaction::seedelf_token_name("seedelf-label".to_string(), Some(&inputs)).unwrap();
+    let name = transaction::seedelf_token_name("seedelf-label".to_string(), Some(&inputs)).unwrap();
     assert_eq!(name.len(), 32);
 }
 

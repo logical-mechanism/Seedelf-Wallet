@@ -50,8 +50,7 @@ async fn find_nft_and_ada() {
             .unwrap(),
         )
         .unwrap();
-    let selected_utxos =
-        utxos::select(&fixture_params(), utxo_vector, 5_000_000, tokens).unwrap();
+    let selected_utxos = utxos::select(&fixture_params(), utxo_vector, 5_000_000, tokens).unwrap();
 
     for utxo in selected_utxos {
         println!("nft {:?}", string_to_u64(utxo.value));
@@ -94,11 +93,7 @@ fn ada_utxo(tx_hash_byte: u8, lovelace: u64) -> UtxoResponse {
     }
 }
 
-fn token_utxo(
-    tx_hash_byte: u8,
-    lovelace: u64,
-    tokens: &[(&str, &str, u64)],
-) -> UtxoResponse {
+fn token_utxo(tx_hash_byte: u8, lovelace: u64, tokens: &[(&str, &str, u64)]) -> UtxoResponse {
     let asset_list: Vec<KoiosAsset> = tokens
         .iter()
         .map(|(pid, name, qty)| KoiosAsset {
@@ -124,8 +119,7 @@ fn need_token() -> Assets {
 
 #[test]
 fn select_empty_utxos_returns_empty() {
-    let selected =
-        utxos::select(&fixture_params(), Vec::new(), 1_000_000, Assets::new()).unwrap();
+    let selected = utxos::select(&fixture_params(), Vec::new(), 1_000_000, Assets::new()).unwrap();
     assert!(selected.is_empty());
 }
 
@@ -181,7 +175,10 @@ fn select_combines_multiple_ada_utxos_for_lovelace() {
         .map(|u| string_to_u64(u.value.clone()).unwrap())
         .min()
         .unwrap();
-    assert!(smallest_picked >= 3_000_000, "1M UTxO should be left behind");
+    assert!(
+        smallest_picked >= 3_000_000,
+        "1M UTxO should be left behind"
+    );
 }
 
 #[test]
@@ -261,10 +258,7 @@ fn select_treats_none_asset_list_as_pure_ada_for_sorting() {
     // A larger UTxO with `None` asset_list and a smaller pure-ada UTxO with
     // `Some(vec![])`. Both mean "no native tokens"; the larger one should win
     // the largest-first sort regardless of how the no-token state is encoded.
-    let utxos = vec![
-        ada_utxo(0x01, 2_000_000),
-        ada_utxo_none(0x02, 5_000_000),
-    ];
+    let utxos = vec![ada_utxo(0x01, 2_000_000), ada_utxo_none(0x02, 5_000_000)];
     let selected = utxos::select(&fixture_params(), utxos, 1_500_000, Assets::new()).unwrap();
     assert_eq!(selected.len(), 1);
     assert_eq!(
