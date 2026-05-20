@@ -11,7 +11,7 @@ use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTran
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_core::address;
-use seedelf_core::assets::{Asset, Assets};
+use seedelf_core::assets::Assets;
 use seedelf_core::constants::{
     COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO, get_config,
 };
@@ -50,16 +50,20 @@ pub(crate) struct TransforArgs {
     )]
     lovelaces: Option<Vec<u64>>,
 
-    /// repeated custom token string
-    /// "pid1:tkn1=amt1,pid2:tkn2=amt2"
+    /// Native tokens for the *n*th seedelf in the same order as `--seedelfs`.
+    /// Format `<policy_id>.<token_name>=<amount>`, comma-separated for multiple
+    /// tokens going to the same seedelf. Pass an empty value (`--asset ""`)
+    /// to skip a recipient.
     #[arg(
-        short = 't',
-        long,
-        action = clap::ArgAction::Append,      // collect occurrences
-        num_args = 0..=1,                // allow bare flag; see note below
-        default_missing_value = ""       // bare `--tokens` becomes ""
+        long = "asset",
+        value_name = "PID.TKN=AMT",
+        action = clap::ArgAction::Append,
+        num_args = 0..=1,
+        default_missing_value = "",
+        help = "Native tokens for the matching seedelf: <policy_id>.<token_name>=<amount>, comma-separated.",
+        display_order = 3
     )]
-    tokens: Vec<String>,
+    assets: Vec<String>,
 
     /// Optional repeated 'txId#txIdx'
     #[arg(long = "utxo", help = "The utxos to spend.", display_order = 6)]
@@ -80,31 +84,21 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         bail!("Error: Must be sending to at least 1 seedelf.");
     }
 
-    let mut all_selected_tokens: Vec<Assets> = Vec::new();
-    if args.tokens.is_empty() {
-        all_selected_tokens = vec![Assets::new(); args.seedelfs.len()];
+    let all_selected_tokens: Vec<Assets> = if args.assets.is_empty() {
+        vec![Assets::new(); args.seedelfs.len()]
     } else {
-        // "pid1:tkn1=amt1,pid2:tkn2=amt2"
-        for token in args.tokens {
-            let mut selected_tokens: Assets = Assets::new();
-            for part in token.split(',') {
-                let part = part.trim();
-                if part.is_empty() {
-                    continue;
-                }
-
-                let (lhs, amt_str) = part.split_once('=').unwrap_or_default();
-                let (pid, tkn) = lhs.split_once(':').unwrap_or_default();
-                let amt: u64 = amt_str.trim().parse().unwrap_or_default();
-                if pid.is_empty() || tkn.is_empty() || amt == 0 {
-                    continue;
-                }
-                let new_asset = Asset::new(pid.to_string(), tkn.to_string(), amt)?;
-                selected_tokens = selected_tokens.add(new_asset)?;
-            }
-            all_selected_tokens.push(selected_tokens);
+        if args.assets.len() != args.seedelfs.len() {
+            bail!(
+                "--asset must be supplied once per --seedelfs (got {} assets for {} seedelfs); use empty `--asset \"\"` to skip a recipient",
+                args.assets.len(),
+                args.seedelfs.len()
+            );
         }
-    }
+        args.assets
+            .iter()
+            .map(|spec| Assets::parse(spec))
+            .collect::<Result<Vec<_>>>()?
+    };
     // calculate all the required minimums then check the lovelace
     let minimum_lovelaces: Vec<u64> = all_selected_tokens
         .iter()

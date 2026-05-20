@@ -6,7 +6,7 @@ use colored::Colorize;
 use pallas_addresses::Address;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use seedelf_core::address;
-use seedelf_core::assets::{Asset, Assets};
+use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};
 use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_core::utxos;
@@ -44,45 +44,23 @@ pub(crate) struct FundArgs {
     )]
     lovelace: Option<u64>,
 
-    /// Optional repeated `policy-id`
+    /// Native tokens to include, repeatable. Format `<policy_id>.<token_name>=<amount>`.
+    /// Multiple tokens can also be comma-separated within a single value.
     #[arg(
-        long = "policy-id",
-        help = "The policy id for the asset.",
-        display_order = 4,
-        requires = "token_name",
-        requires = "amount"
+        long = "asset",
+        value_name = "PID.TKN=AMT",
+        action = clap::ArgAction::Append,
+        help = "Native token to send: <policy_id>.<token_name>=<amount>. Repeat or comma-separate for multiple.",
+        display_order = 4
     )]
-    policy_id: Option<Vec<String>>,
-
-    /// Optional repeated `token-name`
-    #[arg(
-        long = "token-name",
-        help = "The token name for the asset.",
-        display_order = 5,
-        requires = "policy_id",
-        requires = "amount"
-    )]
-    token_name: Option<Vec<String>>,
-
-    /// Optional repeated `amount`
-    #[arg(
-        long = "amount",
-        help = "The amount for the asset.",
-        display_order = 6,
-        requires = "token_name",
-        requires = "policy_id"
-    )]
-    amount: Option<Vec<u64>>,
+    assets: Vec<String>,
 }
 
 pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
-    // its ok not to define lovelace but in that case an asset has to be define
-    if args.lovelace.is_none()
-        && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none())
-    {
+    if args.lovelace.is_none() && args.assets.is_empty() {
         bail!("No Lovelace or Assets Provided.");
     }
 
@@ -92,26 +70,9 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
     });
     let params = epoch_params(network_flag).await?;
 
-    // lets collect the tokens if they exist
     let mut selected_tokens: Assets = Assets::new();
-    if let (Some(policy_id), Some(token_name), Some(amount)) =
-        (args.policy_id, args.token_name, args.amount)
-    {
-        if policy_id.len() != token_name.len() || policy_id.len() != amount.len() {
-            bail!("Error: Each --policy-id must have a corresponding --token-name and --amount.",);
-        }
-
-        for ((pid, tkn), amt) in policy_id
-            .into_iter()
-            .zip(token_name.into_iter())
-            .zip(amount.into_iter())
-        {
-            if amt == 0 {
-                bail!("Error: Token Amount must be positive");
-            }
-            let new_asset = Asset::new(pid, tkn, amt)?;
-            selected_tokens = selected_tokens.add(new_asset)?;
-        }
+    for spec in &args.assets {
+        selected_tokens = selected_tokens.merge(Assets::parse(spec)?)?;
     }
 
     let minimum_lovelace: u64 =

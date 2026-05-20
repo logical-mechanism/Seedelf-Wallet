@@ -11,7 +11,7 @@ use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTran
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_core::address;
-use seedelf_core::assets::{Asset, Assets};
+use seedelf_core::assets::Assets;
 use seedelf_core::constants::{
     ADA_HANDLE_POLICY_ID, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO,
     get_config,
@@ -59,46 +59,26 @@ pub(crate) struct SweepArgs {
     )]
     all: bool,
 
-    /// Optional repeated `policy-id`
+    /// Native tokens to include, repeatable. Format `<policy_id>.<token_name>=<amount>`.
     #[arg(
-        long = "policy-id",
-        help = "The policy id for the asset.",
-        display_order = 4,
-        requires = "token_name",
-        requires = "amount"
+        long = "asset",
+        value_name = "PID.TKN=AMT",
+        action = clap::ArgAction::Append,
+        help = "Native token to send: <policy_id>.<token_name>=<amount>. Repeat or comma-separate for multiple.",
+        display_order = 4
     )]
-    policy_id: Option<Vec<String>>,
-
-    /// Optional repeated `token-name`
-    #[arg(
-        long = "token-name",
-        help = "The token name for the asset.",
-        display_order = 5,
-        requires = "policy_id",
-        requires = "amount"
-    )]
-    token_name: Option<Vec<String>>,
-
-    /// Optional repeated `amount`
-    #[arg(
-        long = "amount",
-        help = "The amount for the asset.",
-        display_order = 6,
-        requires = "token_name",
-        requires = "policy_id"
-    )]
-    amount: Option<Vec<u64>>,
+    assets: Vec<String>,
 
     /// Optional ADA Handle
     #[arg(
         long = "ada-handle",
         help = "ADA handle without the $.",
-        display_order = 7
+        display_order = 5
     )]
     ada_handle: Option<String>,
 
     /// Optional repeated 'txId#txIdx'
-    #[arg(long = "utxo", help = "The utxos to spend.", display_order = 8)]
+    #[arg(long = "utxo", help = "The utxos to spend.", display_order = 6)]
     utxos: Option<Vec<String>>,
 }
 
@@ -148,44 +128,17 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
     };
     let addr: Address = Address::from_bech32(outbound_address.as_str()).unwrap();
 
-    // need to check about if all then assets is none too etc
-    if !args.all
-        && (args.lovelace.is_none()
-            && (args.policy_id.is_none() || args.token_name.is_none() || args.amount.is_none()))
-    {
-        bail!("Either --lovelace or --all must be specified.");
+    if !args.all && args.lovelace.is_none() && args.assets.is_empty() {
+        bail!("Either --lovelace, --asset, or --all must be specified.");
     }
 
-    if args.all
-        && (args.lovelace.is_some()
-            || args.policy_id.is_some()
-            || args.token_name.is_some()
-            || args.amount.is_some())
-    {
-        bail!("--lovelace and --all cannot be used together.");
+    if args.all && (args.lovelace.is_some() || !args.assets.is_empty()) {
+        bail!("--all cannot be combined with --lovelace or --asset.");
     }
 
-    // lets collect the tokens if they exist
     let mut selected_tokens: Assets = Assets::new();
-    if let (Some(policy_id), Some(token_name), Some(amount)) =
-        (args.policy_id, args.token_name, args.amount)
-    {
-        if policy_id.len() != token_name.len() || policy_id.len() != amount.len() {
-            bail!("Error: Each --policy-id must have a corresponding --token-name and --amount.");
-        }
-
-        for ((pid, tkn), amt) in policy_id
-            .into_iter()
-            .zip(token_name.into_iter())
-            .zip(amount.into_iter())
-        {
-            if amt == 0 {
-                bail!("Error: Token Amount must be positive");
-            }
-
-            let new_asset = Asset::new(pid, tkn, amt)?;
-            selected_tokens = selected_tokens.add(new_asset)?;
-        }
+    for spec in &args.assets {
+        selected_tokens = selected_tokens.merge(Assets::parse(spec)?)?;
     }
 
     let address_minimum_lovelace: u64 =
