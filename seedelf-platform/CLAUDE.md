@@ -13,7 +13,6 @@ Cargo workspace rooted at [Cargo.toml](Cargo.toml), resolver `"3"`, edition `202
 - [seedelf-core](seedelf-core/) — wallet domain logic: address/asset/UTxO selection, [constants.rs](seedelf-core/src/constants.rs) (hardcoded script hashes and reference UTxOs per `variant`), tx building on Pallas 0.33.
 - [seedelf-display](seedelf-display/) — TUI formatting, colors, version-check helpers.
 - [seedelf-cli](seedelf-cli/) — binary entrypoint ([main.rs](seedelf-cli/src/main.rs)). One file per subcommand under [src/commands/](seedelf-cli/src/commands/); `util/` and `external/` are subcommand groups with their own `mod.rs`.
-- [seedelf-gui/src-tauri](seedelf-gui/) — Tauri 2 shell. **Being dropped; do not invest in new GUI features.**
 
 Dependency direction: `cli` → `core` → `crypto` + `koios` + `display`. The workspace `[patch.crates-io]` table rewrites the published `seedelf-*` crates to local paths so edits propagate without a publish — never remove this when bumping versions, and always bump `[workspace.package].version` together with the `[workspace.dependencies]` entries (they must match).
 
@@ -45,4 +44,3 @@ Formatting is governed by [rustfmt.toml](rustfmt.toml). No project-level lint sc
 - **Script hashes are baked in.** [seedelf-core/src/constants.rs](seedelf-core/src/constants.rs) hardcodes the wallet contract hash, seedelf policy ID, and reference UTxOs for each `variant`. If `../seedelf-contracts/compile.sh` is re-run (or the `acabcafe` seed changes), these must be updated here — see [../seedelf-contracts/README.md](../seedelf-contracts/README.md) for the canonical values.
 - **Torsion-free points and matching scalars** are protocol invariants — violating them produces permanently-locked UTxOs. The CLI enforces this, but any new code constructing `Register`s directly must call `is_torsion_free()` and re-randomize with the same `d` on both `generator` and `public_value`. See root CLAUDE.md "Core protocol invariants".
 - **Pallas is pinned to 0.33.0** across the workspace. Bumping it is a coordinated change — `pallas-txbuilder`'s API drifts between minor versions.
-- The GUI member (`seedelf-gui/src-tauri`) is still in the workspace `members` list. If/when it's removed, also drop the React app under [seedelf-gui/](seedelf-gui/) and any GUI-only deps that no other crate uses.
