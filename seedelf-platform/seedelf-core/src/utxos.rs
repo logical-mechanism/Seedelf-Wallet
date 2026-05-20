@@ -183,13 +183,14 @@ fn do_select(
     // all the found assets
     let mut found_assets: Assets = Assets::new();
 
-    // sort by largest ada first
-    // (empty asset lists first)
+    // Sort: no-token UTxOs first, then by descending lovelace value within
+    // each group. Koios reports a token-less outpoint as either `Some(vec![])`
+    // or `None`; both must group together.
     utxos.sort_by(|a, b| {
-        let a_group_key = a.asset_list.as_ref().is_some_and(|list| list.is_empty());
-        let b_group_key = b.asset_list.as_ref().is_some_and(|list| list.is_empty());
+        let a_has_tokens = a.asset_list.as_ref().is_some_and(|list| !list.is_empty());
+        let b_has_tokens = b.asset_list.as_ref().is_some_and(|list| !list.is_empty());
 
-        b_group_key.cmp(&a_group_key).then_with(|| {
+        a_has_tokens.cmp(&b_has_tokens).then_with(|| {
             string_to_u64(b.value.clone())
                 .into_iter()
                 .cmp(string_to_u64(a.value.clone()))
@@ -203,38 +204,39 @@ fn do_select(
         let mut utxo_assets: Assets = Assets::new();
         let mut added: bool = false;
 
-        // lets keep track if we found any assets while searching
-        if let Some(assets) = utxo.clone().asset_list {
-            if !assets.is_empty() {
-                for token in assets.clone() {
-                    utxo_assets = utxo_assets
-                        .add(
-                            Asset::new(
-                                token.policy_id,
-                                token.asset_name,
-                                string_to_u64(token.quantity).context("Invalid Asset Amount")?,
-                            )
-                            .context("Invalid Asset")?,
+        // Treat `None` and `Some(vec![])` identically — both mean "no native
+        // tokens here". An earlier version of this branch dropped `None`
+        // through entirely, leaving such UTxOs unselectable until the
+        // tokens-already-found path fired.
+        let asset_list: Vec<seedelf_koios::koios::Asset> =
+            utxo.asset_list.clone().unwrap_or_default();
+        if !asset_list.is_empty() {
+            for token in asset_list {
+                utxo_assets = utxo_assets
+                    .add(
+                        Asset::new(
+                            token.policy_id,
+                            token.asset_name,
+                            string_to_u64(token.quantity).context("Invalid Asset Amount")?,
                         )
-                        .context("Can't Add Assets")?;
-                }
-                // if this utxo has the assets we need but we haven't found it all yet then add it
-                if utxo_assets.any(tokens.clone()) && !found_assets.contains(tokens.clone()) {
-                    selected_utxos.push(utxo.clone());
-                    current_lovelace_sum += value;
-                    found_assets = found_assets
-                        .merge(utxo_assets.clone())
-                        .context("Can't Merge Assets")?;
-                    added = true;
-                }
-            } else {
-                // no tokens here just lovelace so add it
-                if current_lovelace_sum < lovelace {
-                    selected_utxos.push(utxo.clone());
-                    current_lovelace_sum += value;
-                    added = true;
-                }
+                        .context("Invalid Asset")?,
+                    )
+                    .context("Can't Add Assets")?;
             }
+            // if this utxo has the assets we need but we haven't found it all yet then add it
+            if utxo_assets.any(tokens.clone()) && !found_assets.contains(tokens.clone()) {
+                selected_utxos.push(utxo.clone());
+                current_lovelace_sum += value;
+                found_assets = found_assets
+                    .merge(utxo_assets.clone())
+                    .context("Can't Merge Assets")?;
+                added = true;
+            }
+        } else if current_lovelace_sum < lovelace {
+            // no tokens here just lovelace so add it
+            selected_utxos.push(utxo.clone());
+            current_lovelace_sum += value;
+            added = true;
         }
 
         // the utxo is not pure ada and doesnt contain what you need but you need ada because you already found the tokens so add it
@@ -262,17 +264,21 @@ fn do_select(
             } else {
                 1
             };
-            // we need lovelace for the goal and the change here
-            if current_lovelace_sum - multiplier * minimum >= lovelace_goal {
-                // it is!
+            // we need lovelace for both the spend goal AND the change min-UTxO.
+            // Compare via addition instead of subtraction — degenerate token
+            // UTxOs (lots of accessory tokens, little ADA) can make the change
+            // floor exceed gathered lovelace, which would underflow u64.
+            let change_floor: u64 = multiplier.saturating_mul(minimum);
+            let total_needed: u64 = lovelace_goal.saturating_add(change_floor);
+            if current_lovelace_sum >= total_needed {
                 found_enough = true;
                 break;
             } else {
-                // its not, try again but increase the lovelace by the minimum we would need
+                // not yet — bump the lovelace target by the change floor and retry
                 return do_select(
                     params,
                     utxos.clone(),
-                    lovelace + multiplier * minimum,
+                    lovelace.saturating_add(change_floor),
                     tokens.clone(),
                     lovelace_goal,
                 );

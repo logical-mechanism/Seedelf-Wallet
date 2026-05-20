@@ -241,3 +241,69 @@ fn select_no_tokens_needed_ignores_token_utxos_when_pure_ada_sufficient() {
         "should have picked the pure-ada UTxO"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Edge cases that were previously broken.
+
+/// `asset_list: None` represents "no native tokens" the same way
+/// `Some(vec![])` does. Build it directly so tests stay honest.
+fn ada_utxo_none(tx_hash_byte: u8, lovelace: u64) -> UtxoResponse {
+    UtxoResponse {
+        tx_hash: hex::encode([tx_hash_byte; 32]),
+        value: lovelace.to_string(),
+        asset_list: None,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn select_treats_none_asset_list_as_pure_ada_for_sorting() {
+    // A larger UTxO with `None` asset_list and a smaller pure-ada UTxO with
+    // `Some(vec![])`. Both mean "no native tokens"; the larger one should win
+    // the largest-first sort regardless of how the no-token state is encoded.
+    let utxos = vec![
+        ada_utxo(0x01, 2_000_000),
+        ada_utxo_none(0x02, 5_000_000),
+    ];
+    let selected = utxos::select(&fixture_params(), utxos, 1_500_000, Assets::new()).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(
+        string_to_u64(selected[0].value.clone()).unwrap(),
+        5_000_000,
+        "the larger UTxO should be picked even when its asset_list is None"
+    );
+}
+
+#[test]
+fn select_uses_none_asset_list_utxo_when_no_tokens_needed() {
+    // A wallet whose only UTxO returns `asset_list: None` should still be
+    // selectable for a no-tokens search.
+    let utxos = vec![ada_utxo_none(0x01, 5_000_000)];
+    let selected = utxos::select(&fixture_params(), utxos, 1_000_000, Assets::new()).unwrap();
+    assert_eq!(selected.len(), 1);
+}
+
+#[test]
+fn select_does_not_panic_when_change_min_exceeds_gathered_lovelace() {
+    // Degenerate token UTxO: very little ADA but many accessory tokens. After
+    // selecting it the change-min math is `multiplier * minimum` > the
+    // gathered lovelace, which previously underflowed `current_lovelace_sum -
+    // multiplier * minimum`. The function must surface this as a normal
+    // "not enough" empty result, not a panic.
+    let mut extras: Vec<(&str, &str, u64)> = Vec::new();
+    // 30 distinct accessory tokens trip the >MAXIMUM_TOKENS_PER_UTXO (20)
+    // branch so the multiplier becomes 2; with realistic min-UTxO values for
+    // 20-token outputs (~2M lovelace), 2 * minimum easily exceeds 1M.
+    let names: Vec<String> = (0u8..30).map(|i| format!("{:02x}", i)).collect();
+    for name in &names {
+        extras.push((PID_EXTRA, name.as_str(), 1));
+    }
+    let mut tokens_vec = vec![(PID_NEEDED, "aa", 1)];
+    tokens_vec.extend(extras);
+    let utxos = vec![token_utxo(0x01, 1_000_000, &tokens_vec)];
+    let selected = utxos::select(&fixture_params(), utxos, 1_000_000, need_token()).unwrap();
+    assert!(
+        selected.is_empty(),
+        "should bail out cleanly instead of underflowing"
+    );
+}
