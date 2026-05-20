@@ -1,16 +1,12 @@
+use crate::commands::fee;
 use crate::setup;
 use crate::web_server;
 use anyhow::{Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
-use hex;
 use pallas_addresses::Address;
-use pallas_crypto::key::ed25519::SecretKey;
-use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use pallas_wallet::PrivateKey;
-use rand_core::OsRng;
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, get_config, plutus_v3_cost_model};
@@ -211,12 +207,8 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
         bail!("Invalid Transaction");
     }
 
-    // fake signature for tx size estimation
-    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
-
     let tx_size: u64 = intermediate_tx
-        .sign(fake_signer_private_key)
+        .sign(fee::fake_signer())
         .unwrap()
         .tx_bytes
         .0
@@ -224,17 +216,11 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
         .try_into()
         .unwrap();
 
-    let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    let tx_fee: u64 = fee::linear_fee(tx_size);
     let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
     let script_reference_fee: u64 = config.contract.seedelf_contract_size * 15;
 
-    let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
-    // we add a single lovelace so the 3/2 * fee has no rounding issues during the collateral calculation
-    total_fee = if total_fee % 2 == 1 {
-        total_fee + 1
-    } else {
-        total_fee
-    };
+    let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
 
     let mut change_output: Output =
         Output::new(addr.clone(), total_lovelace - min_utxo - total_fee);

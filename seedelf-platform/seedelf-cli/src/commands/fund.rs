@@ -1,14 +1,10 @@
+use crate::commands::fee;
 use crate::web_server;
 use anyhow::{Result, bail};
 use clap::Args;
 use colored::Colorize;
-use hex;
 use pallas_addresses::Address;
-use pallas_crypto::key::ed25519::SecretKey;
-use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use pallas_wallet::PrivateKey;
-use rand_core::OsRng;
 use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};
@@ -253,13 +249,8 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
     // build an intermediate tx for fee estimation
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
-    // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
-
-    // we need the script size here
     let tx_size: u64 = intermediate_tx
-        .sign(fake_signer_private_key)
+        .sign(fee::fake_signer())
         .unwrap()
         .tx_bytes
         .0
@@ -267,8 +258,7 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
         .try_into()
         .unwrap();
     // floor division means its safer to just add 1 lovelace
-    let tx_fee: u64 =
-        fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default())) + 1;
+    let tx_fee: u64 = fee::linear_fee(tx_size) + 1;
 
     // a max tokens per change output here
     let change_token_per_utxo: Vec<Assets> = change_tokens

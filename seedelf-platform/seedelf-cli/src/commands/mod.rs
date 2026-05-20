@@ -1,6 +1,7 @@
 pub(crate) mod balance;
 pub(crate) mod create;
 pub(crate) mod external;
+pub(crate) mod fee;
 pub(crate) mod fund;
 pub(crate) mod remove;
 pub(crate) mod sweep;

@@ -1,3 +1,4 @@
+use crate::commands::fee;
 use crate::setup;
 use anyhow::{Result, bail};
 use blstrs::Scalar;
@@ -6,7 +7,6 @@ use colored::Colorize;
 use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::{PublicKey, SecretKey};
 use pallas_primitives::Hash;
-use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
@@ -371,35 +371,23 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
             }
         };
 
-    // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
-
     let tx_size: u64 = intermediate_tx
         .sign(one_time_private_key)
         .unwrap()
-        .sign(fake_signer_private_key)
+        .sign(fee::fake_signer())
         .unwrap()
         .tx_bytes
         .0
         .len()
         .try_into()
         .unwrap();
-    let tx_fee: u64 = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    let tx_fee: u64 = fee::linear_fee(tx_size);
 
-    // This probably should be a function
     let compute_fee: u64 = total_computation_fee(budgets.clone());
 
     let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
 
-    // total fee is the sum of everything
-    let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
-    // total fee needs to be even for the collateral calculation to work
-    total_fee = if total_fee % 2 == 1 {
-        total_fee + 1
-    } else {
-        total_fee
-    };
+    let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
 
     raw_tx = raw_tx
         .collateral_output(Output::new(
