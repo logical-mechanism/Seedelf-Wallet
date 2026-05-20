@@ -126,7 +126,8 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
             Ok(potential_addr) => potential_addr,
         }
     };
-    let addr: Address = Address::from_bech32(outbound_address.as_str()).unwrap();
+    let addr: Address = Address::from_bech32(outbound_address.as_str())
+        .map_err(|e| anyhow::anyhow!("Supplied Address Is Incorrect: {e}"))?;
 
     if !args.all && args.lovelace.is_none() && args.assets.is_empty() {
         bail!("Either --lovelace, --asset, or --all must be specified.");
@@ -220,8 +221,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
             utxo.tx_index,
         );
         let inline_datum: Register = extract_bytes_with_logging(&utxo.inline_datum)
-            .ok_or("Not Register Type".to_string())
-            .unwrap();
+            .ok_or_else(|| anyhow::anyhow!("Wallet UTxO datum is not a Register"))?;
         // draft and raw are built the same here
         draft_tx = draft_tx.input(this_input.clone());
         input_vector.push(this_input.clone());
@@ -512,27 +512,26 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
 
     let witness_public_key: PublicKey = PublicKey::from(COLLATERAL_PUBLIC_KEY);
 
-    let signed_tx_cbor: BuiltTransaction = match witness_collateral(tx_cbor.clone(), network_flag)
-        .await
-    {
-        Ok(witness) => {
-            let witness_cbor = match witness.get("witness").and_then(|v| v.as_str()) {
-                Some(w) if w.len() >= 128 => w,
-                _ => bail!("Collateral Service Returned Unexpected Response: {witness}"),
-            };
-            let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
-            let witness_vector: [u8; 64] = hex::decode(witness_sig)
-                .map_err(|e| anyhow::anyhow!("Collateral Witness Hex Decode Failed: {e}"))?
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("Collateral Witness Wrong Length"))?;
+    let signed_tx_cbor: BuiltTransaction =
+        match witness_collateral(tx_cbor.clone(), network_flag).await {
+            Ok(witness) => {
+                let witness_cbor = match witness.get("witness").and_then(|v| v.as_str()) {
+                    Some(w) if w.len() >= 128 => w,
+                    _ => bail!("Collateral Service Returned Unexpected Response: {witness}"),
+                };
+                let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
+                let witness_vector: [u8; 64] = hex::decode(witness_sig)
+                    .map_err(|e| anyhow::anyhow!("Collateral Witness Hex Decode Failed: {e}"))?
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Collateral Witness Wrong Length"))?;
 
-            tx.sign(PrivateKey::from(one_time_secret_key.clone()))
-                .unwrap()
-                .add_signature(witness_public_key, witness_vector)
-                .unwrap()
-        }
-        Err(e) => bail!("Collateral Service Request Failed: {e}"),
-    };
+                tx.sign(PrivateKey::from(one_time_secret_key.clone()))
+                    .unwrap()
+                    .add_signature(witness_public_key, witness_vector)
+                    .unwrap()
+            }
+            Err(e) => bail!("Collateral Service Request Failed: {e}"),
+        };
 
     let tx_hash = match submit_tx(hex::encode(signed_tx_cbor.clone().tx_bytes), network_flag).await
     {

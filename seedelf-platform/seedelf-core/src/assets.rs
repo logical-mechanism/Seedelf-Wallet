@@ -61,12 +61,16 @@ impl Asset {
     /// * `Err(String)` - If the `policy_id` or `token_name` do not match.
     pub fn add(&self, other: &Asset) -> Result<Self> {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
-            bail!("Assets must have the same policy_id and token_name to be subtracted")
+            bail!("Assets must have the same policy_id and token_name to be added")
         }
+        let amount = self
+            .amount
+            .checked_add(other.amount)
+            .ok_or_else(|| anyhow::anyhow!("Asset addition overflow"))?;
         Ok(Self {
             policy_id: self.policy_id,
             token_name: self.token_name.clone(),
-            amount: self.amount + other.amount,
+            amount,
         })
     }
 
@@ -84,10 +88,14 @@ impl Asset {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
             bail!("Assets must have the same policy_id and token_name to be subtracted")
         }
+        let amount = self
+            .amount
+            .checked_sub(other.amount)
+            .ok_or_else(|| anyhow::anyhow!("Asset subtraction underflow"))?;
         Ok(Self {
             policy_id: self.policy_id,
             token_name: self.token_name.clone(),
-            amount: self.amount - other.amount,
+            amount,
         })
     }
 

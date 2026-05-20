@@ -47,38 +47,39 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
 
     let collat_addr: Address = address::collateral_address(network_flag);
     // we need to make sure that the network flag and the address provided makes sense here
-    let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
+    let addr: Address = Address::from_bech32(args.address.as_str())
+        .map_err(|e| anyhow::anyhow!("Supplied Address Is Incorrect: {e}"))?;
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
         bail!("Supplied Address Is Incorrect");
     }
 
-    let mut empty_datum_utxo = UtxoResponse::default();
-    match utxo_info(&args.utxo, network_flag).await {
+    let empty_datum_utxo = match utxo_info(&args.utxo, network_flag).await {
         Ok(utxos) => {
-            if !utxos.is_empty() {
-                empty_datum_utxo = utxos.first().unwrap().clone();
-                if empty_datum_utxo.inline_datum.is_some() {
-                    bail!("UTxO has datum");
-                }
-                let utxo_addr: Address = Address::from_bech32(&empty_datum_utxo.address).unwrap();
-                if utxo_addr
-                    != address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
-                {
-                    bail!("UTxO not in wallet");
-                }
-                if empty_datum_utxo.is_spent {
-                    bail!("UTxO is spent");
-                }
-            } else {
-                bail!("No UTxO Found");
+            let utxo = utxos
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("No UTxO Found"))?
+                .clone();
+            if utxo.inline_datum.is_some() {
+                bail!("UTxO has datum");
             }
+            let utxo_addr: Address = Address::from_bech32(&utxo.address)
+                .map_err(|e| anyhow::anyhow!("UTxO address is not valid bech32: {e}"))?;
+            if utxo_addr
+                != address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
+            {
+                bail!("UTxO not in wallet");
+            }
+            if utxo.is_spent {
+                bail!("UTxO is spent");
+            }
+            utxo
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxO: {err}\nWait a few moments and try again.");
+            bail!("Failed to fetch UTxO: {err}\nWait a few moments and try again.");
         }
-    }
+    };
     let (empty_utxo_lovelace, empty_utxo_tokens) =
         utxos::assets_of(vec![empty_datum_utxo.clone()])?;
     let minimum_lovelace: u64 =

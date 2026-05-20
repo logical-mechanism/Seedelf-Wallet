@@ -48,7 +48,8 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
     let params = epoch_params(network_flag).await?;
 
     // we need to make sure that the network flag and the address provided makes sense here
-    let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
+    let addr: Address = Address::from_bech32(args.address.as_str())
+        .map_err(|e| anyhow::anyhow!("Supplied Address Is Incorrect: {e}"))?;
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {

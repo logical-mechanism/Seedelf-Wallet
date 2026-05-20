@@ -128,8 +128,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
             utxo.tx_index,
         );
         let inline_datum: Register = extract_bytes_with_logging(&utxo.inline_datum)
-            .ok_or("Not Register Type".to_string())
-            .unwrap();
+            .ok_or_else(|| anyhow::anyhow!("Wallet UTxO datum is not a Register"))?;
         draft_tx = draft_tx.input(this_input.clone());
         input_vector.push(this_input.clone());
         // do the registers

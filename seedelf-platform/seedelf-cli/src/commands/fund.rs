@@ -82,7 +82,8 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
     }
 
     // we need to make sure that the network flag and the address provided makes sense here
-    let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
+    let addr: Address = Address::from_bech32(args.address.as_str())
+        .map_err(|e| anyhow::anyhow!("Supplied Address Is Incorrect: {e}"))?;
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
@@ -109,12 +110,12 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
         every_utxo_at_script,
     ) {
         Ok(Some(utxo)) => utxo,
-        _ => UtxoResponse::default(),
+        Ok(None) => bail!("Seedelf {} not found on chain", args.seedelf),
+        Err(e) => bail!("Failed to look up seedelf {}: {e}", args.seedelf),
     };
 
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
-        .ok_or("Not Register Type".to_string())
-        .unwrap_or_default();
+        .ok_or_else(|| anyhow::anyhow!("Seedelf datum is not a Register"))?;
 
     let every_utxo_at_address: Vec<UtxoResponse> =
         utxos::get_address_utxos(&args.address, network_flag)

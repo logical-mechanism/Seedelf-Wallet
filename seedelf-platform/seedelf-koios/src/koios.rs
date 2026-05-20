@@ -4,6 +4,17 @@ use reqwest::{Client, Error, Response};
 use seedelf_crypto::register::Register;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::LazyLock;
+use std::time::Duration;
+
+/// Shared HTTP client with sane timeouts. Reuses TCP connections across calls.
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("Failed to build reqwest client")
+});
 
 /// Represents the latest blockchain tip information from Koios.
 #[derive(Deserialize, Debug)]
@@ -35,9 +46,11 @@ pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{network}.koios.rest/api/v1/tip");
 
-    // Make the GET request and parse the JSON response
-    let response: Vec<BlockchainTip> = reqwest::get(&url)
+    let response: Vec<BlockchainTip> = HTTP_CLIENT
+        .get(&url)
+        .send()
         .await?
+        .error_for_status()?
         .json::<Vec<BlockchainTip>>()
         .await?;
 
@@ -105,7 +118,6 @@ pub async fn credential_utxos(
     let network: &str = if network_flag { "preprod" } else { "api" };
     // this is searching the wallet contract. We have to collect the entire utxo set to search it.
     let url: String = format!("https://{network}.koios.rest/api/v1/credential_utxos");
-    let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -118,14 +130,15 @@ pub async fn credential_utxos(
 
     loop {
         // Make the POST request
-        let response: Response = client
+        let response: Response = HTTP_CLIENT
             .post(url.clone())
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .query(&[("offset", offset.to_string())])
             .json(&payload)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         let mut utxos: Vec<UtxoResponse> = response.json().await?;
         // Break the loop if no more results
@@ -170,7 +183,6 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
     // if you have 1000 utxos in that wallets that cannot pay for anything then something
     // is wrong in that wallet
     let url: String = format!("https://{network}.koios.rest/api/v1/address_utxos");
-    let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -179,13 +191,14 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
     });
 
     // Make the POST request
-    let response: Response = client
+    let response: Response = HTTP_CLIENT
         .post(url)
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .json(&payload)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
     let utxos: Vec<UtxoResponse> = response.json().await?;
 
@@ -305,16 +318,16 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
     });
 
     let url: String = format!("https://{network}.koios.rest/api/v1/ogmios");
-    let client: Client = reqwest::Client::new();
 
     // Make the POST request
-    let response: Response = client
+    let response: Response = HTTP_CLIENT
         .post(url)
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .json(&payload)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
     response.json().await
 }
@@ -343,19 +356,19 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
 pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
     let network: &str = if network_flag { "preprod" } else { "mainnet" };
     let url: String = format!("https://www.giveme.my/{network}/collateral/");
-    let client: Client = reqwest::Client::new();
 
     let payload: Value = serde_json::json!({
         "tx": tx_cbor,
     });
 
     // Make the POST request
-    let response: Response = client
+    let response: Response = HTTP_CLIENT
         .post(url)
         .header("content-type", "application/json")
         .json(&payload)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
     response.json().await
 }
@@ -382,22 +395,27 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
 ///
 /// - Decodes the transaction CBOR hex string into raw binary data.
 /// - Sends the binary data as the body of a POST request with `Content-Type: application/cbor`.
-pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
+pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{network}.koios.rest/api/v1/submittx");
-    let client: Client = reqwest::Client::new();
 
     // Decode the hex string into binary data
-    let data: Vec<u8> = hex::decode(&tx_cbor).unwrap();
+    let data: Vec<u8> = hex::decode(&tx_cbor).context("Invalid hex in tx cbor")?;
 
-    let response: Response = client
+    let response: Response = HTTP_CLIENT
         .post(url)
         .header("Content-Type", "application/cbor")
         .body(data) // Send the raw binary data as the body of the request
         .send()
-        .await?;
+        .await
+        .context("Failed to submit transaction")?
+        .error_for_status()
+        .context("Koios rejected the transaction")?;
 
-    response.json().await
+    response
+        .json()
+        .await
+        .context("Failed to parse submit_tx response")
 }
 
 pub async fn ada_handle_address(
@@ -417,21 +435,24 @@ pub async fn ada_handle_address(
     let url: String = format!(
         "https://{network}.koios.rest/api/v1/asset_nft_address?_asset_policy={ada_handle_policy_id}&_asset_name={token_name}",
     );
-    let client: Client = reqwest::Client::new();
 
-    let response: Response = match client
+    let response: Response = match HTTP_CLIENT
         .get(url)
         .header("Content-Type", "application/json")
         .send()
         .await
+        .and_then(|r| r.error_for_status())
     {
         Ok(resp) => resp,
         Err(err) => return Err(format!("HTTP request failed: {err}")),
     };
 
-    let outcome: Value = response.json().await.unwrap();
+    let outcome: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse ADA handle response: {e}"))?;
     let vec_outcome = serde_json::from_value::<Vec<serde_json::Value>>(outcome)
-        .expect("Failed to parse outcome as Vec<Value>");
+        .map_err(|e| format!("Failed to parse outcome as array: {e}"))?;
 
     // Borrow from the longer-lived variable
     let payment_address = match vec_outcome
@@ -470,7 +491,6 @@ pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoRespons
     // if you have 1000 utxos in that wallets that cannot pay for anything then something
     // is wrong in that wallet
     let url: String = format!("https://{network}.koios.rest/api/v1/utxo_info");
-    let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -479,13 +499,14 @@ pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoRespons
     });
 
     // Make the POST request
-    let response: Response = client
+    let response: Response = HTTP_CLIENT
         .post(url)
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .json(&payload)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
     let utxos: Vec<UtxoResponse> = response.json().await?;
 
@@ -500,7 +521,6 @@ pub async fn nft_utxo(
 ) -> Result<Vec<UtxoResponse>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{network}.koios.rest/api/v1/asset_utxos");
-    let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -509,13 +529,14 @@ pub async fn nft_utxo(
     });
 
     // Make the POST request
-    let response: Response = client
+    let response: Response = HTTP_CLIENT
         .post(url)
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .json(&payload)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
     let utxos: Vec<UtxoResponse> = response.json().await?;
 
@@ -540,7 +561,6 @@ pub async fn datum_from_datum_hash(
 ) -> Result<Vec<ResolvedDatum>, Error> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{network}.koios.rest/api/v1/datum_info");
-    let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -548,13 +568,14 @@ pub async fn datum_from_datum_hash(
     });
 
     // Make the POST request
-    let response: Response = client
+    let response: Response = HTTP_CLIENT
         .post(url)
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .json(&payload)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
     let datums: Vec<ResolvedDatum> = response.json().await?;
     Ok(datums)
@@ -573,21 +594,25 @@ pub async fn asset_history(
     token_name: String,
     network_flag: bool,
     limit: u64,
-) -> Result<Vec<History>, Error> {
+) -> Result<Vec<History>> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!(
         "https://{network}.koios.rest/api/v1/asset_txs?_asset_policy={policy_id}&_asset_name={token_name}&_after_block_height=50000&_history=true&limit={limit}"
     );
-    let client: Client = reqwest::Client::new();
 
-    // Make the POST request
-    let response: Response = client
+    let response: Response = HTTP_CLIENT
         .get(url)
         .header("content-type", "application/json")
         .send()
-        .await?;
+        .await
+        .context("Failed to fetch asset history")?
+        .error_for_status()
+        .context("Koios returned an error for asset history")?;
 
-    let data: Vec<History> = response.json().await.unwrap();
+    let data: Vec<History> = response
+        .json()
+        .await
+        .context("Failed to parse asset history response")?;
     Ok(data)
 }
 
@@ -674,7 +699,6 @@ pub async fn address_transactions(
     let address_tx_url: String = format!("https://{network}.koios.rest/api/v1/address_txs");
 
     let tx_info_url: String = format!("https://{network}.koios.rest/api/v1/tx_info");
-    let client: Client = reqwest::Client::new();
 
     // Prepare the request payload
     let address_payload: Value = serde_json::json!({
@@ -686,14 +710,15 @@ pub async fn address_transactions(
     let shift: i32 = 65;
 
     loop {
-        let address_response: Response = client
+        let address_response: Response = HTTP_CLIENT
             .post(address_tx_url.clone())
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .query(&[("offset", offset.to_string()), ("limit", shift.to_string())])
             .json(&address_payload)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         let utxos: Vec<History> = address_response.json().await?;
         // Break the loop if no more results
@@ -714,13 +739,14 @@ pub async fn address_transactions(
             "_bytecode": false
         });
 
-        let tx_info_response: Response = client
+        let tx_info_response: Response = HTTP_CLIENT
             .post(tx_info_url.clone())
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .json(&tx_info_payload)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         let txs: Vec<TxInfoResponse> = tx_info_response.json().await?;
         let mut tx_responses: Vec<TxResponse> = txs
@@ -755,9 +781,13 @@ pub async fn epoch_params(network_flag: bool) -> Result<ProtocolParameters> {
     let network: &str = if network_flag { "preprod" } else { "api" };
     let url: String = format!("https://{network}.koios.rest/api/v1/epoch_params?limit=1");
 
-    let response: Vec<Value> = reqwest::get(&url)
+    let response: Vec<Value> = HTTP_CLIENT
+        .get(&url)
+        .send()
         .await
         .context("Failed To Fetch Epoch Params")?
+        .error_for_status()
+        .context("Koios returned an error for epoch_params")?
         .json()
         .await
         .context("Failed To Parse Epoch Params")?;

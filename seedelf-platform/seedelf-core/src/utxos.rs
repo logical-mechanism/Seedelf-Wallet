@@ -170,7 +170,7 @@ pub fn select(
 }
 fn do_select(
     params: &ProtocolParameters,
-    mut utxos: Vec<UtxoResponse>,
+    utxos: Vec<UtxoResponse>,
     lovelace: u64,
     tokens: Assets,
     lovelace_goal: u64,
@@ -186,16 +186,26 @@ fn do_select(
     // Sort: no-token UTxOs first, then by descending lovelace value within
     // each group. Koios reports a token-less outpoint as either `Some(vec![])`
     // or `None`; both must group together.
-    utxos.sort_by(|a, b| {
+    //
+    // Pre-parse the values once and bail on any malformed entry. An earlier
+    // version used `Result::into_iter().cmp(...)`, which silently treated
+    // parse failures as `Equal` and could break the largest-first invariant
+    // the selector below depends on.
+    let mut sortable: Vec<(u64, UtxoResponse)> = utxos
+        .into_iter()
+        .map(|u| -> Result<(u64, UtxoResponse)> {
+            let v = string_to_u64(u.value.clone()).context("Invalid UTxO Value")?;
+            Ok((v, u))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    sortable.sort_by(|(a_val, a), (b_val, b)| {
         let a_has_tokens = a.asset_list.as_ref().is_some_and(|list| !list.is_empty());
         let b_has_tokens = b.asset_list.as_ref().is_some_and(|list| !list.is_empty());
-
-        a_has_tokens.cmp(&b_has_tokens).then_with(|| {
-            string_to_u64(b.value.clone())
-                .into_iter()
-                .cmp(string_to_u64(a.value.clone()))
-        })
+        a_has_tokens
+            .cmp(&b_has_tokens)
+            .then_with(|| b_val.cmp(a_val))
     });
+    let utxos: Vec<UtxoResponse> = sortable.into_iter().map(|(_, u)| u).collect();
 
     for utxo in utxos.clone() {
         // the value from koios is the lovelace
@@ -226,7 +236,9 @@ fn do_select(
             // if this utxo has the assets we need but we haven't found it all yet then add it
             if utxo_assets.any(tokens.clone()) && !found_assets.contains(tokens.clone()) {
                 selected_utxos.push(utxo.clone());
-                current_lovelace_sum += value;
+                current_lovelace_sum = current_lovelace_sum
+                    .checked_add(value)
+                    .context("Lovelace sum overflow")?;
                 found_assets = found_assets
                     .merge(utxo_assets.clone())
                     .context("Can't Merge Assets")?;
@@ -235,14 +247,18 @@ fn do_select(
         } else if current_lovelace_sum < lovelace {
             // no tokens here just lovelace so add it
             selected_utxos.push(utxo.clone());
-            current_lovelace_sum += value;
+            current_lovelace_sum = current_lovelace_sum
+                .checked_add(value)
+                .context("Lovelace sum overflow")?;
             added = true;
         }
 
         // the utxo is not pure ada and doesnt contain what you need but you need ada because you already found the tokens so add it
         if !added && current_lovelace_sum < lovelace && found_assets.contains(tokens.clone()) {
             selected_utxos.push(utxo.clone());
-            current_lovelace_sum += value;
+            current_lovelace_sum = current_lovelace_sum
+                .checked_add(value)
+                .context("Lovelace sum overflow")?;
             found_assets = found_assets
                 .merge(utxo_assets)
                 .context("Can't Merge Assets")?;
@@ -301,7 +317,9 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> Result<(u64, Assets)> {
 
     for utxo in utxos.clone() {
         let value: u64 = string_to_u64(utxo.value.clone()).context("Invalid UTxO Value")?;
-        current_lovelace_sum += value;
+        current_lovelace_sum = current_lovelace_sum
+            .checked_add(value)
+            .context("Lovelace sum overflow")?;
 
         if let Some(assets) = utxo.clone().asset_list
             && !assets.is_empty()
