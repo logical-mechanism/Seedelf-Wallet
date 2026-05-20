@@ -4,7 +4,7 @@ use pallas_crypto::key::ed25519::SecretKey;
 use pallas_primitives::Hash;
 use pallas_wallet::PrivateKey;
 
-pub fn scalar_to_secret_key(scalar: Scalar) -> SecretKey {
+fn scalar_to_secret_key(scalar: Scalar) -> SecretKey {
     let scalar_bytes: [u8; 32] = scalar.to_bytes_be();
     let (_, public) = ed25519::keypair(&scalar_bytes);
     SecretKey::from(public)

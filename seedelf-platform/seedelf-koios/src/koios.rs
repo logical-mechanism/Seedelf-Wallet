@@ -590,7 +590,7 @@ pub async fn asset_history(
     Ok(data)
 }
 
-pub fn extract_bytes_from_value_with_logging(value: &Value) -> Option<Register> {
+fn extract_bytes_from_value_with_logging(value: &Value) -> Option<Register> {
     if value.is_null() {
         // Don't log anything — null is expected sometimes
         return None;
@@ -618,11 +618,11 @@ pub fn extract_bytes_from_value_with_logging(value: &Value) -> Option<Register> 
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
-pub struct TxInfoResponse {
-    pub tx_hash: String,
-    pub block_height: u64,
-    pub inputs: Vec<serde_json::Value>,
-    pub outputs: Vec<serde_json::Value>,
+struct TxInfoResponse {
+    tx_hash: String,
+    block_height: u64,
+    inputs: Vec<serde_json::Value>,
+    outputs: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -634,7 +634,7 @@ pub struct TxResponse {
 }
 
 impl TxResponse {
-    pub fn from_info_response(info: TxInfoResponse) -> Self {
+    fn from_info_response(info: TxInfoResponse) -> Self {
         let input_registers = info
             .inputs
             .iter()
@@ -737,39 +737,3 @@ pub async fn address_transactions(
     Ok(all_txs)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxStatus {
-    pub tx_hash: String,
-    pub num_confirmations: Option<u64>,
-}
-
-/// Returns the number of confirmations for a transaction.
-///
-pub async fn transaction_status(
-    network_flag: bool,
-    tx_hash: String,
-) -> Result<Vec<TxStatus>, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-
-    let tx_status_url: String = format!("https://{network}.koios.rest/api/v1/tx_status");
-
-    let client: Client = reqwest::Client::new();
-
-    // Prepare the request payload
-    let tx_payload: Value = serde_json::json!({
-        "_tx_hashes": [tx_hash],
-    });
-
-    let response: Response = client
-        .post(tx_status_url)
-        .header("accept", "application/json")
-        .header("content-type", "application/json")
-        .json(&tx_payload)
-        .send()
-        .await?;
-
-    let status: Vec<TxStatus> = response.json().await?;
-
-    //
-    Ok(status)
-}

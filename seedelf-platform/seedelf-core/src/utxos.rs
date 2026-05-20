@@ -51,57 +51,6 @@ pub fn collect_all_wallet_utxos(
     Ok(all_utxos)
 }
 
-/// Find a specific seedelf's datum and all the utxos owned by a scalar. The maximum amount of utxos is limited by a upper bound.
-pub fn find_seedelf_and_wallet_utxos(
-    sk: Scalar,
-    seedelf: String,
-    seedelf_policy_id: &str,
-    utxos: Vec<UtxoResponse>,
-) -> Result<(Option<Register>, Vec<UtxoResponse>)> {
-    let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
-    let mut number_of_utxos: u64 = 0;
-
-    let mut seedelf_datum: Option<Register> = None;
-    let mut found_seedelf: bool = false;
-
-    for utxo in utxos {
-        // Extract bytes
-        if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            if !found_seedelf && contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
-                let asset_name = utxo
-                    .asset_list
-                    .as_ref()
-                    .and_then(|vec| {
-                        vec.iter()
-                            .find(|asset| asset.policy_id == seedelf_policy_id)
-                            .map(|asset| &asset.asset_name)
-                    })
-                    .context("Can't Produce Asset Name")?;
-                if asset_name == &seedelf {
-                    found_seedelf = true;
-                    seedelf_datum = Some(inline_datum.clone());
-                }
-            }
-            // utxo must be owned by this secret scaler
-            if inline_datum
-                .is_owned(sk)
-                .context("Failed To Construct Points")?
-            {
-                // its owned but it can't hold a seedelf
-                if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
-                    if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
-                        // we hit the max utxos allowed in a single tx
-                        break;
-                    }
-                    usable_utxos.push(utxo);
-                    number_of_utxos += 1;
-                }
-            }
-        }
-    }
-    Ok((seedelf_datum, usable_utxos))
-}
-
 pub fn find_seedelf_datum(
     seedelf: String,
     seedelf_policy_id: &str,
@@ -217,7 +166,7 @@ pub fn select(
 ) -> Result<Vec<UtxoResponse>> {
     do_select(utxos, lovelace, tokens, lovelace).context("Do Select Failed")
 }
-pub fn do_select(
+fn do_select(
     mut utxos: Vec<UtxoResponse>,
     lovelace: u64,
     tokens: Assets,

@@ -59,7 +59,7 @@ pub fn preprod_text(network_flag: bool) {
     }
 }
 
-pub fn extract_all_owned_seedelfs(
+fn extract_all_owned_seedelfs(
     sk: Scalar,
     seedelf_policy_id: &str,
     utxos: Vec<UtxoResponse>,
@@ -109,7 +109,7 @@ pub fn print_seedelfs(items: Vec<String>) {
     }
 }
 
-pub fn seedelf_label(seedelf: String) {
+fn seedelf_label(seedelf: String) {
     let substring: String = seedelf[8..38].to_string();
     let label: String = hex_to_ascii(&substring).unwrap();
     if !label.starts_with('.') {
