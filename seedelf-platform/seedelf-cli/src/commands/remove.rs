@@ -11,9 +11,7 @@ use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTran
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_core::address;
-use seedelf_core::constants::{
-    COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, get_config, plutus_v3_cost_model,
-};
+use seedelf_core::constants::{COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, get_config};
 use seedelf_core::data_structures;
 use seedelf_core::transaction;
 use seedelf_core::utxos;
@@ -21,7 +19,8 @@ use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::{create_proof, random_scalar};
 use seedelf_display::display;
 use seedelf_koios::koios::{
-    UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
+    UtxoResponse, epoch_params, evaluate_transaction, extract_bytes_with_logging, submit_tx,
+    witness_collateral,
 };
 
 /// Struct to hold command-specific arguments
@@ -47,6 +46,7 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
+    let params = epoch_params(network_flag).await?;
 
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
@@ -166,7 +166,7 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
         )
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
+            params.cost_model_v3.clone(),
         )
         .disclosed_signer(pallas_crypto::hash::Hash::new(
             hex::decode(&pkh)
@@ -243,8 +243,8 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
         .try_into()
         .unwrap();
     let tx_fee: u64 = fee::linear_fee(tx_size);
-    let compute_fee: u64 = transaction::computation_fee(mint_mem_units, mint_cpu_units)
-        + transaction::computation_fee(spend_mem_units, spend_cpu_units);
+    let compute_fee: u64 = transaction::computation_fee(&params, mint_mem_units, mint_cpu_units)
+        + transaction::computation_fee(&params, spend_mem_units, spend_cpu_units);
     let script_reference_fee: u64 =
         config.contract.seedelf_contract_size * 15 + config.contract.wallet_contract_size * 15;
 

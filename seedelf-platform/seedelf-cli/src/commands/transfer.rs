@@ -14,7 +14,6 @@ use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::constants::{
     COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO, get_config,
-    plutus_v3_cost_model,
 };
 use seedelf_core::data_structures;
 use seedelf_core::transaction::{
@@ -26,7 +25,8 @@ use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::{create_proof, random_scalar};
 use seedelf_display::display;
 use seedelf_koios::koios::{
-    UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
+    UtxoResponse, epoch_params, evaluate_transaction, extract_bytes_with_logging, submit_tx,
+    witness_collateral,
 };
 
 /// Struct to hold command-specific arguments
@@ -74,6 +74,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
+    let params = epoch_params(network_flag).await?;
 
     if args.seedelfs.is_empty() {
         bail!("Error: Must be sending to at least 1 seedelf.");
@@ -107,7 +108,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
     // calculate all the required minimums then check the lovelace
     let minimum_lovelaces: Vec<u64> = all_selected_tokens
         .iter()
-        .map(|assets| wallet_minimum_lovelace_with_assets(assets.clone()).unwrap_or_default())
+        .map(|assets| wallet_minimum_lovelace_with_assets(&params, assets.clone()).unwrap_or_default())
         .collect();
     let lovelaces: Vec<u64> = args.lovelaces.unwrap_or_default();
     let all_greater = lovelaces
@@ -168,7 +169,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         .into_iter()
         .fold(Assets::new(), |acc, a| acc.merge(a).unwrap_or(acc));
     let usable_utxos: Vec<UtxoResponse> = if selected_utxos.is_none() {
-        utxos::select(usable_utxos, total_lovelace, total_selected_tokens.clone())
+        utxos::select(&params, usable_utxos, total_lovelace, total_selected_tokens.clone())
             .unwrap_or_default()
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
@@ -256,7 +257,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
+            params.cost_model_v3.clone(),
         )
         .disclosed_signer(pallas_crypto::hash::Hash::new(
             hex::decode(&pkh)
@@ -280,7 +281,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
             .unwrap_or_default()
             .to_vec()
             .unwrap_or_default();
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - total_lovelace - tmp_fee;
@@ -383,7 +384,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         .unwrap();
     let tx_fee: u64 = fee::linear_fee(tx_size);
 
-    let compute_fee: u64 = total_computation_fee(budgets.clone());
+    let compute_fee: u64 = total_computation_fee(&params, budgets.clone());
 
     let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
 
@@ -410,7 +411,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
             .unwrap_or_default()
             .to_vec()
             .unwrap_or_default();
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - total_lovelace - total_fee;

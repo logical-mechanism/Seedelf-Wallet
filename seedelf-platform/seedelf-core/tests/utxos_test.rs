@@ -1,12 +1,23 @@
 use seedelf_core::assets::{Asset, Assets, string_to_u64};
 use seedelf_core::utxos;
+use seedelf_koios::koios::ProtocolParameters;
+
+fn fixture_params() -> ProtocolParameters {
+    ProtocolParameters {
+        coins_per_utxo_size: 4_310,
+        price_mem: 0.0577,
+        price_step: 0.0000721,
+        cost_model_v3: Vec::new(),
+    }
+}
 
 #[tokio::test]
 async fn find_first_large_utxo() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
     let utxo_vector = utxos::collect_address_utxos(every_utxo).unwrap();
-    let selected_utxos = utxos::select(utxo_vector, 4_446_456, Assets::new()).unwrap();
+    let selected_utxos =
+        utxos::select(&fixture_params(), utxo_vector, 4_446_456, Assets::new()).unwrap();
     for utxo in selected_utxos {
         println!("large {:?}", string_to_u64(utxo.value));
     }
@@ -17,7 +28,8 @@ async fn find_many_utxos() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
     let utxo_vector = utxos::collect_address_utxos(every_utxo).unwrap();
-    let selected_utxos = utxos::select(utxo_vector, 2_000_000_000, Assets::new()).unwrap();
+    let selected_utxos =
+        utxos::select(&fixture_params(), utxo_vector, 2_000_000_000, Assets::new()).unwrap();
     for utxo in selected_utxos {
         println!("many {:?}", string_to_u64(utxo.value));
     }
@@ -38,7 +50,8 @@ async fn find_nft_and_ada() {
             .unwrap(),
         )
         .unwrap();
-    let selected_utxos = utxos::select(utxo_vector, 5_000_000, tokens).unwrap();
+    let selected_utxos =
+        utxos::select(&fixture_params(), utxo_vector, 5_000_000, tokens).unwrap();
 
     for utxo in selected_utxos {
         println!("nft {:?}", string_to_u64(utxo.value));

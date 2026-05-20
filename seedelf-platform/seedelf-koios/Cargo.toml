@@ -8,6 +8,7 @@ authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
 repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
 
 [dependencies]
+anyhow = "1.0.98"
 hex = "0.4.3"
 reqwest = { version = "0.12.9", features = ["json"] }
 serde = { version = "1.0.215", features = ["derive"] }

@@ -9,13 +9,13 @@ use pallas_addresses::Address;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
-use seedelf_core::constants::{Config, get_config, plutus_v3_cost_model};
+use seedelf_core::constants::{Config, get_config};
 use seedelf_core::data_structures;
 use seedelf_core::transaction;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_display::{display, text_coloring};
-use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction};
+use seedelf_koios::koios::{UtxoResponse, address_utxos, epoch_params, evaluate_transaction};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -45,6 +45,7 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
+    let params = epoch_params(network_flag).await?;
 
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
@@ -65,14 +66,14 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
 
     // we need about 2 ada for the utxo
     let tmp_fee: u64 = 205_000;
-    let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace()? + tmp_fee;
+    let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace(&params)? + tmp_fee;
 
     let (mut draft_tx, all_utxos) =
         assign_collateral_and_get_utxos(args.address, network_flag, draft_tx).await;
 
     // lovelace goal here should account for the estimated fee
     let selected_utxos: Vec<UtxoResponse> =
-        utxos::select(all_utxos, lovelace_goal, Assets::new()).unwrap_or_default();
+        utxos::select(&params, all_utxos, lovelace_goal, Assets::new()).unwrap_or_default();
     for utxo in selected_utxos.clone() {
         draft_tx = draft_tx.input(Input::new(
             pallas_crypto::hash::Hash::new(
@@ -106,7 +107,7 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
             .unwrap_or_default();
     let token_name_hex: String = hex::encode(token_name.clone());
 
-    let min_utxo: u64 = transaction::seedelf_minimum_lovelace()?;
+    let min_utxo: u64 = transaction::seedelf_minimum_lovelace(&params)?;
 
     let mut change_output: Output = Output::new(addr.clone(), total_lovelace - min_utxo - tmp_fee);
     for asset in tokens.items.clone() {
@@ -163,7 +164,7 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
         )
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
+            params.cost_model_v3.clone(),
         );
 
     // clone the tx but remove the tmp fee, collateral, change output, and fake redeemer
@@ -217,7 +218,7 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
         .unwrap();
 
     let tx_fee: u64 = fee::linear_fee(tx_size);
-    let compute_fee: u64 = transaction::computation_fee(mem_units, cpu_units);
+    let compute_fee: u64 = transaction::computation_fee(&params, mem_units, cpu_units);
     let script_reference_fee: u64 = config.contract.seedelf_contract_size * 15;
 
     let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);

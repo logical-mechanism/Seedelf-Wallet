@@ -6,7 +6,8 @@ use blstrs::Scalar;
 use hex;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{
-    UtxoResponse, address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
+    ProtocolParameters, UtxoResponse, address_utxos, contains_policy_id, credential_utxos,
+    extract_bytes_with_logging,
 };
 
 pub async fn get_credential_utxos(
@@ -160,13 +161,15 @@ pub fn collect_address_utxos(utxos: Vec<UtxoResponse>) -> Result<Vec<UtxoRespons
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
 pub fn select(
+    params: &ProtocolParameters,
     utxos: Vec<UtxoResponse>,
     lovelace: u64,
     tokens: Assets,
 ) -> Result<Vec<UtxoResponse>> {
-    do_select(utxos, lovelace, tokens, lovelace).context("Do Select Failed")
+    do_select(params, utxos, lovelace, tokens, lovelace).context("Do Select Failed")
 }
 fn do_select(
+    params: &ProtocolParameters,
     mut utxos: Vec<UtxoResponse>,
     lovelace: u64,
     tokens: Assets,
@@ -250,7 +253,7 @@ fn do_select(
                 .separate(tokens.clone())
                 .context("Can't Separate Assets")?;
             let number_of_change_assets: u64 = change_assets.len();
-            let minimum: u64 = wallet_minimum_lovelace_with_assets(change_assets.clone())
+            let minimum: u64 = wallet_minimum_lovelace_with_assets(params, change_assets.clone())
                 .context("Invalid Minimum Lovelace")?;
             // we need to calculate how many multiple change utxos we need
             let multiplier: u64 = if number_of_change_assets > MAXIMUM_TOKENS_PER_UTXO {
@@ -267,6 +270,7 @@ fn do_select(
             } else {
                 // its not, try again but increase the lovelace by the minimum we would need
                 return do_select(
+                    params,
                     utxos.clone(),
                     lovelace + multiplier * minimum,
                     tokens.clone(),

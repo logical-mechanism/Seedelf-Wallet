@@ -14,7 +14,7 @@ use seedelf_core::address;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::constants::{
     ADA_HANDLE_POLICY_ID, COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO,
-    get_config, plutus_v3_cost_model,
+    get_config,
 };
 use seedelf_core::data_structures;
 use seedelf_core::transaction::{
@@ -26,8 +26,8 @@ use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::{create_proof, random_scalar};
 use seedelf_display::display;
 use seedelf_koios::koios::{
-    UtxoResponse, ada_handle_address, evaluate_transaction, extract_bytes_with_logging, submit_tx,
-    witness_collateral,
+    UtxoResponse, ada_handle_address, epoch_params, evaluate_transaction,
+    extract_bytes_with_logging, submit_tx, witness_collateral,
 };
 
 /// Struct to hold command-specific arguments
@@ -110,6 +110,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
+    let params = epoch_params(network_flag).await?;
 
     // address or ada handle must be found
     if args.address.is_none() && args.ada_handle.is_none() {
@@ -188,7 +189,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
     }
 
     let address_minimum_lovelace: u64 =
-        address_minimum_lovelace_with_assets(&outbound_address, selected_tokens.clone())?;
+        address_minimum_lovelace_with_assets(&params, &outbound_address, selected_tokens.clone())?;
     if args.lovelace.is_some_and(|x| x < address_minimum_lovelace) {
         bail!("lovelace Too Small For Min UTxO");
     }
@@ -200,7 +201,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
         bail!("Supplied Address Is Incorrect");
     }
 
-    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(selected_tokens.clone())?;
+    let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(&params, selected_tokens.clone())?;
     let scalar: Scalar = setup::unlock_wallet_interactive();
 
     let lovelace: u64 = args.lovelace.unwrap_or(minimum_lovelace);
@@ -236,7 +237,8 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
         // if not selecting utxos then select from the owned utxos else use the utxos provided
         if args.utxos.is_none() {
             // we will assume that the change will required ~2 ADA and the fee about ~0.5 ADA
-            utxos::select(owned_utxos, lovelace_goal, selected_tokens.clone()).unwrap_or_default()
+            utxos::select(&params, owned_utxos, lovelace_goal, selected_tokens.clone())
+                .unwrap_or_default()
         } else {
             // assumes the utxos hold the correct tokens else it will error downstream
             match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
@@ -318,7 +320,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
         .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
+            params.cost_model_v3.clone(),
         )
         .disclosed_signer(pallas_crypto::hash::Hash::new(
             hex::decode(&pkh)
@@ -344,7 +346,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
                 .to_vec()
                 .unwrap_or_default();
             let minimum: u64 =
-                wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
+                wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
             let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
                 // this is the last one or the only one
                 lovelace_amount = lovelace_amount - lovelace_goal - tmp_fee;
@@ -445,7 +447,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
         .unwrap();
     let tx_fee: u64 = fee::linear_fee(tx_size);
 
-    let compute_fee: u64 = total_computation_fee(budgets.clone());
+    let compute_fee: u64 = total_computation_fee(&params, budgets.clone());
 
     let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
 
@@ -498,7 +500,7 @@ pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Re
                 .to_vec()
                 .unwrap_or_default();
             let minimum: u64 =
-                wallet_minimum_lovelace_with_assets(change.clone()).unwrap_or_default();
+                wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
             let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
                 // this is the last one or the only one
                 lovelace_amount = lovelace_amount - lovelace_goal - total_fee;

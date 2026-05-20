@@ -1,19 +1,18 @@
 use clap::Args;
 use colored::Colorize;
 use pallas_addresses::Address;
-use pallas_crypto::key::ed25519::SecretKey;
-use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use pallas_wallet::PrivateKey;
-use rand_core::OsRng;
 use seedelf_core::data_structures;
-use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction, utxo_info};
+use seedelf_koios::koios::{
+    UtxoResponse, address_utxos, epoch_params, evaluate_transaction, utxo_info,
+};
 
+use crate::commands::fee;
 use crate::web_server;
 use anyhow::{Result, bail};
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
-use seedelf_core::constants::{Config, get_config, plutus_v3_cost_model};
+use seedelf_core::constants::{Config, get_config};
 use seedelf_core::transaction::{
     address_minimum_lovelace_with_assets, extract_budgets, reference_utxo, total_computation_fee,
 };
@@ -44,6 +43,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
+    let params = epoch_params(network_flag).await?;
 
     let collat_addr: Address = address::collateral_address(network_flag);
     // we need to make sure that the network flag and the address provided makes sense here
@@ -82,7 +82,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
     let (empty_utxo_lovelace, empty_utxo_tokens) =
         utxos::assets_of(vec![empty_datum_utxo.clone()])?;
     let minimum_lovelace: u64 =
-        address_minimum_lovelace_with_assets(&args.address, empty_utxo_tokens.clone())?;
+        address_minimum_lovelace_with_assets(&params, &args.address, empty_utxo_tokens.clone())?;
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -121,7 +121,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
         }
     }
     let usable_utxos: Vec<UtxoResponse> =
-        utxos::select(all_utxos, minimum_lovelace, Assets::new())?;
+        utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;
     if usable_utxos.is_empty() {
         bail!("Not Enough Lovelace/Tokens");
     }
@@ -182,7 +182,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
         .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
+            params.cost_model_v3.clone(),
         );
 
     let intermediate_tx: BuiltTransaction = draft_tx.clone().build_conway_raw().unwrap();
@@ -209,27 +209,22 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
             }
         };
 
-    // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
-
     let tx_size: u64 = intermediate_tx
-        .sign(fake_signer_private_key)
+        .sign(fee::fake_signer())
         .unwrap()
         .tx_bytes
         .0
         .len()
         .try_into()
         .unwrap();
-    let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    let tx_fee = fee::linear_fee(tx_size);
     println!(
         "{} {}",
         "\nTx Size Fee:".bright_blue(),
         tx_fee.to_string().bright_white()
     );
 
-    // This probably should be a function
-    let compute_fee: u64 = total_computation_fee(budgets.clone());
+    let compute_fee: u64 = total_computation_fee(&params, budgets.clone());
     println!(
         "{} {}",
         "Compute Fee:".bright_blue(),

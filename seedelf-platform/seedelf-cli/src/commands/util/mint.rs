@@ -1,3 +1,4 @@
+use crate::commands::fee;
 use crate::setup;
 use anyhow::{Result, bail};
 use blstrs::Scalar;
@@ -6,7 +7,6 @@ use colored::Colorize;
 use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::{PublicKey, SecretKey};
 use pallas_primitives::Hash;
-use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
@@ -14,7 +14,6 @@ use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::{
     COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO, get_config,
-    plutus_v3_cost_model,
 };
 use seedelf_core::data_structures;
 use seedelf_core::transaction::{
@@ -26,7 +25,8 @@ use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::{create_proof, random_scalar};
 use seedelf_display::display;
 use seedelf_koios::koios::{
-    UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
+    UtxoResponse, epoch_params, evaluate_transaction, extract_bytes_with_logging, submit_tx,
+    witness_collateral,
 };
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -70,6 +70,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
+    let params = epoch_params(network_flag).await?;
 
     // we need this as the address type and not the shelley
     let wallet_addr: Address =
@@ -84,7 +85,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
 
     // we need about 2 ada for the utxo
     let tmp_fee: u64 = 205_000;
-    let lovelace_goal: u64 = seedelf_minimum_lovelace()? + tmp_fee;
+    let lovelace_goal: u64 = seedelf_minimum_lovelace(&params)? + tmp_fee;
 
     // if the label is none then just use the empty string
     let label: String = args.label.unwrap_or_default();
@@ -98,7 +99,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         utxos::collect_wallet_utxos(scalar, &config.contract.seedelf_policy_id, every_utxo)?;
 
     let usable_utxos: Vec<UtxoResponse> = if args.utxos.is_none() {
-        utxos::select(owned_utxos, lovelace_goal, Assets::default())?
+        utxos::select(&params, owned_utxos, lovelace_goal, Assets::default())?
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
         match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
@@ -143,7 +144,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         hex::encode(token_name.clone()).bright_white()
     );
 
-    let min_utxo: u64 = seedelf_minimum_lovelace()?;
+    let min_utxo: u64 = seedelf_minimum_lovelace(&params)?;
     println!(
         "{} {}",
         "\nMinimum Required Lovelace:".bright_blue(),
@@ -226,7 +227,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
+            params.cost_model_v3.clone(),
         )
         .disclosed_signer(pallas_crypto::hash::Hash::new(
             hex::decode(&pkh)
@@ -245,7 +246,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     // a max tokens per change output here
     for (i, change) in change_token_per_utxo.iter().enumerate() {
         let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - min_utxo - tmp_fee;
@@ -334,14 +335,10 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
             }
         };
 
-    // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
-
     let tx_size: u64 = intermediate_tx
         .sign(one_time_private_key)
         .unwrap()
-        .sign(fake_signer_private_key)
+        .sign(fee::fake_signer())
         .unwrap()
         .tx_bytes
         .0
@@ -349,14 +346,14 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         .try_into()
         .unwrap();
 
-    let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    let tx_fee = fee::linear_fee(tx_size);
     println!(
         "{} {}",
         "\nTx Size Fee:".bright_blue(),
         tx_fee.to_string().bright_white()
     );
 
-    let compute_fee: u64 = total_computation_fee(budgets.clone());
+    let compute_fee: u64 = total_computation_fee(&params, budgets.clone());
     println!(
         "{} {}",
         "Compute Fee:".bright_blue(),
@@ -401,7 +398,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
         let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount = lovelace_amount - min_utxo - total_fee;

@@ -1,13 +1,10 @@
+use crate::commands::fee;
 use crate::setup;
 use anyhow::{Result, bail};
 use blstrs::Scalar;
 use colored::Colorize;
 use pallas_addresses::Address;
-use pallas_crypto::key::ed25519::SecretKey;
-use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use pallas_wallet::PrivateKey;
-use rand_core::OsRng;
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};
@@ -16,7 +13,7 @@ use seedelf_core::utxos;
 use seedelf_crypto::convert;
 use seedelf_crypto::register::Register;
 use seedelf_display::display;
-use seedelf_koios::koios::{UtxoResponse, submit_tx};
+use seedelf_koios::koios::{UtxoResponse, epoch_params, submit_tx};
 
 pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
@@ -27,6 +24,7 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
         eprintln!("Error: Invalid Variant");
         std::process::exit(1);
     });
+    let params = epoch_params(network_flag).await?;
 
     let wallet_addr: Address =
         address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
@@ -81,7 +79,7 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
     // a max tokens per change output here
     for (i, change) in change_token_per_utxo.iter().enumerate() {
         let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount -= tmp_fee;
@@ -117,19 +115,15 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
     }
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
-    // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
-
     let tx_size: u64 = intermediate_tx
-        .sign(fake_signer_private_key)
+        .sign(fee::fake_signer())
         .unwrap()
         .tx_bytes
         .0
         .len()
         .try_into()
         .unwrap();
-    let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    let tx_fee = fee::linear_fee(tx_size);
     println!(
         "{} {}",
         "\nTx Size Fee:".bright_blue(),
@@ -147,7 +141,7 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
     let mut lovelace_amount: u64 = total_lovelace;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
         let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(change.clone())?;
+        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
             lovelace_amount -= tx_fee;
