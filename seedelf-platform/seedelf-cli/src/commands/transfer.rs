@@ -28,18 +28,6 @@ use seedelf_display::display;
 use seedelf_koios::koios::{
     UtxoResponse, evaluate_transaction, extract_bytes_with_logging, submit_tx, witness_collateral,
 };
-use serde::Serialize;
-
-#[derive(Serialize)]
-pub struct TransferSeedelfOutput {
-    pub tx_cbor: String,
-    pub tx_hash: String,
-    pub tx_fee: u64,
-    pub compute_fee: u64,
-    pub script_reference_fee: u64,
-    pub total_fee: u64,
-    pub usable_utxos: Vec<UtxoResponse>,
-}
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -121,10 +109,8 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         .iter()
         .map(|assets| wallet_minimum_lovelace_with_assets(assets.clone()).unwrap_or_default())
         .collect();
-    let all_greater = args
-        .lovelaces
-        .clone()
-        .unwrap_or_default()
+    let lovelaces: Vec<u64> = args.lovelaces.unwrap_or_default();
+    let all_greater = lovelaces
         .iter()
         .zip(minimum_lovelaces.iter())
         .all(|(l, min)| l >= min);
@@ -136,85 +122,10 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     // if there is change going back then we need this to rerandomize a datum
     let scalar: Scalar = setup::unlock_wallet_interactive();
 
-    let TransferSeedelfOutput {
-        tx_cbor,
-        tx_hash,
-        tx_fee,
-        compute_fee,
-        script_reference_fee,
-        total_fee,
-        usable_utxos,
-    } = build_transfer_seedelf(
-        config,
-        network_flag,
-        args.seedelfs,
-        args.lovelaces.unwrap_or_default(),
-        all_selected_tokens,
-        args.utxos,
-        scalar,
-    )
-    .await;
+    let seedelfs: Vec<String> = args.seedelfs;
+    let selected_tokens: Vec<Assets> = all_selected_tokens;
+    let selected_utxos: Option<Vec<String>> = args.utxos;
 
-    if usable_utxos.is_empty() {
-        bail!("No Usuable UTxOs Found");
-    }
-
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Compute Fee:".bright_blue(),
-        compute_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Script Reference Fee:".bright_blue(),
-        script_reference_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Total Fee:".bright_blue(),
-        total_fee.to_string().bright_white()
-    );
-
-    println!("\nTx Cbor: {}", tx_cbor.clone().white());
-
-    if tx_hash.is_empty() {
-        println!("\nTransaction Successfully Failed!");
-    } else {
-        println!("\nTransaction Successfully Submitted!");
-        println!("\nTx Hash: {}", tx_hash.bright_cyan());
-        if network_flag {
-            println!(
-                "{}",
-                format!("\nhttps://preprod.cardanoscan.io/transaction/{}", tx_hash).bright_purple()
-            );
-        } else {
-            println!(
-                "{}",
-                format!("\nhttps://cardanoscan.io/transaction/{}", tx_hash).bright_purple()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-pub async fn build_transfer_seedelf(
-    config: Config,
-    network_flag: bool,
-    seedelfs: Vec<String>,
-    lovelaces: Vec<u64>,
-    selected_tokens: Vec<Assets>,
-    selected_utxos: Option<Vec<String>>,
-    scalar: Scalar,
-) -> TransferSeedelfOutput {
     let collat_addr: Address = address::collateral_address(network_flag);
     let wallet_addr: Address =
         address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
@@ -267,6 +178,10 @@ pub async fn build_transfer_seedelf(
         }
     };
 
+    if usable_utxos.is_empty() {
+        bail!("No Usuable UTxOs Found");
+    }
+
     let (total_lovelace_found, tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_default();
     let change_tokens: Assets = tokens
         .separate(total_selected_tokens.clone())
@@ -306,6 +221,7 @@ pub async fn build_transfer_seedelf(
     // println!("{:?}", selected_tokens.len());
     // println!("{:?}", seedelf_datums.len());
     for ((lovelace, assets), datum_opt) in lovelaces
+        .clone()
         .into_iter()
         .zip(selected_tokens.into_iter())
         .zip(seedelf_datums.into_iter())
@@ -589,14 +505,50 @@ pub async fn build_transfer_seedelf(
         }
         Err(_) => String::new(),
     };
-    //
-    TransferSeedelfOutput {
-        tx_cbor,
-        tx_hash,
-        tx_fee,
-        compute_fee,
-        script_reference_fee,
-        total_fee,
-        usable_utxos,
+
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Compute Fee:".bright_blue(),
+        compute_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Script Reference Fee:".bright_blue(),
+        script_reference_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Total Fee:".bright_blue(),
+        total_fee.to_string().bright_white()
+    );
+
+    println!("\nTx Cbor: {}", tx_cbor.clone().white());
+
+    if tx_hash.is_empty() {
+        println!("\nTransaction Successfully Failed!");
+    } else {
+        println!("\nTransaction Successfully Submitted!");
+        println!("\nTx Hash: {}", tx_hash.bright_cyan());
+        if network_flag {
+            println!(
+                "{}",
+                format!("\nhttps://preprod.cardanoscan.io/transaction/{}", tx_hash).bright_purple()
+            );
+        } else {
+            println!(
+                "{}",
+                format!("\nhttps://cardanoscan.io/transaction/{}", tx_hash).bright_purple()
+            );
+        }
     }
+
+    Ok(())
 }

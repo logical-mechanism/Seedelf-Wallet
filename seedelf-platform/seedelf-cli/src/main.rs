@@ -1,8 +1,10 @@
 use clap::{Parser, Subcommand};
-use seedelf_cli::commands;
-use seedelf_cli::setup;
 use seedelf_core::constants::VARIANT;
 use seedelf_display::text_coloring::{display_blue, display_cyan, display_yellow};
+
+mod commands;
+mod setup;
+mod web_server;
 
 #[derive(Parser)]
 #[command(name = "seedelf-cli")]

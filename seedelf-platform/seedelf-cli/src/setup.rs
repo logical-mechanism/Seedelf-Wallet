@@ -29,14 +29,14 @@ struct EncryptedData {
     data: String,
 }
 
-pub fn seedelf_home_path() -> PathBuf {
+fn seedelf_home_path() -> PathBuf {
     let home: PathBuf = home_dir().expect("Failed to get home directory");
     let seedelf_path: PathBuf = home.join(".seedelf");
     seedelf_path
 }
 
 /// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
-pub fn check_and_prepare_seedelf() -> Option<String> {
+pub(crate) fn check_and_prepare_seedelf() -> Option<String> {
     let seedelf_path: PathBuf = seedelf_home_path();
 
     // Check if `.seedelf` exists
@@ -63,7 +63,7 @@ pub fn check_and_prepare_seedelf() -> Option<String> {
 }
 
 /// Prompt the user to enter a wallet name
-pub fn prompt_wallet_name() -> String {
+pub(crate) fn prompt_wallet_name() -> String {
     let mut wallet_name: String = String::new();
     println!("{}", "\nEnter A Wallet Name:".bright_purple());
     io::stdout().flush().unwrap();
@@ -81,7 +81,7 @@ pub fn prompt_wallet_name() -> String {
     final_name
 }
 
-pub fn enter_password() -> String {
+fn enter_password() -> String {
     println!(
         "{}",
         "\nEnter A Password To Encrypt The Wallet:".bright_purple()
@@ -90,7 +90,7 @@ pub fn enter_password() -> String {
     password
 }
 
-pub fn is_valid_password() -> String {
+pub(crate) fn is_valid_password() -> String {
     let password: String = enter_password();
     if !password_complexity_check(password.clone()) {
         println!(
@@ -115,7 +115,7 @@ pub fn is_valid_password() -> String {
 }
 
 /// Create a wallet file and save a random private key
-pub fn create_wallet(wallet_name: String, password: String) {
+pub(crate) fn create_wallet(wallet_name: String, password: String) {
     // Generate a random private key
     let sk: Scalar = random_scalar(); // Requires `Field` trait in scope
     let private_key_bytes: [u8; 32] = sk.to_repr(); // Use `to_repr()` to get canonical bytes
@@ -161,7 +161,7 @@ pub fn create_wallet(wallet_name: String, password: String) {
 }
 
 /// Load the wallet file and deserialize the private key into a Scalar
-pub fn load_wallet(password: String) -> Result<Scalar, String> {
+fn load_wallet(password: String) -> Result<Scalar, String> {
     let seedelf_path: PathBuf = seedelf_home_path();
 
     // Get the list of files in `.seedelf`
@@ -227,7 +227,7 @@ pub fn load_wallet(password: String) -> Result<Scalar, String> {
         .ok_or("Failed to reconstruct Scalar from bytes".into())
 }
 
-pub fn unlock_wallet_interactive() -> Scalar {
+pub(crate) fn unlock_wallet_interactive() -> Scalar {
     loop {
         let password: String = enter_password();
 
@@ -240,7 +240,7 @@ pub fn unlock_wallet_interactive() -> Scalar {
     }
 }
 
-pub fn password_complexity_check(password: String) -> bool {
+fn password_complexity_check(password: String) -> bool {
     // length check, 14 for now
     if password.len() < 14 {
         return false;
@@ -269,4 +269,34 @@ pub fn password_complexity_check(password: String) -> bool {
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::password_complexity_check;
+
+    #[test]
+    fn test_short_password() {
+        assert!(!password_complexity_check("i@G37xzM".to_string()));
+    }
+
+    #[test]
+    fn test_no_lowercase() {
+        assert!(!password_complexity_check("I@G37XZM@QCGK3G".to_string()));
+    }
+
+    #[test]
+    fn test_no_uppercase() {
+        assert!(!password_complexity_check("i@g37xzm@qcgk3g".to_string()));
+    }
+
+    #[test]
+    fn test_no_special() {
+        assert!(!password_complexity_check("iaG37xzMaqcgk3g".to_string()));
+    }
+
+    #[test]
+    fn test_good_password() {
+        assert!(password_complexity_check("i@G37xzM@qcgk3g".to_string()));
+    }
 }

@@ -30,16 +30,6 @@ use seedelf_koios::koios::{
     witness_collateral,
 };
 
-pub struct SweepSeedelfOutput {
-    pub tx_cbor: String,
-    pub tx_hash: String,
-    pub tx_fee: u64,
-    pub compute_fee: u64,
-    pub script_reference_fee: u64,
-    pub total_fee: u64,
-    pub usable_utxos: Vec<UtxoResponse>,
-}
-
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct SweepArgs {
@@ -213,89 +203,8 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     let minimum_lovelace: u64 = wallet_minimum_lovelace_with_assets(selected_tokens.clone())?;
     let scalar: Scalar = setup::unlock_wallet_interactive();
 
-    let SweepSeedelfOutput {
-        tx_cbor,
-        tx_hash,
-        tx_fee,
-        compute_fee,
-        script_reference_fee,
-        total_fee,
-        usable_utxos,
-    } = build_sweep_seedelf(
-        config,
-        network_flag,
-        outbound_address,
-        args.lovelace.unwrap_or(minimum_lovelace),
-        selected_tokens,
-        args.utxos,
-        scalar,
-        args.all,
-    )
-    .await;
-
-    if usable_utxos.is_empty() {
-        bail!("No Usuable UTxOs Found");
-    }
-
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Compute Fee:".bright_blue(),
-        compute_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Script Reference Fee:".bright_blue(),
-        script_reference_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Total Fee:".bright_blue(),
-        total_fee.to_string().bright_white()
-    );
-
-    println!("\nTx Cbor: {}", hex::encode(tx_cbor.clone()).white());
-
-    if tx_hash.is_empty() {
-        println!("\nTransaction Successfully Failed!");
-    } else {
-        println!("\nTransaction Successfully Submitted!");
-        println!("\nTx Hash: {}", tx_hash.bright_cyan());
-        if network_flag {
-            println!(
-                "{}",
-                format!("\nhttps://preprod.cardanoscan.io/transaction/{}", tx_hash).bright_purple()
-            );
-        } else {
-            println!(
-                "{}",
-                format!("\nhttps://cardanoscan.io/transaction/{}", tx_hash).bright_purple()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn build_sweep_seedelf(
-    config: Config,
-    network_flag: bool,
-    address: String,
-    lovelace: u64,
-    selected_tokens: Assets,
-    selected_utxos: Option<Vec<String>>,
-    scalar: Scalar,
-    send_all: bool,
-) -> SweepSeedelfOutput {
-    let addr: Address = Address::from_bech32(&address).unwrap();
+    let lovelace: u64 = args.lovelace.unwrap_or(minimum_lovelace);
+    let send_all: bool = args.all;
 
     let collat_addr: Address = address::collateral_address(network_flag);
     let wallet_addr: Address =
@@ -307,8 +216,6 @@ pub async fn build_sweep_seedelf(
     let mut input_vector: Vec<Input> = Vec::new();
     let mut register_vector: Vec<Register> = Vec::new();
 
-    let minimum_lovelace: u64 =
-        wallet_minimum_lovelace_with_assets(selected_tokens.clone()).unwrap_or_default();
     let lovelace_goal: u64 = if lovelace < minimum_lovelace {
         minimum_lovelace
     } else {
@@ -327,17 +234,21 @@ pub async fn build_sweep_seedelf(
         owned_utxos
     } else {
         // if not selecting utxos then select from the owned utxos else use the utxos provided
-        if selected_utxos.is_none() {
+        if args.utxos.is_none() {
             // we will assume that the change will required ~2 ADA and the fee about ~0.5 ADA
             utxos::select(owned_utxos, lovelace_goal, selected_tokens.clone()).unwrap_or_default()
         } else {
             // assumes the utxos hold the correct tokens else it will error downstream
-            match utxos::parse_tx_utxos(selected_utxos.unwrap_or_default()) {
+            match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
                 Ok(parsed) => utxos::filter_utxos(owned_utxos, parsed),
                 Err(_) => Vec::new(),
             }
         }
     };
+
+    if usable_utxos.is_empty() {
+        bail!("No Usuable UTxOs Found");
+    }
 
     let (total_lovelace_found, tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_default();
     let change_tokens: Assets = tokens.separate(selected_tokens.clone()).unwrap_or_default();
@@ -679,14 +590,49 @@ pub async fn build_sweep_seedelf(
         Err(_) => String::new(),
     };
 
-    //
-    SweepSeedelfOutput {
-        tx_cbor,
-        tx_hash,
-        tx_fee,
-        compute_fee,
-        script_reference_fee,
-        total_fee,
-        usable_utxos,
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Compute Fee:".bright_blue(),
+        compute_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Script Reference Fee:".bright_blue(),
+        script_reference_fee.to_string().bright_white()
+    );
+
+    println!(
+        "{} {}",
+        "Total Fee:".bright_blue(),
+        total_fee.to_string().bright_white()
+    );
+
+    println!("\nTx Cbor: {}", hex::encode(tx_cbor.clone()).white());
+
+    if tx_hash.is_empty() {
+        println!("\nTransaction Successfully Failed!");
+    } else {
+        println!("\nTransaction Successfully Submitted!");
+        println!("\nTx Hash: {}", tx_hash.bright_cyan());
+        if network_flag {
+            println!(
+                "{}",
+                format!("\nhttps://preprod.cardanoscan.io/transaction/{}", tx_hash).bright_purple()
+            );
+        } else {
+            println!(
+                "{}",
+                format!("\nhttps://cardanoscan.io/transaction/{}", tx_hash).bright_purple()
+            );
+        }
     }
+
+    Ok(())
 }

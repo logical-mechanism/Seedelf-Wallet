@@ -17,14 +17,6 @@ use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_display::{display, text_coloring};
 use seedelf_koios::koios::{UtxoResponse, extract_bytes_with_logging};
-use serde::Serialize;
-
-#[derive(Serialize)]
-pub struct FundSeedelfOutput {
-    pub tx_cbor: String,
-    pub tx_fee: u64,
-    pub usable_utxos: Vec<UtxoResponse>,
-}
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -138,50 +130,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
         bail!("Supplied Address Is Incorrect");
     }
 
-    let FundSeedelfOutput {
-        tx_cbor,
-        tx_fee,
-        usable_utxos,
-    } = build_fund_seedelf(
-        config,
-        network_flag,
-        args.address,
-        args.seedelf,
-        args.lovelace.unwrap_or(minimum_lovelace),
-        selected_tokens,
-    )
-    .await;
-
-    if usable_utxos.is_empty() {
-        bail!("Not Enough Lovelace/Tokens");
-    }
-
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
-    );
-
-    println!("\nTx Cbor: {}", tx_cbor.clone().white());
-
-    // inject the tx cbor into the local webserver to prompt the wallet
-    display::webserver_address();
-    web_server::run_web_server(tx_cbor, network_flag).await;
-    text_coloring::display_purple("Server has stopped.");
-
-    Ok(())
-}
-
-pub async fn build_fund_seedelf(
-    config: Config,
-    network_flag: bool,
-    user_address: String,
-    seedelf: String,
-    lovelace: u64,
-    selected_tokens: Assets,
-) -> FundSeedelfOutput {
-    // we need to make sure that the network flag and the address provided makes sense here
-    let addr: Address = Address::from_bech32(user_address.as_str()).unwrap();
+    let lovelace: u64 = args.lovelace.unwrap_or(minimum_lovelace);
 
     // we need this as the address type and not the shelley
     let wallet_addr: Address =
@@ -196,7 +145,7 @@ pub async fn build_fund_seedelf(
             .unwrap_or_default();
 
     let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
-        seedelf.clone(),
+        args.seedelf.clone(),
         &config.contract.seedelf_policy_id,
         every_utxo_at_script,
     ) {
@@ -209,7 +158,7 @@ pub async fn build_fund_seedelf(
         .unwrap_or_default();
 
     let every_utxo_at_address: Vec<UtxoResponse> =
-        utxos::get_address_utxos(&user_address, network_flag)
+        utxos::get_address_utxos(&args.address, network_flag)
             .await
             .unwrap_or_default();
     // all non collateral utxos, assume 5 ada for collateral
@@ -218,6 +167,10 @@ pub async fn build_fund_seedelf(
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(every_non_collatreal_utxo, lovelace, selected_tokens.clone())
             .unwrap_or_default();
+
+    if usable_utxos.is_empty() {
+        bail!("Not Enough Lovelace/Tokens");
+    }
 
     let (total_lovelace, tokens) = utxos::assets_of(usable_utxos.clone()).unwrap_or_default();
     let change_tokens: Assets = tokens.separate(selected_tokens.clone()).unwrap_or_default();
@@ -358,10 +311,18 @@ pub async fn build_fund_seedelf(
 
     let tx_cbor: String = hex::encode(tx.tx_bytes);
 
-    // fill this out as we need it
-    FundSeedelfOutput {
-        tx_cbor,
-        tx_fee,
-        usable_utxos,
-    }
+    println!(
+        "{} {}",
+        "\nTx Size Fee:".bright_blue(),
+        tx_fee.to_string().bright_white()
+    );
+
+    println!("\nTx Cbor: {}", tx_cbor.clone().white());
+
+    // inject the tx cbor into the local webserver to prompt the wallet
+    display::webserver_address();
+    web_server::run_web_server(tx_cbor, network_flag).await;
+    text_coloring::display_purple("Server has stopped.");
+
+    Ok(())
 }
