@@ -32,7 +32,7 @@ use seedelf_koios::koios::{
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct SweepArgs {
+pub(crate) struct SweepArgs {
     /// address that receives the funds
     #[arg(
         short = 'a',
@@ -102,7 +102,7 @@ pub struct SweepArgs {
     utxos: Option<Vec<String>>,
 }
 
-pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 

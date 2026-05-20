@@ -9,7 +9,7 @@ use seedelf_crypto::convert;
 use seedelf_display::display;
 use seedelf_koios::koios::UtxoResponse;
 
-pub async fn run(network_flag: bool) -> Result<()> {
+pub(crate) async fn run(network_flag: bool) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;

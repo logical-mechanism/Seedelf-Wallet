@@ -22,7 +22,7 @@ use seedelf_display::{display, text_coloring};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct ExtractArgs {
+pub(crate) struct ExtractArgs {
     /// The label to search with
     #[arg(short = 'u', long, help = "The UTxO to spend", display_order = 1)]
     utxo: String,
@@ -36,7 +36,7 @@ pub struct ExtractArgs {
     address: String,
 }
 
-pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 

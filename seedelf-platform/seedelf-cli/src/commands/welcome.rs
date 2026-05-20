@@ -1,7 +1,7 @@
 use colored::Colorize;
 use seedelf_display::display::is_their_an_update;
 
-pub async fn run() {
+pub(crate) async fn run() {
     is_their_an_update().await;
     println!(
         "\n{} 🌱🧝\n{}",

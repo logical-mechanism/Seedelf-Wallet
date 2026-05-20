@@ -27,7 +27,7 @@ use seedelf_koios::koios::{
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct RemoveArgs {
+pub(crate) struct RemoveArgs {
     #[arg(short = 's', long, help = "The seedelf to remove.", display_order = 1)]
     seedelf: String,
 
@@ -40,7 +40,7 @@ pub struct RemoveArgs {
     address: String,
 }
 
-pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 

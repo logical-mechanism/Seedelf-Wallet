@@ -8,7 +8,7 @@ use seedelf_koios::koios::UtxoResponse;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct FindArgs {
+pub(crate) struct FindArgs {
     /// The label to search with
     #[arg(
         short = 'l',
@@ -19,7 +19,7 @@ pub struct FindArgs {
     label: Option<String>,
 }
 
-pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
     let label: String = args.label.unwrap_or_default();

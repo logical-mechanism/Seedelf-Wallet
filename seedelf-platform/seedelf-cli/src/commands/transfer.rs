@@ -31,7 +31,7 @@ use seedelf_koios::koios::{
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct TransforArgs {
+pub(crate) struct TransforArgs {
     /// seedelf to send funds too
     #[arg(
         short = 's',
@@ -66,7 +66,7 @@ pub struct TransforArgs {
     utxos: Option<Vec<String>>,
 }
 
-pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 

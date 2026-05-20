@@ -6,13 +6,13 @@ use seedelf_display::display;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct MigrateArgs {
+pub(crate) struct MigrateArgs {
     /// The label to search with
     #[arg(long, help = "The contract variant to migrate from", display_order = 1)]
     from_variant: u64,
 }
 
-pub async fn run(args: MigrateArgs, network_flag: bool) -> Result<()> {
+pub(crate) async fn run(args: MigrateArgs, network_flag: bool) -> Result<()> {
     // starts a variant 1
     if args.from_variant == 0 || args.from_variant >= VARIANT {
         bail!("Incorrect Migration Variant");

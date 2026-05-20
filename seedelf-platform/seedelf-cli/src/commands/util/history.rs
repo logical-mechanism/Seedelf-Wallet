@@ -12,7 +12,7 @@ use seedelf_koios::koios::address_transactions;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct HistoryArgs {
+pub(crate) struct HistoryArgs {
     /// Show spend only in history
     #[arg(long, help = "Show spend only", display_order = 1)]
     spend_only: bool,
@@ -22,7 +22,7 @@ pub struct HistoryArgs {
     receive_only: bool,
 }
 
-pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 

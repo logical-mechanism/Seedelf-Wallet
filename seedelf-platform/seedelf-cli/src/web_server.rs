@@ -16,7 +16,7 @@ fn serve_bytes(path: &'static str, data: Vec<u8>) -> impl warp::Reply {
         .body(data)
 }
 
-pub async fn run_web_server(message: String, network_flag: bool) {
+pub(crate) async fn run_web_server(message: String, network_flag: bool) {
     let addr: SocketAddr = ([127, 0, 0, 1], 44203).into();
 
     let html = warp::path::end().map(move || {

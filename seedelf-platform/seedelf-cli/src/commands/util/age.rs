@@ -8,7 +8,7 @@ use seedelf_koios::koios::{History, asset_history};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct AgeArgs {
+pub(crate) struct AgeArgs {
     /// seedelf to age check
     #[arg(
         short = 's',
@@ -55,7 +55,7 @@ fn format_duration(seconds: i64) -> String {
     }
 }
 
-pub async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: AgeArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
     let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {

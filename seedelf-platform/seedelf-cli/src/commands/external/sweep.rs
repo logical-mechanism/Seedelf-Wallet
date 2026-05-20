@@ -18,7 +18,7 @@ use seedelf_crypto::register::Register;
 use seedelf_display::display;
 use seedelf_koios::koios::{UtxoResponse, submit_tx};
 
-pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
     println!("\n{}", "Sweeping All External UTxOs".bright_blue(),);

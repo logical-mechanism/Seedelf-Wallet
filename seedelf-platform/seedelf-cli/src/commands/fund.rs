@@ -20,7 +20,7 @@ use seedelf_koios::koios::{UtxoResponse, extract_bytes_with_logging};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct FundArgs {
+pub(crate) struct FundArgs {
     /// address sending funds
     #[arg(
         short = 'a',
@@ -79,7 +79,7 @@ pub struct FundArgs {
     amount: Option<Vec<u64>>,
 }
 
-pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 

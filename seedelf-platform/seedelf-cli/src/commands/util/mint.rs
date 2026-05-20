@@ -30,7 +30,7 @@ use seedelf_koios::koios::{
 };
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct MintArgs {
+pub(crate) struct MintArgs {
     #[arg(
         short = 'l',
         long,
@@ -62,7 +62,7 @@ pub struct MintArgs {
     utxos: Option<Vec<String>>,
 }
 
-pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_their_an_update().await;
     display::preprod_text(network_flag);
 
