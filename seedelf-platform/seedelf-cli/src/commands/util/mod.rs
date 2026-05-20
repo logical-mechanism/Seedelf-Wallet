@@ -35,7 +35,7 @@ pub(crate) enum UtilCommands {
 #[derive(Args)]
 pub(crate) struct UtilArgs {
     #[command(subcommand)]
-    pub command: UtilCommands,
+    pub(crate) command: UtilCommands,
 }
 
 pub(crate) async fn run(args: UtilArgs, preprod_flag: bool, variant: u64) {

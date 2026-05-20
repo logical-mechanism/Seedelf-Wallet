@@ -14,7 +14,7 @@ pub(crate) enum ExternalCommands {
 #[derive(Args)]
 pub(crate) struct ExternalArgs {
     #[command(subcommand)]
-    pub command: ExternalCommands,
+    pub(crate) command: ExternalCommands,
 }
 
 pub(crate) async fn run(args: ExternalArgs, preprod_flag: bool, variant: u64) {

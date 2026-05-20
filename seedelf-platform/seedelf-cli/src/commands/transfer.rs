@@ -59,7 +59,7 @@ pub(crate) struct TransforArgs {
         num_args = 0..=1,                // allow bare flag; see note below
         default_missing_value = ""       // bare `--tokens` becomes ""
     )]
-    pub tokens: Vec<String>,
+    tokens: Vec<String>,
 
     /// Optional repeated 'txId#txIdx'
     #[arg(long = "utxo", help = "The utxos to spend.", display_order = 6)]
