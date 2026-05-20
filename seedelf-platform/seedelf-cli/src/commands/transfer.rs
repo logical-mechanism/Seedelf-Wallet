@@ -477,16 +477,22 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         .await
     {
         Ok(witness) => {
-            let witness_cbor = witness.get("witness").and_then(|v| v.as_str()).unwrap();
+            let witness_cbor = match witness.get("witness").and_then(|v| v.as_str()) {
+                Some(w) if w.len() >= 128 => w,
+                _ => bail!("Collateral Service Returned Unexpected Response: {witness}"),
+            };
             let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
-            let witness_vector: [u8; 64] = hex::decode(witness_sig).unwrap().try_into().unwrap();
+            let witness_vector: [u8; 64] = hex::decode(witness_sig)
+                .map_err(|e| anyhow::anyhow!("Collateral Witness Hex Decode Failed: {e}"))?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Collateral Witness Wrong Length"))?;
 
             tx.sign(PrivateKey::from(one_time_secret_key.clone()))
                 .unwrap()
                 .add_signature(witness_public_key, witness_vector)
                 .unwrap()
         }
-        _ => tx,
+        Err(e) => bail!("Collateral Service Request Failed: {e}"),
     };
 
     let tx_hash = match submit_tx(hex::encode(signed_tx_cbor.clone().tx_bytes), network_flag).await

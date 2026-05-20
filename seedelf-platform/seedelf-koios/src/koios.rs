@@ -346,7 +346,7 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
     let client: Client = reqwest::Client::new();
 
     let payload: Value = serde_json::json!({
-        "tx_body": tx_cbor,
+        "tx": tx_cbor,
     });
 
     // Make the POST request
