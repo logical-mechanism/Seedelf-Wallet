@@ -8,8 +8,8 @@ use pallas_primitives::{
 fn test_register_datum() {
     let generator = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
     let public_value = "aafdf5aaed4bae8122d02990b67b9030c8fe352dc40c5823cce4588ed981e89ec7057e1c057a9657a934f310e8c0851a";
-    let gb = Vec::from_hex(&generator).expect("Invalid hex string");
-    let pvb = Vec::from_hex(&public_value).expect("Invalid hex string");
+    let gb = Vec::from_hex(generator).expect("Invalid hex string");
+    let pvb = Vec::from_hex(public_value).expect("Invalid hex string");
 
     let d = PlutusData::Constr(Constr {
         tag: 121,

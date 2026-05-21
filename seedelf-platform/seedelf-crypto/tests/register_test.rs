@@ -26,7 +26,7 @@ fn is_random_register_valid_test() {
     let sk: Scalar = random_scalar();
     let datum: Register = Register::create(sk).unwrap();
     println!("{datum:?}");
-    assert_eq!(datum.is_valid().unwrap(), true);
+    assert!(datum.is_valid().unwrap());
 }
 
 #[test]

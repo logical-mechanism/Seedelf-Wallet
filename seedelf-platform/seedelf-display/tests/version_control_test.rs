@@ -2,17 +2,17 @@ use seedelf_display::version_control::{compare_versions, get_latest_version};
 
 #[test]
 fn same_version() {
-    assert_eq!(compare_versions("0.4.6", "0.4.6"), true)
+    assert!(compare_versions("0.4.6", "0.4.6"))
 }
 
 #[test]
 fn need_to_update() {
-    assert_eq!(compare_versions("0.4.5", "0.4.6"), false)
+    assert!(!compare_versions("0.4.5", "0.4.6"))
 }
 
 #[test]
 fn major_minor_tests() {
-    assert_eq!(compare_versions("0.5.5", "0.4.6"), true)
+    assert!(compare_versions("0.5.5", "0.4.6"))
 }
 
 #[tokio::test]

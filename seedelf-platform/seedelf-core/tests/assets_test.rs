@@ -1,4 +1,3 @@
-use hex;
 use seedelf_core::assets::{Asset, Assets};
 
 #[test]
