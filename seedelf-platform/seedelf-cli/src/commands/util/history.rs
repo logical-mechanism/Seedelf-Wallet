@@ -23,12 +23,11 @@ pub(crate) struct HistoryArgs {
 }
 
 pub(crate) async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
     let scalar: Scalar = setup::unlock_wallet_interactive();
-    let config: Config =
-        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
+    let config: Config = get_config(variant, network_flag)?;
 
     println!("\n{}\n", "Getting History..".bright_blue(),);
     let wallet_addr: Address =

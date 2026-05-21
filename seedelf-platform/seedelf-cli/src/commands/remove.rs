@@ -1,6 +1,6 @@
 use crate::commands::fee;
 use crate::setup;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
@@ -39,12 +39,15 @@ pub(crate) struct RemoveArgs {
 }
 
 pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config =
-        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
+    let config: Config = get_config(variant, network_flag)?;
     let params = epoch_params(network_flag).await?;
+
+    // Reject a non-hex --seedelf up front rather than panicking mid-build.
+    let seedelf_token_name: Vec<u8> =
+        hex::decode(&args.seedelf).context("--seedelf must be a hex-encoded token name")?;
 
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str())
@@ -84,14 +87,16 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or_else(|| anyhow::anyhow!("Seedelf datum is not a Register"))?;
 
-    let total_lovelace: u64 = seedelf_utxo.value.parse::<u64>().unwrap_or_default();
+    let total_lovelace: u64 = seedelf_utxo
+        .value
+        .parse::<u64>()
+        .context("Seedelf UTxO has an invalid lovelace value")?;
+    let seedelf_tx_hash: [u8; 32] = hex::decode(&seedelf_utxo.tx_hash)
+        .context("Seedelf UTxO tx hash is not valid hex")?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Seedelf UTxO tx hash is not 32 bytes"))?;
     let seedelf_input: Input = Input::new(
-        pallas_crypto::hash::Hash::new(
-            hex::decode(seedelf_utxo.tx_hash.clone())
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ),
+        pallas_crypto::hash::Hash::new(seedelf_tx_hash),
         seedelf_utxo.tx_index,
     );
     draft_tx = draft_tx.input(seedelf_input.clone());
@@ -110,11 +115,10 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
     // use the base register to rerandomize for the datum
 
     let r: Scalar = random_scalar();
-    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone(), r).unwrap_or_default();
+    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone(), r)?;
     let spend_redeemer_vector: Vec<u8> =
-        data_structures::create_spend_redeemer(z, g_r, pkh.clone()).unwrap_or_default();
-    let burn_redeemer_vector: Vec<u8> =
-        data_structures::create_mint_redeemer("".to_string()).unwrap_or_default();
+        data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
+    let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string())?;
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
@@ -129,7 +133,7 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
                     .try_into()
                     .expect("Not Correct Length"),
             ),
-            hex::decode(args.seedelf.clone()).unwrap(),
+            seedelf_token_name.clone(),
             -1,
         )
         .unwrap()

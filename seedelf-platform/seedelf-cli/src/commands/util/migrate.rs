@@ -18,7 +18,7 @@ pub(crate) async fn run(args: MigrateArgs, network_flag: bool) -> Result<()> {
         bail!("Incorrect Migration Variant");
     }
 
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
     println!(

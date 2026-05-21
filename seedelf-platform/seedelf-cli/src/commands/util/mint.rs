@@ -63,11 +63,10 @@ pub(crate) struct MintArgs {
 }
 
 pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config =
-        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
+    let config: Config = get_config(variant, network_flag)?;
     let params = epoch_params(network_flag).await?;
 
     // we need this as the address type and not the shelley

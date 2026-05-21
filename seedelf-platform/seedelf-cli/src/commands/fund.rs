@@ -57,15 +57,14 @@ pub(crate) struct FundArgs {
 }
 
 pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
     if args.lovelace.is_none() && args.assets.is_empty() {
         bail!("No Lovelace or Assets Provided.");
     }
 
-    let config: Config =
-        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
+    let config: Config = get_config(variant, network_flag)?;
     let params = epoch_params(network_flag).await?;
 
     let mut selected_tokens: Assets = Assets::new();
@@ -154,11 +153,7 @@ pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Res
     // This is some semi legit fee to be used to estimate it
     let tmp_fee: u64 = 200_000;
 
-    let datum_vector: Vec<u8> = seedelf_datum
-        .rerandomize()
-        .unwrap_or_default()
-        .to_vec()
-        .unwrap_or_default();
+    let datum_vector: Vec<u8> = seedelf_datum.rerandomize()?.to_vec()?;
     let mut fund_output: Output =
         Output::new(wallet_addr.clone(), lovelace).set_inline_datum(datum_vector.clone());
     for asset in selected_tokens.items.clone() {

@@ -38,11 +38,11 @@ impl Asset {
     pub fn new(policy_id: String, token_name: String, amount: u64) -> Result<Self> {
         Ok(Self {
             policy_id: Hash::new(
-                hex::decode(policy_id)
-                    .unwrap_or_default()
+                hex::decode(&policy_id)
+                    .context("Invalid policy_id hex")?
                     .as_slice()
                     .try_into()
-                    .map_err(|e| anyhow::anyhow!("{e}"))?,
+                    .map_err(|e| anyhow::anyhow!("policy_id must be 28 bytes: {e}"))?,
             ),
             token_name: hex::decode(token_name).context("Can't Decode Token Name")?,
             amount,

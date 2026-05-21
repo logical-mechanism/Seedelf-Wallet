@@ -422,67 +422,62 @@ pub async fn ada_handle_address(
     asset_name: String,
     network_flag: bool,
     cip68_flag: bool,
-    variant: u64,
+    _variant: u64,
     wallet_addr: String,
     ada_handle_policy_id: &str,
 ) -> Result<String, String> {
     let network: &str = if network_flag { "preprod" } else { "api" };
-    let token_name: String = if cip68_flag {
-        "000de140".to_string() + &hex::encode(asset_name.clone())
+
+    // Candidate token-name encodings to try, in order. A non-CIP68 lookup
+    // falls back to the CIP68 (000de140-prefixed) name — at most two attempts,
+    // iterated rather than recursed so there is no unbounded call depth.
+    let cip68_name: String = "000de140".to_string() + &hex::encode(&asset_name);
+    let candidates: Vec<String> = if cip68_flag {
+        vec![cip68_name]
     } else {
-        hex::encode(asset_name.clone())
-    };
-    let url: String = format!(
-        "https://{network}.koios.rest/api/v1/asset_nft_address?_asset_policy={ada_handle_policy_id}&_asset_name={token_name}",
-    );
-
-    let response: Response = match HTTP_CLIENT
-        .get(url)
-        .header("Content-Type", "application/json")
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-    {
-        Ok(resp) => resp,
-        Err(err) => return Err(format!("HTTP request failed: {err}")),
+        vec![hex::encode(&asset_name), cip68_name]
     };
 
-    let outcome: Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse ADA handle response: {e}"))?;
-    let vec_outcome = serde_json::from_value::<Vec<serde_json::Value>>(outcome)
-        .map_err(|e| format!("Failed to parse outcome as array: {e}"))?;
+    for token_name in candidates {
+        // Build query params via `.query()` so values are URL-encoded rather
+        // than interpolated raw into the URL string.
+        let url: String = format!("https://{network}.koios.rest/api/v1/asset_nft_address");
+        let response: Response = match HTTP_CLIENT
+            .get(url)
+            .query(&[
+                ("_asset_policy", ada_handle_policy_id),
+                ("_asset_name", token_name.as_str()),
+            ])
+            .header("Content-Type", "application/json")
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(resp) => resp,
+            Err(err) => return Err(format!("HTTP request failed: {err}")),
+        };
 
-    // Borrow from the longer-lived variable
-    let payment_address = match vec_outcome
-        .first()
-        .and_then(|obj| obj.get("payment_address"))
-        .and_then(|val| val.as_str())
-    {
-        Some(address) => address,
-        None => {
-            if cip68_flag {
-                return Err("Payment address not found".to_string());
+        let outcome: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse ADA handle response: {e}"))?;
+        let vec_outcome = serde_json::from_value::<Vec<serde_json::Value>>(outcome)
+            .map_err(|e| format!("Failed to parse outcome as array: {e}"))?;
+
+        if let Some(payment_address) = vec_outcome
+            .first()
+            .and_then(|obj| obj.get("payment_address"))
+            .and_then(|val| val.as_str())
+        {
+            return if payment_address == wallet_addr {
+                Err("ADA Handle Is In Wallet Address".to_string())
             } else {
-                return Box::pin(ada_handle_address(
-                    asset_name,
-                    network_flag,
-                    !cip68_flag,
-                    variant,
-                    wallet_addr,
-                    ada_handle_policy_id,
-                ))
-                .await;
-            }
+                Ok(payment_address.to_string())
+            };
         }
-    };
-
-    if payment_address == wallet_addr {
-        Err("ADA Handle Is In Wallet Address".to_string())
-    } else {
-        Ok(payment_address.to_string())
     }
+
+    Err("Payment address not found".to_string())
 }
 
 pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {

@@ -25,6 +25,12 @@ pub struct Register {
 impl Register {
     /// Creates a new `Register` with the specified generator and public value.
     ///
+    /// This constructor does **not** check that the points are on-curve or
+    /// torsion-free — it is fine for wrapping data read off-chain, but any
+    /// caller that intends to write the register back to chain must first
+    /// call [`Register::is_valid`]. A non-prime-order point produces a
+    /// permanently-locked UTxO.
+    ///
     /// # Arguments
     ///
     /// * `generator` - A compressed hex string representing the generator point.

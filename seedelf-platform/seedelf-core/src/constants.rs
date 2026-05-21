@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use hex_literal::hex;
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +26,7 @@ pub struct Config {
 }
 
 /// We can store all variants of the contracts inside this function then call it whenever we need it.
-pub fn get_config(variant: u64, network: bool) -> Option<Config> {
+pub fn get_config(variant: u64, network: bool) -> Result<Config> {
     match variant {
         1 => {
             let reference: Reference = if network {
@@ -56,12 +57,12 @@ pub fn get_config(variant: u64, network: bool) -> Option<Config> {
                 wallet_contract_size: 629,
                 seedelf_contract_size: 519,
             };
-            Some(Config {
+            Ok(Config {
                 contract,
                 reference,
             })
         }
-        _ => None, // unsupported variant
+        _ => bail!("unsupported contract variant {variant}; supported variants: 1"),
     }
 }
 

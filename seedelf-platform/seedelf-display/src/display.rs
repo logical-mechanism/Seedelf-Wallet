@@ -12,7 +12,7 @@ pub fn webserver_address() {
     display_yellow("Hit Ctrl-C To Stop Web Server");
 }
 
-pub async fn is_their_an_update() {
+pub async fn is_there_an_update() {
     match get_latest_version().await {
         Ok(tag) => {
             if !compare_versions(env!("CARGO_PKG_VERSION"), &tag) {

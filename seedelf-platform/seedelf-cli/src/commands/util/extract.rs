@@ -36,11 +36,10 @@ pub(crate) struct ExtractArgs {
 }
 
 pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config =
-        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
+    let config: Config = get_config(variant, network_flag)?;
     let params = epoch_params(network_flag).await?;
 
     let collat_addr: Address = address::collateral_address(network_flag);

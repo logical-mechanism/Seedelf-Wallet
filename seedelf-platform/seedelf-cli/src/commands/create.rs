@@ -38,11 +38,10 @@ pub(crate) struct CreateArgs {
 }
 
 pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config =
-        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
+    let config: Config = get_config(variant, network_flag)?;
     let params = epoch_params(network_flag).await?;
 
     // we need to make sure that the network flag and the address provided makes sense here
@@ -91,14 +90,8 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
         bail!("Not Enough Lovelace");
     }
 
-    let datum_vector: Vec<u8> = Register::create(scalar)
-        .unwrap_or_default()
-        .rerandomize()
-        .unwrap_or_default()
-        .to_vec()
-        .unwrap_or_default();
-    let redeemer_vector: Vec<u8> =
-        data_structures::create_mint_redeemer(label.clone()).unwrap_or_default();
+    let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
+    let redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer(label.clone())?;
 
     // build the seedelf token
     let token_name: Vec<u8> =

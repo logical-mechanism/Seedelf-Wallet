@@ -20,7 +20,7 @@ pub(crate) struct FindArgs {
 }
 
 pub(crate) async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
     let label: String = args.label.unwrap_or_default();
     println!(
@@ -29,8 +29,7 @@ pub(crate) async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Res
         label.bright_green()
     );
 
-    let config: Config =
-        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
+    let config: Config = get_config(variant, network_flag)?;
 
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;

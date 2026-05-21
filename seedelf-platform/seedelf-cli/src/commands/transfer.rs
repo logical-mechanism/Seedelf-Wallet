@@ -71,11 +71,10 @@ pub(crate) struct TransforArgs {
 }
 
 pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config =
-        get_config(variant, network_flag).ok_or_else(|| anyhow::anyhow!("Invalid Variant"))?;
+    let config: Config = get_config(variant, network_flag)?;
     let params = epoch_params(network_flag).await?;
 
     if args.seedelfs.is_empty() {
@@ -235,11 +234,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
     {
         let datum =
             datum_opt.ok_or_else(|| anyhow::anyhow!("Seedelf {seedelf_id} not found on chain"))?;
-        let inline = datum
-            .rerandomize()
-            .unwrap_or_default()
-            .to_vec()
-            .unwrap_or_default();
+        let inline = datum.rerandomize()?.to_vec()?;
 
         // println!("{:?}", lovelace.clone());
         // println!("{:?}", inline.clone());
@@ -279,12 +274,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
     // a max tokens per change output here
     let mut lovelace_amount: u64 = total_lovelace_found;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar)
-            .unwrap_or_default()
-            .rerandomize()
-            .unwrap_or_default()
-            .to_vec()
-            .unwrap_or_default();
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
         let minimum: u64 =
             wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
@@ -309,12 +299,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
 
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar)
-            .unwrap_or_default()
-            .rerandomize()
-            .unwrap_or_default()
-            .to_vec()
-            .unwrap_or_default();
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
         // println!("{:}", lovelace_amount);
         // println!("{:}", total_lovelace);
         // println!("{:}", tmp_fee);
@@ -332,9 +317,8 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         .zip(register_vector.clone().into_iter())
     {
         let r: Scalar = random_scalar();
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r).unwrap_or_default();
-        let spend_redeemer_vector =
-            data_structures::create_spend_redeemer(z, g_r, pkh.clone()).unwrap_or_default();
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r)?;
+        let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
         draft_tx = draft_tx.add_spend_redeemer(
             input,
             spend_redeemer_vector.clone(),
@@ -403,12 +387,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
     // a max tokens per change output here
     let mut lovelace_amount: u64 = total_lovelace_found;
     for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar)
-            .unwrap_or_default()
-            .rerandomize()
-            .unwrap_or_default()
-            .to_vec()
-            .unwrap_or_default();
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
         let minimum: u64 =
             wallet_minimum_lovelace_with_assets(&params, change.clone()).unwrap_or_default();
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
@@ -433,12 +412,7 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
 
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar)
-            .unwrap_or_default()
-            .rerandomize()
-            .unwrap_or_default()
-            .to_vec()
-            .unwrap_or_default();
+        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
         let change_lovelace: u64 = lovelace_amount - total_lovelace - total_fee;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
@@ -452,9 +426,8 @@ pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) ->
         .zip(budgets.clone().into_iter())
     {
         let r: Scalar = random_scalar();
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r).unwrap_or_default();
-        let spend_redeemer_vector =
-            data_structures::create_spend_redeemer(z, g_r, pkh.clone()).unwrap_or_default();
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r)?;
+        let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
         raw_tx = raw_tx.add_spend_redeemer(
             input,
             spend_redeemer_vector.clone(),

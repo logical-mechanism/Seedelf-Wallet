@@ -1,7 +1,7 @@
 use aes_gcm::aead::{Aead, AeadCore, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use anyhow::{Result, anyhow, bail};
-use argon2::{Argon2, password_hash::SaltString};
+use argon2::{Algorithm, Argon2, Params, Version, password_hash::SaltString};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use blstrs::Scalar;
@@ -31,6 +31,19 @@ struct EncryptedData {
     salt: String,
     nonce: String,
     data: String,
+}
+
+/// Argon2id KDF with explicit, pinned parameters.
+///
+/// m = 19 MiB, t = 2, p = 1, 32-byte tag — the OWASP minimum for Argon2id and
+/// identical to the `argon2` crate's current defaults. Pinning them here means
+/// a future change to that crate's `Default` cannot silently weaken
+/// key-derivation strength, and the values stay backward-compatible with
+/// wallets already on disk.
+fn wallet_kdf() -> Result<Argon2<'static>> {
+    let params: Params = Params::new(19_456, 2, 1, Some(32))
+        .map_err(|e| anyhow!("Invalid Argon2 parameters: {e}"))?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
 fn seedelf_home_path() -> PathBuf {
@@ -158,7 +171,7 @@ pub(crate) fn create_wallet(wallet_name: String, password: String) -> Result<()>
 
     let salt: SaltString = SaltString::generate(&mut OsRng);
     let mut output_key_material: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    Argon2::default()
+    wallet_kdf()?
         .hash_password_into(
             password.as_bytes(),
             salt.to_string().as_bytes(),
@@ -213,7 +226,7 @@ fn load_wallet(password: String) -> Result<Scalar> {
     let salt: SaltString = SaltString::from_b64(&encrypted_wallet.salt)
         .map_err(|e| anyhow!("Invalid salt format: {e}"))?;
     let mut output_key_material: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    Argon2::default()
+    wallet_kdf()?
         .hash_password_into(
             password.as_bytes(),
             salt.to_string().as_bytes(),

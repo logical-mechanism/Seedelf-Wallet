@@ -52,7 +52,10 @@ pub fn random_scalar() -> Scalar {
 ///
 /// * `datum` - A `Register` containing the generator and public value as hex-encoded strings.
 /// * `sk` - A secret scalar representing the private key.
-/// * `bound` - A string representing an additional input for the Fiat-Shamir heuristic.
+/// * `vkh` - The blake2b-224 hash of the one-time signing key, hex-encoded (28
+///   bytes). Folding this into the Fiat-Shamir challenge is what blocks the
+///   rollback-replay vector; it must correspond to a key in the transaction's
+///   extra signatories.
 ///
 /// # Returns
 ///
@@ -62,7 +65,7 @@ pub fn random_scalar() -> Scalar {
 pub fn create_proof(
     datum: Register,
     sk: Scalar,
-    bound: String,
+    vkh: String,
     r: Scalar,
 ) -> Result<(String, String)> {
     // Defense-in-depth: the on-chain validator rejects non-prime-order points,
@@ -71,6 +74,14 @@ pub fn create_proof(
     // so any future direct caller can't bypass it.
     if !datum.is_valid()? {
         anyhow::bail!("Register points are not in the prime-order subgroup");
+    }
+
+    // The Fiat-Shamir challenge MUST commit to the one-time signing key hash.
+    // Omitting it — or letting a caller pass arbitrary transcript bytes here —
+    // reintroduces the rollback-replay vector, so enforce the vkh shape.
+    let vkh_len: usize = hex::decode(&vkh).context("vkh is not valid hex")?.len();
+    if vkh_len != 28 {
+        anyhow::bail!("vkh must be a 28-byte blake2b-224 key hash, got {vkh_len} bytes");
     }
 
     let g1: G1Affine = G1Affine::from_compressed(
@@ -88,7 +99,7 @@ pub fn create_proof(
         datum.generator,
         hex::encode(g_r.to_compressed()),
         datum.public_value,
-        bound,
+        vkh,
     )
     .context("Fair Shamir Heuristic Failure")?;
     let c_bytes: Vec<u8> = hex::decode(&c_hex).context("Failed to decode Fiat-Shamir output")?;
@@ -111,7 +122,7 @@ pub fn prove(
     public_value: &str,
     z_b: &str,
     g_r_b: &str,
-    bound: &str,
+    vkh: &str,
 ) -> Result<bool> {
     // Decode and decompress generator
     let g1: G1Affine = G1Affine::from_compressed(
@@ -159,7 +170,7 @@ pub fn prove(
         generator.to_string(),
         g_r_b.to_string(),
         public_value.to_string(),
-        bound.to_string(),
+        vkh.to_string(),
     )
     .context("Fair Shamir Heuristic Failure")?;
     let c_bytes: Vec<u8> = hex::decode(&c_hex).context("Failed to decode Fiat-Shamir output")?;

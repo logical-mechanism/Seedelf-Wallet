@@ -10,7 +10,7 @@ use seedelf_display::display;
 use seedelf_koios::koios::UtxoResponse;
 
 pub(crate) async fn run(network_flag: bool) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
 
