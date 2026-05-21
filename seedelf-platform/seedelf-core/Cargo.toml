@@ -24,3 +24,4 @@ seedelf-koios = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1.41.1", features = ["macros", "rt"] }
+proptest = "1"
