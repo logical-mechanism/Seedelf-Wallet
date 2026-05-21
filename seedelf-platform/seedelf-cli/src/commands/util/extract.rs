@@ -94,15 +94,15 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
             // loop all the utxos found from the address
             for utxo in utxos {
                 // get the lovelace on this utxo
-                let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
+                let lovelace: u64 = utxo
+                    .value
+                    .parse::<u64>()
+                    .map_err(|e| anyhow::anyhow!("UTxO has an invalid lovelace value: {e}"))?;
                 if lovelace == 5_000_000 && !found_collateral {
                     draft_tx = draft_tx.collateral_input(Input::new(
-                        pallas_crypto::hash::Hash::new(
-                            hex::decode(utxo.tx_hash.clone())
-                                .expect("Invalid hex string")
-                                .try_into()
-                                .expect("Failed to convert to 32-byte array"),
-                        ),
+                        pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+                            &utxo.tx_hash,
+                        )?),
                         utxo.tx_index,
                     ));
                     // we just want a single collateral here
@@ -131,12 +131,9 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
     let spend_redeemer_vector =
         data_structures::create_spend_redeemer(String::new(), String::new(), String::new())?;
     let empty_input: Input = Input::new(
-        pallas_crypto::hash::Hash::new(
-            hex::decode(empty_datum_utxo.tx_hash.clone())
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ),
+        pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+            &empty_datum_utxo.tx_hash,
+        )?),
         empty_datum_utxo.clone().tx_index,
     );
     draft_tx = draft_tx.input(empty_input.clone());
@@ -152,17 +149,17 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
     for utxo in usable_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(utxo.tx_hash.clone())
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
+            pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+                &utxo.tx_hash,
+            )?),
             utxo.tx_index,
         ));
     }
 
-    let mut extract_output: Output = Output::new(addr.clone(), total_lovelace - tmp_fee);
+    let mut extract_output: Output = Output::new(
+        addr.clone(),
+        seedelf_core::transaction::checked_lovelace(total_lovelace, &[tmp_fee])?,
+    );
     for asset in total_tokens.items.clone() {
         extract_output = extract_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -172,7 +169,7 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(extract_output)
-        .collateral_output(fee::collateral_output(addr.clone(), tmp_fee))
+        .collateral_output(fee::collateral_output(addr.clone(), tmp_fee)?)
         .fee(tmp_fee)
         .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
@@ -236,7 +233,10 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
         total_fee.to_string().bright_white()
     );
 
-    let mut extract_output: Output = Output::new(addr.clone(), total_lovelace - total_fee);
+    let mut extract_output: Output = Output::new(
+        addr.clone(),
+        seedelf_core::transaction::checked_lovelace(total_lovelace, &[total_fee])?,
+    );
     for asset in total_tokens.items.clone() {
         extract_output = extract_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -245,10 +245,12 @@ pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> 
 
     raw_tx = raw_tx
         .output(extract_output)
-        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee)?)
         .fee(total_fee);
 
-    let (cpu, mem) = budgets.first().unwrap();
+    let (cpu, mem) = budgets
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("transaction evaluation returned no execution budgets"))?;
     raw_tx = raw_tx.add_spend_redeemer(
         empty_input.clone(),
         spend_redeemer_vector.clone(),

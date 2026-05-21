@@ -245,3 +245,30 @@ fn assets_parse_merges_duplicate_assets() {
     assert_eq!(parsed.items.len(), 1);
     assert_eq!(parsed.items[0].amount, 8);
 }
+
+#[test]
+fn separate_absent_token_errors() {
+    // Subtracting a token that is not present must error rather than silently
+    // inserting a phantom positive-amount entry into the change.
+    let have: Assets = Assets::new()
+        .add(Asset::new(PID.to_string(), "aa".to_string(), 100).unwrap())
+        .unwrap();
+    let want: Assets = Assets::new()
+        .add(Asset::new(PID.to_string(), "bb".to_string(), 50).unwrap())
+        .unwrap();
+    assert!(have.separate(want).is_err());
+}
+
+#[test]
+fn separate_present_token_subtracts() {
+    // Sanity check the happy path still works after the absent-token guard.
+    let have: Assets = Assets::new()
+        .add(Asset::new(PID.to_string(), "aa".to_string(), 100).unwrap())
+        .unwrap();
+    let want: Assets = Assets::new()
+        .add(Asset::new(PID.to_string(), "aa".to_string(), 30).unwrap())
+        .unwrap();
+    let left: Assets = have.separate(want).unwrap();
+    assert_eq!(left.items.len(), 1);
+    assert_eq!(left.items[0].amount, 70);
+}

@@ -234,7 +234,10 @@ impl Assets {
                 .sub(&other)
                 .context("Can't Subtract Asset From Assets")?;
         } else {
-            new_items.push(other);
+            // Subtracting an asset that isn't present is a caller error — it
+            // must not silently insert a phantom positive-amount entry, which
+            // would corrupt change calculation via `separate`.
+            bail!("cannot subtract an asset that is not in the collection");
         }
         Ok(Self { items: new_items }.remove_zero_amounts())
     }

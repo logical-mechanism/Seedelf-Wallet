@@ -22,7 +22,7 @@ use seedelf_core::transaction::{
 };
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr::{create_proof, random_scalar};
+use seedelf_crypto::schnorr::create_proof;
 use seedelf_display::display;
 use seedelf_koios::koios::{
     UtxoResponse, epoch_params, evaluate_transaction, extract_bytes_with_logging, submit_tx,
@@ -99,14 +99,10 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         utxos::select(&params, owned_utxos, lovelace_goal, Assets::default())?
     } else {
         // assumes the utxos hold the correct tokens else it will error downstream
-        match utxos::parse_tx_utxos(args.utxos.unwrap_or_default()) {
-            Ok(parsed) => utxos::filter_utxos(owned_utxos, parsed),
-            Err(e) => {
-                eprintln!("Unable To Parse UTxOs Error: {e}");
-                // nothing works if you are not spending anything, this could be an exit
-                Vec::new()
-            }
-        }
+        utxos::filter_utxos(
+            owned_utxos,
+            utxos::parse_tx_utxos(args.utxos.unwrap_or_default())?,
+        )
     };
 
     if usable_utxos.is_empty() {
@@ -116,12 +112,9 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
 
     for utxo in usable_utxos.clone() {
         let this_input: Input = Input::new(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(utxo.tx_hash.clone())
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
+            pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+                &utxo.tx_hash,
+            )?),
             utxo.tx_index,
         );
         let inline_datum: Register = extract_bytes_with_logging(&utxo.inline_datum)
@@ -190,7 +183,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     draft_tx = draft_tx
         .output(seedelf_output)
         .collateral_input(collateral_input(network_flag))
-        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee)?)
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
@@ -242,11 +235,13 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
-            lovelace_amount = lovelace_amount - min_utxo - tmp_fee;
+            lovelace_amount =
+                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[min_utxo, tmp_fee])?;
             lovelace_amount
         } else {
             // its additional tokens going back
-            lovelace_amount -= minimum;
+            lovelace_amount =
+                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[minimum])?;
             minimum
         };
 
@@ -263,7 +258,8 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
         let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let change_lovelace: u64 = lovelace_amount - min_utxo - tmp_fee;
+        let change_lovelace: u64 =
+            seedelf_core::transaction::checked_lovelace(lovelace_amount, &[min_utxo, tmp_fee])?;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
         draft_tx = draft_tx.output(change_output);
@@ -276,8 +272,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         .into_iter()
         .zip(register_vector.clone().into_iter())
     {
-        let r: Scalar = random_scalar();
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r)?;
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         draft_tx = draft_tx.add_spend_redeemer(
             input,
@@ -365,7 +360,7 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     );
 
     raw_tx = raw_tx
-        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee)?)
         .fee(total_fee);
 
     // need to check if there is change going back here
@@ -380,11 +375,15 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
         let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
-            lovelace_amount = lovelace_amount - min_utxo - total_fee;
+            lovelace_amount = seedelf_core::transaction::checked_lovelace(
+                lovelace_amount,
+                &[min_utxo, total_fee],
+            )?;
             lovelace_amount
         } else {
             // its additional tokens going back
-            lovelace_amount -= minimum;
+            lovelace_amount =
+                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[minimum])?;
             minimum
         };
 
@@ -401,22 +400,24 @@ pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Res
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
         let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let change_lovelace: u64 = lovelace_amount - min_utxo - total_fee;
+        let change_lovelace: u64 =
+            seedelf_core::transaction::checked_lovelace(lovelace_amount, &[min_utxo, total_fee])?;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
         raw_tx = raw_tx.output(change_output);
     }
 
     // split the budgets up into the spending and the minting.
-    let (minting, spending) = budgets.split_last().unwrap();
+    let (minting, spending) = budgets
+        .split_last()
+        .ok_or_else(|| anyhow::anyhow!("transaction evaluation returned no execution budgets"))?;
     for ((input, datum), (cpu, mem)) in input_vector
         .clone()
         .into_iter()
         .zip(register_vector.clone().into_iter())
         .zip(spending.iter())
     {
-        let r: Scalar = random_scalar();
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone(), r)?;
+        let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
         raw_tx = raw_tx.add_spend_redeemer(
             input,

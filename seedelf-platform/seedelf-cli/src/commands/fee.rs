@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::fees;
@@ -36,8 +36,14 @@ pub(crate) fn total_with_even_rounding(
 /// Build the collateral return Output: returns `5 ADA - 3/2 * total_fee` to
 /// the supplied address. Caller is responsible for ensuring `total_fee` is
 /// even (via [`total_with_even_rounding`]) so the integer division is exact.
-pub(crate) fn collateral_output(addr: Address, total_fee: u64) -> Output {
-    Output::new(addr, 5_000_000 - total_fee * 3 / 2)
+///
+/// Errors if the fee is large enough that `3/2 * total_fee` exceeds the fixed
+/// 5 ADA collateral — at that point the collateral cannot cover the tx anyway.
+pub(crate) fn collateral_output(addr: Address, total_fee: u64) -> Result<Output> {
+    let collateral_return: u64 = 5_000_000u64
+        .checked_sub(total_fee * 3 / 2)
+        .context("transaction fee is too large for the 5 ADA collateral to cover")?;
+    Ok(Output::new(addr, collateral_return))
 }
 
 /// Interpret a Koios `submit_tx` JSON response. Returns the tx hash on

@@ -37,7 +37,7 @@ pub fn collect_all_wallet_utxos(
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
     for utxo in utxos {
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scaler
+            // utxo must be owned by this secret scalar
             if inline_datum
                 .is_owned(sk)
                 .context("Failed To Construct Points")?
@@ -119,7 +119,7 @@ pub fn collect_wallet_utxos(
     for utxo in utxos {
         // Extract bytes
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scaler
+            // utxo must be owned by this secret scalar
             if inline_datum
                 .is_owned(sk)
                 .context("Failed To Construct Points")?

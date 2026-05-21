@@ -66,6 +66,34 @@ pub fn reference_utxo(reference_utxo: [u8; 32]) -> Input {
     Input::new(Hash::new(reference_utxo), 1)
 }
 
+/// Decode a 32-byte transaction hash from its hex string form.
+///
+/// UTxO `tx_hash` values come straight from Koios; a malformed one should
+/// surface as an error rather than panic in the middle of building a tx.
+pub fn decode_tx_hash(tx_hash: &str) -> Result<[u8; 32]> {
+    hex::decode(tx_hash)
+        .context("UTxO tx hash is not valid hex")?
+        .try_into()
+        .map_err(|_| anyhow!("UTxO tx hash is not 32 bytes"))
+}
+
+/// Subtract a series of `deductions` (outputs, fees, minimums) from `available`
+/// lovelace, erroring instead of wrapping on underflow.
+///
+/// Plain `u64` subtraction wraps silently in release builds, so a fee or change
+/// figure that exceeds the selected lovelace would otherwise produce a
+/// nonsensical multi-quintillion-lovelace output the node simply rejects. This
+/// turns that into a clear "insufficient lovelace" error before submission.
+pub fn checked_lovelace(available: u64, deductions: &[u64]) -> Result<u64> {
+    let mut remaining: u64 = available;
+    for deduction in deductions {
+        remaining = remaining
+            .checked_sub(*deduction)
+            .context("insufficient lovelace to cover the outputs and fee")?;
+    }
+    Ok(remaining)
+}
+
 /// Generates the SeedElf token name.
 ///
 /// This function constructs a token name by concatenating a prefix, a provided label,

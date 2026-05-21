@@ -33,7 +33,9 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
 
     let vkey: String = convert::secret_key_to_public_key(scalar);
     let addr: Address = address::dapp_address(vkey.clone(), network_flag)?;
-    let addr_bech32: String = addr.to_bech32().unwrap();
+    let addr_bech32: String = addr
+        .to_bech32()
+        .map_err(|e| anyhow::anyhow!("Failed to encode address: {e}"))?;
 
     let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag).await?;
     if all_utxos.is_empty() {
@@ -43,12 +45,9 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
 
     for utxo in all_utxos.clone() {
         let this_input: Input = Input::new(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(utxo.tx_hash.clone())
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
+            pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+                &utxo.tx_hash,
+            )?),
             utxo.tx_index,
         );
         draft_tx = draft_tx.input(this_input.clone());
@@ -79,11 +78,13 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
         let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
-            lovelace_amount -= tmp_fee;
+            lovelace_amount =
+                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[tmp_fee])?;
             lovelace_amount
         } else {
             // its additional tokens going back
-            lovelace_amount -= minimum;
+            lovelace_amount =
+                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[minimum])?;
             minimum
         };
 
@@ -100,15 +101,19 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
         let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let change_lovelace: u64 = lovelace_amount - tmp_fee;
+        let change_lovelace: u64 =
+            seedelf_core::transaction::checked_lovelace(lovelace_amount, &[tmp_fee])?;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
         draft_tx = draft_tx.output(change_output);
     }
 
     let mut raw_tx: StagingTransaction = draft_tx.clone().clear_fee();
-    for i in 0..number_of_change_utxo + 1 {
-        raw_tx = raw_tx.remove_output(number_of_change_utxo - i);
+    // The draft has `number_of_change_utxo` change outputs, or exactly one when
+    // there were no tokens to split. Strip them all (re-added once the real fee
+    // is known); removing index 0 each time shifts the rest down.
+    for _ in 0..number_of_change_utxo.max(1) {
+        raw_tx = raw_tx.remove_output(0);
     }
     let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
 
@@ -141,11 +146,13 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
         let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
         let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
             // this is the last one or the only one
-            lovelace_amount -= tx_fee;
+            lovelace_amount =
+                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[tx_fee])?;
             lovelace_amount
         } else {
             // its additional tokens going back
-            lovelace_amount -= minimum;
+            lovelace_amount =
+                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[minimum])?;
             minimum
         };
 
@@ -162,7 +169,8 @@ pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
     if number_of_change_utxo == 0 {
         // no tokens so we just need to account for the lovelace going back
         let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let change_lovelace: u64 = lovelace_amount - tx_fee;
+        let change_lovelace: u64 =
+            seedelf_core::transaction::checked_lovelace(lovelace_amount, &[tx_fee])?;
         let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
             .set_inline_datum(datum_vector.clone());
         raw_tx = raw_tx.output(change_output);

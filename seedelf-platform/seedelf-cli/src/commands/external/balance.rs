@@ -29,7 +29,9 @@ pub(crate) async fn run(network_flag: bool) -> Result<()> {
         address::stake_key(network_flag).bright_blue()
     );
     let addr: Address = address::dapp_address(vkey, network_flag)?;
-    let addr_bech32: String = addr.to_bech32().unwrap();
+    let addr_bech32: String = addr
+        .to_bech32()
+        .map_err(|e| anyhow::anyhow!("Failed to encode address: {e}"))?;
     println!("\nAddress: {}", addr_bech32.bright_blue());
 
     let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag).await?;

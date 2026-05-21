@@ -16,7 +16,7 @@ use seedelf_core::data_structures;
 use seedelf_core::transaction;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr::{create_proof, random_scalar};
+use seedelf_crypto::schnorr::create_proof;
 use seedelf_display::display;
 use seedelf_koios::koios::{
     UtxoResponse, epoch_params, evaluate_transaction, extract_bytes_with_logging, submit_tx,
@@ -71,9 +71,7 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
     let mut input_vector: Vec<Input> = Vec::new();
 
     let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag)
-            .await
-            .unwrap_or_default();
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
         args.seedelf.clone(),
         &config.contract.seedelf_policy_id,
@@ -114,17 +112,19 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
 
     // use the base register to rerandomize for the datum
 
-    let r: Scalar = random_scalar();
-    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone(), r)?;
+    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone())?;
     let spend_redeemer_vector: Vec<u8> =
         data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
     let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string())?;
 
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
-        .output(Output::new(addr.clone(), total_lovelace - tmp_fee))
+        .output(Output::new(
+            addr.clone(),
+            seedelf_core::transaction::checked_lovelace(total_lovelace, &[tmp_fee])?,
+        ))
         .collateral_input(transaction::collateral_input(network_flag))
-        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee)?)
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
@@ -250,8 +250,11 @@ pub(crate) async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> R
     let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
 
     raw_tx = raw_tx
-        .output(Output::new(addr.clone(), total_lovelace - total_fee))
-        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee))
+        .output(Output::new(
+            addr.clone(),
+            seedelf_core::transaction::checked_lovelace(total_lovelace, &[total_fee])?,
+        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee)?)
         .fee(total_fee)
         .add_spend_redeemer(
             input_vector.clone().remove(0),

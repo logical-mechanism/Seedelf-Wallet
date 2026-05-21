@@ -45,8 +45,9 @@ pub fn random_scalar() -> Scalar {
 /// Creates a non-interactive Schnorr proof using the Fiat-Shamir heuristic.
 ///
 /// This function generates a proof of knowledge for a secret scalar `sk` associated
-/// with a `Register`. It uses a random scalar `r` and applies the Fiat-Shamir heuristic
-/// to produce a challenge, which is then used to compute the response.
+/// with a `Register`. A fresh random nonce `r` is drawn internally — each call
+/// must use a unique `r`, so it is generated here rather than passed in to make
+/// nonce reuse (which would leak `sk`) impossible by construction.
 ///
 /// # Arguments
 ///
@@ -62,12 +63,7 @@ pub fn random_scalar() -> Scalar {
 /// * `(String, String)` - A tuple containing:
 ///     - `z` - The response scalar as a hex-encoded string.
 ///     - `g_r` - The blinded generator (`g^r`) as a hex-encoded compressed point.
-pub fn create_proof(
-    datum: Register,
-    sk: Scalar,
-    vkh: String,
-    r: Scalar,
-) -> Result<(String, String)> {
+pub fn create_proof(datum: Register, sk: Scalar, vkh: String) -> Result<(String, String)> {
     // Defense-in-depth: the on-chain validator rejects non-prime-order points,
     // and producing a proof for a torsion-tainted Register would yield a UTxO
     // the chain cannot accept. The CLI normally enforces this, but check here
@@ -83,6 +79,9 @@ pub fn create_proof(
     if vkh_len != 28 {
         anyhow::bail!("vkh must be a 28-byte blake2b-224 key hash, got {vkh_len} bytes");
     }
+
+    // Fresh per-proof nonce — never reuse across proofs.
+    let r: Scalar = random_scalar();
 
     let g1: G1Affine = G1Affine::from_compressed(
         &hex::decode(&datum.generator)

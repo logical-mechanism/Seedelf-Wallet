@@ -57,8 +57,7 @@ fn create_proof_and_test_it() {
     assert_eq!(datum.public_value, public_value_hex);
 
     let vkh = "00112233445566778899aabbccddeeff00112233445566778899aabb";
-    let r: Scalar = random_scalar();
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string(), r).unwrap();
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string()).unwrap();
     assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, vkh).unwrap())
 }
 
@@ -67,8 +66,7 @@ fn create_random_proof_and_test_it() {
     let sk: Scalar = random_scalar();
     let datum: Register = Register::create(sk).unwrap();
     let vkh = "00112233445566778899aabbccddeeff00112233445566778899aabb";
-    let r: Scalar = random_scalar();
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string(), r).unwrap();
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string()).unwrap();
     assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, vkh).unwrap())
 }
 
@@ -77,8 +75,7 @@ fn create_random_proof_rerandomize_it_and_test_it() {
     let sk: Scalar = random_scalar();
     let datum: Register = Register::create(sk).unwrap().rerandomize().unwrap();
     let vkh = "00112233445566778899aabbccddeeff00112233445566778899aabb";
-    let r: Scalar = random_scalar();
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string(), r).unwrap();
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string()).unwrap();
     assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, vkh).unwrap())
 }
 
@@ -88,7 +85,6 @@ fn create_proof_rejects_non_vkh_bound() {
     // passing arbitrary transcript bytes must be rejected, not proven over.
     let sk: Scalar = random_scalar();
     let datum: Register = Register::create(sk).unwrap();
-    let r: Scalar = random_scalar();
-    assert!(create_proof(datum.clone(), sk, "acab".to_string(), r).is_err());
-    assert!(create_proof(datum, sk, "nothex".to_string(), r).is_err());
+    assert!(create_proof(datum.clone(), sk, "acab".to_string()).is_err());
+    assert!(create_proof(datum, sk, "nothex".to_string()).is_err());
 }

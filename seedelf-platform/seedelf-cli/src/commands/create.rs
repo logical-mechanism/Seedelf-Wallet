@@ -1,7 +1,7 @@
 use crate::commands::fee;
 use crate::setup;
 use crate::web_server;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
@@ -67,24 +67,21 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
     let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace(&params)? + tmp_fee;
 
     let (mut draft_tx, all_utxos) =
-        assign_collateral_and_get_utxos(args.address, network_flag, draft_tx).await;
+        assign_collateral_and_get_utxos(args.address, network_flag, draft_tx).await?;
 
     // lovelace goal here should account for the estimated fee
     let selected_utxos: Vec<UtxoResponse> =
-        utxos::select(&params, all_utxos, lovelace_goal, Assets::new()).unwrap_or_default();
+        utxos::select(&params, all_utxos, lovelace_goal, Assets::new())?;
     for utxo in selected_utxos.clone() {
         draft_tx = draft_tx.input(Input::new(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(utxo.tx_hash.clone())
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
+            pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+                &utxo.tx_hash,
+            )?),
             utxo.tx_index,
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos).unwrap_or_default();
+    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos)?;
 
     if total_lovelace < lovelace_goal {
         bail!("Not Enough Lovelace");
@@ -95,13 +92,15 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
 
     // build the seedelf token
     let token_name: Vec<u8> =
-        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref())
-            .unwrap_or_default();
+        transaction::seedelf_token_name(label.clone(), draft_tx.inputs.as_ref())?;
     let token_name_hex: String = hex::encode(token_name.clone());
 
     let min_utxo: u64 = transaction::seedelf_minimum_lovelace(&params)?;
 
-    let mut change_output: Output = Output::new(addr.clone(), total_lovelace - min_utxo - tmp_fee);
+    let mut change_output: Output = Output::new(
+        addr.clone(),
+        seedelf_core::transaction::checked_lovelace(total_lovelace, &[min_utxo, tmp_fee])?,
+    );
     for asset in tokens.items.clone() {
         change_output = change_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -125,7 +124,10 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
                 .unwrap(),
         )
         .output(change_output)
-        .collateral_output(Output::new(addr.clone(), 5_000_000 - (tmp_fee) * 3 / 2))
+        .collateral_output(Output::new(
+            addr.clone(),
+            seedelf_core::transaction::checked_lovelace(5_000_000, &[tmp_fee * 3 / 2])?,
+        ))
         .fee(tmp_fee)
         .mint_asset(
             pallas_crypto::hash::Hash::new(
@@ -214,8 +216,10 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
 
     let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
 
-    let mut change_output: Output =
-        Output::new(addr.clone(), total_lovelace - min_utxo - total_fee);
+    let mut change_output: Output = Output::new(
+        addr.clone(),
+        seedelf_core::transaction::checked_lovelace(total_lovelace, &[min_utxo, total_fee])?,
+    );
     for asset in tokens.items.clone() {
         change_output = change_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -224,7 +228,10 @@ pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> R
 
     raw_tx = raw_tx
         .output(change_output)
-        .collateral_output(Output::new(addr.clone(), 5_000_000 - (total_fee) * 3 / 2))
+        .collateral_output(Output::new(
+            addr.clone(),
+            seedelf_core::transaction::checked_lovelace(5_000_000, &[total_fee * 3 / 2])?,
+        ))
         .fee(total_fee)
         .add_mint_redeemer(
             pallas_crypto::hash::Hash::new(
@@ -293,33 +300,29 @@ async fn assign_collateral_and_get_utxos(
     address: String,
     network_flag: bool,
     mut draft_tx: StagingTransaction,
-) -> (StagingTransaction, Vec<UtxoResponse>) {
+) -> Result<(StagingTransaction, Vec<UtxoResponse>)> {
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
     let mut found_collateral: bool = false;
 
-    match address_utxos(&address, network_flag).await {
-        Ok(utxos) => {
-            for utxo in utxos {
-                let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
-                if lovelace == 5_000_000 && !found_collateral {
-                    draft_tx = draft_tx.collateral_input(Input::new(
-                        pallas_crypto::hash::Hash::new(
-                            hex::decode(utxo.tx_hash.clone())
-                                .expect("Invalid hex string")
-                                .try_into()
-                                .expect("Failed to convert to 32-byte array"),
-                        ),
-                        utxo.tx_index,
-                    ));
-                    found_collateral = true;
-                } else {
-                    all_utxos.push(utxo.clone());
-                }
-            }
-        }
-        Err(_) => {
-            return (draft_tx, Vec::new());
+    let utxos = address_utxos(&address, network_flag)
+        .await
+        .context("Failed to fetch address UTxOs")?;
+    for utxo in utxos {
+        let lovelace: u64 = utxo
+            .value
+            .parse::<u64>()
+            .context("UTxO has an invalid lovelace value")?;
+        if lovelace == 5_000_000 && !found_collateral {
+            draft_tx = draft_tx.collateral_input(Input::new(
+                pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+                    &utxo.tx_hash,
+                )?),
+                utxo.tx_index,
+            ));
+            found_collateral = true;
+        } else {
+            all_utxos.push(utxo.clone());
         }
     }
-    (draft_tx, all_utxos)
+    Ok((draft_tx, all_utxos))
 }
