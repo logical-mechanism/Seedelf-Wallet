@@ -1,6 +1,7 @@
 use aes_gcm::aead::{Aead, AeadCore, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use argon2::{Argon2, password_hash::SaltString};
+use anyhow::{Result, anyhow, bail};
+use argon2::{Algorithm, Argon2, Params, Version, password_hash::SaltString};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use blstrs::Scalar;
@@ -13,12 +14,35 @@ use seedelf_crypto::schnorr::random_scalar;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-/// Data structure for storing wallet information
-#[derive(Serialize, Deserialize)]
+/// Test seam: when set, [`unlock_wallet_interactive`] returns this scalar
+/// instead of prompting for a password.
+///
+/// `None` in production, so the interactive prompt is always used and behavior
+/// is unchanged. Integration tests inject a known wallet key here so they can
+/// drive transaction commands without a terminal — see [`inject_wallet_scalar`].
+static INJECTED_SCALAR: RwLock<Option<Scalar>> = RwLock::new(None);
+
+/// Test seam: inject the wallet scalar that [`unlock_wallet_interactive`] will
+/// return, bypassing the interactive password prompt.
+///
+/// Production code never calls this. Pass `None` to clear the injected key and
+/// restore the interactive prompt.
+pub fn inject_wallet_scalar(scalar: Option<Scalar>) {
+    *INJECTED_SCALAR
+        .write()
+        .expect("injected scalar lock poisoned") = scalar;
+}
+
+/// Data structure for storing wallet information. The decoded hex private
+/// key lives in `private_key`; `ZeroizeOnDrop` wipes it when this struct
+/// goes out of scope so the hex never lingers in memory.
+#[derive(Serialize, Deserialize, ZeroizeOnDrop)]
 struct Wallet {
-    private_key: String, // Store the scalar as a hex string
+    private_key: String,
 }
 
 /// Data structure for storing wallet information
@@ -29,41 +53,74 @@ struct EncryptedData {
     data: String,
 }
 
-pub fn seedelf_home_path() -> PathBuf {
+/// Argon2id KDF with explicit, pinned parameters.
+///
+/// m = 19 MiB, t = 2, p = 1, 32-byte tag — the OWASP minimum for Argon2id and
+/// identical to the `argon2` crate's current defaults. Pinning them here means
+/// a future change to that crate's `Default` cannot silently weaken
+/// key-derivation strength, and the values stay backward-compatible with
+/// wallets already on disk.
+fn wallet_kdf() -> Result<Argon2<'static>> {
+    let params: Params = Params::new(19_456, 2, 1, Some(32))
+        .map_err(|e| anyhow!("Invalid Argon2 parameters: {e}"))?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
+}
+
+fn seedelf_home_path() -> PathBuf {
     let home: PathBuf = home_dir().expect("Failed to get home directory");
     let seedelf_path: PathBuf = home.join(".seedelf");
     seedelf_path
 }
 
-/// Check if `.seedelf` exists, create it if it doesn't, and handle file logic
-pub fn check_and_prepare_seedelf() -> Option<String> {
+/// Restrict a path to owner-only permissions on Unix. No-op elsewhere.
+#[cfg(unix)]
+fn restrict_permissions(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = fs::Permissions::from_mode(mode);
+    fs::set_permissions(path, perms).map_err(|e| anyhow!("Failed to chmod {path:?}: {e}"))
+}
+
+#[cfg(not(unix))]
+fn restrict_permissions(_path: &Path, _mode: u32) -> Result<()> {
+    Ok(())
+}
+
+/// Return the sorted list of `*.wallet` files in `.seedelf`.
+fn list_wallet_files(seedelf_path: &Path) -> Result<Vec<PathBuf>> {
+    let mut wallets: Vec<PathBuf> = fs::read_dir(seedelf_path)
+        .map_err(|e| anyhow!("Failed to read .seedelf directory: {e}"))?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("wallet"))
+        .collect();
+    wallets.sort();
+    Ok(wallets)
+}
+
+/// Check if `.seedelf` exists, create it if it doesn't, and return the wallet
+/// file name if exactly one `*.wallet` file is present.
+pub(crate) fn check_and_prepare_seedelf() -> Result<Option<String>> {
     let seedelf_path: PathBuf = seedelf_home_path();
 
-    // Check if `.seedelf` exists
     if !seedelf_path.exists() {
-        fs::create_dir_all(&seedelf_path).expect("Failed to create .seedelf directory");
+        fs::create_dir_all(&seedelf_path)
+            .map_err(|e| anyhow!("Failed to create .seedelf directory: {e}"))?;
+        restrict_permissions(&seedelf_path, 0o700)?;
     }
 
-    // Check if there are any files in `.seedelf`
-    let contents: Vec<fs::DirEntry> = fs::read_dir(&seedelf_path)
-        .expect("Failed to read .seedelf directory")
-        .filter_map(|entry| entry.ok())
-        .collect::<Vec<_>>();
-
-    if contents.is_empty() {
-        None
-    } else {
-        for entry in &contents {
-            if let Ok(file_name) = entry.file_name().into_string() {
-                return Some(file_name);
-            }
-        }
-        None
+    let wallets = list_wallet_files(&seedelf_path)?;
+    match wallets.len() {
+        0 => Ok(None),
+        1 => Ok(wallets[0]
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())),
+        n => bail!("Found {n} wallet files in .seedelf; expected exactly one"),
     }
 }
 
 /// Prompt the user to enter a wallet name
-pub fn prompt_wallet_name() -> String {
+pub(crate) fn prompt_wallet_name() -> String {
     let mut wallet_name: String = String::new();
     println!("{}", "\nEnter A Wallet Name:".bright_purple());
     io::stdout().flush().unwrap();
@@ -81,7 +138,7 @@ pub fn prompt_wallet_name() -> String {
     final_name
 }
 
-pub fn enter_password() -> String {
+fn enter_password() -> String {
     println!(
         "{}",
         "\nEnter A Password To Encrypt The Wallet:".bright_purple()
@@ -90,7 +147,7 @@ pub fn enter_password() -> String {
     password
 }
 
-pub fn is_valid_password() -> String {
+pub(crate) fn is_valid_password() -> String {
     let password: String = enter_password();
     if !password_complexity_check(password.clone()) {
         println!(
@@ -115,34 +172,40 @@ pub fn is_valid_password() -> String {
 }
 
 /// Create a wallet file and save a random private key
-pub fn create_wallet(wallet_name: String, password: String) {
+pub(crate) fn create_wallet(wallet_name: String, password: String) -> Result<()> {
+    // Treat the password as one-shot — wipe on scope exit.
+    let password = Zeroizing::new(password);
+
     // Generate a random private key
-    let sk: Scalar = random_scalar(); // Requires `Field` trait in scope
-    let private_key_bytes: [u8; 32] = sk.to_repr(); // Use `to_repr()` to get canonical bytes
-    let private_key_hex: String = hex::encode(private_key_bytes);
-
-    // Serialize the wallet
+    let sk: Scalar = random_scalar();
+    let mut private_key_bytes: [u8; 32] = sk.to_repr();
     let wallet: Wallet = Wallet {
-        private_key: private_key_hex,
+        private_key: hex::encode(private_key_bytes),
     };
-    let wallet_data: String =
-        serde_json::to_string_pretty(&wallet).expect("Failed to serialize wallet");
+    private_key_bytes.zeroize();
 
-    let salt: SaltString = SaltString::generate(&mut OsRng);
-    let mut output_key_material: [u8; 32] = [0u8; 32];
-    let _ = Argon2::default().hash_password_into(
-        password.as_bytes(),
-        salt.to_string().as_bytes(),
-        &mut output_key_material,
+    let wallet_data: Zeroizing<String> = Zeroizing::new(
+        serde_json::to_string_pretty(&wallet)
+            .map_err(|e| anyhow!("Failed to serialize wallet: {e}"))?,
     );
 
-    let key = Key::<Aes256Gcm>::from_slice(&output_key_material);
+    let salt: SaltString = SaltString::generate(&mut OsRng);
+    let mut output_key_material: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
+    wallet_kdf()?
+        .hash_password_into(
+            password.as_bytes(),
+            salt.to_string().as_bytes(),
+            output_key_material.as_mut_slice(),
+        )
+        .map_err(|e| anyhow!("Argon2 key derivation failed: {e}"))?;
+
+    let key = Key::<Aes256Gcm>::from_slice(output_key_material.as_slice());
     let cipher = Aes256Gcm::new(key);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
     let encrypted_data = cipher
         .encrypt(&nonce, wallet_data.as_bytes())
-        .expect("Encryption failed");
+        .map_err(|e| anyhow!("Encryption failed: {e}"))?;
 
     // Save encrypted data, salt, and nonce as JSON
     let output: EncryptedData = EncryptedData {
@@ -150,97 +213,107 @@ pub fn create_wallet(wallet_name: String, password: String) {
         nonce: STANDARD.encode(nonce),
         data: STANDARD.encode(encrypted_data),
     };
-    let output_data: String =
-        serde_json::to_string_pretty(&output).expect("Failed to serialize wallet");
+    let output_data: String = serde_json::to_string_pretty(&output)
+        .map_err(|e| anyhow!("Failed to serialize wallet: {e}"))?;
 
     let seedelf_path: PathBuf = seedelf_home_path();
     let wallet_path = seedelf_path.join(format!("{wallet_name}.wallet"));
 
-    // Save to file
-    fs::write(wallet_path.clone(), output_data).expect("Failed to write wallet file");
+    fs::write(&wallet_path, output_data)
+        .map_err(|e| anyhow!("Failed to write wallet file: {e}"))?;
+    restrict_permissions(&wallet_path, 0o600)?;
+    Ok(())
 }
 
 /// Load the wallet file and deserialize the private key into a Scalar
-pub fn load_wallet(password: String) -> Result<Scalar, String> {
+fn load_wallet(password: String) -> Result<Scalar> {
+    let password = Zeroizing::new(password);
+
     let seedelf_path: PathBuf = seedelf_home_path();
+    let wallets = list_wallet_files(&seedelf_path)?;
+    let wallet_path: PathBuf = match wallets.len() {
+        0 => bail!("No wallet files found in .seedelf directory"),
+        1 => wallets.into_iter().next().unwrap(),
+        n => bail!("Found {n} wallet files in .seedelf; expected exactly one"),
+    };
 
-    // Get the list of files in `.seedelf`
-    let contents: Vec<fs::DirEntry> = fs::read_dir(&seedelf_path)
-        .map_err(|_| "Failed to read .seedelf directory")?
-        .filter_map(|entry| entry.ok())
-        .collect::<Vec<_>>();
-
-    if contents.is_empty() {
-        return Err("No wallet files found in .seedelf directory".into());
-    }
-
-    // Use the first file in the directory to build the wallet path
-    let first_file: &fs::DirEntry = &contents[0];
-    let wallet_path: PathBuf = first_file.path();
-
-    // Read the wallet file
     let wallet_data: String =
-        fs::read_to_string(&wallet_path).map_err(|_| "Failed to read wallet file")?;
+        fs::read_to_string(&wallet_path).map_err(|e| anyhow!("Failed to read wallet file: {e}"))?;
 
-    // Deserialize the wallet JSON
-    let encrypted_wallet: EncryptedData =
-        serde_json::from_str(&wallet_data).map_err(|_| "Failed to parse wallet JSON")?;
+    let encrypted_wallet: EncryptedData = serde_json::from_str(&wallet_data)
+        .map_err(|e| anyhow!("Failed to parse wallet JSON: {e}"))?;
 
-    // Derive the decryption key using the provided salt
-    let salt: SaltString =
-        SaltString::from_b64(&encrypted_wallet.salt).map_err(|_| "Invalid salt format")?;
-    let mut output_key_material: [u8; 32] = [0u8; 32];
-    let _ = Argon2::default().hash_password_into(
-        password.as_bytes(),
-        salt.to_string().as_bytes(),
-        &mut output_key_material,
-    );
+    let salt: SaltString = SaltString::from_b64(&encrypted_wallet.salt)
+        .map_err(|e| anyhow!("Invalid salt format: {e}"))?;
+    let mut output_key_material: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
+    wallet_kdf()?
+        .hash_password_into(
+            password.as_bytes(),
+            salt.to_string().as_bytes(),
+            output_key_material.as_mut_slice(),
+        )
+        .map_err(|e| anyhow!("Argon2 key derivation failed: {e}"))?;
 
-    let key = Key::<Aes256Gcm>::from_slice(&output_key_material);
+    let key = Key::<Aes256Gcm>::from_slice(output_key_material.as_slice());
     let cipher = Aes256Gcm::new(key);
 
-    // Decode the nonce and encrypted data from base64
     let nonce_bytes = STANDARD
         .decode(&encrypted_wallet.nonce)
-        .map_err(|_| "Failed to decode nonce")?;
+        .map_err(|e| anyhow!("Failed to decode nonce: {e}"))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let encrypted_bytes = STANDARD
         .decode(&encrypted_wallet.data)
-        .map_err(|_| "Failed to decode encrypted data")?;
+        .map_err(|e| anyhow!("Failed to decode encrypted data: {e}"))?;
 
-    /* ---- decrypt ---- */
-    let decrypted_data = cipher
-        .decrypt(nonce, encrypted_bytes.as_ref())
-        .map_err(|_| "Failed to decrypt")?;
+    let decrypted_data: Zeroizing<Vec<u8>> = Zeroizing::new(
+        cipher
+            .decrypt(nonce, encrypted_bytes.as_ref())
+            .map_err(|_| anyhow!("Failed to decrypt — wrong password?"))?,
+    );
 
-    /* ---- deserialize inner JSON ---- */
-    let wallet: Wallet =
-        serde_json::from_slice(&decrypted_data).map_err(|_| "Failed to parse decrypted JSON")?;
+    let wallet: Wallet = serde_json::from_slice(decrypted_data.as_slice())
+        .map_err(|e| anyhow!("Failed to parse decrypted JSON: {e}"))?;
 
-    /* ---- bytes -> Scalar ---- */
-    let key_bytes =
-        hex::decode(wallet.private_key).map_err(|_| "Failed to decode private key hex")?;
+    let key_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(
+        hex::decode(&wallet.private_key)
+            .map_err(|e| anyhow!("Failed to decode private key hex: {e}"))?,
+    );
 
-    Scalar::from_repr(key_bytes.try_into().map_err(|_| "Invalid key length")?)
+    let mut repr_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
+        key_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("Invalid key length"))?,
+    );
+    let scalar = Scalar::from_repr(*repr_bytes)
         .into_option()
-        .ok_or("Failed to reconstruct Scalar from bytes".into())
+        .ok_or_else(|| anyhow!("Failed to reconstruct Scalar from bytes"))?;
+    repr_bytes.zeroize();
+    Ok(scalar)
 }
 
-pub fn unlock_wallet_interactive() -> Scalar {
+pub(crate) fn unlock_wallet_interactive() -> Scalar {
+    // Test seam: an injected key short-circuits the interactive prompt.
+    if let Some(scalar) = *INJECTED_SCALAR
+        .read()
+        .expect("injected scalar lock poisoned")
+    {
+        return scalar;
+    }
     loop {
         let password: String = enter_password();
 
         match load_wallet(password) {
             Ok(scalar) => break scalar,
             Err(e) => {
-                eprintln!("Error: {e}\nPlease Try Again");
+                eprintln!("Error: {e:#}\nPlease Try Again");
             }
         }
     }
 }
 
-pub fn password_complexity_check(password: String) -> bool {
+fn password_complexity_check(password: String) -> bool {
     // length check, 14 for now
     if password.len() < 14 {
         return false;
@@ -269,4 +342,34 @@ pub fn password_complexity_check(password: String) -> bool {
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::password_complexity_check;
+
+    #[test]
+    fn test_short_password() {
+        assert!(!password_complexity_check("i@G37xzM".to_string()));
+    }
+
+    #[test]
+    fn test_no_lowercase() {
+        assert!(!password_complexity_check("I@G37XZM@QCGK3G".to_string()));
+    }
+
+    #[test]
+    fn test_no_uppercase() {
+        assert!(!password_complexity_check("i@g37xzm@qcgk3g".to_string()));
+    }
+
+    #[test]
+    fn test_no_special() {
+        assert!(!password_complexity_check("iaG37xzMaqcgk3g".to_string()));
+    }
+
+    #[test]
+    fn test_good_password() {
+        assert!(password_complexity_check("i@G37xzM@qcgk3g".to_string()));
+    }
 }

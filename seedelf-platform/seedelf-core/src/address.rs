@@ -66,36 +66,22 @@ pub fn is_not_a_script(addr: Address) -> bool {
 
 /// Generates the wallet contract address for the specified Cardano network.
 ///
-/// This function constructs a Shelley address for the wallet contract based on the given `network_flag`.
-/// If the flag indicates Testnet, the Testnet network and pre-production stake hash are used.
-/// Otherwise, the Mainnet network and stake hash are used.
-///
-/// # Arguments
-///
-/// * `network_flag` - A boolean flag specifying the network:
-///    - `true` for Testnet.
-///    - `false` for Mainnet.
-///
-/// # Returns
-///
-/// * `Address` - The wallet contract address for the specified network.
+/// Returns the enterprise form of the script address (no delegation part).
+/// New outputs go here; existing UTxOs at the older staked base form remain
+/// spendable because Koios credential queries and input outpoints don't
+/// depend on the delegation part.
 pub fn wallet_contract(network_flag: bool, wallet_contract_hash: [u8; 28]) -> Address {
-    // Construct the Shelley wallet address based on the network flag.
-    let shelly_wallet_address: ShelleyAddress = if network_flag {
-        ShelleyAddress::new(
-            Network::Testnet,
-            ShelleyPaymentPart::Script(ScriptHash::new(wallet_contract_hash)),
-            ShelleyDelegationPart::Key(StakeKeyHash::new(PREPROD_STAKE_HASH)),
-        )
+    let network = if network_flag {
+        Network::Testnet
     } else {
-        ShelleyAddress::new(
-            Network::Mainnet,
-            ShelleyPaymentPart::Script(ScriptHash::new(wallet_contract_hash)),
-            ShelleyDelegationPart::Key(StakeKeyHash::new(MAINNET_STAKE_HASH)),
-        )
+        Network::Mainnet
     };
-    // we need this as the address type and not the shelley
-    Address::from(shelly_wallet_address.clone())
+    let shelly_wallet_address: ShelleyAddress = ShelleyAddress::new(
+        network,
+        ShelleyPaymentPart::Script(ScriptHash::new(wallet_contract_hash)),
+        ShelleyDelegationPart::Null,
+    );
+    Address::from(shelly_wallet_address)
 }
 
 pub fn dummy_base_address() -> Address {

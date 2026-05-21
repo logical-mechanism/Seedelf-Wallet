@@ -6,7 +6,8 @@ use blstrs::Scalar;
 use hex;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{
-    UtxoResponse, address_utxos, contains_policy_id, credential_utxos, extract_bytes_with_logging,
+    ProtocolParameters, UtxoResponse, address_utxos, contains_policy_id, credential_utxos,
+    extract_bytes_with_logging,
 };
 
 pub async fn get_credential_utxos(
@@ -36,7 +37,7 @@ pub fn collect_all_wallet_utxos(
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
     for utxo in utxos {
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scaler
+            // utxo must be owned by this secret scalar
             if inline_datum
                 .is_owned(sk)
                 .context("Failed To Construct Points")?
@@ -49,57 +50,6 @@ pub fn collect_all_wallet_utxos(
         }
     }
     Ok(all_utxos)
-}
-
-/// Find a specific seedelf's datum and all the utxos owned by a scalar. The maximum amount of utxos is limited by a upper bound.
-pub fn find_seedelf_and_wallet_utxos(
-    sk: Scalar,
-    seedelf: String,
-    seedelf_policy_id: &str,
-    utxos: Vec<UtxoResponse>,
-) -> Result<(Option<Register>, Vec<UtxoResponse>)> {
-    let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
-    let mut number_of_utxos: u64 = 0;
-
-    let mut seedelf_datum: Option<Register> = None;
-    let mut found_seedelf: bool = false;
-
-    for utxo in utxos {
-        // Extract bytes
-        if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            if !found_seedelf && contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
-                let asset_name = utxo
-                    .asset_list
-                    .as_ref()
-                    .and_then(|vec| {
-                        vec.iter()
-                            .find(|asset| asset.policy_id == seedelf_policy_id)
-                            .map(|asset| &asset.asset_name)
-                    })
-                    .context("Can't Produce Asset Name")?;
-                if asset_name == &seedelf {
-                    found_seedelf = true;
-                    seedelf_datum = Some(inline_datum.clone());
-                }
-            }
-            // utxo must be owned by this secret scaler
-            if inline_datum
-                .is_owned(sk)
-                .context("Failed To Construct Points")?
-            {
-                // its owned but it can't hold a seedelf
-                if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
-                    if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
-                        // we hit the max utxos allowed in a single tx
-                        break;
-                    }
-                    usable_utxos.push(utxo);
-                    number_of_utxos += 1;
-                }
-            }
-        }
-    }
-    Ok((seedelf_datum, usable_utxos))
 }
 
 pub fn find_seedelf_datum(
@@ -169,7 +119,7 @@ pub fn collect_wallet_utxos(
     for utxo in utxos {
         // Extract bytes
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scaler
+            // utxo must be owned by this secret scalar
             if inline_datum
                 .is_owned(sk)
                 .context("Failed To Construct Points")?
@@ -190,20 +140,23 @@ pub fn collect_wallet_utxos(
 }
 
 /// Collect all the address utxos that are not an assumed collateral utxo.
+///
+/// Koios reports a token-less outpoint as either `Some(vec![])` or `None`; treat
+/// them identically. An earlier version filtered on `Some(_)` and silently
+/// dropped every pure-ADA UTxO whose `asset_list` came back `None`.
 pub fn collect_address_utxos(utxos: Vec<UtxoResponse>) -> Result<Vec<UtxoResponse>> {
     let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
-    // loop all the utxos found from the address
     for utxo in utxos {
-        // get the lovelace on this utxo
         let lovelace: u64 = utxo.value.parse::<u64>().context("Invalid Lovelace")?;
-        if let Some(assets) = &utxo.asset_list {
-            if assets.is_empty() && lovelace == 5_000_000 {
-                // its probably a collateral utxo
-            } else {
-                // its probably not a collateral utxo
-                usable_utxos.push(utxo);
-            }
+        let is_empty_asset_list = utxo
+            .asset_list
+            .as_ref()
+            .is_none_or(|assets| assets.is_empty());
+        if is_empty_asset_list && lovelace == 5_000_000 {
+            // probably the collateral UTxO — skip
+            continue;
         }
+        usable_utxos.push(utxo);
     }
     Ok(usable_utxos)
 }
@@ -211,14 +164,16 @@ pub fn collect_address_utxos(utxos: Vec<UtxoResponse>) -> Result<Vec<UtxoRespons
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
 pub fn select(
+    params: &ProtocolParameters,
     utxos: Vec<UtxoResponse>,
     lovelace: u64,
     tokens: Assets,
 ) -> Result<Vec<UtxoResponse>> {
-    do_select(utxos, lovelace, tokens, lovelace).context("Do Select Failed")
+    do_select(params, utxos, lovelace, tokens, lovelace).context("Do Select Failed")
 }
-pub fn do_select(
-    mut utxos: Vec<UtxoResponse>,
+fn do_select(
+    params: &ProtocolParameters,
+    utxos: Vec<UtxoResponse>,
     lovelace: u64,
     tokens: Assets,
     lovelace_goal: u64,
@@ -231,18 +186,29 @@ pub fn do_select(
     // all the found assets
     let mut found_assets: Assets = Assets::new();
 
-    // sort by largest ada first
-    // (empty asset lists first)
-    utxos.sort_by(|a, b| {
-        let a_group_key = a.asset_list.as_ref().is_some_and(|list| list.is_empty());
-        let b_group_key = b.asset_list.as_ref().is_some_and(|list| list.is_empty());
-
-        b_group_key.cmp(&a_group_key).then_with(|| {
-            string_to_u64(b.value.clone())
-                .into_iter()
-                .cmp(string_to_u64(a.value.clone()))
+    // Sort: no-token UTxOs first, then by descending lovelace value within
+    // each group. Koios reports a token-less outpoint as either `Some(vec![])`
+    // or `None`; both must group together.
+    //
+    // Pre-parse the values once and bail on any malformed entry. An earlier
+    // version used `Result::into_iter().cmp(...)`, which silently treated
+    // parse failures as `Equal` and could break the largest-first invariant
+    // the selector below depends on.
+    let mut sortable: Vec<(u64, UtxoResponse)> = utxos
+        .into_iter()
+        .map(|u| -> Result<(u64, UtxoResponse)> {
+            let v = string_to_u64(u.value.clone()).context("Invalid UTxO Value")?;
+            Ok((v, u))
         })
+        .collect::<Result<Vec<_>>>()?;
+    sortable.sort_by(|(a_val, a), (b_val, b)| {
+        let a_has_tokens = a.asset_list.as_ref().is_some_and(|list| !list.is_empty());
+        let b_has_tokens = b.asset_list.as_ref().is_some_and(|list| !list.is_empty());
+        a_has_tokens
+            .cmp(&b_has_tokens)
+            .then_with(|| b_val.cmp(a_val))
     });
+    let utxos: Vec<UtxoResponse> = sortable.into_iter().map(|(_, u)| u).collect();
 
     for utxo in utxos.clone() {
         // the value from koios is the lovelace
@@ -251,44 +217,51 @@ pub fn do_select(
         let mut utxo_assets: Assets = Assets::new();
         let mut added: bool = false;
 
-        // lets keep track if we found any assets while searching
-        if let Some(assets) = utxo.clone().asset_list {
-            if !assets.is_empty() {
-                for token in assets.clone() {
-                    utxo_assets = utxo_assets
-                        .add(
-                            Asset::new(
-                                token.policy_id,
-                                token.asset_name,
-                                string_to_u64(token.quantity).context("Invalid Asset Amount")?,
-                            )
-                            .context("Invalid Asset")?,
+        // Treat `None` and `Some(vec![])` identically — both mean "no native
+        // tokens here". An earlier version of this branch dropped `None`
+        // through entirely, leaving such UTxOs unselectable until the
+        // tokens-already-found path fired.
+        let asset_list: Vec<seedelf_koios::koios::Asset> =
+            utxo.asset_list.clone().unwrap_or_default();
+        if !asset_list.is_empty() {
+            for token in asset_list {
+                utxo_assets = utxo_assets
+                    .add(
+                        Asset::new(
+                            token.policy_id,
+                            token.asset_name,
+                            string_to_u64(token.quantity).context("Invalid Asset Amount")?,
                         )
-                        .context("Can't Add Assets")?;
-                }
-                // if this utxo has the assets we need but we haven't found it all yet then add it
-                if utxo_assets.any(tokens.clone()) && !found_assets.contains(tokens.clone()) {
-                    selected_utxos.push(utxo.clone());
-                    current_lovelace_sum += value;
-                    found_assets = found_assets
-                        .merge(utxo_assets.clone())
-                        .context("Can't Merge Assets")?;
-                    added = true;
-                }
-            } else {
-                // no tokens here just lovelace so add it
-                if current_lovelace_sum < lovelace {
-                    selected_utxos.push(utxo.clone());
-                    current_lovelace_sum += value;
-                    added = true;
-                }
+                        .context("Invalid Asset")?,
+                    )
+                    .context("Can't Add Assets")?;
             }
+            // if this utxo has the assets we need but we haven't found it all yet then add it
+            if utxo_assets.any(tokens.clone()) && !found_assets.contains(tokens.clone()) {
+                selected_utxos.push(utxo.clone());
+                current_lovelace_sum = current_lovelace_sum
+                    .checked_add(value)
+                    .context("Lovelace sum overflow")?;
+                found_assets = found_assets
+                    .merge(utxo_assets.clone())
+                    .context("Can't Merge Assets")?;
+                added = true;
+            }
+        } else if current_lovelace_sum < lovelace {
+            // no tokens here just lovelace so add it
+            selected_utxos.push(utxo.clone());
+            current_lovelace_sum = current_lovelace_sum
+                .checked_add(value)
+                .context("Lovelace sum overflow")?;
+            added = true;
         }
 
         // the utxo is not pure ada and doesnt contain what you need but you need ada because you already found the tokens so add it
         if !added && current_lovelace_sum < lovelace && found_assets.contains(tokens.clone()) {
             selected_utxos.push(utxo.clone());
-            current_lovelace_sum += value;
+            current_lovelace_sum = current_lovelace_sum
+                .checked_add(value)
+                .context("Lovelace sum overflow")?;
             found_assets = found_assets
                 .merge(utxo_assets)
                 .context("Can't Merge Assets")?;
@@ -301,7 +274,7 @@ pub fn do_select(
                 .separate(tokens.clone())
                 .context("Can't Separate Assets")?;
             let number_of_change_assets: u64 = change_assets.len();
-            let minimum: u64 = wallet_minimum_lovelace_with_assets(change_assets.clone())
+            let minimum: u64 = wallet_minimum_lovelace_with_assets(params, change_assets.clone())
                 .context("Invalid Minimum Lovelace")?;
             // we need to calculate how many multiple change utxos we need
             let multiplier: u64 = if number_of_change_assets > MAXIMUM_TOKENS_PER_UTXO {
@@ -310,16 +283,21 @@ pub fn do_select(
             } else {
                 1
             };
-            // we need lovelace for the goal and the change here
-            if current_lovelace_sum - multiplier * minimum >= lovelace_goal {
-                // it is!
+            // we need lovelace for both the spend goal AND the change min-UTxO.
+            // Compare via addition instead of subtraction — degenerate token
+            // UTxOs (lots of accessory tokens, little ADA) can make the change
+            // floor exceed gathered lovelace, which would underflow u64.
+            let change_floor: u64 = multiplier.saturating_mul(minimum);
+            let total_needed: u64 = lovelace_goal.saturating_add(change_floor);
+            if current_lovelace_sum >= total_needed {
                 found_enough = true;
                 break;
             } else {
-                // its not, try again but increase the lovelace by the minimum we would need
+                // not yet — bump the lovelace target by the change floor and retry
                 return do_select(
+                    params,
                     utxos.clone(),
-                    lovelace + multiplier * minimum,
+                    lovelace.saturating_add(change_floor),
                     tokens.clone(),
                     lovelace_goal,
                 );
@@ -342,7 +320,9 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> Result<(u64, Assets)> {
 
     for utxo in utxos.clone() {
         let value: u64 = string_to_u64(utxo.value.clone()).context("Invalid UTxO Value")?;
-        current_lovelace_sum += value;
+        current_lovelace_sum = current_lovelace_sum
+            .checked_add(value)
+            .context("Lovelace sum overflow")?;
 
         if let Some(assets) = utxo.clone().asset_list
             && !assets.is_empty()

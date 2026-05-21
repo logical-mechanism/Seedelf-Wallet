@@ -1,8 +1,8 @@
-use seedelf_display::display::{hex_to_ascii, is_their_an_update};
+use seedelf_display::display::{hex_to_ascii, is_there_an_update};
 
 #[tokio::test]
 async fn test_version_control_display() {
-    is_their_an_update().await
+    is_there_an_update().await
 }
 
 #[test]
@@ -68,11 +68,6 @@ fn test_fail_label_to_ascii2() {
         "5eed0e1f00000acab00000018732122c62aea887cd16d743c3045e524f019aea".to_string();
     let answer: String = ".........2.,b..".to_string();
     let substring: String = seedelf[8..38].to_string();
-    if answer.chars().next() == Some('.') {
-        assert_eq!(true, true)
-    } else {
-        assert_eq!(false, true)
-    }
 
     match hex_to_ascii(&substring) {
         Ok(ascii) => assert_eq!(ascii, answer),

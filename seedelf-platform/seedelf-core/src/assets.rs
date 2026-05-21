@@ -38,11 +38,11 @@ impl Asset {
     pub fn new(policy_id: String, token_name: String, amount: u64) -> Result<Self> {
         Ok(Self {
             policy_id: Hash::new(
-                hex::decode(policy_id)
-                    .unwrap_or_default()
+                hex::decode(&policy_id)
+                    .context("Invalid policy_id hex")?
                     .as_slice()
                     .try_into()
-                    .map_err(|e| anyhow::anyhow!("{e}"))?,
+                    .map_err(|e| anyhow::anyhow!("policy_id must be 28 bytes: {e}"))?,
             ),
             token_name: hex::decode(token_name).context("Can't Decode Token Name")?,
             amount,
@@ -61,12 +61,16 @@ impl Asset {
     /// * `Err(String)` - If the `policy_id` or `token_name` do not match.
     pub fn add(&self, other: &Asset) -> Result<Self> {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
-            bail!("Assets must have the same policy_id and token_name to be subtracted")
+            bail!("Assets must have the same policy_id and token_name to be added")
         }
+        let amount = self
+            .amount
+            .checked_add(other.amount)
+            .ok_or_else(|| anyhow::anyhow!("Asset addition overflow"))?;
         Ok(Self {
             policy_id: self.policy_id,
             token_name: self.token_name.clone(),
-            amount: self.amount + other.amount,
+            amount,
         })
     }
 
@@ -84,10 +88,14 @@ impl Asset {
         if self.policy_id != other.policy_id || self.token_name != other.token_name {
             bail!("Assets must have the same policy_id and token_name to be subtracted")
         }
+        let amount = self
+            .amount
+            .checked_sub(other.amount)
+            .ok_or_else(|| anyhow::anyhow!("Asset subtraction underflow"))?;
         Ok(Self {
             policy_id: self.policy_id,
             token_name: self.token_name.clone(),
-            amount: self.amount - other.amount,
+            amount,
         })
     }
 
@@ -124,6 +132,33 @@ impl Asset {
             Ok(None)
         }
     }
+
+    /// Parse a `<policy_id_hex>.<token_name_hex>=<amount>` spec into an `Asset`.
+    ///
+    /// Whitespace around any component is trimmed. Empty token names are
+    /// allowed (some native tokens use an empty name). Amount must be a
+    /// positive `u64`. Returns an error describing which part is wrong so
+    /// users see the issue instead of silently dropping the asset.
+    pub fn parse(spec: &str) -> Result<Self> {
+        let spec = spec.trim();
+        let (lhs, amt_str) = spec
+            .split_once('=')
+            .with_context(|| format!("asset '{spec}': missing '=' between token and amount"))?;
+        let (pid, tkn) = lhs
+            .split_once('.')
+            .with_context(|| format!("asset '{spec}': missing '.' between policy id and token"))?;
+        let pid = pid.trim();
+        let tkn = tkn.trim();
+        let amt: u64 = amt_str
+            .trim()
+            .parse()
+            .with_context(|| format!("asset '{spec}': amount is not a valid u64"))?;
+        if amt == 0 {
+            bail!("asset '{spec}': amount must be positive");
+        }
+        Asset::new(pid.to_string(), tkn.to_string(), amt)
+            .with_context(|| format!("asset '{spec}': invalid policy id or token name hex"))
+    }
 }
 
 /// Represents a collection of `Asset` instances.
@@ -142,6 +177,22 @@ impl Assets {
     /// Creates a new, empty `Assets` instance.
     pub fn new() -> Self {
         Self { items: Vec::new() }
+    }
+
+    /// Parse a comma-separated list of `<pid>.<tkn>=<amt>` specs into an
+    /// `Assets` bundle. Empty entries (e.g. trailing commas, all-whitespace
+    /// specs) are skipped; the empty string yields an empty bundle. Any
+    /// malformed entry returns an error rather than being silently dropped.
+    pub fn parse(specs: &str) -> Result<Self> {
+        let mut assets = Self::new();
+        for part in specs.split(',') {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            assets = assets.add(Asset::parse(trimmed)?)?;
+        }
+        Ok(assets)
     }
 
     /// Adds an asset to the collection, combining amounts if the asset already exists.
@@ -183,7 +234,10 @@ impl Assets {
                 .sub(&other)
                 .context("Can't Subtract Asset From Assets")?;
         } else {
-            new_items.push(other);
+            // Subtracting an asset that isn't present is a caller error — it
+            // must not silently insert a phantom positive-amount entry, which
+            // would corrupt change calculation via `separate`.
+            bail!("cannot subtract an asset that is not in the collection");
         }
         Ok(Self { items: new_items }.remove_zero_amounts())
     }

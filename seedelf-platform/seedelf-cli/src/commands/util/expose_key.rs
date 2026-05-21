@@ -2,7 +2,7 @@ use crate::setup;
 use blstrs::Scalar;
 use colored::Colorize;
 
-pub fn run() {
+pub(crate) fn run() {
     println!(
         "\n{}\n",
         "Exposing Your Secret Key, Use With Caution!".bright_red()

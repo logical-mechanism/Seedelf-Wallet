@@ -197,7 +197,7 @@ The datum (`Register`) is chosen by the *sender* of a UTxO, not the recipient. A
 1. **Keep off-chain point validation strict.** `is_torsion_free` + non-identity checks on both `generator` and `public_value` must be unconditional in `seedelf-crypto` / `seedelf-core` before publishing a register. A single lapse produces dead UTxOs with no on-chain recourse.
 2. **Add expect-fail unit tests** in `lib/schnorr.ak` for identity-point attempts (§2.5). Cheap insurance against future refactors.
 3. **Document the "one mint per tx" restriction** of `seedelf.ak` in user-facing docs (§3.1). If batch-mint is ever a product requirement, plan a v2 policy rather than patching in place.
-4. **Guardrail the GUI/CLI** against sending assets to the `always_false` address beyond the minimum reference-script min-UTxO (§5).
+4. **Guardrail the CLI** against sending assets to the `always_false` address beyond the minimum reference-script min-UTxO (§5).
 5. **Consider blake2b_256 for Fiat-Shamir** in a future validator version if 128-bit soundness is a marketing/audit requirement (§2.1). Current 224-bit choice is a deliberate cost trade-off.
 6. **Add a stdlib-upgrade checklist** to the release process: rebuild, re-test, diff `hashes/` (§6.3).
 
