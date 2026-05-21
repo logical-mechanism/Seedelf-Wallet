@@ -40,3 +40,12 @@ seedelf-crypto = { workspace = true }
 seedelf-core = { workspace = true }
 seedelf-display = { workspace = true }
 seedelf-koios = { workspace = true }
+
+[dev-dependencies]
+wiremock = "0.6"
+serial_test = "3"
+
+# Offline mock-Koios integration tests for the transaction-building commands.
+[[test]]
+name = "cli"
+path = "tests/cli/main.rs"
