@@ -16,7 +16,7 @@ use seedelf_koios::koios::{UtxoResponse, epoch_params, extract_bytes_with_loggin
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub(crate) struct FundArgs {
+pub struct FundArgs {
     /// address sending funds
     #[arg(
         short = 'a',
@@ -24,7 +24,7 @@ pub(crate) struct FundArgs {
         help = "The address sending funds to the seedelf.",
         display_order = 1
     )]
-    address: String,
+    pub address: String,
 
     /// seedelf to send funds too
     #[arg(
@@ -33,7 +33,7 @@ pub(crate) struct FundArgs {
         help = "The seedelf receiving funds.",
         display_order = 2
     )]
-    seedelf: String,
+    pub seedelf: String,
 
     /// The amount of Lovelace to send
     #[arg(
@@ -42,7 +42,7 @@ pub(crate) struct FundArgs {
         help = "The amount of Lovelace being sent to the seedelf.",
         display_order = 3
     )]
-    lovelace: Option<u64>,
+    pub lovelace: Option<u64>,
 
     /// Native tokens to include, repeatable. Format `<policy_id>.<token_name>=<amount>`.
     /// Multiple tokens can also be comma-separated within a single value.
@@ -53,10 +53,10 @@ pub(crate) struct FundArgs {
         help = "Native token to send: <policy_id>.<token_name>=<amount>. Repeat or comma-separate for multiple.",
         display_order = 4
     )]
-    assets: Vec<String>,
+    pub assets: Vec<String>,
 }
 
-pub(crate) async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
 

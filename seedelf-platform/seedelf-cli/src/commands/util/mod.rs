@@ -3,11 +3,11 @@ use clap::{Args, Subcommand};
 pub(crate) mod age;
 pub(crate) mod base;
 pub(crate) mod expose_key;
-pub(crate) mod extract;
+pub mod extract;
 pub(crate) mod find;
 pub(crate) mod history;
 pub(crate) mod migrate;
-pub(crate) mod mint;
+pub mod mint;
 pub(crate) mod statistics;
 
 #[derive(Subcommand)]

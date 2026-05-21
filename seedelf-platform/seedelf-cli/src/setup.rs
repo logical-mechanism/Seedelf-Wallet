@@ -15,7 +15,27 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+/// Test seam: when set, [`unlock_wallet_interactive`] returns this scalar
+/// instead of prompting for a password.
+///
+/// `None` in production, so the interactive prompt is always used and behavior
+/// is unchanged. Integration tests inject a known wallet key here so they can
+/// drive transaction commands without a terminal — see [`inject_wallet_scalar`].
+static INJECTED_SCALAR: RwLock<Option<Scalar>> = RwLock::new(None);
+
+/// Test seam: inject the wallet scalar that [`unlock_wallet_interactive`] will
+/// return, bypassing the interactive password prompt.
+///
+/// Production code never calls this. Pass `None` to clear the injected key and
+/// restore the interactive prompt.
+pub fn inject_wallet_scalar(scalar: Option<Scalar>) {
+    *INJECTED_SCALAR
+        .write()
+        .expect("injected scalar lock poisoned") = scalar;
+}
 
 /// Data structure for storing wallet information. The decoded hex private
 /// key lives in `private_key`; `ZeroizeOnDrop` wipes it when this struct
@@ -274,6 +294,13 @@ fn load_wallet(password: String) -> Result<Scalar> {
 }
 
 pub(crate) fn unlock_wallet_interactive() -> Scalar {
+    // Test seam: an injected key short-circuits the interactive prompt.
+    if let Some(scalar) = *INJECTED_SCALAR
+        .read()
+        .expect("injected scalar lock poisoned")
+    {
+        return scalar;
+    }
     loop {
         let password: String = enter_password();
 

@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 
 pub(crate) mod balance;
-pub(crate) mod sweep;
+pub mod sweep;
 
 #[derive(Subcommand)]
 pub(crate) enum ExternalCommands {

@@ -32,7 +32,7 @@ use seedelf_koios::koios::{
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub(crate) struct SweepArgs {
+pub struct SweepArgs {
     /// address that receives the funds
     #[arg(
         short = 'a',
@@ -40,7 +40,7 @@ pub(crate) struct SweepArgs {
         help = "The address receiving funds.",
         display_order = 1
     )]
-    address: Option<String>,
+    pub address: Option<String>,
 
     /// The amount of lovelace to send
     #[arg(
@@ -49,7 +49,7 @@ pub(crate) struct SweepArgs {
         help = "The amount of Lovelace being sent to the address. Cannot be used with --all",
         display_order = 2
     )]
-    lovelace: Option<u64>,
+    pub lovelace: Option<u64>,
 
     /// Send all funds; cannot be combined with --lovelace or --asset
     #[arg(
@@ -57,7 +57,7 @@ pub(crate) struct SweepArgs {
         help = "Send all funds. Cannot be used with --lovelace or --asset.",
         display_order = 3
     )]
-    all: bool,
+    pub all: bool,
 
     /// Native tokens to include, repeatable. Format `<policy_id>.<token_name>=<amount>`.
     #[arg(
@@ -67,7 +67,7 @@ pub(crate) struct SweepArgs {
         help = "Native token to send: <policy_id>.<token_name>=<amount>. Repeat or comma-separate for multiple.",
         display_order = 4
     )]
-    assets: Vec<String>,
+    pub assets: Vec<String>,
 
     /// Optional ADA Handle
     #[arg(
@@ -75,14 +75,14 @@ pub(crate) struct SweepArgs {
         help = "ADA handle without the $.",
         display_order = 5
     )]
-    ada_handle: Option<String>,
+    pub ada_handle: Option<String>,
 
     /// Optional repeated 'txId#txIdx'
     #[arg(long = "utxo", help = "The utxos to spend.", display_order = 6)]
-    utxos: Option<Vec<String>>,
+    pub utxos: Option<Vec<String>>,
 }
 
-pub(crate) async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
 

@@ -1,12 +1,41 @@
 use mime_guess::MimeGuess;
 use rust_embed::RustEmbed;
 use std::net::SocketAddr;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::signal;
 use warp::{Filter, http::Response};
 
 #[derive(RustEmbed)]
 #[folder = "static/"]
 struct Asset;
+
+/// Test seam: capture the transaction CBOR handed to [`run_web_server`].
+///
+/// `create`, `fund`, and `extract` finish by serving a local CIP30 signing
+/// site and blocking on Ctrl-C, which would hang an automated test. When the
+/// capture seam is armed, `run_web_server` instead records the CBOR and returns
+/// immediately. Production never arms it, so the signing site always serves.
+static CAPTURE_ARMED: AtomicBool = AtomicBool::new(false);
+static CAPTURED_CBOR: Mutex<Option<String>> = Mutex::new(None);
+
+/// Arm the CBOR capture seam, clearing any previously captured value.
+///
+/// While armed, [`run_web_server`] stores its `message` (the tx CBOR) and
+/// returns without serving the signing site.
+pub fn arm_cbor_capture() {
+    *CAPTURED_CBOR.lock().expect("cbor capture lock poisoned") = None;
+    CAPTURE_ARMED.store(true, Ordering::SeqCst);
+}
+
+/// Disarm the capture seam and return the CBOR captured since [`arm_cbor_capture`].
+pub fn take_captured_cbor() -> Option<String> {
+    CAPTURE_ARMED.store(false, Ordering::SeqCst);
+    CAPTURED_CBOR
+        .lock()
+        .expect("cbor capture lock poisoned")
+        .take()
+}
 
 /// Helper to build a `warp::http::Response<Vec<u8>>` with the correct Content-Type.
 fn serve_bytes(path: &'static str, data: Vec<u8>) -> impl warp::Reply {
@@ -17,6 +46,13 @@ fn serve_bytes(path: &'static str, data: Vec<u8>) -> impl warp::Reply {
 }
 
 pub(crate) async fn run_web_server(message: String, network_flag: bool) {
+    // Test seam: when armed, record the tx CBOR and return instead of serving
+    // the signing site (which would block on Ctrl-C and hang the test).
+    if CAPTURE_ARMED.load(Ordering::SeqCst) {
+        *CAPTURED_CBOR.lock().expect("cbor capture lock poisoned") = Some(message);
+        return;
+    }
+
     let addr: SocketAddr = ([127, 0, 0, 1], 44203).into();
 
     let html = warp::path::end().map(move || {

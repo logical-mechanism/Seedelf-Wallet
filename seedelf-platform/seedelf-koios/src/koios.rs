@@ -4,7 +4,7 @@ use reqwest::{Client, Error, Response};
 use seedelf_crypto::register::Register;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, RwLock};
 use std::time::Duration;
 
 /// Shared HTTP client with sane timeouts. Reuses TCP connections across calls.
@@ -15,6 +15,67 @@ static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
         .build()
         .expect("Failed to build reqwest client")
 });
+
+/// Optional base-URL overrides for the Koios REST host and the giveme.my
+/// collateral service.
+///
+/// Both are `None` in production, so the real hosts are always used and
+/// behavior is unchanged. The sole purpose of this seam is to let integration
+/// tests redirect every network call at a local mock server — see
+/// [`override_endpoints`].
+#[derive(Default)]
+struct EndpointOverride {
+    koios: Option<String>,
+    collateral: Option<String>,
+}
+
+static ENDPOINT_OVERRIDE: RwLock<EndpointOverride> = RwLock::new(EndpointOverride {
+    koios: None,
+    collateral: None,
+});
+
+/// Test seam: redirect the Koios REST base URL and/or the collateral-service
+/// base URL at a different host (e.g. `http://127.0.0.1:PORT`).
+///
+/// Production code never calls this; with the defaults left in place the real
+/// `https://{network}.koios.rest` and `https://www.giveme.my` hosts are used.
+/// Pass `None` for an argument to restore its real host.
+pub fn override_endpoints(koios_base: Option<String>, collateral_base: Option<String>) {
+    let mut guard = ENDPOINT_OVERRIDE
+        .write()
+        .expect("endpoint override lock poisoned");
+    guard.koios = koios_base;
+    guard.collateral = collateral_base;
+}
+
+/// Build a Koios REST URL for `path` (no leading slash), honoring the test
+/// override when one is set.
+fn koios_url(network_flag: bool, path: &str) -> String {
+    if let Some(base) = ENDPOINT_OVERRIDE
+        .read()
+        .expect("endpoint override lock poisoned")
+        .koios
+        .as_deref()
+    {
+        return format!("{base}/api/v1/{path}");
+    }
+    let network: &str = if network_flag { "preprod" } else { "api" };
+    format!("https://{network}.koios.rest/api/v1/{path}")
+}
+
+/// Build the collateral-service URL, honoring the test override when one is set.
+fn collateral_url(network_flag: bool) -> String {
+    let network: &str = if network_flag { "preprod" } else { "mainnet" };
+    if let Some(base) = ENDPOINT_OVERRIDE
+        .read()
+        .expect("endpoint override lock poisoned")
+        .collateral
+        .as_deref()
+    {
+        return format!("{base}/{network}/collateral/");
+    }
+    format!("https://www.giveme.my/{network}/collateral/")
+}
 
 /// Represents the latest blockchain tip information from Koios.
 #[derive(Deserialize, Debug)]
@@ -43,8 +104,7 @@ pub struct BlockchainTip {
 /// * `Ok(Vec<BlockchainTip>)` - A vector containing the latest blockchain tip data.
 /// * `Err(Error)` - If the API request or JSON parsing fails.
 pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{network}.koios.rest/api/v1/tip");
+    let url: String = koios_url(network_flag, "tip");
 
     let response: Vec<BlockchainTip> = HTTP_CLIENT
         .get(&url)
@@ -115,9 +175,8 @@ pub async fn credential_utxos(
     payment_credential: &str,
     network_flag: bool,
 ) -> Result<Vec<UtxoResponse>, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
     // this is searching the wallet contract. We have to collect the entire utxo set to search it.
-    let url: String = format!("https://{network}.koios.rest/api/v1/credential_utxos");
+    let url: String = koios_url(network_flag, "credential_utxos");
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -178,11 +237,10 @@ pub async fn credential_utxos(
 /// The function assumes a maximum of 1000 UTXOs per address, as per CIP-30 wallets.
 /// If an address exceeds this limit, the wallet is likely mismanaged.
 pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
     // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
     // if you have 1000 utxos in that wallets that cannot pay for anything then something
     // is wrong in that wallet
-    let url: String = format!("https://{network}.koios.rest/api/v1/address_utxos");
+    let url: String = koios_url(network_flag, "address_utxos");
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -304,8 +362,6 @@ pub fn contains_policy_id(asset_list: &Option<Vec<Asset>>, target_policy_id: &st
 /// The function constructs a JSON-RPC request payload and sends a POST request
 /// to the Koios Ogmios endpoint.
 pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-
     // Prepare the request payload
     let payload: Value = serde_json::json!({
         "jsonrpc": "2.0",
@@ -317,7 +373,7 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
         }
     });
 
-    let url: String = format!("https://{network}.koios.rest/api/v1/ogmios");
+    let url: String = koios_url(network_flag, "ogmios");
 
     // Make the POST request
     let response: Response = HTTP_CLIENT
@@ -354,8 +410,7 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
 /// The function constructs a JSON payload containing the transaction body and sends
 /// it to the specified API endpoint using a POST request.
 pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<Value, Error> {
-    let network: &str = if network_flag { "preprod" } else { "mainnet" };
-    let url: String = format!("https://www.giveme.my/{network}/collateral/");
+    let url: String = collateral_url(network_flag);
 
     let payload: Value = serde_json::json!({
         "tx": tx_cbor,
@@ -396,8 +451,7 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
 /// - Decodes the transaction CBOR hex string into raw binary data.
 /// - Sends the binary data as the body of a POST request with `Content-Type: application/cbor`.
 pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{network}.koios.rest/api/v1/submittx");
+    let url: String = koios_url(network_flag, "submittx");
 
     // Decode the hex string into binary data
     let data: Vec<u8> = hex::decode(&tx_cbor).context("Invalid hex in tx cbor")?;
@@ -426,8 +480,6 @@ pub async fn ada_handle_address(
     wallet_addr: String,
     ada_handle_policy_id: &str,
 ) -> Result<String, String> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-
     // Candidate token-name encodings to try, in order. A non-CIP68 lookup
     // falls back to the CIP68 (000de140-prefixed) name — at most two attempts,
     // iterated rather than recursed so there is no unbounded call depth.
@@ -441,7 +493,7 @@ pub async fn ada_handle_address(
     for token_name in candidates {
         // Build query params via `.query()` so values are URL-encoded rather
         // than interpolated raw into the URL string.
-        let url: String = format!("https://{network}.koios.rest/api/v1/asset_nft_address");
+        let url: String = koios_url(network_flag, "asset_nft_address");
         let response: Response = match HTTP_CLIENT
             .get(url)
             .query(&[
@@ -481,11 +533,10 @@ pub async fn ada_handle_address(
 }
 
 pub async fn utxo_info(utxo: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
     // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
     // if you have 1000 utxos in that wallets that cannot pay for anything then something
     // is wrong in that wallet
-    let url: String = format!("https://{network}.koios.rest/api/v1/utxo_info");
+    let url: String = koios_url(network_flag, "utxo_info");
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -514,8 +565,7 @@ pub async fn nft_utxo(
     token_name: String,
     network_flag: bool,
 ) -> Result<Vec<UtxoResponse>, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{network}.koios.rest/api/v1/asset_utxos");
+    let url: String = koios_url(network_flag, "asset_utxos");
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -554,8 +604,7 @@ pub async fn datum_from_datum_hash(
     datum_hash: String,
     network_flag: bool,
 ) -> Result<Vec<ResolvedDatum>, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{network}.koios.rest/api/v1/datum_info");
+    let url: String = koios_url(network_flag, "datum_info");
 
     // Prepare the request payload
     let payload: Value = serde_json::json!({
@@ -590,9 +639,11 @@ pub async fn asset_history(
     network_flag: bool,
     limit: u64,
 ) -> Result<Vec<History>> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!(
-        "https://{network}.koios.rest/api/v1/asset_txs?_asset_policy={policy_id}&_asset_name={token_name}&_after_block_height=50000&_history=true&limit={limit}"
+    let url: String = koios_url(
+        network_flag,
+        &format!(
+            "asset_txs?_asset_policy={policy_id}&_asset_name={token_name}&_after_block_height=50000&_history=true&limit={limit}"
+        ),
     );
 
     let response: Response = HTTP_CLIENT
@@ -690,10 +741,9 @@ pub async fn address_transactions(
     network_flag: bool,
     address: String,
 ) -> Result<Vec<TxResponse>, Error> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-    let address_tx_url: String = format!("https://{network}.koios.rest/api/v1/address_txs");
+    let address_tx_url: String = koios_url(network_flag, "address_txs");
 
-    let tx_info_url: String = format!("https://{network}.koios.rest/api/v1/tx_info");
+    let tx_info_url: String = koios_url(network_flag, "tx_info");
 
     // Prepare the request payload
     let address_payload: Value = serde_json::json!({
@@ -773,8 +823,7 @@ pub struct ProtocolParameters {
 
 /// Fetch the current epoch's protocol parameters from Koios.
 pub async fn epoch_params(network_flag: bool) -> Result<ProtocolParameters> {
-    let network: &str = if network_flag { "preprod" } else { "api" };
-    let url: String = format!("https://{network}.koios.rest/api/v1/epoch_params?limit=1");
+    let url: String = koios_url(network_flag, "epoch_params?limit=1");
 
     let response: Vec<Value> = HTTP_CLIENT
         .get(&url)

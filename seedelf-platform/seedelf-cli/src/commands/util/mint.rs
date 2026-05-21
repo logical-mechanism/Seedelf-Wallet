@@ -30,14 +30,14 @@ use seedelf_koios::koios::{
 };
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub(crate) struct MintArgs {
+pub struct MintArgs {
     #[arg(
         short = 'l',
         long,
         help = "The seedelf label / personal tag.",
         display_order = 1
     )]
-    label: Option<String>,
+    pub label: Option<String>,
 
     #[arg(
         short = 'g',
@@ -46,7 +46,7 @@ pub(crate) struct MintArgs {
         display_order = 2,
         requires = "public_value"
     )]
-    generator: Option<String>,
+    pub generator: Option<String>,
 
     #[arg(
         short = 'p',
@@ -55,14 +55,14 @@ pub(crate) struct MintArgs {
         display_order = 3,
         requires = "generator"
     )]
-    public_value: Option<String>,
+    pub public_value: Option<String>,
 
     /// Optional repeated 'txId#txIdx'
     #[arg(long = "utxo", help = "The utxos to spend.", display_order = 4)]
-    utxos: Option<Vec<String>>,
+    pub utxos: Option<Vec<String>>,
 }
 
-pub(crate) async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
 

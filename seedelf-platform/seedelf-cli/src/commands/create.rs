@@ -19,14 +19,14 @@ use seedelf_koios::koios::{UtxoResponse, address_utxos, epoch_params, evaluate_t
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub(crate) struct CreateArgs {
+pub struct CreateArgs {
     #[arg(
         short = 'a',
         long,
         help = "The address paying for the seedelf.",
         display_order = 1
     )]
-    address: String,
+    pub address: String,
 
     #[arg(
         short = 'l',
@@ -34,10 +34,10 @@ pub(crate) struct CreateArgs {
         help = "The seedelf label / personal tag.",
         display_order = 2
     )]
-    label: Option<String>,
+    pub label: Option<String>,
 }
 
-pub(crate) async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
 

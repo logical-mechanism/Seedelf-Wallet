@@ -31,7 +31,7 @@ use seedelf_koios::koios::{
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub(crate) struct TransforArgs {
+pub struct TransforArgs {
     /// seedelf to send funds too
     #[arg(
         short = 's',
@@ -39,7 +39,7 @@ pub(crate) struct TransforArgs {
         help = "The seedelfs receiving funds.",
         display_order = 1
     )]
-    seedelfs: Vec<String>,
+    pub seedelfs: Vec<String>,
 
     /// The amount of lovelace to send
     #[arg(
@@ -48,7 +48,7 @@ pub(crate) struct TransforArgs {
         help = "The amount of Lovelace being sent to the seedelfs.",
         display_order = 2
     )]
-    lovelaces: Option<Vec<u64>>,
+    pub lovelaces: Option<Vec<u64>>,
 
     /// Native tokens for the *n*th seedelf in the same order as `--seedelfs`.
     /// Format `<policy_id>.<token_name>=<amount>`, comma-separated for multiple
@@ -63,14 +63,14 @@ pub(crate) struct TransforArgs {
         help = "Native tokens for the matching seedelf: <policy_id>.<token_name>=<amount>, comma-separated.",
         display_order = 3
     )]
-    assets: Vec<String>,
+    pub assets: Vec<String>,
 
     /// Optional repeated 'txId#txIdx'
     #[arg(long = "utxo", help = "The utxos to spend.", display_order = 6)]
-    utxos: Option<Vec<String>>,
+    pub utxos: Option<Vec<String>>,
 }
 
-pub(crate) async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
 

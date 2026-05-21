@@ -21,10 +21,10 @@ use seedelf_display::{display, text_coloring};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub(crate) struct ExtractArgs {
+pub struct ExtractArgs {
     /// The UTxO to spend
     #[arg(short = 'u', long, help = "The UTxO to spend", display_order = 1)]
-    utxo: String,
+    pub utxo: String,
 
     #[arg(
         short = 'a',
@@ -32,10 +32,10 @@ pub(crate) struct ExtractArgs {
         help = "The address receiving the funds",
         display_order = 2
     )]
-    address: String,
+    pub address: String,
 }
 
-pub(crate) async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<()> {
+pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<()> {
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
