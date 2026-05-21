@@ -41,11 +41,11 @@ pub(crate) struct TransforArgs {
     )]
     seedelfs: Vec<String>,
 
-    /// The amount of ADA to send
+    /// The amount of lovelace to send
     #[arg(
         short = 'l',
         long,
-        help = "The amount of ADA being sent to the seedelfs.",
+        help = "The amount of Lovelace being sent to the seedelfs.",
         display_order = 2
     )]
     lovelaces: Option<Vec<u64>>,

@@ -42,7 +42,7 @@ pub(crate) struct SweepArgs {
     )]
     address: Option<String>,
 
-    /// The amount of ADA to send
+    /// The amount of lovelace to send
     #[arg(
         short = 'l',
         long,
@@ -51,10 +51,10 @@ pub(crate) struct SweepArgs {
     )]
     lovelace: Option<u64>,
 
-    /// Send all funds if amount is not specified
+    /// Send all funds; cannot be combined with --lovelace or --asset
     #[arg(
         long,
-        help = "Send all funds. Cannot be used with --amount.",
+        help = "Send all funds. Cannot be used with --lovelace or --asset.",
         display_order = 3
     )]
     all: bool,

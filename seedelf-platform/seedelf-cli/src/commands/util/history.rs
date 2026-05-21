@@ -17,7 +17,7 @@ pub(crate) struct HistoryArgs {
     #[arg(long, help = "Show spend only", display_order = 1)]
     spend_only: bool,
 
-    /// Show recieve only in history
+    /// Show receive only in history
     #[arg(long, help = "Show receive only", display_order = 2)]
     receive_only: bool,
 }

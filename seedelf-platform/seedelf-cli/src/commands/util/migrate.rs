@@ -7,7 +7,7 @@ use seedelf_display::display;
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub(crate) struct MigrateArgs {
-    /// The label to search with
+    /// The contract variant to migrate from
     #[arg(long, help = "The contract variant to migrate from", display_order = 1)]
     from_variant: u64,
 }

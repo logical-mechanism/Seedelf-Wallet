@@ -22,7 +22,7 @@ use seedelf_display::{display, text_coloring};
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub(crate) struct ExtractArgs {
-    /// The label to search with
+    /// The UTxO to spend
     #[arg(short = 'u', long, help = "The UTxO to spend", display_order = 1)]
     utxo: String,
 
