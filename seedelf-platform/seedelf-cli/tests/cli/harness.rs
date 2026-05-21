@@ -41,8 +41,7 @@ const EPOCH_PARAMS_FIXTURE: &str = include_str!("fixtures/epoch_params.json");
 
 /// A representative seedelf token name captured from preprod (32 bytes,
 /// `5eed0e1f`-prefixed).
-pub const SAMPLE_SEEDELF: &str =
-    "5eed0e1f0272b6c6cde1a5652ecf4480d4f70b3a0601b4a40b3ed3fd096d7b8a";
+pub const SAMPLE_SEEDELF: &str = "5eed0e1f0272b6c6cde1a5652ecf4480d4f70b3a0601b4a40b3ed3fd096d7b8a";
 
 // ----------------------------------------------------------------------------
 // configuration helpers
@@ -172,12 +171,7 @@ pub fn seedelf_utxo(scalar: Scalar, n: u64, lovelace: u64, seedelf_name: &str) -
 
 /// A plain (non-script) address UTxO with no datum — what `address_utxos`
 /// returns for a payer / dApp address.
-pub fn address_utxo(
-    addr: &str,
-    n: u64,
-    lovelace: u64,
-    tokens: &[TokenAmount],
-) -> UtxoResponse {
+pub fn address_utxo(addr: &str, n: u64, lovelace: u64, tokens: &[TokenAmount]) -> UtxoResponse {
     UtxoResponse {
         tx_hash: tx_hash(n),
         tx_index: 0,
@@ -313,8 +307,7 @@ impl Scenario {
         Mock::given(method("GET"))
             .and(path("/api/v1/epoch_params"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_raw(EPOCH_PARAMS_FIXTURE, "application/json"),
+                ResponseTemplate::new(200).set_body_raw(EPOCH_PARAMS_FIXTURE, "application/json"),
             )
             .mount(&server)
             .await;
@@ -378,9 +371,7 @@ impl Scenario {
             .collect();
         Mock::given(method("POST"))
             .and(path("/api/v1/ogmios"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({"result": budgets})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": budgets})))
             .mount(&self.server)
             .await;
     }
@@ -391,8 +382,7 @@ impl Scenario {
         Mock::given(method("POST"))
             .and(path("/preprod/collateral/"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"witness": "ab".repeat(64)})),
+                ResponseTemplate::new(200).set_body_json(json!({"witness": "ab".repeat(64)})),
             )
             .mount(&self.server)
             .await;
@@ -500,7 +490,10 @@ fn register_from_datum(datum: DatumOption) -> Option<Register> {
             _ => None,
         }
     };
-    Some(Register::new(bytes(fields.first()?)?, bytes(fields.get(1)?)?))
+    Some(Register::new(
+        bytes(fields.first()?)?,
+        bytes(fields.get(1)?)?,
+    ))
 }
 
 /// Decode a transaction CBOR hex string into an owned, asserted-against view.
@@ -607,7 +600,8 @@ pub fn assert_value_conserved(tx: &DecodedTx, ledger: &Ledger) {
         tx.fee
     );
 
-    let mut keys: std::collections::BTreeSet<(String, String)> = in_assets.keys().cloned().collect();
+    let mut keys: std::collections::BTreeSet<(String, String)> =
+        in_assets.keys().cloned().collect();
     keys.extend(out_assets.keys().cloned());
     keys.extend(tx.mint.keys().cloned());
     for key in keys {

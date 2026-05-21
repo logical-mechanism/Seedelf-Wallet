@@ -63,7 +63,10 @@ fn pure_ada_selection_covers_goal_and_change() {
     let goal: u64 = 4_000_000;
 
     let selected = utxos::select(&params, wallet, goal, Assets::new()).unwrap();
-    assert!(!selected.is_empty(), "11 ADA on hand, a 4 ADA send must select");
+    assert!(
+        !selected.is_empty(),
+        "11 ADA on hand, a 4 ADA send must select"
+    );
 
     let (total, tokens) = utxos::assets_of(selected).unwrap();
     assert!(tokens.is_empty(), "no native tokens involved");
@@ -90,10 +93,16 @@ fn token_selection_change_conserves_every_token() {
         .unwrap();
 
     let selected = utxos::select(&params, wallet, 2_000_000, send.clone()).unwrap();
-    assert!(!selected.is_empty(), "wallet holds the token and enough ADA");
+    assert!(
+        !selected.is_empty(),
+        "wallet holds the token and enough ADA"
+    );
 
     let (total, found) = utxos::assets_of(selected).unwrap();
-    assert!(found.contains(send.clone()), "selection must hold what is sent");
+    assert!(
+        found.contains(send.clone()),
+        "selection must hold what is sent"
+    );
 
     // change == gathered tokens minus what is sent
     let change = found.separate(send).unwrap();
@@ -121,7 +130,11 @@ fn selection_refuses_when_change_min_unsatisfiable() {
     let params = fixture_params();
     // single UTxO: the needed token, a residual token, and only just enough
     // lovelace for the goal — nothing left for the mandatory change output.
-    let wallet = vec![token_utxo(0x01, 2_000_000, &[(PID, "aa", 5), (PID, "bb", 3)])];
+    let wallet = vec![token_utxo(
+        0x01,
+        2_000_000,
+        &[(PID, "aa", 5), (PID, "bb", 3)],
+    )];
     let send: Assets = Assets::new()
         .add(Asset::new(PID.to_string(), "aa".to_string(), 2).unwrap())
         .unwrap();

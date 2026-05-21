@@ -92,5 +92,9 @@ async fn sweep_partial_returns_change_to_wallet() {
         to_address[0].lovelace, 3_000_000,
         "address receives exactly the requested lovelace"
     );
-    assert_eq!(tx.outputs_to(&wallet_address()).len(), 1, "change to wallet");
+    assert_eq!(
+        tx.outputs_to(&wallet_address()).len(),
+        1,
+        "change to wallet"
+    );
 }

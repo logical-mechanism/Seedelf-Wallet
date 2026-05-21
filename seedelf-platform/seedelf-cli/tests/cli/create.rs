@@ -40,7 +40,11 @@ async fn create_mints_seedelf_and_conserves_value() {
     let tx = decode_tx(&scenario.captured_cbor());
     assert_sound_transaction(&tx, &scenario, &params);
 
-    assert_eq!(tx.inputs.len(), 1, "only the funding UTxO is a regular input");
+    assert_eq!(
+        tx.inputs.len(),
+        1,
+        "only the funding UTxO is a regular input"
+    );
     assert_eq!(tx.outputs.len(), 2, "seedelf output + change");
     assert_eq!(
         tx.outputs_to(&wallet_address()).len(),

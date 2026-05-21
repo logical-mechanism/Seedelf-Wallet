@@ -44,7 +44,11 @@ async fn remove_burns_token_and_returns_ada() {
     assert_sound_transaction(&tx, &scenario, &params);
 
     assert_eq!(tx.inputs.len(), 1, "only the seedelf UTxO is spent");
-    assert_eq!(tx.outputs.len(), 1, "leftover ADA goes to one address output");
+    assert_eq!(
+        tx.outputs.len(),
+        1,
+        "leftover ADA goes to one address output"
+    );
     assert_eq!(tx.outputs_to(&external_address()).len(), 1);
 
     let burned = tx
