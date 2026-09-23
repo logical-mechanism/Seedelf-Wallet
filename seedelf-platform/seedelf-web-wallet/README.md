@@ -43,7 +43,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 - **No import or migration** in either direction. CLI users stay CLI users.
 - **What they share:**
   - the on-chain contracts ([seedelf-contracts](../../seedelf-contracts/))
-  - the cryptography: [seedelf-crypto](../seedelf-crypto/), compiled to WebAssembly for the extension
+  - the cryptography ([seedelf-crypto](../seedelf-crypto/)) and the transaction building ([seedelf-core](../seedelf-core/)), compiled to WebAssembly for the extension
 
 ## Design docs
 
@@ -67,10 +67,14 @@ git clone --depth 1 --branch lace-extension@2.4.0 \
 
 Every Lace path in these docs is relative to that checkout.
 
-## Open decisions
+## Decisions
 
-- **Seedelf key derivation:** how the phrase becomes the Seedelf scalar. This is permanent once shipped. See [keys-and-accounts.md](docs/keys-and-accounts.md#seedelf-key-derivation).
-- **Transaction building:** Rust (Pallas) compiled to WebAssembly, or a TypeScript Cardano library. See [architecture.md](docs/architecture.md#transaction-building).
-- **UI:** framework (or none), and side panel vs popup.
-- **Unlock across service-worker restarts:** keep the unlocked key in `chrome.storage.session`, or re-prompt for the password.
-- **One-time account addresses:** shared Seedelf staking part, or no staking part. See [privacy.md](docs/privacy.md#known-links).
+- **Seedelf key derivation:** domain-tagged HKDF over the BIP39 seed. It is permanent once shipped. See [keys-and-accounts.md](docs/keys-and-accounts.md#seedelf-key-derivation).
+- **UI:** a popup, plus a full-tab view of the same app, like Eternl. No side panel. See [architecture.md](docs/architecture.md#ui).
+- **Staying unlocked:** Chrome stops the extension's background worker after about 30 seconds idle, which clears its memory.
+  - The unlocked key is kept in `chrome.storage.session` (memory-only, cleared when the browser closes).
+  - So the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every restart.
+  - See [architecture.md](docs/architecture.md#service-worker).
+- **One-time accounts:** base addresses with the shared Seedelf staking part, the same as the CLI's External Wallet. See [privacy.md](docs/privacy.md#known-links).
+- **Transaction building:** the CLI's Rust (Pallas) builders, separated from network calls and compiled to WebAssembly. See [architecture.md](docs/architecture.md#transaction-building).
+- **UI stack:** React + TypeScript + Vite, with plain CSS.

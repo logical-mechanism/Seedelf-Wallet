@@ -1,12 +1,12 @@
 # Architecture
 
-Keep it light: a small Manifest V3 extension, the Seedelf crypto we already have compiled to WebAssembly, and Koios for chain data. Nothing else unless it earns its place.
+Keep it light: a small Manifest V3 extension, the Seedelf crypto and transaction building we already have in Rust (compiled to WebAssembly), and Koios for chain data. Nothing else unless it earns its place.
 
 ## Shape
 
 ```mermaid
 flowchart LR
-  UI["UI page<br/>(side panel or popup)"] -- "typed RPC over a port" --> SW
+  UI["UI<br/>(popup or full tab)"] -- "typed RPC over a port" --> SW
   subgraph SW["Service worker"]
     Vault["Vault + lock"]
     Wallet["Wallet state"]
@@ -32,9 +32,11 @@ flowchart LR
 - **Chrome kills an idle worker after about 30 seconds.** State must reload from storage on every wake-up.
   - Register event listeners synchronously, before the first `await`, or the event that woke the worker is lost.
 - **`importScripts` only works during `install`.** Don't code-split the worker, or preload every chunk at install the way Lace does.
-- **Open decision:** what happens to an unlocked wallet when the worker restarts.
-  - **Option 1:** keep the unlocked key in `chrome.storage.session`. That storage is in memory only, cleared when the browser restarts, and not readable by content scripts.
-  - **Option 2:** ask for the password again after every restart.
+- **Staying unlocked across restarts (decided).** A worker restart loses everything held in memory, including the unlocked key. The popup can't hold the key either, because it closes as soon as the user clicks away.
+  - On unlock, the key goes into `chrome.storage.session`. That storage is in memory only, never written to disk, cleared when the browser closes, and not readable by content scripts.
+  - A restarted worker reads the key back from there.
+  - **Lock** (manual or auto-lock) clears the key from session storage as well as from memory.
+  - The result: the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every idle restart.
 
 ## Crypto
 
@@ -42,9 +44,9 @@ flowchart LR
   - This is the same prover the CLI already runs against the on-chain verifier.
   - It covers register creation, re-randomization, the ownership check and Schnorr proofs.
   - One implementation, so there are no byte-for-byte parity problems.
-- **A thin wrapper crate exposes only what the wallet needs.** That way `seedelf-crypto` itself doesn't change.
-- **Build notes from a first probe:** `seedelf-crypto` compiled to `wasm32-unknown-unknown` at about 670 KB before `wasm-opt`. It has not been run yet. It needed three settings:
-  - `getrandom` 0.2 with the `js` feature, set in the wrapper crate.
+- **One WebAssembly crate for the wallet:** `seedelf-web-wallet/wasm/`, added to the Cargo workspace. It exposes only what the extension needs, for both crypto and [transaction building](#transaction-building).
+- **Build settings from a first probe.** Nothing has been run yet. The build needed:
+  - `getrandom` 0.2 with the `js` feature, set in the wasm crate.
   - `CC_wasm32_unknown_unknown=clang`, because `blst` is C code.
   - `AR_wasm32_unknown_unknown=llvm-ar`, which is `llvm-ar-18` on Ubuntu.
 - **The manifest CSP needs `script-src 'self' 'wasm-unsafe-eval'`** to load WebAssembly.
@@ -55,18 +57,37 @@ flowchart LR
 
 ## Transaction building
 
-**Open decision.** The two options:
+**Decided: Rust (Pallas 0.33), compiled to WebAssembly.**
 
-1. **Rust (Pallas) compiled to WebAssembly.**
-   - The CLI already builds every Seedelf transaction with Pallas 0.33: registers, the reference-script spend, the fee and ex-unit loop, and the collateral-service witness. It is covered by offline integration tests.
-   - To reuse that logic, the builders would move out of each command's `run` into shared functions. [seedelf-platform/CLAUDE.md](../../CLAUDE.md) currently forbids that on purpose, so it would be a deliberate change.
-   - Networking stays in TypeScript.
-2. **A TypeScript Cardano library.**
-   - Lace's `TransactionBuilder` (`packages/contract/cardano-context/src/tx-builder/`) covers inline datums, redeemers, collateral and script evaluation.
-   - But it has **no reference inputs**, and Seedelf spends go through reference scripts.
-   - We would port the Seedelf-specific logic by hand.
+- **One implementation.** The CLI already builds every Seedelf transaction with Pallas: registers, reference-script spends, the fee and ex-unit loop, and the collateral-service witness. Offline integration tests cover it. Reusing it gives the same single implementation as the crypto.
+- **The rejected option was a TypeScript library.** Lace's `TransactionBuilder` has no reference inputs, so we would have had to port the Seedelf logic by hand.
 
-**Leaning:** option 1, for the same reason as the crypto: one implementation that has already been tested against the chain.
+**What a probe found:**
+
+- **It compiles.** `seedelf-core`, `pallas-txbuilder`, `seedelf-crypto` and `seedelf-koios` all compile to `wasm32-unknown-unknown`, at about 912 KB before `wasm-opt`.
+- **One line blocked it.** `seedelf-koios` sets `connect_timeout` on its HTTP client, and `reqwest`'s browser build doesn't have that setting. Gate the line with `#[cfg(not(target_arch = "wasm32"))]`.
+
+**Plan: separate building from network calls.** Each CLI command's `run` mixes pure building with a few network calls:
+
+- **At the start:** protocol parameters, UTxOs, recipient registers.
+- **In the middle:** `evaluate_transaction`, to get ex-units.
+- **At the end:** the giveme.my collateral witness, then submit.
+
+The building moves into network-free functions in `seedelf-core`: a draft step, plus a finalize step after evaluation for script spends. Both callers then use the same functions:
+
+- **The CLI** calls them with Koios data, as it does today.
+- **The extension** fetches the same Koios JSON in TypeScript and passes it through WebAssembly. It deserializes into the same `seedelf-koios` types.
+
+**Notes on the refactor:**
+
+- **Scope:** only the commands the web wallet needs, about 2.1k lines:
+  - `external sweep` (move in)
+  - `util mint` (create)
+  - `transfer`
+  - `sweep`
+  - `remove`
+- **Tests guard it.** The CLI's offline integration tests (`seedelf-cli/tests/cli/`) already check value conservation, min-UTxO and valid change registers for each of these commands.
+- **CLAUDE.md rule:** this reverses the "don't reintroduce `build_*` functions" rule in [seedelf-platform/CLAUDE.md](../../CLAUDE.md). That rule existed because the removed GUI was the only other consumer. Update it when the refactor lands.
 
 ## Chain data
 
@@ -86,18 +107,25 @@ flowchart LR
   - the encrypted vault: a single SecretBox blob, see [keys-and-accounts.md](keys-and-accounts.md#password-and-vault)
   - non-secret settings
   - cached chain data
-- **Decrypted secrets live only in service-worker memory**, or in session storage if we choose that (see above).
+- **Decrypted secrets live only in service-worker memory and `chrome.storage.session`** (see above).
 - **They are wiped on lock.** Lace keeps the last verified password in memory after use (`packages/contract/authentication-prompt/src/store/auth-secret-accessor.ts`), and we won't.
 - **Auto-lock** after a period of inactivity.
 - **Failed unlocks** trigger an exponential back-off.
 
 ## UI
 
-- **A plain web UI** with a small framework or none. Not Lace's React Native / Expo stack.
+- **React + TypeScript, bundled with Vite (decided).**
+  - No heavy component library.
+  - Plain CSS with design tokens for light and dark themes.
+  - Not Lace's React Native / Expo stack.
 - **Lace's flows and visual language may inspire ours:** spacing, corner radius, light and dark themes, screen-to-screen flow.
 - **We don't take Lace's name, logo or brand assets,** and we don't take its commercial fonts (Brandon Grotesque and Proxima Nova are in its repo but not licensed to us).
 - **Icons** only under a compatible license.
-- **Side panel or popup:** open decision. Lace uses a side panel and has no popup.
+- **Popup plus full tab (decided), like Eternl:**
+  - Clicking the toolbar icon opens a popup.
+  - An "expand" button opens the same app in a full browser tab.
+  - One responsive UI serves both.
+  - No side panel. Lace opens in a side panel, which feels cramped.
 
 ## What we borrow from Lace
 

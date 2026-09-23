@@ -14,21 +14,31 @@ A web-wallet phrase is a Seedelf phrase. CLI wallets use a random scalar stored 
 
 ### Seedelf key derivation
 
-**Open decision, and the most important one.** Once wallets exist this derivation can never change, or their phrases stop restoring funds.
+**Decided: domain-tagged HKDF.** Once wallets exist this derivation can never change, or their phrases stop restoring funds.
 
-**Requirements:**
+**Proposed `v1`:**
 
-- **Versioned from day one** (`v1`).
-- **Domain-separated** from the Cardano tree.
-- **Uniform output:** a non-zero scalar mod `r`, with no modulo bias. Expand to at least 48 bytes before reducing.
-- **One implementation:** specified here with test vectors, implemented once in Rust (`seedelf-crypto`), and used through WebAssembly.
+```text
+seed = BIP39 seed of the phrase             PBKDF2-HMAC-SHA512, 2048 rounds, empty passphrase → 64 bytes
+okm  = HKDF-SHA-256(
+         ikm  = seed,
+         salt = "seedelf-wallet-v1",
+         info = "seedelf-key" || u32_be(account),
+         L    = 64)
+x    = int_be(okm) mod r                    r = BLS12-381 scalar field order
+if x == 0: derivation error                 probability ≈ 2^-255
+```
 
-**Candidates:**
+**Notes:**
 
-1. **A domain-tagged hash-to-scalar.** For example, HKDF-SHA-256 over the BIP39 seed with info `seedelf-wallet-v1/<account>`, expanded and reduced mod `r`. This is the simplest option and easy to specify completely.
-2. **EIP-2333.** The standard BLS12-381 key derivation from a BIP39 seed, with published test vectors. It carries more machinery than we need for one scalar per account.
-
-**Leaning:** candidate 1, with an account index in the info string so multiple Seedelf accounts per phrase stay possible later.
+- **`account` is `0` for v1.** The index keeps multiple Seedelf accounts per phrase possible later.
+- **Why the BIP39 seed and not the raw entropy:**
+  - The BIP39 seed is the standard input for non-Cardano derivations.
+  - It's already a different function of the phrase than Cardano's Icarus master key.
+  - The salt and info tags separate the two domains again.
+- **Reducing 64 bytes mod `r`** (a 255-bit prime) leaves negligible bias.
+- **BIP39 passphrase:** always empty in v1. Supporting one later would be an opt-in variant.
+- **Freezing it:** the spec is frozen with test vectors when it's implemented (phrase → seed → okm → `x` → base register). It is implemented once in Rust (`seedelf-crypto`) and used through WebAssembly.
 
 ## Accounts
 
@@ -36,7 +46,7 @@ A web-wallet phrase is a Seedelf phrase. CLI wallets use a random scalar stored 
 |---|---|---|---|
 | **Seedelf** | The scalar `x`. The base register is `(G1, G1^x)`. Each seedelf's root UTxO holds a re-randomized copy that senders use. | Wallet contract (script address, no staking part) | Permanent |
 | **Deposit** | CIP-1852 account `0'`, payment `0/0`, staking `2/0` | Standard base address | Permanent. Money passes through it and doesn't stay. |
-| **One-time** (round-trip phase) | CIP-1852 account `1'`, payment `0/i`, a fresh `i` each session | Shared Seedelf staking part or none. See [privacy.md](privacy.md#known-links). | One session, then retired |
+| **One-time** (round-trip phase) | CIP-1852 account `1'`, payment `0/i`, a fresh `i` each session | Base address with the shared Seedelf staking part, the same as the CLI's External Wallet. See [privacy.md](privacy.md#known-links). | One session, then retired |
 
 - **The deposit account is what exchanges and other wallets pay.** It is linked to the user by definition, so it is never used as a one-time account.
 - **One-time accounts are how funds leave Seedelf to use a contract.** The wallet sweeps them back automatically (see [flows.md](flows.md#contract-round-trip)).

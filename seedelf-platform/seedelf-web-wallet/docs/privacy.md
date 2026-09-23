@@ -41,12 +41,10 @@ The wallet can't prevent these, so it should make them visible to the user inste
 - **Co-spending:** spending several UTxOs in one transaction suggests they share an owner.
   - Coin selection should spend as few inputs as it can.
   - It should avoid mixing funds with different histories, such as round-trip returns and fresh deposits, when it doesn't need to.
-- **The one-time account's staking part** (open decision):
-  - **Shared Seedelf staking hash**, like the CLI's External Wallet (`seedelf-core/src/address.rs`, `dapp_address`):
-    - dApps see a normal base address, and the staking part doesn't identify the user.
-    - But it marks the address as a Seedelf address.
-    - Any rewards on that credential go to whoever holds it, not to the user. That's fine for money passing through, but the UI should say so.
-  - **No staking part:** also unlinkable, but it's a less common address type, and some dApps expect a reward address.
+- **The one-time account's staking part (decided): the shared Seedelf staking hash,** the same as the CLI's External Wallet (`seedelf-core/src/address.rs`, `dapp_address`).
+  - dApps see a normal base address, and the staking part doesn't identify the user.
+  - The trade-off is that it marks the address as a Seedelf address.
+  - Any rewards on that credential go to whoever holds it, not to the user. That's fine for money passing through, but the UI should say so.
 - **Crowd size:** privacy grows with the number of honest users (the flood-attack section of the root README). With few users, timing and amounts carry most of the risk. The wallet should say that plainly and not overpromise.
 - **Network:** Koios and giveme.my see the user's IP address, and Koios has no Tor access. A VPN helps; see the root README's IP-tracking section.
 
