@@ -46,7 +46,7 @@ flowchart LR
   - One implementation, so there are no byte-for-byte parity problems.
 - **One WebAssembly crate for the wallet:** [seedelf-web-wallet/wasm](../wasm/) (`seedelf-wasm`), a Cargo workspace member.
   - It exposes only what the extension needs, for both crypto and [transaction building](#transaction-building).
-  - `build.sh` produces an ES module of about 260 KB.
+  - `build.sh` produces an ES module of about 350 KB.
   - Its tests check the output against native Rust byte for byte.
 - **Build settings:**
   - `getrandom` 0.2 with the `js` feature, set in the wasm crate.
@@ -54,10 +54,10 @@ flowchart LR
   - `AR_wasm32_unknown_unknown=llvm-ar`, which is `llvm-ar-18` on Ubuntu.
   - `wasm-bindgen-cli` pinned to the crate's `wasm-bindgen` version.
 - **The manifest CSP needs `script-src 'self' 'wasm-unsafe-eval'`** to load WebAssembly.
+- **Recovery phrases (BIP39) are handled in Rust too:** generation, validation and the Seedelf key derivation. See [keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation).
 - **Everything else uses small, audited JS libraries:**
   - `@noble/hashes` (Argon2id, BLAKE2b)
   - `@noble/ciphers` (ChaCha20-Poly1305)
-  - `@scure/bip39` (recovery phrases)
 
 ## Transaction building
 

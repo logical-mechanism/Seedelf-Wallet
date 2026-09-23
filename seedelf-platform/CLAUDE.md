@@ -63,4 +63,7 @@ These seams are process-global, so every test in the `cli` binary is `#[serial]`
 
 - **Script hashes are baked in.** [seedelf-core/src/constants.rs](seedelf-core/src/constants.rs) hardcodes the wallet contract hash, seedelf policy ID, and reference UTxOs for each `variant`. If `../seedelf-contracts/compile.sh` is re-run (or the `acabcafe` seed changes), these must be updated here — see [../seedelf-contracts/README.md](../seedelf-contracts/README.md) for the canonical values.
 - **Torsion-free points and matching scalars** are protocol invariants — violating them produces permanently-locked UTxOs. The CLI enforces this, but any new code constructing `Register`s directly must call `is_torsion_free()` and re-randomize with the same `d` on both `generator` and `public_value`. See root CLAUDE.md "Core protocol invariants".
+- **The web wallet's key derivation is frozen.** Every web wallet's recovery phrase depends on it: [seedelf-crypto/src/derivation.rs](seedelf-crypto/src/derivation.rs), v1.
+  - Never change its outputs, and never edit the vectors in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`.
+  - A new scheme would be a new version (`v2`) alongside v1, never a replacement.
 - **Pallas is pinned to 0.33.0** across the workspace. Bumping it is a coordinated change — `pallas-txbuilder`'s API drifts between minor versions.

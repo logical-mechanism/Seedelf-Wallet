@@ -2,7 +2,7 @@
 
 ## One phrase, two key trees
 
-A wallet is one **24-word BIP39 recovery phrase** (256 bits of entropy). Two independent key trees come from it:
+A wallet is one **BIP39 recovery phrase**. New wallets get 24 words (256 bits of entropy). Restore also accepts 12 or 15 words, as Lace does. Two independent key trees come from the phrase:
 
 - **Cardano tree:** standard CIP-1852 derivation (`m/1852'/1815'/account'/role/index`) from the usual Icarus master key.
   - Because it is standard, the phrase also restores the Cardano side in Lace, Eternl and other wallets.
@@ -14,9 +14,13 @@ A web-wallet phrase is a Seedelf phrase. CLI wallets use a random scalar stored 
 
 ### Seedelf key derivation
 
-**Decided: domain-tagged HKDF.** Once wallets exist this derivation can never change, or their phrases stop restoring funds.
+**`v1`, frozen on 2026-09-23.** Once wallets exist this derivation can never change, or their phrases stop restoring funds.
 
-**Proposed `v1`:**
+- **Implementation:** [`seedelf-crypto/src/derivation.rs`](../../seedelf-crypto/src/derivation.rs).
+- **Vectors:** [`seedelf-crypto/tests/vectors/seedelf_key_v1.json`](../../seedelf-crypto/tests/vectors/seedelf_key_v1.json).
+  - Nine vectors, covering 12-, 15- and 24-word phrases, pin every step: phrase → seed → okm → `x` → base register.
+  - They were checked against independent implementations: Python `hashlib`/`hmac` for the seed, HKDF and the reduction, and `py_ecc` for the public value. The BIP39 layer also reproduces the official Trezor vector.
+  - Both the Rust tests and the WebAssembly tests run them.
 
 ```text
 seed = BIP39 seed of the phrase             PBKDF2-HMAC-SHA512, 2048 rounds, empty passphrase → 64 bytes
@@ -38,7 +42,13 @@ if x == 0: derivation error                 probability ≈ 2^-255
   - The salt and info tags separate the two domains again.
 - **Reducing 64 bytes mod `r`** (a 255-bit prime) leaves negligible bias.
 - **BIP39 passphrase:** always empty in v1. Supporting one later would be an opt-in variant.
-- **Freezing it:** the spec is frozen with test vectors when it's implemented (phrase → seed → okm → `x` → base register). It is implemented once in Rust (`seedelf-crypto`) and used through WebAssembly.
+- **Phrase rules (wallet policy, applied before the derivation):**
+  - New phrases are 24 words. Restore accepts 12, 15 or 24 BIP39 English words with a valid checksum. These are the lengths Lace accepts; 18 and 21 are refused.
+  - The rule is checked before the derivation, which works the same for any length. Accepting another length later wouldn't change any existing wallet's keys.
+  - **Restoring another wallet's phrase:** if someone restores a phrase from Lace or Yoroi, the deposit account is that wallet's standard account 0. The Seedelf wallet can then see and spend those funds, and the Seedelf key is new.
+  - Case and extra whitespace are ignored. The seed is always computed from the canonical words.
+  - `generatePhrase` and `validatePhrase` in the WebAssembly module apply these rules, and `validatePhrase` says what is wrong.
+- **One implementation:** the derivation lives in Rust (`seedelf-crypto`), and the extension uses it through WebAssembly (`SeedelfKey.fromPhrase`).
 
 ## Accounts
 
