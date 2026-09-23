@@ -12,25 +12,22 @@ use seedelf_koios::koios::address_transactions;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct HistoryArgs {
+pub(crate) struct HistoryArgs {
     /// Show spend only in history
     #[arg(long, help = "Show spend only", display_order = 1)]
     spend_only: bool,
 
-    /// Show recieve only in history
+    /// Show receive only in history
     #[arg(long, help = "Show receive only", display_order = 2)]
     receive_only: bool,
 }
 
-pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+pub(crate) async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<()> {
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
     let scalar: Scalar = setup::unlock_wallet_interactive();
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config = get_config(variant, network_flag)?;
 
     println!("\n{}\n", "Getting History..".bright_blue(),);
     let wallet_addr: Address =
@@ -38,18 +35,14 @@ pub async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> Result<
     let txs: Vec<TxResponse> = address_transactions(network_flag, wallet_addr.to_string()).await?;
     // println!("{:?}", txs);
     for tx in &txs {
-        let input_match = tx.input_registers.iter().any(|r| {
-            r.is_owned(scalar).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            })
-        });
-        let output_match = tx.output_registers.iter().any(|r| {
-            r.is_owned(scalar).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            })
-        });
+        let input_match = tx
+            .input_registers
+            .iter()
+            .any(|r| r.is_owned(scalar).unwrap_or(false));
+        let output_match = tx
+            .output_registers
+            .iter()
+            .any(|r| r.is_owned(scalar).unwrap_or(false));
 
         if (!args.receive_only || args.spend_only) && input_match {
             println!(

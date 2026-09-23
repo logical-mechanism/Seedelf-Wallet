@@ -56,28 +56,35 @@ fn create_proof_and_test_it() {
     assert_eq!(datum.generator, generator_hex);
     assert_eq!(datum.public_value, public_value_hex);
 
-    let bound = "acab";
-    let r: Scalar = random_scalar();
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string(), r).unwrap();
-    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound).unwrap())
+    let vkh = "00112233445566778899aabbccddeeff00112233445566778899aabb";
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string()).unwrap();
+    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, vkh).unwrap())
 }
 
 #[test]
 fn create_random_proof_and_test_it() {
     let sk: Scalar = random_scalar();
     let datum: Register = Register::create(sk).unwrap();
-    let bound = "acab";
-    let r: Scalar = random_scalar();
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string(), r).unwrap();
-    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound).unwrap())
+    let vkh = "00112233445566778899aabbccddeeff00112233445566778899aabb";
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string()).unwrap();
+    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, vkh).unwrap())
 }
 
 #[test]
 fn create_random_proof_rerandomize_it_and_test_it() {
     let sk: Scalar = random_scalar();
     let datum: Register = Register::create(sk).unwrap().rerandomize().unwrap();
-    let bound = "acab";
-    let r: Scalar = random_scalar();
-    let (z_b, g_r_b) = create_proof(datum.clone(), sk, bound.to_string(), r).unwrap();
-    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, bound).unwrap())
+    let vkh = "00112233445566778899aabbccddeeff00112233445566778899aabb";
+    let (z_b, g_r_b) = create_proof(datum.clone(), sk, vkh.to_string()).unwrap();
+    assert!(prove(&datum.generator, &datum.public_value, &z_b, &g_r_b, vkh).unwrap())
+}
+
+#[test]
+fn create_proof_rejects_non_vkh_bound() {
+    // The Fiat-Shamir challenge must commit to a 28-byte key hash; a caller
+    // passing arbitrary transcript bytes must be rejected, not proven over.
+    let sk: Scalar = random_scalar();
+    let datum: Register = Register::create(sk).unwrap();
+    assert!(create_proof(datum.clone(), sk, "acab".to_string()).is_err());
+    assert!(create_proof(datum, sk, "nothex".to_string()).is_err());
 }

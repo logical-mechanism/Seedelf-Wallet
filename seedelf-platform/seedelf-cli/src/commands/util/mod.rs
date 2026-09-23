@@ -1,17 +1,17 @@
 use clap::{Args, Subcommand};
 
-pub mod age;
-pub mod base;
-pub mod expose_key;
+pub(crate) mod age;
+pub(crate) mod base;
+pub(crate) mod expose_key;
 pub mod extract;
-pub mod find;
-pub mod history;
-pub mod migrate;
+pub(crate) mod find;
+pub(crate) mod history;
+pub(crate) mod migrate;
 pub mod mint;
-pub mod statistics;
+pub(crate) mod statistics;
 
 #[derive(Subcommand)]
-pub enum UtilCommands {
+pub(crate) enum UtilCommands {
     /// Exposes the wallets secret key, use with caution!
     ExposeKey,
     /// Find all seedelfs by a label / personal tag
@@ -33,12 +33,12 @@ pub enum UtilCommands {
 }
 
 #[derive(Args)]
-pub struct UtilArgs {
+pub(crate) struct UtilArgs {
     #[command(subcommand)]
-    pub command: UtilCommands,
+    pub(crate) command: UtilCommands,
 }
 
-pub async fn run(args: UtilArgs, preprod_flag: bool, variant: u64) {
+pub(crate) async fn run(args: UtilArgs, preprod_flag: bool, variant: u64) {
     match args.command {
         UtilCommands::ExposeKey => {
             expose_key::run();

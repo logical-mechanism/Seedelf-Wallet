@@ -1,9 +1,10 @@
-pub mod balance;
+pub(crate) mod balance;
 pub mod create;
 pub mod external;
+pub(crate) mod fee;
 pub mod fund;
 pub mod remove;
 pub mod sweep;
 pub mod transfer;
 pub mod util;
-pub mod welcome;
+pub(crate) mod welcome;

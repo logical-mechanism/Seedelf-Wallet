@@ -48,12 +48,12 @@ async fn find_nft_utxo() {
     .await;
     let utxo = nft_utxo.unwrap().first().unwrap().clone();
     println!("{:?}", utxo.tx_hash);
-    if utxo.inline_datum.is_none() {
-        if let Some(datum_hash) = utxo.datum_hash {
-            println!("Datum Hash: {}", datum_hash);
-            let datum = datum_from_datum_hash(datum_hash, false).await;
-            println!("Datum: {:?}", datum);
-        }
+    if utxo.inline_datum.is_none()
+        && let Some(datum_hash) = utxo.datum_hash
+    {
+        println!("Datum Hash: {}", datum_hash);
+        let datum = datum_from_datum_hash(datum_hash, false).await;
+        println!("Datum: {:?}", datum);
     }
 }
 

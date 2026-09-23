@@ -2,14 +2,13 @@ use crate::setup;
 use anyhow::Result;
 use blstrs::Scalar;
 use colored::Colorize;
-use hex;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_core::utxos;
 use seedelf_display::display;
 use seedelf_koios::koios::UtxoResponse;
 
-pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+pub(crate) async fn run(network_flag: bool, variant: u64) -> Result<()> {
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
 
@@ -17,10 +16,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
 
     let scalar: Scalar = setup::unlock_wallet_interactive();
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config = get_config(variant, network_flag)?;
 
     let seedelfs = display::all_seedelfs(
         scalar,

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Scope: this file covers the Aiken on-chain contracts. The parent [../CLAUDE.md](../CLAUDE.md) has the monorepo-wide context (Rust off-chain crates, GUI, cross-cutting invariants). Read it too when work spans both sides.
+Scope: this file covers the Aiken on-chain contracts. The parent [../CLAUDE.md](../CLAUDE.md) has the monorepo-wide context (Rust off-chain crates, cross-cutting invariants). Read it too when work spans both sides.
 
 ## Commands
 

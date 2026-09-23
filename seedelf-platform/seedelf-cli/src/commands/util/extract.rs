@@ -1,19 +1,18 @@
 use clap::Args;
 use colored::Colorize;
 use pallas_addresses::Address;
-use pallas_crypto::key::ed25519::SecretKey;
-use pallas_traverse::fees;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use pallas_wallet::PrivateKey;
-use rand_core::OsRng;
 use seedelf_core::data_structures;
-use seedelf_koios::koios::{UtxoResponse, address_utxos, evaluate_transaction, utxo_info};
+use seedelf_koios::koios::{
+    UtxoResponse, address_utxos, epoch_params, evaluate_transaction, utxo_info,
+};
 
+use crate::commands::fee;
 use crate::web_server;
 use anyhow::{Result, bail};
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
-use seedelf_core::constants::{Config, get_config, plutus_v3_cost_model};
+use seedelf_core::constants::{Config, get_config};
 use seedelf_core::transaction::{
     address_minimum_lovelace_with_assets, extract_budgets, reference_utxo, total_computation_fee,
 };
@@ -23,9 +22,9 @@ use seedelf_display::{display, text_coloring};
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct ExtractArgs {
-    /// The label to search with
+    /// The UTxO to spend
     #[arg(short = 'u', long, help = "The UTxO to spend", display_order = 1)]
-    utxo: String,
+    pub utxo: String,
 
     #[arg(
         short = 'a',
@@ -33,56 +32,55 @@ pub struct ExtractArgs {
         help = "The address receiving the funds",
         display_order = 2
     )]
-    address: String,
+    pub address: String,
 }
 
 pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config = get_config(variant, network_flag)?;
+    let params = epoch_params(network_flag).await?;
 
     let collat_addr: Address = address::collateral_address(network_flag);
     // we need to make sure that the network flag and the address provided makes sense here
-    let addr: Address = Address::from_bech32(args.address.as_str()).unwrap();
+    let addr: Address = Address::from_bech32(args.address.as_str())
+        .map_err(|e| anyhow::anyhow!("Supplied Address Is Incorrect: {e}"))?;
     if !(address::is_not_a_script(addr.clone())
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
         bail!("Supplied Address Is Incorrect");
     }
 
-    let mut empty_datum_utxo = UtxoResponse::default();
-    match utxo_info(&args.utxo, network_flag).await {
+    let empty_datum_utxo = match utxo_info(&args.utxo, network_flag).await {
         Ok(utxos) => {
-            if !utxos.is_empty() {
-                empty_datum_utxo = utxos.first().unwrap().clone();
-                if empty_datum_utxo.inline_datum.is_some() {
-                    bail!("UTxO has datum");
-                }
-                let utxo_addr: Address = Address::from_bech32(&empty_datum_utxo.address).unwrap();
-                if utxo_addr
-                    != address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
-                {
-                    bail!("UTxO not in wallet");
-                }
-                if empty_datum_utxo.is_spent {
-                    bail!("UTxO is spent");
-                }
-            } else {
-                bail!("No UTxO Found");
+            let utxo = utxos
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("No UTxO Found"))?
+                .clone();
+            if utxo.inline_datum.is_some() {
+                bail!("UTxO has datum");
             }
+            let utxo_addr: Address = Address::from_bech32(&utxo.address)
+                .map_err(|e| anyhow::anyhow!("UTxO address is not valid bech32: {e}"))?;
+            if utxo_addr
+                != address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
+            {
+                bail!("UTxO not in wallet");
+            }
+            if utxo.is_spent {
+                bail!("UTxO is spent");
+            }
+            utxo
         }
         Err(err) => {
-            eprintln!("Failed to fetch UTxO: {err}\nWait a few moments and try again.");
+            bail!("Failed to fetch UTxO: {err}\nWait a few moments and try again.");
         }
-    }
+    };
     let (empty_utxo_lovelace, empty_utxo_tokens) =
         utxos::assets_of(vec![empty_datum_utxo.clone()])?;
     let minimum_lovelace: u64 =
-        address_minimum_lovelace_with_assets(&args.address, empty_utxo_tokens.clone())?;
+        address_minimum_lovelace_with_assets(&params, &args.address, empty_utxo_tokens.clone())?;
 
     // this is used to calculate the real fee
     let mut draft_tx: StagingTransaction = StagingTransaction::new();
@@ -96,15 +94,15 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             // loop all the utxos found from the address
             for utxo in utxos {
                 // get the lovelace on this utxo
-                let lovelace: u64 = utxo.value.parse::<u64>().expect("Invalid Lovelace");
+                let lovelace: u64 = utxo
+                    .value
+                    .parse::<u64>()
+                    .map_err(|e| anyhow::anyhow!("UTxO has an invalid lovelace value: {e}"))?;
                 if lovelace == 5_000_000 && !found_collateral {
                     draft_tx = draft_tx.collateral_input(Input::new(
-                        pallas_crypto::hash::Hash::new(
-                            hex::decode(utxo.tx_hash.clone())
-                                .expect("Invalid hex string")
-                                .try_into()
-                                .expect("Failed to convert to 32-byte array"),
-                        ),
+                        pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+                            &utxo.tx_hash,
+                        )?),
                         utxo.tx_index,
                     ));
                     // we just want a single collateral here
@@ -115,13 +113,10 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
                 }
             }
         }
-        Err(err) => {
-            eprintln!("Failed to fetch UTxOs: {err}");
-            std::process::exit(1);
-        }
+        Err(err) => anyhow::bail!("Failed to fetch UTxOs: {err}"),
     }
     let usable_utxos: Vec<UtxoResponse> =
-        utxos::select(all_utxos, minimum_lovelace, Assets::new())?;
+        utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;
     if usable_utxos.is_empty() {
         bail!("Not Enough Lovelace/Tokens");
     }
@@ -136,12 +131,9 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     let spend_redeemer_vector =
         data_structures::create_spend_redeemer(String::new(), String::new(), String::new())?;
     let empty_input: Input = Input::new(
-        pallas_crypto::hash::Hash::new(
-            hex::decode(empty_datum_utxo.tx_hash.clone())
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ),
+        pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+            &empty_datum_utxo.tx_hash,
+        )?),
         empty_datum_utxo.clone().tx_index,
     );
     draft_tx = draft_tx.input(empty_input.clone());
@@ -157,17 +149,17 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     for utxo in usable_utxos.clone() {
         // draft and raw are built the same here
         draft_tx = draft_tx.input(Input::new(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(utxo.tx_hash.clone())
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
+            pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
+                &utxo.tx_hash,
+            )?),
             utxo.tx_index,
         ));
     }
 
-    let mut extract_output: Output = Output::new(addr.clone(), total_lovelace - tmp_fee);
+    let mut extract_output: Output = Output::new(
+        addr.clone(),
+        seedelf_core::transaction::checked_lovelace(total_lovelace, &[tmp_fee])?,
+    );
     for asset in total_tokens.items.clone() {
         extract_output = extract_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -177,12 +169,12 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     // build out the rest of the draft tx with the tmp fee
     draft_tx = draft_tx
         .output(extract_output)
-        .collateral_output(Output::new(addr.clone(), 5_000_000 - (tmp_fee) * 3 / 2))
+        .collateral_output(fee::collateral_output(addr.clone(), tmp_fee)?)
         .fee(tmp_fee)
         .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
         .language_view(
             pallas_txbuilder::ScriptKind::PlutusV3,
-            plutus_v3_cost_model(),
+            params.cost_model_v3.clone(),
         );
 
     let intermediate_tx: BuiltTransaction = draft_tx.clone().build_conway_raw().unwrap();
@@ -196,40 +188,31 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             .await
         {
             Ok(execution_units) => {
-                if let Some(_error) = execution_units.get("error") {
-                    println!("{execution_units:?}");
-                    std::process::exit(1);
+                if execution_units.get("error").is_some() {
+                    anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
                 }
                 let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
                 budgets
             }
-            Err(err) => {
-                eprintln!("Failed to evaluate transaction: {err}");
-                std::process::exit(1);
-            }
+            Err(err) => anyhow::bail!("Failed to evaluate transaction: {err}"),
         };
 
-    // we can fake the signature here to get the correct tx size
-    let fake_signer_secret_key: SecretKey = SecretKey::new(OsRng);
-    let fake_signer_private_key: PrivateKey = PrivateKey::from(fake_signer_secret_key);
-
     let tx_size: u64 = intermediate_tx
-        .sign(fake_signer_private_key)
+        .sign(fee::fake_signer())
         .unwrap()
         .tx_bytes
         .0
         .len()
         .try_into()
         .unwrap();
-    let tx_fee = fees::compute_linear_fee_policy(tx_size, &(fees::PolicyParams::default()));
+    let tx_fee = fee::linear_fee(tx_size);
     println!(
         "{} {}",
         "\nTx Size Fee:".bright_blue(),
         tx_fee.to_string().bright_white()
     );
 
-    // This probably should be a function
-    let compute_fee: u64 = total_computation_fee(budgets.clone());
+    let compute_fee: u64 = total_computation_fee(&params, budgets.clone());
     println!(
         "{} {}",
         "Compute Fee:".bright_blue(),
@@ -243,21 +226,17 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
         script_reference_fee.to_string().bright_white()
     );
 
-    // total fee is the sum of everything
-    let mut total_fee: u64 = tx_fee + compute_fee + script_reference_fee;
-    // total fee needs to be even for the collateral calculation to work
-    total_fee = if total_fee % 2 == 1 {
-        total_fee + 1
-    } else {
-        total_fee
-    };
+    let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
     println!(
         "{} {}",
         "Total Fee:".bright_blue(),
         total_fee.to_string().bright_white()
     );
 
-    let mut extract_output: Output = Output::new(addr.clone(), total_lovelace - total_fee);
+    let mut extract_output: Output = Output::new(
+        addr.clone(),
+        seedelf_core::transaction::checked_lovelace(total_lovelace, &[total_fee])?,
+    );
     for asset in total_tokens.items.clone() {
         extract_output = extract_output
             .add_asset(asset.policy_id, asset.token_name, asset.amount)
@@ -266,13 +245,12 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
 
     raw_tx = raw_tx
         .output(extract_output)
-        .collateral_output(Output::new(
-            collat_addr.clone(),
-            5_000_000 - (total_fee) * 3 / 2,
-        ))
+        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee)?)
         .fee(total_fee);
 
-    let (cpu, mem) = budgets.first().unwrap();
+    let (cpu, mem) = budgets
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("transaction evaluation returned no execution budgets"))?;
     raw_tx = raw_tx.add_spend_redeemer(
         empty_input.clone(),
         spend_redeemer_vector.clone(),

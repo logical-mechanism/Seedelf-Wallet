@@ -3,7 +3,7 @@ use blstrs::Scalar;
 use colored::Colorize;
 use seedelf_crypto::register::Register;
 
-pub fn run() {
+pub(crate) fn run() {
     println!("\n{}", "Register Base Element".bright_cyan());
     let scalar: Scalar = setup::unlock_wallet_interactive();
     let base: Register = Register::create(scalar).unwrap();

@@ -1,8 +1,8 @@
 use colored::Colorize;
-use seedelf_display::display::is_their_an_update;
+use seedelf_display::display::is_there_an_update;
 
-pub async fn run() {
-    is_their_an_update().await;
+pub(crate) async fn run() {
+    is_there_an_update().await;
     println!(
         "\n{} 🌱🧝\n{}",
         "\nWelcome to seedelf-cli!".bright_white(),

@@ -13,6 +13,8 @@ colored = "3.0.0"
 reqwest = { version = "0.12.9", features = ["json"] }
 semver = "1.0.26"
 serde_json = "1.0.133"
-tokio = { version = "1.41.1", features = ["full"] }
 # seedelf stuff
 seedelf-koios = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1.41.1", features = ["macros", "rt"] }

@@ -1,6 +1,6 @@
 name = "logical-mechanism/Seedelf-Wallet"
 version = "0.4.10"
-compiler = "v1.1.19"
+compiler = "v1.1.23"
 plutus = "v3"
 license = "MIT"
 description = "Seedelf: A Cardano Stealth Wallet"
@@ -12,7 +12,7 @@ platform = "github"
 
 [[dependencies]]
 name = "aiken-lang/stdlib"
-version = "v3.0.0"
+version = "v3.1.0"
 source = "github"
 
 [config]

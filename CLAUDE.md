@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a multi-language monorepo for **Seedelf**, a Cardano stealth wallet. Two top-level components:
 
 - [seedelf-contracts/](seedelf-contracts/) — on-chain validators written in **Aiken**.
-- [seedelf-platform/](seedelf-platform/) — a Cargo workspace of Rust crates implementing the CLI, GUI, and supporting libraries.
+- [seedelf-platform/](seedelf-platform/) — a Cargo workspace of Rust crates implementing the CLI and supporting libraries.
 
 The on-chain contract and the off-chain Rust code must stay in sync: the Rust code hardcodes the compiled script hashes produced by `compile.sh` (see [seedelf-contracts/README.md](seedelf-contracts/README.md) for current version-1 hashes). Changing validator code or the `acabcafe` random seed changes the hashes, which must then be updated in the Rust constants.
 
@@ -35,17 +35,6 @@ cargo test -p <crate>                # run tests for one crate
 cargo test -p seedelf-crypto <name>  # single test
 ```
 
-### GUI ([seedelf-platform/seedelf-gui/](seedelf-platform/seedelf-gui/))
-
-Tauri 2 + React/Vite frontend. The Rust side (`src-tauri`) is a workspace member.
-
-```bash
-npm install
-npm run tauri    # cargo tauri dev — dev build of the desktop app
-npm run build    # tsc + vite build of the frontend
-npm run lint     # prettier
-```
-
 ## Architecture
 
 ### Crate boundaries ([seedelf-platform/](seedelf-platform/))
@@ -53,11 +42,10 @@ npm run lint     # prettier
 - **seedelf-crypto** — BLS12-381 primitives. [register.rs](seedelf-platform/seedelf-crypto/src/register.rs) defines the `Register { generator, public_value }` datum type; [schnorr.rs](seedelf-platform/seedelf-crypto/src/schnorr.rs) implements the non-interactive Schnorr Σ-protocol (Fiat-Shamir) used to prove spendability. The `vkh` one-time pad in proofs prevents rollback-replay attacks.
 - **seedelf-koios** — thin client for the Koios REST API (UTxO queries, tx submission/evaluation). Koios is the sole data layer; no local node.
 - **seedelf-core** — wallet-level domain logic: address types, asset handling, UTxO selection, on-chain `constants` (script hashes, network params), transaction building atop Pallas.
-- **seedelf-display** — TUI/text formatting, color, version-check helpers shared by CLI and GUI.
+- **seedelf-display** — TUI/text formatting, color, version-check helpers.
 - **seedelf-cli** — binary entrypoint. One module per subcommand in [src/commands/](seedelf-platform/seedelf-cli/src/commands/) (`create`, `fund`, `transfer`, `sweep`, `remove`, `balance`, `welcome`, `util/`, `external/`). [web_server.rs](seedelf-platform/seedelf-cli/src/web_server.rs) spins up a local static site at `127.0.0.1:44203` to bridge CIP30 browser wallets for signing.
-- **seedelf-gui/src-tauri** — Tauri shell re-exposing CLI flows to a React frontend.
 
-Dependency direction: `cli`/`gui` → `core` → `crypto` + `koios` + `display`. Crypto and koios are leaf crates.
+Dependency direction: `cli` → `core` → `crypto` + `koios` + `display`. Crypto and koios are leaf crates.
 
 ### On-chain contracts ([seedelf-contracts/](seedelf-contracts/))
 

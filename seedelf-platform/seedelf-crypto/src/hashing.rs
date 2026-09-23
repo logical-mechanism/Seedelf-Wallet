@@ -7,29 +7,21 @@ use sha3::{Digest, Sha3_256};
 
 /// Computes the BLAKE2b-224 hash of the input data.
 ///
-/// This function accepts a string input, which can be a hex-encoded string or a raw string.
-/// If the input is hex-encoded, it is decoded to bytes. Otherwise, the raw bytes of the string are used.
-/// The resulting hash is 224 bits (28 bytes) and is returned as a hex-encoded string.
+/// The input MUST be a hex-encoded string. The on-chain verifier hashes raw
+/// bytes via `bytearray.concat`; we hash the decoded bytes here so the two
+/// sides agree byte-for-byte. A non-hex input is an error — an earlier
+/// version silently fell back to hashing the UTF-8 bytes, which could
+/// produce off-chain proofs the on-chain validator rejects.
 ///
 /// # Arguments
 ///
-/// * `data` - A string slice representing the input data. It can be a hex-encoded string or plain text.
+/// * `data` - A hex-encoded string slice.
 ///
 /// # Returns
 ///
-/// * `String` - The BLAKE2b-224 hash of the input data, encoded as a hex string.
-///
-/// # Panics
-///
-/// * If creating or finalizing the BLAKE2b hasher fails.
-/// * If the input hex string cannot be decoded.
+/// * `String` - The BLAKE2b-224 hash, hex-encoded.
 pub fn blake2b_224(data: &str) -> Result<String> {
-    // Decode hex string to bytes if needed
-    let decoded_data: Vec<u8> = if let Ok(decoded) = hex::decode(data) {
-        decoded
-    } else {
-        data.as_bytes().to_vec()
-    };
+    let decoded_data: Vec<u8> = hex::decode(data).context("blake2b_224: input must be hex")?;
 
     // Create a BLAKE2b hasher with a 224-bit output
     let mut hasher: RtVariableCoreWrapper<blake2::Blake2bVarCore> =
@@ -48,29 +40,19 @@ pub fn blake2b_224(data: &str) -> Result<String> {
 
 /// Computes the BLAKE2b-256 hash of the input data.
 ///
-/// This function accepts a string input, which can be a hex-encoded string or a raw string.
-/// If the input is hex-encoded, it is decoded to bytes. Otherwise, the raw bytes of the string are used.
-/// The resulting hash is 256 bits (32 bytes) and is returned as a hex-encoded string.
+/// The input MUST be a hex-encoded string. See [`blake2b_224`] for the
+/// rationale — silently falling back to UTF-8 bytes risks divergence from
+/// the on-chain hasher.
 ///
 /// # Arguments
 ///
-/// * `data` - A string slice representing the input data. It can be a hex-encoded string or plain text.
+/// * `data` - A hex-encoded string slice.
 ///
 /// # Returns
 ///
-/// * `String` - The BLAKE2b-256 hash of the input data, encoded as a hex string.
-///
-/// # Panics
-///
-/// * If creating or finalizing the BLAKE2b hasher fails.
-/// * If the input hex string cannot be decoded.
+/// * `String` - The BLAKE2b-256 hash, hex-encoded.
 pub fn blake2b_256(data: &str) -> Result<String> {
-    // Decode hex string to bytes if needed
-    let decoded_data: Vec<u8> = if let Ok(decoded) = hex::decode(data) {
-        decoded
-    } else {
-        data.as_bytes().to_vec()
-    };
+    let decoded_data: Vec<u8> = hex::decode(data).context("blake2b_256: input must be hex")?;
 
     // Create a BLAKE2b hasher with a 256-bit output
     let mut hasher: RtVariableCoreWrapper<blake2::Blake2bVarCore> =

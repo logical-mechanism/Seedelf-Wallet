@@ -13,7 +13,6 @@ sed -i '0,/^seedelf-core = ".*"/s//seedelf-core = "'${version}'"/' seedelf-platf
 sed -i '0,/^seedelf-crypto = ".*"/s//seedelf-crypto = "'${version}'"/' seedelf-platform/Cargo.toml
 sed -i '0,/^seedelf-display = ".*"/s//seedelf-display = "'${version}'"/' seedelf-platform/Cargo.toml
 sed -i '0,/^seedelf-koios = ".*"/s//seedelf-koios = "'${version}'"/' seedelf-platform/Cargo.toml
-sed -i "s/\"version\": \".*\"/\"version\": \"${version}\"/" seedelf-platform/seedelf-gui/package.json
 # add, commit, and tag out
 git add .
 git commit -m "chore: tagging ${version} release"

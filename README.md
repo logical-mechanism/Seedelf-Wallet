@@ -177,7 +177,7 @@ The third ITM is a flood attack on the protocol itself. The stealthiness of the 
 
 ### Wallet File Storage
 
-During the create-a-wallet process, a file will be saved to the default `$HOME/.seedelf` folder. This file is an encrypted file, via AES256GCM, requiring a password to decrypt. Using the CLI or GUI, seedelf will require the user to select a password with these requirements below.
+During the create-a-wallet process, a file will be saved to the default `$HOME/.seedelf` folder. This file is an encrypted file, via AES256GCM, requiring a password to decrypt. Using the CLI, seedelf will require the user to select a password with these requirements below.
 
 ```bash
 # Minimum Length: At Least 14 Characters.

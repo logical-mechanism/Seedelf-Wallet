@@ -8,7 +8,7 @@ use seedelf_koios::koios::UtxoResponse;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
-pub struct FindArgs {
+pub(crate) struct FindArgs {
     /// The label to search with
     #[arg(
         short = 'l',
@@ -19,8 +19,8 @@ pub struct FindArgs {
     label: Option<String>,
 }
 
-pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<()> {
-    display::is_their_an_update().await;
+pub(crate) async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<()> {
+    display::is_there_an_update().await;
     display::preprod_text(network_flag);
     let label: String = args.label.unwrap_or_default();
     println!(
@@ -29,10 +29,7 @@ pub async fn run(args: FindArgs, network_flag: bool, variant: u64) -> Result<()>
         label.bright_green()
     );
 
-    let config: Config = get_config(variant, network_flag).unwrap_or_else(|| {
-        eprintln!("Error: Invalid Variant");
-        std::process::exit(1);
-    });
+    let config: Config = get_config(variant, network_flag)?;
 
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
