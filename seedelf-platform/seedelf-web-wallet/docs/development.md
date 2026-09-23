@@ -2,6 +2,30 @@
 
 This is how we'll run and test the extension before it's in the Chrome Web Store. There's no code yet, so exact commands get filled in when the project is scaffolded.
 
+## Branching
+
+`seedelf-web-wallet` is the long-lived dev branch for the web wallet.
+
+- **It merges into `main` only once the wallet works and looks the way we want.** Until then, `main` carries no web-wallet code, so shelving the effort never leaves dead code on `main`.
+
+**Feature branches and PRs:**
+
+- **Start every feature branch from `seedelf-web-wallet`** and name it `web-wallet/<topic>`. Git can't create `seedelf-web-wallet/<topic>` next to an existing branch with that name.
+- **Open PRs into `seedelf-web-wallet`, never into `main`.**
+  - CI runs on pull requests into any branch.
+  - Direct pushes to the dev branch don't trigger CI.
+
+**Keeping up with `main`:**
+
+- **Merge `main` into `seedelf-web-wallet` regularly.** Merge rather than rebase, because the branch is shared.
+- **Always merge `main` in right before the builder extraction** in `seedelf-core` / `seedelf-cli`. That refactor touches the same files `main` changes.
+
+**Shared Rust code:**
+
+- **Changes to shared Rust code that only the web wallet needs stay on the dev branch too.** The builder extraction is the main example.
+
+**Progress** is tracked in [roadmap.md](roadmap.md). The work happens in chunks of about one session each, and each chunk updates the roadmap when it finishes.
+
 ## Running it in Chrome
 
 Chrome runs an extension straight from a folder once developer mode is on. There is no store and no packaging.

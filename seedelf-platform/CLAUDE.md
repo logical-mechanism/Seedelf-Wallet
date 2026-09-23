@@ -16,7 +16,10 @@ Cargo workspace rooted at [Cargo.toml](Cargo.toml), resolver `"3"`, edition `202
 
 Also in this folder but **not** a Cargo member:
 
-- [seedelf-web-wallet](seedelf-web-wallet/) — the Chrome extension wallet. It is in the design phase; start with its [README](seedelf-web-wallet/README.md) and `docs/`.
+- [seedelf-web-wallet](seedelf-web-wallet/) — the Chrome extension wallet.
+  - Start with its [README](seedelf-web-wallet/README.md).
+  - [docs/roadmap.md](seedelf-web-wallet/docs/roadmap.md) holds the current chunk and handoff notes.
+  - **Branching:** web-wallet work branches from `seedelf-web-wallet` as `web-wallet/<topic>`, and PRs go back into `seedelf-web-wallet`, never `main`.
 - `_reference/` — gitignored third-party checkouts, such as Lace, for reading only.
 
 Dependency direction: `cli` → `core` → `crypto` + `koios` + `display`. `seedelf-cli` is a leaf crate and is intentionally NOT in `[workspace.dependencies]` / `[patch.crates-io]` — its library target is consumed only by its own `main.rs` and `tests/`. The workspace patch table rewrites the published `seedelf-{core,crypto,koios,display}` crates to local paths so edits propagate without a publish — never remove this when bumping versions, and always bump `[workspace.package].version` together with the `[workspace.dependencies]` entries (they must match).
