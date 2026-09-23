@@ -1,0 +1,25 @@
+[package]
+name = "seedelf-wasm"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "WebAssembly bindings for the Seedelf web wallet"
+authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
+repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1.0.98"
+blstrs = "0.7.1"
+ff = "0.13.0"
+hex = "0.4.3"
+seedelf-crypto = { workspace = true }
+wasm-bindgen = "0.2"
+
+# Only here to switch on getrandom's browser backend (crypto.getRandomValues)
+# for wasm32-unknown-unknown; seedelf-crypto draws its randomness through it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

@@ -44,11 +44,15 @@ flowchart LR
   - This is the same prover the CLI already runs against the on-chain verifier.
   - It covers register creation, re-randomization, the ownership check and Schnorr proofs.
   - One implementation, so there are no byte-for-byte parity problems.
-- **One WebAssembly crate for the wallet:** `seedelf-web-wallet/wasm/`, added to the Cargo workspace. It exposes only what the extension needs, for both crypto and [transaction building](#transaction-building).
-- **Build settings from a first probe.** Nothing has been run yet. The build needed:
+- **One WebAssembly crate for the wallet:** [seedelf-web-wallet/wasm](../wasm/) (`seedelf-wasm`), a Cargo workspace member.
+  - It exposes only what the extension needs, for both crypto and [transaction building](#transaction-building).
+  - `build.sh` produces an ES module of about 260 KB.
+  - Its tests check the output against native Rust byte for byte.
+- **Build settings:**
   - `getrandom` 0.2 with the `js` feature, set in the wasm crate.
   - `CC_wasm32_unknown_unknown=clang`, because `blst` is C code.
   - `AR_wasm32_unknown_unknown=llvm-ar`, which is `llvm-ar-18` on Ubuntu.
+  - `wasm-bindgen-cli` pinned to the crate's `wasm-bindgen` version.
 - **The manifest CSP needs `script-src 'self' 'wasm-unsafe-eval'`** to load WebAssembly.
 - **Everything else uses small, audited JS libraries:**
   - `@noble/hashes` (Argon2id, BLAKE2b)
