@@ -53,6 +53,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
 | [flows.md](docs/flows.md) | Onboarding, deposit, create/fund, transfer, withdraw, contract round trip |
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
+| [development.md](docs/development.md) | Running it in Chrome before the Web Store, test funds, the testing layers, sharing with testers |
 
 ## Reference: Lace
 
@@ -69,6 +70,7 @@ Every Lace path in these docs is relative to that checkout.
 
 ## Decisions
 
+- **Networks:** preprod first. Mainnet is a build flag. See [architecture.md](docs/architecture.md#networks).
 - **Seedelf key derivation:** domain-tagged HKDF over the BIP39 seed. It is permanent once shipped. See [keys-and-accounts.md](docs/keys-and-accounts.md#seedelf-key-derivation).
 - **UI:** a popup, plus a full-tab view of the same app, like Eternl. No side panel. See [architecture.md](docs/architecture.md#ui).
 - **Staying unlocked:** Chrome stops the extension's background worker after about 30 seconds idle, which clears its memory.

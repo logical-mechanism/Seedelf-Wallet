@@ -89,6 +89,39 @@ The building moves into network-free functions in `seedelf-core`: a draft step, 
 - **Tests guard it.** The CLI's offline integration tests (`seedelf-cli/tests/cli/`) already check value conservation, min-UTxO and valid change registers for each of these commands.
 - **CLAUDE.md rule:** this reverses the "don't reintroduce `build_*` functions" rule in [seedelf-platform/CLAUDE.md](../../CLAUDE.md). That rule existed because the removed GUI was the only other consumer. Update it when the refactor lands.
 
+## Networks
+
+**Preprod first. Mainnet is a build flag.**
+
+**Default builds are preprod-only:**
+
+- Only the preprod hosts are in the manifest's host permissions.
+- There is no network switch.
+- The UI shows a permanent **PREPROD** badge.
+
+**Setting the flag** (for example `VITE_ENABLE_MAINNET=true`) makes three changes:
+
+- It adds the mainnet hosts to the manifest.
+- It makes mainnet the default.
+- It adds a network switch in settings, so preprod stays available for testing.
+
+**One network value drives everything network-specific.** The Rust side already takes a `network_flag` everywhere (`true` = preprod), and the WebAssembly API passes it through. This is how the CLI's `--preprod` works.
+
+| | Preprod | Mainnet |
+|---|---|---|
+| Koios | `https://preprod.koios.rest/api/v1` | `https://api.koios.rest/api/v1` |
+| Collateral service | `https://www.giveme.my/preprod/collateral/` | `https://www.giveme.my/mainnet/collateral/` |
+| Contract config | `get_config(variant, true)` | `get_config(variant, false)` |
+| Addresses | `addr_test…` | `addr…` |
+
+- **The contract config** covers reference UTxOs, the collateral UTxO and the shared staking hash. These differ per network. The script hashes are the same on both.
+- **Cached chain data is kept per network.** The vault is shared, because keys don't depend on the network. The CLI works the same way.
+- **Addresses are checked against the active network** before anything is sent. This mirrors the CLI's `is_on_correct_network`.
+- **Preprod status on 2026-09-23:**
+  - The wallet and seedelf reference scripts are live and unspent.
+  - The collateral UTxO is live, and the giveme.my preprod endpoint is up.
+  - The wallet contract holds 25 UTxOs.
+
 ## Chain data
 
 - **Koios, same as the CLI.**
