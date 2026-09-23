@@ -14,6 +14,11 @@ Cargo workspace rooted at [Cargo.toml](Cargo.toml), resolver `"3"`, edition `202
 - [seedelf-display](seedelf-display/) — TUI formatting, colors, version-check helpers.
 - [seedelf-cli](seedelf-cli/) — CLI crate: a thin [main.rs](seedelf-cli/src/main.rs) binary shim over a [lib.rs](seedelf-cli/src/lib.rs) library target. The split exists so the offline integration tests in [tests/cli/](seedelf-cli/tests/cli/) can drive the command `run()` functions directly. One file per subcommand under [src/commands/](seedelf-cli/src/commands/); `util/` and `external/` are subcommand groups with their own `mod.rs`.
 
+Also in this folder but **not** a Cargo member:
+
+- [seedelf-web-wallet](seedelf-web-wallet/) — the Chrome extension wallet. It is in the design phase; start with its [README](seedelf-web-wallet/README.md) and `docs/`.
+- `_reference/` — gitignored third-party checkouts, such as Lace, for reading only.
+
 Dependency direction: `cli` → `core` → `crypto` + `koios` + `display`. `seedelf-cli` is a leaf crate and is intentionally NOT in `[workspace.dependencies]` / `[patch.crates-io]` — its library target is consumed only by its own `main.rs` and `tests/`. The workspace patch table rewrites the published `seedelf-{core,crypto,koios,display}` crates to local paths so edits propagate without a publish — never remove this when bumping versions, and always bump `[workspace.package].version` together with the `[workspace.dependencies]` entries (they must match).
 
 ## Common commands
