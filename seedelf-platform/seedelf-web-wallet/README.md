@@ -2,7 +2,7 @@
 
 A Chrome extension for Seedelf, the Cardano stealth wallet.
 
-> **Status:** design phase. There is no code yet. The design lives in [docs/](docs/).
+> **Status:** early build, preprod only. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md).
 
 ## What it is
 
@@ -51,7 +51,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 |---|---|
 | [architecture.md](docs/architecture.md) | How the extension is structured, crypto in WebAssembly, chain data, storage, and what we borrow from Lace |
 | [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
-| [flows.md](docs/flows.md) | Onboarding, deposit, create/fund, transfer, withdraw, contract round trip |
+| [flows.md](docs/flows.md) | Onboarding, deposit, move in, create, transfer, withdraw, contract round trip |
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
 | [development.md](docs/development.md) | The branching rule, running it in Chrome before the Web Store, test funds, the testing layers, sharing with testers |
 | [roadmap.md](docs/roadmap.md) | Build chunks, their status, and handoff notes between sessions |

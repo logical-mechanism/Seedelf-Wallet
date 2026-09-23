@@ -6,6 +6,7 @@ members = [
     "seedelf-crypto",
     "seedelf-display",
     "seedelf-koios",
+    "seedelf-web-wallet/wasm",
 ]
 
 
