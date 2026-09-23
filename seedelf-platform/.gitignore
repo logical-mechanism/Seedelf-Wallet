@@ -49,4 +49,6 @@ Thumbs.db
 *.cabinet
 .idea/cache- backup
 
+_reference/
+
 ---
