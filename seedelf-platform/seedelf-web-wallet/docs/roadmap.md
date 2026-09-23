@@ -15,7 +15,7 @@ The wallet is built in **chunks**, each about one working session.
 | # | Chunk | Status | Scope |
 |---|---|---|---|
 | 1 | WASM foundation | ✅ | Create the `seedelf-web-wallet/wasm` crate (a workspace member). Expose register create, re-randomize, the ownership check and the Schnorr proof. Build with `wasm-bindgen` and smoke-test from JS. |
-| 2 | Seedelf key derivation | ⬜ | Implement the v1 HKDF spec ([keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation)) in `seedelf-crypto` with frozen test vectors. Expose it through WASM and check the vectors from TS. |
+| 2 | Seedelf key derivation | ✅ | Implement the v1 HKDF spec ([keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation)) in `seedelf-crypto` with frozen test vectors. Expose it through WASM and check the vectors from TS. |
 | 3 | Cardano keys | ⬜ | Phrase → CIP-1852 deposit account and address. Rust (`pallas-wallet`) or a JS library, decided in the chunk. Check against a known wallet's addresses. |
 | 4 | Extension scaffold | ⬜ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
 | 5 | Vault and lock | ⬜ | SecretBox vault, create/restore onboarding, unlock, `chrome.storage.session`, auto-lock, unlock back-off. |
@@ -36,6 +36,19 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-23: chunk 2 done** (`web-wallet/key-derivation`).
+  - **What landed:** the v1 derivation, frozen, in `seedelf-crypto/src/derivation.rs`:
+    - `parse_phrase`: 24 words, checksum, and case/whitespace normalization, with user-facing errors.
+    - `generate_phrase`, `bip39_seed`, `okm_v1`, `scalar_from_okm`, `seedelf_key_v1`.
+    - No new crates: `bip39` comes via `pallas-wallet`, and HKDF comes from `cryptoxide`.
+  - **Vectors:** seven, in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`.
+    - Checked against independent implementations: Python `hashlib`/`hmac`, `py_ecc` for the public values, and the Trezor BIP39 vector.
+    - The Rust tests (`derivation_test.rs`) and the WASM tests (`derivation.test.mjs`) both read them.
+  - **WASM:** added `SeedelfKey.fromPhrase(phrase, account)`, `generatePhrase()` and `validatePhrase()`. The module is now about 350 KB, mostly the word list and SHA-512.
+  - **Change from the plan:** BIP39 moved into Rust, so `@scure/bip39` is out of the JS stack.
+  - **Next:** chunk 3, the phrase → CIP-1852 deposit account.
+    - `pallas-wallet` (already in the tree) has an HD module and `bip39`. Check it for Icarus master-key and CIP-1852 derivation before reaching for a JS library.
+    - Verify the results against a known wallet's addresses for the same phrase.
 - **2026-09-23: chunk 1 done** (`web-wallet/wasm-foundation`).
   - **What landed:** the `seedelf-wasm` crate in `seedelf-web-wallet/wasm/`.
     - `SeedelfKey` keeps the scalar inside WASM.

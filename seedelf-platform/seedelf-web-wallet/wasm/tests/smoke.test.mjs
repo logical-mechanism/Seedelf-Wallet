@@ -4,21 +4,15 @@
 // byte for byte on a pinned vector.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 
 import {
-  initSync,
   Register,
   SeedelfKey,
   isValidRegister,
   registerToDatum,
   rerandomize,
   verifyProof,
-} from "../pkg/seedelf_wasm.js";
-
-initSync({
-  module: readFileSync(new URL("../pkg/seedelf_wasm_bg.wasm", import.meta.url)),
-});
+} from "./wasm.mjs";
 
 // Same vector as seedelf-crypto's `random_register` test: sk = 18446744073709551606.
 const VECTOR_SK = "000000000000000000000000000000000000000000000000fffffffffffffff6";

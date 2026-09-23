@@ -12,7 +12,7 @@
 
 use blstrs::Scalar;
 use ff::Field;
-use seedelf_crypto::{register, schnorr};
+use seedelf_crypto::{derivation, register, schnorr};
 use wasm_bindgen::prelude::*;
 
 /// Plain-Rust implementations behind the exports, testable off-wasm.
@@ -121,12 +121,22 @@ pub struct SeedelfKey {
 
 #[wasm_bindgen]
 impl SeedelfKey {
-    /// A fresh random key. For development and tests only: wallets derive
-    /// their key from the recovery phrase.
+    /// A fresh random key. For development and tests only: wallets use
+    /// `fromPhrase`.
     pub fn random() -> SeedelfKey {
         SeedelfKey {
             sk: schnorr::random_scalar(),
         }
+    }
+
+    /// The wallet's key: v1 derivation from a 24-word recovery phrase
+    /// (see `seedelf_crypto::derivation`). Case and extra whitespace are
+    /// ignored; invalid phrases throw with a reason.
+    #[wasm_bindgen(js_name = fromPhrase)]
+    pub fn from_phrase(phrase: &str, account: u32) -> Result<SeedelfKey, JsError> {
+        derivation::seedelf_key_v1(phrase, account)
+            .map(|sk| SeedelfKey { sk })
+            .map_err(js_error)
     }
 
     /// Imports a key from 32 big-endian bytes in hex. For development and
@@ -171,6 +181,22 @@ impl Drop for SeedelfKey {
         self.sk = Scalar::ZERO;
         std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
     }
+}
+
+/// A new 24-word recovery phrase from the browser's secure random source.
+#[wasm_bindgen(js_name = generatePhrase)]
+pub fn generate_phrase() -> String {
+    derivation::generate_phrase()
+}
+
+/// Checks a typed recovery phrase: 24 BIP39 English words with a valid
+/// checksum (case and extra whitespace ignored). Throws with a reason
+/// suitable for showing to the user.
+#[wasm_bindgen(js_name = validatePhrase)]
+pub fn validate_phrase(phrase: &str) -> Result<(), JsError> {
+    derivation::parse_phrase(phrase)
+        .map(|_| ())
+        .map_err(js_error)
 }
 
 /// Re-randomizes `register` for a new output: `(g^d, u^d)` with a fresh,

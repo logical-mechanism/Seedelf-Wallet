@@ -1,0 +1,70 @@
+{
+  "spec": "seedelf-key-v1",
+  "frozen": "2026-09-23. Never edit these values: every web wallet's phrase depends on them.",
+  "derivation": {
+    "seed": "BIP39 seed of the phrase: PBKDF2-HMAC-SHA512, 2048 rounds, salt \"mnemonic\" (empty passphrase), 64 bytes",
+    "okm": "HKDF-SHA-256(ikm = seed, salt = \"seedelf-wallet-v1\", info = \"seedelf-key\" || u32_be(account), L = 64)",
+    "sk": "int_be(okm) mod r (BLS12-381 scalar field order), 32 bytes big-endian; zero is rejected",
+    "public_value": "compressed G1 point G1^sk, the base register's public value"
+  },
+  "cross_checked": "seed, okm and sk against Python hashlib/hmac; public_value against py_ecc; BIP39 layer against the Trezor vector",
+  "vectors": [
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "account": 0,
+      "seed": "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840",
+      "okm": "5c1f2ead7c8412ad59c3f3fcfe65305a071c74f400ee9e618261a2b8fa1754b4b30063c9da4a9bba4f78b2f8f17ae6977e7453b407e8431a7f146af41e5938af",
+      "sk": "15904ace4804c2585b71bee8737b941b76635ff0b5e7f1aab89bbce40a734b27",
+      "public_value": "b1daface80981124c9ee5a9247a95dd908541941ae53191e7eccef751f873a7a108c6a9c42849e6fa8532eaef4ee2d17"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "account": 1,
+      "seed": "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840",
+      "okm": "9b96dbc083b340a379202a023bb89e373c7e42454cf4e9f686fcbbb626730b4765afa35f8951dbcd99a3daf636f054cdf58d3f4cf047cc016e90ac1ce5c08450",
+      "sk": "4eb160208d010e77bb079efb4dc769388d93d648231fb8585ef60549e843cd83",
+      "public_value": "8f21bc9811637eba277be73a581c15452b40737f3698509c5434e0019cdc0aeb034a5bf3e7776aae2fce3a3f9c25c12d"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "account": 4294967295,
+      "seed": "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840",
+      "okm": "6d52a84b52472c1c7ee064d5e916567868feb0065596e25ff81a45febe0649fd6b0f4d834f5381d75f50fd89a6f92c7e7f43d663899665be7036b2d658502f58",
+      "sk": "5fa9b18ddcbe0f31a5dba27209e5d75b9bdcd440ab219682f30e11d370fef4f8",
+      "public_value": "938dc27c7e9b99fd5363b9ae1298f3f0919620d17978f73c9afd76bd08494ee0202bb104d19544fbd73d1bfd9b5aabdc"
+    },
+    {
+      "phrase": "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+      "account": 0,
+      "seed": "761914478ebf6fe16185749372e91549361af22b386de46322cf8b1ba7e92e80c4af05196f742be1e63aab603899842ddadf4e7248d8e43870a4b6ff9bf16324",
+      "okm": "3a03224f781fa0a466e0a2dc4abbf1bb0b3111800d38672ccd18ccf8a0b07acc16d4007cb8d6811bbb43319e54dea518822f62a7c435a04111bb35d91788d845",
+      "sk": "1dab1cde1b72c56d698f7d61360d02f70baf490197b62953ea5c09951743b85c",
+      "public_value": "817634a12c39bd03d859384838fceeae16d404a37a0bd01ed0f543c3844bd8fee69a9f31dc4432875ed3c5151ae6a6ed"
+    },
+    {
+      "phrase": "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
+      "account": 0,
+      "seed": "848bbe19cad445e46f35fd3d1a89463583ac2b60b5eb4cfcf955731775a5d9e17a81a71613fed83f1ae27b408478fdec2bbc75b5161d1937aa7cdf4ad686ef5f",
+      "okm": "0e1b32d13127366ba7b8231fa1621f23df6b4ecb0e0b765655c58a5413b4b020889e255f5fb9842ad93c26a4a3f2c8c3159fb7f3faa5831649296c13ec7d1557",
+      "sk": "69698a0af13f164f9729ac39cb60fcff2b28f6b7d21561be7b52332dd43c8467",
+      "public_value": "81b80b441e8d1a6b42d3add69ff6f0656a5b1307b2a113ad449ee07b1f1ee3303d23ddd1013ca26ac037eb3fc1e05add"
+    },
+    {
+      "phrase": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
+      "account": 0,
+      "seed": "e28a37058c7f5112ec9e16a3437cf363a2572d70b6ceb3b6965447623d620f14d06bb321a26b33ec15fcd84a3b5ddfd5520e230c924c87aaa0d559749e044fef",
+      "okm": "47ccc767284c3c62150d614d6a60dcfd2d720c11d602c91122b90cd16e87029ef484635fb79ed68ffae9e516783d260a2021cf2fa3506325f8b5db516002bf81",
+      "sk": "6921b009520e62129d47cccf22368b2b08c51fa5e5ce8caf3ab963fe88d2421f",
+      "public_value": "97828374f5ff606e48e0862089c05b4ebf18388c591bdb5815370eaba2ac7b057c23e5b92d27c4667dde423f567322cc"
+    },
+    {
+      "phrase": "void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold",
+      "account": 0,
+      "seed": "b873212f885ccffbf4692afcb84bc2e55886de2dfa07d90f5c3c239abc31c0a6ce047e30fd8bf6a281e71389aa82d73df74c7bbfb3b06b4639a5cee775cccd3c",
+      "okm": "64272cbc33de8facc7c01af4b0f90ea1b482f23a43c58ad898ba831e1244fbadd34e710974b44d2900e8db153757f93b1405b11b7fa3f62844a6844b0ae45e14",
+      "sk": "7364e2655abe5cc6e62ac74b2513539048543532481a97f4fa48130f70806631",
+      "public_value": "b24897f480609883b51f3606257bc8d1cf676f81f03fe02b70c12fffef1d2512f057e2a86d7dcfc9242303b2b1ad46d9"
+    }
+
+  ]
+}

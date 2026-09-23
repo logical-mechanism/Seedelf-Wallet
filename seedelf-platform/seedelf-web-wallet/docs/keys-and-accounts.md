@@ -14,9 +14,13 @@ A web-wallet phrase is a Seedelf phrase. CLI wallets use a random scalar stored 
 
 ### Seedelf key derivation
 
-**Decided: domain-tagged HKDF.** Once wallets exist this derivation can never change, or their phrases stop restoring funds.
+**`v1`, frozen on 2026-09-23.** Once wallets exist this derivation can never change, or their phrases stop restoring funds.
 
-**Proposed `v1`:**
+- **Implementation:** [`seedelf-crypto/src/derivation.rs`](../../seedelf-crypto/src/derivation.rs).
+- **Vectors:** [`seedelf-crypto/tests/vectors/seedelf_key_v1.json`](../../seedelf-crypto/tests/vectors/seedelf_key_v1.json).
+  - Seven vectors pin every step: phrase → seed → okm → `x` → base register.
+  - They were checked against independent implementations: Python `hashlib`/`hmac` for the seed, HKDF and the reduction, and `py_ecc` for the public value. The BIP39 layer also reproduces the official Trezor vector.
+  - Both the Rust tests and the WebAssembly tests run them.
 
 ```text
 seed = BIP39 seed of the phrase             PBKDF2-HMAC-SHA512, 2048 rounds, empty passphrase → 64 bytes
@@ -38,7 +42,11 @@ if x == 0: derivation error                 probability ≈ 2^-255
   - The salt and info tags separate the two domains again.
 - **Reducing 64 bytes mod `r`** (a 255-bit prime) leaves negligible bias.
 - **BIP39 passphrase:** always empty in v1. Supporting one later would be an opt-in variant.
-- **Freezing it:** the spec is frozen with test vectors when it's implemented (phrase → seed → okm → `x` → base register). It is implemented once in Rust (`seedelf-crypto`) and used through WebAssembly.
+- **Phrase rules (wallet policy, applied before the derivation):**
+  - Exactly 24 BIP39 English words with a valid checksum.
+  - Case and extra whitespace are ignored. The seed is always computed from the canonical words.
+  - `generatePhrase` and `validatePhrase` in the WebAssembly module apply these rules, and `validatePhrase` says what is wrong.
+- **One implementation:** the derivation lives in Rust (`seedelf-crypto`), and the extension uses it through WebAssembly (`SeedelfKey.fromPhrase`).
 
 ## Accounts
 

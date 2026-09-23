@@ -9,6 +9,7 @@ repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
 
 [dependencies]
 anyhow = "1.0.98"
+bip39 = "2.2.0"
 blake2 = "0.10.6"
 blstrs = "0.7.1"
 cryptoxide = "0.5.0"
@@ -23,3 +24,4 @@ sha3 = "0.10.8"
 
 [dev-dependencies]
 proptest = "1"
+serde_json = "1.0.133"

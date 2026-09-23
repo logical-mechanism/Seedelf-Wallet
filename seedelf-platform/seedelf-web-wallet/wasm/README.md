@@ -7,11 +7,14 @@ The WebAssembly bindings the web wallet uses for Seedelf cryptography. It is a t
 | Export | What it does |
 |---|---|
 | `SeedelfKey` | Holds the secret scalar inside WebAssembly memory. |
-| `SeedelfKey.random()`, `SeedelfKey.fromHex()` | Dev/test constructors. Wallets will derive the key from the phrase (roadmap chunk 2). |
+| `SeedelfKey.fromPhrase(phrase, account)` | The wallet's key, using the frozen v1 derivation (`seedelf-crypto::derivation`). Throws with a reason on an invalid phrase. |
+| `SeedelfKey.random()`, `SeedelfKey.fromHex()` | Dev/test constructors only. |
 | `key.baseRegister()` | Returns the base register `(G1, G1^x)`. |
 | `key.isOwned(register)` | Whether this key can spend a UTxO with this register. |
 | `key.createProof(register, vkh)` | Returns a Schnorr proof `{ z, gR }` bound to the one-time key hash `vkh` (28 bytes, hex). |
 | `key.free()` | Drops the key and overwrites the scalar. |
+| `generatePhrase()` | A new 24-word recovery phrase from the secure random source. |
+| `validatePhrase(phrase)` | Throws with a user-facing reason (word count, unknown word N, checksum). Case and extra whitespace are ignored. |
 | `Register` | `{ generator, publicValue }`: compressed G1 points in hex. |
 | `rerandomize(register)` | Returns `(g^d, u^d)` with a fresh `d` that is thrown away. |
 | `isValidRegister(register)` | On-curve and torsion-free check. |
@@ -43,4 +46,7 @@ cargo test -p seedelf-wasm                                        # native, the 
 node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"            # the built package, from JS
 ```
 
-Both suites check the same pinned vector as `seedelf-crypto`'s `random_register` test, so the WebAssembly build is known to match native Rust byte for byte.
+Both suites check the same pinned vectors as `seedelf-crypto`, so the WebAssembly build is known to match native Rust byte for byte:
+
+- `seedelf-crypto`'s `random_register` vector
+- the frozen key-derivation vectors in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`
