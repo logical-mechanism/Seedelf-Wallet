@@ -217,8 +217,8 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     for (((lovelace, assets), datum_opt), seedelf_id) in lovelaces
         .clone()
         .into_iter()
-        .zip(selected_tokens.into_iter())
-        .zip(seedelf_datums.into_iter())
+        .zip(selected_tokens)
+        .zip(seedelf_datums)
         .zip(seedelfs.iter())
     {
         let datum =
@@ -309,7 +309,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     for (input, datum) in input_vector
         .clone()
         .into_iter()
-        .zip(register_vector.clone().into_iter())
+        .zip(register_vector.clone())
     {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
@@ -422,8 +422,8 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     for ((input, datum), (cpu, mem)) in input_vector
         .clone()
         .into_iter()
-        .zip(register_vector.clone().into_iter())
-        .zip(budgets.clone().into_iter())
+        .zip(register_vector.clone())
+        .zip(budgets.clone())
     {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;

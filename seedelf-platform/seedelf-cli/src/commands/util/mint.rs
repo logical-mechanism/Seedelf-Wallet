@@ -270,7 +270,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
     for (input, datum) in input_vector
         .clone()
         .into_iter()
-        .zip(register_vector.clone().into_iter())
+        .zip(register_vector.clone())
     {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone());
@@ -414,7 +414,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
     for ((input, datum), (cpu, mem)) in input_vector
         .clone()
         .into_iter()
-        .zip(register_vector.clone().into_iter())
+        .zip(register_vector.clone())
         .zip(spending.iter())
     {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;

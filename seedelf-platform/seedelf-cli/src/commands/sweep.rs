@@ -102,8 +102,8 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         bail!("ADA Handle cannot be empty");
     }
 
-    let outbound_address: String = if args.address.is_some() {
-        args.address.unwrap()
+    let outbound_address: String = if let Some(addr) = args.address {
+        addr
     } else {
         let wallet_addr: String =
             address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
@@ -324,7 +324,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     for (input, datum) in input_vector
         .clone()
         .into_iter()
-        .zip(register_vector.clone().into_iter())
+        .zip(register_vector.clone())
     {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
@@ -466,8 +466,8 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     for ((input, datum), (cpu, mem)) in input_vector
         .clone()
         .into_iter()
-        .zip(register_vector.clone().into_iter())
-        .zip(budgets.clone().into_iter())
+        .zip(register_vector.clone())
+        .zip(budgets.clone())
     {
         let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
         let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
