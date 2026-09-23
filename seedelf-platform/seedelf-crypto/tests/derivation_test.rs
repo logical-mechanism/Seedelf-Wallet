@@ -13,7 +13,7 @@ fn vectors() -> Vec<serde_json::Value> {
 #[test]
 fn frozen_v1_vectors() {
     let vectors = vectors();
-    assert_eq!(vectors.len(), 7);
+    assert_eq!(vectors.len(), 9);
     for v in vectors {
         let phrase = v["phrase"].as_str().unwrap();
         let account = v["account"].as_u64().unwrap() as u32;
@@ -45,7 +45,22 @@ fn frozen_v1_vectors() {
 fn spec_constants_are_frozen() {
     assert_eq!(SALT_V1, b"seedelf-wallet-v1");
     assert_eq!(INFO_PREFIX_V1, b"seedelf-key");
-    assert_eq!(PHRASE_WORDS, 24);
+    assert_eq!(NEW_PHRASE_WORDS, 24);
+    assert_eq!(RESTORE_PHRASE_WORDS, [12, 15, 24]);
+}
+
+#[test]
+fn restore_accepts_12_15_and_24_words() {
+    for v in vectors() {
+        let phrase = v["phrase"].as_str().unwrap();
+        assert!(RESTORE_PHRASE_WORDS.contains(&phrase.split(' ').count()));
+        assert!(parse_phrase(phrase).is_ok());
+    }
+    let lengths: std::collections::BTreeSet<usize> = vectors()
+        .iter()
+        .map(|v| v["phrase"].as_str().unwrap().split(' ').count())
+        .collect();
+    assert_eq!(lengths.into_iter().collect::<Vec<_>>(), vec![12, 15, 24]);
 }
 
 #[test]
@@ -68,9 +83,10 @@ fn typed_phrases_are_normalized() {
 fn bad_phrases_are_rejected_with_a_reason() {
     let err = |p: &str| parse_phrase(p).unwrap_err().to_string();
 
-    // 12 valid words: right checksum, wrong length for a Seedelf phrase
-    let twelve = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    assert!(err(twelve).contains("24 words"));
+    // 18 valid words (a Trezor vector): BIP39 allows it, restore does not
+    let eighteen = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon agent";
+    assert!(err(eighteen).contains("12, 15 or 24 words"));
+    assert!(err("abandon abandon").contains("got 2"));
 
     // last word swapped: checksum fails
     let bad_checksum = ABANDON_ART.replace(" art", " abandon");
@@ -88,7 +104,7 @@ fn generated_phrases_are_valid_and_distinct() {
     let a = generate_phrase();
     let b = generate_phrase();
     assert_ne!(a, b);
-    assert_eq!(a.split(' ').count(), PHRASE_WORDS);
+    assert_eq!(a.split(' ').count(), NEW_PHRASE_WORDS);
     assert!(seedelf_key_v1(&a, 0).is_ok());
 }
 

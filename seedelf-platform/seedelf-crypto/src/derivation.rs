@@ -29,10 +29,13 @@ pub const SALT_V1: &[u8] = b"seedelf-wallet-v1";
 /// HKDF info prefix for v1; the account index follows as a big-endian u32.
 pub const INFO_PREFIX_V1: &[u8] = b"seedelf-key";
 
-/// A Seedelf recovery phrase is always 24 English BIP39 words (256 bits of
-/// entropy). This is wallet policy; the derivation itself only needs a
-/// valid mnemonic.
-pub const PHRASE_WORDS: usize = 24;
+/// New wallets get 24 English BIP39 words (256 bits of entropy).
+pub const NEW_PHRASE_WORDS: usize = 24;
+
+/// Restore accepts the same lengths as Lace: 12, 15 or 24 words. This is
+/// wallet policy checked before the derivation, which itself works for any
+/// valid mnemonic; allowing another length would not change existing keys.
+pub const RESTORE_PHRASE_WORDS: [usize; 3] = [12, 15, 24];
 
 /// Generates a new 24-word recovery phrase from the OS random source.
 pub fn generate_phrase() -> String {
@@ -46,7 +49,7 @@ pub fn generate_phrase() -> String {
 
 /// Parses a recovery phrase typed by a user: case and extra whitespace are
 /// ignored, the words and checksum must be valid BIP39 English, and there
-/// must be exactly 24 of them.
+/// must be 12, 15 or 24 of them.
 pub fn parse_phrase(phrase: &str) -> Result<Mnemonic> {
     let normalized: String = phrase
         .split_whitespace()
@@ -54,8 +57,8 @@ pub fn parse_phrase(phrase: &str) -> Result<Mnemonic> {
         .collect::<Vec<_>>()
         .join(" ");
     let words = normalized.split(' ').filter(|w| !w.is_empty()).count();
-    if words != PHRASE_WORDS {
-        bail!("a recovery phrase has {PHRASE_WORDS} words, got {words}");
+    if !RESTORE_PHRASE_WORDS.contains(&words) {
+        bail!("a recovery phrase has 12, 15 or 24 words, got {words}");
     }
     Mnemonic::parse_in_normalized(Language::English, &normalized).map_err(|e| match e {
         bip39::Error::UnknownWord(i) => {

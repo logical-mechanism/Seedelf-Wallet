@@ -7,7 +7,8 @@
     "sk": "int_be(okm) mod r (BLS12-381 scalar field order), 32 bytes big-endian; zero is rejected",
     "public_value": "compressed G1 point G1^sk, the base register's public value"
   },
-  "cross_checked": "seed, okm and sk against Python hashlib/hmac; public_value against py_ecc; BIP39 layer against the Trezor vector",
+  "phrase_lengths": "24 words for new wallets; 12 and 15 words are also accepted on restore, as in Lace",
+  "cross_checked": "seed, okm and sk against Python hashlib/hmac; public_value against py_ecc; BIP39 layer against the Trezor vector and the well-known 12-word seed",
   "vectors": [
     {
       "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
@@ -64,7 +65,22 @@
       "okm": "64272cbc33de8facc7c01af4b0f90ea1b482f23a43c58ad898ba831e1244fbadd34e710974b44d2900e8db153757f93b1405b11b7fa3f62844a6844b0ae45e14",
       "sk": "7364e2655abe5cc6e62ac74b2513539048543532481a97f4fa48130f70806631",
       "public_value": "b24897f480609883b51f3606257bc8d1cf676f81f03fe02b70c12fffef1d2512f057e2a86d7dcfc9242303b2b1ad46d9"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "account": 0,
+      "seed": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "okm": "7c03341cef862ce8c534975f7cfb1c4b77f95e42362d0bea5531fce5ab2c4075cfa27b2750959862f3cb040b0d62e219b3824371aa26d247bfcc7f021eb92870",
+      "sk": "189d7173bcf5e494cca13c0a82b6c1f14340e4cba85358d6c564d3ab39a28b7b",
+      "public_value": "ac019617cd18d3d23fe5c1bbca5185afa3ecfd872c04056317efc2bc2617be86a24b897b83f7d4dffab4d7b03e54da2a"
+    },
+    {
+      "phrase": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math exhibit",
+      "account": 0,
+      "seed": "85a7ff16b142e4fe20330f991bfd55e44543aace2d3f4be68fbef96bde85db6e7cc839fecd8fa573ad501a4335aca11140f0d37a218e05e2de0a15fe5c69a8a9",
+      "okm": "e35b8ef40aa7beb022f22e39efc6f994257bc3b033a22ecf7fdde5a0c859ab321c0d51411884cb0101a04cfa3caa9a51ef7878d3ad9323f9cc0bffa61fc4abe6",
+      "sk": "46d91e0e32006fb50287350a709d5874a8fb1c3ae3adb325047b926cfec85d0f",
+      "public_value": "83e4801ba67881b7b6615cf63e488a6deed32eec72cd39804217e1d41f077a48dc611afd5e3f033eb35452de18879927"
     }
-
   ]
 }

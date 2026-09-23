@@ -24,7 +24,7 @@ flowchart LR
   3. Confirm a few of the words.
   4. Set a password.
 - **Restore:**
-  1. Enter the phrase and set a password.
+  1. Enter the phrase (12, 15 or 24 words) and set a password.
   2. Scan the wallet contract for owned registers.
   3. Scan the deposit account.
   4. Scan one-time accounts up to a gap limit.

@@ -14,7 +14,7 @@ const { spec, vectors } = JSON.parse(
 
 test("frozen v1 vectors match through WebAssembly", () => {
   assert.equal(spec, "seedelf-key-v1");
-  assert.equal(vectors.length, 7);
+  assert.equal(vectors.length, 9);
   for (const v of vectors) {
     const key = SeedelfKey.fromPhrase(v.phrase, v.account);
     assert.equal(key.baseRegister().publicValue, v.public_value, `${v.phrase} / ${v.account}`);
@@ -44,9 +44,18 @@ test("typed phrases are normalized", () => {
 test("validatePhrase explains what is wrong", () => {
   const [v] = vectors;
   assert.doesNotThrow(() => validatePhrase(v.phrase));
-  assert.throws(() => validatePhrase(v.phrase.split(" ").slice(0, 12).join(" ")), /24 words/);
+  assert.throws(() => validatePhrase(v.phrase.split(" ").slice(0, 13).join(" ")), /12, 15 or 24 words, got 13/);
   assert.throws(() => validatePhrase(v.phrase.replace(/ art$/, " abandon")), /checksum/);
   assert.throws(() => validatePhrase(v.phrase.replace(/^abandon/, "notaword")), /word 1/);
+});
+
+test("restore accepts 12, 15 and 24 words, as Lace does", () => {
+  const lengths = new Set(vectors.map((v) => v.phrase.split(" ").length));
+  assert.deepEqual([...lengths].sort((a, b) => a - b), [12, 15, 24]);
+  for (const v of vectors) assert.doesNotThrow(() => validatePhrase(v.phrase));
+  // 18 valid BIP39 words: allowed by BIP39, not by restore
+  const eighteen = `${"abandon ".repeat(17)}agent`;
+  assert.throws(() => validatePhrase(eighteen), /got 18/);
 });
 
 test("generated phrases are 24 valid, distinct words", () => {

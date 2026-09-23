@@ -38,11 +38,11 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
 
 - **2026-09-23: chunk 2 done** (`web-wallet/key-derivation`).
   - **What landed:** the v1 derivation, frozen, in `seedelf-crypto/src/derivation.rs`:
-    - `parse_phrase`: 24 words, checksum, and case/whitespace normalization, with user-facing errors.
+    - `parse_phrase`: checksum and case/whitespace normalization, with user-facing errors. New phrases are 24 words; restore accepts 12, 15 or 24, like Lace.
     - `generate_phrase`, `bip39_seed`, `okm_v1`, `scalar_from_okm`, `seedelf_key_v1`.
     - No new crates: `bip39` comes via `pallas-wallet`, and HKDF comes from `cryptoxide`.
-  - **Vectors:** seven, in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`.
-    - Checked against independent implementations: Python `hashlib`/`hmac`, `py_ecc` for the public values, and the Trezor BIP39 vector.
+  - **Vectors:** nine (12, 15 and 24 words), in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`.
+    - Checked against independent implementations: Python `hashlib`/`hmac`, `py_ecc` for the public values, the Trezor BIP39 vector, and the well-known 12-word seed.
     - The Rust tests (`derivation_test.rs`) and the WASM tests (`derivation.test.mjs`) both read them.
   - **WASM:** added `SeedelfKey.fromPhrase(phrase, account)`, `generatePhrase()` and `validatePhrase()`. The module is now about 350 KB, mostly the word list and SHA-512.
   - **Change from the plan:** BIP39 moved into Rust, so `@scure/bip39` is out of the JS stack.

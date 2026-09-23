@@ -129,9 +129,9 @@ impl SeedelfKey {
         }
     }
 
-    /// The wallet's key: v1 derivation from a 24-word recovery phrase
-    /// (see `seedelf_crypto::derivation`). Case and extra whitespace are
-    /// ignored; invalid phrases throw with a reason.
+    /// The wallet's key: v1 derivation from a 12-, 15- or 24-word recovery
+    /// phrase (see `seedelf_crypto::derivation`). Case and extra whitespace
+    /// are ignored; invalid phrases throw with a reason.
     #[wasm_bindgen(js_name = fromPhrase)]
     pub fn from_phrase(phrase: &str, account: u32) -> Result<SeedelfKey, JsError> {
         derivation::seedelf_key_v1(phrase, account)
@@ -189,9 +189,9 @@ pub fn generate_phrase() -> String {
     derivation::generate_phrase()
 }
 
-/// Checks a typed recovery phrase: 24 BIP39 English words with a valid
-/// checksum (case and extra whitespace ignored). Throws with a reason
-/// suitable for showing to the user.
+/// Checks a typed recovery phrase: 12, 15 or 24 BIP39 English words with a
+/// valid checksum (case and extra whitespace ignored), the lengths Lace
+/// accepts. Throws with a reason suitable for showing to the user.
 #[wasm_bindgen(js_name = validatePhrase)]
 pub fn validate_phrase(phrase: &str) -> Result<(), JsError> {
     derivation::parse_phrase(phrase)
