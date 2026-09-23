@@ -15,6 +15,10 @@ The WebAssembly bindings the web wallet uses for Seedelf cryptography. It is a t
 | `key.free()` | Drops the key and overwrites the scalar. |
 | `generatePhrase()` | A new 24-word recovery phrase from the secure random source. |
 | `validatePhrase(phrase)` | Accepts 12, 15 or 24 words, the lengths Lace accepts. Throws with a user-facing reason (word count, unknown word N, checksum). Case and extra whitespace are ignored. |
+| `CardanoAccount.fromPhrase(phrase, account)` | The wallet's Cardano account: standard CIP-1852 keys, the same as Lace, Eternl and Yoroi. v1 uses account 0. The private keys stay in WebAssembly memory. |
+| `account.receiveAddress(network, index)`, `account.changeAddress(network, index)` | Base addresses `0/index` and `1/index`, delegated to the staking key `2/0`. |
+| `account.stakeAddress(network)`, `account.accountPublicKey()` | The reward address, and the account xpub (hex). |
+| `Network.Preprod`, `Network.Mainnet` | The network for addresses. |
 | `Register` | `{ generator, publicValue }`: compressed G1 points in hex. |
 | `rerandomize(register)` | Returns `(g^d, u^d)` with a fresh `d` that is thrown away. |
 | `isValidRegister(register)` | On-curve and torsion-free check. |
@@ -50,3 +54,4 @@ Both suites check the same pinned vectors as `seedelf-crypto`, so the WebAssembl
 
 - `seedelf-crypto`'s `random_register` vector
 - the frozen key-derivation vectors in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`
+- the Cardano account vectors in `seedelf-crypto/tests/vectors/cardano_account.json`, verified against `@cardano-sdk` (Lace's library)

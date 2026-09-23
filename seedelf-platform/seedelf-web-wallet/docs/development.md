@@ -53,7 +53,7 @@ After a rebuild, click the reload arrow on the extension's card. During `dev`, a
 
 ## Test funds
 
-- Get preprod test ADA from the [Cardano testnet faucet](https://docs.cardano.org/cardano-testnets/tools/faucet) and send it to the wallet's deposit address.
+- Get preprod test ADA from the [Cardano testnet faucet](https://docs.cardano.org/cardano-testnets/tools/faucet) and send it to the wallet's Cardano account (its receive address).
 - The preprod contracts, reference scripts and collateral service are live (see [architecture.md](architecture.md#networks)).
 
 ## Testing layers
@@ -61,7 +61,7 @@ After a rebuild, click the reload arrow on the extension's card. During `dev`, a
 | Layer | What | How |
 |---|---|---|
 | Rust | `seedelf-crypto`, `seedelf-core`, and the wasm crate | `cargo test`. The CLI's offline integration tests (`seedelf-cli/tests/cli/`) guard the builder extraction. |
-| Key derivation | The frozen v1 test vectors | Checked in Rust, and again from TypeScript through WebAssembly, so both sides agree |
+| Key derivation | The frozen v1 Seedelf key vectors, and the Cardano account vectors (verified against `@cardano-sdk`, Lace's library) | Checked in Rust, and again from JS through WebAssembly, so both sides agree |
 | TypeScript | Vault, messaging, wallet state | Vitest |
 | End to end | Real flows on preprod | Playwright launches Chromium with the unpacked extension loaded and drives the popup |
 | Manual | A preprod checklist before each release | Onboarding, move in, create, transfer, withdraw, lock/unlock, restore |

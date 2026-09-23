@@ -46,7 +46,7 @@ flowchart LR
   - One implementation, so there are no byte-for-byte parity problems.
 - **One WebAssembly crate for the wallet:** [seedelf-web-wallet/wasm](../wasm/) (`seedelf-wasm`), a Cargo workspace member.
   - It exposes only what the extension needs, for both crypto and [transaction building](#transaction-building).
-  - `build.sh` produces an ES module of about 350 KB.
+  - `build.sh` produces an ES module of about 590 KB, before `wasm-opt`.
   - Its tests check the output against native Rust byte for byte.
 - **Build settings:**
   - `getrandom` 0.2 with the `js` feature, set in the wasm crate.
@@ -130,7 +130,7 @@ The building moves into network-free functions in `seedelf-core`: a draft step, 
 
 - **Koios, same as the CLI.**
   - Wallet contract UTxOs via `credential_utxos`.
-  - `address_utxos` for the deposit and one-time accounts.
+  - `address_utxos` for the Cardano account (receive and change chains, gap limit 20) and one-time accounts.
   - Protocol parameters, tip, `evaluate_transaction`, `submit_tx`.
   - Seedelf token lookups for recipients' registers.
 - **Collateral for Seedelf spends comes from the giveme.my service**, exactly as in the CLI (`seedelf-koios`). See [privacy.md](privacy.md).

@@ -1,3 +1,4 @@
+pub mod cardano;
 pub mod convert;
 pub mod derivation;
 pub mod hashing;
