@@ -74,23 +74,19 @@ fn randomize(datum: Register, s: State<Scalar>) -> Register {
 }
 
 test cheapest_hash1() {
-  let s: ByteArray =
-    #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  let s: ByteArray = #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
   crypto.blake2b_224(s) == #"0c97d8d889acb1d65d23e44212b0a4e16a57fc0ebcfea8f5f965f8ba"
 }
 
 test cheapest_hash2() {
-  let s: ByteArray =
-    #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  let s: ByteArray = #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
   crypto.blake2b_256(s) == #"667f1e9b75c8eac1cccf77a2f82526a478b01ec0f26dd938b5b5b4ad0d856368"
 }
 
 test blake2b_224_to_scaler() {
-  let s: ByteArray =
-    #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-  let c: State<Scalar> =
-    crypto.blake2b_224(s)
-      |> scalar.from_bytes
+  let s: ByteArray = #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  let c: State<Scalar> = crypto.blake2b_224(s)
+    |> scalar.from_bytes
   let n: Int = scalar.to_int(c)
   and {
     n == 1326213754908867643386542832476386926406432000867097109721424197818,
@@ -99,11 +95,9 @@ test blake2b_224_to_scaler() {
 }
 
 test blake2b_256_to_scaler() {
-  let s: ByteArray =
-    #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-  let c: State<Scalar> =
-    crypto.blake2b_256(s)
-      |> scalar.from_bytes
+  let s: ByteArray = #"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  let c: State<Scalar> = crypto.blake2b_256(s)
+    |> scalar.from_bytes
   let n: Int = scalar.to_int(c)
   and {
     n == 46360511376306354142291113884986684445147634496658193575979966595181178086248,
@@ -142,9 +136,13 @@ pub fn verify(
   let g_z: G1Element = generator |> g1.decompress |> g1.scale(z)
   //
   // use the fiat-shamir heuristic to calculate the challenge then convert it to an scalar
-  let c: State<Scalar> =
-    fiat_shamir_heuristic(generator, g_r_b, public_value, bound)
-      |> scalar.from_bytes
+  let c: State<Scalar> = fiat_shamir_heuristic(
+    generator,
+    g_r_b,
+    public_value,
+    bound,
+  )
+    |> scalar.from_bytes
   //
   // the u^c computation: u^c = (g^x)^c = g^(x * c)
   let u_c: G1Element = public_value |> g1.decompress |> g1.scale(c)
@@ -156,21 +154,18 @@ pub fn verify(
 
 test valid_schnorr_proof() {
   // some secret x 
-  let x: State<Scalar> =
-    scalar.from_int(
-      42435875175126190479447740508185965837690552500527637822603658699938581184513,
-    )
+  let x: State<Scalar> = scalar.from_int(
+    42435875175126190479447740508185965837690552500527637822603658699938581184513,
+  )
   // the datum register using the g1 generator and the public value for x
-  let datum: Register =
-    Register {
-      generator: g1.generator |> g1.compress,
-      public_value: g1.generator |> g1.scale(x) |> g1.compress,
-    }
+  let datum: Register = Register {
+    generator: g1.generator |> g1.compress,
+    public_value: g1.generator |> g1.scale(x) |> g1.compress,
+  }
   // a random number
-  let r: State<Scalar> =
-    scalar.from_int(
-      32435875175126190479447740508185965837690552500527637822603658699938581184513,
-    )
+  let r: State<Scalar> = scalar.from_int(
+    32435875175126190479447740508185965837690552500527637822603658699938581184513,
+  )
   // the bound, something unique from the tx
   let bound: ByteArray = #"acab"
   // calculate the g^r term
@@ -178,8 +173,12 @@ test valid_schnorr_proof() {
   let g_r: G1Element = g1.scale(g, r)
   let g_r_b: ByteArray = g_r |> g1.compress
   // the challenge number using a fiat shamir transform
-  let c_b: ByteArray =
-    fiat_shamir_heuristic(datum.generator, g_r_b, datum.public_value, bound)
+  let c_b: ByteArray = fiat_shamir_heuristic(
+    datum.generator,
+    g_r_b,
+    datum.public_value,
+    bound,
+  )
   let c: State<Scalar> = scalar.from_bytes(c_b)
   // the z value
   let z: State<Scalar> = scalar.mul(c, x) |> scalar.add(r)
@@ -194,26 +193,22 @@ test valid_schnorr_proof() {
 
 test randomized_valid_schnorr_proof() {
   // some secret x 
-  let x: State<Scalar> =
-    scalar.from_int(
-      12435875175126190479447740508185965837690552500527637822603658699938581184513,
-    )
+  let x: State<Scalar> = scalar.from_int(
+    12435875175126190479447740508185965837690552500527637822603658699938581184513,
+  )
   // the datum register using the g1 generator and the public value for x
-  let datum: Register =
-    Register {
-      generator: g1.generator |> g1.compress,
-      public_value: g1.generator |> g1.scale(x) |> g1.compress,
-    }
+  let datum: Register = Register {
+    generator: g1.generator |> g1.compress,
+    public_value: g1.generator |> g1.scale(x) |> g1.compress,
+  }
   // a random number
-  let r: State<Scalar> =
-    scalar.from_int(
-      32435875175126190479447740508185965837690552500527637822603658699938581184513,
-    )
+  let r: State<Scalar> = scalar.from_int(
+    32435875175126190479447740508185965837690552500527637822603658699938581184513,
+  )
   // another random number
-  let d: State<Scalar> =
-    scalar.from_int(
-      12435875175126190479447740508185965837690552500527637822603658699938581184513,
-    )
+  let d: State<Scalar> = scalar.from_int(
+    12435875175126190479447740508185965837690552500527637822603658699938581184513,
+  )
   // rerandomize the a0 register
   let datum_rng: Register = randomize(datum, d)
   // the bound, something unique from the tx
@@ -223,13 +218,12 @@ test randomized_valid_schnorr_proof() {
   let g_r: G1Element = g1.scale(g, r)
   let g_r_b: ByteArray = g_r |> g1.compress
   // the challenge number using a fiat shamir transform
-  let c_b: ByteArray =
-    fiat_shamir_heuristic(
-      datum_rng.generator,
-      g_r_b,
-      datum_rng.public_value,
-      bound,
-    )
+  let c_b: ByteArray = fiat_shamir_heuristic(
+    datum_rng.generator,
+    g_r_b,
+    datum_rng.public_value,
+    bound,
+  )
   let c: State<Scalar> = scalar.from_bytes(c_b)
   // the z value
   let z: State<Scalar> = scalar.mul(c, x) |> scalar.add(r)
@@ -244,21 +238,18 @@ test randomized_valid_schnorr_proof() {
 
 test invalid_schnorr_proof() fail {
   // some secret x 
-  let x: State<Scalar> =
-    scalar.from_int(
-      42435875175126190479447740508185965837690552500527637822603658699938581184513,
-    )
+  let x: State<Scalar> = scalar.from_int(
+    42435875175126190479447740508185965837690552500527637822603658699938581184513,
+  )
   // the datum register using the g1 generator and the public value for x
-  let datum: Register =
-    Register {
-      generator: g1.generator |> g1.compress,
-      public_value: g1.generator |> g1.scale(x) |> g1.compress,
-    }
+  let datum: Register = Register {
+    generator: g1.generator |> g1.compress,
+    public_value: g1.generator |> g1.scale(x) |> g1.compress,
+  }
   // a random number
-  let r: State<Scalar> =
-    scalar.from_int(
-      32435875175126190479447740508185965837690552500527637822603658699938581184513,
-    )
+  let r: State<Scalar> = scalar.from_int(
+    32435875175126190479447740508185965837690552500527637822603658699938581184513,
+  )
   // the bound, something unique from the tx
   let bound: ByteArray = #""
   // calculate the g^r term
@@ -266,8 +257,12 @@ test invalid_schnorr_proof() fail {
   let g_r: G1Element = g1.scale(g, r)
   let g_r_b: ByteArray = g_r |> g1.compress
   // the challenge number using a fiat shamir transform
-  let c_b: ByteArray =
-    fiat_shamir_heuristic(datum.generator, g_r_b, datum.public_value, bound)
+  let c_b: ByteArray = fiat_shamir_heuristic(
+    datum.generator,
+    g_r_b,
+    datum.public_value,
+    bound,
+  )
   let c: State<Scalar> = scalar.from_bytes(c_b)
   // the bad z value, it assumes the secret is the challenge
   let z: State<Scalar> = scalar.mul(c, c) |> scalar.add(r)
@@ -280,11 +275,10 @@ test simple_schnorr_proof() {
   // some secret x 
   let x: State<Scalar> = scalar.from_int(44203)
   // the datum register using the g1 generator and the public value for x
-  let datum: Register =
-    Register {
-      generator: g1.generator |> g1.compress,
-      public_value: g1.generator |> g1.scale(x) |> g1.compress,
-    }
+  let datum: Register = Register {
+    generator: g1.generator |> g1.compress,
+    public_value: g1.generator |> g1.scale(x) |> g1.compress,
+  }
   // a random number
   let r: State<Scalar> = scalar.from_int(1337)
   // the bound, something unique from the tx
@@ -294,8 +288,12 @@ test simple_schnorr_proof() {
   let g_r: G1Element = g1.scale(g, r)
   let g_r_b: ByteArray = g_r |> g1.compress
   // the challenge number using a fiat shamir transform
-  let c_b: ByteArray =
-    fiat_shamir_heuristic(datum.generator, g_r_b, datum.public_value, bound)
+  let c_b: ByteArray = fiat_shamir_heuristic(
+    datum.generator,
+    g_r_b,
+    datum.public_value,
+    bound,
+  )
   let c: State<Scalar> = scalar.from_bytes(c_b)
   // the z value
   let z: State<Scalar> = scalar.mul(c, x) |> scalar.add(r)
@@ -307,19 +305,17 @@ test simple_regsiter() {
   // some secret x 
   let x: State<Scalar> = scalar.from_int(18446744073709551606)
   // the datum register using the g1 generator and the public value for x
-  let datum: Register =
-    Register {
-      generator: g1.generator |> g1.compress,
-      public_value: g1.generator |> g1.scale(x) |> g1.compress,
-    }
+  let datum: Register = Register {
+    generator: g1.generator |> g1.compress,
+    public_value: g1.generator |> g1.scale(x) |> g1.compress,
+  }
   // trace datum
   datum == datum
 }
 
 test torsion_point() fail {
   // a valid but torsion point
-  let point: ByteArray =
-    #"a000000000000000000000000054686973206973206120736563726574206d65737361676520666f7220416c6963652e"
+  let point: ByteArray = #"a000000000000000000000000054686973206973206120736563726574206d65737361676520666f7220416c6963652e"
   // this fails for torsion points as they do not belong in the prime order group
   let g: G1Element = g1.decompress(point)
   let p: ByteArray = g1.compress(g)

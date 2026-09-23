@@ -22,9 +22,8 @@ validator contract(_any: Data) {
     //
     // a single thing is being burned in this tx
     //
-    expect [(pid, tkn, amt)]: List<(PolicyId, AssetName, Int)> =
-      mint
-        |> assets.flatten()
+    expect [(pid, tkn, amt)]: List<(PolicyId, AssetName, Int)> = mint
+      |> assets.flatten()
     //
     // Burn one or mint one.
     //

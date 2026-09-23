@@ -46,13 +46,12 @@ test no_prefix_token_name() {
 }
 
 test real_token_name1() {
-  let tkn: AssetName =
-    generate(
-      #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
-      0,
-      seedelf,
-      #"",
-    )
+  let tkn: AssetName = generate(
+    #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
+    0,
+    seedelf,
+    #"",
+  )
   and {
     bytearray.take(tkn, 4) == seedelf,
     tkn == #"5eed0e1f004172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce2361",
@@ -61,13 +60,12 @@ test real_token_name1() {
 }
 
 test real_token_name2() {
-  let tkn: AssetName =
-    generate(
-      #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
-      0,
-      seedelf,
-      #"acab",
-    )
+  let tkn: AssetName = generate(
+    #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
+    0,
+    seedelf,
+    #"acab",
+  )
   and {
     bytearray.take(tkn, 4) == seedelf,
     tkn == #"5eed0e1facab004172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce",
@@ -76,20 +74,18 @@ test real_token_name2() {
 }
 
 test rollover_attack() fail {
-  let tkn1: AssetName =
-    generate(
-      #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
-      0,
-      seedelf,
-      #"acab",
-    )
-  let tkn2: AssetName =
-    generate(
-      #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
-      256,
-      seedelf,
-      #"acab",
-    )
+  let tkn1: AssetName = generate(
+    #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
+    0,
+    seedelf,
+    #"acab",
+  )
+  let tkn2: AssetName = generate(
+    #"4172bf875e341da9ecc0f1f84bfb7b6e6bb8b022b17205b5ce23617fc1641880",
+    256,
+    seedelf,
+    #"acab",
+  )
   tkn1 == tkn2
 }
 
