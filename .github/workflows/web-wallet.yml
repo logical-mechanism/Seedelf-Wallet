@@ -72,3 +72,12 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           npm run e2e
+
+      # The Web Store package: no dev key, the third-party notices (which fail
+      # on a crate with no licence), the zip, and the same tests on that build.
+      - name: Store package and its end-to-end
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: |
+          VITE_STORE_BUILD=true npm run build:ext
+          node scripts/package.mjs
+          npm run e2e

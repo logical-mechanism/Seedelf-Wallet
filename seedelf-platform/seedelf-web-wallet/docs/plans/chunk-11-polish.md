@@ -32,7 +32,7 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
    cd seedelf-web-wallet/extension
    npm ci && npm run build && npm test && npx playwright install chromium && npm run e2e
    ```
-   Expect Vitest 109 (+1 live, skipped) and Playwright 18. CI (`.github/workflows/web-wallet.yml`) runs all of it on the PR.
+   Expect cargo 209, WASM Node 29, Vitest 117 (+2 live, skipped) and Playwright 19 (as of 11b). CI (`.github/workflows/web-wallet.yml`) runs all of it on the PR.
 4. **Confirm the part's decisions with the user** before building what they affect. Each part has a table below; the suggestions are only suggestions.
 5. At the end: tick the part in the roadmap, add a handoff note, open the PR, watch CI, and update the *Web wallet branching* memory note.
 
@@ -141,6 +141,25 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 ## 11c: the unlisted Web Store listing
 
 The user owns the Chrome Web Store developer account and submits the listing. This part prepares everything, so that submitting is copy and paste.
+
+**Done (2026-09-24).** The decisions were preprod only, unlisted, the policy on GitHub, *Authentication* and *Financial* declared, and framed screenshots. Everything to submit is in [store/](../store/README.md). See the roadmap's handoff note.
+
+### What 11a and 11b left for 11c
+
+- **The look is dark only.** There's no light theme to screenshot.
+  - Playwright's popup tour already shoots every wallet screen at 360 px (`test-results/popup-*.png`).
+  - Use `snap()` in `e2e/extension.spec.ts` for full-page shots. It turns animations off, and unsticks each screen's foot through the CSSOM, because the page CSP refuses an injected stylesheet.
+  - The store's sizes are fixed (check them live), so a store-screenshot script sets the viewport and frames the popup itself.
+- **Third-party licences in the package.** Only Inter's OFL and Lucide's ISC ship today (`public/licenses/`). The zip should also carry notices for:
+  - SecretBox, adapted from Lace (Apache-2.0; its licence is only in `src/background/secret-box/`);
+  - the bundled npm packages (React, `@noble/*`, `uqr`);
+  - the Rust crates compiled into the WebAssembly (`cargo about` or `cargo license` can list them).
+
+  One `licenses/THIRD-PARTY.txt`, made by a script, is enough.
+- **A store build has no pinned ID.** Without the dev `key`, Chrome gives the unpacked build its own ID, but `e2e/extension.spec.ts` pins `jfekiogplaamnceifeehipmomhojngcb`. For "passes the same tests", read the ID from the service worker's URL instead.
+- **The release checklist builds on what's there.** development.md already has *Preprod checklist before a release* (11b). Add the version bump, the store build, the zip and the upload around it, not a second list.
+- **Numbers for the listing:** the zipped `dist/` is about 873 KB. The module is 1.2 MB (424 KB gzipped). Proofs take about 2 ms.
+- **The live runs** (`node e2e/live/run.mjs all`) submit real preprod transactions from the private test wallet. The user approved that for 11b only, so ask again before running them.
 
 ### Reading list
 

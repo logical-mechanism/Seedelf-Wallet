@@ -53,7 +53,8 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
 | [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, contract round trip |
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
-| [development.md](docs/development.md) | The branching rule, running it in Chrome before the Web Store, test funds, the testing layers, sharing with testers |
+| [development.md](docs/development.md) | The branching rule, running it in Chrome, test funds, the testing layers, the release checklist, sharing with testers |
+| [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
 | [roadmap.md](docs/roadmap.md) | Build chunks, their status, and handoff notes between sessions |
 
 ## Reference: Lace

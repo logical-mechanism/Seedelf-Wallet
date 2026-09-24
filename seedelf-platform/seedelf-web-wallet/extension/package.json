@@ -12,10 +12,13 @@
     "build:wasm": "../wasm/build.sh",
     "build:ext": "vite build",
     "build": "npm run build:wasm && npm run build:ext",
+    "build:store": "VITE_STORE_BUILD=true npm run build",
+    "package": "npm run build:store && node scripts/package.mjs",
     "dev": "vite build --watch --mode development",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test --project=extension",
+    "store:images": "playwright test --project=store"
   },
   "dependencies": {
     "@noble/ciphers": "^2.4.0",

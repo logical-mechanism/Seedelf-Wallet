@@ -41,7 +41,7 @@ Then:
 After a rebuild, press the reload arrow on the extension's card.
 
 - **Stable ID:** the dev key in `src/manifest.ts` pins the ID to `jfekiogplaamnceifeehipmomhojngcb`, so the extension's storage survives moving the folder.
-- **Web Store builds** set `VITE_STORE_BUILD=true` to leave that key out.
+- **Web Store builds** set `VITE_STORE_BUILD=true` to leave that key out. `npm run package` makes one and zips it (see [the release checklist](../docs/development.md#releasing-to-the-web-store)).
 - **Mainnet:** builds are preprod-only unless `VITE_ENABLE_MAINNET=true`.
 
 ## Scripts
@@ -49,11 +49,14 @@ After a rebuild, press the reload arrow on the extension's card.
 | Script | What it does |
 |---|---|
 | `npm run build` | WASM plus the extension (`build:wasm`, then `build:ext`) |
+| `npm run build:store` | The same with `VITE_STORE_BUILD=true`: no dev key, so Chrome or the store picks the ID |
+| `npm run package` | A store build, plus `licenses/THIRD-PARTY.txt`, zipped reproducibly into `release/seedelf-wallet-<version>.zip` for the Web Store (`scripts/package.mjs`, `scripts/third-party.mjs`) |
 | `npm run dev` | Rebuilds the extension into `dist/` on change (development mode, with source maps) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios and giveme.my clients, the balance scan over recorded preprod responses, move-in, mint, transfer and withdraw (on real preprod Ogmios evaluations), the handlers (all with the real WASM and the shared vectors), and formatting |
 | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts` | Optional: the balance scan against the real preprod Koios. Skipped otherwise, so CI stays offline. |
-| `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, balances, move-in, creating a seedelf, sending to one, withdrawing, and removing one. Koios, Ogmios and giveme.my answer from the recorded fixtures and every other host is blocked. Since only giveme.my's real key can sign, the Seedelf-spend tests (stealth mint, transfer, withdraw, remove) stop at Send: it checks that a forged witness is refused and nothing is submitted. Screenshots of every screen land in `test-results/`, the popup's as `popup-*.png`. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
+| `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, balances, move-in, creating a seedelf, sending to one, withdrawing, and removing one. Koios, Ogmios and giveme.my answer from the recorded fixtures and every other host is blocked. Since only giveme.my's real key can sign, the Seedelf-spend tests (stealth mint, transfer, withdraw, remove) stop at Send: it checks that a forged witness is refused and nothing is submitted. Screenshots of every screen land in `test-results/`, the popup's as `popup-*.png`. The tests read the extension's ID from its worker, so they run on a dev or a store build. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
+| `npm run store:images` | The Web Store's five screenshots, small promo tile and store icon, into `../docs/store/images/`. It uses the fixtures and the public 12-word test phrase (`e2e/store-images.spec.ts`). Run a build first. |
 | `node e2e/live/run.mjs all` | Live preprod runs of the built extension with nothing intercepted. Every flow, in one browser session: mint (account), move in, a stealth mint, a transfer, a withdrawal, a removal. Each submits a real transaction from the test wallet in `.preprod-test-wallet.txt` (gitignored) and waits for it to confirm. Single flows work too: `run.mjs mint live-1 account + move-in 25.5`. See `e2e/live/flows.mjs`. |
 
 ## Layout
@@ -98,7 +101,10 @@ tests/                  Vitest (vectors/: independent SecretBox vectors; fixture
                         real preprod evaluation, remade by fixtures/record-account-mint.mjs; a transfer's real
                         preprod evaluation and giveme.my answer, remade by fixtures/record-transfer.mjs; withdrawals
                         and a removal's real preprod evaluations, remade by fixtures/record-withdraw.mjs)
-e2e/                    Playwright; live/ holds the live preprod runs
+e2e/                    Playwright: support.ts (launch, the fake Koios, shared steps), extension.spec.ts,
+                        store-images.spec.ts; live/ holds the live preprod runs
+scripts/                package.mjs (the store zip) and third-party.mjs (the licence notices)
+release/                the store zip (gitignored)
 ```
 
 See [../docs/](../docs/) for the design, especially [architecture.md](../docs/architecture.md) and [development.md](../docs/development.md).
