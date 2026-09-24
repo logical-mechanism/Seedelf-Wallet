@@ -50,3 +50,26 @@ describe("parseAda", () => {
     expect(explorerUrl("mainnet", "ab")).toBe("https://cardanoscan.io/transaction/ab");
   });
 });
+
+describe("sanitizeAda", () => {
+  it("keeps at most 6 decimals, dropping the rest rather than rounding", async () => {
+    const { sanitizeAda } = await import("../src/ui/format");
+    expect(sanitizeAda("", "10.1234567890")).toEqual({
+      value: "10.123456",
+      note: "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.",
+    });
+    expect(sanitizeAda("", "0.9999999")).toMatchObject({ value: "0.999999" });
+    expect(sanitizeAda("", "10.123456")).toEqual({ value: "10.123456" });
+    expect(sanitizeAda("", "1,234.5")).toEqual({ value: "1,234.5" });
+    expect(sanitizeAda("", "10.")).toEqual({ value: "10." });
+    expect(sanitizeAda("", ".5")).toEqual({ value: "0.5" });
+    expect(sanitizeAda("12", "")).toEqual({ value: "" });
+  });
+
+  it("refuses what isn't a number and keeps the previous value", async () => {
+    const { sanitizeAda } = await import("../src/ui/format");
+    for (const bad of ["12a", "-5", "1e6", "1.2.3", ",", "₳5"]) {
+      expect(sanitizeAda("12", bad)).toEqual({ value: "12", note: "Enter an amount in ADA, like 25 or 12.5." });
+    }
+  });
+});

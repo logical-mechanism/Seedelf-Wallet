@@ -363,8 +363,19 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await page.getByRole("button", { name: "Move in" }).click();
 
+  // ADA has 6 decimal places: extra digits are dropped, with a note; letters are refused.
+  await page.getByLabel("Amount").fill("10.1234567890");
+  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await expect(page.getByTestId("move-in-amount-note")).toContainText("at most 6 decimal places");
+  await page.getByLabel("Amount").pressSequentially("9");
+  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await page.getByLabel("Amount").fill("abc");
+  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await expect(page.getByTestId("move-in-amount-note")).toContainText("Enter an amount in ADA");
+
   // A non-round amount gets the privacy nudge; a round one doesn't.
   await page.getByLabel("Amount").fill("25.5");
+  await expect(page.getByTestId("move-in-amount-note")).toHaveCount(0);
   await expect(page.locator(".callout--warn")).toContainText("Round amounts");
   await page.getByLabel("Amount").fill("25");
   await expect(page.locator(".callout--warn")).toHaveCount(0);

@@ -746,3 +746,9 @@ h2 {
   flex-direction: column;
   gap: 4px;
 }
+
+.field-note {
+  margin: -4px 0 0;
+  font-size: 12.5px;
+  color: var(--warn-text);
+}

@@ -6,6 +6,7 @@ import { useState, type FormEvent } from "react";
 
 import type { Balances, MoveInSummary, PendingTx, TokenAmount, TokenRef } from "../../shared/rpc";
 import { call } from "../background";
+import { AdaInput } from "../components/AdaInput";
 import { formatAda, formatQuantity, parseAda, tokenName } from "../format";
 
 const key = (t: TokenRef) => `${t.policyId}.${t.assetName}`;
@@ -108,27 +109,15 @@ export function MoveIn({
       <p className="note">Move ADA, and any tokens you pick, from your Cardano account into your Seedelf balance.</p>
 
       <label htmlFor="move-in-amount">Amount</label>
-      <div className="amount-row">
-        <input
-          id="move-in-amount"
-          inputMode="decimal"
-          autoComplete="off"
-          placeholder="0"
-          value={max ? "Max" : amount}
-          disabled={max}
-          onChange={(e) => setAmount(e.target.value)}
-          aria-invalid={!max && amount !== "" && lovelace === undefined ? true : undefined}
-          autoFocus
-        />
-        <span className="amount-row__unit">₳</span>
+      <AdaInput id="move-in-amount" value={amount} onChange={setAmount} disabled={max} shown="Max">
         <button type="button" className={max ? "segmented__item segmented__item--on" : "segmented__item"} aria-pressed={max} onClick={() => setMax(!max)}>
           Max
         </button>
-      </div>
+      </AdaInput>
       {max ? (
         <p className="note">Everything except the fee and what the tokens you keep need. UTxOs of exactly 5 ₳ stay put: another wallet may use them as collateral.</p>
       ) : (
-        <p className={amount && !round ? "callout callout--warn" : "note"}>
+        <p className={lovelace && !round ? "callout callout--warn" : "note"}>
           Round amounts, like 100 ₳, are harder to match to a later withdrawal.
         </p>
       )}

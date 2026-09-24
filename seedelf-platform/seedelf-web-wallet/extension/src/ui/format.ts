@@ -63,3 +63,27 @@ export function parseAda(text: string): string | undefined {
 export function explorerUrl(network: "preprod" | "mainnet", txHash: string): string {
   return `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/transaction/${txHash}`;
 }
+
+/**
+ * Cleans what the user typed or pasted into an ADA amount field. ADA has 6
+ * decimal places (1 lovelace = 0.000001 ₳), so extra digits are dropped, not
+ * rounded: the amount never grows. Anything that isn't a number keeps the
+ * previous value. `note` says what was changed or refused.
+ */
+export function sanitizeAda(previous: string, typed: string): { value: string; note?: string } {
+  let text = typed.trim();
+  if (text === "") return { value: "" };
+  if (text.startsWith(".")) text = `0${text}`;
+  const match = /^([\d,]*)(?:\.(\d*))?$/.exec(text);
+  if (!match || !/\d/.test(match[1]!)) {
+    return { value: previous, note: "Enter an amount in ADA, like 25 or 12.5." };
+  }
+  const decimals = match[2];
+  if (decimals !== undefined && decimals.length > 6) {
+    return {
+      value: `${match[1]}.${decimals.slice(0, 6)}`,
+      note: "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.",
+    };
+  }
+  return { value: text };
+}
