@@ -1264,6 +1264,36 @@ main {
   border: 1px solid var(--accent-line);
 }
 
+/* A row, then its lock: the row opens the details, the lock toggles at once. */
+.utxo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.utxo-row .token-row {
+  width: calc(100% + var(--s2));
+  margin-right: 0;
+}
+
+.utxo-row__lock {
+  width: 34px;
+  height: 34px;
+}
+
+.utxo-row .icon-button {
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.utxo-row .icon-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
 /* Settings (screens/Settings.tsx): rows that open a page, and outside links. */
 
 .menu-row {

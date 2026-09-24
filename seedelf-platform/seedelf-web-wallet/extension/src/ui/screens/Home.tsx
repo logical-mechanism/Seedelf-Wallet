@@ -16,6 +16,7 @@ import type { Account, Balances, PendingTx, SeedelfInfo } from "../../shared/rpc
 import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
+import { RefreshRow } from "../components/RefreshRow";
 import { Splash, useSplash } from "../components/Splash";
 import {
   ChevronRightIcon,
@@ -26,7 +27,6 @@ import {
   InfoIcon,
   MoveInIcon,
   ReceiveIcon,
-  RefreshIcon,
   SendIcon,
   SpinnerIcon,
   SproutIcon,
@@ -34,7 +34,7 @@ import {
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { explorerUrl, formatAda, plural, shortHex, timeAgo, unlocked } from "../format";
+import { explorerUrl, formatAda, plural, shortHex, unlocked } from "../format";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
@@ -193,14 +193,21 @@ export function Home() {
   if (screen === "withdraw" && free) return <Withdraw seedelf={free.seedelf} onCancel={home} onSent={sent} />;
   if (activityOf) {
     const pendingHash = watching ? pending?.txHash : undefined;
-    return <Activity of={activityOf} pendingHash={pendingHash} onBack={() => setActivityOf(undefined)} />;
+    return (
+      <Activity
+        of={activityOf}
+        pendingHash={pendingHash}
+        onBack={() => setActivityOf(undefined)}
+        onRead={() => void load(false)}
+      />
+    );
   }
   if (tokensOf && balances) {
     const back = () => setTokensOf(undefined);
     return <Tokens tokens={balances[tokensOf].tokens} of={tokensOf} onBack={back} />;
   }
   if (utxosOf) {
-    // Locking changes what's locked, not the reading: the kept reading comes back with it, no request.
+    // Locking or refreshing there changes the kept reading: Home picks it up, with no request.
     return <Utxos of={utxosOf} onBack={() => setUtxosOf(undefined)} onChanged={() => void load(false)} />;
   }
 
@@ -362,23 +369,7 @@ export function Home() {
           </section>
         )}
 
-        <div className="refresh-row">
-          <span className="note" data-testid="updated">
-            {reading ? "Reading the chain…" : balances ? `Updated ${timeAgo(balances.updatedAt, now)}` : ""}
-          </span>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => void load(true)}
-            disabled={reading}
-            aria-label="Refresh"
-            title="Read the chain again"
-          >
-            <span className={reading ? "spin" : "icon"}>
-              <RefreshIcon size={15} />
-            </span>
-          </button>
-        </div>
+        <RefreshRow reading={reading} updatedAt={balances?.updatedAt} onRefresh={() => void load(true)} />
       </div>
     </>
   );

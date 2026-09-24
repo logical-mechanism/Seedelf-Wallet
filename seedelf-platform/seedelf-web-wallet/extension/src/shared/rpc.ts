@@ -120,6 +120,8 @@ export interface UtxoInfo {
 export interface UtxoLists {
   seedelf: UtxoInfo[];
   cardano: UtxoInfo[];
+  /** When the balance reading they come from was made (ms since the epoch). */
+  updatedAt?: number;
 }
 
 /** The Cardano account's collateral: 5 ₳ set aside for transactions that run a script. */
@@ -350,10 +352,18 @@ export interface Requests {
   /** Adds a contact, or changes the one with `id`; returns the contacts. */
   "contact-save": { payload: { id?: string; name: string; value: string }; result: Contact[] };
   "contact-remove": { payload: { id: string }; result: Contact[] };
-  /** One balance's activity, newest first; `more` reads the next page (the Cardano account only). */
-  history: { payload: { of: "seedelf" | "cardano"; more?: boolean }; result: { entries: ActivityEntry[]; more: boolean } };
-  /** Both sides' UTxOs, from the last reading. */
-  utxos: { payload: None; result: UtxoLists };
+  /**
+   * One balance's activity, newest first; `more` reads the next page (the
+   * Cardano account only). `refresh` reads the balances again first, for the
+   * Seedelf side's arrivals; the Cardano side asks Koios for what's newer
+   * every time. `updatedAt`: when what's shown was read.
+   */
+  history: {
+    payload: { of: "seedelf" | "cardano"; more?: boolean; refresh?: boolean };
+    result: { entries: ActivityEntry[]; more: boolean; updatedAt?: number };
+  };
+  /** Both sides' UTxOs, from the last reading, or a new one with `refresh`. */
+  utxos: { payload: { refresh?: boolean }; result: UtxoLists };
   /** Locks or unlocks one UTxO (`txhash#index`): a locked one is left out of every payment. */
   "utxo-lock": { payload: { of: UtxoSide; utxo: string; locked: boolean }; result: UtxoLists };
   /** The Cardano account's collateral, from the last reading. */

@@ -19,7 +19,7 @@
 // last balance reading and the contract scan, in session storage.
 
 import type { NetworkName } from "../networks";
-import type { CollateralStatus, Locked, UtxoInfo, UtxoLists, UtxoSide } from "../shared/rpc";
+import type { Balances, CollateralStatus, Locked, UtxoInfo, UtxoLists, UtxoSide } from "../shared/rpc";
 import type { PathedUtxo } from "./account";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
@@ -28,7 +28,7 @@ import type { KoiosUtxo } from "./koios";
 import type { PrivateStore } from "./private-store";
 import { outpoint, spentSet } from "./spent";
 import type { Area } from "./storage";
-import type { Wallet } from "./wallet";
+import { SESSION_BALANCES_PREFIX, type Wallet } from "./wallet";
 
 /** chrome.storage.session, per network: the account's UTxOs at the last balance reading, with their paths. */
 export const SESSION_ACCOUNT_UTXOS_PREFIX = "seedelf.accountUtxos.";
@@ -128,12 +128,13 @@ export class CoinControlService {
   /** Both sides' UTxOs, from the last reading: largest first. */
   async lists(network: NetworkName): Promise<UtxoLists> {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
-    const [view, account, spent] = await wallet.withKeys(
+    const [view, account, spent, reading] = await wallet.withKeys(
       async () =>
         [
           await keptContractView(session, network),
           (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [],
           await spentSet(session),
+          await session.get<Balances>(SESSION_BALANCES_PREFIX + network),
         ] as const,
     );
     const choices = await this.choices(network);
@@ -157,7 +158,11 @@ export class CoinControlService {
         ...(p === collateral ? { collateral: true } : {}),
       }),
     );
-    return { seedelf: seedelf.sort(largestFirst), cardano: cardano.sort(largestFirst) };
+    return {
+      seedelf: seedelf.sort(largestFirst),
+      cardano: cardano.sort(largestFirst),
+      ...(reading ? { updatedAt: reading.updatedAt } : {}),
+    };
   }
 
   /** Locks or unlocks one UTxO. A seedelf's UTxO and the collateral aren't locked this way. */

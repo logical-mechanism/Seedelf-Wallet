@@ -74,6 +74,14 @@ export class BalanceService {
     return this.withLocked(network, await this.reading(network, refresh));
   }
 
+  /** When the kept reading was made, without reading anything; undefined when there's none. Throws if locked. */
+  async lastRead(network: NetworkName): Promise<number | undefined> {
+    const cached = await this.deps.wallet.withKeys(() =>
+      this.deps.session.get<Balances>(SESSION_BALANCES_PREFIX + network),
+    );
+    return cached?.updatedAt;
+  }
+
   private async reading(network: NetworkName, refresh: boolean): Promise<Balances> {
     if (!refresh) {
       const cached = await this.deps.wallet.withKeys(() =>

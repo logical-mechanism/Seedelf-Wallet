@@ -107,13 +107,20 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.contacts.save(ctx.network, message);
     case "contact-remove":
       return ctx.contacts.remove(ctx.network, message.id);
-    case "history":
-      return message.of === "seedelf"
-        ? { entries: await ctx.activity.seedelf(ctx.network), more: false }
-        : ctx.activity.cardano(ctx.network, message.more ?? false);
+    case "history": {
+      if (message.of === "seedelf") {
+        // Arrivals are noted by a balance reading: Refresh makes one, and otherwise the history asks nothing.
+        const updatedAt = message.refresh
+          ? (await ctx.balances.get(ctx.network, true)).updatedAt
+          : await ctx.balances.lastRead(ctx.network);
+        return { entries: await ctx.activity.seedelf(ctx.network), more: false, updatedAt };
+      }
+      // The Cardano side asks Koios for what's newer on every call.
+      return { ...(await ctx.activity.cardano(ctx.network, message.more ?? false)), updatedAt: Date.now() };
+    }
     // Coin control reads the last balance reading, so there must be one.
     case "utxos":
-      await ctx.balances.get(ctx.network);
+      await ctx.balances.get(ctx.network, message.refresh ?? false);
       return ctx.coins.lists(ctx.network);
     case "utxo-lock":
       return ctx.coins.setLocked(ctx.network, message.of, message.utxo, message.locked);

@@ -541,18 +541,29 @@ test("activity: the Seedelf history from the device, the Cardano account's from 
     /^https:\/\/preprod\.cardanoscan\.io\/transaction\/[0-9a-f]{64}$/,
   );
   await page.keyboard.press("Escape");
+  // Refresh reads the balances again, which is how arrivals are noted.
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("updated")).toHaveText("Updated just now");
+  await expect.poll(() => koios.calls.slice(reads).sort()).toEqual(["account_addresses", "credential_utxos", "credential_utxos"]);
+  await expect(list.getByRole("listitem")).toHaveCount(2);
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
   // Cardano account: a page of 20 is two requests; Load more, two more.
+  const before = koios.calls.length;
   await cardanoTab(page);
   await page.getByRole("button", { name: "Activity" }).click();
   await expect(page.getByRole("heading", { name: "Cardano account activity" })).toBeVisible();
   await expect(list.getByRole("listitem")).toHaveCount(20);
-  expect(koios.calls.slice(reads)).toEqual(["account_txs", "tx_info"]);
+  expect(koios.calls.slice(before)).toEqual(["account_txs", "tx_info"]);
   await snap(page, "activity-cardano");
   await page.getByRole("button", { name: "Load more" }).click();
   await expect(list.getByRole("listitem")).toHaveCount(40);
-  expect(koios.calls.slice(reads)).toEqual(["account_txs", "tx_info", "account_txs", "tx_info"]);
+  expect(koios.calls.slice(before)).toEqual(["account_txs", "tx_info", "account_txs", "tx_info"]);
+  // Refresh asks only for what's newer: nothing, so no tx_info.
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect.poll(() => koios.calls.slice(before)).toEqual(["account_txs", "tx_info", "account_txs", "tx_info", "account_txs"]);
+  await expect(page.getByTestId("updated")).toHaveText("Updated just now");
+  await expect(list.getByRole("listitem")).toHaveCount(40);
 });
 
 test("move in: amount and a token, review, send, then watch it confirm", async ({ context, koios }) => {
@@ -713,16 +724,24 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   await expect(page.getByText("3 ₳ available · 25 ₳ locked")).toBeVisible();
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
-  // Cardano: lock the biggest, and Send offers less.
+  // Cardano: lock the biggest from its row, and Send offers less.
   await cardanoTab(page);
   await page.getByRole("button", { name: "UTxOs", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Cardano account UTxOs" })).toBeVisible();
-  await expect(page.getByTestId("utxos").getByRole("listitem")).toHaveCount(6);
-  await page.getByTestId("utxos").getByRole("button").first().click();
+  const rows = page.getByTestId("utxos").getByRole("listitem");
+  await expect(rows).toHaveCount(6);
+  const quick = page.getByRole("button", { name: /^Lock 10,338\.538725 ₳/ });
+  await expect(quick).toHaveAttribute("aria-pressed", "false");
+  await quick.click();
+  await expect(quick).toHaveAttribute("aria-pressed", "true");
+  // It stays where it was, and its details say it's locked.
+  await expect(rows.first()).toContainText("10,338.538725 ₳");
+  await snap(page, "utxos-cardano");
+  await rows.first().getByRole("button").first().click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByTestId("utxo-address")).toBeVisible();
   await expect(dialog.getByTestId("utxo-tokens")).toBeVisible();
-  await dialog.getByRole("button", { name: "Lock", exact: true }).click();
+  await expect(dialog.getByTestId("utxo-state")).toHaveText("Locked: left out of every payment.");
   await expect(dialog.getByRole("button", { name: "Unlock" })).toBeVisible();
   await snap(page, "utxo-details");
   await dialog.getByRole("button", { name: "Close" }).click();
@@ -735,6 +754,13 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   // None of it asked Koios anything, or sent anything.
   expect(koios.calls).toHaveLength(reads);
   expect(koios.submitted).toHaveLength(0);
+
+  // Refresh reads the balances again, as Home's does, and the lock holds.
+  await page.getByRole("button", { name: "UTxOs", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect.poll(() => koios.calls.slice(reads).sort()).toEqual(["account_addresses", "credential_utxos", "credential_utxos"]);
+  await expect(page.getByTestId("updated")).toHaveText("Updated just now");
+  await expect(quick).toHaveAttribute("aria-pressed", "true");
 });
 
 test("collateral: set in Settings by paying 5 ₳ to yourself, then watched on Home", async ({ context, koios }) => {

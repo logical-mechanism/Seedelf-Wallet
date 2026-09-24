@@ -1,9 +1,10 @@
 // Activity: one balance's history, newest first, grouped by day, after Lace's
 // Activity tab. The Seedelf history comes from the device (no requests); the
 // Cardano account's, a page of 20 at a time from Koios. An entry opens its
-// details, with the transaction on Cardanoscan.
+// details, with the transaction on Cardanoscan. Refresh reads again: the
+// balances, for the Seedelf side's arrivals; what's newer, for the account's.
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ActivityEntry } from "../../shared/rpc";
 import { call } from "../background";
@@ -19,6 +20,7 @@ import {
   WithdrawIcon,
 } from "../components/Icons";
 import { Modal } from "../components/Modal";
+import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { explorerUrl, formatAda, plural, shortHex } from "../format";
@@ -83,31 +85,50 @@ function day(at: number, now: Date): string {
 
 const time = (at: number) => (at ? new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "");
 
-export function Activity({ of, pendingHash, onBack }: { of: Of; pendingHash?: string; onBack: () => void }) {
+export function Activity({
+  of,
+  pendingHash,
+  onBack,
+  onRead,
+}: {
+  of: Of;
+  pendingHash?: string;
+  onBack: () => void;
+  /** After Refresh: the balances may have been read again. */
+  onRead: () => void;
+}) {
   const network = useNetwork();
   const [entries, setEntries] = useState<ActivityEntry[]>();
   const [more, setMore] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number>();
+  const [busy, setBusy] = useState<"more" | "refresh" | "open">();
   const [error, setError] = useState<string>();
   const [open, setOpen] = useState<ActivityEntry>();
+  // Home's callback is new on every render; reading it through a ref keeps `load` (and the effect) stable.
+  const read = useRef(onRead);
+  useEffect(() => {
+    read.current = onRead;
+  });
 
   const load = useCallback(
-    async (next: boolean) => {
-      setBusy(true);
+    async (why: "more" | "refresh" | "open") => {
+      setBusy(why);
       setError(undefined);
       try {
-        const page = await call("history", { of, more: next });
+        const page = await call("history", { of, more: why === "more", refresh: why === "refresh" });
         setEntries(page.entries);
         setMore(page.more);
+        setUpdatedAt(page.updatedAt);
+        if (why === "refresh") read.current();
       } catch (e) {
         setError((e as Error).message);
       } finally {
-        setBusy(false);
+        setBusy(undefined);
       }
     },
     [of],
   );
-  useEffect(() => void load(false), [load]);
+  useEffect(() => void load("open"), [load]);
 
   const now = new Date();
   const groups: Array<[string, ActivityEntry[]]> = [];
@@ -132,6 +153,7 @@ export function Activity({ of, pendingHash, onBack }: { of: Of; pendingHash?: st
       ) : (
         <p className="note">Read from Koios, which already knows this account, 20 transactions at a time.</p>
       )}
+      <RefreshRow reading={busy === "refresh"} updatedAt={updatedAt} onRefresh={() => void load("refresh")} />
       {entries === undefined ? (
         <p className="note center empty">{busy ? "Reading…" : ""}</p>
       ) : entries.length === 0 ? (
@@ -161,8 +183,8 @@ export function Activity({ of, pendingHash, onBack }: { of: Of; pendingHash?: st
         </div>
       )}
       {more && (
-        <button type="button" className="secondary" onClick={() => void load(true)} disabled={busy}>
-          {busy ? "Reading…" : "Load more"}
+        <button type="button" className="secondary" onClick={() => void load("more")} disabled={busy !== undefined}>
+          {busy === "more" ? "Reading…" : "Load more"}
         </button>
       )}
       {open && (

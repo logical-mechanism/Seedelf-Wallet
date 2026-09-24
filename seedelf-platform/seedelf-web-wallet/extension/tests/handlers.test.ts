@@ -4,15 +4,14 @@
 import { describe, expect, it } from "vitest";
 
 import { handle, type Context } from "../src/background/handlers";
-import type { Account, Balances, Status, UnlockResult } from "../src/shared/rpc";
+import type { Account, Balances, Status, UnlockResult, UtxoLists } from "../src/shared/rpc";
 import { isMessage } from "../src/shared/rpc";
 import { loadTestWasm, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 
-function context(): Context {
-  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins } =
-    testBalances();
+function context(t = testBalances()): Context {
+  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins } = t;
   return {
     wasm: loadTestWasm(),
     wallet,
@@ -104,6 +103,31 @@ describe("handlers", () => {
     const b = (await handle({ type: "balances", refresh: true }, ctx)) as Balances;
     expect(b.network).toBe("preprod");
     expect(b.seedelf.seedelfs.map((s) => s.label)).toEqual(["web-wallet"]);
+  });
+
+  it("refreshes UTxOs and the Seedelf history with a balance reading; opening them reads nothing", async () => {
+    const t = testBalances();
+    const ctx = context(t);
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    const first = (await handle({ type: "balances" }, ctx)) as Balances;
+    const reads = () => t.koios.calls.length;
+    const before = reads();
+
+    const lists = (await handle({ type: "utxos" }, ctx)) as UtxoLists;
+    const history = (await handle({ type: "history", of: "seedelf" }, ctx)) as { updatedAt?: number };
+    expect(lists.updatedAt).toBe(first.updatedAt);
+    expect(history.updatedAt).toBe(first.updatedAt);
+    expect(reads()).toBe(before);
+
+    t.clock.now += 60_000;
+    const fresh = (await handle({ type: "utxos", refresh: true }, ctx)) as UtxoLists;
+    expect(fresh.updatedAt).toBe(t.clock.now);
+    expect(reads()).toBe(before + 3);
+    t.clock.now += 60_000;
+    const again = (await handle({ type: "history", of: "seedelf", refresh: true }, ctx)) as { updatedAt?: number };
+    expect(again.updatedAt).toBe(t.clock.now);
+    expect(reads()).toBe(before + 6);
   });
 
   it("recognizes only known requests", () => {

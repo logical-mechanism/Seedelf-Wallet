@@ -1,10 +1,11 @@
-// UTxOs: one balance's UTxOs, locked ones first, then largest first, from the
-// last reading (no requests). A UTxO opens its details, where it can be
-// locked: a locked UTxO is left out of every payment on its side, Max
+// UTxOs: one balance's UTxOs, kept ones first, then largest first, from the
+// last reading (no requests; Refresh reads the chain again). The lock at the
+// end of a row locks or unlocks it at once; the row opens its details, which
+// have Lock too. A locked UTxO is left out of every payment on its side, Max
 // included. The Cardano account's collateral is listed too, and reclaimed in
 // Settings; a seedelf's UTxO only ever moves when the seedelf is removed.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
 import { call } from "../background";
@@ -12,6 +13,7 @@ import { Callout } from "../components/Callout";
 import { CopyField } from "../components/CopyField";
 import { CoinsIcon, LockIcon, LockOpenIcon, SproutIcon, VaultIcon } from "../components/Icons";
 import { Modal } from "../components/Modal";
+import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { formatAda, formatQuantity, plural, shortHex, tokenKey } from "../format";
@@ -28,41 +30,68 @@ function tag(u: UtxoInfo): string | undefined {
   return undefined;
 }
 
+/** A seedelf's UTxO and the collateral aren't locked or unlocked by hand. */
+const lockable = (u: UtxoInfo) => !u.seedelf && !u.collateral;
+
 function Icon({ u }: { u: UtxoInfo }) {
   if (u.seedelf) return <SproutIcon size={16} />;
   if (u.collateral) return <VaultIcon size={16} />;
-  if (u.locked) return <LockIcon size={16} />;
   return <CoinsIcon size={16} />;
 }
 
+/** Kept ones first, so they're found among hundreds; each group largest first, as the worker sends them. */
+const arrange = (all: UtxoInfo[]) => [...all.filter((u) => tag(u)), ...all.filter((u) => !tag(u))].map(ref);
+
 export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => void; onChanged: () => void }) {
   const [lists, setLists] = useState<UtxoLists>();
+  // The order is set when the list is read, so a row stays put while it's locked and unlocked.
+  const [order, setOrder] = useState<string[]>([]);
   const [open, setOpen] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [saving, setSaving] = useState<string>();
   const [error, setError] = useState<string>();
-
+  // Home's callback is new on every render; reading it through a ref keeps `read` (and the effect) stable.
+  const changed = useRef(onChanged);
   useEffect(() => {
-    call("utxos", {}).then(setLists, (e: Error) => setError(e.message));
-  }, []);
+    changed.current = onChanged;
+  });
 
-  // Locked ones first, so they're found among hundreds; each group largest first, as the worker sends them.
+  const read = useCallback(
+    async (refresh: boolean) => {
+      setRefreshing(refresh);
+      setError(undefined);
+      try {
+        const next = await call("utxos", { refresh });
+        setLists(next);
+        setOrder(arrange(next[of]));
+        if (refresh) changed.current();
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setRefreshing(false);
+      }
+    },
+    [of],
+  );
+  useEffect(() => void read(false), [read]);
+
   const list = useMemo(() => {
-    const all = lists?.[of];
-    return all && [...all.filter((u) => tag(u)), ...all.filter((u) => !tag(u))];
-  }, [lists, of]);
+    const byRef = new Map((lists?.[of] ?? []).map((u) => [ref(u), u]));
+    return lists && order.flatMap((r) => byRef.get(r) ?? []);
+  }, [lists, of, order]);
   const locked = list?.filter((u) => u.locked && !u.seedelf).length ?? 0;
   const shown = list?.find((u) => ref(u) === open);
 
   async function setLocked(u: UtxoInfo, lock: boolean) {
-    setBusy(true);
+    setSaving(ref(u));
     setError(undefined);
     try {
       setLists(await call("utxo-lock", { of, utxo: ref(u), locked: lock }));
-      onChanged();
+      changed.current();
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      setSaving(undefined);
     }
   }
 
@@ -81,41 +110,62 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
           about.
         </Callout>
       )}
+      <RefreshRow reading={refreshing} updatedAt={lists?.updatedAt} onRefresh={() => void read(true)} />
       {list === undefined ? (
         <p className="note center empty">{error ? "" : "Reading…"}</p>
       ) : list.length === 0 ? (
         <p className="note center empty">No UTxOs yet.</p>
       ) : (
-        <section className="section" aria-labelledby="utxos-title">
+        <section className="section" aria-label="UTxOs">
           <ul className="list" data-testid="utxos">
-            {list.map((u) => (
-              <li key={ref(u)}>
-                <button
-                  type="button"
-                  className="token-row"
-                  onClick={() => setOpen(ref(u))}
-                  aria-label={`${formatAda(u.lovelace)} ₳${tag(u) ? `, ${tag(u)!.toLowerCase()}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
-                >
-                  <span className={`avatar activity__icon${tag(u) ? " utxo__icon--kept" : ""}`}>
-                    <Icon u={u} />
-                  </span>
-                  <span className="token-row__label">
-                    {formatAda(u.lovelace)} ₳{u.tokens.length ? ` and ${plural(u.tokens.length, "token")}` : ""}
-                  </span>
-                  <span className="token-row__amount">{tag(u) && <span className="utxo-tag">{tag(u)}</span>}</span>
-                  <span className="token-row__sub">
-                    {shortHex(u.txHash, 8, 4)}#{u.index}
-                  </span>
-                </button>
-              </li>
-            ))}
+            {list.map((u) => {
+              const name = `${formatAda(u.lovelace)} ₳, ${shortHex(u.txHash)}#${u.index}`;
+              return (
+                <li key={ref(u)} className="utxo-row">
+                  <button
+                    type="button"
+                    className="token-row"
+                    onClick={() => setOpen(ref(u))}
+                    aria-label={`${formatAda(u.lovelace)} ₳${tag(u) ? `, ${tag(u)!.toLowerCase()}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
+                  >
+                    <span className={`avatar activity__icon${tag(u) ? " utxo__icon--kept" : ""}`}>
+                      <Icon u={u} />
+                    </span>
+                    <span className="token-row__label">
+                      {formatAda(u.lovelace)} ₳{u.tokens.length ? ` and ${plural(u.tokens.length, "token")}` : ""}
+                    </span>
+                    <span className="token-row__amount">
+                      {!lockable(u) && <span className="utxo-tag">{tag(u)}</span>}
+                    </span>
+                    <span className="token-row__sub">
+                      {shortHex(u.txHash, 8, 4)}#{u.index}
+                    </span>
+                  </button>
+                  {lockable(u) ? (
+                    <button
+                      type="button"
+                      className="icon-button utxo-row__lock"
+                      aria-pressed={u.locked}
+                      aria-label={`Lock ${name}`}
+                      title={u.locked ? "Locked: tap to spend it again" : "Lock: keep it out of payments"}
+                      onClick={() => void setLocked(u, !u.locked)}
+                      disabled={saving === ref(u)}
+                    >
+                      {u.locked ? <LockIcon size={16} /> : <LockOpenIcon size={16} />}
+                    </button>
+                  ) : (
+                    <span className="utxo-row__lock" aria-hidden="true" />
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
       {shown && (
         <UtxoDetails
           utxo={shown}
-          busy={busy}
+          busy={saving === ref(shown)}
           error={error}
           onLock={(lock) => void setLocked(shown, lock)}
           onClose={() => {
@@ -142,8 +192,7 @@ function UtxoDetails({
   onClose: () => void;
 }) {
   const network = useNetwork();
-  const lockable = !utxo.seedelf && !utxo.collateral;
-  const foot = lockable ? (
+  const foot = lockable(utxo) ? (
     <>
       {error && (
         <p className="error" role="alert">
