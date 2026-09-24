@@ -1,7 +1,7 @@
 // Display formatting for amounts and token names. Amounts arrive as integer
 // strings and are handled as bigint, so nothing is rounded on the way.
 
-import type { Locked, TokenAmount } from "../shared/rpc";
+import type { Locked, PoolRef, StakeInfo, TokenAmount } from "../shared/rpc";
 
 /** An integer amount with `decimals` places, grouped and with trailing zeros trimmed: "1,234.5". */
 export function formatQuantity(quantity: string, decimals: number): string {
@@ -199,4 +199,48 @@ export function unlocked<S extends { lovelace: string; tokens: TokenAmount[]; ut
 /** " · 5 ₳ locked" when some of a balance side is locked, for a form's line under its title. */
 export function lockedAside(side: { locked: Locked }): string {
   return side.locked.utxos ? ` · ${formatAda(side.locked.lovelace)} ₳ locked` : "";
+}
+
+/** A percentage to at most two places: "18.79%", "2%". */
+export function formatPercent(value: number): string {
+  return `${Number(value.toFixed(2)).toLocaleString("en-US")}%`;
+}
+
+/**
+ * The staking rewards a payment from the account spends along with it: all of
+ * them, when the user spends rewards and the vote is delegated (Conway pays
+ * out nothing otherwise).
+ */
+export function spentRewards(staking: StakeInfo, spendRewards: boolean): bigint {
+  return spendRewards && staking.registered && staking.drep ? BigInt(staking.rewards) : 0n;
+}
+
+/** Rewards that can't be withdrawn until the vote is delegated. */
+export const rewardsLocked = (s: StakeInfo) => s.registered && BigInt(s.rewards) > 0n && !s.drep;
+
+/** The account's side with `rewards` added to what it can pay: they ride along with any payment. */
+export function withRewards<S extends { lovelace: string }>(side: S, rewards: bigint): S {
+  return rewards > 0n ? { ...side, lovelace: (BigInt(side.lovelace) + rewards).toString() } : side;
+}
+
+/** ", with 57.47 ₳ of rewards" after what a form can pay, when rewards ride along. */
+export function rewardsAside(rewards?: string): string {
+  return rewards ? `, with ${formatAda(rewards)} ₳ of rewards` : "";
+}
+
+/** A pool by its ticker, else its name, else its shortened ID. */
+export function poolLabel(pool: PoolRef): string {
+  return pool.ticker ?? pool.name ?? shortHex(pool.id, 10, 6);
+}
+
+/** The pinned vote delegations, as Koios names them. */
+export const ALWAYS_ABSTAIN = "drep_always_abstain";
+export const ALWAYS_NO_CONFIDENCE = "drep_always_no_confidence";
+
+/** Where the vote goes, in words: a pinned choice, the DRep's name or shortened ID, or nowhere. */
+export function voteLabel(drep: string | null, name?: string): string {
+  if (!drep) return "Not delegated";
+  if (drep === ALWAYS_ABSTAIN) return "Always abstain";
+  if (drep === ALWAYS_NO_CONFIDENCE) return "Always no confidence";
+  return name ?? shortHex(drep, 10, 6);
 }

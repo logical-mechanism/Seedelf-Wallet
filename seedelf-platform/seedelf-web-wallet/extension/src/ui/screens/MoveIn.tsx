@@ -12,16 +12,21 @@ import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, lockedAside, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, formatQuantity, lockedAside, rewardsAside, tokenKey as key } from "../format";
+import { WithdrawalRow } from "./CardanoSend";
 import { useNetwork } from "../network";
 import { tokenLabel } from "../tokens";
 
 export function MoveIn({
   cardano,
+  rewards,
   onCancel,
   onSent,
 }: {
+  /** What can pay: `lovelace` includes `rewards`. */
   cardano: Balances["cardano"];
+  /** Staking rewards that ride along (lovelace), when any do. */
+  rewards?: string;
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
@@ -95,6 +100,7 @@ export function MoveIn({
             );
           })}
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
+          <WithdrawalRow withdrawal={summary.withdrawal} />
           <Row label="Back to your Cardano account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="New Seedelf UTxOs" value={String(summary.depositOutputs)} />
         </ReviewRows>
@@ -113,7 +119,7 @@ export function MoveIn({
       title="Move in"
       titleId="move-in-title"
       onBack={onCancel}
-      aside={`${formatAda(cardano.lovelace)} ₳ available${lockedAside(cardano)}`}
+      aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!ready || busy}>
@@ -145,7 +151,8 @@ export function MoveIn({
       </div>
       {max ? (
         <p className="note">
-          Everything except the fee and what the tokens you keep need. Your collateral and any UTxOs you locked stay put.
+          Everything except the fee and what the tokens you keep need{rewards ? ", staking rewards included" : ""}. Your
+          collateral and any UTxOs you locked stay put.
         </p>
       ) : (
         <>
