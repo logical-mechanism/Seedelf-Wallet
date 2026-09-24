@@ -23,7 +23,6 @@ import type {
   WithdrawSummary,
 } from "../shared/rpc";
 import { seedelfName } from "../shared/seedelf-name";
-import { CONTRACT_V1 } from "./balances";
 import { seedelfLabel } from "./chain";
 import { keep, measure, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
 
@@ -89,17 +88,10 @@ export class WithdrawService {
     lovelace: string | null,
     tokens: TokenQuantity[],
   ): Promise<WithdrawSummary> {
-    const { wasm, wallet } = this.deps;
+    const { wasm } = this.deps;
     const destination = await this.resolve(network, to);
-    const { contractUtxos, params } = await readContract(this.deps, network);
-    const request = await wallet.withKeys((keys) => ({
-      network,
-      params,
-      utxos: spendable(this.deps, keys, contractUtxos),
-      to: destination.address,
-      lovelace,
-      tokens,
-    }));
+    const { view, params } = await readContract(this.deps, network);
+    const request = { network, params, utxos: spendable(this.deps, view), to: destination.address, lovelace, tokens };
     if (request.utxos.length === 0) {
       throw new Error("Your Seedelf balance is empty, so there's nothing to withdraw.");
     }
@@ -122,14 +114,13 @@ export class WithdrawService {
 
   /** Builds the removal of the seedelf `name`; its ADA goes `to` the account's 0/0 or the Seedelf balance. */
   async buildRemove(network: NetworkName, name: string, to: RemoveTo): Promise<RemoveSummary> {
-    const { wasm, wallet, contract = CONTRACT_V1 } = this.deps;
+    const { wasm, wallet } = this.deps;
     const seedelf = seedelfName(name);
     if (!seedelf) throw new Error("That isn't a seedelf's name.");
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-    const { contractUtxos, params } = await readContract(this.deps, network);
-    const utxo = contractUtxos.find((u) =>
-      u.asset_list?.some((a) => a.policy_id === contract.seedelfPolicyId && a.asset_name === seedelf),
-    );
+    const { view, params } = await readContract(this.deps, network);
+    // Any seedelf is found; WebAssembly refuses one that isn't this wallet's.
+    const utxo = view.seedelfs[seedelf];
     if (!utxo) throw new Error(`No seedelf with that name on ${network}. It may be removed already.`);
     const request = await wallet.withKeys((keys) => ({
       network,

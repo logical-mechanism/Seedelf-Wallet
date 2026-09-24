@@ -1,8 +1,9 @@
 // Every Seedelf script spend (a stealth mint, a transfer; sweep and remove
 // next) is built and sent the same way:
 //
-// build  reads the whole wallet contract and the protocol parameters; the
-//        caller makes the WebAssembly request from them. WebAssembly drafts
+// build  reads the wallet contract (contract-scan.ts: in full when due,
+//        otherwise only what's new) and the protocol parameters; the caller
+//        makes the WebAssembly request from them. WebAssembly drafts
 //        it under a new one-time key, Ogmios (through Koios) measures the
 //        scripts, and WebAssembly finishes it. The unsigned transaction waits
 //        in session storage, with its one-time key's seed, until Send.
@@ -18,12 +19,13 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { PendingTx } from "../shared/rpc";
-import { CONTRACT_V1, ownedUtxos, type ContractConfig } from "./balances";
+import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
 import type { Collateral } from "./collateral";
-import type { Koios, KoiosUtxo } from "./koios";
+import { forgetContractView, readContractView, type ContractView } from "./contract-scan";
+import { SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { SESSION_PENDING } from "./pending";
-import { readFresh, rememberSpent, spentSet, unspent } from "./spent";
+import { rememberSpent } from "./spent";
 import type { Area } from "./storage";
 import type { Keys, Wallet } from "./wallet";
 
@@ -55,30 +57,19 @@ export interface Kept {
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
-/**
- * The whole wallet contract, less what this wallet has already spent
- * (spent.ts), and the protocol parameters: fresh, read outside the wallet's queue.
- */
+/** This wallet's view of the contract (contract-scan.ts), and the protocol parameters. */
 export async function readContract(
   deps: ScriptSpendDeps,
   network: NetworkName,
-): Promise<{ contractUtxos: KoiosUtxo[]; params: Record<string, unknown> }> {
-  const { contract = CONTRACT_V1 } = deps;
-  const koios = deps.koios(network);
-  const spent = await deps.wallet.withKeys(() => spentSet(deps.session));
-  const [contractUtxos, params] = await readFresh(
-    spent,
-    () => Promise.all([koios.credentialUtxos([contract.walletContractHash]), koios.epochParams()]),
-    ([utxos]) => utxos,
-    deps.sleep,
-  );
-  return { contractUtxos: unspent(contractUtxos, spent), params };
+): Promise<{ view: ContractView; params: Record<string, unknown> }> {
+  const [view, params] = await Promise.all([readContractView(deps, network), deps.koios(network).epochParams()]);
+  return { view, params };
 }
 
 /** What the Seedelf balance counts, and a Seedelf spend may pay with: owned UTxOs that don't hold a seedelf. */
-export function spendable(deps: ScriptSpendDeps, keys: Keys, contractUtxos: KoiosUtxo[]): KoiosUtxo[] {
-  const { wasm, contract = CONTRACT_V1 } = deps;
-  return ownedUtxos(wasm, keys, contractUtxos).filter((u) => !seedelfTokenOf(u, contract.seedelfPolicyId));
+export function spendable(deps: ScriptSpendDeps, view: ContractView): KoiosUtxo[] {
+  const { contract = CONTRACT_V1 } = deps;
+  return view.owned.filter((u) => !seedelfTokenOf(u, contract.seedelfPolicyId));
 }
 
 /**
@@ -142,7 +133,14 @@ export async function send(
     txCbor = signed.txCbor;
   }
   const bytes = hexBytes(txCbor);
-  const submitted = await deps.koios(network).submitTx(bytes);
+  let submitted: string;
+  try {
+    submitted = await deps.koios(network).submitTx(bytes);
+  } catch (e) {
+    // The kept view had a spent UTxO as ours: read the contract in full next time.
+    if (e instanceof SpentInputError) await forgetContractView(deps, network);
+    throw e;
+  }
   if (submitted !== txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
 
   const pending: PendingTx = { kind, network, txHash, submittedAt: now(), confirmations: null };

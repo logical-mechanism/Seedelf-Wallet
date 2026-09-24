@@ -1,7 +1,8 @@
 // Balances: read the chain through Koios and work out what this wallet owns.
 //
 // Seedelf side: every UTxO in the wallet contract, kept when the register in
-// its datum is ours (g^x == u, checked in WebAssembly). This is what the CLI's
+// its datum is ours (g^x == u, checked in WebAssembly). The contract is read
+// in full only when due, otherwise from the last block seen (contract-scan.ts). This is what the CLI's
 // `balance` does, and UTxOs holding a seedelf are listed as seedelfs rather
 // than counted in the balance, also as in the CLI.
 //
@@ -21,6 +22,7 @@ import type * as Wasm from "@seedelf/wasm";
 import type { NetworkName } from "../networks";
 import type { Balances, SeedelfInfo } from "../shared/rpc";
 import { discoverChain, registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
+import { readContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
 import { readFresh, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
@@ -80,26 +82,24 @@ export class BalanceService {
     const [stake, spent] = await wallet.withKeys(
       async ({ cardano }) => [cardano.stakeAddress(net), await spentSet(session)] as const,
     );
-    const [usedAddresses, accountRead, contractRead] = await readFresh(
-      spent,
-      () =>
-        Promise.all([
-          koios.accountAddresses(stake),
-          koios.accountUtxos(stake),
-          koios.credentialUtxos([contract.walletContractHash]),
-        ]),
-      ([, account, contract]) => [...account, ...contract],
-      this.deps.sleep,
-    );
+    const [[usedAddresses, accountRead], view] = await Promise.all([
+      readFresh(
+        spent,
+        () => Promise.all([koios.accountAddresses(stake), koios.accountUtxos(stake)]),
+        ([, account]) => account,
+        this.deps.sleep,
+      ),
+      // The contract: in full when due, otherwise only what's new (contract-scan.ts).
+      readContractView(this.deps, network),
+    ]);
     const accountUtxos = unspent(accountRead, spent);
-    const contractUtxos = unspent(contractRead, spent);
 
-    // Ownership is decided, and the result cached, only while still unlocked.
+    // The result is cached only while still unlocked.
     return wallet.withKeys(async (keys) => {
       const balances: Balances = {
         network,
         updatedAt: now(),
-        seedelf: this.seedelfSide(keys, contractUtxos, contract.seedelfPolicyId),
+        seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId),
         cardano: this.cardanoSide(keys, net, new Set(usedAddresses), accountUtxos),
       };
       await session.set(SESSION_BALANCES_PREFIX + network, balances);
@@ -107,10 +107,11 @@ export class BalanceService {
     });
   }
 
-  private seedelfSide(keys: Keys, utxos: KoiosUtxo[], policyId: string): Balances["seedelf"] {
+  /** `owned`: this wallet's contract UTxOs. */
+  private seedelfSide(owned: KoiosUtxo[], policyId: string): Balances["seedelf"] {
     const seedelfs: SeedelfInfo[] = [];
     const spendable: KoiosUtxo[] = [];
-    for (const utxo of ownedUtxos(this.deps.wasm, keys, utxos)) {
+    for (const utxo of owned) {
       const name = seedelfTokenOf(utxo, policyId);
       if (name) seedelfs.push({ assetName: name, label: seedelfLabel(name), lovelace: utxo.value });
       else spendable.push(utxo);

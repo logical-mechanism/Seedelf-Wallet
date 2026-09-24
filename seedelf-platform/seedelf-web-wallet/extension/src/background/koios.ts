@@ -32,6 +32,9 @@ const TIMEOUT_MS = 20_000;
 
 export class KoiosError extends Error {}
 
+/** The network refused a transaction because an input it spends is already spent. */
+export class SpentInputError extends KoiosError {}
+
 /** A request that never got an answer: offline, or blocked on the way. */
 function unreachable(e: unknown): string {
   const cause = e instanceof Error ? e.message : String(e);
@@ -55,9 +58,13 @@ export class Koios {
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
   ) {}
 
-  /** Every UTxO whose payment credential is one of `credentials` (key or script hashes, hex). */
-  credentialUtxos(credentials: string[]): Promise<KoiosUtxo[]> {
-    return this.paged("credential_utxos", { _payment_credentials: credentials, _extended: true });
+  /**
+   * Every UTxO whose payment credential is one of `credentials` (key or
+   * script hashes, hex); with `after`, only those in blocks after it.
+   */
+  credentialUtxos(credentials: string[], after?: number): Promise<KoiosUtxo[]> {
+    const body = { _payment_credentials: credentials, _extended: true };
+    return this.paged("credential_utxos", body, after === undefined ? "" : `block_height=gt.${after}`);
   }
 
   /** Every address that has used this stake key, including ones now empty. */
@@ -125,7 +132,7 @@ export class Koios {
     // A UTxO it spends is already spent: Koios showed the wallet an old view
     // of the chain (spent.ts), or this transaction already went through.
     if (text.includes("BadInputsUTxO")) {
-      throw new KoiosError(
+      throw new SpentInputError(
         "The network refused it: a UTxO it spends is already spent. Koios may have shown an out-of-date view of the chain. Wait a minute, refresh, and review it again.",
       );
     }
@@ -153,10 +160,15 @@ export class Koios {
     return new Map(rows.map((r) => [r.tx_hash, r.num_confirmations]));
   }
 
-  private async paged<T>(path: string, body: unknown): Promise<T[]> {
+  /** All the rows, 1,000 a request; `filter` narrows them on Koios's side (PostgREST, e.g. `block_height=gt.5`). */
+  private async paged<T>(path: string, body: unknown, filter = ""): Promise<T[]> {
     const rows: T[] = [];
     for (let offset = 0; ; offset += PAGE_SIZE) {
-      const page = await this.post<T>(path, body, `order=tx_hash.asc,tx_index.asc&offset=${offset}&limit=${PAGE_SIZE}`);
+      const page = await this.post<T>(
+        path,
+        body,
+        `${filter ? `${filter}&` : ""}order=tx_hash.asc,tx_index.asc&offset=${offset}&limit=${PAGE_SIZE}`,
+      );
       rows.push(...page);
       if (page.length < PAGE_SIZE) return rows;
     }

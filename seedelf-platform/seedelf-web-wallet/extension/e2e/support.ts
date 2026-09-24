@@ -123,9 +123,11 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
+    // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
+    const after = Number(/gt\.(\d+)/.exec(new URL(request.url()).searchParams.get("block_height") ?? "")?.[1] ?? -1);
     const rows =
       path === "credential_utxos"
-        ? [...koiosPreprod.contract_utxos, ...ownedUtxos]
+        ? [...koiosPreprod.contract_utxos, ...ownedUtxos].filter((u) => (u.block_height ?? 0) > after)
         : path === "account_addresses"
           ? (account?.account_addresses ?? [])
           : path === "account_utxos"

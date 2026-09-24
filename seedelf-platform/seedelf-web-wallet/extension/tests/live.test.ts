@@ -15,11 +15,12 @@ describe.skipIf(!process.env.LIVE_KOIOS)("live preprod Koios", () => {
     const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
     const t = testWallet();
     await t.wallet.create(v.phrase, "correct horse battery");
+    const urls: string[] = [];
     const balances = new BalanceService({
       wasm: loadTestWasm(),
       wallet: t.wallet,
       session: t.session,
-      koios: () => new Koios(NETWORKS.preprod.koios),
+      koios: () => new Koios(NETWORKS.preprod.koios, (url, init) => (urls.push(url), fetch(url, init))),
       now: Date.now,
     });
     const started = performance.now();
@@ -32,6 +33,13 @@ describe.skipIf(!process.env.LIVE_KOIOS)("live preprod Koios", () => {
     // shape, not how many there are.
     expect(b.seedelf.seedelfs.every((s) => s.assetName.startsWith("5eed0e1f"))).toBe(true);
     expect(BigInt(b.seedelf.lovelace)).toBeGreaterThanOrEqual(0n);
+
+    // The next reading asks only for UTxOs newer than the last block seen, and agrees.
+    const again = await balances.get("preprod", true);
+    const scans = urls.filter((u) => u.includes("/credential_utxos"));
+    expect(scans).toHaveLength(2);
+    expect(scans[1]).toMatch(/block_height=gt\.\d+/);
+    expect(again.seedelf).toEqual(b.seedelf);
   }, 60_000);
 
   it("finds real ADA Handles, a plain one and a CIP-68 one", async () => {

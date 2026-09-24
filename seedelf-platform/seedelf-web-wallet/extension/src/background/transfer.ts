@@ -2,10 +2,10 @@
 // the CLI's `transfer`, built by the same core code (`build::transfer`)
 // through WebAssembly, and sent like every Seedelf spend (script-spend.ts).
 //
-// lookup  a seedelf is found by its full name in the whole wallet contract:
-//         the credential_utxos query a balance reading already makes. Koios
-//         is never asked about the recipient's token (asset_utxos and the
-//         like): that would tell it exactly who is being paid.
+// lookup  a seedelf is found by its full name in the wallet contract, as
+//         the balance reading sees it (contract-scan.ts). Koios is never asked
+//         about the recipient's token (asset_utxos and the like): that would
+//         tell it exactly who is being paid.
 // build   the same lookup, fresh. WebAssembly checks the recipient's UTxO (in
 //         the contract, holding that seedelf, under a register), pays a new
 //         re-randomization of that register, picks the Seedelf UTxOs that
@@ -17,10 +17,11 @@
 import type { NetworkName } from "../networks";
 import type { PendingTx, SeedelfLookup, TokenQuantity, TransferSummary } from "../shared/rpc";
 import { SEEDELF_NAME_RULE, seedelfName } from "../shared/seedelf-name";
-import { CONTRACT_V1, ownedUtxos } from "./balances";
 import { seedelfLabel } from "./chain";
+import { readContractView, type ContractView } from "./contract-scan";
 import type { KoiosUtxo } from "./koios";
 import { keep, measure, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
+import { outpoint } from "./spent";
 
 /** chrome.storage.session: the transfer built last, until it's sent or replaced. */
 export const SESSION_TRANSFER = "seedelf.transfer.built";
@@ -37,27 +38,18 @@ export class TransferService {
   /** The seedelf named `to`, if the wallet contract holds it. */
   async lookup(network: NetworkName, to: string): Promise<SeedelfLookup> {
     const name = nameOf(to);
-    const { contract = CONTRACT_V1 } = this.deps;
-    const utxos = await this.deps.koios(network).credentialUtxos([contract.walletContractHash]);
-    const utxo = this.find(utxos, name, network);
-    const own = await this.deps.wallet.withKeys((keys) => ownedUtxos(this.deps.wasm, keys, [utxo]).length > 0);
+    const view = await readContractView(this.deps, network);
+    const utxo = find(view, name, network);
+    const own = view.owned.some((u) => outpoint(u) === outpoint(utxo));
     return { name, label: seedelfLabel(name), own };
   }
 
   async build(network: NetworkName, to: string, lovelace: string, tokens: TokenQuantity[]): Promise<TransferSummary> {
-    const { wasm, wallet } = this.deps;
+    const { wasm } = this.deps;
     const name = nameOf(to);
-    const { contractUtxos, params } = await readContract(this.deps, network);
-    const recipient = this.find(contractUtxos, name, network);
-    const request = await wallet.withKeys((keys) => ({
-      network,
-      params,
-      utxos: spendable(this.deps, keys, contractUtxos),
-      to: name,
-      recipient,
-      lovelace,
-      tokens,
-    }));
+    const { view, params } = await readContract(this.deps, network);
+    const recipient = find(view, name, network);
+    const request = { network, params, utxos: spendable(this.deps, view), to: name, recipient, lovelace, tokens };
     if (request.utxos.length === 0) {
       throw new Error("Your Seedelf balance is empty. Move some ADA in first; transfers are paid from there.");
     }
@@ -79,15 +71,13 @@ export class TransferService {
     return send(this.deps, network, txHash, SESSION_TRANSFER, "transfer", "transfer");
   }
 
-  /** The contract UTxO holding the seedelf `name`, found locally. */
-  private find(utxos: KoiosUtxo[], name: string, network: NetworkName): KoiosUtxo {
-    const { contract = CONTRACT_V1 } = this.deps;
-    const utxo = utxos.find((u) =>
-      u.asset_list?.some((a) => a.policy_id === contract.seedelfPolicyId && a.asset_name === name),
-    );
-    if (!utxo) throw new Error(`No seedelf with that name on ${network}.`);
-    return utxo;
-  }
+}
+
+/** The contract UTxO holding the seedelf `name`, found locally. */
+function find(view: ContractView, name: string, network: NetworkName): KoiosUtxo {
+  const utxo = view.seedelfs[name];
+  if (!utxo) throw new Error(`No seedelf with that name on ${network}.`);
+  return utxo;
 }
 
 function nameOf(to: string): string {

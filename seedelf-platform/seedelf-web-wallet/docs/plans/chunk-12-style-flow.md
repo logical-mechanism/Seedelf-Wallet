@@ -17,6 +17,7 @@ v1 is built (chunks 1–11c). The user found 11a's pass "kind of looks like Lace
 - **Every privacy note stays.** A redesign can move or shorten one, never drop it.
 - Correctness UX is always in scope: clear errors, input limits.
 - Nothing new phones home. A new host or query needs its own decision, because of what it tells that host.
+- **Koios budget.** The wallet uses Koios's public tier: 5,000 requests a day, at most 1,000 rows a response, a 30 s timeout. Every feature states how many requests it costs, and anything paged must scale with the contract's size. The e2e tests assert the exact requests a screen makes, as Home's already does.
 - The tests find things by role, label and test id. A renamed control means updating `e2e/extension.spec.ts` in the same commit.
 
 ## The list
@@ -30,6 +31,13 @@ v1 is built (chunks 1–11c). The user found 11a's pass "kind of looks like Lace
 | 5 | Modals must be centred; a token's details were cut off when it sat low in the list. | **One `Modal`, centred,** never taller than the window, with its body scrolling. The popup is sized by its page, and a `<dialog>` doesn't count towards that size, so the old bottom sheet could spill past it. The details' ids read as plain rows, so they fit without scrolling. | ✅ built; the user checks |
 | 6 | Move in any amount of a token, not only all of it. | **An amount box per token, with Max for all of it** (`TokenAmounts`, as in Send and Withdraw, which gain Max too). The Rust `build::move_in` takes `(policy, name, quantity)`; every UTxO holding the token is still spent, and the rest goes back with the change. It refuses more than is held, or none. | ✅ built; the user checks |
 | 7 | "Cardano account" is long next to "Seedelf" in Home's tabs. | **The tab says "Cardano".** The balance under it still says "Cardano account". | ✅ built; the user checks |
+| 8 | Lace has settings; we have none. | **A Settings screen**, from a gear in the top bar: show the recovery phrase (password first), change the password, remove the wallet, About. No Koios requests. | ⬜ |
+| 9 | Lace has an activity list; we show only the transaction just sent. | **Activity.** Cardano account: `account_txs` (newest first, then only after the last-seen block) and one batched `tx_info` per page of 20, only while Activity is open. Seedelf: no requests at all, and never a question about a specific transaction: received UTxOs from the scan, and what this wallet sent. The history is kept **encrypted on the device** (a key derived from the phrase), unreadable while locked. | ⬜ |
+| 10 | Lace has an address book. Seedelf names are 64 hex characters. | **Contacts:** named seedelfs and addresses, **encrypted on the device** with the history's key, offered in Send and Withdraw. No Koios requests. privacy.md's "never on disk" becomes "never on disk unencrypted". | ⬜ |
+| 11 | Forms list every token (the follow-up below). | **A token picker** like Lace's "Add assets": search, pick, then an amount box for each picked token only. No Koios requests. | ⬜ |
+| 12 | The balance reading pulls the whole contract, 1 request per 1,000 UTxOs, and the contract only grows. | **An incremental scan.** A full scan on unlock and every 30 minutes; in between, only UTxOs newer than the last-seen block (`credential_utxos?block_height=gt.N`, checked live: 5 of 35 rows in one request). The wallet drops its own spends as it makes them; the full scan catches another device's spends and rollbacks. The owned set stays in session memory. Checked live: the second reading filtered, and agreed. | ✅ built |
+
+**Compared with Lace (2.4.0) and left out on purpose:** hardware wallets, swaps, Buy, other chains, mobile, analytics, the light theme (decided earlier); NFT images and fiat prices (new hosts: IPFS, CoinGecko); Identity Center, Passport, RealFi, Earn Rewards, the dApp Explorer and Lace's notification centre (Lace's own); languages, `web+cardano:` links and a QR scanner (not yet worth it). The dApp connector, Authorized dApps and the collateral setting come with the contract round trip, after v1.
 
 ## Follow-ups noticed on the way
 

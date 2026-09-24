@@ -76,14 +76,9 @@ export class MintService {
   }
 
   private async buildStealth(network: NetworkName, label: string): Promise<MintSummary> {
-    const { wasm, wallet } = this.deps;
-    const { contractUtxos, params } = await readContract(this.deps, network);
-    const request = await wallet.withKeys((keys) => ({
-      network,
-      params,
-      label,
-      utxos: spendable(this.deps, keys, contractUtxos),
-    }));
+    const { wasm } = this.deps;
+    const { view, params } = await readContract(this.deps, network);
+    const request = { network, params, label, utxos: spendable(this.deps, view) };
     if (request.utxos.length === 0) {
       throw new Error("Your Seedelf balance is empty. Move some ADA in first; the seedelf is paid from there.");
     }

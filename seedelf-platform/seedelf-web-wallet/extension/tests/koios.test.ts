@@ -33,6 +33,14 @@ describe("Koios client", () => {
     ]);
   });
 
+  it("asks only for UTxOs in blocks after a height, when given one", async () => {
+    const { koios, calls } = scripted([Response.json(rows(1))]);
+    await koios.credentialUtxos(["94bc"], 5214886);
+    expect(calls[0]!.url).toBe(
+      `${BASE}/credential_utxos?block_height=gt.5214886&order=tx_hash.asc,tx_index.asc&offset=0&limit=1000`,
+    );
+  });
+
   it("pages 1000 rows at a time until a short page", async () => {
     const { koios, calls } = scripted([Response.json(rows(1000)), Response.json(rows(1000, 1000)), Response.json(rows(7, 2000))]);
     const all = await koios.accountUtxos("stake_test1u");
