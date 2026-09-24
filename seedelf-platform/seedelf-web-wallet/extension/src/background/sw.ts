@@ -5,11 +5,13 @@ import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
 import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
 import { BalanceService } from "./balances";
 import { Collateral } from "./collateral";
+import { ContactsService } from "./contacts";
 import { handle, type Context } from "./handlers";
 import { Koios } from "./koios";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
+import { PrivateStore } from "./private-store";
 import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { chromeArea } from "./storage";
@@ -51,6 +53,8 @@ function getContext(): Promise<Context> {
     const transfer = new TransferService({ wasm, wallet, session, koios, collateral, now: Date.now });
     const withdraw = new WithdrawService({ wasm, wallet, session, koios, collateral, now: Date.now });
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
+    const store = new PrivateStore({ wallet, local: chromeArea(chrome.storage.local) });
+    const contacts = new ContactsService({ wasm, store });
     return {
       wasm,
       wallet,
@@ -60,6 +64,7 @@ function getContext(): Promise<Context> {
       transfer,
       withdraw,
       pending,
+      contacts,
       version: __VERSION__,
       network: defaultNetwork(__MAINNET_ENABLED__),
       networks: enabledNetworks(__MAINNET_ENABLED__),

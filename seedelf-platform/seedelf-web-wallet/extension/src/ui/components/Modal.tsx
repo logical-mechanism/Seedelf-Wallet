@@ -1,6 +1,8 @@
 // A modal, centred over the dimmed page: a <dialog>, so focus stays inside,
 // Escape closes it, and so does a click around it. It's never taller than the
 // window; its body scrolls instead, so nothing is cut off in the popup.
+// A modal often opens over a form (Send, Move in): Enter in one of its boxes
+// never submits that form.
 
 import { useEffect, useRef, type ReactNode } from "react";
 
@@ -35,6 +37,10 @@ export function Modal({
       onClick={(e) => {
         if (e.target === ref.current) onClose();
       }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault();
+      }}
+      onSubmit={(e) => e.stopPropagation()}
     >
       <header className="modal__head">
         <h2 id={titleId} className="modal__title">

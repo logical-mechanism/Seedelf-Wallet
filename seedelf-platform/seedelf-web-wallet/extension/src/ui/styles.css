@@ -1071,6 +1071,11 @@ main {
   background: #e9edf2;
 }
 
+.avatar--contact {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .avatar--tint-0 {
   background: #134e4a;
 }

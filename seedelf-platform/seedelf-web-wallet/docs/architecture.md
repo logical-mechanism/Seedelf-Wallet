@@ -201,8 +201,13 @@ flowchart LR
 | `chrome.storage.session` | `seedelf.entropy` | The vault entropy, only while unlocked |
 | `chrome.storage.session` | `seedelf.lastActivity` | When the user last did something, for auto-lock |
 | `chrome.storage.session` | `seedelf.balances.<network>` | The last balance reading, only while unlocked |
+| `chrome.storage.session` | `seedelf.contract.<network>` | This wallet's contract UTxOs, each seedelf's UTxO and the last block seen (`contract-scan.ts`), only while unlocked |
+| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts` (chunk 12), and the Seedelf history per network. See below. |
 
-Non-secret settings and cached chain data join `chrome.storage.local` in later chunks.
+- **Private records** (`private-store.ts`, chunk 12) are what the wallet keeps on disk that says something about its user.
+  - Each one is JSON sealed with XChaCha20-Poly1305 under a random 24-byte nonce, with the record's key as associated data.
+  - The key is HKDF-SHA-256 of the vault's entropy (salt `seedelf-web-wallet-private-store-v1`, info `records`), derived only while unlocked and zeroed after use (`Wallet.withStoreKey`). So a record can't be read while locked, or by anyone without the phrase.
+  - Removing the wallet deletes them all.
 
 - **Decrypted secrets live only in service-worker memory and `chrome.storage.session`** (see above).
 - **They are wiped on lock.** Lace keeps the last verified password in memory after use (`packages/contract/authentication-prompt/src/store/auth-secret-accessor.ts`), and we don't.

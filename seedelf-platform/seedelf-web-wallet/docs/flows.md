@@ -67,7 +67,9 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 - **Failed unlocks:** exponential back-off (1 s, 2 s, 4 s … capped at 60 s), enforced by the worker. The unlock screen shows the countdown.
 - **Forgot password:** "Restore from your phrase" deletes the wallet from this browser after a typed confirmation (`delete wallet`), then goes straight to restore.
 
-**Settings** (the gear in the top bar, while unlocked): **Show recovery phrase** (the password again first), **Change password**, **Remove wallet** (typed confirmation), and About (the version, the network, the source code and the privacy policy). Settings asks Koios nothing.
+**Settings** (the gear in the top bar, while unlocked): **Contacts**, **Show recovery phrase** (the password again first), **Change password**, **Remove wallet** (typed confirmation), and About (the version, the network, the source code and the privacy policy). Settings asks Koios nothing.
+
+**Contacts** name the seedelfs and addresses (or `$handles`) the user pays, after Lace's address book. They're managed in Settings, picked with **Contacts** above Send's seedelf name or Withdraw's destination, and saved from either form with **Save to contacts** once it's found. They're encrypted on the device (see [privacy.md](privacy.md#known-links)).
 
 See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 

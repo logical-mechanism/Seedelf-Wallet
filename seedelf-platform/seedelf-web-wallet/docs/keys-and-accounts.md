@@ -116,7 +116,8 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
 - **Settings (chunk 12):**
   - **Show recovery phrase** opens the vault with the password again, even while unlocked, and shows the words. A wrong password counts towards the unlock back-off and waits like one.
   - **Change password** opens the vault with the current password and seals the same entropy under the new one, keeping `createdAt`. The same back-off applies.
-  - **Remove wallet** deletes the vault after the typed confirmation (`delete wallet`), as Forgot password does.
+  - **Remove wallet** deletes the vault after the typed confirmation (`delete wallet`), as Forgot password does, and every private record with it.
+- **Private records** (contacts, the Seedelf history) are sealed under a second key: HKDF-SHA-256 of the entropy with its own salt (`seedelf-web-wallet-private-store-v1`), so it has nothing to do with the Seedelf or Cardano keys. See [architecture.md](architecture.md#storage).
 - **Password rule:** at least 12 characters, with no composition rules. The UI shows a rough strength hint, and the worker enforces the length. (The CLI asks for 14 characters with character classes; the two are separate products.)
 - **Performance:** unlock takes about 190 ms in the service worker, measured end to end in Playwright (Argon2id in pure JS, plus both key derivations in WebAssembly). That's well under the 1.5 s budget, so no faster Argon2id is needed. Lace's `setArgon2idImplementation` hook is kept in case that changes.
 - **Lock and wipe:**

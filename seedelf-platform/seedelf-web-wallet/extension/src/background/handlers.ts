@@ -6,6 +6,7 @@ import type * as Wasm from "@seedelf/wasm";
 import type { NetworkName } from "../networks";
 import type { Message, Requests, Status } from "../shared/rpc";
 import type { BalanceService } from "./balances";
+import type { ContactsService } from "./contacts";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
@@ -22,6 +23,7 @@ export interface Context {
   transfer: TransferService;
   withdraw: WithdrawService;
   pending: PendingService;
+  contacts: ContactsService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -89,6 +91,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "change-password":
       await wallet.changePassword(message.current, message.next);
       return null;
+    case "contacts":
+      return ctx.contacts.list(ctx.network);
+    case "contact-save":
+      return ctx.contacts.save(ctx.network, message);
+    case "contact-remove":
+      return ctx.contacts.remove(ctx.network, message.id);
   }
 }
 

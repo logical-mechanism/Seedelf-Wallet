@@ -39,6 +39,16 @@ export interface TokenAmount {
   fingerprint: string;
 }
 
+/** A name for a seedelf or an address this wallet pays, kept sealed on the device. */
+export interface Contact {
+  id: string;
+  name: string;
+  /** A seedelf's full name, or an address or `$handle` to withdraw to. */
+  kind: "seedelf" | "address";
+  value: string;
+  network: NetworkName;
+}
+
 /** One of the user's seedelfs: a named token in a UTxO the wallet owns. */
 export interface SeedelfInfo {
   /** The full token name, hex. */
@@ -245,6 +255,11 @@ export interface Requests {
   "reveal-phrase": { payload: { password: string }; result: { words: string[] } };
   /** Seals the vault under a new password. */
   "change-password": { payload: { current: string; next: string }; result: None };
+  /** This network's contacts, by name. */
+  contacts: { payload: None; result: Contact[] };
+  /** Adds a contact, or changes the one with `id`; returns the contacts. */
+  "contact-save": { payload: { id?: string; name: string; value: string }; result: Contact[] };
+  "contact-remove": { payload: { id: string }; result: Contact[] };
 }
 
 export type RequestName = keyof Requests;
@@ -285,6 +300,9 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "reset-wallet",
   "reveal-phrase",
   "change-password",
+  "contacts",
+  "contact-save",
+  "contact-remove",
 ]);
 
 export function isMessage(value: unknown): value is Message {

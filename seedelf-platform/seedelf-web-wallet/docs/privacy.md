@@ -75,6 +75,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Finding a recipient** uses the contract as the balance reading sees it, and picks the seedelf's UTxO in the extension. The wallet never asks Koios about the recipient's token (`asset_utxos` and the like): that would tell Koios exactly who is being paid.
   - **An ADA Handle can't be found that way:** withdrawing to `$name` asks Koios who holds that handle (`asset_nft_address`), so Koios learns it. The transaction names the address anyway once it's submitted. Pasting the address instead asks Koios nothing.
 - **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk, and it's wiped on lock.
+  - **Contacts** (who the user pays) and the Seedelf history are kept on disk, but **never unencrypted** (decided in chunk 12): sealed under a key derived from the phrase, unreadable while locked, deleted with the wallet. Saving or checking a contact asks no one anything.
 
 ## Not for holding
 

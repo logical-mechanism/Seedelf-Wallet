@@ -13,6 +13,7 @@ import { AdaInput, RoundNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { ContactEditor, ContactPicker, useContacts } from "../components/Contacts";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { adaWithTokens, formatAda, formatQuantity, parseAda, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
@@ -37,8 +38,12 @@ export function Transfer({
   const [summary, setSummary] = useState<TransferSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [contacts, reloadContacts] = useContacts();
+  const [contactModal, setContactModal] = useState<"pick" | "save">();
 
   const name = seedelfName(to);
+  const saved = name ? contacts?.find((c) => c.kind === "seedelf" && c.value === name) : undefined;
+  const hasContacts = !!contacts?.some((c) => c.kind === "seedelf");
   const nameProblem = to.trim() !== "" && !name ? SEEDELF_NAME_RULE : undefined;
 
   // Look the seedelf up once a whole name is pasted.
@@ -154,7 +159,14 @@ export function Transfer({
       }
     >
       <div className="field">
-        <label htmlFor="transfer-to">Seedelf name</label>
+        <div className="field-row">
+          <label htmlFor="transfer-to">Seedelf name</label>
+          {hasContacts && (
+            <button type="button" className="link" onClick={() => setContactModal("pick")}>
+              Contacts
+            </button>
+          )}
+        </div>
         <textarea
           id="transfer-to"
           className="seedelf-name"
@@ -180,6 +192,19 @@ export function Transfer({
           ) : found.state === "found" ? (
             <p className="note">
               Found: <strong>{found.seedelf.label ?? "Unnamed"}</strong> · <code>{shortHex(found.seedelf.name, 12, 6)}</code>
+              {saved ? (
+                <> · your contact {saved.name}</>
+              ) : (
+                !found.seedelf.own &&
+                contacts && (
+                  <>
+                    {" · "}
+                    <button type="button" className="link" onClick={() => setContactModal("save")}>
+                      Save to contacts
+                    </button>
+                  </>
+                )
+              )}
             </p>
           ) : (
             <p className="note">
@@ -212,6 +237,27 @@ export function Transfer({
       <Callout tone="privacy">
         Sending right after moving in is easy to match by timing: the move-in and the payment sit close together on chain.
       </Callout>
+      {contactModal === "pick" && (
+        <ContactPicker
+          contacts={contacts ?? []}
+          kind="seedelf"
+          onClose={() => setContactModal(undefined)}
+          onPick={(value) => {
+            setTo(value);
+            setContactModal(undefined);
+          }}
+        />
+      )}
+      {contactModal === "save" && name && (
+        <ContactEditor
+          value={name}
+          onClose={() => setContactModal(undefined)}
+          onSaved={(next) => {
+            reloadContacts(next);
+            setContactModal(undefined);
+          }}
+        />
+      )}
     </Screen>
   );
 }

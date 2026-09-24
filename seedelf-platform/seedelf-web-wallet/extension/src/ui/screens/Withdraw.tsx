@@ -13,6 +13,7 @@ import { AdaInput, RoundNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { ContactEditor, ContactPicker, useContacts } from "../components/Contacts";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { adaWithTokens, formatAda, formatQuantity, parseAda, plural, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
@@ -42,6 +43,15 @@ export function Withdraw({
   const [amount, setAmount] = useState("");
   const [max, setMax] = useState(false);
   const [tokenAmounts, setTokenAmounts] = useState<Record<string, string>>({});
+  const [contacts, reloadContacts] = useContacts();
+  const [contactModal, setContactModal] = useState<"pick" | "save">();
+  const hasContacts = !!contacts?.some((c) => c.kind === "address");
+  // What a contact holds for this destination: the $handle as typed, or the address.
+  const destinationValue =
+    read.state === "read" ? (read.destination.handle ? `$${read.destination.handle}` : read.destination.address) : undefined;
+  const savedAs = destinationValue
+    ? contacts?.find((c) => c.kind === "address" && c.value === destinationValue)
+    : undefined;
   const [summary, setSummary] = useState<WithdrawSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -166,7 +176,14 @@ export function Withdraw({
       }
     >
       <div className="field">
-        <label htmlFor="withdraw-to">To</label>
+        <div className="field-row">
+          <label htmlFor="withdraw-to">To</label>
+          {hasContacts && (
+            <button type="button" className="link" onClick={() => setContactModal("pick")}>
+              Contacts
+            </button>
+          )}
+        </div>
         <input
           id="withdraw-to"
           className="seedelf-name"
@@ -190,6 +207,19 @@ export function Withdraw({
             <p className="note">
               {read.destination.handle ? `$${read.destination.handle} is ` : "Sends to "}
               <code title={read.destination.address}>{shortHex(read.destination.address, 14, 8)}</code>
+              {savedAs ? (
+                <> · your contact {savedAs.name}</>
+              ) : (
+                !read.destination.own &&
+                contacts && (
+                  <>
+                    {" · "}
+                    <button type="button" className="link" onClick={() => setContactModal("save")}>
+                      Save to contacts
+                    </button>
+                  </>
+                )
+              )}
             </p>
           ) : (
             <p className="note">A Cardano address, or an ADA Handle like $name. Looking up a handle tells Koios which one.</p>
@@ -228,6 +258,27 @@ export function Withdraw({
       <Callout tone="privacy">
         Withdrawing to where the money came from links it back. Send it somewhere else, or keep it in Seedelf.
       </Callout>
+      {contactModal === "pick" && (
+        <ContactPicker
+          contacts={contacts ?? []}
+          kind="address"
+          onClose={() => setContactModal(undefined)}
+          onPick={(value) => {
+            setTo(value);
+            setContactModal(undefined);
+          }}
+        />
+      )}
+      {contactModal === "save" && destinationValue && (
+        <ContactEditor
+          value={destinationValue}
+          onClose={() => setContactModal(undefined)}
+          onSaved={(next) => {
+            reloadContacts(next);
+            setContactModal(undefined);
+          }}
+        />
+      )}
     </Screen>
   );
 }

@@ -5,10 +5,12 @@ import * as wasm from "@seedelf/wasm";
 
 import { BalanceService } from "../src/background/balances";
 import { Collateral } from "../src/background/collateral";
+import { ContactsService } from "../src/background/contacts";
 import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
 import { Koios, type FetchLike, type KoiosUtxo } from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
+import { PrivateStore } from "../src/background/private-store";
 import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
@@ -217,6 +219,8 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const t = testWallet();
   const koios = fakeKoios(options);
   const collateral = fakeCollateral();
+  const store = new PrivateStore({ wallet: t.wallet, local: t.local });
+  let ids = 0;
   const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
@@ -245,5 +249,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),
     pending: new PendingService(deps),
+    store,
+    contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
   };
 }

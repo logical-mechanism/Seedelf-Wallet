@@ -8,7 +8,8 @@ import { NETWORKS } from "../../networks";
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
-import { ChevronRightIcon, ExternalIcon, EyeIcon, LockIcon, TrashIcon } from "../components/Icons";
+import { ContactsPage, useContacts } from "../components/Contacts";
+import { ChevronRightIcon, ExternalIcon, EyeIcon, LockIcon, TrashIcon, UsersIcon } from "../components/Icons";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
@@ -18,7 +19,7 @@ const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/seedelf-web-wallet/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
-type Page = "menu" | "phrase" | "password" | "remove";
+type Page = "menu" | "contacts" | "phrase" | "password" | "remove";
 
 export function Settings({
   status,
@@ -31,12 +32,19 @@ export function Settings({
 }) {
   const [page, setPage] = useState<Page>("menu");
   const menu = () => setPage("menu");
+  if (page === "contacts") return <Contacts onBack={menu} />;
   if (page === "phrase") return <ShowPhrase onBack={menu} />;
   if (page === "password") return <ChangePassword onBack={menu} />;
   if (page === "remove") return <RemoveWallet onBack={menu} onRemoved={onRemoved} />;
 
   return (
     <Screen title="Settings" titleId="settings-title" onBack={onBack}>
+      <section className="section" aria-labelledby="wallet-title">
+        <h2 id="wallet-title">Wallet</h2>
+        <ul className="list">
+          <MenuRow icon={<UsersIcon size={16} />} label="Contacts" onClick={() => setPage("contacts")} />
+        </ul>
+      </section>
       <section className="section" aria-labelledby="security-title">
         <h2 id="security-title">Security</h2>
         <ul className="list">
@@ -84,6 +92,15 @@ function MenuRow({
         <ChevronRightIcon size={16} />
       </button>
     </li>
+  );
+}
+
+function Contacts({ onBack }: { onBack: () => void }) {
+  const [contacts, reload] = useContacts();
+  return (
+    <Screen title="Contacts" titleId="contacts-title" onBack={onBack} aside="Encrypted on this device">
+      <ContactsPage contacts={contacts} onChange={reload} />
+    </Screen>
   );
 }
 

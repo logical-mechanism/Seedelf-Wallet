@@ -422,6 +422,56 @@ test("settings: the phrase behind the password, a new password, and removing the
   await expect(page.getByRole("button", { name: "Create new wallet" })).toBeVisible();
 });
 
+test("contacts: save a seedelf from Send, pick it again, and keep them in Settings", async ({ context, koios }) => {
+  const theirs: string = transferPreprod.to;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Send to a seedelf" }).click();
+
+  // Saved from the form once the seedelf is found.
+  await expect(page.getByRole("button", { name: "Contacts", exact: true })).toHaveCount(0);
+  await page.getByLabel("Seedelf name").fill(theirs);
+  const note = page.getByTestId("transfer-to-note");
+  await expect(note).toContainText("Found: This is a test.");
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Save to contacts" }).click();
+  const editor = page.getByRole("dialog", { name: "Save to contacts" });
+  await editor.getByLabel("Name", { exact: true }).fill("Test friend");
+  await editor.getByRole("button", { name: "Save" }).click();
+  await expect(note).toContainText("your contact Test friend");
+
+  // Picked the next time.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Send to a seedelf" }).click();
+  await page.getByRole("button", { name: "Contacts", exact: true }).click();
+  await page.getByRole("dialog", { name: "Contacts" }).getByRole("button", { name: "Test friend" }).click();
+  await expect(page.getByLabel("Seedelf name")).toHaveValue(theirs);
+  await expect(note).toContainText("your contact Test friend");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // Settings: add one (checked), then delete another.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Contacts" }).click();
+  const list = page.getByTestId("contacts");
+  await expect(list).toContainText("Test friend");
+  await page.getByRole("button", { name: "Add a contact" }).click();
+  const add = page.getByRole("dialog", { name: "Add a contact" });
+  await add.getByLabel("Name", { exact: true }).fill("Alice");
+  await add.getByLabel("Seedelf name, address or $handle").fill("nope");
+  await add.getByRole("button", { name: "Save" }).click();
+  await expect(add.getByRole("alert")).toContainText("isn't a seedelf's full name");
+  await add.getByLabel("Seedelf name, address or $handle").fill(vector(15).preprod.receive_0);
+  await add.getByRole("button", { name: "Save" }).click();
+  await expect(list).toContainText("Alice");
+  await snap(page, "contacts");
+  await page.getByRole("button", { name: "Edit Test friend" }).click();
+  await page.getByRole("dialog", { name: "Edit contact" }).getByRole("button", { name: "Delete" }).click();
+  await expect(list).not.toContainText("Test friend");
+  // Contacts ask Koios nothing (the second visit to Send made one small contract read).
+  expect(koios.calls.slice(reads).filter((c) => c !== "credential_utxos")).toEqual([]);
+});
+
 test("move in: amount and a token, review, send, then watch it confirm", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);

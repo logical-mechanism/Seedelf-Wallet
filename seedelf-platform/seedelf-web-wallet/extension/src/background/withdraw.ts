@@ -35,7 +35,8 @@ export const SESSION_REMOVE = "seedelf.remove.built";
 export const ADA_HANDLE_POLICY = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a";
 /** CIP-68's user-token label, which newer handles carry. */
 const CIP68_USER_TOKEN = "000de140";
-const HANDLE = /^[a-z0-9._@-]{1,28}$/;
+/** An ADA Handle's name, after the $. */
+export const HANDLE = /^[a-z0-9._@-]{1,28}$/;
 
 type WithdrawResult = Omit<WithdrawSummary, "network" | "address" | "handle" | "own" | "inputs"> & {
   txCbor: string;
