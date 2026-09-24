@@ -24,7 +24,7 @@ The wallet is built in **chunks**, each about one working session.
 | 8 | Create a seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
 | 8b | Mint first | ✅ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
 | 9 | Transfer | ✅ | Seedelf → seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md). |
-| 10 | Withdraw | ⬜ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Start with a plan file. |
+| 10 | Withdraw | 🚧 | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. **Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md).** |
 | 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
 
 ## After v1
