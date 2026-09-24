@@ -32,6 +32,22 @@ const TIMEOUT_MS = 20_000;
 
 export class KoiosError extends Error {}
 
+/** A request that never got an answer: offline, or blocked on the way. */
+function unreachable(e: unknown): string {
+  const cause = e instanceof Error ? e.message : String(e);
+  return (
+    `Couldn't reach Koios, the service the wallet reads Cardano from (${cause}). ` +
+    "Check your internet connection, and any VPN or ad blocker that might block koios.rest."
+  );
+}
+
+/** An answer that isn't data. */
+function koiosTrouble(status: number, path: string): string {
+  if (status === 429) return "Koios is limiting requests from your connection. Wait a minute and try again.";
+  if (status >= 500) return `Koios is having trouble right now (${status} for ${path}). Try again in a minute.`;
+  return `Koios refused the request (${status} for ${path}).`;
+}
+
 export class Koios {
   constructor(
     private readonly base: string,
@@ -80,7 +96,7 @@ export class Koios {
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
     } catch (e) {
-      throw new KoiosError(`Couldn't reach Koios (${(e as Error).message}).`);
+      throw new KoiosError(unreachable(e));
     }
     const text = await response.text();
     if (!response.ok) throw new KoiosError(`The network rejected the transaction: ${text.slice(0, 500)}`);
@@ -124,9 +140,9 @@ export class Koios {
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
         if (response.ok) return (await response.json()) as T[];
-        failure = `Koios answered ${response.status} for ${path}.`;
+        failure = koiosTrouble(response.status, path);
       } catch (e) {
-        failure = `Couldn't reach Koios (${(e as Error).message}).`;
+        failure = unreachable(e);
       }
       const retryable = !response || response.status === 429 || response.status >= 500;
       const delay = RETRY_DELAYS_MS[attempt];

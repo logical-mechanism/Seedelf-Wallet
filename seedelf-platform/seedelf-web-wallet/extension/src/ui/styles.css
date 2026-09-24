@@ -740,3 +740,9 @@ h2 {
   color: var(--accent);
   font: 12px var(--mono);
 }
+
+.stack-tight {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

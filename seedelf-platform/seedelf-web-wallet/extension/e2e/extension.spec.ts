@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -348,7 +348,7 @@ test("home says so when Koios can't be read", async ({ context, koios }) => {
   koios.failWith = 400;
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
-  await expect(page.getByRole("alert")).toContainText("Koios answered 400");
+  await expect(page.getByRole("alert")).toContainText("Koios refused the request (400");
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("— ₳");
 
   koios.failWith = undefined;
@@ -417,4 +417,35 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   await page.getByRole("button", { name: "← Back" }).click();
   await expect(page.getByTestId("seedelf-lovelace")).toBeVisible();
   expect(koios.submitted).toHaveLength(0);
+});
+
+test("a worker that lost its WASM file explains itself and recovers", async ({ userDataDir }) => {
+  // A rebuild under a running extension: the old worker asks for a deleted file.
+  const copy = mkdtempSync(join(tmpdir(), "seedelf-dist-"));
+  cpSync(dist, copy, { recursive: true });
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    args: [`--disable-extensions-except=${copy}`, `--load-extension=${copy}`],
+  });
+  try {
+    context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+    const assets = join(copy, "assets");
+    const wasm = readdirSync(assets).find((f) => f.endsWith(".wasm"))!;
+    renameSync(join(assets, wasm), join(assets, "moved.wasm"));
+
+    const page = await openApp(context);
+    await expect(page.getByRole("heading", { name: "The wallet couldn't start" })).toBeVisible();
+    await expect(page.getByTestId("startup-error")).toContainText("The wallet's core didn't load");
+    await expect(page.getByTestId("startup-error")).toContainText("reload it");
+    await expect(page.getByRole("button", { name: "Reload the extension" })).toBeVisible();
+    await page.screenshot({ path: "test-results/startup-error.png", fullPage: true });
+
+    // The failed load isn't cached: once the file is back, Try again works.
+    renameSync(join(assets, "moved.wasm"), join(assets, wasm));
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByRole("button", { name: "Create new wallet" })).toBeVisible();
+  } finally {
+    await context.close();
+    rmSync(copy, { recursive: true, force: true });
+  }
 });

@@ -26,7 +26,8 @@ const autoLock = {
 let context: Promise<Context> | undefined;
 
 function getContext(): Promise<Context> {
-  context ??= loadWasm().then((wasm) => {
+  if (context) return context;
+  context = loadWasm().then((wasm) => {
     const session = chromeArea(chrome.storage.session);
     const wallet = new Wallet({
       wasm,
@@ -50,6 +51,8 @@ function getContext(): Promise<Context> {
       networks: enabledNetworks(__MAINNET_ENABLED__),
     };
   });
+  // Don't keep a failed start (the WASM didn't load): the next request tries again.
+  context.catch(() => (context = undefined));
   return context;
 }
 

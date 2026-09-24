@@ -88,6 +88,15 @@ export function Home() {
 
   return (
     <div className="stack">
+      {error && (
+        <section className="callout callout--warn stack-tight" role="alert">
+          <strong>Couldn't read your balances</strong>
+          <span>{error}</span>
+          <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
+            {reading ? "Trying…" : "Try again"}
+          </button>
+        </section>
+      )}
       {pending && (
         <section className="callout banner" role="status" data-testid="pending-tx">
           <strong>
@@ -183,11 +192,6 @@ export function Home() {
         </section>
       )}
 
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
       <div className="refresh-row">
         <span className="note" data-testid="updated">
           {reading ? "Reading the chain…" : balances ? `Updated ${timeAgo(balances.updatedAt, now)}` : ""}
