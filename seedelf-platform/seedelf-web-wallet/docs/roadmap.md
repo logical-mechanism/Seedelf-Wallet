@@ -23,7 +23,7 @@ The wallet is built in **chunks**, each about one working session.
 | 7 | Builder extraction + move in | ✅ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
 | 8b | Mint first | ✅ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
-| 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
+| 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). **Full plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md).** |
 | 10 | Withdraw | ⬜ | `sweep` and `remove`. |
 | 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
 
@@ -60,7 +60,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The fixture keeps no CBOR: a signed transaction over public-phrase UTxOs shouldn't sit in the repo.
   - **Tests:** core `mint_test` 15 (4 new: collateral choice, token collateral, overlap, errors, and fees against the ledger's formula); `seedelf-wasm` native 12 and Node 24; Vitest 91; Playwright 15. The account path runs through Send to "Seedelf created", since no giveme.my signature is needed.
   - **Not done:** a live account-paid mint. From a funded account with no seedelf yet, create one by hand, then record the tx hash here.
-  - **Next:** chunk 9, transfer.
+  - **Next:** chunk 9, transfer. **Its plan is ready: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md),** committed on the `web-wallet/transfer` branch. Start there.
 
 - **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).
   - **Decided with the user:**
