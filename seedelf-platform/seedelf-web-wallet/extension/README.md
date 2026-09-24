@@ -2,7 +2,7 @@
 
 The Chrome (MV3) extension: React + TypeScript + Vite, with the Rust core loaded as WebAssembly in the service worker.
 
-It can create or restore a wallet, lock it with a password, show what the wallet holds (the Seedelf balance and seedelfs, and the Cardano account), move funds from the Cardano account into Seedelf, and create a seedelf. Transfer comes next (roadmap chunk 9).
+It can create or restore a wallet, lock it with a password, and show what the wallet holds (the Seedelf balance and seedelfs, and the Cardano account). It runs every v1 flow: move in, create a seedelf, send to one, withdraw, and remove a seedelf. The look is Lace's dark mode in Seedelf's colours ([architecture.md](../docs/architecture.md#ui)).
 
 ## Screens
 
@@ -13,7 +13,8 @@ It can create or restore a wallet, lock it with a password, show what the wallet
 | Restore | Onboarding | 12, 15 or 24 words, one box each with BIP39 autocomplete; pasting a phrase fills every box. Then a password. |
 | Unlock | Locked | Password, the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
-| Home | Unlocked | The Seedelf balance (ADA, tokens, **Send to a seedelf**, **Withdraw**, your seedelfs with Copy and Remove on each, **Create a seedelf**), the Cardano account (ADA, tokens, receive address with copy and QR, stake address, **Move in**), the Seedelf identity, and Refresh. A sent transaction shows as a banner until it confirms. The lock button is in the top bar. |
+| Home | Unlocked | Two tabs. **Seedelf:** the balance with round **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf); tokens; your seedelfs with Copy and Remove on each; the Seedelf identity. **Cardano account:** the balance with **Receive** and **Move in**, and tokens. A new wallet gets *Get started* (fund, create, move in). Refresh sits under the tabs, and a sent transaction shows as a banner until it confirms. The lock button is in the top bar. |
+| Receive | From the Cardano account tab | The receive address as a QR code and text, with copy, and the stake address |
 | Move in | From Home | An ADA amount or Max, and tokens to bring along; then a review of what moves, the fee and the change; then Send |
 | Send to a seedelf | From Home | Paste the recipient's full seedelf name: it's looked up in the wallet contract and shown ("Found: tag · 5eed0e1f…"), with a warning if it's your own. An ADA amount, and optionally part of any token. Then a review of the recipient, what's sent, the fee and the change, then Send, when giveme.my is asked for the collateral. |
 | Withdraw | From Home | An address or `$handle`, read as it's typed, with a warning if it's your own Cardano account. An ADA amount and optional tokens, or Max (up to 20 UTxOs, every token). Then a review of where it goes, what's sent, the fee and the change, then Send, when giveme.my is asked for the collateral. |
@@ -52,7 +53,7 @@ After a rebuild, press the reload arrow on the extension's card.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios and giveme.my clients, the balance scan over recorded preprod responses, move-in, mint, transfer and withdraw (on real preprod Ogmios evaluations), the handlers (all with the real WASM and the shared vectors), and formatting |
 | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts` | Optional: the balance scan against the real preprod Koios. Skipped otherwise, so CI stays offline. |
-| `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, balances, move-in, creating a seedelf, sending to one, withdrawing, and removing one. Koios, Ogmios and giveme.my answer from the recorded fixtures and every other host is blocked. Since only giveme.my's real key can sign, the Seedelf-spend tests (stealth mint, transfer, withdraw, remove) stop at Send: it checks that a forged witness is refused and nothing is submitted. Screenshots land in `test-results/`. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
+| `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, balances, move-in, creating a seedelf, sending to one, withdrawing, and removing one. Koios, Ogmios and giveme.my answer from the recorded fixtures and every other host is blocked. Since only giveme.my's real key can sign, the Seedelf-spend tests (stealth mint, transfer, withdraw, remove) stop at Send: it checks that a forged witness is refused and nothing is submitted. Screenshots of every screen land in `test-results/`, the popup's as `popup-*.png`. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
 | `node e2e/live/move-in.mjs [ada]`, `node e2e/live/mint.mjs [tag]` | Live preprod runs of the built extension with nothing intercepted: they submit real transactions from the test wallet in `.preprod-test-wallet.txt` (gitignored). Move in first; the mint is paid from Seedelf. |
 
 ## Layout
@@ -83,12 +84,14 @@ src/
     storage.ts, wasm.ts chrome.storage wrapper, lazy WASM init
   ui/
     App.tsx             shell: top bar, picks the screen from the worker's status
-    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, MoveIn, CreateSeedelf, Transfer,
-                        Withdraw, RemoveSeedelf
-    components/         PhraseInput (per-word autocomplete), SetPassword, CopyField, CopyButton, QrCode, TokenList,
-                        TokenAmounts, icons
+    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, Receive, MoveIn, CreateSeedelf,
+                        Transfer, Withdraw, RemoveSeedelf
+    components/         Screen (every flow's layout), ReviewRows, Callout, ActionButton, Choice, PhraseInput
+                        (per-word autocomplete), SetPassword, AdaInput, TokenAmounts, TokenList, CopyField,
+                        CopyButton, QrCode, Icons (Lucide)
+    styles.css          the design tokens, then every style
     format.ts           ADA and token amounts, token names
-public/                 icons and logos, resized from ../brand
+public/                 icons and logos resized from ../brand; fonts/ (Inter); licenses/ (Inter's OFL, Lucide's ISC)
 tests/                  Vitest (vectors/: independent SecretBox vectors; fixtures/: recorded preprod Koios responses
                         and synthetic owned UTxOs, remade by fixtures/record-koios.mjs; a stealth mint's real preprod
                         evaluation and giveme.my answer, remade by fixtures/record-mint.mjs; an account-paid mint's

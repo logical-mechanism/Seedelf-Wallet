@@ -17,6 +17,7 @@ describe("manifest", () => {
       "connect-src 'self' https://preprod.koios.rest https://www.giveme.my",
     );
     expect(m.content_security_policy.extension_pages).not.toContain("api.koios.rest");
+    expect(m.content_security_policy.extension_pages).toContain("font-src 'self'");
     expect(m.permissions).toEqual(["storage", "alarms"]);
     expect(m.icons).toEqual({
       "16": "icons/icon-16.png",

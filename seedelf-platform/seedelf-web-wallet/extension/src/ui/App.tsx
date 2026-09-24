@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { NETWORKS } from "../networks";
 import type { Status } from "../shared/rpc";
 import { call, onStateChanged, reportActivity } from "./background";
+import { Callout } from "./components/Callout";
 import { ExpandIcon, LockIcon } from "./components/Icons";
 import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
@@ -80,7 +81,7 @@ export function App() {
   return (
     <div className={`app app--${view}`}>
       <header className="topbar">
-        <img className="topbar__mark" src="/icons/icon-48.png" alt="" width={24} height={24} />
+        <img className="topbar__mark" src="/icons/icon-48.png" alt="" width={28} height={28} />
         <span className="wordmark">seedelf</span>
         {network && (
           <span className={`badge badge--${network.name}`} data-testid="network">
@@ -112,22 +113,23 @@ export function App() {
 /** The wallet's background service failed: say what happened and offer a way out. */
 function StartupError({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <section className="card stack" role="alert" aria-labelledby="startup-error">
+    <section className="unlock" role="alert" aria-labelledby="startup-error">
+      <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={72} height={72} />
       <h1 id="startup-error">The wallet couldn't start</h1>
-      <p className="note" data-testid="startup-error">
-        {message}
-      </p>
-      <div className="actions">
+      <div className="stack unlock__form">
+        <Callout tone="warn" testId="startup-error">
+          {message}
+        </Callout>
         <button className="primary" onClick={onRetry}>
           Try again
         </button>
         <button className="secondary" onClick={() => chrome.runtime.reload()}>
           Reload the extension
         </button>
+        <p className="note center">
+          Reloading closes the wallet's windows. Your wallet is kept; you unlock it again with your password.
+        </p>
       </div>
-      <p className="note">
-        Reloading closes the wallet's windows. Your wallet is kept; you unlock it again with your password.
-      </p>
     </section>
   );
 }

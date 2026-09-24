@@ -9,7 +9,10 @@ import { useEffect, useState } from "react";
 
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
+import { Callout } from "../components/Callout";
+import { EyeIcon } from "../components/Icons";
 import { PhraseInput } from "../components/PhraseInput";
+import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
 
 const CONFIRM_WORDS = 3;
@@ -73,87 +76,78 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
     }
   }
 
-  return (
-    <section className="card stack">
-      <StepHeader step={step} onBack={step === "reveal" ? onBack : () => setStep(step === "password" ? "confirm" : "reveal")} />
+  const steps: Step[] = ["reveal", "confirm", "password"];
+  const aside = `Step ${steps.indexOf(step) + 1} of ${steps.length}`;
+  const back = step === "reveal" ? onBack : () => setStep(step === "password" ? "confirm" : "reveal");
 
-      {step === "reveal" && (
-        <>
-          <h1>Your recovery phrase</h1>
-          <p className="note">
-            Write these 24 words on paper, in order, and keep it somewhere safe. They are the only way to
-            restore this wallet. Anyone who has them can take your funds.
-          </p>
-          <div className="callout callout--warn">
-            Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a
-            website.
-          </div>
-          <div className="callout">
-            This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your
-            Cardano account and nothing else.
-          </div>
-          <div className={revealed ? "phrase-reveal" : "phrase-reveal phrase-reveal--hidden"}>
-            <ol className="phrase-grid" data-testid="recovery-phrase" aria-hidden={!revealed}>
-              {phrase.map((word, i) => (
-                <li className="word word--static" key={i}>
-                  <span className="word__n">{i + 1}</span>
-                  <span className="word__text">{revealed ? word : "••••••"}</span>
-                </li>
-              ))}
-            </ol>
-            {!revealed && (
-              <button className="secondary phrase-reveal__button" onClick={() => setRevealed(true)} disabled={!phrase.length}>
-                Reveal phrase
-              </button>
-            )}
-          </div>
+  if (step === "reveal") {
+    return (
+      <Screen
+        title="Your recovery phrase"
+        titleId="create-title"
+        onBack={back}
+        aside={aside}
+        error={error}
+        foot={
           <button className="primary" disabled={!revealed} onClick={startConfirm}>
             I've written it down
           </button>
-        </>
-      )}
+        }
+      >
+        <p className="note">
+          Write these 24 words on paper, in order, and keep it somewhere safe. They are the only way to restore this
+          wallet. Anyone who has them can take your funds.
+        </p>
+        <Callout tone="warn">
+          Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website.
+        </Callout>
+        <div className={revealed ? "phrase-reveal" : "phrase-reveal phrase-reveal--hidden"}>
+          <ol className="phrase-grid" data-testid="recovery-phrase" aria-hidden={!revealed}>
+            {phrase.map((word, i) => (
+              <li className="word word--static" key={i}>
+                <span className="word__n">{i + 1}</span>
+                <span className="word__text">{revealed ? word : "••••••"}</span>
+              </li>
+            ))}
+          </ol>
+          {!revealed && (
+            <button className="secondary phrase-reveal__button" onClick={() => setRevealed(true)} disabled={!phrase.length}>
+              <EyeIcon />
+              Reveal phrase
+            </button>
+          )}
+        </div>
+        <Callout>
+          This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano
+          account and nothing else.
+        </Callout>
+      </Screen>
+    );
+  }
 
-      {step === "confirm" && (
-        <>
-          <h1>Confirm your phrase</h1>
-          <p className="note">Enter words {positions.join(", ")} from your written copy.</p>
-          <PhraseInput words={answers} onChange={setAnswers} positions={positions} />
-          <button
-            className="primary"
-            disabled={positions.some((p) => !answers[p - 1])}
-            onClick={checkConfirm}
-          >
+  if (step === "confirm") {
+    return (
+      <Screen
+        title="Confirm your phrase"
+        titleId="create-title"
+        onBack={back}
+        aside={aside}
+        error={error}
+        foot={
+          <button className="primary" disabled={positions.some((p) => !answers[p - 1])} onClick={checkConfirm}>
             Confirm
           </button>
-        </>
-      )}
+        }
+      >
+        <p className="note">Enter words {positions.join(", ")} from your written copy.</p>
+        <PhraseInput words={answers} onChange={setAnswers} positions={positions} />
+      </Screen>
+    );
+  }
 
-      {step === "password" && (
-        <>
-          <h1>Set a password</h1>
-          <SetPassword submitLabel="Create wallet" busy={busy} onSubmit={create} />
-        </>
-      )}
-
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-    </section>
-  );
-}
-
-function StepHeader({ step, onBack }: { step: Step; onBack: () => void }) {
-  const steps: Step[] = ["reveal", "confirm", "password"];
   return (
-    <div className="step-header">
-      <button type="button" className="link" onClick={onBack}>
-        ← Back
-      </button>
-      <span className="note">
-        Step {steps.indexOf(step) + 1} of {steps.length}
-      </span>
-    </div>
+    <Screen title="Set a password" titleId="create-title" onBack={back} aside={aside} error={error}>
+      <SetPassword submitLabel="Create wallet" busy={busy} onSubmit={create} />
+    </Screen>
   );
 }

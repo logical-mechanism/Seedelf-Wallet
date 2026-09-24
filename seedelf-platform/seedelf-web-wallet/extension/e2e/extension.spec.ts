@@ -158,6 +158,33 @@ async function restore(page: Page, phrase: string) {
   await setPassword(page, "Restore wallet");
 }
 
+/**
+ * A full-page screenshot, for looking at: transitions finished, and each
+ * screen's foot in the flow instead of stuck over what scrolls under it.
+ * (The page's CSP refuses an injected stylesheet, so the foot is moved
+ * through the CSSOM, which CSP allows.)
+ */
+async function snap(page: Page, name: string) {
+  const feet = (position: string) =>
+    page.evaluate((p) => {
+      for (const el of document.querySelectorAll<HTMLElement>(".screen__foot")) el.style.position = p;
+    }, position);
+  await feet("static");
+  await page.screenshot({ path: `test-results/${name}.png`, fullPage: true, animations: "disabled" });
+  await feet("");
+}
+
+/** Home's Cardano account tab. */
+async function cardanoTab(page: Page) {
+  await page.getByRole("tab", { name: "Cardano account" }).click();
+}
+
+/** Home → Cardano account → Receive: the receive and stake addresses. */
+async function openReceive(page: Page) {
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "Receive" }).click();
+}
+
 async function setPassword(page: Page, submit: string) {
   await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByLabel("Confirm password").fill(PASSWORD);
@@ -193,7 +220,7 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
   await page.getByRole("button", { name: "Reveal phrase" }).click();
   const words = await phrase.locator(".word__text").allTextContents();
   expect(words).toHaveLength(24);
-  await page.screenshot({ path: "test-results/create-phrase.png", fullPage: true });
+  await snap(page, "create-phrase");
   await page.getByRole("button", { name: "I've written it down" }).click();
 
   // Three random positions; a wrong word is caught.
@@ -219,16 +246,25 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
   await page.getByLabel("Confirm password").fill(PASSWORD);
   await page.getByRole("button", { name: "Create wallet" }).click();
 
+  // Home opens on the Seedelf tab, with the first steps in the order that keeps them apart.
+  const publicValue = page.getByTestId("seedelf-public-value");
+  await expect(publicValue).toHaveText(/^[0-9a-f]{10}…[0-9a-f]{10}$/);
+  const identity = await publicValue.textContent();
+  await expect(page.getByTestId("getting-started")).toContainText("Fund your Cardano account");
+  await snap(page, "home");
+
+  // Step one's Receive shows the account's addresses.
+  await page.getByTestId("getting-started").getByRole("button", { name: "Receive" }).click();
   await expect(page.getByTestId("receive-address")).toHaveText(/^addr_test1q/);
   await expect(page.getByTestId("stake-address")).toHaveText(/^stake_test1u/);
-  await expect(page.getByTestId("seedelf-public-value")).toHaveText(/^[0-9a-f]{10}…[0-9a-f]{10}$/);
   const address = await page.getByTestId("receive-address").textContent();
-  await page.screenshot({ path: "test-results/home.png", fullPage: true });
 
   // Reopening the app keeps it unlocked.
   const popup = await openApp(context, "popup");
+  await expect(popup.getByTestId("seedelf-public-value")).toHaveText(identity!);
+  await snap(popup, "home-popup");
+  await openReceive(popup);
   await expect(popup.getByTestId("receive-address")).toHaveText(address!);
-  await popup.screenshot({ path: "test-results/home-popup.png", fullPage: true });
 
   // Lock: every open page follows the worker.
   await page.getByRole("button", { name: "Lock" }).click();
@@ -237,14 +273,15 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
 
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Unlock" }).click();
-  await expect(page.getByTestId("receive-address")).toHaveText(address!);
-  await expect(popup.getByTestId("receive-address")).toHaveText(address!);
+  await expect(page.getByTestId("seedelf-public-value")).toHaveText(identity!);
+  await expect(popup.getByTestId("seedelf-public-value")).toHaveText(identity!);
 });
 
 test("restore: a pasted vector phrase gives its Lace-matching address", async ({ context }) => {
   const v = vector(15);
   const page = await openApp(context);
   await restore(page, v.phrase);
+  await openReceive(page);
   await expect(page.getByTestId("receive-address")).toHaveText(v.preprod.receive_0);
   await expect(page.getByTestId("stake-address")).toHaveText(v.preprod.stake);
 });
@@ -261,7 +298,7 @@ test("restore: per-word autocomplete and the Rust core's reasons", async ({ cont
   const first = page.getByLabel("Word 1", { exact: true });
   await first.pressSequentially(words[0]!.slice(0, 3));
   await expect(page.getByRole("option").first()).toBeVisible();
-  await page.screenshot({ path: "test-results/restore-autocomplete.png", fullPage: true });
+  await snap(page, "restore-autocomplete");
   await page.getByRole("option", { name: words[0]!, exact: true }).click();
   await expect(first).toHaveValue(words[0]!);
   await expect(page.getByLabel("Word 2", { exact: true })).toBeFocused();
@@ -281,6 +318,7 @@ test("restore: per-word autocomplete and the Rust core's reasons", async ({ cont
   for (let i = 1; i < 12; i++) await page.getByLabel(`Word ${i + 1}`, { exact: true }).fill(words[i]!);
   await page.getByRole("button", { name: "Continue" }).click();
   await setPassword(page, "Restore wallet");
+  await openReceive(page);
   await expect(page.getByTestId("receive-address")).toHaveText(v.preprod.receive_0);
 });
 
@@ -295,11 +333,12 @@ test("a wrong password starts the back-off", async ({ context }) => {
   await expect(page.getByTestId("retry-after")).toContainText("Try again in");
   await page.getByLabel("Password").fill(PASSWORD);
   await expect(page.getByRole("button", { name: "Unlock" })).toBeDisabled();
-  await page.screenshot({ path: "test-results/unlock-backoff.png", fullPage: true });
+  await snap(page, "unlock-backoff");
 
   // The countdown ends and the right password works.
   await expect(page.getByRole("button", { name: "Unlock" })).toBeEnabled({ timeout: 5000 });
   await page.getByRole("button", { name: "Unlock" }).click();
+  await openReceive(page);
   await expect(page.getByTestId("receive-address")).toHaveText(vector(24).preprod.receive_0);
 });
 
@@ -317,6 +356,7 @@ test("forgot password: reset, then restore from the phrase", async ({ context })
 test("a browser restart comes back locked; unlock takes well under 1.5 s", async ({ context, userDataDir }) => {
   const page = await openApp(context);
   await restore(page, vector(24).phrase);
+  await openReceive(page);
   await expect(page.getByTestId("receive-address")).toHaveText(vector(24).preprod.receive_0);
   await context.close();
 
@@ -335,6 +375,7 @@ test("a browser restart comes back locked; unlock takes well under 1.5 s", async
     test.info().annotations.push({ type: "unlock-ms", description: String(Math.round(millis)) });
     console.log(`unlock in the service worker: ${Math.round(millis)} ms`);
     expect(millis).toBeLessThan(1500);
+    await openReceive(again);
     await expect(again.getByTestId("receive-address")).toHaveText(vector(24).preprod.receive_0);
   } finally {
     await restarted.close();
@@ -361,6 +402,7 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await expect(page.getByTestId("seedelfs")).toContainText("1.5 ₳");
 
   // The real preprod account of this public test phrase.
+  await cardanoTab(page);
   const account = koiosPreprod.accounts[v.preprod.stake];
   await expect(page.getByTestId("cardano-lovelace")).toHaveText(`${ada(lovelaceOf(account.account_utxos))} ₳`);
   await expect(page.getByText("4 addresses used")).toBeVisible();
@@ -368,16 +410,22 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
   expect(koios.calls.sort()).toEqual(["account_addresses", "account_utxos", "credential_utxos"]);
 
-  await page.getByRole("button", { name: "Show QR code" }).click();
+  await snap(page, "home-cardano");
+
+  await page.getByRole("button", { name: "Receive" }).click();
   const qr = page.getByRole("img", { name: "QR code of the receive address" });
   await expect(qr).toBeVisible();
   await qr.screenshot({ path: "test-results/receive-qr.png" });
-  await page.screenshot({ path: "test-results/home-balances.png", fullPage: true });
+  await snap(page, "receive");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("tab", { name: "Seedelf" }).click();
+  await expect(page.getByTestId("seedelfs")).toBeVisible();
+  await snap(page, "home-balances");
 
   // The popup opens from the worker's reading; Refresh reads the chain again.
   const popup = await openApp(context, "popup");
   await expect(popup.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
-  await popup.screenshot({ path: "test-results/home-balances-popup.png", fullPage: true });
+  await snap(popup, "home-balances-popup");
   expect(koios.calls).toHaveLength(3);
   await popup.getByRole("button", { name: "Refresh" }).click();
   await expect.poll(() => koios.calls.length).toBe(6);
@@ -400,6 +448,7 @@ test("home says so when Koios can't be read", async ({ context, koios }) => {
 test("move in: amount and a token, review, send, then watch it confirm", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
+  await cardanoTab(page);
   await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await page.getByRole("button", { name: "Move in" }).click();
 
@@ -424,18 +473,18 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   // A non-round amount gets the privacy nudge; a round one doesn't.
   await page.getByLabel("Amount").fill("25.5");
   await expect(page.getByTestId("move-in-amount-note")).toHaveCount(0);
-  await expect(page.locator(".callout--warn")).toContainText("Round amounts");
+  await expect(page.getByTestId("round-warning")).toContainText("Round amounts");
   await page.getByLabel("Amount").fill("25");
-  await expect(page.locator(".callout--warn")).toHaveCount(0);
+  await expect(page.getByTestId("round-warning")).toHaveCount(0);
   await page.getByRole("checkbox", { name: /tUSDM/ }).check();
-  await page.screenshot({ path: "test-results/move-in-form.png", fullPage: true });
+  await snap(page, "move-in-form");
   await page.getByRole("button", { name: "Review" }).click();
 
   const review = page.getByTestId("move-in-review");
   await expect(review).toContainText("Into Seedelf25 ₳");
   await expect(review).toContainText("3,000,000,000 tUSDM");
   await expect(review).toContainText("Network fee");
-  await page.screenshot({ path: "test-results/move-in-review.png", fullPage: true });
+  await snap(page, "move-in-review");
   expect(koios.submitted).toHaveLength(0);
   await page.getByRole("button", { name: "Send" }).click();
 
@@ -446,7 +495,7 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   const [txId] = koios.submitted;
   await expect(banner.getByRole("link")).toHaveAttribute("href", `https://preprod.cardanoscan.io/transaction/${txId}`);
   await expect(page.getByRole("button", { name: "Move in" })).toBeDisabled();
-  await page.screenshot({ path: "test-results/move-in-sent.png", fullPage: true });
+  await snap(page, "move-in-sent");
 
   // Reopening the wallet resumes the watch; once confirmed, balances are read again.
   koios.confirmations = 2;
@@ -461,6 +510,7 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
 test("move in: Max, and an amount that's too big", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
+  await cardanoTab(page);
   await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await page.getByRole("button", { name: "Move in" }).click();
 
@@ -473,9 +523,9 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   await expect(page.getByText("UTxOs of exactly 5 ₳ stay put")).toBeVisible();
   await page.getByRole("button", { name: "Review" }).click();
   await expect(page.getByTestId("move-in-review")).toContainText("Back to your Cardano account");
-  await page.getByRole("button", { name: "← Back" }).click();
-  await page.getByRole("button", { name: "← Back" }).click();
-  await expect(page.getByTestId("seedelf-lovelace")).toBeVisible();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("cardano-lovelace")).toBeVisible();
   expect(koios.submitted).toHaveLength(0);
 });
 
@@ -483,14 +533,14 @@ test("create a seedelf from the Cardano account: review, send, then watch it con
   koios.evaluation = accountMintPreprod.evaluation;
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
-  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
   await page.getByRole("button", { name: "Create a seedelf" }).click();
 
   // The Cardano account pays by default, and says what that links.
   await expect(page.getByRole("button", { name: "Cardano account" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("mint-from-note")).toContainText("create your seedelf before moving money in");
   await page.getByLabel("Personal tag (optional)").fill("first");
-  await page.screenshot({ path: "test-results/account-mint-form.png", fullPage: true });
+  await snap(page, "account-mint-form");
   await page.getByRole("button", { name: "Review" }).click();
 
   const review = page.getByTestId("mint-review");
@@ -498,7 +548,7 @@ test("create a seedelf from the Cardano account: review, send, then watch it con
   await expect(review).toContainText("Paid fromCardano account");
   await expect(review).toContainText("Locked with it1.74986 ₳");
   await expect(review).toContainText("Back to your Cardano account");
-  await page.screenshot({ path: "test-results/account-mint-review.png", fullPage: true });
+  await snap(page, "account-mint-review");
   expect(koios.submitted).toHaveLength(0);
 
   // Signed at review: Send only submits, and giveme.my is never asked.
@@ -532,7 +582,7 @@ test("create a seedelf from the Seedelf balance: tag rules, review, and nothing 
   await tag.fill("my tag");
   await expect(page.getByTestId("mint-preview")).toContainText("Listed as my tag");
   await expect(page.getByTestId("mint-preview")).toContainText("5eed0e1f6d7920746167…");
-  await page.screenshot({ path: "test-results/mint-form.png", fullPage: true });
+  await snap(page, "mint-form");
   await page.getByRole("button", { name: "Review" }).click();
 
   // Ogmios measured it; giveme.my hasn't heard of it yet.
@@ -543,7 +593,7 @@ test("create a seedelf from the Seedelf balance: tag rules, review, and nothing 
   await expect(review).toContainText("Back to your Seedelf balance22.99");
   expect(koios.calls).toContain("ogmios");
   expect(koios.collateralAsked).toBe(0);
-  await page.screenshot({ path: "test-results/mint-review.png", fullPage: true });
+  await snap(page, "mint-review");
 
   // giveme.my refuses (its answer to a transaction it can't validate).
   await page.getByRole("button", { name: "Send" }).click();
@@ -554,10 +604,10 @@ test("create a seedelf from the Seedelf balance: tag rules, review, and nothing 
   await expect(page.getByRole("alert")).toContainText("doesn't match this transaction, so it wasn't sent");
   expect(koios.collateralAsked).toBe(2);
   expect(koios.submitted).toHaveLength(0);
-  await page.screenshot({ path: "test-results/mint-refused.png", fullPage: true });
+  await snap(page, "mint-refused");
 
-  await page.getByRole("button", { name: "← Back" }).click();
-  await page.getByRole("button", { name: "← Back" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
 });
 
@@ -600,7 +650,7 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   await expect(page.getByText("That's more than the 1,234.56 you hold.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
   await tusdm.fill("1");
-  await page.screenshot({ path: "test-results/transfer-form.png", fullPage: true });
+  await snap(page, "transfer-form");
   await page.getByRole("button", { name: "Review" }).click();
 
   const review = page.getByTestId("transfer-review");
@@ -614,7 +664,7 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   expect(koios.collateralAsked).toBe(0);
   // Koios was only ever asked about the whole contract, never the recipient's token.
   expect(koios.calls.filter((c) => c.startsWith("asset"))).toEqual([]);
-  await page.screenshot({ path: "test-results/transfer-review.png", fullPage: true });
+  await snap(page, "transfer-review");
 
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("alert")).toContainText("refused this transaction: Transaction Fails Validation");
@@ -655,7 +705,7 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   await page.getByRole("button", { name: "Max" }).click();
   await page.getByLabel("Amount", { exact: true }).fill("5");
   await page.getByLabel("Amount of tUSDM").fill("1");
-  await page.screenshot({ path: "test-results/withdraw-form.png", fullPage: true });
+  await snap(page, "withdraw-form");
   await page.getByRole("button", { name: "Review" }).click();
 
   const review = page.getByTestId("withdraw-review");
@@ -665,7 +715,7 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   await expect(review).toContainText(`Network fee${Number(withdrawPreprod.amount.final.fee.total) / 1e6} ₳`);
   await expect(review).toContainText("Seedelf UTxOs spent2");
   expect(koios.collateralAsked).toBe(0);
-  await page.screenshot({ path: "test-results/withdraw-review.png", fullPage: true });
+  await snap(page, "withdraw-review");
 
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("alert")).toContainText("refused this transaction: Transaction Fails Validation");
@@ -688,7 +738,7 @@ test("remove a seedelf: where its ADA goes, review, and nothing sent without giv
   await page.getByRole("button", { name: "Seedelf balance" }).click();
   await expect(note).toContainText("ties the seedelf's name to the new UTxO");
   await page.getByRole("button", { name: "Cardano account" }).click();
-  await page.screenshot({ path: "test-results/remove-form.png", fullPage: true });
+  await snap(page, "remove-form");
   await page.getByRole("button", { name: "Review" }).click();
 
   const review = page.getByTestId("remove-review");
@@ -696,12 +746,61 @@ test("remove a seedelf: where its ADA goes, review, and nothing sent without giv
   await expect(review).toContainText("Seedelfweb-wallet");
   await expect(review).toContainText(`Back to your Cardano account${(1_500_000 - fee) / 1e6} ₳`);
   await expect(review).toContainText(`Network fee${fee / 1e6} ₳`);
-  await page.screenshot({ path: "test-results/remove-review.png", fullPage: true });
+  await snap(page, "remove-review");
 
   koios.collateral = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("alert")).toContainText("doesn't match this transaction, so it wasn't sent");
   expect(koios.submitted).toHaveLength(0);
+});
+
+test("every wallet screen in the popup, for the look", async ({ context, koios }) => {
+  // Restoring happens in a tab; the popup then opens on the unlocked wallet.
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.close();
+
+  const popup = await openApp(context, "popup");
+  const shot = (name: string) => snap(popup, `popup-${name}`);
+  const back = () => popup.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(popup.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await shot("home-seedelf");
+
+  await cardanoTab(popup);
+  await expect(popup.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await shot("home-cardano");
+  await popup.getByRole("button", { name: "Receive" }).click();
+  await expect(popup.getByRole("img", { name: "QR code of the receive address" })).toBeVisible();
+  await shot("receive");
+  await back();
+  await popup.getByRole("button", { name: "Move in" }).click();
+  await popup.getByLabel("Amount").fill("25.5");
+  await popup.getByRole("checkbox", { name: /tUSDM/ }).check();
+  await shot("move-in");
+  await popup.getByRole("button", { name: "Review" }).click();
+  await expect(popup.getByTestId("move-in-review")).toBeVisible();
+  await shot("move-in-review");
+  await back();
+  await back();
+
+  await popup.getByRole("tab", { name: "Seedelf" }).click();
+  for (const [button, name] of [
+    ["Send to a seedelf", "transfer"],
+    ["Withdraw", "withdraw"],
+    ["Create a seedelf", "create-seedelf"],
+    ["Remove web-wallet", "remove"],
+  ] as const) {
+    await popup.getByRole("button", { name: button }).click();
+    await expect(popup.getByRole("heading", { level: 1 })).toBeVisible();
+    await shot(name);
+    await back();
+  }
+  expect(koios.submitted).toHaveLength(0);
+
+  await popup.getByRole("button", { name: "Lock" }).click();
+  await expect(popup.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await shot("unlock");
 });
 
 test("a worker that lost its WASM file explains itself and recovers", async ({ userDataDir }) => {
@@ -723,7 +822,7 @@ test("a worker that lost its WASM file explains itself and recovers", async ({ u
     await expect(page.getByTestId("startup-error")).toContainText("The wallet's core didn't load");
     await expect(page.getByTestId("startup-error")).toContainText("reload it");
     await expect(page.getByRole("button", { name: "Reload the extension" })).toBeVisible();
-    await page.screenshot({ path: "test-results/startup-error.png", fullPage: true });
+    await snap(page, "startup-error");
 
     // The failed load isn't cached: once the file is back, Try again works.
     renameSync(join(assets, "moved.wasm"), join(assets, wasm));

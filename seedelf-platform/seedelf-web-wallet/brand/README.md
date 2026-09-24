@@ -5,7 +5,7 @@ The original logo set, at full size. The extension ships smaller copies made fro
 | File | What it is | Used for |
 |---|---|---|
 | `mystical_seed_elf_emblem.png` | The emblem, transparent background, 1254² | Toolbar and extension icons (`icons/icon-{16,32,48,128}.png`), the top-bar mark (`brand/emblem.png`) |
-| `seedelf_wallet_gradient_tech_logo.png` | Emblem and "Seedelf Wallet" wordmark in colour, transparent background | Welcome screen (`brand/wordmark-on-light.png`, and `brand/wordmark-on-dark.png` with the navy lettering lifted to near-white for dark backgrounds) |
+| `seedelf_wallet_gradient_tech_logo.png` | Emblem and "Seedelf Wallet" wordmark in colour, transparent background | Welcome screen (`brand/wordmark-on-dark.png`, with the navy lettering lifted to near-white for the dark theme) |
 | `seedelf_wallet_logo.png` | The same lockup in one colour (navy `#011833`) | Print, or single-colour use |
 | `hooded_seed_elf_guardian_icon.png` | Rounded-square app icon with a background | The Chrome Web Store listing (roadmap chunk 11) |
 

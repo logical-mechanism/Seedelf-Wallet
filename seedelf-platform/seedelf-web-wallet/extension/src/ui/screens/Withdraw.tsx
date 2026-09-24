@@ -9,11 +9,12 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type { Balances, PendingTx, WithdrawDestination, WithdrawSummary } from "../../shared/rpc";
 import { call } from "../background";
-import { AdaInput } from "../components/AdaInput";
+import { AdaInput, RoundNote } from "../components/AdaInput";
+import { Callout } from "../components/Callout";
+import { ReviewRows, Row } from "../components/ReviewRows";
+import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { formatAda, formatQuantity, parseAda, shortHex, tokenName } from "../format";
-
-const key = (t: { policyId: string; assetName: string }) => `${t.policyId}.${t.assetName}`;
+import { adaWithTokens, formatAda, formatQuantity, parseAda, plural, shortHex, tokenKey as key, tokenName } from "../format";
 
 type Read =
   | { state: "idle" }
@@ -100,19 +101,21 @@ export function Withdraw({
   }
 
   if (summary) {
-    const change = summary.changeTokens
-      ? `${formatAda(summary.changeLovelace)} ₳ and ${plural(summary.changeTokens, "token")}`
-      : `${formatAda(summary.changeLovelace)} ₳`;
     return (
-      <section className="card stack" aria-labelledby="withdraw-review">
-        <div className="step-header">
-          <button type="button" className="link" onClick={() => setSummary(undefined)} disabled={busy}>
-            ← Back
+      <Screen
+        title="Review the withdrawal"
+        titleId="withdraw-review"
+        onBack={() => setSummary(undefined)}
+        backDisabled={busy}
+        aside="Nothing is sent until you press Send"
+        error={error}
+        foot={
+          <button type="button" className="primary" onClick={send} disabled={busy}>
+            {busy ? "Sending…" : "Send"}
           </button>
-          <span className="note">Nothing is sent until you press Send</span>
-        </div>
-        <h1 id="withdraw-review">Review the withdrawal</h1>
-        <dl className="review" data-testid="withdraw-review">
+        }
+      >
+        <ReviewRows testId="withdraw-review">
           <Row label="To" value={summary.handle ? `$${summary.handle}` : shortHex(summary.address, 16, 8)} title={summary.address} strong />
           {summary.handle && <Row label="Address" value={shortHex(summary.address, 16, 8)} title={summary.address} />}
           <Row label={summary.max ? "Everything" : "Amount"} value={`${formatAda(summary.lovelace)} ₳`} strong />
@@ -123,9 +126,11 @@ export function Withdraw({
             );
           })}
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-          {!summary.max && <Row label="Back to your Seedelf balance" value={change} />}
+          {!summary.max && (
+            <Row label="Back to your Seedelf balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          )}
           <Row label="Seedelf UTxOs spent" value={String(summary.inputs)} />
-        </dl>
+        </ReviewRows>
         {summary.left > 0 && (
           <p className="note" data-testid="withdraw-left">
             {plural(summary.left, "Seedelf UTxO")} stay for another withdrawal: a transaction fits 20 at most.
@@ -135,75 +140,70 @@ export function Withdraw({
         <p className="note">
           Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the network to confirm.
         </p>
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <button type="button" className="primary" onClick={send} disabled={busy}>
-          {busy ? "Sending…" : "Send"}
-        </button>
-      </section>
+      </Screen>
     );
   }
 
   return (
-    <form className="card stack" onSubmit={review} aria-labelledby="withdraw-title">
-      <div className="step-header">
-        <button type="button" className="link" onClick={onCancel}>
-          ← Back
+    <Screen
+      onSubmit={review}
+      title="Withdraw"
+      titleId="withdraw-title"
+      onBack={onCancel}
+      aside={`${formatAda(seedelf.lovelace)} ₳ in your Seedelf balance`}
+      error={error}
+      foot={
+        <button type="submit" className="primary" disabled={!ready || busy}>
+          {busy ? "Building…" : "Review"}
         </button>
-        <span className="note">{formatAda(seedelf.lovelace)} ₳ in your Seedelf balance</span>
-      </div>
-      <h1 id="withdraw-title">Withdraw</h1>
-
-      <label htmlFor="withdraw-to">To</label>
-      <input
-        id="withdraw-to"
-        className="seedelf-name"
-        value={to}
-        onChange={(e) => setTo(e.target.value)}
-        placeholder="addr_test1… or $handle"
-        autoComplete="off"
-        spellCheck={false}
-        autoFocus
-        aria-invalid={read.state === "error" ? true : undefined}
-        aria-describedby="withdraw-to-note"
-      />
-      <div id="withdraw-to-note" data-testid="withdraw-to-note">
-        {read.state === "reading" ? (
-          <p className="note">Reading it…</p>
-        ) : read.state === "error" ? (
-          <p className="field-note" role="alert">
-            {read.message}
-          </p>
-        ) : read.state === "read" ? (
-          <p className="note">
-            {read.destination.handle ? `$${read.destination.handle} is ` : "Sends to "}
-            <code title={read.destination.address}>{shortHex(read.destination.address, 14, 8)}</code>
-          </p>
-        ) : (
-          <p className="note">A Cardano address, or an ADA Handle like $name. Looking up a handle tells Koios which one.</p>
-        )}
+      }
+    >
+      <div className="field">
+        <label htmlFor="withdraw-to">To</label>
+        <input
+          id="withdraw-to"
+          className="seedelf-name"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          placeholder="addr_test1… or $handle"
+          autoComplete="off"
+          spellCheck={false}
+          autoFocus
+          aria-invalid={read.state === "error" ? true : undefined}
+          aria-describedby="withdraw-to-note"
+        />
+        <div id="withdraw-to-note" data-testid="withdraw-to-note">
+          {read.state === "reading" ? (
+            <p className="note">Reading it…</p>
+          ) : read.state === "error" ? (
+            <p className="field-note" role="alert">
+              {read.message}
+            </p>
+          ) : read.state === "read" ? (
+            <p className="note">
+              {read.destination.handle ? `$${read.destination.handle} is ` : "Sends to "}
+              <code title={read.destination.address}>{shortHex(read.destination.address, 14, 8)}</code>
+            </p>
+          ) : (
+            <p className="note">A Cardano address, or an ADA Handle like $name. Looking up a handle tells Koios which one.</p>
+          )}
+        </div>
       </div>
       {read.state === "read" && read.destination.own && <OwnWarning />}
 
-      <label htmlFor="withdraw-amount">Amount</label>
-      <AdaInput id="withdraw-amount" value={amount} onChange={setAmount} disabled={max} shown="Max" autoFocus={false}>
-        <button
-          type="button"
-          className={max ? "segmented__item segmented__item--on" : "segmented__item"}
-          aria-pressed={max}
-          onClick={() => setMax(!max)}
-        >
-          Max
-        </button>
-      </AdaInput>
-      {tooMuch && (
-        <p className="field-note" data-testid="withdraw-too-much">
-          That's more than the {formatAda(seedelf.lovelace)} ₳ in your Seedelf balance.
-        </p>
-      )}
+      <div className="field">
+        <label htmlFor="withdraw-amount">Amount</label>
+        <AdaInput id="withdraw-amount" value={amount} onChange={setAmount} disabled={max} shown="Max" autoFocus={false}>
+          <button type="button" className="chip" aria-pressed={max} onClick={() => setMax(!max)}>
+            Max
+          </button>
+        </AdaInput>
+        {tooMuch && (
+          <p className="field-note" data-testid="withdraw-too-much">
+            That's more than the {formatAda(seedelf.lovelace)} ₳ in your Seedelf balance.
+          </p>
+        )}
+      </div>
       {max ? (
         <p className="note" data-testid="withdraw-max-note">
           Everything in your Seedelf balance, up to 20 UTxOs at once, with every token, less the fee. Spending them
@@ -211,46 +211,25 @@ export function Withdraw({
         </p>
       ) : (
         <>
-          <p className={lovelace && !round ? "callout callout--warn" : "note"}>
+          <RoundNote warn={!!lovelace && !round}>
             Round amounts, like 100 ₳, are harder to match to the move-in that paid for them.
-          </p>
+          </RoundNote>
           <TokenAmounts held={seedelf.tokens} typed={tokenAmounts} onChange={setTokenAmounts} />
         </>
       )}
 
-      <div className="callout">
+      <Callout tone="privacy">
         Withdrawing to where the money came from links it back. Send it somewhere else, or keep it in Seedelf.
-      </div>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <button type="submit" className="primary" disabled={!ready || busy}>
-        {busy ? "Building…" : "Review"}
-      </button>
-    </form>
+      </Callout>
+    </Screen>
   );
 }
 
 function OwnWarning() {
   return (
-    <div className="callout callout--warn" data-testid="withdraw-own">
+    <Callout tone="warn" testId="withdraw-own">
       This is your own Cardano account. Withdrawing here links the money back to it, and to whoever paid it into
       Seedelf.
-    </div>
+    </Callout>
   );
-}
-
-function Row({ label, value, strong, title }: { label: string; value: string; strong?: boolean; title?: string }) {
-  return (
-    <div className={strong ? "review__row review__row--strong" : "review__row"}>
-      <dt>{label}</dt>
-      <dd title={title}>{value}</dd>
-    </div>
-  );
-}
-
-function plural(n: number, one: string): string {
-  return `${n} ${one}${n === 1 ? "" : "s"}`;
 }

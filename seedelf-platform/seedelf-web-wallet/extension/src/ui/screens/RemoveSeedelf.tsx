@@ -8,6 +8,10 @@ import { useState, type FormEvent } from "react";
 
 import type { PendingTx, RemoveSummary, RemoveTo, SeedelfInfo } from "../../shared/rpc";
 import { call } from "../background";
+import { Callout } from "../components/Callout";
+import { Choice } from "../components/Choice";
+import { ReviewRows, Row } from "../components/ReviewRows";
+import { Screen } from "../components/Screen";
 import { formatAda, shortHex } from "../format";
 
 const DESTINATIONS: Record<RemoveTo, string> = { account: "Cardano account", seedelf: "Seedelf balance" };
@@ -55,91 +59,67 @@ export function RemoveSeedelf({
 
   if (summary) {
     return (
-      <section className="card stack" aria-labelledby="remove-review">
-        <div className="step-header">
-          <button type="button" className="link" onClick={() => setSummary(undefined)} disabled={busy}>
-            ← Back
+      <Screen
+        title="Review the removal"
+        titleId="remove-review"
+        onBack={() => setSummary(undefined)}
+        backDisabled={busy}
+        aside="Nothing is sent until you press Send"
+        error={error}
+        foot={
+          <button type="button" className="primary" onClick={send} disabled={busy}>
+            {busy ? "Sending…" : "Send"}
           </button>
-          <span className="note">Nothing is sent until you press Send</span>
-        </div>
-        <h1 id="remove-review">Review the removal</h1>
-        <dl className="review" data-testid="remove-review">
+        }
+      >
+        <ReviewRows testId="remove-review">
           <Row label="Seedelf" value={summary.label ?? "Unnamed"} strong />
           <Row label="Token name" value={shortHex(summary.name, 16, 8)} title={summary.name} />
           <Row label={`Back to your ${DESTINATIONS[summary.to]}`} value={`${formatAda(summary.lovelace)} ₳`} strong />
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-        </dl>
+        </ReviewRows>
         <p className="note">
           The token is burned. Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the
           network to confirm.
         </p>
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <button type="button" className="primary" onClick={send} disabled={busy}>
-          {busy ? "Sending…" : "Send"}
-        </button>
-      </section>
+      </Screen>
     );
   }
 
   return (
-    <form className="card stack" onSubmit={review} aria-labelledby="remove-title">
-      <div className="step-header">
-        <button type="button" className="link" onClick={onCancel}>
-          ← Back
+    <Screen
+      onSubmit={review}
+      title={`Remove ${name}`}
+      titleId="remove-title"
+      onBack={onCancel}
+      aside={`${formatAda(seedelf.lovelace)} ₳ locked with it`}
+      error={error}
+      foot={
+        <button type="submit" className="primary" disabled={busy}>
+          {busy ? "Building…" : "Review"}
         </button>
-        <span className="note">{formatAda(seedelf.lovelace)} ₳ locked with it</span>
-      </div>
-      <h1 id="remove-title">Remove {name}</h1>
+      }
+    >
       <p className="note">
         Removing burns the seedelf's token and frees the ADA locked with it, less the fee. Payments already sent to it
         stay yours; after this, nobody can pay it by name.
       </p>
-      <p className="note">
-        <code title={seedelf.assetName}>{shortHex(seedelf.assetName, 16, 8)}</code>
-      </p>
+      <code className="copy-field__value" title={seedelf.assetName}>
+        {seedelf.assetName}
+      </code>
 
-      <span className="label" id="remove-to">
-        Send what's freed to
-      </span>
-      <div className="segmented" role="group" aria-labelledby="remove-to">
-        {(["account", "seedelf"] as const).map((d) => (
-          <button
-            key={d}
-            type="button"
-            className={to === d ? "segmented__item segmented__item--on" : "segmented__item"}
-            aria-pressed={to === d}
-            onClick={() => setTo(d)}
-          >
-            {DESTINATIONS[d]}
-          </button>
-        ))}
-      </div>
-      <div className="callout" data-testid="remove-to-note">
+      <Choice
+        label="Send what's freed to"
+        id="remove-to"
+        value={to}
+        onChange={setTo}
+        options={(["account", "seedelf"] as const).map((d) => ({ value: d, label: DESTINATIONS[d] }))}
+      />
+      <Callout tone="privacy" testId="remove-to-note">
         {to === "account"
           ? "Back where an account-paid seedelf's ADA came from, so it links nothing new."
           : "For a seedelf you minted from your Seedelf balance. For one your Cardano account paid for, this ties the seedelf's name to the new UTxO, and to whatever it's later spent with."}
-      </div>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <button type="submit" className="primary" disabled={busy}>
-        {busy ? "Building…" : "Review"}
-      </button>
-    </form>
-  );
-}
-
-function Row({ label, value, strong, title }: { label: string; value: string; strong?: boolean; title?: string }) {
-  return (
-    <div className={strong ? "review__row review__row--strong" : "review__row"}>
-      <dt>{label}</dt>
-      <dd title={title}>{value}</dd>
-    </div>
+      </Callout>
+    </Screen>
   );
 }

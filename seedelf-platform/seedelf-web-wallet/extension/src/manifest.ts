@@ -42,7 +42,8 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
     permissions: ["storage", "alarms"],
     host_permissions: origins.map((o) => `${o}/*`),
     // WebAssembly needs 'wasm-unsafe-eval'; connect-src limits network access
-    // to the extension itself and the wallet's own services.
+    // to the extension itself and the wallet's own services. Fonts and images
+    // ship inside the extension.
     content_security_policy: {
       extension_pages: [
         "default-src 'self'",
@@ -51,6 +52,7 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
         `connect-src 'self' ${origins.join(" ")}`,
         "style-src 'self'",
         "img-src 'self' data:",
+        "font-src 'self'",
       ].join("; "),
     },
     ...(storeBuild ? {} : { key: DEV_KEY }),

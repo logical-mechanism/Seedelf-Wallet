@@ -24,10 +24,7 @@ export function Onboarding({ start, onDone }: { start?: "create" | "restore"; on
 
   return (
     <section className="welcome">
-      <picture>
-        <source srcSet="/brand/wordmark-on-dark.png" media="(prefers-color-scheme: dark)" />
-        <img className="welcome__logo" src="/brand/wordmark-on-light.png" alt="Seedelf Wallet" width={360} height={118} />
-      </picture>
+      <img className="welcome__logo" src="/brand/wordmark-on-dark.png" alt="Seedelf Wallet" width={360} height={118} />
       <p className="welcome__lead">A private wallet for Cardano.</p>
       <p className="note welcome__text">
         Payments to your seedelfs can't be linked to you, and spending them doesn't reveal who you are.

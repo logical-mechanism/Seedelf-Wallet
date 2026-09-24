@@ -4,6 +4,7 @@
 import { useState, type ReactNode } from "react";
 
 import { sanitizeAda } from "../format";
+import { Callout } from "./Callout";
 
 export function AdaInput({
   id,
@@ -27,7 +28,7 @@ export function AdaInput({
   const [note, setNote] = useState<string>();
   return (
     <>
-      <div className="amount-row">
+      <div className="amount-box">
         <input
           id={id}
           inputMode="decimal"
@@ -43,7 +44,7 @@ export function AdaInput({
           }}
           autoFocus={autoFocus}
         />
-        <span className="amount-row__unit">₳</span>
+        <span className="amount-box__unit">₳</span>
         {children}
       </div>
       {note && !disabled && (
@@ -52,5 +53,16 @@ export function AdaInput({
         </p>
       )}
     </>
+  );
+}
+
+/** The nudge towards round amounts: a quiet note, or a warning once the amount isn't round. */
+export function RoundNote({ warn, children }: { warn: boolean; children: ReactNode }) {
+  return warn ? (
+    <Callout tone="warn" testId="round-warning">
+      {children}
+    </Callout>
+  ) : (
+    <p className="note">{children}</p>
   );
 }
