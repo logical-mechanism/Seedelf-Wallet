@@ -4,6 +4,7 @@ pub mod external;
 pub(crate) mod fee;
 pub mod fund;
 pub mod remove;
+pub(crate) mod spend;
 pub mod sweep;
 pub mod transfer;
 pub mod util;

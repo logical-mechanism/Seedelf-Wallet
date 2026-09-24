@@ -23,8 +23,8 @@ async fn remove_burns_token_and_returns_ada() {
             SAMPLE_SEEDELF,
         )])
         .await;
-    // remove evaluates two scripts: the spend and the burn.
-    scenario.mount_evaluate(2).await;
+    // remove evaluates two scripts: the spend and the burn, as Ogmios labels them.
+    scenario.mount_evaluate_mint(1).await;
     scenario.mount_collateral().await;
     scenario.mount_submit().await;
 

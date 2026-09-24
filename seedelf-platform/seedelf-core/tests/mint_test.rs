@@ -1676,3 +1676,365 @@ mod transfer {
         assert!(proven(&w, spend).draft().is_err());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Withdraw: paying an address from the Seedelf balance, or removing a seedelf
+// ---------------------------------------------------------------------------
+
+mod withdraw {
+    use super::*;
+    use pallas_addresses::{
+        Network, PaymentKeyHash, ScriptHash, ShelleyAddress, ShelleyDelegationPart,
+        ShelleyPaymentPart, StakeKeyHash,
+    };
+    use seedelf_core::assets::{Asset as Token, Assets};
+    use seedelf_core::transaction::address_minimum_lovelace_with_assets;
+
+    /// A base address on `network` from made-up key hashes.
+    fn key_address(network: Network) -> Address {
+        ShelleyAddress::new(
+            network,
+            ShelleyPaymentPart::Key(PaymentKeyHash::new([7; 28])),
+            ShelleyDelegationPart::Key(StakeKeyHash::new([8; 28])),
+        )
+        .into()
+    }
+
+    fn tokens(items: &[(&str, u64)]) -> Assets {
+        items.iter().fold(Assets::new(), |all, (name, quantity)| {
+            all.add(Token::new(TOKEN_POLICY.to_string(), hex::encode(name), *quantity).unwrap())
+                .unwrap()
+        })
+    }
+
+    /// An owned UTxO holding the seedelf `name` and nothing else.
+    fn seedelf(w: &World, n: u8, name: &str) -> UtxoResponse {
+        let mut utxo = owned(w, n, 0, 1_749_860, &[]);
+        utxo.asset_list = Some(vec![Asset {
+            decimals: 0,
+            quantity: "1".into(),
+            policy_id: w.chain.config.contract.seedelf_policy_id.clone(),
+            asset_name: name.into(),
+            fingerprint: String::new(),
+        }]);
+        utxo
+    }
+
+    fn spends_only(spends: usize) -> Budgets {
+        let result: Vec<Value> = (0..spends)
+            .map(|i| {
+                json!({"validator": {"index": i, "purpose": "spend"},
+                       "budget": {"memory": SPEND.mem, "cpu": SPEND.steps}})
+            })
+            .collect();
+        Budgets::from_ogmios(&json!({"result": result})).unwrap()
+    }
+
+    fn finish(w: &World, spend: build::ScriptSpend, budgets: &Budgets) -> build::FinalSpend {
+        spend
+            .proven(|register, vkh| create_proof(register.clone(), w.sk, vkh.to_string()))
+            .unwrap()
+            .finalize(budgets)
+            .unwrap()
+    }
+
+    fn assets_of(o: &Out) -> Assets {
+        o.assets.iter().fold(Assets::new(), |all, ((p, n), q)| {
+            all.add(Token::new(p.clone(), n.clone(), *q).unwrap())
+                .unwrap()
+        })
+    }
+
+    /// What every withdrawal must satisfy, whatever its outputs: value
+    /// conserved (less anything burned), proofs bound to the one-time key,
+    /// the fee against the ledger's formula for `script_bytes`, and
+    /// giveme.my's collateral.
+    fn assert_spend(
+        w: &World,
+        spent: &[UtxoResponse],
+        built: &build::FinalSpend,
+        script_bytes: u64,
+    ) -> Decoded {
+        let tx = decode(&built.tx);
+        let mut expected: Vec<(String, u64)> = spent
+            .iter()
+            .map(|u| (u.tx_hash.clone(), u.tx_index))
+            .collect();
+        expected.sort();
+        assert_eq!(tx.inputs, expected);
+        assert_eq!(
+            tx.collateral,
+            vec![(hex::encode(PREPROD_COLLATERAL_UTXO), 0)]
+        );
+
+        let lovelace_in: u64 = spent.iter().map(|u| u.value.parse::<u64>().unwrap()).sum();
+        let lovelace_out: u64 = tx.outputs.iter().map(|o| o.lovelace).sum();
+        assert_eq!(lovelace_in, lovelace_out + tx.fee, "lovelace conserved");
+        let mut tokens: BTreeMap<(String, String), i64> = BTreeMap::new();
+        for a in spent.iter().flat_map(|u| u.asset_list.iter().flatten()) {
+            *tokens
+                .entry((a.policy_id.clone(), a.asset_name.clone()))
+                .or_default() += a.quantity.parse::<i64>().unwrap();
+        }
+        for (k, v) in &tx.mint {
+            *tokens.entry(k.clone()).or_default() += v;
+        }
+        tokens.retain(|_, v| *v != 0);
+        let mut out: BTreeMap<(String, String), i64> = BTreeMap::new();
+        for o in &tx.outputs {
+            for (k, v) in &o.assets {
+                *out.entry(k.clone()).or_default() += *v as i64;
+            }
+        }
+        assert_eq!(tokens, out, "tokens conserved");
+
+        // Every output above its minimum, wherever it goes.
+        for (i, o) in tx.outputs.iter().enumerate() {
+            let minimum = if o.address == w.wallet {
+                let register = o.register.as_ref().expect("a register datum");
+                assert!(register.is_owned(w.sk).unwrap(), "change is owned");
+                wallet_minimum_lovelace_with_assets(&w.chain.params, assets_of(o)).unwrap()
+            } else {
+                assert!(o.register.is_none(), "an address output carries no datum");
+                address_minimum_lovelace_with_assets(
+                    &w.chain.params,
+                    &o.address.to_bech32().unwrap(),
+                    assets_of(o),
+                )
+                .unwrap()
+            };
+            assert!(o.lovelace >= minimum, "output {i} above its minimum");
+        }
+
+        let vkh = hex::encode(w.signer);
+        assert_eq!(tx.signers, vec![w.signer, Hash::new(COLLATERAL_HASH)]);
+        for r in tx.redeemers.iter().filter(|r| r.tag == RedeemerTag::Spend) {
+            let (hash, index) = &tx.inputs[r.index as usize];
+            let utxo = spent
+                .iter()
+                .find(|u| &u.tx_hash == hash && u.tx_index == *index)
+                .unwrap();
+            let register = register_of(utxo);
+            assert!(
+                prove(
+                    &register.generator,
+                    &register.public_value,
+                    &bytes_field(&r.data, 0),
+                    &bytes_field(&r.data, 1),
+                    &vkh,
+                )
+                .unwrap()
+            );
+        }
+
+        let (mem, steps) = tx
+            .redeemers
+            .iter()
+            .fold((0, 0), |(m, s), r| (m + r.budget.mem, s + r.budget.steps));
+        let needed = ledger_minimum_fee(&w.chain.params, tx.size_signed, mem, steps, script_bytes);
+        assert_eq!(tx.fee % 2, 0);
+        assert!(tx.fee >= needed, "fee {} covers {needed}", tx.fee);
+        assert!(
+            tx.fee - needed < 1_000,
+            "fee {} is close to {needed}",
+            tx.fee
+        );
+        assert_eq!(built.fee.script_reference, script_bytes * 15);
+        assert_eq!(
+            tx.collateral_return,
+            (collateral_address(true), 5_000_000 - tx.fee * 3 / 2)
+        );
+        tx
+    }
+
+    #[test]
+    fn pays_an_address_exactly_and_keeps_the_change() {
+        let w = world();
+        let to = key_address(Network::Testnet);
+        let available = [
+            owned(&w, 0x01, 0, 20_000_000, &[]),
+            owned(&w, 0x02, 0, 3_000_000, &[("tok", 100)]),
+            owned(&w, 0x03, 0, 2_500_000, &[("other", 9)]),
+        ];
+        let sent = tokens(&[("tok", 40)]);
+        let spend = build::sweep(
+            &w.chain, &available, &to, 5_000_000, &sent, &w.owner, w.signer,
+        )
+        .unwrap();
+        let spent = spend.inputs();
+        // The token's UTxO, then the largest pure-ADA one; never the other token's.
+        assert_eq!(spent.len(), 2);
+        assert!(spent.iter().all(|u| u.value != "2500000"));
+        let built = finish(&w, spend, &spends_only(2));
+        let tx = assert_spend(&w, &spent, &built, 629);
+        assert_eq!(tx.outputs[0].address, to);
+        assert_eq!(tx.outputs[0].lovelace, 5_000_000);
+        assert_eq!(assets_of(&tx.outputs[0]), sent);
+        assert!(tx.outputs[1..].iter().all(|o| o.address == w.wallet));
+        assert_eq!(built.change_tokens, tokens(&[("tok", 60)]));
+        assert!(tx.mint.is_empty());
+    }
+
+    #[test]
+    fn sends_everything_less_the_fee() {
+        let w = world();
+        let to = key_address(Network::Testnet);
+        let names: Vec<String> = (0..25).map(|i| format!("token{i:02}")).collect();
+        let many: Vec<(&str, u64)> = names.iter().map(|n| (n.as_str(), 1)).collect();
+        let inputs = [
+            owned(&w, 0x01, 0, 8_000_000, &[]),
+            owned(&w, 0x02, 0, 6_000_000, &many),
+        ];
+        let spend = build::sweep_all(&w.chain, &inputs, &to, &w.owner, w.signer).unwrap();
+        let built = finish(&w, spend, &spends_only(2));
+        let tx = assert_spend(&w, &inputs, &built, 629);
+        // All of it to the address, the 25 tokens 20 to an output; nothing back.
+        assert_eq!(tx.outputs.len(), 2);
+        assert!(tx.outputs.iter().all(|o| o.address == to));
+        assert_eq!(built.change_lovelace, 14_000_000 - built.fee.total);
+        assert_eq!(built.change_tokens.items.len(), 25);
+    }
+
+    #[test]
+    fn removes_a_seedelf_to_an_address_or_back_into_the_contract() {
+        let w = world();
+        let name = format!("5eed0e1f{}", "ab".repeat(28));
+        let utxo = seedelf(&w, 0x40, &name);
+        let policy = w.chain.config.contract.seedelf_policy_id.clone();
+        let both_scripts = 629 + 519;
+
+        // To an address: the token burned, the rest of its ADA there.
+        let to = key_address(Network::Testnet);
+        let spend = build::remove(&w.chain, &utxo, &w.owner, w.signer)
+            .unwrap()
+            .change_to(&to);
+        let draft = decode(
+            &spend
+                .clone()
+                .proven(|r, vkh| create_proof(r.clone(), w.sk, vkh.to_string()))
+                .unwrap()
+                .draft()
+                .unwrap(),
+        );
+        assert!(draft.redeemers.iter().all(|r| r.budget == DRAFT_BUDGET));
+        let built = finish(&w, spend, &Budgets::from_ogmios(&measured(1)).unwrap());
+        let tx = assert_spend(&w, std::slice::from_ref(&utxo), &built, both_scripts);
+        assert_eq!(
+            tx.mint,
+            BTreeMap::from([((policy.clone(), name.clone()), -1)])
+        );
+        let burn = tx
+            .redeemers
+            .iter()
+            .find(|r| r.tag == RedeemerTag::Mint)
+            .unwrap();
+        assert_eq!(burn.data, PlutusData::BoundedBytes(Vec::new().into()));
+        let mut refs = tx.reference_inputs.clone();
+        refs.sort();
+        let mut want = vec![
+            (
+                hex::encode(w.chain.config.reference.wallet_reference_utxo),
+                1,
+            ),
+            (
+                hex::encode(w.chain.config.reference.seedelf_reference_utxo),
+                1,
+            ),
+        ];
+        want.sort();
+        assert_eq!(refs, want);
+        assert_eq!(tx.outputs.len(), 1);
+        assert_eq!(tx.outputs[0].address, to);
+        assert_eq!(tx.outputs[0].lovelace, 1_749_860 - built.fee.total);
+        // About 0.24 ADA, leaving more than either kind of output needs.
+        assert!(
+            (200_000..300_000).contains(&built.fee.total),
+            "{}",
+            built.fee.total
+        );
+
+        // Back into the Seedelf balance: one owned contract output.
+        let spend = build::remove(&w.chain, &utxo, &w.owner, w.signer).unwrap();
+        let built = finish(&w, spend, &Budgets::from_ogmios(&measured(1)).unwrap());
+        let tx = assert_spend(&w, std::slice::from_ref(&utxo), &built, both_scripts);
+        assert_eq!(tx.outputs.len(), 1);
+        assert_eq!(tx.outputs[0].address, w.wallet);
+        assert!(tx.outputs[0].assets.is_empty());
+    }
+
+    #[test]
+    fn refuses_what_would_lose_money() {
+        let w = world();
+        let available = [owned(&w, 0x01, 0, 10_000_000, &[("tok", 5)])];
+        let err = |to: &Address, lovelace: u64, sent: &Assets| {
+            build::sweep(&w.chain, &available, to, lovelace, sent, &w.owner, w.signer)
+                .err()
+                .expect("an error")
+                .to_string()
+        };
+        let none = Assets::new();
+
+        // Only a normal address on this network.
+        let script: Address = ShelleyAddress::new(
+            Network::Testnet,
+            ShelleyPaymentPart::Script(ScriptHash::new([9; 28])),
+            ShelleyDelegationPart::Null,
+        )
+        .into();
+        let script_stake: Address = ShelleyAddress::new(
+            Network::Testnet,
+            ShelleyPaymentPart::Key(PaymentKeyHash::new([7; 28])),
+            ShelleyDelegationPart::Script(ScriptHash::new([9; 28])),
+        )
+        .into();
+        let stake = Address::from_bech32(
+            "stake_test1urj40zgr2gy4788kl54h6x3gu0pukq5lfr8nflufpg5dzas324ywz",
+        )
+        .unwrap();
+        for bad in [
+            &w.wallet,
+            &script,
+            &script_stake,
+            &stake,
+            &key_address(Network::Mainnet),
+        ] {
+            assert!(!build::is_payable_address(bad, true));
+            assert!(
+                err(bad, 2_000_000, &none).contains("normal preprod address"),
+                "{bad:?}"
+            );
+            assert!(build::sweep_all(&w.chain, &available, bad, &w.owner, w.signer).is_err());
+        }
+        let to = key_address(Network::Testnet);
+        assert!(build::is_payable_address(&to, true));
+        assert!(build::is_payable_address(&collateral_address(true), true));
+
+        // Amounts.
+        assert!(err(&to, 500_000, &none).contains("needs at least"));
+        assert!(err(&to, 2_000_000, &tokens(&[("tok", 6)])).contains("holds only 5"));
+        assert!(err(&to, 2_000_000, &tokens(&[("nope", 1)])).contains("doesn't hold the token"));
+        assert!(err(&to, 9_900_000, &none).contains("Not enough ADA"));
+
+        // Removing needs exactly one seedelf.
+        let plain = owned(&w, 0x02, 0, 5_000_000, &[]);
+        let e = build::remove(&w.chain, &plain, &w.owner, w.signer)
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("exactly one seedelf"), "{e}");
+        let mut two = seedelf(&w, 0x03, &format!("5eed0e1f{}", "01".repeat(28)));
+        let second = two.asset_list.as_ref().unwrap()[0].clone();
+        two.asset_list.as_mut().unwrap().push(Asset {
+            asset_name: format!("5eed0e1f{}", "02".repeat(28)),
+            ..second
+        });
+        assert!(build::remove(&w.chain, &two, &w.owner, w.signer).is_err());
+        // A burn needs the policy's budget.
+        let utxo = seedelf(&w, 0x04, &format!("5eed0e1f{}", "03".repeat(28)));
+        let spend = build::remove(&w.chain, &utxo, &w.owner, w.signer)
+            .unwrap()
+            .proven(|r, vkh| create_proof(r.clone(), w.sk, vkh.to_string()))
+            .unwrap();
+        let e = spend.finalize(&spends_only(1)).err().unwrap();
+        assert!(e.to_string().contains("seedelf policy"), "{e}");
+    }
+}

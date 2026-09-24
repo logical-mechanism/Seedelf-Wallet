@@ -1,27 +1,15 @@
-use crate::commands::fee;
+use crate::commands::spend::{self, OneTimeKey};
 use crate::setup;
 use anyhow::{Context, Result, bail};
 use blstrs::Scalar;
 use clap::Args;
-use colored::Colorize;
 use pallas_addresses::Address;
-use pallas_crypto::key::ed25519::{PublicKey, SecretKey};
-use pallas_primitives::Hash;
-use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
-use pallas_wallet::PrivateKey;
-use rand_core::OsRng;
-use seedelf_core::address;
-use seedelf_core::constants::{COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, get_config};
-use seedelf_core::data_structures;
-use seedelf_core::transaction;
+use seedelf_core::build::{self, Chain};
+use seedelf_core::constants::get_config;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr::create_proof;
 use seedelf_display::display;
-use seedelf_koios::koios::{
-    UtxoResponse, epoch_params, evaluate_transaction, extract_bytes_with_logging, submit_tx,
-    witness_collateral,
-};
+use seedelf_koios::koios::{UtxoResponse, epoch_params, extract_bytes_with_logging};
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -42,39 +30,31 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag)?;
-    let params = epoch_params(network_flag).await?;
+    let chain = Chain {
+        config: get_config(variant, network_flag)?,
+        params: epoch_params(network_flag).await?,
+        network_flag,
+    };
 
     // Reject a non-hex --seedelf up front rather than panicking mid-build.
-    let seedelf_token_name: Vec<u8> =
-        hex::decode(&args.seedelf).context("--seedelf must be a hex-encoded token name")?;
+    hex::decode(&args.seedelf).context("--seedelf must be a hex-encoded token name")?;
 
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str())
         .map_err(|e| anyhow::anyhow!("Supplied Address Is Incorrect: {e}"))?;
-    if !(address::is_not_a_script(addr.clone())
-        && address::is_on_correct_network(addr.clone(), network_flag))
-    {
+    if !build::is_payable_address(&addr, network_flag) {
         bail!("Supplied Address Is Incorrect");
     }
 
-    // There is a single register here so we can do this
+    // proves the seedelf's UTxO
     let scalar: Scalar = setup::unlock_wallet_interactive();
 
-    // we need this as the address type and not the shelley
-    let collat_addr: Address = address::collateral_address(network_flag);
-
-    // this is used to calculate the real fee
-    let mut draft_tx: StagingTransaction = StagingTransaction::new();
-
-    // we do this so I can initialize it to the empty vector
-    let mut input_vector: Vec<Input> = Vec::new();
-
     let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
+        utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
+            .await?;
     let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
         args.seedelf.clone(),
-        &config.contract.seedelf_policy_id,
+        &chain.config.contract.seedelf_policy_id,
         every_utxo,
     ) {
         Ok(Some(utxo)) => utxo,
@@ -82,272 +62,17 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         Err(e) => bail!("Failed to look up seedelf {}: {e}", args.seedelf),
     };
 
-    let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
-        .ok_or_else(|| anyhow::anyhow!("Seedelf datum is not a Register"))?;
-
-    let total_lovelace: u64 = seedelf_utxo
-        .value
-        .parse::<u64>()
-        .context("Seedelf UTxO has an invalid lovelace value")?;
-    let seedelf_tx_hash: [u8; 32] = hex::decode(&seedelf_utxo.tx_hash)
-        .context("Seedelf UTxO tx hash is not valid hex")?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("Seedelf UTxO tx hash is not 32 bytes"))?;
-    let seedelf_input: Input = Input::new(
-        pallas_crypto::hash::Hash::new(seedelf_tx_hash),
-        seedelf_utxo.tx_index,
-    );
-    draft_tx = draft_tx.input(seedelf_input.clone());
-    input_vector.push(seedelf_input.clone());
-
-    // This is some semi legit fee to be used to estimate it
-    let tmp_fee: u64 = 200_000;
-
-    // generate a one time key pad
-    let one_time_secret_key: SecretKey = SecretKey::new(OsRng);
-    let one_time_private_key: PrivateKey = PrivateKey::from(one_time_secret_key.clone());
-    let public_key_hash: Hash<28> =
-        pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
-    let pkh: String = hex::encode(public_key_hash);
-
-    // use the base register to rerandomize for the datum
-
-    let (z, g_r) = create_proof(seedelf_datum, scalar, pkh.clone())?;
-    let spend_redeemer_vector: Vec<u8> =
-        data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
-    let burn_redeemer_vector: Vec<u8> = data_structures::create_mint_redeemer("".to_string())?;
-
-    // build out the rest of the draft tx with the tmp fee
-    draft_tx = draft_tx
-        .output(Output::new(
-            addr.clone(),
-            seedelf_core::transaction::checked_lovelace(total_lovelace, &[tmp_fee])?,
-        ))
-        .collateral_input(transaction::collateral_input(network_flag))
-        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee)?)
-        .fee(tmp_fee)
-        .mint_asset(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(&config.contract.seedelf_policy_id)
-                    .unwrap()
-                    .try_into()
-                    .expect("Not Correct Length"),
-            ),
-            seedelf_token_name.clone(),
-            -1,
-        )
-        .unwrap()
-        .reference_input(transaction::reference_utxo(
-            config.reference.seedelf_reference_utxo,
-        ))
-        .reference_input(transaction::reference_utxo(
-            config.reference.wallet_reference_utxo,
-        ))
-        .add_spend_redeemer(
-            input_vector.clone().remove(0),
-            spend_redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits {
-                mem: 14_000_000,
-                steps: 10_000_000_000,
-            }),
-        )
-        .add_mint_redeemer(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(&config.contract.seedelf_policy_id)
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
-            burn_redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits {
-                mem: 14_000_000,
-                steps: 10_000_000_000,
-            }),
-        )
-        .language_view(
-            pallas_txbuilder::ScriptKind::PlutusV3,
-            params.cost_model_v3.clone(),
-        )
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(&pkh)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ))
-        .disclosed_signer(pallas_crypto::hash::Hash::new(COLLATERAL_HASH));
-
-    // this is what will be signed when the real fee is known
-    let mut raw_tx: StagingTransaction = draft_tx
-        .clone()
-        .clear_fee()
-        .clear_collateral_output()
-        .remove_output(0)
-        .remove_spend_redeemer(input_vector.clone().remove(0))
-        .remove_mint_redeemer(pallas_crypto::hash::Hash::new(
-            hex::decode(&config.contract.seedelf_policy_id)
-                .expect("Invalid hex string")
-                .try_into()
-                .expect("Failed to convert to 32-byte array"),
-        ));
-
-    let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
-
-    let (mint_cpu_units, mint_mem_units, spend_cpu_units, spend_mem_units) =
-        match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag)
-            .await
-        {
-            Ok(execution_units) => {
-                if execution_units.get("error").is_some() {
-                    anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
-                }
-                let spend_cpu_units: u64 = execution_units
-                    .pointer("/result/0/budget/cpu")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let spend_mem_units: u64 = execution_units
-                    .pointer("/result/0/budget/memory")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-
-                let mint_cpu_units: u64 = execution_units
-                    .pointer("/result/1/budget/cpu")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let mint_mem_units: u64 = execution_units
-                    .pointer("/result/1/budget/memory")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                (
-                    mint_cpu_units,
-                    mint_mem_units,
-                    spend_cpu_units,
-                    spend_mem_units,
-                )
-            }
-            Err(_) => (0, 0, 0, 0),
-        };
-
-    if mint_cpu_units == 0 || mint_mem_units == 0 || spend_cpu_units == 0 || spend_mem_units == 0 {
-        bail!("Invalid Transaction");
+    // Say so here, rather than have the wallet script refuse the proof.
+    let owned: bool = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
+        .is_some_and(|register| register.is_owned(scalar).unwrap_or(false));
+    if !owned {
+        bail!("Seedelf {} isn't this wallet's", args.seedelf);
     }
 
-    let tx_size: u64 = intermediate_tx
-        .sign(one_time_private_key)
-        .unwrap()
-        .sign(fee::fake_signer())
-        .unwrap()
-        .tx_bytes
-        .0
-        .len()
-        .try_into()
-        .unwrap();
-    let tx_fee: u64 = fee::linear_fee(&params, tx_size);
-    let compute_fee: u64 = transaction::computation_fee(&params, mint_mem_units, mint_cpu_units)
-        + transaction::computation_fee(&params, spend_mem_units, spend_cpu_units);
-    let script_reference_fee: u64 =
-        config.contract.seedelf_contract_size * 15 + config.contract.wallet_contract_size * 15;
+    // the leftover ADA goes to the address
+    let key = OneTimeKey::new();
+    let spend = build::remove(&chain, &seedelf_utxo, &Register::create(scalar)?, key.hash)?
+        .change_to(&addr);
 
-    let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
-
-    raw_tx = raw_tx
-        .output(Output::new(
-            addr.clone(),
-            seedelf_core::transaction::checked_lovelace(total_lovelace, &[total_fee])?,
-        ))
-        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee)?)
-        .fee(total_fee)
-        .add_spend_redeemer(
-            input_vector.clone().remove(0),
-            spend_redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits {
-                mem: spend_mem_units,
-                steps: spend_cpu_units,
-            }),
-        )
-        .add_mint_redeemer(
-            pallas_crypto::hash::Hash::new(
-                hex::decode(&config.contract.seedelf_policy_id)
-                    .expect("Invalid hex string")
-                    .try_into()
-                    .expect("Failed to convert to 32-byte array"),
-            ),
-            burn_redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits {
-                mem: mint_mem_units,
-                steps: mint_cpu_units,
-            }),
-        );
-
-    let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
-    // need to witness it now
-    let tx_cbor: String = hex::encode(tx.tx_bytes.as_ref());
-
-    let witness_public_key: PublicKey = PublicKey::from(COLLATERAL_PUBLIC_KEY);
-
-    let signed_tx_cbor: BuiltTransaction =
-        match witness_collateral(tx_cbor.clone(), network_flag).await {
-            Ok(witness) => {
-                let witness_cbor = match witness.get("witness").and_then(|v| v.as_str()) {
-                    Some(w) if w.len() >= 128 => w,
-                    _ => bail!("Collateral Service Returned Unexpected Response: {witness}"),
-                };
-                let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
-                let witness_vector: [u8; 64] = hex::decode(witness_sig)
-                    .map_err(|e| anyhow::anyhow!("Collateral Witness Hex Decode Failed: {e}"))?
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Collateral Witness Wrong Length"))?;
-
-                tx.sign(PrivateKey::from(one_time_secret_key.clone()))
-                    .unwrap()
-                    .add_signature(witness_public_key, witness_vector)
-                    .unwrap()
-            }
-            Err(e) => bail!("Collateral Service Request Failed: {e}"),
-        };
-
-    let tx_cbor: String = hex::encode(signed_tx_cbor.clone().tx_bytes);
-
-    let tx_hash = fee::parse_submit_response(&submit_tx(tx_cbor.clone(), network_flag).await?)?;
-
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Compute Fee:".bright_blue(),
-        compute_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Script Reference Fee:".bright_blue(),
-        script_reference_fee.to_string().bright_white()
-    );
-
-    println!(
-        "{} {}",
-        "Total Fee:".bright_blue(),
-        total_fee.to_string().bright_white()
-    );
-
-    println!("\nTx Cbor: {}", tx_cbor.white());
-
-    println!("\nTransaction Successfully Submitted!");
-    println!("\nTx Hash: {}", tx_hash.bright_cyan());
-    if network_flag {
-        println!(
-            "{}",
-            format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    } else {
-        println!(
-            "{}",
-            format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    }
-
-    Ok(())
+    spend::prove_and_submit(spend, scalar, key, network_flag).await
 }

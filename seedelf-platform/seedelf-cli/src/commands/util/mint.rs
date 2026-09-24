@@ -1,22 +1,15 @@
-use crate::commands::fee;
+use crate::commands::spend::{self, OneTimeKey};
 use crate::setup;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
-use pallas_crypto::key::ed25519::{PublicKey, SecretKey};
-use pallas_primitives::Hash;
-use pallas_wallet::PrivateKey;
-use rand_core::OsRng;
-use seedelf_core::build::{self, Budgets, Chain};
-use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, get_config};
+use seedelf_core::build::{self, Chain};
+use seedelf_core::constants::get_config;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr::create_proof;
 use seedelf_display::display;
-use seedelf_koios::koios::{
-    UtxoResponse, epoch_params, evaluate_transaction, submit_tx, witness_collateral,
-};
+use seedelf_koios::koios::{UtxoResponse, epoch_params};
 /// Struct to hold command-specific arguments
 #[derive(Args)]
 pub struct MintArgs {
@@ -91,10 +84,8 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
     };
 
     // the proofs are bound to this key, and it signs
-    let one_time_secret_key: SecretKey = SecretKey::new(OsRng);
-    let one_time_private_key: PrivateKey = PrivateKey::from(one_time_secret_key.clone());
-    let signer: Hash<28> =
-        pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
+    let key = OneTimeKey::new();
+    let signer = key.hash;
 
     let minted: build::SeedelfMint = match args.utxos {
         None => build::mint(&chain, &owned_utxos, &label, &seedelf, &owner, signer)?,
@@ -119,71 +110,5 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
         minted.lovelace.to_string().bright_white()
     );
 
-    let spend = minted
-        .spend
-        .proven(|register, vkh| create_proof(register.clone(), scalar, vkh.to_string()))?;
-    let draft = spend.draft()?;
-    let evaluation = evaluate_transaction(hex::encode(draft.tx_bytes.as_ref()), network_flag)
-        .await
-        .context("Failed to evaluate transaction")?;
-    let built = spend.finalize(&Budgets::from_ogmios(&evaluation)?)?;
-
-    println!(
-        "{} {}",
-        "\nTx Size Fee:".bright_blue(),
-        built.fee.size.to_string().bright_white()
-    );
-    println!(
-        "{} {}",
-        "Compute Fee:".bright_blue(),
-        built.fee.compute.to_string().bright_white()
-    );
-    println!(
-        "{} {}",
-        "Script Reference Fee:".bright_blue(),
-        built.fee.script_reference.to_string().bright_white()
-    );
-    println!(
-        "{} {}",
-        "Total Fee:".bright_blue(),
-        built.fee.total.to_string().bright_white()
-    );
-
-    // need to witness it now
-    let tx_cbor: String = hex::encode(built.tx.tx_bytes.as_ref());
-    let witness = witness_collateral(tx_cbor, network_flag)
-        .await
-        .context("Collateral Service Request Failed")?;
-    let signed_tx_cbor = built
-        .tx
-        .sign(PrivateKey::from(one_time_secret_key))
-        .context("Failed To Sign The Transaction")?
-        .add_signature(
-            PublicKey::from(COLLATERAL_PUBLIC_KEY),
-            build::collateral_signature(&witness)?,
-        )
-        .context("Failed To Add The Collateral Witness")?;
-
-    println!(
-        "\nTx Cbor: {}",
-        hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
-    );
-
-    let response = submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await?;
-    let tx_hash = fee::parse_submit_response(&response)?;
-    println!("\nTransaction Successfully Submitted!");
-    println!("\nTx Hash: {}", tx_hash.bright_cyan());
-    if network_flag {
-        println!(
-            "{}",
-            format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    } else {
-        println!(
-            "{}",
-            format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    }
-
-    Ok(())
+    spend::prove_and_submit(minted.spend, scalar, key, network_flag).await
 }
