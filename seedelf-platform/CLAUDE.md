@@ -74,4 +74,5 @@ These seams are process-global, so every test in the `cli` binary is `#[serial]`
   - Never change its outputs, and never edit the vectors in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`.
   - A new scheme would be a new version (`v2`) alongside v1, never a replacement.
 - **Size fees come from the protocol parameters.** Use `seedelf_core::build::linear_fee(&params, size)`, which is `min_fee_a × size + min_fee_b`. Pallas's `fees::PolicyParams::default()` is Byron's policy (43.946 lovelace a byte): it prices a Seedelf spend a few dozen lovelace short, and the node refuses it with `FeeTooSmallUTxO`. The old CLI drafts hid this with oversized placeholder budgets.
+- **`[profile.wasm-release]` in the workspace `Cargo.toml` is the web wallet's WebAssembly build** (`seedelf-web-wallet/wasm/build.sh`): release built for size. The CLI doesn't use it; don't drop it as unused.
 - **Pallas is pinned to 0.33.0** across the workspace. Bumping it is a coordinated change — `pallas-txbuilder`'s API drifts between minor versions.

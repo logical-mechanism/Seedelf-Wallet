@@ -12,6 +12,9 @@
 // proves nothing.
 //
 // The reading is cached per network in chrome.storage.session and wiped on lock.
+// A reading that still lists a UTxO this wallet has spent came from a Koios
+// backend that's behind (spent.ts): it's read again, a few times, and what's
+// spent is left out either way.
 
 import type * as Wasm from "@seedelf/wasm";
 
@@ -19,6 +22,7 @@ import type { NetworkName } from "../networks";
 import type { Balances, SeedelfInfo } from "../shared/rpc";
 import { discoverChain, registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import type { Koios, KoiosUtxo } from "./koios";
+import { readFresh, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, type Keys, type Wallet } from "./wallet";
 
@@ -41,6 +45,8 @@ export interface BalanceDeps {
   koios: (network: NetworkName) => Koios;
   now: () => number;
   contract?: ContractConfig;
+  /** Waits between readings; tests don't. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export class BalanceService {
@@ -71,12 +77,22 @@ export class BalanceService {
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
 
     // Network calls happen outside withKeys, so they never hold up a lock.
-    const stake = await wallet.withKeys(({ cardano }) => cardano.stakeAddress(net));
-    const [usedAddresses, accountUtxos, contractUtxos] = await Promise.all([
-      koios.accountAddresses(stake),
-      koios.accountUtxos(stake),
-      koios.credentialUtxos([contract.walletContractHash]),
-    ]);
+    const [stake, spent] = await wallet.withKeys(
+      async ({ cardano }) => [cardano.stakeAddress(net), await spentSet(session)] as const,
+    );
+    const [usedAddresses, accountRead, contractRead] = await readFresh(
+      spent,
+      () =>
+        Promise.all([
+          koios.accountAddresses(stake),
+          koios.accountUtxos(stake),
+          koios.credentialUtxos([contract.walletContractHash]),
+        ]),
+      ([, account, contract]) => [...account, ...contract],
+      this.deps.sleep,
+    );
+    const accountUtxos = unspent(accountRead, spent);
+    const contractUtxos = unspent(contractRead, spent);
 
     // Ownership is decided, and the result cached, only while still unlocked.
     return wallet.withKeys(async (keys) => {

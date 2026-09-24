@@ -93,23 +93,42 @@ export class Koios {
   }
 
   /**
-   * Submits a signed transaction; returns its hash. Not retried: if an answer
-   * were lost, a second submit would fail with "inputs already spent" and hide
-   * the fact that the first one went through.
+   * Submits a signed transaction; returns its hash. Retried only when Koios
+   * says its node was unreachable: otherwise, if an answer were lost, a
+   * second submit would fail with "inputs already spent" and hide the fact
+   * that the first one went through.
    */
   async submitTx(txCbor: Uint8Array<ArrayBuffer>): Promise<string> {
     let response: Response;
-    try {
-      response = await this.fetchFn(`${this.base}/submittx`, {
-        method: "POST",
-        headers: { "content-type": "application/cbor" },
-        body: txCbor,
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch (e) {
-      throw new KoiosError(unreachable(e));
+    let text: string;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        response = await this.fetchFn(`${this.base}/submittx`, {
+          method: "POST",
+          headers: { "content-type": "application/cbor" },
+          body: txCbor,
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+      } catch (e) {
+        throw new KoiosError(unreachable(e));
+      }
+      text = await response.text();
+      // Found live: a Koios backend whose own node was down answered. The
+      // transaction never reached the network, so it's safe to send again,
+      // and the gateway likely picks another backend.
+      if (!text.includes("TxSubmitConnectionError")) break;
+      if (attempt === RETRY_DELAYS_MS.length) {
+        throw new KoiosError("Koios couldn't reach its Cardano node, so the transaction wasn't sent. Press Send again in a moment.");
+      }
+      await this.sleep(RETRY_DELAYS_MS[attempt]!);
     }
-    const text = await response.text();
+    // A UTxO it spends is already spent: Koios showed the wallet an old view
+    // of the chain (spent.ts), or this transaction already went through.
+    if (text.includes("BadInputsUTxO")) {
+      throw new KoiosError(
+        "The network refused it: a UTxO it spends is already spent. Koios may have shown an out-of-date view of the chain. Wait a minute, refresh, and review it again.",
+      );
+    }
     if (!response.ok) throw new KoiosError(`The network rejected the transaction: ${text.slice(0, 500)}`);
     return JSON.parse(text) as string;
   }

@@ -104,6 +104,8 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 
 ## 11b: a smaller module, live runs, and loose ends
 
+**Done (2026-09-24).** `opt-level = "z"` with LTO, and no `wasm-opt` (it grew the compressed size). Every flow ran live on the private test wallet, which also turned up a lagging Koios backend and a Koios node outage. See the roadmap's handoff note.
+
 ### Reading list
 
 - `wasm/build.sh` and the workspace `Cargo.toml`, which has no `[profile.*]` yet.

@@ -59,6 +59,7 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 
 - Get preprod test ADA from the [Cardano testnet faucet](https://docs.cardano.org/cardano-testnets/tools/faucet) and send it to the wallet's Cardano account (its receive address).
 - The preprod contracts, reference scripts and collateral service are live (see [architecture.md](architecture.md#networks)).
+- **The private test wallet** is `extension/.preprod-test-wallet.txt` (gitignored): one line, `phrase: ` and 24 words. The live runs restore it. It was funded with 10,000 tADA on 2026-09-24.
 
 ## Testing layers
 
@@ -68,8 +69,39 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 | Key derivation | The frozen v1 Seedelf key vectors, and the Cardano account vectors (verified against `@cardano-sdk`, Lace's library) | Checked in Rust, and again from JS through WebAssembly, so both sides agree |
 | TypeScript | The manifest, the vault and wallet state, the Koios and giveme.my clients, and the worker's services and handlers against the real WASM, over recorded preprod answers | Vitest (`npm test`) |
 | End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the popup and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. |
-| Live | Real preprod transactions from the built extension | `e2e/live/move-in.mjs`, then `e2e/live/mint.mjs`, on the test wallet in `extension/.preprod-test-wallet.txt` once it's funded |
-| Manual | A preprod checklist before each release | Onboarding, move in, create, transfer, withdraw, lock/unlock, restore |
+| Live reads | The balance scan and the ADA Handle lookup against the real preprod Koios | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`; skipped otherwise |
+| Live | Real preprod transactions from the built extension, by hand, never in CI | `node e2e/live/run.mjs all` runs every flow in one browser session on the private test wallet, waiting for each to confirm, and prints the hashes. `run.mjs` also takes single flows: `mint live-1 account + move-in 25.5`. |
+| Manual | What a script can't see, before each release | [The preprod checklist](#preprod-checklist-before-a-release) |
+
+## Preprod checklist before a release
+
+On the built extension (`npm run build`, then load `dist/` unpacked), in the popup and in a tab.
+
+1. **The automated layers:** `cargo test --workspace`, the WASM tests, `npm test` and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
+2. **Onboarding:** create a wallet from the popup (it opens a tab): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match. Restore a 12- or 15-word phrase from Lace or Eternl, and check its account.
+3. **Locking:**
+   - the lock button;
+   - auto-lock after 15 minutes;
+   - a wrong password's back-off;
+   - Forgot password, then delete, then restore;
+   - a browser restart comes back locked.
+4. **Home:**
+   - both tabs, and *Get started* on a new wallet;
+   - Receive: scan the QR code from a phone wallet;
+   - Refresh, and a sent transaction's banner through to confirmed, then Dismiss.
+5. **Each flow once by hand:**
+   - create a seedelf, paid by the account;
+   - move in;
+   - send to a seedelf, pasting a name someone else gave you;
+   - withdraw to an address and to a `$handle`;
+   - remove a seedelf.
+
+   Read every review and every privacy note as you go.
+6. **Mistakes and failures:**
+   - Koios blocked (offline, or an ad blocker) says why, and recovers on Refresh;
+   - amounts: more than the balance, seven decimals, letters;
+   - a mistyped seedelf name, and a `$handle` that doesn't exist.
+7. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my`.
 
 ## Sharing with testers before launch
 

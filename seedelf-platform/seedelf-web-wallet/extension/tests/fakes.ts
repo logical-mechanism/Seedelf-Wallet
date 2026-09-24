@@ -92,6 +92,7 @@ export const transferPreprod = fixture("transfer-preprod.json") as {
   lovelace: string;
   tokens: Array<{ policyId: string; assetName: string; quantity: string }>;
   evaluation: unknown;
+  draft: { draftCbor: string; inputs: Array<{ txHash: string; txIndex: number }> };
   final: { fee: { total: string } };
 };
 /** Real withdrawals on preprod: an amount, Max and a removal (tests/fixtures/record-withdraw.mjs). */
@@ -120,6 +121,8 @@ export interface FakeKoios {
   evaluation: unknown;
   /** Who holds each NFT, by `policy.name`, for `asset_nft_address`. */
   nfts: Map<string, string>;
+  /** Outpoints (`txhash#index`) this Koios has seen spent: left out of its UTxO answers. */
+  spent: Set<string>;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -135,6 +138,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     confirmations: null,
     evaluation: mintPreprod.evaluation,
     nfts: new Map(),
+    spent: new Set(),
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -170,6 +174,9 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
       } else {
         return new Response("not found", { status: 404 });
       }
+      if (path === "credential_utxos" || path === "account_utxos") {
+        rows = (rows as KoiosUtxo[]).filter((u) => !fake.spent.has(`${u.tx_hash}#${u.tx_index}`));
+      }
       const offset = Number(searchParams.get("offset") ?? 0);
       const limit = Number(searchParams.get("limit") ?? 1000);
       return Response.json(rows.slice(offset, offset + limit));
@@ -200,7 +207,7 @@ export function fakeCollateral(): FakeCollateral {
 }
 
 /** A wallet plus the balance, move-in, mint, transfer, withdraw and pending services over the fake Koios and giveme.my. */
-export function testBalances(options?: { owned?: boolean }) {
+export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) => Promise<void> }) {
   const t = testWallet();
   const koios = fakeKoios(options);
   const collateral = fakeCollateral();
@@ -210,6 +217,7 @@ export function testBalances(options?: { owned?: boolean }) {
     session: t.session,
     koios: () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined),
     now: () => t.clock.now,
+    sleep: options?.sleep ?? (async () => undefined),
   };
   return {
     ...t,

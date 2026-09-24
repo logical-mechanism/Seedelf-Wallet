@@ -26,3 +26,16 @@ seedelf-koios  = { path = "seedelf-koios" }
 
 [workspace.package]
 version = "0.4.10"
+
+
+# The web wallet's WebAssembly module, built for size by
+# seedelf-web-wallet/wasm/build.sh. The CLI keeps the plain release profile.
+# Against release it halves the module (2.3 MB to 1.2 MB, 582 KB to 424 KB
+# gzipped) at the same speed: the BLS arithmetic is blst's C either way.
+# wasm-opt was tried on top and left out: smaller raw, larger compressed.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

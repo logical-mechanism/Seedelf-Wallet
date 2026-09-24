@@ -104,7 +104,22 @@ describe("Koios client: transactions", () => {
     await expect(rejected.submitTx(new Uint8Array([0x84]))).rejects.toThrow("The network rejected the transaction: ValueNotConserved");
     const busy = new Koios(BASE, async () => (tries++, new Response("", { status: 503 })));
     await expect(busy.submitTx(new Uint8Array([0x84]))).rejects.toThrow("rejected");
-    expect(tries).toBe(2); // never retried
+    // Koios's answer, recorded live, when its node was unreachable: not sent, so Send again.
+    const nodeDown = JSON.stringify({
+      contents: { contents: "Network.Socket.connect: <socket: 14>: does not exist (No such file or directory)", tag: "TxCmdTxSubmitConnectionError" },
+      tag: "TxSubmitFail",
+    });
+    const down = new Koios(BASE, async () => (tries++, new Response(nodeDown, { status: 400 })), async () => undefined);
+    await expect(down.submitTx(new Uint8Array([0x84]))).rejects.toThrow("Koios couldn't reach its Cardano node, so the transaction wasn't sent");
+    expect(tries).toBe(5); // that answer, and only that one, is tried three times
+    const answers = [new Response(nodeDown, { status: 400 }), Response.json("cd".repeat(32), { status: 202 })];
+    const recovers = new Koios(BASE, async () => answers.shift()!, async () => undefined);
+    expect(await recovers.submitTx(new Uint8Array([0x84]))).toBe("cd".repeat(32));
+    // A UTxO it spends is already spent: an out-of-date view of the chain.
+    const badInputs = JSON.stringify({ contents: { contents: { contents: { error: ["ConwayUtxowFailure (UtxoFailure (BadInputsUTxO (fromList [])))"] } } } });
+    const spentAlready = new Koios(BASE, async () => (tries++, new Response(badInputs, { status: 400 })));
+    await expect(spentAlready.submitTx(new Uint8Array([0x84]))).rejects.toThrow("a UTxO it spends is already spent");
+    expect(tries).toBe(6); // never retried
   });
 
   it("has Ogmios evaluate a draft, and passes on why the scripts refused", async () => {
