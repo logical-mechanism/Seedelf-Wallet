@@ -1,21 +1,36 @@
 // Tokens to bring along, after Lace's "Add assets": Add tokens opens a
-// searchable picker, and only the picked tokens get an amount box, each
-// checked against its decimals and what's held, with Max for all of it and ×
-// to take it off again. A wallet with hundreds of tokens never lists them all
-// in the form.
+// searchable picker, and only the picked tokens get an amount box, with Max
+// for all of it and × to take it off again. A box takes the token's decimals
+// and never more than the wallet holds (sanitizeAmount, as ADA takes its 45
+// billion), with commas that regroup as it's typed. A wallet with hundreds of
+// tokens never lists them all in the form.
 
 import { useMemo, useState } from "react";
 
 import type { TokenAmount, TokenQuantity } from "../../shared/rpc";
-import { formatQuantity, parseQuantity, plural, tokenKey as key } from "../format";
+import { formatQuantity, parseQuantity, plural, sanitizeAmount, tokenKey as key, type AmountRules } from "../format";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, tokenLabel, viewToken } from "../tokens";
+import { AmountField } from "./AmountField";
 import { CheckIcon, CloseIcon, SearchIcon } from "./Icons";
 import { Modal } from "./Modal";
 import { TokenAvatar } from "./TokenList";
 
 /** How many search results the picker shows at once. */
 const SHOWN = 100;
+
+/** A token's amount box: its decimals, and at most what the wallet holds. */
+export function tokenRules(t: TokenAmount, label: string): AmountRules {
+  return {
+    decimals: t.decimals,
+    max: BigInt(t.quantity),
+    notANumber: t.decimals ? "Enter an amount, like 25 or 12.5." : "Enter a whole number, like 25.",
+    tooPrecise: t.decimals
+      ? `${label} has at most ${t.decimals} decimal places, so the extra digits were dropped.`
+      : `${label} comes in whole units, so the decimals were dropped.`,
+    tooMuch: `That's more than the ${formatQuantity(t.quantity, t.decimals)} ${label} you hold.`,
+  };
+}
 
 /** The token amounts typed so far: those to send, and what's wrong with any of them. */
 export function tokenChoices(
@@ -58,6 +73,8 @@ export function TokenAmounts({
 }) {
   const network = useNetwork();
   const [picking, setPicking] = useState(false);
+  // What the last edit of each box changed or refused.
+  const [notes, setNotes] = useState<Record<string, string | undefined>>({});
   if (held.length === 0) return null;
   const { problems } = tokenChoices(held, typed);
   const picked = held.filter((t) => key(t) in typed);
@@ -67,20 +84,23 @@ export function TokenAmounts({
     <fieldset className="token-picker">
       <legend>{legend}</legend>
       {picked.map((t) => {
-        const problem = problems[key(t)];
+        const problem = problems[key(t)] ?? notes[key(t)];
         const label = tokenLabel(network, t);
         const all = formatQuantity(t.quantity, t.decimals);
+        const set = (value: string, note?: string) => {
+          setNotes({ ...notes, [key(t)]: note });
+          onChange({ ...typed, [key(t)]: value });
+        };
         return (
           <div key={key(t)} className="token-amount">
             <label className="token-amount__row">
               <span className="list__name">{label}</span>
-              <input
-                inputMode="decimal"
-                autoComplete="off"
+              <AmountField
                 placeholder="0"
                 value={typed[key(t)] ?? ""}
-                onChange={(e) => onChange({ ...typed, [key(t)]: e.target.value })}
-                aria-invalid={problem ? true : undefined}
+                clean={(previous, text) => sanitizeAmount(previous, text, tokenRules(t, label))}
+                onChange={set}
+                aria-invalid={problems[key(t)] ? true : undefined}
                 aria-label={`Amount of ${label}`}
               />
             </label>
@@ -91,7 +111,7 @@ export function TokenAmounts({
                   type="button"
                   className="chip"
                   aria-label={`All of ${label}`}
-                  onClick={() => onChange({ ...typed, [key(t)]: all })}
+                  onClick={() => set(all)}
                 >
                   Max
                 </button>
@@ -102,6 +122,7 @@ export function TokenAmounts({
                   title="Take it off"
                   onClick={() => {
                     const { [key(t)]: _, ...rest } = typed;
+                    setNotes({ ...notes, [key(t)]: undefined });
                     onChange(rest);
                   }}
                 >

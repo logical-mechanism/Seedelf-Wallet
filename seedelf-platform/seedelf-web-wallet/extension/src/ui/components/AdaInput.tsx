@@ -1,11 +1,13 @@
-// An ADA amount field: at most 6 decimal places, digits only, with a note
-// when something typed or pasted had to be dropped or refused. With tokens,
+// An ADA amount field: at most 6 decimal places, digits only, grouped with
+// commas as it's typed (AmountField), with a note when something typed or
+// pasted had to be dropped or refused. With tokens,
 // it may stay empty: the builder raises any amount to the least ADA the
 // network accepts with them, and the review says so (MinimumNote).
 
 import { useState, type ReactNode } from "react";
 
 import { formatAda, parseAda, sanitizeAda } from "../format";
+import { AmountField } from "./AmountField";
 import { Callout } from "./Callout";
 
 /**
@@ -43,18 +45,16 @@ export function AdaInput({
   return (
     <>
       <div className="amount-box">
-        <input
+        <AmountField
           id={id}
-          inputMode="decimal"
-          autoComplete="off"
           placeholder={placeholder}
           value={disabled && shown ? shown : value}
           disabled={disabled}
           aria-describedby={note ? `${id}-note` : undefined}
-          onChange={(e) => {
-            const cleaned = sanitizeAda(value, e.target.value);
-            setNote(cleaned.note);
-            onChange(cleaned.value);
+          clean={sanitizeAda}
+          onChange={(cleaned, why) => {
+            setNote(why);
+            onChange(cleaned);
           }}
           autoFocus={autoFocus}
         />

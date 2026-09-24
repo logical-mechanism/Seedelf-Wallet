@@ -566,6 +566,7 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("10.123456");
   await expect(page.getByTestId("move-in-amount-note")).toContainText("45 billion");
   await page.getByLabel("Amount", { exact: true }).fill("20000");
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("20,000");
   await expect(page.getByTestId("move-in-too-much")).toContainText("That's more than the 10,350.538725 ₳");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
 
@@ -590,14 +591,30 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await page.getByRole("button", { name: "Take SIRIUS-B off" }).click();
   await addTokens(page, ["tUSDM"]);
 
-  // Any amount of a token: Max fills in all of it; more than that is refused.
+  // Any amount of a token: Max fills in all of it.
   const tusdm = page.getByLabel("Amount of tUSDM");
   await page.getByRole("button", { name: "All of tUSDM" }).click();
   await expect(tusdm).toHaveValue("3,000,000,000");
+  // The commas regroup as digits go; Backspace on a comma takes the digit before it.
+  await tusdm.press("End");
+  await tusdm.press("Backspace");
+  await expect(tusdm).toHaveValue("300,000,000");
+  await tusdm.press("Home");
+  for (let i = 0; i < 4; i++) await tusdm.press("ArrowRight");
+  await tusdm.press("Backspace");
+  await expect(tusdm).toHaveValue("30,000,000");
+  // The caret stayed after "30": a digit typed now goes there.
+  await tusdm.press("5");
+  await expect(tusdm).toHaveValue("305,000,000");
+  // No more than the account holds, as ADA's box takes no more than 45 billion.
   await tusdm.fill("3000000001");
-  await expect(page.getByText("That's more than the 3,000,000,000 you hold.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  await expect(tusdm).toHaveValue("305,000,000");
+  await expect(page.getByText("That's more than the 3,000,000,000 tUSDM you hold.")).toBeVisible();
+  await tusdm.fill("");
+  await tusdm.pressSequentially("30000000009");
+  await expect(tusdm).toHaveValue("3,000,000,000");
   await tusdm.fill("1250000000");
+  await expect(tusdm).toHaveValue("1,250,000,000");
   await snap(page, "move-in-form");
   await page.getByRole("button", { name: "Review" }).click();
 
@@ -834,8 +851,13 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   await addTokens(page, ["tUSDM"]);
   const tusdm = page.getByLabel("Amount of tUSDM");
   await tusdm.fill("2000");
-  await expect(page.getByText("That's more than the 1,234.56 you hold.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  await expect(tusdm).toHaveValue("");
+  await expect(page.getByText("That's more than the 1,234.56 tUSDM you hold.")).toBeVisible();
+  await tusdm.fill("1234.561");
+  await expect(tusdm).toHaveValue("");
+  await tusdm.fill("1.1234567");
+  await expect(tusdm).toHaveValue("1.123456");
+  await expect(page.getByText("tUSDM has at most 6 decimal places")).toBeVisible();
   await tusdm.fill("1");
   await snap(page, "transfer-form");
   await page.getByRole("button", { name: "Review" }).click();

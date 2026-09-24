@@ -76,32 +76,98 @@ export function explorerUrl(network: "preprod" | "mainnet", txHash: string): str
 /** All the ADA there will ever be: 45 billion ₳, in lovelace. */
 export const MAX_SUPPLY_LOVELACE = 45_000_000_000_000_000n;
 
+/** What an amount field accepts, and what it says when it changes or refuses something. */
+export interface AmountRules {
+  decimals: number;
+  /** The most it may be, as a raw integer. */
+  max: bigint;
+  /** For anything that isn't a number. */
+  notANumber: string;
+  /** When decimal places past `decimals` are dropped. */
+  tooPrecise: string;
+  /** When it's more than `max`. */
+  tooMuch: string;
+}
+
 /**
- * Cleans what the user typed or pasted into an ADA amount field. ADA has 6
- * decimal places (1 lovelace = 0.000001 ₳), so extra digits are dropped, not
- * rounded: the amount never grows. Anything that isn't a number, or is more
- * than all the ADA in existence, keeps the previous value. `note` says what
- * was changed or refused.
+ * Cleans what the user typed or pasted into an amount field.
+ *
+ * - The thousands are grouped with commas again, wherever they were typed or
+ *   deleted: "3,000,00" is "300,000".
+ * - Decimal places past `decimals` are dropped, not rounded: the amount never
+ *   grows.
+ * - Anything that isn't a number, or is more than `max`, keeps the previous
+ *   value.
+ *
+ * `note` says what was changed or refused.
  */
-export function sanitizeAda(previous: string, typed: string): { value: string; note?: string } {
+export function sanitizeAmount(previous: string, typed: string, rules: AmountRules): { value: string; note?: string } {
   let text = typed.trim();
   if (text === "") return { value: "" };
   if (text.startsWith(".")) text = `0${text}`;
   const match = /^([\d,]*)(?:\.(\d*))?$/.exec(text);
-  if (!match || !/\d/.test(match[1]!)) {
-    return { value: previous, note: "Enter an amount in ADA, like 25 or 12.5." };
-  }
-  const decimals = match[2];
-  let value = text;
+  if (!match || !/\d/.test(match[1]!)) return { value: previous, note: rules.notANumber };
+  let fraction = match[2];
   let note: string | undefined;
-  if (decimals !== undefined && decimals.length > 6) {
-    value = `${match[1]}.${decimals.slice(0, 6)}`;
-    note = "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.";
+  if (fraction !== undefined && fraction.length > rules.decimals) {
+    fraction = fraction.slice(0, rules.decimals);
+    note = rules.tooPrecise;
   }
-  if (BigInt(parseAda(value) ?? "0") > MAX_SUPPLY_LOVELACE) {
-    return { value: previous, note: "That's more than all the ADA there is: 45 billion ₳." };
-  }
+  // Whole units only: no point either.
+  if (rules.decimals === 0) fraction = undefined;
+  const whole = BigInt(match[1]!.replaceAll(",", "")).toLocaleString("en-US");
+  const value = fraction === undefined ? whole : `${whole}.${fraction}`;
+  if (BigInt(parseQuantity(value, rules.decimals) ?? "0") > rules.max) return { value: previous, note: rules.tooMuch };
   return note ? { value, note } : { value };
+}
+
+/** ADA's rules: 6 decimal places (0.000001 ₳ is one lovelace), and no more than all the ADA there is. */
+export const ADA_RULES: AmountRules = {
+  decimals: 6,
+  max: MAX_SUPPLY_LOVELACE,
+  notANumber: "Enter an amount in ADA, like 25 or 12.5.",
+  tooPrecise: "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.",
+  tooMuch: "That's more than all the ADA there is: 45 billion ₳.",
+};
+
+/** `sanitizeAmount` with ADA's rules. */
+export function sanitizeAda(previous: string, typed: string): { value: string; note?: string } {
+  return sanitizeAmount(previous, typed, ADA_RULES);
+}
+
+/** An amount's digits and point, without the commas. */
+const significant = (text: string) => text.replace(/[^\d.]/g, "");
+
+/**
+ * Where the caret goes when `typed` (the caret at `caret`) is cleaned into
+ * `value`: after the same digits, however the commas moved.
+ */
+export function caretAfter(typed: string, caret: number, value: string): number {
+  const before = significant(typed.slice(0, caret)).length;
+  if (before === 0) return 0;
+  let seen = 0;
+  for (let i = 0; i < value.length; i++) {
+    if (/[\d.]/.test(value[i]!) && ++seen === before) return i + 1;
+  }
+  return value.length;
+}
+
+/**
+ * When an edit only took a comma out of `previous` (Backspace or Delete on
+ * one), the digit beside it goes instead: the text and caret to clean.
+ */
+export function deleteBesideComma(
+  previous: string,
+  typed: string,
+  caret: number,
+  kind: string | undefined,
+): { text: string; caret: number } {
+  if (typed.length >= previous.length || significant(typed) !== significant(previous)) return { text: typed, caret };
+  if (kind === "deleteContentBackward" && caret > 0) {
+    return { text: typed.slice(0, caret - 1) + typed.slice(caret), caret: caret - 1 };
+  }
+  if (kind === "deleteContentForward") return { text: typed.slice(0, caret) + typed.slice(caret + 1), caret };
+  return { text: typed, caret };
 }
 
 /** "1 UTxO", "3 UTxOs"; `many` for irregular plurals. */
