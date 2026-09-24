@@ -107,7 +107,16 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await expect(popup.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 
-  await page.getByLabel("Password").fill(PASSWORD);
+  // Show lets you check what you typed; Hide covers it again.
+  const password = page.getByLabel("Password");
+  await password.fill(PASSWORD);
+  await expect(password).toHaveAttribute("type", "password");
+  await page.getByRole("button", { name: "Show", exact: true }).click();
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(password).toHaveValue(PASSWORD);
+  await snap(page, "unlock-shown");
+  await page.getByRole("button", { name: "Hide", exact: true }).click();
+  await expect(password).toHaveAttribute("type", "password");
   await page.getByRole("button", { name: "Unlock" }).click();
   await expect(page.getByTestId("getting-started")).toBeVisible();
   await expect(popup.getByTestId("getting-started")).toBeVisible();
@@ -426,6 +435,8 @@ test("settings: the phrase behind the password, a new password, and removing the
   await page.getByRole("button", { name: "Show recovery phrase" }).click();
   await expect(page.getByTestId("recovery-phrase")).toHaveCount(0);
   await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Show", exact: true }).click();
+  await expect(page.getByLabel("Password")).toHaveAttribute("type", "text");
   await page.getByRole("button", { name: "Show phrase" }).click();
   await expect(page.getByTestId("recovery-phrase").locator(".word__text")).toHaveCount(24);
   const words = await page.getByTestId("recovery-phrase").locator(".word__text").allTextContents();

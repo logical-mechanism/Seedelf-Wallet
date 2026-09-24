@@ -11,7 +11,7 @@ It can create or restore a wallet, lock it with a password, and show what the wa
 | Welcome | No wallet yet | **Create new wallet** or **Restore wallet**. From the popup, both open a full tab. |
 | Create | Onboarding | Shows a new 24-word phrase (hidden until **Reveal**), asks for 3 of its words, then a password |
 | Restore | Onboarding | 12, 15 or 24 words, one box each with BIP39 autocomplete; pasting a phrase fills every box. Then a password. |
-| Unlock | Locked | Password, the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
+| Unlock | Locked | Password (with Show), the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
 | Home | Unlocked | Two tabs. **Seedelf:** the balance with round **Receive** (your seedelfs' names), **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf); the first five tokens and **View all**. **Cardano account:** the balance with **Receive**, **Send** and **Move in**, and tokens. Until the first reading arrives, a splash covers it. A new wallet gets *Get started* (fund, create, move in). Refresh sits under the tabs, and a sent transaction shows as a banner until it confirms. The lock button is in the top bar. |
 | Activity | The row at the bottom of each Home tab | Newest first, grouped by day; an entry opens its details and Cardanoscan. **Seedelf:** from the device, encrypted, no requests. **Cardano account:** 20 at a time from Koios, with Load more. |

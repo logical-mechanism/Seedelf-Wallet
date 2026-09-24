@@ -10,6 +10,7 @@ import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ContactsPage, useContacts } from "../components/Contacts";
 import { ChevronRightIcon, ExternalIcon, EyeIcon, LockIcon, TrashIcon, UsersIcon } from "../components/Icons";
+import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
@@ -162,17 +163,7 @@ function ShowPhrase({ onBack }: { onBack: () => void }) {
       }
     >
       <p className="note">Enter your password to see the words that restore this wallet. Check nobody can see your screen.</p>
-      <div className="field">
-        <label htmlFor="phrase-password">Password</label>
-        <input
-          id="phrase-password"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoFocus
-        />
-      </div>
+      <PasswordField id="phrase-password" value={password} onChange={setPassword} autoFocus />
     </Screen>
   );
 }
@@ -223,16 +214,7 @@ function ChangePassword({ onBack }: { onBack: () => void }) {
 
   return (
     <Screen title="Change password" titleId="password-title" onBack={onBack} backDisabled={busy} error={error}>
-      <div className="field">
-        <label htmlFor="current-password">Current password</label>
-        <input
-          id="current-password"
-          type="password"
-          autoComplete="current-password"
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-        />
-      </div>
+      <PasswordField id="current-password" label="Current password" value={current} onChange={setCurrent} />
       <SetPassword label="New password" submitLabel="Change password" busy={busy} onSubmit={change} />
     </Screen>
   );
