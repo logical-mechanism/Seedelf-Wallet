@@ -61,13 +61,32 @@ Show the receive address `0/0`, with a copy button and a QR code, so someone pay
 
 ## Move in (Cardano account → Seedelf)
 
-This is the equivalent of the CLI's `external sweep`:
+This is the equivalent of the CLI's `external sweep`, built by the same core code (`seedelf-core::build`). Built in chunk 7.
 
-- **What it does:** the Cardano account pays into the wallet contract. Each output gets a freshly re-randomized copy of the user's own base register.
-- **Signing:** only the Cardano account's payment keys sign.
-- **What moves:** ADA by default, and tokens only when the user picks them. Pure-ADA 5 ADA UTxOs (another wallet's collateral) are skipped unless the user chooses "move everything".
+- **What it does:** the Cardano account pays into the wallet contract. Each contract output gets a freshly re-randomized copy of the user's own base register.
+- **What the user chooses:**
+  - An **ADA amount, or Max**.
+  - **Tokens to bring along**, from a checklist. A picked token moves in full.
+  - The form nudges towards round amounts, which are harder to match to a later withdrawal.
+- **Which UTxOs are spent:**
+  - Every UTxO holding a picked token.
+  - Then pure-ADA UTxOs, largest first.
+  - Then other token UTxOs, until the amount, the fee and valid change are covered.
+  - **Never** a pure-ADA UTxO of exactly 5 ADA: it's probably another wallet's collateral. Those have to be moved with that wallet.
+  - **Max** spends every other UTxO and keeps only the minimum ADA that the unpicked tokens need.
+- **Outputs:**
+  - The contract deposits, tokens 20 to an output.
+  - Change (leftover ADA and unpicked tokens) back to the receive address `0/0`, as in Lace's single-address mode.
+- **Review, then send:**
+  - The worker builds and signs the transaction, and the user reviews what moves, the fee and the change.
+  - Nothing is sent until **Send**, and then exactly the reviewed transaction is submitted. A built move-in expires after 10 minutes.
+- **Watching:**
+  - Home shows the sent transaction with a Cardanoscan link.
+  - It asks Koios for its status every 15 s for up to 10 minutes, and reopening the wallet resumes the watch.
+  - Once it's confirmed, the balances are read again.
+- **Signing:** only the Cardano account's payment keys sign, one signature per key, inside WebAssembly.
 - **No seedelf needed.** No script runs and no collateral is needed.
-- **Privacy:** it links the Cardano account to *some* register UTxOs, but not to any seedelf name.
+- **Privacy:** it links the Cardano account to *some* register UTxOs, but not to any seedelf name. The form says so.
 
 ## Create a seedelf
 

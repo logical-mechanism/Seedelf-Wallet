@@ -1,3 +1,6 @@
 dist/
 test-results/
 playwright-report/
+
+# Preprod test wallet phrase for live runs (never commit)
+.preprod-test-wallet.txt

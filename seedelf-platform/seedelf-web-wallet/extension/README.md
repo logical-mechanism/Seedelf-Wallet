@@ -2,7 +2,7 @@
 
 The Chrome (MV3) extension: React + TypeScript + Vite, with the Rust core loaded as WebAssembly in the service worker.
 
-It can create or restore a wallet, lock it with a password, and show what the wallet holds: the Seedelf balance and seedelfs, and the Cardano account. Moving funds comes next (roadmap chunk 7).
+It can create or restore a wallet, lock it with a password, show what the wallet holds (the Seedelf balance and seedelfs, and the Cardano account), and move funds from the Cardano account into Seedelf. Creating a seedelf comes next (roadmap chunk 8).
 
 ## Screens
 
@@ -13,7 +13,8 @@ It can create or restore a wallet, lock it with a password, and show what the wa
 | Restore | Onboarding | 12, 15 or 24 words, one box each with BIP39 autocomplete; pasting a phrase fills every box. Then a password. |
 | Unlock | Locked | Password, the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
-| Home | Unlocked | The Seedelf balance (ADA, tokens, your seedelfs), the Cardano account (ADA, tokens, receive address with copy and QR, stake address), the Seedelf identity, and Refresh. The lock button is in the top bar. |
+| Home | Unlocked | The Seedelf balance (ADA, tokens, your seedelfs), the Cardano account (ADA, tokens, receive address with copy and QR, stake address, **Move in**), the Seedelf identity, and Refresh. A sent move-in shows as a banner until it confirms. The lock button is in the top bar. |
+| Move in | From Home | An ADA amount or Max, and tokens to bring along; then a review of what moves, the fee and the change; then Send |
 
 The flows are described in [../docs/flows.md](../docs/flows.md#onboarding).
 
@@ -61,6 +62,7 @@ src/
     sw.ts               service worker entry: listeners, the auto-lock alarm
     wallet.ts           wallet state, lock, auto-lock and unlock back-off
     balances.ts         the balance reading: contract scan, account discovery, session cache
+    move-in.ts          build (in WASM), hold, submit and watch a move-in
     koios.ts, chain.ts  the Koios client; pure helpers (registers, gap limit, sums, seedelf tags)
     vault.ts            the vault record in chrome.storage.local
     secret-box/         SBV1 encryption, adapted from Lace (Apache-2.0)
@@ -68,7 +70,7 @@ src/
     storage.ts, wasm.ts chrome.storage wrapper, lazy WASM init
   ui/
     App.tsx             shell: top bar, picks the screen from the worker's status
-    screens/            Onboarding, Create, Restore, Unlock (and reset), Home
+    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, MoveIn
     components/         PhraseInput (per-word autocomplete), SetPassword, CopyField, QrCode, TokenList, icons
     format.ts           ADA and token amounts, token names
 public/                 icons and logos, resized from ../brand

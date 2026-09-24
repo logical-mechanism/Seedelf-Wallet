@@ -28,6 +28,7 @@ The WebAssembly bindings the web wallet uses for Seedelf cryptography. It is a t
 | `isValidRegister(register)` | On-curve and torsion-free check. |
 | `registerToDatum(register)` | Inline-datum bytes (PlutusData CBOR). |
 | `verifyProof(register, z, gR, vkh)` | Off-chain mirror of the validator's check. |
+| `buildMoveIn(account, key, requestJson)` | Builds and signs a move-in with `seedelf-core`'s `build::move_in`. The request carries Koios's `epoch_params` row and the account's UTxOs, each with its `role/index`, which is checked against the derived address. Returns JSON with the signed CBOR, its hash and a summary. Keys never reach JavaScript. |
 
 ## Build
 
@@ -60,3 +61,4 @@ Both suites check the same pinned vectors as `seedelf-crypto`, so the WebAssembl
 - the frozen key-derivation vectors in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`
 - the Cardano account vectors in `seedelf-crypto/tests/vectors/cardano_account.json`, verified against `@cardano-sdk` (Lace's library)
 - entropy round trips on every one of those phrases (`tests/entropy.test.mjs`)
+- a move-in on the 12-word phrase's recorded preprod UTxOs (`tests/move-in.test.mjs`). The native tests also check that every witness verifies against the tx hash, and that the signers are exactly the inputs' payment keys.

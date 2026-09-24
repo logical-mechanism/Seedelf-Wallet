@@ -124,16 +124,38 @@ export class BalanceService {
     used: ReadonlySet<string>,
     utxos: KoiosUtxo[],
   ): Balances["cardano"] {
-    const receive = discoverChain(used, (i) => keys.cardano.receiveAddress(net, i));
-    const change = discoverChain(used, (i) => keys.cardano.changeAddress(net, i));
-    const ours = new Set([...receive.addresses, ...change.addresses]);
-    const mine = utxos.filter((u) => ours.has(u.address));
+    const account = discoverAccount(keys, net, used);
+    const mine = utxos.filter((u) => account.paths.has(u.address));
     const { lovelace, tokens } = sumValue(mine);
     return {
       lovelace: lovelace.toString(),
       tokens,
       utxos: mine.length,
-      addressesUsed: receive.used + change.used,
+      addressesUsed: account.used,
     };
   }
+}
+
+/** Where an account address sits: chain (0 receive, 1 change) and index. */
+export interface KeyPath {
+  role: 0 | 1;
+  index: number;
+}
+
+/**
+ * The Cardano account's addresses, found with the gap limit on the receive
+ * and change chains, each with its path. `used` is the set of addresses Koios
+ * lists under the account's stake key.
+ */
+export function discoverAccount(
+  keys: Keys,
+  net: Wasm.Network,
+  used: ReadonlySet<string>,
+): { paths: Map<string, KeyPath>; used: number } {
+  const receive = discoverChain(used, (i) => keys.cardano.receiveAddress(net, i));
+  const change = discoverChain(used, (i) => keys.cardano.changeAddress(net, i));
+  const paths = new Map<string, KeyPath>();
+  receive.addresses.forEach((a, index) => paths.set(a, { role: 0, index }));
+  change.addresses.forEach((a, index) => paths.set(a, { role: 1, index }));
+  return { paths, used: receive.used + change.used };
 }

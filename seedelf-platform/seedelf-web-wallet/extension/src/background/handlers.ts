@@ -6,12 +6,14 @@ import type * as Wasm from "@seedelf/wasm";
 import type { NetworkName } from "../networks";
 import type { Message, Requests, Status } from "../shared/rpc";
 import type { BalanceService } from "./balances";
+import type { MoveInService } from "./move-in";
 import type { Wallet } from "./wallet";
 
 export interface Context {
   wasm: typeof Wasm;
   wallet: Wallet;
   balances: BalanceService;
+  moveIn: MoveInService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -45,6 +47,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.balances.get(ctx.network, message.refresh ?? false);
     case "wordlist":
       return wasm.bip39Wordlist();
+    case "move-in-build":
+      return ctx.moveIn.build(ctx.network, message.lovelace, message.tokens);
+    case "move-in-submit":
+      return ctx.moveIn.submit(ctx.network, message.txHash);
+    case "pending-tx":
+      return ctx.moveIn.pending();
     case "reset-wallet":
       await wallet.reset();
       return status(ctx);

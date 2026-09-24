@@ -36,3 +36,17 @@ describe("formatting", () => {
     expect(timeAgo(0, 2 * 3_600_000)).toBe("2 h ago");
   });
 });
+
+describe("parseAda", () => {
+  it("reads typed ADA amounts exactly", async () => {
+    const { parseAda, explorerUrl } = await import("../src/ui/format");
+    expect(parseAda("25")).toBe("25000000");
+    expect(parseAda(" 1,234.5 ")).toBe("1234500000");
+    expect(parseAda("0.000001")).toBe("1");
+    expect(parseAda("10.")).toBe("10000000");
+    expect(parseAda("90071992547.409931")).toBe("90071992547409931");
+    for (const bad of ["", "-1", "1.2345678", "abc", "1e6", ".5"]) expect(parseAda(bad)).toBeUndefined();
+    expect(explorerUrl("preprod", "ab")).toBe("https://preprod.cardanoscan.io/transaction/ab");
+    expect(explorerUrl("mainnet", "ab")).toBe("https://cardanoscan.io/transaction/ab");
+  });
+});

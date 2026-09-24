@@ -49,3 +49,17 @@ export function timeAgo(then: number, now: number): string {
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   return `${Math.floor(s / 3600)} h ago`;
 }
+
+/** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */
+export function parseAda(text: string): string | undefined {
+  const clean = text.trim().replaceAll(",", "");
+  const match = /^(\d+)(?:\.(\d{0,6}))?$/.exec(clean);
+  if (!match) return undefined;
+  const lovelace = BigInt(match[1]!) * 1_000_000n + BigInt((match[2] ?? "").padEnd(6, "0") || "0");
+  return lovelace.toString();
+}
+
+/** A block explorer link for a transaction. */
+export function explorerUrl(network: "preprod" | "mainnet", txHash: string): string {
+  return `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/transaction/${txHash}`;
+}

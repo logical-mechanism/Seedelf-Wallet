@@ -60,6 +60,37 @@ export interface Balances {
   cardano: { lovelace: string; tokens: TokenAmount[]; utxos: number; addressesUsed: number };
 }
 
+/** A token to bring along on a move-in; it moves in full. */
+export interface TokenRef {
+  policyId: string;
+  assetName: string;
+}
+
+/** A built and signed move-in, waiting for the user to confirm it. Amounts are lovelace strings. */
+export interface MoveInSummary {
+  network: NetworkName;
+  txHash: string;
+  fee: string;
+  /** Into Seedelf. */
+  lovelace: string;
+  tokens: Array<TokenRef & { quantity: string }>;
+  /** How many new contract UTxOs hold it. */
+  depositOutputs: number;
+  /** Back to the Cardano account's receive address. */
+  changeLovelace: string;
+  changeTokens: number;
+  inputs: number;
+}
+
+/** A submitted transaction the wallet is watching. */
+export interface PendingTx {
+  network: NetworkName;
+  txHash: string;
+  submittedAt: number;
+  /** Null until it's on chain. */
+  confirmations: number | null;
+}
+
 type None = Record<never, never>;
 
 /** Every request the service worker answers: its payload and its result. */
@@ -77,6 +108,12 @@ export interface Requests {
   /** The last reading, or a new one if there is none or `refresh` is set. */
   balances: { payload: { refresh?: boolean }; result: Balances };
   wordlist: { payload: None; result: string[] };
+  /** Builds and signs a move-in without submitting it. `lovelace` null moves the most possible. */
+  "move-in-build": { payload: { lovelace: string | null; tokens: TokenRef[] }; result: MoveInSummary };
+  /** Submits the move-in built last, if its hash matches. */
+  "move-in-submit": { payload: { txHash: string }; result: PendingTx };
+  /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
+  "pending-tx": { payload: None; result: PendingTx | null };
   "reset-wallet": { payload: None; result: Status };
 }
 
@@ -102,6 +139,9 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "account",
   "balances",
   "wordlist",
+  "move-in-build",
+  "move-in-submit",
+  "pending-tx",
   "reset-wallet",
 ]);
 

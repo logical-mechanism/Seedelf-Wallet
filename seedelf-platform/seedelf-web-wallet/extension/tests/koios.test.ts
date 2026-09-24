@@ -9,7 +9,7 @@ function scripted(responses: Array<Response | Error>) {
   const calls: Array<{ url: string; body: any }> = [];
   const delays: number[] = [];
   const fetchFn: FetchLike = async (url, init) => {
-    calls.push({ url, body: JSON.parse(String(init.body)) });
+    calls.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined });
     const next = responses.shift();
     if (!next) throw new Error("no more responses");
     if (next instanceof Error) throw next;
@@ -71,5 +71,35 @@ describe("Koios client", () => {
     const { koios, calls } = scripted([new Response("bad", { status: 400 })]);
     await expect(koios.accountUtxos("x")).rejects.toThrow("Koios answered 400 for account_utxos.");
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("Koios client: transactions", () => {
+  it("reads the protocol parameters with a GET", async () => {
+    const { koios, calls } = scripted([Response.json([{ epoch_no: 1, coins_per_utxo_size: "4310" }])]);
+    expect(await koios.epochParams()).toEqual({ epoch_no: 1, coins_per_utxo_size: "4310" });
+    expect(calls[0]!.url).toBe(`${BASE}/epoch_params?limit=1`);
+  });
+
+  it("submits CBOR bytes once, and reports a rejection", async () => {
+    const sent: Array<{ url: string; init: RequestInit }> = [];
+    const ok = new Koios(BASE, async (url, init) => (sent.push({ url, init }), Response.json("ab".repeat(32), { status: 202 })));
+    expect(await ok.submitTx(new Uint8Array([0x84, 1]))).toBe("ab".repeat(32));
+    expect(sent[0]!.url).toBe(`${BASE}/submittx`);
+    expect(sent[0]!.init.headers).toEqual({ "content-type": "application/cbor" });
+
+    let tries = 0;
+    const rejected = new Koios(BASE, async () => (tries++, new Response("ValueNotConserved", { status: 400 })));
+    await expect(rejected.submitTx(new Uint8Array([0x84]))).rejects.toThrow("The network rejected the transaction: ValueNotConserved");
+    const busy = new Koios(BASE, async () => (tries++, new Response("", { status: 503 })));
+    await expect(busy.submitTx(new Uint8Array([0x84]))).rejects.toThrow("rejected");
+    expect(tries).toBe(2); // never retried
+  });
+
+  it("reads confirmations", async () => {
+    const { koios, calls } = scripted([Response.json([{ tx_hash: "aa", num_confirmations: 3 }, { tx_hash: "bb", num_confirmations: null }])]);
+    const status = await koios.txStatus(["aa", "bb"]);
+    expect([...status]).toEqual([["aa", 3], ["bb", null]]);
+    expect(calls[0]!.body).toEqual({ _tx_hashes: ["aa", "bb"] });
   });
 });

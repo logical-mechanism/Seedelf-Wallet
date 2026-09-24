@@ -18,12 +18,20 @@ use wasm_bindgen::prelude::*;
 
 /// Plain-Rust implementations behind the exports, testable off-wasm.
 pub mod api {
-    use anyhow::{Result, anyhow, bail};
+    use std::collections::HashMap;
+
+    use anyhow::{Context, Result, anyhow, bail};
     use blstrs::Scalar;
     use ff::Field;
+    use seedelf_core::address::wallet_contract;
+    use seedelf_core::build::{self, MoveInAmount};
+    use seedelf_core::constants::{VARIANT, get_config};
+    use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::derivation;
     use seedelf_crypto::register::Register;
     use seedelf_crypto::schnorr;
+    use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
+    use serde::{Deserialize, Serialize};
 
     /// Parses a secret scalar from 32 big-endian bytes in hex. Rejects
     /// non-canonical values (`>= r`) and zero.
@@ -50,6 +58,168 @@ pub mod api {
         bytes.fill(0);
         std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
         result
+    }
+
+    /// A move-in request from the extension, as JSON. `utxos` are the
+    /// Cardano account's UTxOs as Koios returns them, each with the path of
+    /// the key that can spend it.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MoveInRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        pub utxos: Vec<PathedUtxo>,
+        /// Lovelace as a decimal string; `null` moves the most possible.
+        pub lovelace: Option<String>,
+        pub tokens: Vec<TokenRef>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct PathedUtxo {
+        pub utxo: UtxoResponse,
+        /// 0 = receive chain, 1 = change chain.
+        pub role: u32,
+        pub index: u32,
+    }
+
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TokenRef {
+        pub policy_id: String,
+        pub asset_name: String,
+    }
+
+    #[derive(Serialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TokenOut {
+        pub policy_id: String,
+        pub asset_name: String,
+        pub quantity: String,
+    }
+
+    /// A signed move-in, ready to submit, and what it does.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MoveInResult {
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub fee: String,
+        /// Into the wallet contract.
+        pub lovelace: String,
+        pub tokens: Vec<TokenOut>,
+        pub deposit_outputs: usize,
+        /// Back to the Cardano account's receive address `0/0`.
+        pub change_lovelace: String,
+        pub change_tokens: usize,
+        pub inputs: usize,
+    }
+
+    fn role_of(role: u32) -> Result<Role> {
+        match role {
+            0 => Ok(Role::Receive),
+            1 => Ok(Role::Change),
+            _ => bail!("a spending key is on the receive (0) or change (1) chain, not {role}"),
+        }
+    }
+
+    /// Builds and signs a move-in: the Cardano account pays into the wallet
+    /// contract under fresh re-randomizations of `sk`'s base register.
+    /// Every UTxO must sit at the address its path derives; each spent one is
+    /// signed with that path's payment key, inside this module.
+    pub fn move_in(
+        account: &CardanoAccount,
+        sk: Scalar,
+        request: MoveInRequest,
+    ) -> Result<MoveInResult> {
+        let network_flag = match request.network.as_str() {
+            "preprod" => true,
+            "mainnet" => false,
+            other => bail!("unknown network {other}"),
+        };
+        let params = ProtocolParameters::from_koios(&request.params)?;
+
+        // Every UTxO must be ours, at the address its path derives.
+        let mut paths: HashMap<(String, u64), (Role, u32)> = HashMap::new();
+        for p in &request.utxos {
+            let role = role_of(p.role)?;
+            let expected = account
+                .base_address(network_flag, role, p.index)?
+                .to_bech32()
+                .map_err(|e| anyhow!("failed to encode an address: {e}"))?;
+            if p.utxo.address != expected {
+                bail!(
+                    "UTxO {}#{} is not at the account's address {}/{}",
+                    p.utxo.tx_hash,
+                    p.utxo.tx_index,
+                    p.role,
+                    p.index
+                );
+            }
+            paths.insert((p.utxo.tx_hash.clone(), p.utxo.tx_index), (role, p.index));
+        }
+
+        let amount = match &request.lovelace {
+            Some(l) => {
+                MoveInAmount::Lovelace(l.parse().context("lovelace must be a whole number")?)
+            }
+            None => MoveInAmount::Max,
+        };
+        let picked: Vec<(String, String)> = request
+            .tokens
+            .iter()
+            .map(|t| (t.policy_id.clone(), t.asset_name.clone()))
+            .collect();
+        let config = get_config(VARIANT, network_flag)?;
+        let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
+        let change = account.base_address(network_flag, Role::Receive, 0)?;
+        let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
+
+        let built = build::move_in(
+            &params,
+            &available,
+            amount,
+            &picked,
+            &Register::create(sk)?,
+            &wallet,
+            &change,
+        )?;
+
+        // One signature per distinct key.
+        let mut signed = built.tx.clone();
+        let mut done: Vec<(Role, u32)> = Vec::new();
+        for input in &built.inputs {
+            let path = paths[&(input.tx_hash.clone(), input.tx_index)];
+            if done.contains(&path) {
+                continue;
+            }
+            done.push(path);
+            let key = account.private_key(path.0, path.1)?;
+            signed = signed
+                .sign(key.to_ed25519_private_key())
+                .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
+        }
+
+        Ok(MoveInResult {
+            tx_cbor: hex::encode(&signed.tx_bytes.0),
+            tx_hash: hex::encode(signed.tx_hash.0),
+            fee: built.fee.to_string(),
+            lovelace: built.lovelace.to_string(),
+            tokens: built
+                .tokens
+                .items
+                .iter()
+                .map(|a| TokenOut {
+                    policy_id: hex::encode(a.policy_id),
+                    asset_name: hex::encode(&a.token_name),
+                    quantity: a.amount.to_string(),
+                })
+                .collect(),
+            deposit_outputs: built.deposit_outputs,
+            change_lovelace: built.change_lovelace.to_string(),
+            change_tokens: built.change_tokens.items.len(),
+            inputs: built.inputs.len(),
+        })
     }
 
     /// Re-randomizes a register with a fresh random `d` applied to both points.
@@ -332,6 +502,22 @@ pub fn bip39_wordlist() -> Vec<String> {
         .iter()
         .map(|w| w.to_string())
         .collect()
+}
+
+/// Builds and signs a move-in from the Cardano account into the wallet
+/// contract. `request` is JSON (see `api::MoveInRequest`); the result is JSON
+/// (`api::MoveInResult`) holding the signed transaction and what it does.
+/// The payment keys and the Seedelf key never leave WebAssembly.
+#[wasm_bindgen(js_name = buildMoveIn)]
+pub fn build_move_in(
+    account: &WasmCardanoAccount,
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<String, JsError> {
+    let request: api::MoveInRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad move-in request: {e}")))?;
+    let result = api::move_in(&account.inner, key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Re-randomizes `register` for a new output: `(g^d, u^d)` with a fresh,
