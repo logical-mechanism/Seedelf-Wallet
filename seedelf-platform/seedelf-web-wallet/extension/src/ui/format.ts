@@ -1,7 +1,7 @@
 // Display formatting for amounts and token names. Amounts arrive as integer
 // strings and are handled as bigint, so nothing is rounded on the way.
 
-import type { Locked, PoolRef, StakeInfo, TokenAmount } from "../shared/rpc";
+import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type Locked, type PoolRef, type StakeInfo, type TokenAmount } from "../shared/rpc";
 
 /** An integer amount with `decimals` places, grouped and with trailing zeros trimmed: "1,234.5". */
 export function formatQuantity(quantity: string, decimals: number): string {
@@ -232,10 +232,6 @@ export function rewardsAside(rewards?: string): string {
 export function poolLabel(pool: PoolRef): string {
   return pool.ticker ?? pool.name ?? shortHex(pool.id, 10, 6);
 }
-
-/** The pinned vote delegations, as Koios names them. */
-export const ALWAYS_ABSTAIN = "drep_always_abstain";
-export const ALWAYS_NO_CONFIDENCE = "drep_always_no_confidence";
 
 /** Where the vote goes, in words: a pinned choice, the DRep's name or shortened ID, or nowhere. */
 export function voteLabel(drep: string | null, name?: string): string {

@@ -8,13 +8,13 @@
 
 import { useState, type FormEvent } from "react";
 
-import type { DrepDetails } from "../../shared/rpc";
+import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CheckIcon, LandmarkIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, formatAda, voteLabel } from "../format";
+import { formatAda, voteLabel } from "../format";
 
 type Pick = "abstain" | "no-confidence" | "drep";
 

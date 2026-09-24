@@ -19,16 +19,18 @@
 //           and the stake key, and kept until Send, which only submits it.
 
 import type { NetworkName } from "../networks";
-import type {
-  DrepDetails,
-  PendingTx,
-  PoolDetails,
-  PoolList,
-  PoolRef,
-  PoolRow,
-  StakeInfo,
-  StakingAction,
-  StakingSummary,
+import {
+  ALWAYS_ABSTAIN,
+  ALWAYS_NO_CONFIDENCE,
+  type DrepDetails,
+  type PendingTx,
+  type PoolDetails,
+  type PoolList,
+  type PoolRef,
+  type PoolRow,
+  type StakeInfo,
+  type StakingAction,
+  type StakingSummary,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
 import type { Koios, KoiosAccountInfo, KoiosPoolInfo } from "./koios";
@@ -45,10 +47,6 @@ export const SESSION_STAKE = "seedelf.stake.built";
 
 /** How long the pool list is kept. */
 export const POOLS_TTL_MS = 24 * 60 * 60_000;
-
-/** Koios's names for the pinned vote delegations. */
-export const ALWAYS_ABSTAIN = "drep_always_abstain";
-export const ALWAYS_NO_CONFIDENCE = "drep_always_no_confidence";
 
 /** What reading the stake key needs. */
 export interface StakeDeps {
@@ -71,7 +69,7 @@ export async function readStake(deps: StakeDeps, network: NetworkName, stake: st
   return stakeInfoOf(info, pool);
 }
 
-export function stakeInfoOf(info: KoiosAccountInfo | undefined, pool: PoolRef | null): StakeInfo {
+function stakeInfoOf(info: KoiosAccountInfo | undefined, pool: PoolRef | null): StakeInfo {
   if (!info) return NOT_STAKING;
   const registered = info.status === "registered";
   return {
@@ -82,9 +80,6 @@ export function stakeInfoOf(info: KoiosAccountInfo | undefined, pool: PoolRef | 
     deposit: info.deposit ?? "0",
   };
 }
-
-/** Rewards can be withdrawn only with the vote delegated (Conway's rule). */
-export const rewardsLocked = (s: StakeInfo) => s.registered && BigInt(s.rewards) > 0n && !s.drep;
 
 /**
  * A pool's ticker and name: from what this session has read, then the pool

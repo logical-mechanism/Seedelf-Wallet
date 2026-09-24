@@ -93,6 +93,10 @@ export interface PoolRef {
   name?: string;
 }
 
+/** Koios's names for the two pinned vote delegations, which the wallet uses too. */
+export const ALWAYS_ABSTAIN = "drep_always_abstain";
+export const ALWAYS_NO_CONFIDENCE = "drep_always_no_confidence";
+
 /** Where the Cardano account's stake key stands (Koios's `account_info`). Lovelace amounts are decimal strings. */
 export interface StakeInfo {
   /** Registered: it can be delegated, and earn rewards. */
