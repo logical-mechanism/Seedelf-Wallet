@@ -10,6 +10,7 @@ import { MoveInService } from "../src/background/move-in";
 import { Koios, type FetchLike, type KoiosUtxo } from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
 import { TransferService } from "../src/background/transfer";
+import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
 import { txIdOf } from "./fixtures/cbor";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
@@ -93,6 +94,11 @@ export const transferPreprod = fixture("transfer-preprod.json") as {
   evaluation: unknown;
   final: { fee: { total: string } };
 };
+/** Real withdrawals on preprod: an amount, Max and a removal (tests/fixtures/record-withdraw.mjs). */
+export const withdrawPreprod = fixture("withdraw-preprod.json") as Record<
+  "amount" | "max" | "remove",
+  { request: Record<string, any>; evaluation: unknown; final: { fee: { total: string } } }
+>;
 /** A real mint round trip on preprod (tests/fixtures/record-mint.mjs). */
 export const mintPreprod = fixture("mint-preprod.json") as {
   evaluation: unknown;
@@ -112,6 +118,8 @@ export interface FakeKoios {
   confirmations: number | null;
   /** Ogmios's answer to every evaluation: the recorded preprod mint's, unless replaced. */
   evaluation: unknown;
+  /** Who holds each NFT, by `policy.name`, for `asset_nft_address`. */
+  nfts: Map<string, string>;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -126,6 +134,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     submitted: [],
     confirmations: null,
     evaluation: mintPreprod.evaluation,
+    nfts: new Map(),
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -144,7 +153,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         const failed = (fake.evaluation as { error?: unknown }).error !== undefined;
         return Response.json(fake.evaluation, { status: failed ? 400 : 200 });
       }
-      if (path === "epoch_params") {
+      if (path === "asset_nft_address") {
+        const holder = fake.nfts.get(`${searchParams.get("_asset_policy")}.${searchParams.get("_asset_name")}`);
+        rows = holder ? [{ payment_address: holder }] : [];
+      } else if (path === "epoch_params") {
         rows = epochParams;
       } else if (path === "tx_status") {
         rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: fake.confirmations }));
@@ -187,7 +199,7 @@ export function fakeCollateral(): FakeCollateral {
   return fake;
 }
 
-/** A wallet plus the balance, move-in, mint, transfer and pending services over the fake Koios and giveme.my. */
+/** A wallet plus the balance, move-in, mint, transfer, withdraw and pending services over the fake Koios and giveme.my. */
 export function testBalances(options?: { owned?: boolean }) {
   const t = testWallet();
   const koios = fakeKoios(options);
@@ -210,6 +222,10 @@ export function testBalances(options?: { owned?: boolean }) {
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),
     transfer: new TransferService({
+      ...deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    }),
+    withdraw: new WithdrawService({
       ...deps,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),

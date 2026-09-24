@@ -35,6 +35,7 @@ const ownedUtxos = fixture("owned-utxos.json").owned_utxos;
 const mintPreprod = fixture("mint-preprod.json");
 const accountMintPreprod = fixture("account-mint-preprod.json");
 const transferPreprod = fixture("transfer-preprod.json");
+const withdrawPreprod = fixture("withdraw-preprod.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -53,6 +54,8 @@ interface KoiosFake {
   collateralAsked: number;
   /** What Ogmios answers every evaluation with. */
   evaluation: unknown;
+  /** Who holds each NFT, by `policy.name`, for asset_nft_address (ADA Handles). */
+  nfts: Map<string, string>;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
@@ -71,6 +74,12 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     }
     if (path === "ogmios") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(koios.evaluation) });
+    }
+    if (path === "asset_nft_address") {
+      const query = new URL(request.url()).searchParams;
+      const holder = koios.nfts.get(`${query.get("_asset_policy")}.${query.get("_asset_name")}`);
+      const rows = holder ? [{ payment_address: holder }] : [];
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const body = request.postDataJSON();
     if (path === "tx_status") {
@@ -118,6 +127,7 @@ const test = base.extend<{ userDataDir: string; koios: KoiosFake; context: Brows
       collateralAsked: 0,
       // The real preprod evaluation of a stealth mint of the 12-word phrase's 25 ₳ UTxO.
       evaluation: mintPreprod.evaluation,
+      nfts: new Map(),
     });
   },
   context: async ({ userDataDir, koios }, use) => {
@@ -612,6 +622,85 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("alert")).toContainText("doesn't match this transaction, so it wasn't sent");
   expect(koios.collateralAsked).toBe(2);
+  expect(koios.submitted).toHaveLength(0);
+});
+
+test("withdraw: a handle or an address, own-account warning, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
+  koios.evaluation = withdrawPreprod.amount.evaluation;
+  const theirs: string = vector(15).preprod.receive_0;
+  koios.nfts.set(`f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a.${Buffer.from("bob").toString("hex")}`, theirs);
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Withdraw" }).click();
+
+  // The destination is read as it's typed: an address, or a handle through Koios.
+  const to = page.getByLabel("To", { exact: true });
+  const note = page.getByTestId("withdraw-to-note");
+  await to.fill("nope");
+  await expect(note).toContainText("isn't a Cardano address");
+  await to.fill(vector(12).preprod.receive_0);
+  await expect(note).toContainText("Sends to");
+  await expect(page.getByTestId("withdraw-own")).toContainText("This is your own Cardano account");
+  await to.fill("$nobody");
+  await expect(note).toContainText("No ADA Handle $nobody on preprod.");
+  await to.fill("$bob");
+  await expect(note).toContainText("$bob is");
+  await expect(page.getByTestId("withdraw-own")).toHaveCount(0);
+
+  // Max hides the token amounts; an amount brings them back.
+  await page.getByRole("button", { name: "Max" }).click();
+  await expect(page.getByTestId("withdraw-max-note")).toContainText("up to 20 UTxOs");
+  await expect(page.getByLabel("Amount of tUSDM")).toHaveCount(0);
+  await page.getByRole("button", { name: "Max" }).click();
+  await page.getByLabel("Amount", { exact: true }).fill("5");
+  await page.getByLabel("Amount of tUSDM").fill("1");
+  await page.screenshot({ path: "test-results/withdraw-form.png", fullPage: true });
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const review = page.getByTestId("withdraw-review");
+  await expect(review).toContainText("To$bob");
+  await expect(review).toContainText("Amount5 ₳");
+  await expect(review).toContainText("1 tUSDM");
+  await expect(review).toContainText(`Network fee${Number(withdrawPreprod.amount.final.fee.total) / 1e6} ₳`);
+  await expect(review).toContainText("Seedelf UTxOs spent2");
+  expect(koios.collateralAsked).toBe(0);
+  await page.screenshot({ path: "test-results/withdraw-review.png", fullPage: true });
+
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction: Transaction Fails Validation");
+  koios.collateral = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("alert")).toContainText("doesn't match this transaction, so it wasn't sent");
+  expect(koios.submitted).toHaveLength(0);
+});
+
+test("remove a seedelf: where its ADA goes, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
+  koios.evaluation = withdrawPreprod.remove.evaluation;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
+  await page.getByRole("button", { name: "Remove web-wallet" }).click();
+
+  await expect(page.getByRole("heading", { name: "Remove web-wallet" })).toBeVisible();
+  const note = page.getByTestId("remove-to-note");
+  await expect(note).toContainText("links nothing new");
+  await page.getByRole("button", { name: "Seedelf balance" }).click();
+  await expect(note).toContainText("ties the seedelf's name to the new UTxO");
+  await page.getByRole("button", { name: "Cardano account" }).click();
+  await page.screenshot({ path: "test-results/remove-form.png", fullPage: true });
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const review = page.getByTestId("remove-review");
+  const fee = Number(withdrawPreprod.remove.final.fee.total);
+  await expect(review).toContainText("Seedelfweb-wallet");
+  await expect(review).toContainText(`Back to your Cardano account${(1_500_000 - fee) / 1e6} ₳`);
+  await expect(review).toContainText(`Network fee${fee / 1e6} ₳`);
+  await page.screenshot({ path: "test-results/remove-review.png", fullPage: true });
+
+  koios.collateral = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("alert")).toContainText("doesn't match this transaction, so it wasn't sent");
   expect(koios.submitted).toHaveLength(0);
 });
 

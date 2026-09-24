@@ -813,15 +813,11 @@ pub mod api {
 
     /// A destination address from the extension: bech32, and one a
     /// withdrawal can pay (`build::is_payable_address`).
-    fn payable_address(chain: &Chain, to: &str) -> Result<Address> {
+    pub fn payable_address(network_flag: bool, to: &str) -> Result<Address> {
         let addr =
             Address::from_bech32(to.trim()).map_err(|_| anyhow!("That isn't a Cardano address"))?;
-        if !build::is_payable_address(&addr, chain.network_flag) {
-            let network = if chain.network_flag {
-                "preprod"
-            } else {
-                "mainnet"
-            };
+        if !build::is_payable_address(&addr, network_flag) {
+            let network = if network_flag { "preprod" } else { "mainnet" };
             bail!(
                 "Withdrawals go to a normal {network} address: not a script, stake or other network's address"
             );
@@ -883,7 +879,7 @@ pub mod api {
     ) -> Result<(ScriptSpend, usize)> {
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
-        let to = payable_address(&chain, &request.to)?;
+        let to = payable_address(chain.network_flag, &request.to)?;
         let owner = Register::create(sk)?;
         let signer = key_hash(&one_time_key(&sk, seed));
         let (spend, left) = match &request.lovelace {
@@ -1016,7 +1012,7 @@ pub mod api {
         let signer = key_hash(&one_time_key(&sk, seed));
         let mut spend = build::remove(&chain, utxo, &Register::create(sk)?, signer)?;
         if let Some(to) = &request.to {
-            spend = spend.change_to(&payable_address(&chain, to)?);
+            spend = spend.change_to(&payable_address(chain.network_flag, to)?);
         }
         Ok((prove_with(sk, spend)?, name))
     }
@@ -1524,6 +1520,15 @@ pub fn finish_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsErro
         .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
     let result = api::finish_withdraw(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Checks a withdrawal's destination: a normal key address on `network`.
+/// Throws the reason to show the user.
+#[wasm_bindgen(js_name = checkWithdrawAddress)]
+pub fn check_withdraw_address(address: &str, network: Network) -> Result<(), JsError> {
+    api::payable_address(network.flag(), address)
+        .map(|_| ())
+        .map_err(js_error)
 }
 
 /// Removing a seedelf, step 1: checks the UTxO is this wallet's and holds

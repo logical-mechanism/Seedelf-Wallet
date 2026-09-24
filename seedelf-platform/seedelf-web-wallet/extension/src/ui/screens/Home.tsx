@@ -1,12 +1,12 @@
 // Home: the Seedelf balance and seedelfs, the Cardano account, and the
 // Seedelf identity. Balances come from the worker's last reading; it reads
 // the chain again when that is over a minute old, or on Refresh. A sent
-// move-in, seedelf mint or transfer shows as a banner until the network
-// confirms it.
+// move-in, seedelf mint, transfer, withdrawal or removal shows as a banner
+// until the network confirms it.
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { Account, Balances, PendingTx } from "../../shared/rpc";
+import type { Account, Balances, PendingTx, SeedelfInfo } from "../../shared/rpc";
 import { call } from "../background";
 import { CopyButton } from "../components/CopyButton";
 import { CopyField } from "../components/CopyField";
@@ -15,14 +15,24 @@ import { TokenList } from "../components/TokenList";
 import { explorerUrl, formatAda, shortHex, timeAgo } from "../format";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
+import { RemoveSeedelf } from "./RemoveSeedelf";
 import { Transfer } from "./Transfer";
+import { Withdraw } from "./Withdraw";
 
 /** How the banner names a sent transaction, and says it's confirmed. */
-const SENT: Record<PendingTx["kind"], string> = { "move-in": "Move-in", mint: "Seedelf mint", transfer: "Transfer" };
+const SENT: Record<PendingTx["kind"], string> = {
+  "move-in": "Move-in",
+  mint: "Seedelf mint",
+  transfer: "Transfer",
+  withdraw: "Withdrawal",
+  remove: "Seedelf removal",
+};
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Move-in confirmed",
   mint: "Seedelf created",
   transfer: "Transfer confirmed",
+  withdraw: "Withdrawal confirmed",
+  remove: "Seedelf removed",
 };
 
 /** Read again on open when the last reading is older than this. */
@@ -37,7 +47,8 @@ export function Home() {
   const [error, setError] = useState<string>();
   const [showQr, setShowQr] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const [screen, setScreen] = useState<"home" | "move-in" | "create" | "transfer">("home");
+  const [screen, setScreen] = useState<"home" | "move-in" | "create" | "transfer" | "withdraw">("home");
+  const [removing, setRemoving] = useState<SeedelfInfo>();
   const [pending, setPending] = useState<PendingTx | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
@@ -88,6 +99,7 @@ export function Home() {
   const sent = (p: PendingTx) => {
     setPending(p);
     setScreen("home");
+    setRemoving(undefined);
   };
   if (screen === "move-in" && balances) {
     return <MoveIn cardano={balances.cardano} onCancel={() => setScreen("home")} onSent={sent} />;
@@ -98,7 +110,18 @@ export function Home() {
   if (screen === "transfer" && balances) {
     return <Transfer seedelf={balances.seedelf} onCancel={() => setScreen("home")} onSent={sent} />;
   }
+  if (screen === "withdraw" && balances) {
+    return <Withdraw seedelf={balances.seedelf} onCancel={() => setScreen("home")} onSent={sent} />;
+  }
+  if (removing) {
+    return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
+  }
   const what = pending ? SENT[pending.kind] : "";
+  const spendTitle = watching
+    ? "Wait for the last transaction to confirm"
+    : balances && balances.seedelf.utxos === 0
+      ? "Move some ADA in first: these are paid from your Seedelf balance"
+      : undefined;
 
   return (
     <div className="stack">
@@ -137,21 +160,26 @@ export function Home() {
         </div>
         <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
         {balances && <TokenList tokens={balances.seedelf.tokens} testId="seedelf-tokens" />}
-        <button
-          type="button"
-          className="primary"
-          onClick={() => setScreen("transfer")}
-          disabled={!balances || balances.seedelf.utxos === 0 || watching}
-          title={
-            watching
-              ? "Wait for the last transaction to confirm"
-              : balances && balances.seedelf.utxos === 0
-                ? "Move some ADA in first: transfers are paid from your Seedelf balance"
-                : undefined
-          }
-        >
-          Send to a seedelf
-        </button>
+        <div className="actions">
+          <button
+            type="button"
+            className="primary"
+            onClick={() => setScreen("transfer")}
+            disabled={!balances || balances.seedelf.utxos === 0 || watching}
+            title={spendTitle}
+          >
+            Send to a seedelf
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => setScreen("withdraw")}
+            disabled={!balances || balances.seedelf.utxos === 0 || watching}
+            title={spendTitle}
+          >
+            Withdraw
+          </button>
+        </div>
         <div className="subsection">
           <h2>Your seedelfs</h2>
           {balances && balances.seedelf.seedelfs.length === 0 && <p className="note">No seedelfs yet.</p>}
@@ -161,9 +189,21 @@ export function Home() {
                 {balances.seedelf.seedelfs.map((s) => (
                   <li key={s.assetName} className="seedelfs__row" title={s.assetName}>
                     <span className="seedelfs__label">{s.label ?? "Unnamed"}</span>
-                    <code className="seedelfs__id">{shortHex(s.assetName, 12, 6)}</code>
                     <span className="seedelfs__ada">{formatAda(s.lovelace)} ₳</span>
-                    <CopyButton value={s.assetName} label={`Copy the name of ${s.label ?? "this seedelf"}`} />
+                    <code className="seedelfs__id">{shortHex(s.assetName, 12, 6)}</code>
+                    <span className="seedelfs__actions">
+                      <CopyButton value={s.assetName} label={`Copy the name of ${s.label ?? "this seedelf"}`} />
+                      <button
+                        type="button"
+                        className="link"
+                        aria-label={`Remove ${s.label ?? "this seedelf"}`}
+                        onClick={() => setRemoving(s)}
+                        disabled={watching}
+                        title={watching ? "Wait for the last transaction to confirm" : undefined}
+                      >
+                        Remove
+                      </button>
+                    </span>
                   </li>
                 ))}
               </ul>

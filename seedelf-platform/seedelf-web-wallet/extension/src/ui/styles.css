@@ -597,18 +597,23 @@ h2 {
 
 .tokens__row,
 .seedelfs__row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: 8px;
+  gap: 2px 8px;
   padding: 6px 10px;
   border-radius: 8px;
   background: var(--surface-2);
 }
 
+.seedelfs__actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
 .tokens__name,
 .seedelfs__label {
-  flex: none;
-  max-width: 55%;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -617,13 +622,12 @@ h2 {
 
 .tokens__amount,
 .seedelfs__ada {
-  margin-left: auto;
+  text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .seedelfs__id {
-  flex: 1;
   min-width: 0;
   font: 11.5px var(--mono);
   color: var(--muted);
