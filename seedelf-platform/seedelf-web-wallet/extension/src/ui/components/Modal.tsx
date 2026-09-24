@@ -10,11 +10,14 @@ export function Modal({
   title,
   titleId,
   onClose,
+  foot,
   children,
 }: {
   title: ReactNode;
   titleId: string;
   onClose: () => void;
+  /** Stays in view under the body, which scrolls. */
+  foot?: ReactNode;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -33,17 +36,16 @@ export function Modal({
         if (e.target === ref.current) onClose();
       }}
     >
-      <div className="modal__panel">
-        <header className="modal__head">
-          <h2 id={titleId} className="modal__title">
-            {title}
-          </h2>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close" title="Close">
-            <CloseIcon />
-          </button>
-        </header>
-        {children}
-      </div>
+      <header className="modal__head">
+        <h2 id={titleId} className="modal__title">
+          {title}
+        </h2>
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close" title="Close">
+          <CloseIcon />
+        </button>
+      </header>
+      <div className="modal__body">{children}</div>
+      {foot && <div className="modal__foot">{foot}</div>}
     </dialog>
   );
 }

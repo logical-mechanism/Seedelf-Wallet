@@ -7,11 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base, chromium, type BrowserContext, type Page } from "@playwright/test";
+import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
 
 import { txIdOf } from "../tests/fixtures/cbor";
 
-export { expect } from "@playwright/test";
+export { expect };
 
 export const dist = fileURLToPath(new URL("../dist", import.meta.url));
 
@@ -213,6 +213,16 @@ export async function snap(page: Page, name: string) {
   await feet("static");
   await page.screenshot({ path: `test-results/${name}.png`, fullPage: true, animations: "disabled" });
   await feet("");
+}
+
+/** Picks tokens in a form's "Add tokens" picker: the ones named, or every one. */
+export async function addTokens(page: Page, names?: string[]) {
+  await page.getByRole("button", { name: /^Add (more )?tokens$/ }).click();
+  const picker = page.getByRole("dialog", { name: "Add tokens" });
+  if (names) for (const name of names) await picker.getByRole("button", { name, exact: true }).click();
+  else await picker.getByRole("button", { name: /^Select all/ }).click();
+  await picker.getByRole("button", { name: /^Add \d+ tokens?$/ }).click();
+  await expect(picker).toHaveCount(0);
 }
 
 /** Home's Cardano account tab. */

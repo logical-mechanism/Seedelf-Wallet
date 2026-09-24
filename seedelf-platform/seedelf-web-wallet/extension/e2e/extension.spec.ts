@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import {
   accountMintPreprod,
+  addTokens,
   appUrl,
   cardanoTab,
   dist,
@@ -452,6 +453,21 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(page.getByTestId("round-warning")).toContainText("Round amounts");
   await page.getByLabel("Amount", { exact: true }).fill("25");
   await expect(page.getByTestId("round-warning")).toHaveCount(0);
+  // Tokens come from a picker: search, select what's found, and take one off again.
+  await expect(page.getByLabel(/^Amount of /)).toHaveCount(0);
+  await page.getByRole("button", { name: "Add tokens" }).click();
+  const picker = page.getByRole("dialog", { name: "Add tokens" });
+  await picker.getByLabel("Search tokens").fill("sirius");
+  await expect(picker.getByTestId("token-picker").getByRole("listitem")).toHaveCount(2);
+  await picker.getByRole("button", { name: "Select all found" }).click();
+  await snap(page, "token-picker");
+  await picker.getByRole("button", { name: "Add 2 tokens" }).click();
+  await expect(page.getByLabel(/^Amount of /)).toHaveCount(2);
+  await page.getByRole("button", { name: "Take SIRIUS-A off" }).click();
+  await expect(page.getByLabel(/^Amount of /)).toHaveCount(1);
+  await page.getByRole("button", { name: "Take SIRIUS-B off" }).click();
+  await addTokens(page, ["tUSDM"]);
+
   // Any amount of a token: Max fills in all of it; more than that is refused.
   const tusdm = page.getByLabel("Amount of tUSDM");
   await page.getByRole("button", { name: "All of tUSDM" }).click();
@@ -628,6 +644,7 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
 
   // 5 ₳ and 1 tUSDM, of the 1,234.56 held.
   await page.getByLabel("Amount", { exact: true }).fill("5");
+  await addTokens(page, ["tUSDM"]);
   const tusdm = page.getByLabel("Amount of tUSDM");
   await tusdm.fill("2000");
   await expect(page.getByText("That's more than the 1,234.56 you hold.")).toBeVisible();
@@ -682,6 +699,7 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   await expect(page.getByTestId("withdraw-own")).toHaveCount(0);
 
   // Max hides the token amounts; an amount brings them back.
+  await addTokens(page, ["tUSDM"]);
   await page.getByRole("button", { name: "Max" }).click();
   await expect(page.getByTestId("withdraw-max-note")).toContainText("up to 20 UTxOs");
   await expect(page.getByLabel("Amount of tUSDM")).toHaveCount(0);
@@ -767,6 +785,7 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
   await back();
   await popup.getByRole("button", { name: "Move in" }).click();
   await popup.getByLabel("Amount", { exact: true }).fill("25.5");
+  await addTokens(popup, ["tUSDM"]);
   await popup.getByLabel("Amount of tUSDM").fill("1000");
   await shot("move-in");
   await popup.getByRole("button", { name: "Review" }).click();

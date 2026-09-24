@@ -88,7 +88,7 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
 - **What it does:** the Cardano account pays into the wallet contract. Each contract output gets a freshly re-randomized copy of the user's own base register.
 - **What the user chooses:**
   - An **ADA amount, or Max**.
-  - **Tokens to bring along:** any amount of each, or all of it with its Max. The rest of a token stays in the account.
+  - **Tokens to bring along:** **Add tokens** opens a searchable picker; each picked token gets an amount box, with Max for all of it. The rest of a token stays in the account. Send and Withdraw pick tokens the same way.
   - The form nudges towards round amounts, which are harder to match to a later withdrawal.
 - **Which UTxOs are spent:**
   - Every UTxO holding a token being brought along.

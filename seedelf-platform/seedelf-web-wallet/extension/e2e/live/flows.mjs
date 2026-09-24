@@ -25,6 +25,13 @@ export const FLOWS = {
     await page.getByRole("tab", { name: "Cardano", exact: true }).click();
     await page.getByRole("button", { name: "Move in" }).click();
     await page.getByLabel("Amount", { exact: true }).fill(ada);
+    const add = page.getByRole("button", { name: "Add tokens" });
+    if (await add.count()) {
+      await add.click();
+      const picker = page.getByRole("dialog", { name: "Add tokens" });
+      await picker.getByRole("button", { name: /^Select all/ }).click();
+      await picker.getByRole("button", { name: /^Add \d+ tokens?$/ }).click();
+    }
     for (const all of await page.getByRole("button", { name: /^All of / }).all()) await all.click();
     await reviewAndSend(page, "move-in-review", "move-in");
     return confirmed(page, "Move-in confirmed");
