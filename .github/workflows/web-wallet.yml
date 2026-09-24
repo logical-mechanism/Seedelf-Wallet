@@ -1,0 +1,74 @@
+name: Web Wallet
+
+on:
+  pull_request:
+    paths:
+      - "seedelf-platform/**"
+      - ".github/workflows/web-wallet.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: seedelf-platform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: seedelf-platform
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: seedelf-platform/seedelf-web-wallet/extension/package-lock.json
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (web wallet crates)
+        run: cargo clippy -p seedelf-crypto -p seedelf-wasm --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      # Cargo.lock is not tracked, so match the CLI to whatever resolved here.
+      - name: Install wasm-bindgen-cli
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+
+      - name: Build WebAssembly
+        run: ./seedelf-web-wallet/wasm/build.sh
+
+      - name: WebAssembly tests
+        run: node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"
+
+      - name: Extension dependencies
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: npm ci
+
+      - name: Extension typecheck
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: npm run typecheck
+
+      - name: Extension unit tests
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: npm test
+
+      - name: Extension build
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: npm run build:ext
+
+      - name: Extension end-to-end (Chromium)
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: |
+          npx playwright install --with-deps chromium
+          npm run e2e

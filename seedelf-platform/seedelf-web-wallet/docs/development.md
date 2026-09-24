@@ -1,6 +1,6 @@
 # Development
 
-This is how we'll run and test the extension before it's in the Chrome Web Store. There's no code yet, so exact commands get filled in when the project is scaffolded.
+This is how we run and test the extension before it's in the Chrome Web Store. The extension lives in [../extension/](../extension/); its README lists every script.
 
 ## Branching
 
@@ -30,12 +30,12 @@ This is how we'll run and test the extension before it's in the Chrome Web Store
 
 Chrome runs an extension straight from a folder once developer mode is on. There is no store and no packaging.
 
-1. Build the extension. The default build targets preprod, and the output folder is `dist/`.
+1. Build it: `cd seedelf-web-wallet/extension && npm install && npm run build`. This builds the Rust core to WebAssembly and then the extension into `dist/`. The default build targets preprod.
 2. Open `chrome://extensions` and turn on **Developer mode** (top right).
 3. Click **Load unpacked** and choose the `dist/` folder.
 4. Pin the extension, then click its icon to open the popup.
 
-After a rebuild, click the reload arrow on the extension's card. During `dev`, a Vite extension plugin can reload it automatically; we'll pick one when scaffolding.
+After a rebuild, click the reload arrow on the extension's card. `npm run dev` rebuilds `dist/` on every change, but you still reload the extension by hand.
 
 **Debugging:**
 
@@ -47,7 +47,7 @@ After a rebuild, click the reload arrow on the extension's card. During `dev`, a
 
 **Gotchas:**
 
-- **Pin the extension ID.** Chrome derives an unpacked extension's ID from its folder path. Move the folder and you get a new ID with empty storage, so your test wallet disappears. A dev-only `key` in the manifest keeps the ID fixed.
+- **The extension ID is pinned.** Chrome normally derives an unpacked extension's ID from its folder path, so moving the folder would give a new ID with empty storage. The dev `key` in `extension/src/manifest.ts` fixes the ID at `jfekiogplaamnceifeehipmomhojngcb`. Web Store builds leave it out (`VITE_STORE_BUILD=true`).
 - **Removing the extension deletes its storage,** including the vault. Keep the test wallet's phrase somewhere.
 - **Startup warning:** Chrome may warn about developer-mode extensions at startup. That's expected.
 
@@ -62,8 +62,8 @@ After a rebuild, click the reload arrow on the extension's card. During `dev`, a
 |---|---|---|
 | Rust | `seedelf-crypto`, `seedelf-core`, and the wasm crate | `cargo test`. The CLI's offline integration tests (`seedelf-cli/tests/cli/`) guard the builder extraction. |
 | Key derivation | The frozen v1 Seedelf key vectors, and the Cardano account vectors (verified against `@cardano-sdk`, Lace's library) | Checked in Rust, and again from JS through WebAssembly, so both sides agree |
-| TypeScript | Vault, messaging, wallet state | Vitest |
-| End to end | Real flows on preprod | Playwright launches Chromium with the unpacked extension loaded and drives the popup |
+| TypeScript | The manifest, and the service-worker handlers against the real WASM (later: the vault and wallet state) | Vitest (`npm test`) |
+| End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the popup and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. |
 | Manual | A preprod checklist before each release | Onboarding, move in, create, transfer, withdraw, lock/unlock, restore |
 
 ## Sharing with testers before launch

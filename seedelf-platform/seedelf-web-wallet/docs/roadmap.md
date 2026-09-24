@@ -17,7 +17,7 @@ The wallet is built in **chunks**, each about one working session.
 | 1 | WASM foundation | ✅ | Create the `seedelf-web-wallet/wasm` crate (a workspace member). Expose register create, re-randomize, the ownership check and the Schnorr proof. Build with `wasm-bindgen` and smoke-test from JS. |
 | 2 | Seedelf key derivation | ✅ | Implement the v1 HKDF spec ([keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation)) in `seedelf-crypto` with frozen test vectors. Expose it through WASM and check the vectors from TS. |
 | 3 | Cardano keys | ✅ | Phrase → CIP-1852 Cardano account (account `0'`): receive, change and stake addresses, in Rust (`pallas-wallet`). Checked against Lace's library (`@cardano-sdk`). |
-| 4 | Extension scaffold | ⬜ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
+| 4 | Extension scaffold | ✅ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
 | 5 | Vault and lock | ⬜ | SecretBox vault, create/restore onboarding, unlock, `chrome.storage.session`, auto-lock, unlock back-off. |
 | 6 | Balance | ⬜ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. |
 | 7 | Builder extraction + move in | ⬜ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
@@ -36,6 +36,22 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-23: chunk 4 done** (`web-wallet/extension-scaffold`).
+  - **What landed:** `extension/`, built with Vite 8 (Rolldown), React 19, TypeScript 7 and an MV3 manifest.
+    - The manifest is generated per build: preprod by default, mainnet behind `VITE_ENABLE_MAINNET`, a strict CSP, and a dev `key` that pins the ID to `jfekiogplaamnceifeehipmomhojngcb`.
+    - The service worker is an ES module. It loads WASM lazily and answers typed RPC (`src/shared/rpc.ts`) only from the extension's own pages.
+    - The UI works as a popup (360 px) or a full tab (`?view=tab`).
+    - A temporary "Wallet core check" screen derives a phrase's Cardano account and Seedelf key in the worker.
+  - **Tests:**
+    - Vitest (9): the manifest, and the handlers with the real WASM against the shared vectors.
+    - Playwright (3): loads `dist/` into Chromium, checks the pinned ID and module worker, and checks the popup derives the Lace-matching addresses. It also covers the full tab.
+  - **CI:** added `.github/workflows/web-wallet.yml`, which runs on PRs touching `seedelf-platform/`. It covers Rust fmt/clippy/tests, the WASM build and tests, and the extension typecheck, tests, build and end-to-end run.
+    - `Cargo.lock` is untracked, so CI resolves dependencies fresh and installs the matching `wasm-bindgen-cli`.
+  - **Gotchas:**
+    - Vite 8 renamed `rollupOptions` to `rolldownOptions`.
+    - Aliases don't apply to `?url` imports, so the WASM binary is imported by relative path.
+    - Playwright 1.63 needs its own Chromium: `npx playwright install chromium`.
+  - **Next:** chunk 5, the vault and lock. It adds the `storage` permission and replaces the preview screen with create/restore onboarding.
 - **2026-09-23: chunk 3 done** (`web-wallet/cardano-keys`).
   - **What landed:** `seedelf-crypto/src/cardano.rs`, `CardanoAccount`.
     - Icarus master key (CIP-3) via `pallas-wallet`, then `m/1852'/1815'/account'/role/index`.

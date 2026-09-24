@@ -2,7 +2,7 @@
 
 A Chrome extension for Seedelf, the Cardano stealth wallet.
 
-> **Status:** early build, preprod only. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md).
+> **Status:** early build, preprod only. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
 
