@@ -54,6 +54,8 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 
 **Start by asking the user for their list of CSS and UX fixes.** In chunk 7 they said those belong in this pass (memory: *Style polish later*). Then confirm the decisions.
 
+**Done (2026-09-24).** The user chose **dark only** (no light theme), **Inter** bundled, **Lucide** icons, and the **switch with round actions** for Home. The palette and form layout follow the suggestions below, and there was no fix list. See the roadmap's handoff note.
+
 ### Reading list
 
 - **Our UI** (about 3,300 lines): `extension/src/ui/styles.css` (the tokens are at the top), `ui/App.tsx`, `ui/screens/*.tsx` and `ui/components/*.tsx`.

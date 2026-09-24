@@ -39,11 +39,19 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 - **Phrase warnings, shown during create:**
   - "Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website."
   - "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
-- **Home** shows:
-  - the **Seedelf balance**: ADA and tokens in the contract UTxOs this wallet owns, and **your seedelfs** with their tags, the ADA locked with each, and a **Copy** button for each full name, to give to anyone who wants to pay you (or to paste into Send to a seedelf);
-  - the **Cardano account**: its ADA and tokens, how many addresses it has used, the receive address (copy, QR) and the stake address;
-  - the **Seedelf identity**: the base register's public value, shortened;
-  - when the chain was last read, and **Refresh**.
+- **Home** has two tabs, and under them when the chain was last read, and **Refresh**.
+  - **Seedelf:**
+    - the **Seedelf balance**: ADA in the contract UTxOs this wallet owns, with round **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf) actions;
+    - its tokens;
+    - **your seedelfs**, with their tags, the ADA locked with each, a **Copy** button for each full name (to give to anyone who wants to pay you, or to paste into Send to a seedelf) and **Remove**;
+    - the **Seedelf identity**: the base register's public value, shortened.
+  - **Cardano account:** its ADA, how many addresses it has used, **Receive** and **Move in**, and its tokens. Until a seedelf exists, a note says to create one before moving money in.
+  - **Get started:** until the wallet has both a seedelf and a Seedelf balance, the Seedelf tab lists three steps, in the order that keeps them apart (see [Create a seedelf](#create-a-seedelf)):
+    1. fund the Cardano account;
+    2. create the seedelf, paid by the account;
+    3. move ADA in.
+
+    A step is ticked when it's done, and the next step has its button.
 
 ## Lock and unlock
 
@@ -57,7 +65,13 @@ See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 
 ## Receive (Cardano account)
 
-Show the receive address `0/0`, with a copy button and a QR code, so someone paying from a phone wallet can scan it. The QR is shown on request, drawn dark on white with the standard quiet zone. Anything that can pay a Cardano address can fund the wallet. For a restored wallet, the funds already in the account show up here too.
+**Receive**, on the Cardano account tab or the first *Get started* step, shows:
+
+- a QR code of the receive address `0/0`, so someone paying from a phone wallet can scan it. It's drawn dark on white with the standard quiet zone;
+- the address, with a copy button;
+- the stake address.
+
+Anything that can pay a Cardano address can fund the wallet. The screen also says that this is an ordinary address, which anyone can watch: to be paid privately, give out a seedelf's name instead. For a restored wallet, the funds already in the account show up here too.
 
 ## Move in (Cardano account → Seedelf)
 

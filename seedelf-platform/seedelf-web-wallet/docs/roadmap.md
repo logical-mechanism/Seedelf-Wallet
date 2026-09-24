@@ -25,7 +25,7 @@ The wallet is built in **chunks**, each about one working session.
 | 8b | Mint first | ✅ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
 | 9 | Transfer | ✅ | Seedelf → seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md). |
 | 10 | Withdraw | ✅ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md). |
-| 11a | Style and flow pass | ⬜ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Starts with the user's list of CSS and UX fixes. **Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).** |
+| 11a | Style and flow pass | ✅ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Dark only, Inter, Lucide icons, and Home as a Seedelf / Cardano account switch with round actions. **Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).** |
 | 11b | Size and live runs | ⬜ | A smaller WebAssembly module (a size-tuned cargo profile, then `wasm-opt` if it pays). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
 | 11c | Testers | ⬜ | The unlisted Chrome Web Store listing (`VITE_STORE_BUILD=true`): the store build, the listing text, the privacy policy, the screenshots and a release checklist, ready for the user to submit. Same plan. |
 
@@ -39,9 +39,35 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-24: chunk 11a done** (`web-wallet/polish`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
+  - **Decided with the user:**
+    - **Dark only;** there's no light theme.
+    - **Inter** is bundled (OFL), and the icons are **Lucide** (ISC).
+    - **Home** is a Seedelf / Cardano account switch with round actions.
+    - There was no fix list, so this chunk did the plan's items plus chunk 10's wrap fix.
+  - **The look** ([architecture.md](architecture.md#ui)):
+    - Tokens at the top of `styles.css`: a near-black navy-tinted page, white-alpha surfaces, Lace's radii and 4 px grid, teal accent with navy text on it. The contrast ratios are in its comment.
+    - The CSP gains `font-src 'self'`. The light wordmark is gone.
+  - **Components:**
+    - `Screen` is every flow's layout, with Back, the title, and a sticky foot holding the error and the primary action.
+    - `ReviewRows`, `Callout` (privacy, warn, info), `ActionButton` and `Choice`.
+    - The five copies of `Row` and six of `plural` are gone. `format.ts` now has `plural`, `adaWithTokens` and `tokenKey`.
+  - **Flow changes:**
+    - Home's two tabs. **Receive** is its own screen, showing the QR code at once, with a note that the address is public.
+    - **Get started** for a new wallet (fund, create the seedelf, move in) puts the mint-first order on screen.
+    - Remove shows the seedelf's full name.
+    - "Send to a seedelf" no longer wraps in the popup: it's the round **Send**, whose accessible name is still the long one.
+  - **Tests:** Vitest 109 (+1 live). Playwright 19:
+    - A new popup tour screenshots every wallet screen at 360 px (`test-results/popup-*.png`).
+    - The tests follow the tabs and Receive. Back is an icon button named "Back". The round-amount warning has a test id (`round-warning`) instead of a class.
+  - **Surprises:**
+    - React reused the Seedelf tab's round buttons for the Cardano tab, so the primary colour animated onto the wrong button. Each panel has a key now.
+    - Playwright's screenshot `style` option is refused by the page CSP. `snap()` in the spec unsticks the foot through the CSSOM instead, and turns animations off.
+  - **Next:** 11b, size and live runs, on `web-wallet/size-and-live` from `seedelf-web-wallet` once this merges.
+
 - **2026-09-24: chunk 11 planned** (after #255 merged; CI green).
   - It's split into three sessions, 11a, 11b and 11c, each with a "Start here": [plans/chunk-11-polish.md](plans/chunk-11-polish.md). The plan is committed on the pushed branch `web-wallet/polish`, which 11a builds on.
-  - **Next:** 11a, the style and flow pass. First ask the user for their list of CSS and UX fixes, then confirm 11a's decisions (theme, palette, font, icons, Home's structure).
+  - **Next:** 11a, the style and flow pass (done, above).
 
 - **2026-09-24: chunk 10 done** (`web-wallet/withdraw`). Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md).
   - **Decided with the user:**
