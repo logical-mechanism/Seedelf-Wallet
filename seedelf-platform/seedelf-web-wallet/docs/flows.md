@@ -89,6 +89,15 @@ See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 
 Anything that can pay a Cardano address can fund the wallet. The screen also says that this is an ordinary address, which anyone can watch: to be paid privately, give out a seedelf's name instead. For a restored wallet, the funds already in the account show up here too.
 
+## Receive (Seedelf)
+
+**Receive** on the Seedelf tab (chunk 12) lists your seedelfs, each by its tag with its whole name and **Copy**, so the name is one tap from Home rather than at the bottom of it. It asks Koios nothing: the names come from the last balance reading.
+
+- It says to give out the whole name, since tags aren't unique, and that nobody can tell a payment to it is yours.
+- Its privacy note: the name is public, and linked to whatever paid to create it; what's paid to it isn't.
+- With no seedelf yet, it says to create one first, with **Create a seedelf** (disabled, with the reason, while the account can't pay for it).
+- *Your seedelfs* at the bottom of Home stays, for the ADA locked with each and **Remove**.
+
 ## Move in (Cardano account → Seedelf)
 
 This is the equivalent of the CLI's `external sweep`, built by the same core code (`seedelf-core::build`). Built in chunk 7.

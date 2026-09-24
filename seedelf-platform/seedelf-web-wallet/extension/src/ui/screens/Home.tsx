@@ -1,6 +1,7 @@
-// Home, in two tabs. Seedelf: the Seedelf balance, its tokens and your
-// seedelfs. Cardano account: the account's balance and tokens, Receive, Send
-// and Move in. Until the wallet has a seedelf and a Seedelf
+// Home, in two tabs. Seedelf: the Seedelf balance with Receive (your
+// seedelfs' names), Send, Withdraw and Create, its tokens and your seedelfs.
+// Cardano account: the account's balance and tokens, Receive, Send and Move
+// in. Until the wallet has a seedelf and a Seedelf
 // balance, a checklist shows the order that keeps them apart: fund the
 // account, create the seedelf, then move in (privacy.md, mint first).
 // Balances come from the worker's last reading; it reads the chain again
@@ -38,7 +39,7 @@ import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
-import { Receive } from "./Receive";
+import { Receive, ReceiveSeedelf } from "./Receive";
 import { RemoveSeedelf } from "./RemoveSeedelf";
 import { Tokens } from "./Tokens";
 import { Transfer } from "./Transfer";
@@ -78,9 +79,9 @@ export function Home() {
   const [error, setError] = useState<string>();
   const [now, setNow] = useState(Date.now);
   const [tab, setTab] = useState<Tab>("seedelf");
-  const [screen, setScreen] = useState<"home" | "receive" | "move-in" | "send" | "create" | "transfer" | "withdraw">(
-    "home",
-  );
+  const [screen, setScreen] = useState<
+    "home" | "receive" | "receive-seedelf" | "move-in" | "send" | "create" | "transfer" | "withdraw"
+  >("home");
   const [removing, setRemoving] = useState<SeedelfInfo>();
   const [tokensOf, setTokensOf] = useState<Tab>();
   const [activityOf, setActivityOf] = useState<Tab>();
@@ -134,6 +135,18 @@ export function Home() {
     return () => clearInterval(timer);
   }, [watching, watch]);
 
+  const seedelfs = balances?.seedelf.seedelfs ?? [];
+  const canSpend = !!balances && balances.seedelf.utxos > 0 && !watching;
+  const spendTitle = watching
+    ? BUSY
+    : balances && balances.seedelf.utxos === 0
+      ? "Move some ADA in first: these are paid from your Seedelf balance"
+      : undefined;
+  const canCreate = !!balances && (balances.cardano.utxos > 0 || balances.seedelf.utxos > 0) && !watching;
+  const createTitle = watching ? BUSY : balances && !canCreate ? "Fund your Cardano account first: it pays for the seedelf" : undefined;
+  // Move in and Send both spend the account.
+  const canMoveIn = !!balances && balances.cardano.utxos > 0 && !watching;
+
   const sent = (p: PendingTx) => {
     setPending(p);
     setScreen("home");
@@ -141,6 +154,10 @@ export function Home() {
   };
   const home = () => setScreen("home");
   if (screen === "receive" && account) return <Receive account={account} onBack={home} />;
+  if (screen === "receive-seedelf") {
+    const create = () => setScreen("create");
+    return <ReceiveSeedelf seedelfs={seedelfs} onBack={home} onCreate={create} createTitle={canCreate ? undefined : createTitle} />;
+  }
   if (screen === "move-in" && balances) return <MoveIn cardano={balances.cardano} onCancel={home} onSent={sent} />;
   if (screen === "send" && balances) return <CardanoSend cardano={balances.cardano} onCancel={home} onSent={sent} />;
   if (screen === "create" && balances) return <CreateSeedelf balances={balances} onCancel={home} onSent={sent} />;
@@ -157,18 +174,6 @@ export function Home() {
     const back = () => setTokensOf(undefined);
     return <Tokens tokens={balances[tokensOf].tokens} of={tokensOf} onBack={back} />;
   }
-
-  const seedelfs = balances?.seedelf.seedelfs ?? [];
-  const canSpend = !!balances && balances.seedelf.utxos > 0 && !watching;
-  const spendTitle = watching
-    ? BUSY
-    : balances && balances.seedelf.utxos === 0
-      ? "Move some ADA in first: these are paid from your Seedelf balance"
-      : undefined;
-  const canCreate = !!balances && (balances.cardano.utxos > 0 || balances.seedelf.utxos > 0) && !watching;
-  const createTitle = watching ? BUSY : balances && !canCreate ? "Fund your Cardano account first: it pays for the seedelf" : undefined;
-  // Move in and Send both spend the account.
-  const canMoveIn = !!balances && balances.cardano.utxos > 0 && !watching;
 
   return (
     <>
@@ -207,6 +212,13 @@ export function Home() {
               <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
               <span className="hero__meta">{balances ? plural(balances.seedelf.utxos, "UTxO") : "\u00a0"}</span>
               <div className="hero__actions">
+                <ActionButton
+                  icon={<ReceiveIcon />}
+                  label="Receive"
+                  name="Receive into Seedelf"
+                  onClick={() => setScreen("receive-seedelf")}
+                  disabled={!balances}
+                />
                 <ActionButton
                   primary
                   icon={<SendIcon />}

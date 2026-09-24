@@ -266,7 +266,8 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  width: 76px;
+  /* Four fit the popup's hero: Receive, Send, Withdraw, Create. */
+  width: 64px;
   font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-2);

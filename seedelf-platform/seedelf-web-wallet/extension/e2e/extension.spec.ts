@@ -260,6 +260,15 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await expect(page.getByTestId("seedelfs")).toBeVisible();
   await snap(page, "home-balances");
 
+  // Seedelf's Receive: each seedelf's whole name, with Copy, and no requests.
+  const mine: string = ownedUtxos[2].asset_list[0].asset_name;
+  await page.getByRole("button", { name: "Receive into Seedelf" }).click();
+  await expect(page.getByTestId("receive-seedelfs").getByTestId(`receive-seedelf-${mine}`)).toHaveText(mine);
+  await expect(page.getByTestId("receive-seedelfs")).toContainText("web-wallet");
+  await expect(page.getByRole("button", { name: "Copy the name of web-wallet" })).toBeVisible();
+  await snap(page, "receive-seedelf");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
   // The popup opens from the worker's reading; Refresh reads the chain again.
   const popup = await openApp(context, "popup");
   await expect(popup.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
@@ -268,6 +277,18 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await popup.getByRole("button", { name: "Refresh" }).click();
   await expect.poll(() => koios.calls.length).toBe(6);
   await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
+});
+
+test("receive into Seedelf without a seedelf says to create one first", async ({ context }) => {
+  const page = await openApp(context);
+  await restore(page, vector(15).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
+  await page.getByRole("button", { name: "Receive into Seedelf" }).click();
+  await expect(page.getByTestId("receive-no-seedelf")).toContainText("you don't have a seedelf yet");
+  // This account is empty, so it can't pay for one yet.
+  const create = page.getByRole("button", { name: "Create a seedelf" });
+  await expect(create).toBeDisabled();
+  await expect(create).toHaveAttribute("title", /Fund your Cardano account first/);
 });
 
 test("home says so when Koios can't be read", async ({ context, koios }) => {
@@ -950,6 +971,7 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
 
   await popup.getByRole("tab", { name: "Seedelf" }).click();
   for (const [button, name] of [
+    ["Receive into Seedelf", "receive-seedelf"],
     ["Send to a seedelf", "transfer"],
     ["Withdraw", "withdraw"],
     ["Create a seedelf", "create-seedelf"],
