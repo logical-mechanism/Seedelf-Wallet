@@ -142,6 +142,8 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 
 The user owns the Chrome Web Store developer account and submits the listing. This part prepares everything, so that submitting is copy and paste.
 
+**Done (2026-09-24).** The decisions were preprod only, unlisted, the policy on GitHub, *Authentication* and *Financial* declared, and framed screenshots. Everything to submit is in [store/](../store/README.md). See the roadmap's handoff note.
+
 ### What 11a and 11b left for 11c
 
 - **The look is dark only.** There's no light theme to screenshot.

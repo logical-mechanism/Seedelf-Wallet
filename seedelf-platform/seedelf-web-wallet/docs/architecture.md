@@ -270,3 +270,5 @@ We don't take Lace's contracts, modules or feature-flag framework, its host/gues
 - keep its notices
 - mark our changes
 - ship a copy of the Apache-2.0 license alongside it
+
+**The store package carries every third-party notice** in `licenses/THIRD-PARTY.txt`: SecretBox, the npm packages in the bundle, and the Rust crates in the WebAssembly. `extension/scripts/third-party.mjs` writes it when `npm run package` runs. Inter's and Lucide's licences sit next to it.

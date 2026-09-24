@@ -27,7 +27,7 @@ The wallet is built in **chunks**, each about one working session.
 | 10 | Withdraw | ✅ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md). |
 | 11a | Style and flow pass | ✅ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Dark only, Inter, Lucide icons, and Home as a Seedelf / Cardano account switch with round actions. **Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).** |
 | 11b | Size and live runs | ✅ | A smaller WebAssembly module: a size-tuned cargo profile (`wasm-opt` measured and left out). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
-| 11c | Testers | ⬜ | The unlisted Chrome Web Store listing (`VITE_STORE_BUILD=true`): the store build, the listing text, the privacy policy, the screenshots and a release checklist, ready for the user to submit. Same plan. |
+| 11c | Testers | ✅ | The unlisted, preprod-only Chrome Web Store listing, ready for the user to submit: `npm run package` (the store build, third-party notices, a reproducible zip), the listing text and privacy policy in [store/](store/README.md), the images from `npm run store:images`, and a release checklist. Same plan. |
 
 ## After v1
 
@@ -38,6 +38,38 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 11c done** (`web-wallet/store`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
+  - **Decided with the user:**
+    - Preprod only, and **unlisted**.
+    - The privacy policy is [store/privacy-policy.md](store/privacy-policy.md), linked on the `seedelf-web-wallet` branch.
+    - The Privacy practices form declares *Authentication information* and *Financial and payment information*.
+    - The screenshots are the popup at 2×, framed on navy with a caption.
+    - Taken as given: version 0.1.0, the category Tools (Lace's), and the store icon from the guardian artwork (`brand/README.md`).
+  - **The store's rules, checked live on 2026-09-24:**
+    - The icon is 128 px: 96 px of artwork in 16 px of padding.
+    - 1 to 5 screenshots, at exactly 1280×800 or 640×400.
+    - A 440×280 small promo tile: listings without one rank lower. The marquee is optional.
+    - The summary is the manifest's `description`, at most 132 characters.
+    - The Privacy practices tab wants a single purpose, a justification for each permission, a remote-code answer, the data categories with three certifications, and a policy URL. Google's FAQ counts data handled only on the device.
+    - Nothing specific to wallets: crypto mining is banned, and crypto extensions aren't featured. The 1 August 2026 update tightened limited use and disclosure.
+  - **What landed:**
+    - `npm run package`: a store build, `licenses/THIRD-PARTY.txt`, and `release/seedelf-wallet-0.1.0.zip`.
+      - The zip is 900 KB and 18 files, SHA-256 `8bf7dd79…fd14f53`. It's reproducible: a rebuild with the same toolchain gives the same bytes.
+      - It refuses a `dist/` with the dev key.
+    - The notices list 109 crates, 6 npm packages and SecretBox, with 90 distinct licence texts (295 KB, 24 KB gzipped).
+    - `e2e/support.ts` holds what the two specs share. The tests read the extension's ID from its worker, so **a store build passes all 19**, and CI now runs them on both builds.
+    - `npm run store:images` writes [store/images/](store/images/) from the fixtures and the public 12-word phrase.
+    - [store/README.md](store/README.md) has every dashboard field, by tab. development.md has *Releasing to the Web Store*, around the preprod checklist.
+    - The manifest's `description`, the store's summary, is now "A Cardano stealth wallet. Pay and get paid through Seedelf, where no UTxO says who owns it."
+  - **Surprises:**
+    - 13 crates ship no licence file: seven Pallas crates, `blst` and `crc-catalog` (they point at the Apache-2.0 text), `base58` and `bech32` (MIT, with the authors from `Cargo.toml`), and two CC0 bitcoin crates. `third-party.mjs` falls back by licence and fails on anything else.
+    - Cargo.lock isn't tracked, so CI's package step would catch a newly resolved crate without a licence.
+  - **Not done:**
+    - The live runs weren't repeated. They weren't approved for 11c, and the extension's code didn't change: only its manifest `description` did.
+    - Submitting. The user submits after this merges, so the policy URL resolves. Then the first message to testers.
+  - **Tests:** cargo 209, WASM Node 29, Vitest 118 (+2 live), and Playwright 19 on the dev build and 19 on the store build.
+  - **Next:** v1 is done once the listing is live. After v1: the contract round trip, the mainnet flag, and merging into `main`.
 
 - **2026-09-24: chunk 11b done** (`web-wallet/size-and-live`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
   - **Decided with the user:**
