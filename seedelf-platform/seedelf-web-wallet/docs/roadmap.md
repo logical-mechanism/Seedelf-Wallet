@@ -57,7 +57,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - PostgREST's JSON-path `select` works on Koios's POST endpoints (`meta_json->body->givenName`), so a DRep's name comes without its metadata's bulk, or its image.
     - The recorded 12-word account's rewards (57.475311 ₳) now ride along in the e2e and Vitest flows by default. Tests about something else keep their meaning: bigger amounts, or rewards spending switched off (`spent.test.ts`).
     - The WebAssembly module grew from 424 to 439 KB gzipped (bech32 and the certificates); the store zip from 900 KB to 952 KB.
-  - **Tests:** cargo 241 (core 123, of which 12 are staking; WASM native 34), WASM Node 33, Vitest 191 (+2 live), Playwright 34.
+  - **Tests:** cargo 241 (core 123, of which 12 are staking; WASM native 34), WASM Node 33, Vitest 196 (+2 live), Playwright 34.
   - **Next:** the user's review of the staking screens, and the live run. The follow-up left (staking in the Cardano Activity) is in the plan. Then the after-v1 items.
 
 - **2026-09-24: chunk 12 done** (`web-wallet/style-flow`). Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).
