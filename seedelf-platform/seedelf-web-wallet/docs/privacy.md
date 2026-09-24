@@ -29,6 +29,8 @@ These are not user settings:
    - They are never stored or logged.
    - They exist only inside `seedelf-crypto`.
 4. **Registers are only built by `seedelf-crypto`,** never assembled in TypeScript. This guarantees the same `d` is applied to both points and that the points are torsion-free. A mistake here locks funds permanently (see the root [CLAUDE.md](../../../CLAUDE.md), "Core protocol invariants").
+   - A payment to someone's seedelf goes under a fresh re-randomization of their register, never the register as found.
+   - The wallet refuses to pay a register whose points don't decode, lie outside the prime-order subgroup, or are the identity. A payment to any of those is locked for good, or anyone can take it.
 5. **A seedelf is linked to whatever pays for it, so the first one is minted before any move-in** (see [flows.md](flows.md#create-a-seedelf)).
    - **By default the Cardano account pays** (chunk 8b), and the Cardano card says to create a seedelf before moving money in.
    - **A stealth mint from the Seedelf balance is the other choice.** It hides the payer only when that balance came from other people's Seedelf payments. For it, the mint service passes only Seedelf UTxOs to WebAssembly, and WebAssembly refuses any it doesn't own.
@@ -48,6 +50,11 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Stealth mint from received money:** hides the payer. That's the case the stealth mint is for.
 - **Exit:** withdrawing to where the money came from re-links the chain. This is the second implicit tracking method in the root README. Withdraw somewhere else, or keep the funds in Seedelf.
 - **Unique amounts and timing:** depositing 1,234.567 ADA and withdrawing roughly 1,234.4 ADA an hour later is an easy match. The UI should nudge users towards round amounts and not rushing.
+- **Transfer:** the payment can't be linked to the recipient's seedelf. The payer's side is an ordinary spend, though.
+  - Its inputs, and the change in the same transaction, trace back through the transaction graph to where that money came from.
+  - If you moved the money in yourself, the chain leads from your Cardano account to this payment, though not to your seedelf's name, nor to the recipient's.
+  - Its amount and timing are public. Sending right after a move-in is easy to match by timing, and the form says so.
+  - Paying your own seedelf is allowed, but it only moves money in a circle.
 - **Co-spending:** spending several UTxOs in one transaction suggests they share an owner.
   - Coin selection should spend as few inputs as it can.
   - It should avoid mixing funds with different histories, such as round-trip returns and fresh deposits, when it doesn't need to.
@@ -59,6 +66,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
 - **Network:** Koios and giveme.my see the user's IP address, and Koios has no Tor access. A VPN helps; see the root README's IP-tracking section.
   - A balance reading asks Koios about the Cardano account and the whole wallet contract at the same moment. Koios can tell that the account's owner uses Seedelf, though not which contract UTxOs are theirs: the ownership check runs in the extension.
   - The wallet only reads the chain when Home opens (at most once a minute) or on Refresh. It never polls in the background.
+  - **Finding a recipient** reads the whole wallet contract, the same query a balance reading makes, and picks the seedelf's UTxO in the extension. The wallet never asks Koios about the recipient's token (`asset_utxos` and the like): that would tell Koios exactly who is being paid.
 - **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk, and it's wiped on lock.
 
 ## Not for holding
