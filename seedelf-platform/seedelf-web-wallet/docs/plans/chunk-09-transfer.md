@@ -31,7 +31,7 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
    - `seedelf-web-wallet/wasm/src/lib.rs`: `draft_mint`, `finish_mint`, `sign_script_spend`.
    - `extension/src/background/mint.ts` (`buildStealth`, `submit`) and `extension/src/ui/screens/{CreateSeedelf,MoveIn}.tsx`.
 4. If the user has the tx hash of chunk 8b's live account-paid mint, record it in the roadmap first.
-5. Confirm the [decisions](#decisions-to-confirm-first) with the user before building the parts they affect.
+5. The [decisions](#decisions) are confirmed.
 
 ## What `transfer` does today
 
@@ -48,14 +48,16 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
 7. **Budgets:** the CLI zips them in answer order (`extract_budgets`), which is exactly what `Budgets::from_ogmios` fixes.
 8. **Fee:** the draft's size fee on the old Byron formula, plus compute, plus the script reference, rounded to even. `ScriptSpend::finalize` replaces all of it.
 
-## Decisions to confirm first
+## Decisions
 
-| Decision | Suggestion | Notes |
+Confirmed with the user on 2026-09-24: every suggestion stands except paying your own seedelf, which is allowed with a warning.
+
+| Decision | Decided | Notes |
 |---|---|---|
 | How the recipient is given | **Paste the full token name** (`5eed0e1f…`, 64 hex characters). Show the tag it reads as, and whether it was found on chain. | Tags aren't unique: anyone can mint "alice". A tag search, like the CLI's `util find`, could come later, but it must always show the full name to pick. |
 | Recipients per transfer | **One** | The CLI allows several. One keeps the form and review simple, and a second transfer is cheap. |
 | What's sent | **An ADA amount** (the move-in `AdaInput` rules: 6 decimals, the supply cap, "more than you have"), **plus optional tokens, each with an amount** | Unlike move-in, a token doesn't move in full: people pay parts of a balance. |
-| Paying your own seedelf | **Refuse, and say why** | It moves money in a circle, costs a fee, and could confuse the balance. The worker can tell: the recipient's register `isOwned`. |
+| Paying your own seedelf | **Allowed, with a warning** (the plan suggested refusing) | It moves money in a circle and costs a fee, but it's the user's call. The worker can tell (the recipient's register `isOwned`), so the summary says `toSelf` and the form and review warn. |
 | Max | **No Max in v1** | "Everything" is what withdraw (chunk 10) is for. |
 | Privacy nudges | **The round-amount nudge from move-in, plus one line**: sending right after moving in is easy to match by timing | See privacy.md *Known links*. |
 
@@ -90,7 +92,7 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
 - **WASM checks the recipient itself:**
   - That UTxO holds exactly one token of the seedelf policy, with the requested name.
   - Its inline datum parses as a `Register` (`extract_bytes_with_logging`) with valid points.
-  - The register isn't owned by this key: that's paying yourself.
+  - Whether the register is owned by this key: paying yourself is allowed, and the result says so (`toSelf`).
 - Owned-input checks as in `mint_spend`: every input owned, none holding a seedelf.
 - `signScriptSpend` is reused unchanged.
 - Consider a shared internal helper for "check the owned inputs, derive the one-time key, prove", used by mint and transfer, before chunk 10 adds two more.
@@ -125,7 +127,7 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
 
 ### 5. Tests
 
-- **Rust:** item 1's tests; the CLI's offline tests (`transfer` especially); `seedelf-wasm` native tests for the recipient checks, including paying yourself and a recipient UTxO with the wrong token or no register.
+- **Rust:** item 1's tests; the CLI's offline tests (`transfer` especially); `seedelf-wasm` native tests for the recipient checks, including paying yourself (allowed, flagged) and a recipient UTxO with the wrong token or no register.
 - **Recorded fixture:** a `record-transfer.mjs` like `record-mint.mjs`.
   - Draft a transfer from the 12-word phrase's synthetic owned UTxOs (as `additionalUtxo`) to a real preprod seedelf. `TAK1` (`5eed0e1f54414b31009dda2589…`) is owned by that same public phrase, so either pay another phrase's seedelf, or point the recorder at any other live seedelf (`policy_asset_list` for the policy lists them).
   - Evaluate it on preprod Ogmios, and save the answer (and giveme.my's refusal) for the tests.
@@ -136,7 +138,7 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
 ### 6. Docs
 
 - flows.md *Transfer*, as built.
-- privacy.md: the lookup never names the recipient to Koios, and paying yourself is refused.
+- privacy.md: the lookup never names the recipient to Koios.
 - architecture.md *Transaction building*: `transfer`, and the shared service flow.
 - `seedelf-platform/CLAUDE.md`: `transfer` is extracted.
 - The READMEs: the wasm exports and the extension's screens.

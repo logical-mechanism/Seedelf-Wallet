@@ -59,7 +59,9 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - `extension/tests/fixtures/record-account-mint.mjs` records it.
     - The fixture keeps no CBOR: a signed transaction over public-phrase UTxOs shouldn't sit in the repo.
   - **Tests:** core `mint_test` 15 (4 new: collateral choice, token collateral, overlap, errors, and fees against the ledger's formula); `seedelf-wasm` native 12 and Node 24; Vitest 91; Playwright 15. The account path runs through Send to "Seedelf created", since no giveme.my signature is needed.
-  - **Not done:** a live account-paid mint. From a funded account with no seedelf yet, create one by hand, then record the tx hash here.
+  - **Live on preprod (2026-09-24, by the user):** the account-paid mint [`ca0fac00…ade137`](https://preprod.cardanoscan.io/transaction/ca0fac004c2b59a28cc7065b10225db8acfb2f5ef0c808a09d5ffbcba4ade137), the seedelf `TAK2` (`5eed0e1f54414b32019dda2589…`) with 1.74986 ₳.
+    - Fee 212,516 for 990 bytes. One account input; the change, with its tokens, went back to the account.
+    - **The collateral held tokens:** a 3 ₳ UTxO with four. The collateral return is 2,681,226 (3 ₳ − 3/2 × fee) with all four tokens, so that path works live.
   - **Next:** chunk 9, transfer. **Its plan is ready: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md),** committed on the `web-wallet/transfer` branch. Start there.
 
 - **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).
