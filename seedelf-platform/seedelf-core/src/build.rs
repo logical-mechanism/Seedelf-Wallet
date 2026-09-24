@@ -172,12 +172,14 @@ pub fn minimum_deposit(params: &ProtocolParameters, tokens: &Assets) -> Result<u
 
 /// Change outputs to a key address: `tokens` split `MAXIMUM_TOKENS_PER_UTXO`
 /// to an output, the last output carrying the rest of `lovelace`. No output at
-/// all when there's nothing to return.
+/// all when there's nothing to return. `short` is the error when the
+/// lovelace can't carry the tokens.
 fn change_outputs(
     params: &ProtocolParameters,
     change_addr: &Address,
     lovelace: u64,
     tokens: &Assets,
+    short: NotEnough,
 ) -> Result<Vec<Output>> {
     if lovelace == 0 && tokens.items.is_empty() {
         return Ok(Vec::new());
@@ -197,7 +199,7 @@ fn change_outputs(
         let minimum = address_minimum_lovelace_with_assets(params, &bech32, chunk.clone())?;
         let amount = if i == last { remaining } else { minimum };
         if amount < minimum || remaining < amount {
-            bail!(MOVE_IN_SHORT);
+            bail!(short);
         }
         remaining -= amount;
         let mut output = Output::new(change_addr.clone(), amount);
@@ -231,12 +233,16 @@ fn minimum_change(
 }
 
 /// The chosen inputs can't pay for the transaction; more inputs might.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct NotEnough(&'static str);
 
 /// A move-in's inputs can't pay for it.
 const MOVE_IN_SHORT: NotEnough =
     NotEnough("Not enough ADA in the Cardano account for this move, its fee and the change");
+
+/// An account-paid mint's inputs can't pay for it.
+const ACCOUNT_MINT_SHORT: NotEnough =
+    NotEnough("Not enough ADA in the Cardano account for the seedelf, its fee and the change");
 
 /// A script spend's inputs can't pay for it.
 const SEEDELF_SHORT: NotEnough =
@@ -488,7 +494,7 @@ fn build_move_in(
         for output in deposits {
             tx = tx.output(output);
         }
-        for output in change_outputs(params, change_addr, change, &staying)? {
+        for output in change_outputs(params, change_addr, change, &staying, MOVE_IN_SHORT)? {
             tx = tx.output(output);
         }
         Ok(tx.fee(fee))
@@ -1256,4 +1262,280 @@ pub fn mint_from(
         token_name,
         lovelace,
     })
+}
+
+// ---------------------------------------------------------------------------
+// A seedelf mint paid by the Cardano account
+//
+// The first seedelf is minted before any move-in: the account pays, so the
+// seedelf is linked to it openly, but money moved in afterwards looks the
+// same as paying anyone's seedelf. (A stealth mint from moved-in money would
+// link the account, the seedelf and the change in one chain; see the web
+// wallet's privacy.md.) This is the CLI's `create`, with the account's keys
+// instead of a browser wallet.
+//
+// Nothing in the contract is spent, so there are no proofs and no one-time
+// key. The collateral is one of the account's own UTxOs, as in the CLI: this
+// transaction names the account anyway. It needn't be ADA-only: the
+// collateral return gives back its tokens, which Babbage and later allow.
+// ---------------------------------------------------------------------------
+
+/// The least an ADA-only account UTxO should hold to be put up as collateral:
+/// 3/2 of any fee a mint pays, plus the minimum the collateral return needs.
+const ACCOUNT_COLLATERAL_MINIMUM: u64 = 2_000_000;
+
+/// A seedelf mint paid by the Cardano account, ready to draft and finalize.
+#[derive(Clone)]
+pub struct AccountMint {
+    chain: Chain,
+    inputs: Vec<UtxoResponse>,
+    collateral: UtxoResponse,
+    seedelf: Output,
+    redeemer: Vec<u8>,
+    change_addr: Address,
+    /// The new token's name: prefix, label, and the smallest input.
+    pub token_name: Vec<u8>,
+    /// Locked with the token; only removing the seedelf gets it back.
+    pub lovelace: u64,
+}
+
+/// A finished account-paid mint: the unsigned transaction and what it does.
+pub struct FinalAccountMint {
+    /// Needs a signature from each input's key and the collateral's.
+    pub tx: BuiltTransaction,
+    pub fee: ScriptFee,
+    /// Back to the Cardano account.
+    pub change_lovelace: u64,
+    pub change_tokens: Assets,
+    pub change_outputs: usize,
+}
+
+impl AccountMint {
+    /// The UTxOs spent, in the order given.
+    pub fn inputs(&self) -> &[UtxoResponse] {
+        &self.inputs
+    }
+
+    /// The UTxO put up as collateral. It's only taken if the policy fails,
+    /// which evaluation rules out.
+    pub fn collateral(&self) -> &UtxoResponse {
+        &self.collateral
+    }
+
+    /// The draft for Ogmios to evaluate: the policy's redeemer carries
+    /// [`DRAFT_BUDGET`], and the fee is the estimate.
+    pub fn draft(&self) -> Result<BuiltTransaction> {
+        let fee = self.estimate()?.fee.total;
+        self.stage(fee, None)?
+            .build_conway_raw()
+            .context("Failed To Build The Draft Transaction")
+    }
+
+    /// The unsigned transaction, with the policy's measured budget and the
+    /// fee it and the signed size need.
+    pub fn finalize(&self, budgets: &Budgets) -> Result<FinalAccountMint> {
+        self.settle(budgets)
+    }
+
+    /// [`Self::finalize`] with a guessed budget: whether these inputs pay.
+    fn estimate(&self) -> Result<FinalAccountMint> {
+        self.settle(&Budgets::guess(0, 1))
+    }
+
+    /// How many keys sign: each distinct payment key among the inputs and
+    /// the collateral.
+    fn signers(&self) -> usize {
+        self.inputs
+            .iter()
+            .chain(std::iter::once(&self.collateral))
+            .map(|u| u.payment_cred.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+
+    fn settle(&self, budgets: &Budgets) -> Result<FinalAccountMint> {
+        let budget = budgets
+            .mint(0)
+            .context("Ogmios measured no budget for the seedelf policy")?;
+        let compute = computation_fee(&self.chain.params, budget.mem, budget.steps);
+        let script_reference =
+            self.chain.config.contract.seedelf_contract_size * REFERENCE_SCRIPT_FEE_PER_BYTE;
+        let (fee, staged) = settle(
+            self.signers(),
+            |size| even(linear_fee(&self.chain.params, size) + compute + script_reference),
+            |fee| self.stage(fee, Some(budgets)),
+        )?;
+        let (change_lovelace, change_tokens) = self.change(fee)?;
+        let change_outputs = staged.outputs.as_ref().map_or(0, Vec::len) - 1;
+        Ok(FinalAccountMint {
+            tx: staged
+                .build_conway_raw()
+                .context("Failed To Build The Transaction")?,
+            fee: ScriptFee {
+                size: fee - compute - script_reference,
+                compute,
+                script_reference,
+                total: fee,
+            },
+            change_lovelace,
+            change_tokens,
+            change_outputs,
+        })
+    }
+
+    /// Everything the inputs hold, less the seedelf's ADA and the fee.
+    fn change(&self, fee: u64) -> Result<(u64, Assets)> {
+        let (total, tokens) = assets_of(self.inputs.clone())?;
+        let lovelace = total
+            .checked_sub(self.lovelace)
+            .and_then(|rest| rest.checked_sub(fee))
+            .ok_or(ACCOUNT_MINT_SHORT)?;
+        Ok((lovelace, tokens))
+    }
+
+    fn stage(&self, fee: u64, budgets: Option<&Budgets>) -> Result<StagingTransaction> {
+        let Chain { params, config, .. } = &self.chain;
+        let (change_lovelace, change_tokens) = self.change(fee)?;
+        let change = change_outputs(
+            params,
+            &self.change_addr,
+            change_lovelace,
+            &change_tokens,
+            ACCOUNT_MINT_SHORT,
+        )?;
+
+        // The collateral comes back, less 3/2 of the fee, to where it was,
+        // with any tokens it holds.
+        let collateral_addr = Address::from_bech32(&self.collateral.address)
+            .map_err(|e| anyhow::anyhow!("The collateral UTxO's address is invalid: {e}"))?;
+        let (collateral_lovelace, collateral_tokens) = assets_of(vec![self.collateral.clone()])?;
+        let collateral_back = collateral_lovelace.saturating_sub(fee * 3 / 2);
+        if collateral_back
+            < address_minimum_lovelace_with_assets(
+                params,
+                &self.collateral.address,
+                collateral_tokens.clone(),
+            )?
+        {
+            bail!("The Cardano account's UTxOs are too small to put up as collateral");
+        }
+        let mut collateral_return = Output::new(collateral_addr, collateral_back);
+        for asset in &collateral_tokens.items {
+            collateral_return = collateral_return
+                .add_asset(asset.policy_id, asset.token_name.clone(), asset.amount)
+                .context("Failed To Add An Asset")?;
+        }
+
+        let policy = policy_hash(config)?;
+        let budget = budgets.and_then(|b| b.mint(0)).unwrap_or(DRAFT_BUDGET);
+        let mut tx = StagingTransaction::new();
+        for utxo in &self.inputs {
+            tx = tx.input(input_of(utxo)?);
+        }
+        for output in std::iter::once(self.seedelf.clone()).chain(change) {
+            tx = tx.output(output);
+        }
+        Ok(tx
+            .collateral_input(input_of(&self.collateral)?)
+            .collateral_output(collateral_return)
+            .fee(fee)
+            .reference_input(reference_utxo(config.reference.seedelf_reference_utxo))
+            .mint_asset(policy, self.token_name.clone(), 1)
+            .context("Failed To Mint The Seedelf")?
+            .add_mint_redeemer(
+                policy,
+                self.redeemer.clone(),
+                Some(ExUnits {
+                    mem: budget.mem,
+                    steps: budget.steps,
+                }),
+            )
+            .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone()))
+    }
+}
+
+/// Mints a seedelf paid by the Cardano account. `available` is the account's
+/// UTxOs (key addresses the caller can sign for):
+///
+/// - Inputs: pure ADA first, largest first, then token UTxOs, as few as pay
+///   for the seedelf, the fee and valid change. A pure-ADA UTxO of exactly
+///   5 ADA is never spent (it's probably another wallet's collateral).
+/// - Collateral: any of `available`, preferring an ADA-only one, then one of
+///   at least 2 ADA (3/2 of the fee plus the return), then one that isn't
+///   spent, then a 5 ADA one, then the largest. Its tokens, if any, come
+///   back with the collateral return.
+/// - The token is named after the smallest input, with `label` cut to 15
+///   bytes; it sits in the contract under `seedelf`, used as given (pass a
+///   fresh re-randomization). Tokens in the inputs go back with the change,
+///   to `change_addr`.
+pub fn account_mint(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    label: &str,
+    seedelf: &Register,
+    change_addr: &Address,
+) -> Result<AccountMint> {
+    if !seedelf.is_valid().unwrap_or(false) {
+        bail!("The seedelf's register isn't made of valid points");
+    }
+    if available.is_empty() {
+        bail!("There is nothing in the Cardano account to pay for a seedelf");
+    }
+    let pure_ada = |u: &UtxoResponse| u.asset_list.as_ref().is_none_or(|a| a.is_empty());
+    let lovelace_of = |u: &UtxoResponse| u.value.parse::<u64>().unwrap_or(0);
+
+    let mut spendable: Vec<UtxoResponse> = collect_address_utxos(available.to_vec())?;
+    spendable.sort_by_key(|u| (!pure_ada(u), std::cmp::Reverse(lovelace_of(u))));
+
+    let config = &chain.config;
+    let policy = policy_hash(config)?;
+    let lovelace = seedelf_minimum_lovelace(&chain.params)?;
+    let wallet_addr = wallet_contract(chain.network_flag, config.contract.wallet_contract_hash);
+    let redeemer = create_mint_redeemer(label.to_string())?;
+
+    let mut last_error = None;
+    for k in 1..=spendable.len() {
+        let inputs = &spendable[..k];
+        let spent = |u: &UtxoResponse| {
+            inputs
+                .iter()
+                .any(|i| i.tx_hash == u.tx_hash && i.tx_index == u.tx_index)
+        };
+        let mut candidates: Vec<&UtxoResponse> = available.iter().collect();
+        candidates.sort_by_key(|u| {
+            (
+                !pure_ada(u),
+                lovelace_of(u) < ACCOUNT_COLLATERAL_MINIMUM,
+                spent(u),
+                lovelace_of(u) != COLLATERAL_LOVELACE,
+                std::cmp::Reverse(lovelace_of(u)),
+            )
+        });
+        let Some(collateral) = candidates.first() else {
+            bail!("There is nothing in the Cardano account to pay for a seedelf");
+        };
+
+        let owned: Vec<Input> = inputs.iter().map(input_of).collect::<Result<_>>()?;
+        let token_name = seedelf_token_name(label.to_string(), Some(&owned))?;
+        let seedelf_output = Output::new(wallet_addr.clone(), lovelace)
+            .set_inline_datum(seedelf.to_vec()?)
+            .add_asset(policy, token_name.clone(), 1)
+            .context("Failed To Add The Seedelf")?;
+        let mint = AccountMint {
+            chain: chain.clone(),
+            inputs: inputs.to_vec(),
+            collateral: (*collateral).clone(),
+            seedelf: seedelf_output,
+            redeemer: redeemer.clone(),
+            change_addr: change_addr.clone(),
+            token_name,
+            lovelace,
+        };
+        match mint.estimate() {
+            Ok(_) => return Ok(mint),
+            Err(e) if e.downcast_ref::<NotEnough>().is_some() => last_error = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| ACCOUNT_MINT_SHORT.into()))
 }

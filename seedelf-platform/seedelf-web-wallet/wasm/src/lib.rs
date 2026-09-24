@@ -27,6 +27,7 @@ pub mod api {
     use ff::Field;
     use pallas_crypto::hash::{Hash, Hasher};
     use pallas_crypto::key::ed25519::{PublicKey, SecretKey, Signature};
+    use pallas_txbuilder::BuiltTransaction;
     use pallas_wallet::PrivateKey;
     use rand_core::{OsRng, RngCore};
     use seedelf_core::address::wallet_contract;
@@ -134,25 +135,17 @@ pub mod api {
         }
     }
 
-    /// Builds and signs a move-in: the Cardano account pays into the wallet
-    /// contract under fresh re-randomizations of `sk`'s base register.
-    /// Every UTxO must sit at the address its path derives; each spent one is
-    /// signed with that path's payment key, inside this module.
-    pub fn move_in(
-        account: &CardanoAccount,
-        sk: Scalar,
-        request: MoveInRequest,
-    ) -> Result<MoveInResult> {
-        let network_flag = match request.network.as_str() {
-            "preprod" => true,
-            "mainnet" => false,
-            other => bail!("unknown network {other}"),
-        };
-        let params = ProtocolParameters::from_koios(&request.params)?;
+    /// Where each of the account's UTxOs sits: its key's path. Every UTxO
+    /// must be at the address its `role/index` derives.
+    type Paths = HashMap<(String, u64), (Role, u32)>;
 
-        // Every UTxO must be ours, at the address its path derives.
-        let mut paths: HashMap<(String, u64), (Role, u32)> = HashMap::new();
-        for p in &request.utxos {
+    fn check_paths(
+        account: &CardanoAccount,
+        network_flag: bool,
+        utxos: &[PathedUtxo],
+    ) -> Result<Paths> {
+        let mut paths = Paths::new();
+        for p in utxos {
             let role = role_of(p.role)?;
             let expected = account
                 .base_address(network_flag, role, p.index)?
@@ -169,6 +162,48 @@ pub mod api {
             }
             paths.insert((p.utxo.tx_hash.clone(), p.utxo.tx_index), (role, p.index));
         }
+        Ok(paths)
+    }
+
+    /// Signs `tx` once per distinct payment key among `spent`, inside this module.
+    fn sign_with_paths(
+        tx: &BuiltTransaction,
+        account: &CardanoAccount,
+        paths: &Paths,
+        spent: &[&UtxoResponse],
+    ) -> Result<BuiltTransaction> {
+        let mut signed = tx.clone();
+        let mut done: Vec<(Role, u32)> = Vec::new();
+        for utxo in spent {
+            let path = *paths
+                .get(&(utxo.tx_hash.clone(), utxo.tx_index))
+                .ok_or_else(|| {
+                    anyhow!("no key path for UTxO {}#{}", utxo.tx_hash, utxo.tx_index)
+                })?;
+            if done.contains(&path) {
+                continue;
+            }
+            done.push(path);
+            let key = account.private_key(path.0, path.1)?;
+            signed = signed
+                .sign(key.to_ed25519_private_key())
+                .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
+        }
+        Ok(signed)
+    }
+
+    /// Builds and signs a move-in: the Cardano account pays into the wallet
+    /// contract under fresh re-randomizations of `sk`'s base register.
+    /// Every UTxO must sit at the address its path derives; each spent one is
+    /// signed with that path's payment key, inside this module.
+    pub fn move_in(
+        account: &CardanoAccount,
+        sk: Scalar,
+        request: MoveInRequest,
+    ) -> Result<MoveInResult> {
+        let network_flag = network_flag(&request.network)?;
+        let params = ProtocolParameters::from_koios(&request.params)?;
+        let paths = check_paths(account, network_flag, &request.utxos)?;
 
         let amount = match &request.lovelace {
             Some(l) => {
@@ -202,20 +237,8 @@ pub mod api {
             &change,
         )?;
 
-        // One signature per distinct key.
-        let mut signed = built.tx.clone();
-        let mut done: Vec<(Role, u32)> = Vec::new();
-        for input in &built.inputs {
-            let path = paths[&(input.tx_hash.clone(), input.tx_index)];
-            if done.contains(&path) {
-                continue;
-            }
-            done.push(path);
-            let key = account.private_key(path.0, path.1)?;
-            signed = signed
-                .sign(key.to_ed25519_private_key())
-                .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
-        }
+        let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
+        let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
 
         Ok(MoveInResult {
             tx_cbor: hex::encode(&signed.tx_bytes.0),
@@ -461,6 +484,132 @@ pub mod api {
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
             inputs: out_refs(&spend),
+        })
+    }
+
+    /// Creating a seedelf paid by the Cardano account, as JSON from the
+    /// extension: the account's UTxOs, each with its key's path, as for a
+    /// move-in.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct AccountMintRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        pub utxos: Vec<PathedUtxo>,
+        /// The personal tag; see [`check_label`].
+        pub label: String,
+        /// Ogmios's answer to evaluating the draft.
+        pub evaluation: Option<serde_json::Value>,
+    }
+
+    /// The draft for Ogmios.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct AccountMintDraft {
+        pub draft_cbor: String,
+        pub inputs: Vec<OutRef>,
+        pub collateral: OutRef,
+    }
+
+    /// A finished, signed account-paid mint and what it does. Amounts in lovelace.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct AccountMintResult {
+        /// Signed by every input's key and the collateral's: ready to submit.
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub token_name: String,
+        /// Locked with the seedelf.
+        pub lovelace: String,
+        pub fee: FeeOut,
+        /// Back to the Cardano account's receive address `0/0`.
+        pub change_lovelace: String,
+        pub change_tokens: usize,
+        pub change_outputs: usize,
+        pub inputs: Vec<OutRef>,
+        pub collateral: OutRef,
+    }
+
+    fn out_ref(u: &UtxoResponse) -> OutRef {
+        OutRef {
+            tx_hash: u.tx_hash.clone(),
+            tx_index: u.tx_index,
+        }
+    }
+
+    fn account_mint_plan(
+        account: &CardanoAccount,
+        sk: Scalar,
+        request: &AccountMintRequest,
+    ) -> Result<(build::AccountMint, Paths)> {
+        let network_flag = network_flag(&request.network)?;
+        let chain = Chain {
+            params: ProtocolParameters::from_koios(&request.params)?,
+            network_flag,
+            config: get_config(VARIANT, network_flag)?,
+        };
+        check_label(&request.label)?;
+        let paths = check_paths(account, network_flag, &request.utxos)?;
+        let available: Vec<UtxoResponse> = request.utxos.iter().map(|p| p.utxo.clone()).collect();
+        let seedelf = Register::create(sk)?.rerandomize()?;
+        let change = account.base_address(network_flag, Role::Receive, 0)?;
+        let mint = build::account_mint(&chain, &available, &request.label, &seedelf, &change)?;
+        Ok((mint, paths))
+    }
+
+    /// Creating a seedelf paid by the Cardano account, step 1: picks the
+    /// UTxOs and the collateral, and drafts the transaction for Ogmios.
+    pub fn draft_account_mint(
+        account: &CardanoAccount,
+        sk: Scalar,
+        request: AccountMintRequest,
+    ) -> Result<AccountMintDraft> {
+        let (mint, _) = account_mint_plan(account, sk, &request)?;
+        Ok(AccountMintDraft {
+            draft_cbor: hex::encode(&mint.draft()?.tx_bytes.0),
+            inputs: mint.inputs().iter().map(out_ref).collect(),
+            collateral: out_ref(mint.collateral()),
+        })
+    }
+
+    /// Step 2: the same request plus Ogmios's `evaluation`. Finishes the
+    /// transaction with the measured budget and signs it with every input's
+    /// key and the collateral's, inside this module.
+    pub fn finish_account_mint(
+        account: &CardanoAccount,
+        sk: Scalar,
+        request: AccountMintRequest,
+    ) -> Result<AccountMintResult> {
+        let evaluation = request
+            .evaluation
+            .as_ref()
+            .ok_or_else(|| anyhow!("finishing a mint needs Ogmios's evaluation"))?;
+        let budgets = Budgets::from_ogmios(evaluation)?;
+        let (mint, paths) = account_mint_plan(account, sk, &request)?;
+        let built = mint.finalize(&budgets)?;
+        let spent: Vec<&UtxoResponse> = mint
+            .inputs()
+            .iter()
+            .chain(std::iter::once(mint.collateral()))
+            .collect();
+        let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
+        Ok(AccountMintResult {
+            tx_cbor: hex::encode(&signed.tx_bytes.0),
+            tx_hash: hex::encode(signed.tx_hash.0),
+            token_name: hex::encode(&mint.token_name),
+            lovelace: mint.lovelace.to_string(),
+            fee: FeeOut {
+                size: built.fee.size.to_string(),
+                compute: built.fee.compute.to_string(),
+                script_reference: built.fee.script_reference.to_string(),
+                total: built.fee.total.to_string(),
+            },
+            change_lovelace: built.change_lovelace.to_string(),
+            change_tokens: built.change_tokens.items.len(),
+            change_outputs: built.change_outputs,
+            inputs: mint.inputs().iter().map(out_ref).collect(),
+            collateral: out_ref(mint.collateral()),
         })
     }
 
@@ -841,6 +990,37 @@ pub fn finish_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::MintRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
     let result = api::finish_mint(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Creating a seedelf paid by the Cardano account, step 1 (`build::account_mint`).
+/// `request` is JSON (`api::AccountMintRequest`): the account's UTxOs, each
+/// with its `role/index`, and the label. Returns JSON (`api::AccountMintDraft`):
+/// the draft for Ogmios, and the inputs and collateral it picked.
+#[wasm_bindgen(js_name = draftAccountMint)]
+pub fn draft_account_mint(
+    account: &WasmCardanoAccount,
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<String, JsError> {
+    let request: api::AccountMintRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
+    let result = api::draft_account_mint(&account.inner, key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Step 2: the draft's request plus Ogmios's `evaluation`. Returns JSON
+/// (`api::AccountMintResult`): the transaction signed with the account's
+/// keys, ready to submit, and what it does. The keys never leave WebAssembly.
+#[wasm_bindgen(js_name = finishAccountMint)]
+pub fn finish_account_mint(
+    account: &WasmCardanoAccount,
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<String, JsError> {
+    let request: api::AccountMintRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
+    let result = api::finish_account_mint(&account.inner, key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 

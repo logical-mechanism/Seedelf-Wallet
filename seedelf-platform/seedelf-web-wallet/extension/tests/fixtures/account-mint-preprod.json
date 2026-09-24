@@ -1,0 +1,61 @@
+{
+ "recorded": "2026-09-24T04:44:32.387Z",
+ "network": "preprod",
+ "owner": "the 12-word cardano_account.json vector, account 0",
+ "epoch": 315,
+ "label": "account-mint",
+ "draft": {
+  "inputs": [
+   {
+    "txHash": "9dda2589d1029e6d6596a3449b05986e2c489dd81aa65fcf40082eea2c428bc8",
+    "txIndex": 1
+   }
+  ],
+  "collateral": {
+   "txHash": "d6065a8a600dbbcdde087517b89e74e7571b3f83e578c6f0370443974e905f72",
+   "txIndex": 0
+  }
+ },
+ "evaluation": {
+  "jsonrpc": "2.0",
+  "method": "evaluateTransaction",
+  "result": [
+   {
+    "validator": {
+     "index": 0,
+     "purpose": "mint"
+    },
+    "budget": {
+     "memory": 72836,
+     "cpu": 21396183
+    }
+   }
+  ],
+  "id": null
+ },
+ "final": {
+  "txHash": "fc1754391267baac3972dc4f7fb2e92c2177e89fa4187b7a8903edd03038eeab",
+  "tokenName": "5eed0e1f6163636f756e742d6d696e74019dda2589d1029e6d6596a3449b0598",
+  "lovelace": "1749860",
+  "fee": {
+   "size": "199337",
+   "compute": "5746",
+   "scriptReference": "7785",
+   "total": "212868"
+  },
+  "changeLovelace": "10320389018",
+  "changeTokens": 2,
+  "changeOutputs": 1,
+  "inputs": [
+   {
+    "txHash": "9dda2589d1029e6d6596a3449b05986e2c489dd81aa65fcf40082eea2c428bc8",
+    "txIndex": 1
+   }
+  ],
+  "collateral": {
+   "txHash": "d6065a8a600dbbcdde087517b89e74e7571b3f83e578c6f0370443974e905f72",
+   "txIndex": 0
+  },
+  "signedBytes": 999
+ }
+}

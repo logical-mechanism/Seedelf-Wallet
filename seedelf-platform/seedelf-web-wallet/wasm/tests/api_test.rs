@@ -518,3 +518,173 @@ mod mint {
         assert_ne!(key(sk, 1), key(random_scalar(), 1));
     }
 }
+
+mod account_mint {
+    use std::collections::{BTreeSet, HashMap};
+
+    use pallas_crypto::key::ed25519::{PublicKey, Signature};
+    use pallas_traverse::MultiEraTx;
+    use seedelf_crypto::cardano::{CardanoAccount, Role};
+    use seedelf_crypto::derivation::seedelf_key_v1;
+    use seedelf_wasm::api::{self, AccountMintRequest, PathedUtxo};
+    use serde_json::Value;
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    fn fixture(path: &str) -> Value {
+        let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// The 12-word phrase's recorded preprod account UTxOs, each with its path.
+    fn account_utxos(account: &CardanoAccount) -> Vec<PathedUtxo> {
+        let doc = fixture("../extension/tests/fixtures/koios-preprod.json");
+        let stake = account.stake_address(true).unwrap().to_bech32().unwrap();
+        let mut paths = HashMap::new();
+        for role in [Role::Receive, Role::Change] {
+            for index in 0..20 {
+                let addr = account
+                    .base_address(true, role, index)
+                    .unwrap()
+                    .to_bech32()
+                    .unwrap();
+                paths.insert(addr, (role as u32, index));
+            }
+        }
+        doc["accounts"][&stake]["account_utxos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|row| {
+                let (role, index) = *paths.get(row["address"].as_str().unwrap())?;
+                Some(PathedUtxo {
+                    utxo: serde_json::from_value(row.clone()).unwrap(),
+                    role,
+                    index,
+                })
+            })
+            .collect()
+    }
+
+    fn request(
+        utxos: Vec<PathedUtxo>,
+        label: &str,
+        evaluation: Option<Value>,
+    ) -> AccountMintRequest {
+        AccountMintRequest {
+            network: "preprod".into(),
+            params: fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone(),
+            utxos,
+            label: label.into(),
+            evaluation,
+        }
+    }
+
+    fn evaluation() -> Value {
+        fixture("../../seedelf-core/tests/fixtures/ogmios/account_mint.json")
+    }
+
+    #[test]
+    fn signs_an_account_paid_mint_with_exactly_the_keys_it_spends() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let utxos = account_utxos(&account);
+        let creds: HashMap<String, String> = utxos
+            .iter()
+            .map(|p| {
+                (
+                    format!("{}#{}", p.utxo.tx_hash, p.utxo.tx_index),
+                    p.utxo.payment_cred.clone(),
+                )
+            })
+            .collect();
+
+        let draft = api::draft_account_mint(
+            &account,
+            sk,
+            request(account_utxos(&account), "first", None),
+        )
+        .unwrap();
+        let result =
+            api::finish_account_mint(&account, sk, request(utxos, "first", Some(evaluation())))
+                .unwrap();
+        assert_eq!(result.inputs, draft.inputs);
+        assert_eq!(result.collateral, draft.collateral);
+        assert!(
+            result
+                .token_name
+                .starts_with(&format!("5eed0e1f{}", hex::encode("first")))
+        );
+        assert_eq!(result.lovelace, "1749860");
+
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        assert_eq!(hex::encode(*tx.hash()), result.tx_hash);
+        assert_eq!(tx.fee().unwrap().to_string(), result.fee.total);
+
+        // Every witness verifies, and they come from exactly the inputs' and the collateral's keys.
+        let mut signers = BTreeSet::new();
+        for w in tx.vkey_witnesses() {
+            let key = PublicKey::from(<[u8; 32]>::try_from(w.vkey.to_vec()).unwrap());
+            let sig = Signature::from(<[u8; 64]>::try_from(w.signature.to_vec()).unwrap());
+            assert!(key.verify(tx.hash(), &sig), "signature verifies");
+            signers.insert(hex::encode(pallas_crypto::hash::Hasher::<224>::hash(
+                key.as_ref(),
+            )));
+        }
+        let spent: BTreeSet<String> = tx
+            .inputs()
+            .iter()
+            .chain(tx.collateral().iter())
+            .map(|i| creds[&format!("{}#{}", hex::encode(*i.hash()), i.index())].clone())
+            .collect();
+        assert_eq!(signers, spent);
+        assert_eq!(tx.vkey_witnesses().len(), spent.len());
+        assert!(tx.required_signers().is_empty());
+    }
+
+    #[test]
+    fn refuses_what_it_must_not_sign_or_write() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let err = |r: anyhow::Result<api::AccountMintDraft>| r.unwrap_err().to_string();
+
+        let mut moved = account_utxos(&account);
+        moved[0].index += 1;
+        assert!(
+            err(api::draft_account_mint(
+                &account,
+                sk,
+                request(moved, "", None)
+            ))
+            .contains("is not at the account's address")
+        );
+        assert!(
+            err(api::draft_account_mint(
+                &account,
+                sk,
+                request(account_utxos(&account), "sixteen chars!!!", None)
+            ))
+            .contains("at most 15")
+        );
+        assert!(
+            err(api::draft_account_mint(
+                &account,
+                sk,
+                request(Vec::new(), "", None)
+            ))
+            .contains("nothing in the Cardano account")
+        );
+        let e = api::finish_account_mint(&account, sk, request(account_utxos(&account), "", None))
+            .unwrap_err();
+        assert!(e.to_string().contains("evaluation"));
+        let failure = fixture("../../seedelf-core/tests/fixtures/ogmios/script_failure.json");
+        let e = api::finish_account_mint(
+            &account,
+            sk,
+            request(account_utxos(&account), "", Some(failure)),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("refused this transaction"));
+    }
+}

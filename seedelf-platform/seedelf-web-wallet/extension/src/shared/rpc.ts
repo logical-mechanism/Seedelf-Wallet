@@ -82,10 +82,14 @@ export interface MoveInSummary {
   inputs: number;
 }
 
+/** What pays for a new seedelf: the Cardano account (mint first, then move in), or the Seedelf balance (a stealth mint). */
+export type MintSource = "account" | "seedelf";
+
 /** A finished seedelf mint, waiting for the user to send it. Amounts are lovelace strings. */
 export interface MintSummary {
   network: NetworkName;
   txHash: string;
+  from: MintSource;
   /** The personal tag, as sent ("" for none). */
   label: string;
   /** The new seedelf's token name, hex: prefix, tag, and the smallest input spent. */
@@ -93,11 +97,11 @@ export interface MintSummary {
   /** Locked with the seedelf; only removing it gets this back. */
   lovelace: string;
   fee: { size: string; compute: string; scriptReference: string; total: string };
-  /** Back into the Seedelf balance. */
+  /** Back to where it was paid from: the Cardano account's `0/0`, or the Seedelf balance. */
   changeLovelace: string;
   changeTokens: number;
   changeOutputs: number;
-  /** How many Seedelf UTxOs pay for it. */
+  /** How many UTxOs pay for it. */
   inputs: number;
 }
 
@@ -133,8 +137,8 @@ export interface Requests {
   /** Submits the move-in built last, if its hash matches. */
   "move-in-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds a seedelf mint (Ogmios measures its scripts) without sending it. */
-  "mint-build": { payload: { label: string }; result: MintSummary };
-  /** Has giveme.my witness the mint built last, signs it, and submits it, if its hash matches. */
+  "mint-build": { payload: { label: string; from: MintSource }; result: MintSummary };
+  /** Submits the mint built last, if its hash matches: an account-paid one as signed, a stealth one once giveme.my has witnessed it. */
   "mint-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };

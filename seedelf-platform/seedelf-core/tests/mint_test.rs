@@ -162,43 +162,48 @@ struct Decoded {
     signers: Vec<Hash<28>>,
     collateral: Vec<(String, u64)>,
     collateral_return: (Address, u64),
+    collateral_return_assets: BTreeMap<(String, String), u64>,
     reference_inputs: Vec<(String, u64)>,
-    /// The size with the one-time key's and giveme.my's signatures.
+    /// The size once signed: by the one-time key and giveme.my for a script
+    /// spend (see `decode_signed` for other counts).
     size_signed: u64,
 }
 
 fn decode(tx: &pallas_txbuilder::BuiltTransaction) -> Decoded {
-    let size_signed = tx
-        .clone()
-        .sign(fake_signer())
-        .unwrap()
-        .sign(fake_signer())
-        .unwrap()
-        .tx_bytes
-        .0
-        .len() as u64;
+    decode_signed(tx, 2)
+}
+
+fn assets_of_output(o: &pallas_traverse::MultiEraOutput) -> BTreeMap<(String, String), u64> {
+    let mut assets = BTreeMap::new();
+    for policy in o.value().assets() {
+        for asset in policy.assets() {
+            assets.insert(
+                (hex::encode(policy.policy()), hex::encode(asset.name())),
+                asset.output_coin().unwrap(),
+            );
+        }
+    }
+    assets
+}
+
+/// Decodes a built transaction; `size_signed` is its size with `signers` signatures.
+fn decode_signed(tx: &pallas_txbuilder::BuiltTransaction, signers: usize) -> Decoded {
+    let mut signed = tx.clone();
+    for _ in 0..signers {
+        signed = signed.sign(fake_signer()).unwrap();
+    }
+    let size_signed = signed.tx_bytes.0.len() as u64;
     let bytes = tx.tx_bytes.0.clone();
     let tx = MultiEraTx::decode(&bytes).unwrap();
     let outpoint = |i: &pallas_traverse::MultiEraInput| (hex::encode(i.hash()), i.index());
     let outputs = tx
         .outputs()
         .iter()
-        .map(|o| {
-            let mut assets = BTreeMap::new();
-            for policy in o.value().assets() {
-                for asset in policy.assets() {
-                    assets.insert(
-                        (hex::encode(policy.policy()), hex::encode(asset.name())),
-                        asset.output_coin().unwrap(),
-                    );
-                }
-            }
-            Out {
-                address: o.address().unwrap(),
-                lovelace: o.value().coin(),
-                assets,
-                register: o.datum().and_then(|d| register_from(d.into())),
-            }
+        .map(|o| Out {
+            address: o.address().unwrap(),
+            lovelace: o.value().coin(),
+            assets: assets_of_output(o),
+            register: o.datum().and_then(|d| register_from(d.into())),
         })
         .collect();
     let mut mint = BTreeMap::new();
@@ -241,6 +246,7 @@ fn decode(tx: &pallas_txbuilder::BuiltTransaction) -> Decoded {
             collateral_return.address().unwrap(),
             collateral_return.value().coin(),
         ),
+        collateral_return_assets: assets_of_output(&collateral_return),
         reference_inputs: tx.reference_inputs().iter().map(outpoint).collect(),
         size_signed,
     }
@@ -861,4 +867,328 @@ fn collateral_return_and_even_rounding() {
     let out = build::collateral_output(collateral_address(true), 400_000).unwrap();
     assert_eq!(out.lovelace, 5_000_000 - 600_000);
     assert!(build::collateral_output(collateral_address(true), 3_400_000).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// A seedelf mint paid by the Cardano account (mint first, then move in)
+// ---------------------------------------------------------------------------
+
+mod account {
+    use super::*;
+    use seedelf_core::transaction::address_minimum_lovelace_with_assets;
+    use seedelf_crypto::cardano::{CardanoAccount, Role};
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    struct Payer {
+        chain: Chain,
+        account: CardanoAccount,
+        wallet: Address,
+        change: Address,
+        seedelf: Register,
+    }
+
+    fn payer() -> Payer {
+        let chain = chain();
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        Payer {
+            wallet: wallet_contract(true, chain.config.contract.wallet_contract_hash),
+            change: account.base_address(true, Role::Receive, 0).unwrap(),
+            seedelf: Register::create(random_scalar())
+                .unwrap()
+                .rerandomize()
+                .unwrap(),
+            chain,
+            account,
+        }
+    }
+
+    /// A UTxO at the account's receive address `index`.
+    fn at(p: &Payer, n: u8, index: u32, lovelace: u64, tokens: &[(&str, u64)]) -> UtxoResponse {
+        UtxoResponse {
+            tx_hash: hex::encode([n; 32]),
+            tx_index: 0,
+            address: p
+                .account
+                .base_address(true, Role::Receive, index)
+                .unwrap()
+                .to_bech32()
+                .unwrap(),
+            value: lovelace.to_string(),
+            payment_cred: hex::encode(p.account.key_hash(Role::Receive, index).unwrap()),
+            asset_list: Some(
+                tokens
+                    .iter()
+                    .map(|(name, quantity)| Asset {
+                        decimals: 0,
+                        quantity: quantity.to_string(),
+                        policy_id: TOKEN_POLICY.to_string(),
+                        asset_name: hex::encode(name),
+                        fingerprint: String::new(),
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn recorded() -> Budgets {
+        Budgets::from_ogmios(&fixture("account_mint.json")).unwrap()
+    }
+
+    fn outpoints(utxos: &[UtxoResponse]) -> Vec<(String, u64)> {
+        let mut o: Vec<(String, u64)> = utxos
+            .iter()
+            .map(|u| (u.tx_hash.clone(), u.tx_index))
+            .collect();
+        o.sort();
+        o
+    }
+
+    fn tokens_of(utxos: &[&UtxoResponse]) -> BTreeMap<(String, String), i64> {
+        let mut tokens = BTreeMap::new();
+        for u in utxos {
+            for a in u.asset_list.iter().flatten() {
+                *tokens
+                    .entry((a.policy_id.clone(), a.asset_name.clone()))
+                    .or_default() += a.quantity.parse::<i64>().unwrap();
+            }
+        }
+        tokens
+    }
+
+    /// Everything a finished account-paid mint must satisfy.
+    fn assert_sound(
+        p: &Payer,
+        mint: &build::AccountMint,
+        built: &build::FinalAccountMint,
+    ) -> Decoded {
+        let signers: std::collections::BTreeSet<&str> = mint
+            .inputs()
+            .iter()
+            .chain(std::iter::once(mint.collateral()))
+            .map(|u| u.payment_cred.as_str())
+            .collect();
+        let tx = decode_signed(&built.tx, signers.len());
+        let params = &p.chain.params;
+        let policy = p.chain.config.contract.seedelf_policy_id.clone();
+
+        // Only the account's UTxOs are spent; one of them is the collateral.
+        assert_eq!(tx.inputs, outpoints(mint.inputs()));
+        assert_eq!(
+            tx.collateral,
+            outpoints(std::slice::from_ref(mint.collateral()))
+        );
+
+        // The seedelf, under the register given, then the change to 0/0.
+        let seedelf = &tx.outputs[0];
+        assert_eq!(seedelf.address, p.wallet);
+        assert_eq!(seedelf.register.as_ref(), Some(&p.seedelf));
+        assert_eq!(seedelf.lovelace, seedelf_minimum_lovelace(params).unwrap());
+        assert_eq!(
+            seedelf.assets.keys().collect::<Vec<_>>(),
+            vec![&(policy.clone(), hex::encode(&mint.token_name))]
+        );
+        for (i, o) in tx.outputs.iter().enumerate().skip(1) {
+            assert_eq!(o.address, p.change, "output {i} is change to 0/0");
+            assert!(o.register.is_none());
+            let mut assets = seedelf_core::assets::Assets::new();
+            for ((pid, n), q) in &o.assets {
+                assets = assets
+                    .add(seedelf_core::assets::Asset::new(pid.clone(), n.clone(), *q).unwrap())
+                    .unwrap();
+            }
+            let minimum = address_minimum_lovelace_with_assets(
+                params,
+                &p.change.to_bech32().unwrap(),
+                assets,
+            )
+            .unwrap();
+            assert!(o.lovelace >= minimum, "change {i} above its minimum");
+        }
+        assert_eq!(built.change_outputs, tx.outputs.len() - 1);
+
+        // Value: inputs = outputs + fee; tokens in + the minted one = tokens out.
+        let spent: Vec<&UtxoResponse> = mint.inputs().iter().collect();
+        let lovelace_in: u64 = spent.iter().map(|u| u.value.parse::<u64>().unwrap()).sum();
+        let lovelace_out: u64 = tx.outputs.iter().map(|o| o.lovelace).sum();
+        assert_eq!(lovelace_in, lovelace_out + tx.fee, "lovelace conserved");
+        let mut tokens_in = tokens_of(&spent);
+        *tokens_in
+            .entry((policy.clone(), hex::encode(&mint.token_name)))
+            .or_default() += 1;
+        let mut tokens_out: BTreeMap<(String, String), i64> = BTreeMap::new();
+        for o in &tx.outputs {
+            for (k, q) in &o.assets {
+                *tokens_out.entry(k.clone()).or_default() += *q as i64;
+            }
+        }
+        assert_eq!(tokens_in, tokens_out, "tokens conserved");
+
+        // One seedelf, named after the smallest spent input; the label is the redeemer.
+        assert_eq!(tx.mint.values().copied().collect::<Vec<_>>(), vec![1]);
+        let (hash, index) = &tx.inputs[0];
+        let expected = format!("5eed0e1f{}{index:02x}{hash}", hex::encode("account-mint"));
+        assert_eq!(hex::encode(&mint.token_name), expected[..64]);
+        assert_eq!(tx.redeemers.len(), 1);
+        assert_eq!(tx.redeemers[0].tag, RedeemerTag::Mint);
+        assert_eq!(
+            tx.redeemers[0].data,
+            PlutusData::BoundedBytes(b"account-mint".to_vec().into())
+        );
+        assert_eq!(tx.redeemers[0].budget, recorded().mint(0).unwrap());
+
+        // Nothing but the seedelf script is referenced, and nobody else must sign.
+        assert_eq!(
+            tx.reference_inputs,
+            vec![(
+                hex::encode(p.chain.config.reference.seedelf_reference_utxo),
+                1
+            )]
+        );
+        assert!(tx.signers.is_empty());
+
+        // The collateral comes back, less 3/2 of the fee, with its tokens.
+        let collateral = mint.collateral();
+        assert_eq!(
+            tx.collateral_return,
+            (
+                Address::from_bech32(&collateral.address).unwrap(),
+                collateral.value.parse::<u64>().unwrap() - tx.fee * 3 / 2
+            )
+        );
+        let returned: BTreeMap<(String, String), i64> = tx
+            .collateral_return_assets
+            .iter()
+            .map(|(k, q)| (k.clone(), *q as i64))
+            .collect();
+        assert_eq!(returned, tokens_of(&[collateral]));
+
+        // The fee: even, at least the ledger's minimum for this many signatures.
+        let b = tx.redeemers[0].budget;
+        let needed = ledger_minimum_fee(params, tx.size_signed, b.mem, b.steps, 519);
+        assert_eq!(tx.fee % 2, 0);
+        assert!(tx.fee >= needed, "fee {} covers {needed}", tx.fee);
+        assert!(tx.fee - needed < 1_000);
+        assert_eq!(built.fee.total, tx.fee);
+        tx
+    }
+
+    #[test]
+    fn the_account_pays_and_its_5_ada_utxo_is_the_collateral() {
+        let p = payer();
+        let available = [
+            at(&p, 0x30, 0, 10_000_000, &[]),
+            at(&p, 0x31, 1, 5_000_000, &[]),
+            at(&p, 0x32, 2, 3_000_000, &[("tok", 7)]),
+        ];
+        let mint = build::account_mint(&p.chain, &available, "account-mint", &p.seedelf, &p.change)
+            .unwrap();
+        // The largest pure-ADA UTxO pays; the 5 ADA one is never spent, only put up.
+        assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
+        assert_eq!(mint.collateral().tx_hash, available[1].tx_hash);
+        assert!(
+            decode(&mint.draft().unwrap())
+                .redeemers
+                .iter()
+                .all(|r| r.budget == DRAFT_BUDGET)
+        );
+        let built = mint.finalize(&recorded()).unwrap();
+        let tx = assert_sound(&p, &mint, &built);
+        assert_eq!(tx.outputs.len(), 2);
+        assert_eq!(built.change_lovelace, 10_000_000 - 1_749_860 - tx.fee);
+    }
+
+    #[test]
+    fn a_token_utxo_can_be_the_collateral() {
+        // Like the public phrase's preprod account after its move-in: every UTxO holds tokens.
+        let p = payer();
+        let names: Vec<String> = (0..25).map(|i| format!("token{i:02}")).collect();
+        let many: Vec<(&str, u64)> = names.iter().map(|n| (n.as_str(), 1)).collect();
+        let available = [
+            at(&p, 0x40, 0, 12_000_000, &many),
+            at(&p, 0x41, 1, 4_000_000, &[("tok", 1)]),
+        ];
+        let mint = build::account_mint(&p.chain, &available, "account-mint", &p.seedelf, &p.change)
+            .unwrap();
+        assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
+        assert_eq!(mint.collateral().tx_hash, available[1].tx_hash);
+        let built = mint.finalize(&recorded()).unwrap();
+        let tx = assert_sound(&p, &mint, &built);
+        // The 25 tokens go back 20 to an output.
+        assert_eq!(tx.outputs.len(), 3);
+        assert_eq!(built.change_tokens.items.len(), 25);
+    }
+
+    #[test]
+    fn spends_as_few_as_it_can_and_can_put_up_a_spent_utxo() {
+        let p = payer();
+        // 2 ADA alone leaves change below its minimum; 1.5 more is enough.
+        let available = [
+            at(&p, 0x50, 0, 1_500_000, &[]),
+            at(&p, 0x51, 1, 2_000_000, &[]),
+            at(&p, 0x52, 2, 5_000_000, &[]),
+        ];
+        let mint = build::account_mint(&p.chain, &available, "account-mint", &p.seedelf, &p.change)
+            .unwrap();
+        assert_eq!(outpoints(mint.inputs()), outpoints(&available[..2]));
+        assert_eq!(mint.collateral().tx_hash, available[2].tx_hash);
+        assert_sound(&p, &mint, &mint.finalize(&recorded()).unwrap());
+
+        // With one UTxO, it's both an input and the collateral.
+        let single = [at(&p, 0x60, 0, 4_000_000, &[])];
+        let mint =
+            build::account_mint(&p.chain, &single, "account-mint", &p.seedelf, &p.change).unwrap();
+        assert_eq!(mint.collateral().tx_hash, single[0].tx_hash);
+        let tx = assert_sound(&p, &mint, &mint.finalize(&recorded()).unwrap());
+        assert_eq!(tx.inputs, tx.collateral);
+    }
+
+    #[test]
+    fn explains_what_is_wrong() {
+        let p = payer();
+        let err = |available: &[UtxoResponse]| {
+            build::account_mint(&p.chain, available, "", &p.seedelf, &p.change)
+                .err()
+                .expect("an error")
+                .to_string()
+        };
+        assert!(
+            err(&[at(&p, 0x70, 0, 1_500_000, &[])])
+                .contains("Not enough ADA in the Cardano account for the seedelf")
+        );
+        assert!(err(&[]).contains("nothing in the Cardano account"));
+        // A 5 ADA pure UTxO alone is never spent.
+        assert!(err(&[at(&p, 0x71, 0, 5_000_000, &[])]).contains("Not enough ADA"));
+        let bad = Register::new("00".repeat(48), "00".repeat(48));
+        assert!(
+            build::account_mint(
+                &p.chain,
+                &[at(&p, 0x72, 0, 9_000_000, &[])],
+                "",
+                &bad,
+                &p.change
+            )
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("register")
+        );
+        let mint = build::account_mint(
+            &p.chain,
+            &[at(&p, 0x73, 0, 9_000_000, &[])],
+            "",
+            &p.seedelf,
+            &p.change,
+        )
+        .unwrap();
+        let no_mint = json!({"result": [{"validator": {"index": 0, "purpose": "spend"}, "budget": {"memory": 1, "cpu": 1}}]});
+        assert!(
+            mint.finalize(&Budgets::from_ogmios(&no_mint).unwrap())
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("seedelf policy")
+        );
+    }
 }

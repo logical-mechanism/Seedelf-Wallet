@@ -56,7 +56,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "move-in-submit":
       return ctx.moveIn.submit(ctx.network, message.txHash);
     case "mint-build":
-      return ctx.mint.build(ctx.network, message.label);
+      return ctx.mint.build(ctx.network, message.label, message.from);
     case "mint-submit":
       return ctx.mint.submit(ctx.network, message.txHash);
     case "pending-tx":

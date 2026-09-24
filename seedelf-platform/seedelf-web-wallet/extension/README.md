@@ -15,7 +15,7 @@ It can create or restore a wallet, lock it with a password, show what the wallet
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
 | Home | Unlocked | The Seedelf balance (ADA, tokens, your seedelfs, **Create a seedelf**), the Cardano account (ADA, tokens, receive address with copy and QR, stake address, **Move in**), the Seedelf identity, and Refresh. A sent move-in or mint shows as a banner until it confirms. The lock button is in the top bar. |
 | Move in | From Home | An ADA amount or Max, and tokens to bring along; then a review of what moves, the fee and the change; then Send |
-| Create a seedelf | From Home | An optional tag (printable ASCII, 15 at most) with a live preview; then a review of the token name, the ADA locked with it, the fee and the change; then Send, which is when giveme.my is asked for the collateral |
+| Create a seedelf | From Home | An optional tag (printable ASCII, 15 at most) with a live preview, and what pays: the Cardano account (the default: mint first, then move in) or the Seedelf balance (a stealth mint). Then a review of the token name, the ADA locked with it, the fee and the change, then Send. The account's keys sign at review; for a stealth mint, Send is when giveme.my is asked for the collateral. |
 
 The flows are described in [../docs/flows.md](../docs/flows.md#onboarding).
 
@@ -66,7 +66,7 @@ src/
     wallet.ts           wallet state, lock, auto-lock and unlock back-off
     balances.ts         the balance reading: contract scan, account discovery, session cache
     move-in.ts          build (in WASM), hold and submit a move-in
-    mint.ts             create a seedelf: draft, Ogmios, finish (in WASM); at Send, giveme.my, sign, submit
+    mint.ts             create a seedelf, paid by the account (signed at review) or stealth (giveme.my and sign at Send)
     pending.ts          the submitted transaction being watched, until it confirms
     collateral.ts       the giveme.my client
     koios.ts, chain.ts  the Koios client; pure helpers (registers, gap limit, sums, seedelf tags)
@@ -81,8 +81,9 @@ src/
     format.ts           ADA and token amounts, token names
 public/                 icons and logos, resized from ../brand
 tests/                  Vitest (vectors/: independent SecretBox vectors; fixtures/: recorded preprod Koios responses
-                        and synthetic owned UTxOs, remade by fixtures/record-koios.mjs, and a mint's real preprod
-                        evaluation and giveme.my answer, remade by fixtures/record-mint.mjs)
+                        and synthetic owned UTxOs, remade by fixtures/record-koios.mjs; a stealth mint's real preprod
+                        evaluation and giveme.my answer, remade by fixtures/record-mint.mjs; an account-paid mint's
+                        real preprod evaluation, remade by fixtures/record-account-mint.mjs)
 e2e/                    Playwright; live/ holds the live preprod runs
 ```
 

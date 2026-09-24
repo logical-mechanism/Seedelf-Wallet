@@ -8,4 +8,6 @@ Each draft is a mint built by `build::mint_from` for the synthetic contract UTxO
 - `script_failure.json`: the same kind of draft, with proofs made by the wrong key. The wallet contract refuses spend 0 (code 3010, then 3012).
 - `unknown_inputs.json`: the two-input draft without `additionalUtxo`. Ogmios can't resolve the inputs, so their redeemers are extraneous (3110).
 
-The extension's `tests/fixtures/record-mint.mjs` records a whole mint the same way, into `mint-preprod.json`.
+- `account_mint.json`: a mint paid by the 12-word phrase's Cardano account (`build::account_mint`), drafted from that account's **real** preprod UTxOs, so no `additionalUtxo` was needed. Only the seedelf policy runs. It was recorded by the extension's `tests/fixtures/record-account-mint.mjs`, which never submits.
+
+The extension's `tests/fixtures/record-mint.mjs` records a whole stealth mint the same way, into `mint-preprod.json`.

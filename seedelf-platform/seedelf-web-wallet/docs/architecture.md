@@ -78,7 +78,11 @@ flowchart LR
 - **Network-free builders** live in [`seedelf-core/src/build.rs`](../../seedelf-core/src/build.rs). A builder takes chain data the caller already has (protocol parameters, UTxOs as Koios returns them, deserialized into the same `seedelf-koios` types) and returns an unsigned transaction.
   - `external_sweep`: the CLI's `external sweep`, now a thin `run()` around it. Its offline tests pass unchanged.
   - `move_in`: the web wallet's move-in (see [flows.md](flows.md#move-in-cardano-account--seedelf)).
-  - `mint`: the CLI's `util mint`, now a thin `run()` around it, and the web wallet's [Create a seedelf](flows.md#create-a-seedelf).
+  - `mint`: the CLI's `util mint`, now a thin `run()` around it, and the web wallet's stealth [Create a seedelf](flows.md#create-a-seedelf).
+  - `account_mint`: a seedelf paid by the Cardano account (chunk 8b; the CLI's `create`, still inline in the CLI).
+    - Key inputs pay: pure ADA first, never a 5 ₳ pure UTxO.
+    - One of the account's own UTxOs is the collateral. If it holds tokens, the collateral return gives them back.
+    - It's drafted and finalized like a script spend, but only the policy runs: no proofs, no one-time key, no giveme.my.
   - Shared pieces: `deposit_outputs` (contract outputs under fresh re-randomizations, tokens 20 to an output), and `settle_fee`, which signs each draft with one throwaway key per signer and reprices until the fee covers the signed size.
 - **Script spends share one shape, `ScriptSpend`** (chunk 8). Transfer, sweep and remove (chunks 9 and 10) are the same shape with other outputs.
   - Owned contract inputs, each unlocked by a Schnorr proof bound to the one-time key's hash. The proofs come from a closure, so core never holds the Seedelf secret.
