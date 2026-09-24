@@ -1,32 +1,22 @@
 use crate::commands::fee;
 use crate::setup;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
-use pallas_addresses::Address;
 use pallas_crypto::key::ed25519::{PublicKey, SecretKey};
 use pallas_primitives::Hash;
-use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
-use seedelf_core::address;
 use seedelf_core::assets::Assets;
-use seedelf_core::constants::{
-    COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO, get_config,
-};
-use seedelf_core::data_structures;
-use seedelf_core::transaction::{
-    collateral_input, extract_budgets, reference_utxo, total_computation_fee,
-    wallet_minimum_lovelace_with_assets,
-};
+use seedelf_core::build::{self, Budgets, Chain, Payment};
+use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, get_config};
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::create_proof;
 use seedelf_display::display;
 use seedelf_koios::koios::{
-    UtxoResponse, epoch_params, evaluate_transaction, extract_bytes_with_logging, submit_tx,
-    witness_collateral,
+    UtxoResponse, epoch_params, evaluate_transaction, submit_tx, witness_collateral,
 };
 
 /// Struct to hold command-specific arguments
@@ -74,8 +64,11 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
 
-    let config: Config = get_config(variant, network_flag)?;
-    let params = epoch_params(network_flag).await?;
+    let chain = Chain {
+        config: get_config(variant, network_flag)?,
+        params: epoch_params(network_flag).await?,
+        network_flag,
+    };
 
     if args.seedelfs.is_empty() {
         bail!("Error: Must be sending to at least 1 seedelf.");
@@ -96,11 +89,6 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
             .map(|spec| Assets::parse(spec))
             .collect::<Result<Vec<_>>>()?
     };
-    // calculate all the required minimums then check the lovelace
-    let minimum_lovelaces: Vec<u64> = all_selected_tokens
-        .iter()
-        .map(|assets| wallet_minimum_lovelace_with_assets(&params, assets.clone()))
-        .collect::<Result<Vec<u64>>>()?;
     let lovelaces: Vec<u64> = args.lovelaces.unwrap_or_default();
     if lovelaces.len() != args.seedelfs.len() {
         bail!(
@@ -109,389 +97,103 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
             args.seedelfs.len()
         );
     }
-    let all_greater = lovelaces
-        .iter()
-        .zip(minimum_lovelaces.iter())
-        .all(|(l, min)| l >= min);
 
-    if !all_greater {
-        bail!("Minimum lovelace not met")
-    }
-
-    // if there is change going back then we need this to rerandomize a datum
+    // proves the inputs, and re-randomizes the change
     let scalar: Scalar = setup::unlock_wallet_interactive();
+    let owner: Register = Register::create(scalar)?;
 
-    let seedelfs: Vec<String> = args.seedelfs;
-    let selected_tokens: Vec<Assets> = all_selected_tokens;
-    let selected_utxos: Option<Vec<String>> = args.utxos;
+    let policy_id: &str = &chain.config.contract.seedelf_policy_id;
+    let every_utxo: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
+            .await?;
+    let owned_utxos: Vec<UtxoResponse> =
+        utxos::collect_wallet_utxos(scalar, policy_id, every_utxo.clone())?;
 
-    let collat_addr: Address = address::collateral_address(network_flag);
-    let wallet_addr: Address =
-        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
-
-    // this is used to calculate the real fee
-    let mut draft_tx: StagingTransaction = StagingTransaction::new();
-
-    let mut input_vector: Vec<Input> = Vec::new();
-    let mut register_vector: Vec<Register> = Vec::new();
-
-    let every_utxo_at_script: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
-
-    let usable_utxos = utxos::collect_wallet_utxos(
-        scalar,
-        &config.contract.seedelf_policy_id,
-        every_utxo_at_script.clone(),
-    )?;
-
-    let seedelf_datums: Vec<Option<Register>> = seedelfs
+    // each recipient's register, found with their seedelf
+    let payments: Vec<Payment> = args
+        .seedelfs
         .iter()
-        .map(|s| {
-            utxos::find_seedelf_datum(
-                s.to_string(),
-                &config.contract.seedelf_policy_id,
-                every_utxo_at_script.clone(),
-            )
-            .ok()
-            .flatten()
+        .zip(lovelaces)
+        .zip(all_selected_tokens)
+        .map(|((seedelf, lovelace), tokens)| {
+            let register =
+                utxos::find_seedelf_datum(seedelf.clone(), policy_id, every_utxo.clone())?
+                    .ok_or_else(|| anyhow!("Seedelf {seedelf} not found on chain"))?;
+            Ok(Payment {
+                register,
+                lovelace,
+                tokens,
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
-    let total_lovelace: u64 = lovelaces.iter().sum();
-    // println!("{:?}", total_lovelace.clone());
-    let total_selected_tokens: Assets = selected_tokens
-        .clone()
-        .into_iter()
-        .fold(Assets::new(), |acc, a| acc.merge(a).unwrap_or(acc));
-    let usable_utxos: Vec<UtxoResponse> = if selected_utxos.is_none() {
-        utxos::select(
-            &params,
-            usable_utxos,
-            total_lovelace,
-            total_selected_tokens.clone(),
-        )?
-    } else {
-        // assumes the utxos hold the correct tokens else it will error downstream
-        utxos::filter_utxos(
-            usable_utxos,
-            utxos::parse_tx_utxos(selected_utxos.unwrap_or_default())?,
-        )
-    };
-
-    if usable_utxos.is_empty() {
-        bail!("No Usuable UTxOs Found");
-    }
-
-    let (total_lovelace_found, tokens) = utxos::assets_of(usable_utxos.clone())?;
-    let change_tokens: Assets = tokens.separate(total_selected_tokens.clone())?;
-
-    for utxo in usable_utxos.clone() {
-        let this_input: Input = Input::new(
-            pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
-                &utxo.tx_hash,
-            )?),
-            utxo.tx_index,
-        );
-        let inline_datum: Register = extract_bytes_with_logging(&utxo.inline_datum)
-            .ok_or_else(|| anyhow::anyhow!("Wallet UTxO datum is not a Register"))?;
-        // draft and raw are built the same here
-        draft_tx = draft_tx.input(this_input.clone());
-        input_vector.push(this_input.clone());
-        // do the registers
-        register_vector.push(inline_datum.clone());
-    }
-
-    // This is some semi legit fee to be used to estimate it
-    let tmp_fee: u64 = 200_000;
-
-    // we can fake the signature here to get the correct tx size
+    // the proofs are bound to this key, and it signs
     let one_time_secret_key: SecretKey = SecretKey::new(OsRng);
     let one_time_private_key: PrivateKey = PrivateKey::from(one_time_secret_key.clone());
-    let public_key_hash: Hash<28> =
+    let signer: Hash<28> =
         pallas_crypto::hash::Hasher::<224>::hash(one_time_private_key.public_key().as_ref());
-    let pkh: String = hex::encode(public_key_hash);
 
-    // println!("{:?}", lovelaces.len());
-    // println!("{:?}", selected_tokens.len());
-    // println!("{:?}", seedelf_datums.len());
-    for (((lovelace, assets), datum_opt), seedelf_id) in lovelaces
-        .clone()
-        .into_iter()
-        .zip(selected_tokens)
-        .zip(seedelf_datums)
-        .zip(seedelfs.iter())
-    {
-        let datum =
-            datum_opt.ok_or_else(|| anyhow::anyhow!("Seedelf {seedelf_id} not found on chain"))?;
-        let inline = datum.rerandomize()?.to_vec()?;
-
-        // println!("{:?}", lovelace.clone());
-        // println!("{:?}", inline.clone());
-        let mut out = Output::new(wallet_addr.clone(), lovelace).set_inline_datum(inline);
-
-        for asset in assets.items {
-            out = out
-                .add_asset(asset.policy_id, asset.token_name, asset.amount)
-                .unwrap();
-        }
-        draft_tx = draft_tx.output(out); // ← one .output per triplet
-    }
-
-    // build out the rest of the draft tx with the tmp fee
-    draft_tx = draft_tx
-        .collateral_input(collateral_input(network_flag))
-        .collateral_output(fee::collateral_output(collat_addr.clone(), tmp_fee)?)
-        .fee(tmp_fee)
-        .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
-        .language_view(
-            pallas_txbuilder::ScriptKind::PlutusV3,
-            params.cost_model_v3.clone(),
-        )
-        .disclosed_signer(pallas_crypto::hash::Hash::new(
-            hex::decode(&pkh)
-                .unwrap()
-                .try_into()
-                .expect("Not Correct Length"),
-        ))
-        .disclosed_signer(pallas_crypto::hash::Hash::new(COLLATERAL_HASH));
-
-    // add in the change outputs here
-    let change_token_per_utxo: Vec<Assets> = change_tokens
-        .clone()
-        .split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
-    let mut number_of_change_utxo: usize = change_token_per_utxo.len();
-    // a max tokens per change output here
-    let mut lovelace_amount: u64 = total_lovelace_found;
-    for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
-        let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
-            // this is the last one or the only one
-            lovelace_amount = seedelf_core::transaction::checked_lovelace(
-                lovelace_amount,
-                &[total_lovelace, tmp_fee],
-            )?;
-            lovelace_amount
-        } else {
-            // its additional tokens going back
-            lovelace_amount =
-                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[minimum])?;
-            minimum
-        };
-
-        let mut change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
-            .set_inline_datum(datum_vector.clone());
-        for asset in change.items.clone() {
-            change_output = change_output
-                .add_asset(asset.policy_id, asset.token_name, asset.amount)
-                .unwrap();
-        }
-        draft_tx = draft_tx.output(change_output);
-    }
-
-    if number_of_change_utxo == 0 {
-        // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        // println!("{:}", lovelace_amount);
-        // println!("{:}", total_lovelace);
-        // println!("{:}", tmp_fee);
-        let change_lovelace: u64 = seedelf_core::transaction::checked_lovelace(
-            lovelace_amount,
-            &[total_lovelace, tmp_fee],
-        )?;
-        let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
-            .set_inline_datum(datum_vector.clone());
-        draft_tx = draft_tx.output(change_output);
-        number_of_change_utxo += 1;
-    }
-
-    // Use zip to pair elements from the two lists
-    for (input, datum) in input_vector
-        .clone()
-        .into_iter()
-        .zip(register_vector.clone())
-    {
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
-        let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
-        draft_tx = draft_tx.add_spend_redeemer(
-            input,
-            spend_redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits {
-                mem: 14_000_000,
-                steps: 10_000_000_000,
-            }),
-        )
-    }
-
-    // this is what will be signed when the real fee is known
-    let mut raw_tx: StagingTransaction = draft_tx.clone().clear_fee().clear_collateral_output();
-    for i in 0..number_of_change_utxo {
-        raw_tx = raw_tx.remove_output(seedelfs.len() - 1 + number_of_change_utxo - i);
-    }
-
-    // Use zip to pair elements from the two lists
-    for input in input_vector.clone().into_iter() {
-        raw_tx = raw_tx.remove_spend_redeemer(input);
-    }
-
-    let intermediate_tx: BuiltTransaction = draft_tx.build_conway_raw().unwrap();
-    // println!("{:}",hex::encode(intermediate_tx.tx_bytes.as_ref()));
-
-    let budgets: Vec<(u64, u64)> =
-        match evaluate_transaction(hex::encode(intermediate_tx.tx_bytes.as_ref()), network_flag)
-            .await
-        {
-            Ok(execution_units) => {
-                if execution_units.get("error").is_some() {
-                    anyhow::bail!("Transaction evaluation failed: {execution_units:?}");
-                }
-                let budgets: Vec<(u64, u64)> = extract_budgets(&execution_units);
-                budgets
+    let spend: build::ScriptSpend = match args.utxos {
+        None => build::transfer(&chain, &owned_utxos, &payments, &owner, signer)?,
+        Some(selected) => {
+            // assumes the utxos hold the correct tokens else it will error downstream
+            let usable_utxos: Vec<UtxoResponse> =
+                utxos::filter_utxos(owned_utxos, utxos::parse_tx_utxos(selected)?);
+            if usable_utxos.is_empty() {
+                bail!("No Usuable UTxOs Found");
             }
-            Err(err) => anyhow::bail!("Failed to evaluate transaction: {err}"),
-        };
-
-    let tx_size: u64 = intermediate_tx
-        .sign(one_time_private_key)
-        .unwrap()
-        .sign(fee::fake_signer())
-        .unwrap()
-        .tx_bytes
-        .0
-        .len()
-        .try_into()
-        .unwrap();
-    let tx_fee: u64 = fee::linear_fee(&params, tx_size);
-
-    let compute_fee: u64 = total_computation_fee(&params, budgets.clone());
-
-    let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
-
-    let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
-
-    raw_tx = raw_tx
-        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee)?)
-        .fee(total_fee);
-
-    // add in the change outputs here
-    let change_token_per_utxo: Vec<Assets> = change_tokens
-        .clone()
-        .split(MAXIMUM_TOKENS_PER_UTXO.try_into().unwrap());
-    let number_of_change_utxo: usize = change_token_per_utxo.len();
-    // a max tokens per change output here
-    let mut lovelace_amount: u64 = total_lovelace_found;
-    for (i, change) in change_token_per_utxo.iter().enumerate() {
-        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let minimum: u64 = wallet_minimum_lovelace_with_assets(&params, change.clone())?;
-        let change_lovelace: u64 = if i == number_of_change_utxo - 1 {
-            // this is the last one or the only one
-            lovelace_amount = seedelf_core::transaction::checked_lovelace(
-                lovelace_amount,
-                &[total_lovelace, total_fee],
-            )?;
-            lovelace_amount
-        } else {
-            // its additional tokens going back
-            lovelace_amount =
-                seedelf_core::transaction::checked_lovelace(lovelace_amount, &[minimum])?;
-            minimum
-        };
-
-        let mut change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
-            .set_inline_datum(datum_vector.clone());
-        for asset in change.items.clone() {
-            change_output = change_output
-                .add_asset(asset.policy_id, asset.token_name, asset.amount)
-                .unwrap();
+            build::transfer_from(&chain, &usable_utxos, &payments, &owner, signer)?
         }
-        raw_tx = raw_tx.output(change_output);
-    }
+    };
 
-    if number_of_change_utxo == 0 {
-        // no tokens so we just need to account for the lovelace going back
-        let datum_vector: Vec<u8> = Register::create(scalar)?.rerandomize()?.to_vec()?;
-        let change_lovelace: u64 = seedelf_core::transaction::checked_lovelace(
-            lovelace_amount,
-            &[total_lovelace, total_fee],
-        )?;
-        let change_output: Output = Output::new(wallet_addr.clone(), change_lovelace)
-            .set_inline_datum(datum_vector.clone());
-        raw_tx = raw_tx.output(change_output);
-    }
-
-    for ((input, datum), (cpu, mem)) in input_vector
-        .clone()
-        .into_iter()
-        .zip(register_vector.clone())
-        .zip(budgets.clone())
-    {
-        let (z, g_r) = create_proof(datum, scalar, pkh.clone())?;
-        let spend_redeemer_vector = data_structures::create_spend_redeemer(z, g_r, pkh.clone())?;
-        raw_tx = raw_tx.add_spend_redeemer(
-            input,
-            spend_redeemer_vector.clone(),
-            Some(pallas_txbuilder::ExUnits { mem, steps: cpu }),
-        )
-    }
-
-    let tx: BuiltTransaction = raw_tx.build_conway_raw().unwrap();
-    // need to witness it now
-    let tx_cbor: String = hex::encode(tx.tx_bytes.as_ref());
-    // println!("{:}", tx_cbor.clone());
-
-    let witness_public_key: PublicKey = PublicKey::from(COLLATERAL_PUBLIC_KEY);
-
-    let signed_tx_cbor: BuiltTransaction =
-        match witness_collateral(tx_cbor.clone(), network_flag).await {
-            Ok(witness) => {
-                let witness_cbor = match witness.get("witness").and_then(|v| v.as_str()) {
-                    Some(w) if w.len() >= 128 => w,
-                    _ => bail!("Collateral Service Returned Unexpected Response: {witness}"),
-                };
-                let witness_sig = &witness_cbor[witness_cbor.len() - 128..];
-                let witness_vector: [u8; 64] = hex::decode(witness_sig)
-                    .map_err(|e| anyhow::anyhow!("Collateral Witness Hex Decode Failed: {e}"))?
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Collateral Witness Wrong Length"))?;
-
-                tx.sign(PrivateKey::from(one_time_secret_key.clone()))
-                    .unwrap()
-                    .add_signature(witness_public_key, witness_vector)
-                    .unwrap()
-            }
-            Err(e) => bail!("Collateral Service Request Failed: {e}"),
-        };
-
-    let tx_hash = fee::parse_submit_response(
-        &submit_tx(hex::encode(signed_tx_cbor.clone().tx_bytes), network_flag).await?,
-    )?;
+    let spend =
+        spend.proven(|register, vkh| create_proof(register.clone(), scalar, vkh.to_string()))?;
+    let draft = spend.draft()?;
+    let evaluation = evaluate_transaction(hex::encode(draft.tx_bytes.as_ref()), network_flag)
+        .await
+        .context("Failed to evaluate transaction")?;
+    let built = spend.finalize(&Budgets::from_ogmios(&evaluation)?)?;
 
     println!(
         "{} {}",
         "\nTx Size Fee:".bright_blue(),
-        tx_fee.to_string().bright_white()
+        built.fee.size.to_string().bright_white()
     );
-
     println!(
         "{} {}",
         "Compute Fee:".bright_blue(),
-        compute_fee.to_string().bright_white()
+        built.fee.compute.to_string().bright_white()
     );
-
     println!(
         "{} {}",
         "Script Reference Fee:".bright_blue(),
-        script_reference_fee.to_string().bright_white()
+        built.fee.script_reference.to_string().bright_white()
     );
-
     println!(
         "{} {}",
         "Total Fee:".bright_blue(),
-        total_fee.to_string().bright_white()
+        built.fee.total.to_string().bright_white()
     );
 
-    println!("\nTx Cbor: {}", tx_cbor.clone().white());
+    // need to witness it now
+    let tx_cbor: String = hex::encode(built.tx.tx_bytes.as_ref());
+    let witness = witness_collateral(tx_cbor.clone(), network_flag)
+        .await
+        .context("Collateral Service Request Failed")?;
+    let signed_tx_cbor = built
+        .tx
+        .sign(PrivateKey::from(one_time_secret_key))
+        .context("Failed To Sign The Transaction")?
+        .add_signature(
+            PublicKey::from(COLLATERAL_PUBLIC_KEY),
+            build::collateral_signature(&witness)?,
+        )
+        .context("Failed To Add The Collateral Witness")?;
 
+    println!("\nTx Cbor: {}", tx_cbor.white());
+
+    let response = submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await?;
+    let tx_hash = fee::parse_submit_response(&response)?;
     println!("\nTransaction Successfully Submitted!");
     println!("\nTx Hash: {}", tx_hash.bright_cyan());
     if network_flag {
