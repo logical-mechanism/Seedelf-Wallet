@@ -72,7 +72,13 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - It now reads `min_fee_a` and `min_fee_b` from the protocol parameters (`ProtocolParameters` gained both).
     - Move-in had the same bug through `settle_fee`.
     - The core tests now check every fee against the ledger's formula written out, and they fail on the old one.
-  - **Not done:** a live mint that lands. To finish, create a seedelf by hand from a funded wallet, or fund the test wallet and run `e2e/live/move-in.mjs` and then `e2e/live/mint.mjs`. Record the tx hash here.
+  - **Live on preprod (2026-09-24), both by the user from the public 12-word test phrase's account:**
+    - Move-in [`9dda2589…28bc8`](https://preprod.cardanoscan.io/transaction/9dda2589d1029e6d6596a3449b05986e2c489dd81aa65fcf40082eea2c428bc8): five key inputs, 25 ₳ into the contract, change to `0/0`. Fee 186,979 for 718 bytes. This is chunk 7's live move-in.
+    - Mint [`939ae7df…aa6ac`](https://preprod.cardanoscan.io/transaction/939ae7df3d6a31255bd6036d05857ea7c6f3cb4d95480813283e9dfca01aa6ac): the seedelf `TAK1` (`5eed0e1f54414b31009dda2589…`) with 1.74986 ₳.
+      - Fee 255,846 for 1,107 bytes. The collateral return is 4,616,231 (5 ₳ − 3/2 × fee), and the change is 22,994,294.
+      - This is the first transaction with a real giveme.my signature.
+    - The live balance scan (`LIVE_KOIOS=1`) finds both. That phrase is public, so anyone can spend them; the live test now checks their shape, not their count.
+    - `e2e/live/*.mjs` on the private test wallet still haven't run (it's unfunded).
   - **Next:** chunk 9, transfer (seedelf → seedelf). Look up the recipient's register by token name, then build a `ScriptSpend` with a recipient output. Most of the plumbing is here.
 
 - **2026-09-23: chunk 7 done** (`web-wallet/move-in`). Plan: [plans/chunk-07-move-in.md](plans/chunk-07-move-in.md).
@@ -99,7 +105,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **"Failed to fetch" and nothing else.** A rebuild under a running extension left the old worker asking for a deleted, hash-named WASM file, and the failure was cached. Now the start is retried, "The wallet couldn't start" offers Try again or Reload the extension, and Koios errors are in plain words.
     - **`AdaInput`:** at most 6 decimals (truncated, with a note), nothing above the 45 billion ADA supply, and a note when the amount exceeds the balance. The WASM builder refuses over-supply amounts too.
   - **Tests:** core builder 6; `seedelf-wasm` native 6 (witnesses verify against the tx hash, and the signers are exactly the inputs' keys, on the real recorded preprod UTxOs); Node 21; Vitest 79 + 1 live; Playwright 13; the CLI's offline tests (11) are green.
-  - **Not done: the live preprod move-in.**
+  - **Not done: the live preprod move-in.** (Done 2026-09-24: see chunk 8's note.)
     - The test wallet in `extension/.preprod-test-wallet.txt` (gitignored) was never funded.
     - The user tried the flow by hand in their own wallet, but no transaction hash was recorded.
     - To finish: fund that wallet, `npm run build`, then `node e2e/live/move-in.mjs 10`. It restores the wallet, moves 10 tADA plus any tokens, waits for confirmation, and prints the result.
