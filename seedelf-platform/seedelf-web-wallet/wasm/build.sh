@@ -28,8 +28,10 @@ if [[ "$have" != "$wanted" ]]; then
   exit 1
 fi
 
-cargo build --manifest-path "$here/Cargo.toml" --target wasm32-unknown-unknown --release
+# wasm-release (the workspace Cargo.toml) is release built for size.
+cargo build --manifest-path "$here/Cargo.toml" --target wasm32-unknown-unknown --profile wasm-release
 wasm-bindgen --target web --out-dir "$here/pkg" \
-  "$workspace/target/wasm32-unknown-unknown/release/seedelf_wasm.wasm"
+  "$workspace/target/wasm32-unknown-unknown/wasm-release/seedelf_wasm.wasm"
 
-echo "Built $(du -h "$here/pkg/seedelf_wasm_bg.wasm" | cut -f1) -> $here/pkg"
+wasm="$here/pkg/seedelf_wasm_bg.wasm"
+echo "Built $(du -h "$wasm" | cut -f1) ($(gzip -9 -c "$wasm" | wc -c | awk '{printf "%d KB", $1 / 1024}') gzipped) -> $here/pkg"

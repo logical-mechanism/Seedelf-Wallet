@@ -51,7 +51,7 @@ flowchart LR
   - One implementation, so there are no byte-for-byte parity problems.
 - **One WebAssembly crate for the wallet:** [seedelf-web-wallet/wasm](../wasm/) (`seedelf-wasm`), a Cargo workspace member.
   - It exposes only what the extension needs, for both crypto and [transaction building](#transaction-building).
-  - `build.sh` produces an ES module of about 590 KB, before `wasm-opt`.
+  - `build.sh` produces an ES module with the `wasm-release` cargo profile: about 1.2 MB, 419 KB gzipped (see [Transaction building](#transaction-building)).
   - Its tests check the output against native Rust byte for byte.
 - **Build settings:**
   - `getrandom` 0.2 with the `js` feature, set in the wasm crate.
@@ -74,7 +74,10 @@ flowchart LR
 **Status (chunk 10):** every v1 transaction is built on it: move-in, creating a seedelf, transfer, withdraw and removing a seedelf.
 
 - **`seedelf-core` compiles to WebAssembly.** The one blocker was `seedelf-koios` setting `connect_timeout` (and `timeout`) on its HTTP client; `reqwest`'s browser build has neither, so both are gated with `#[cfg(not(target_arch = "wasm32"))]`.
-- **The WebAssembly module is now about 2.3 MB** (582 KB gzipped), up from 1.6 MB before the script-spend code. It's loaded from the extension itself, so this only costs a moment on the worker's first start. `wasm-opt` is chunk 11.
+- **The WebAssembly module is about 1.2 MB** (419 KB gzipped). It's loaded from the extension itself, so this only costs a moment on the worker's first start.
+  - `build.sh` uses the workspace's `wasm-release` profile: `opt-level = "z"`, LTO, one codegen unit, stripped. It halved the module (it was 2.3 MB, 582 KB gzipped) at the same speed. The BLS arithmetic is blst's C, and a proof takes about 1.8 ms either way.
+  - `wasm-opt` was measured on top and left out: it made the file 9 % smaller but its gzipped size 6 % larger, and the Web Store's download is a zip.
+  - `wasm/bench.mjs` measures the size and the speed of a build.
 - **Network-free builders** live in [`seedelf-core/src/build.rs`](../../seedelf-core/src/build.rs). A builder takes chain data the caller already has (protocol parameters, UTxOs as Koios returns them, deserialized into the same `seedelf-koios` types) and returns an unsigned transaction.
   - `external_sweep`: the CLI's `external sweep`, now a thin `run()` around it. Its offline tests pass unchanged.
   - `move_in`: the web wallet's move-in (see [flows.md](flows.md#move-in-cardano-account--seedelf)).

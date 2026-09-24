@@ -60,6 +60,16 @@ The one-time key of a script spend is HKDF-SHA-256 of the Seedelf scalar (salt `
 
 The output is an ES module (`--target web`). Load it with `init()` or `initSync()`.
 
+**It's built for size** with the workspace's `wasm-release` profile (`opt-level = "z"`, LTO, one codegen unit, stripped). The CLI keeps the plain release profile. `node bench.mjs [pkg-dir]` prints a build's size (raw, gzip, brotli) and the median time of a proof, the ownership check, a transfer draft and a move-in.
+
+| Build | Raw | gzip | Proof | Transfer draft |
+|---|---|---|---|---|
+| `release` | 2,330 KB | 582 KB | 1.8 ms | 54 ms |
+| `wasm-release` | 1,223 KB | 424 KB | 1.7 ms | 52 ms |
+| `wasm-release` + `wasm-opt -Oz` (not used) | 1,113 KB | 448 KB | 1.8 ms | 54 ms |
+
+Measured 2026-09-24 in Node 24's V8, the engine Chrome runs the worker in.
+
 ## Test
 
 From `seedelf-platform/`:
