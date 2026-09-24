@@ -1,8 +1,36 @@
 use seedelf_display::display::{hex_to_ascii, is_there_an_update};
+use seedelf_display::version_control::override_github_base;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// The CLI's update notice, against a local stand-in for GitHub's API (no
+/// real call, so no rate limit): it prints for a newer release, and GitHub
+/// refusing is only a warning, never a failure.
 #[tokio::test]
 async fn test_version_control_display() {
-    is_there_an_update().await
+    let github = MockServer::start().await;
+    override_github_base(Some(github.uri()));
+    let latest = "/repos/logical-mechanism/Seedelf-Wallet/releases/latest";
+
+    Mock::given(method("GET"))
+        .and(path(latest))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "tag_name": "99.0.0" })),
+        )
+        .up_to_n_times(1)
+        .mount(&github)
+        .await;
+    is_there_an_update().await;
+
+    Mock::given(method("GET"))
+        .and(path(latest))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&github)
+        .await;
+    is_there_an_update().await;
+
+    assert_eq!(github.received_requests().await.unwrap().len(), 2);
+    override_github_base(None);
 }
 
 #[test]
