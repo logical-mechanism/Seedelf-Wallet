@@ -90,8 +90,9 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
    - It's kept out of every payment, and put up only by the account-paid mint: move-in and send run no script, and Seedelf spends use giveme.my.
    - Until chunk 12, move-in and send never spent any pure 5 ADA UTxO, as the CLI's `collect_address_utxos` doesn't. Now only the collateral, and the UTxOs the user locked, stay put.
 3. **Tokens and NFTs are shown.** Move-in moves ADA by default, and tokens only when the user picks them. Each Seedelf UTxO can only hold so many tokens (see the root README's *Wallet Limitations*).
-4. **Staking is untouched.**
-   - Delegation, rewards and governance stay with the user's main wallet.
+4. **The account stakes, with its own stake key `2/0` (chunk 13).**
+   - Delegation to one pool, the vote's delegation, and the rewards are the account's, as in Lace: a restored phrase shows the same pool and DRep, and a change made here shows there.
+   - The stake key signs inside WebAssembly, only for a certificate or a withdrawal, and never leaves it. See [flows.md](flows.md#staking-and-voting-cardano-account).
    - Moving ADA into Seedelf lowers the stake behind that delegation, because Seedelf addresses have no staking part.
 5. **Using it alongside another wallet is fine.** Both wallets can spend the same UTxOs. If both try at once, one transaction simply fails.
 6. **It is not private.** For a restored wallet, this account is the user's public identity, and the UI never suggests otherwise.

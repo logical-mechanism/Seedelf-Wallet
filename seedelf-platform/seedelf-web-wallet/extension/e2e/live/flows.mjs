@@ -2,9 +2,18 @@
 // ending when the network confirms it (see lib.mjs). Each takes the
 // wallet from openWallet() and the flow's arguments, and returns the
 // transaction hash.
-import { balances, confirmed, log, reviewAndSend, seedelfName, yourSeedelfs } from "./lib.mjs";
+import { balances, confirmed, log, reviewAndSend, seedelfName, sendReviewed, yourSeedelfs } from "./lib.mjs";
 
 const home = (page) => page.getByRole("tab", { name: "Seedelf" }).click();
+
+/** The Cardano tab's staking row, into Staking. */
+async function staking(page) {
+  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
+  await page.getByTestId("staking-row").click();
+  await page.getByRole("heading", { name: "Voting power" }).waitFor();
+}
+
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export const FLOWS = {
   /** `mint [tag] [account|seedelf]`: create a seedelf, paid by the Cardano account (mint first) or the Seedelf balance (a stealth mint). */
@@ -73,6 +82,59 @@ export const FLOWS = {
     else await page.getByLabel("Amount", { exact: true }).fill(amount);
     await reviewAndSend(page, "withdraw-review", "withdraw");
     return confirmed(page, "Withdrawal confirmed");
+  },
+
+  /** `stake [ticker|pool1…]`: stake the Cardano account with a pool, found in the pool browser; a first delegation pays the 2 ₳ deposit. */
+  async stake({ page }, pool = "LOGIC") {
+    await staking(page);
+    await page.getByRole("button", { name: /^(Change pool|Choose a pool)$/ }).click();
+    await page.getByLabel("Search pools").fill(pool);
+    const results = page.getByTestId("pool-results");
+    const row = pool.startsWith("pool1")
+      ? results.getByRole("button").first()
+      : results.getByRole("button", { name: new RegExp(`^${escaped(pool)},`, "i") });
+    await row.click();
+    await page.getByTestId("pool-details-facts").waitFor({ timeout: 60_000 });
+    log("pool:", (await page.getByTestId("pool-details").innerText()).replace(/\n/g, " | "));
+    await page.getByRole("button", { name: /^Stake with / }).click();
+    await sendReviewed(page, "stake");
+    return confirmed(page, "Now staking");
+  },
+
+  /** `vote [abstain|no-confidence|drep1…|name]`: delegate the voting power; a DRep is found by its ID or name, then looked up. */
+  async vote({ page }, to = "abstain") {
+    await staking(page);
+    await page.getByRole("button", { name: /^(Change|Delegate)$/ }).click();
+    if (to === "abstain") await page.getByRole("radio", { name: /^Always abstain/ }).click();
+    else if (to === "no-confidence") await page.getByRole("radio", { name: /^Always no confidence/ }).click();
+    else {
+      await page.getByRole("radio", { name: /^A DRep/ }).click();
+      await page.getByLabel("Search DReps").fill(to);
+      const pasted = page.getByRole("button", { name: "Look up this ID" });
+      if (await pasted.count()) await pasted.click();
+      else await page.getByTestId("drep-results").getByRole("button").first().click();
+      await page.getByTestId("drep-facts").waitFor({ timeout: 60_000 });
+      log("DRep:", (await page.getByTestId("drep-facts").innerText()).replace(/\n/g, " | "));
+    }
+    await page.getByRole("button", { name: "Review" }).click();
+    await sendReviewed(page, `vote-${to.startsWith("drep1") ? "drep" : to}`);
+    return confirmed(page, "Voting power delegated");
+  },
+
+  /** `withdraw-rewards`: the whole reward balance, back to the Cardano account. Needs rewards, and the vote delegated. */
+  async "withdraw-rewards"({ page }) {
+    await staking(page);
+    await page.getByRole("button", { name: "Withdraw rewards" }).click();
+    await sendReviewed(page, "withdraw-rewards");
+    return confirmed(page, "Rewards withdrawn");
+  },
+
+  /** `unstake`: withdraw the rewards, unregister the stake key, and get the 2 ₳ deposit back. */
+  async unstake({ page }) {
+    await staking(page);
+    await page.getByRole("button", { name: "Stop staking" }).click();
+    await sendReviewed(page, "unstake");
+    return confirmed(page, "Staking stopped");
   },
 
   /** `remove [tag] [account|seedelf]`: burn a seedelf of the wallet's; its ADA goes to the Cardano account or the Seedelf balance. */

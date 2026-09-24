@@ -70,10 +70,10 @@ export class SendService {
     key: string,
   ): Promise<SendSummary> {
     const { wasm, wallet } = this.deps;
-    const { params, utxos, held } = await readAccount(this.deps, network);
+    const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
     if (utxos.length === 0) throw nothingInAccount(held, "Your Cardano account is empty, so there's nothing to send.");
 
-    const request = { network, params, utxos, to: destination.address, lovelace, tokens };
+    const request = { network, params, utxos, to: destination.address, lovelace, tokens, withdrawal };
     const result = await wallet.withKeys(
       (keys) => JSON.parse(wasm.buildAccountSend(keys.cardano, JSON.stringify(request))) as SendResult,
     );

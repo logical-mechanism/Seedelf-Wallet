@@ -20,6 +20,7 @@ import {
   restore,
   setPassword,
   snap,
+  stakingPreprod,
   test,
   transferPreprod,
   vector,
@@ -248,14 +249,23 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   // Your seedelfs live in Receive, not on Home.
   await expect(page.getByTestId("seedelfs")).toHaveCount(0);
 
-  // The real preprod account of this public test phrase.
+  // The real preprod account of this public test phrase: its UTxOs and its staking rewards.
   await cardanoTab(page);
   const account = koiosPreprod.accounts[v.preprod.stake];
-  await expect(page.getByTestId("cardano-lovelace")).toHaveText(`${ada(lovelaceOf(account.account_utxos))} ₳`);
+  const rewards = BigInt(stakingPreprod.account_info[0].rewards_available);
+  await expect(page.getByTestId("cardano-lovelace")).toHaveText(`${ada(BigInt(lovelaceOf(account.account_utxos)) + rewards)} ₳`);
   await expect(page.getByText("4 addresses used")).toBeVisible();
   await expect(page.getByTestId("cardano-tokens")).toContainText("LINK");
+  await expect(page.getByTestId("staking-row")).toHaveText(`Staking with LOGIC${ada(rewards)} ₳ rewards`);
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
-  expect(koios.calls.sort()).toEqual(["account_addresses", "credential_utxos", "credential_utxos"]);
+  // The account, the contract and the stake key; the pool's ticker the first time.
+  expect(koios.calls.sort()).toEqual([
+    "account_addresses",
+    "account_info",
+    "credential_utxos",
+    "credential_utxos",
+    "pool_info",
+  ]);
 
   await snap(page, "home-cardano");
 
@@ -290,9 +300,10 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   const popup = await openApp(context, "popup");
   await expect(popup.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await snap(popup, "home-balances-popup");
-  expect(koios.calls).toHaveLength(3);
+  expect(koios.calls).toHaveLength(5);
+  // The pool's ticker is remembered for the session.
   await popup.getByRole("button", { name: "Refresh" }).click();
-  await expect.poll(() => koios.calls.length).toBe(6);
+  await expect.poll(() => koios.calls.length).toBe(9);
   await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
 
   // In the narrow popup the name is cut in the middle, keeping its start and end.
@@ -544,7 +555,9 @@ test("activity: the Seedelf history from the device, the Cardano account's from 
   // Refresh reads the balances again, which is how arrivals are noted.
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
-  await expect.poll(() => koios.calls.slice(reads).sort()).toEqual(["account_addresses", "credential_utxos", "credential_utxos"]);
+  await expect
+    .poll(() => koios.calls.slice(reads).sort())
+    .toEqual(["account_addresses", "account_info", "credential_utxos", "credential_utxos"]);
   await expect(list.getByRole("listitem")).toHaveCount(2);
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
@@ -589,7 +602,9 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(page.getByTestId("move-in-amount-note")).toContainText("45 billion");
   await page.getByLabel("Amount", { exact: true }).fill("20000");
   await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("20,000");
-  await expect(page.getByTestId("move-in-too-much")).toContainText("That's more than the 10,350.538725 ₳");
+  // The staking rewards (57.475311 ₳) ride along, so they count.
+  await expect(page.getByText("₳ available, with 57.475311 ₳ of rewards")).toBeVisible();
+  await expect(page.getByTestId("move-in-too-much")).toContainText("That's more than the 10,408.014036 ₳");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
 
   // A non-round amount gets the privacy nudge; a round one doesn't.
@@ -644,6 +659,7 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(review).toContainText("Into Seedelf25 ₳");
   await expect(review).toContainText("1,250,000,000 tUSDM");
   await expect(review).toContainText("Network fee");
+  await expect(review).toContainText("Staking rewards spent57.475311 ₳");
   await snap(page, "move-in-review");
   expect(koios.submitted).toHaveLength(0);
   await page.getByRole("button", { name: "Send" }).click();
@@ -676,8 +692,8 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await page.getByRole("button", { name: "Move in" }).click();
 
-  // Just under the balance: the UI allows it, but the fee doesn't fit, and the builder says so.
-  await page.getByLabel("Amount", { exact: true }).fill("10350.5");
+  // Just under the balance and the rewards: the UI allows it, but the fee doesn't fit, and the builder says so.
+  await page.getByLabel("Amount", { exact: true }).fill("10408");
   await page.getByRole("button", { name: "Review" }).click();
   await expect(page.getByRole("alert")).toContainText("Not enough ADA");
 
@@ -756,7 +772,7 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("cardano-meta")).toHaveText("4 addresses used · 10,338.538725 ₳ locked");
   await page.getByRole("button", { name: "Send from the Cardano account" }).click();
-  await expect(page.getByText(/₳ available · 10,338\.538725 ₳ locked$/)).toBeVisible();
+  await expect(page.getByText(/₳ available, with 57\.475311 ₳ of rewards · 10,338\.538725 ₳ locked$/)).toBeVisible();
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
   // None of it asked Koios anything, or sent anything.
@@ -766,7 +782,9 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   // Refresh reads the balances again, as Home's does, and the lock holds.
   await page.getByRole("button", { name: "UTxOs", exact: true }).click();
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect.poll(() => koios.calls.slice(reads).sort()).toEqual(["account_addresses", "credential_utxos", "credential_utxos"]);
+  await expect
+    .poll(() => koios.calls.slice(reads).sort())
+    .toEqual(["account_addresses", "account_info", "credential_utxos", "credential_utxos"]);
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
   await expect(quick).toHaveAttribute("aria-pressed", "true");
 });
@@ -895,8 +913,8 @@ test("send from the Cardano account: a token with only the ADA it needs, review,
   expect(koios.submitted).toHaveLength(1);
   expect(koios.collateralAsked).toBe(0);
   await expect(page.getByRole("button", { name: "Send from the Cardano account" })).toBeDisabled();
-  // Reading $bob once as typed; each review read it again, and the account; then the submit.
-  const review1 = ["asset_nft_address", "account_addresses", "credential_utxos", "epoch_params"];
+  // Reading $bob once as typed; each review read it again, and the account and its stake key; then the submit.
+  const review1 = ["asset_nft_address", "account_addresses", "account_info", "credential_utxos", "epoch_params"];
   const sent = koios.calls.slice(reads, koios.calls.indexOf("submittx") + 1);
   expect(sent.sort()).toEqual(["asset_nft_address", ...review1, ...review1, "submittx"].sort());
 
@@ -1146,6 +1164,200 @@ test("remove a seedelf: where its ADA goes, review, and nothing sent without giv
   expect(koios.submitted).toHaveLength(0);
 });
 
+const LOGIC_DREP = "drep1ydmraa6kv8cvmry059v608tehl50nfmg0z764lmsqkvwurs40sw2z";
+
+test("staking: the page, the pool browser, a change of pool reviewed and sent, then watched", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await expect(page.getByTestId("staking-row")).toContainText("Staking with LOGIC");
+
+  // The page reads the pool's details, fresh: one request.
+  let reads = koios.calls.length;
+  await page.getByTestId("staking-row").click();
+  await expect(page.getByRole("heading", { name: "Staking" })).toBeVisible();
+  const pool = page.getByTestId("your-pool");
+  await expect(pool).toContainText("LOGIC · Logical Mechanism");
+  await expect(page.getByTestId("your-pool-facts")).toContainText("Saturation18.8%");
+  await expect(page.getByTestId("your-pool-facts")).toContainText("Margin2%");
+  await expect(page.getByTestId("staking-rewards")).toHaveText("57.475311 ₳");
+  await expect(page.getByTestId("vote-now")).toContainText("Always abstain");
+  await expect(page.getByTestId("rewards-locked")).toHaveCount(0);
+  expect(koios.calls.slice(reads)).toEqual(["pool_info"]);
+  await snap(page, "staking");
+
+  // Every live pool: one page on preprod, with the supply and optimal_pool_count for saturation.
+  reads = koios.calls.length;
+  await page.getByRole("button", { name: "Change pool" }).click();
+  await expect(page.getByText("559 live pools")).toBeVisible();
+  expect(koios.calls.slice(reads).sort()).toEqual(["epoch_params", "pool_list", "totals"]);
+  const results = page.getByTestId("pool-results");
+  await expect(results.getByRole("listitem")).toHaveCount(50);
+  await snap(page, "pools");
+  await page.getByLabel("Search pools").fill("logic");
+  await expect(results.getByRole("listitem")).toHaveCount(1);
+  await expect(results).toContainText("Yours");
+  await page.getByLabel("Search pools").fill("tprep");
+  await page.getByLabel("Sort pools").selectOption("saturation");
+  await expect(results.getByRole("listitem")).toHaveCount(1);
+
+  // A pool's details, fresh; its warnings; Stake builds and signs, for review.
+  reads = koios.calls.length;
+  await results.getByRole("button", { name: /^TPREP,/ }).click();
+  await expect(page.getByTestId("pool-details")).toContainText("oversaturated");
+  expect(koios.calls.slice(reads)).toEqual(["pool_info"]);
+  await snap(page, "pool-details");
+  reads = koios.calls.length;
+  await page.getByRole("button", { name: "Stake with TPREP" }).click();
+  const review = page.getByTestId("staking-review");
+  await expect(review).toContainText("Stake withTPREP");
+  await expect(review).not.toContainText("Deposit");
+  await expect(review).not.toContainText("Rewards withdrawn");
+  expect(koios.calls.slice(reads).sort()).toEqual(["account_addresses", "account_info", "credential_utxos", "epoch_params"]);
+  await snap(page, "staking-review");
+  expect(koios.submitted).toHaveLength(0);
+
+  // Signed at review: Send only submits, and giveme.my is never asked.
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Delegation sent. Waiting for the network");
+  expect(koios.submitted).toHaveLength(1);
+  expect(koios.collateralAsked).toBe(0);
+  koios.confirmations = 1;
+  const popup = await openApp(context, "popup");
+  await expect(popup.getByTestId("pending-tx")).toContainText("Now staking");
+
+  // The pool list is kept on the device: browsing again asks nothing.
+  reads = koios.calls.length;
+  await cardanoTab(popup);
+  await popup.getByTestId("staking-row").click();
+  await popup.getByRole("button", { name: "Change pool" }).click();
+  await expect(popup.getByText("559 live pools")).toBeVisible();
+  expect(koios.calls.slice(reads).filter((c) => ["pool_list", "totals", "epoch_params"].includes(c))).toEqual([]);
+});
+
+test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await page.getByTestId("staking-row").click();
+
+  // DReps are searched by name in the wallet's own list, asking no one.
+  await page.getByRole("button", { name: "Change", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Voting power" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /^Always abstain/ })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  const reads = koios.calls.length;
+  await page.getByRole("radio", { name: /^A DRep/ }).click();
+  const results = page.getByTestId("drep-results");
+  await expect(results.getByRole("listitem")).toHaveCount(20);
+  await expect(page.getByTestId("drep-list-note")).toContainText("61 DReps with a name");
+  await page.getByLabel("Search DReps").fill("nobody by this name");
+  await expect(page.getByText("No DRep on the wallet's list matches")).toBeVisible();
+  await page.getByLabel("Search DReps").fill("logical");
+  await expect(results.getByRole("listitem")).toHaveCount(2);
+  await snap(page, "voting-search");
+  expect(koios.calls.slice(reads)).toEqual([]);
+
+  // A pasted ID the list doesn't have is looked up as it is: Koios doesn't know this one.
+  await page.getByLabel("Search DReps").fill("drep1yvquefnvtx57az5ajreyww993qvymgdcdgg4pw9uhg7uxmqcys6t5");
+  await page.getByRole("button", { name: "Look up this ID" }).click();
+  await expect(page.getByRole("alert")).toContainText("doesn't know that DRep");
+
+  // The one picked is looked up live: two requests, its name from its metadata.
+  await page.getByLabel("Search DReps").fill("logical");
+  const lookups = koios.calls.length;
+  await results.getByRole("button").filter({ hasText: "drep1ydmraa6…" }).click();
+  const facts = page.getByTestId("drep-facts");
+  await expect(facts).toContainText("NameLogical Mechanism dRep");
+  await expect(facts).toContainText("StatusInactive since epoch 189");
+  await expect(facts).toContainText("Voting power5,914,902.920642 ₳");
+  await expect(page.getByTestId("drep-details")).toContainText("hasn't voted lately");
+  expect(koios.calls.slice(lookups).sort()).toEqual(["drep_info", "drep_metadata"]);
+  await snap(page, "voting");
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByTestId("staking-review")).toContainText("Voting power toLogical Mechanism dRep");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // Withdraw: the whole balance, back to the account.
+  await page.getByRole("button", { name: "Withdraw rewards" }).click();
+  const review = page.getByTestId("staking-review");
+  await expect(review).toContainText("Rewards withdrawn57.475311 ₳");
+  await expect(review).toContainText("Back to your Cardano account");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Reward withdrawal sent");
+  expect(koios.submitted).toHaveLength(1);
+});
+
+test("staking: locked rewards send you to the vote; an account that isn't staking is offered a pool", async ({
+  context,
+  koios,
+}) => {
+  // The recorded account, as if its vote weren't delegated.
+  const info = stakingPreprod.account_info[0];
+  koios.stakes.set(info.stake_address, { ...info, delegated_drep: null });
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  const warning = page.getByTestId("home-rewards-locked");
+  await expect(warning).toContainText("57.475311 ₳ of staking rewards are locked");
+  await snap(page, "home-rewards-locked");
+  await warning.getByRole("button", { name: "Delegate your vote" }).click();
+  await expect(page.getByRole("heading", { name: "Voting power" })).toBeVisible();
+  await expect(page.getByText("Now: Not delegated")).toBeVisible();
+  await page.getByRole("radio", { name: /^Always abstain/ }).click();
+  await expect(page.getByRole("button", { name: "Review" })).toBeEnabled();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  // Withdrawing and stopping wait for the vote.
+  await expect(page.getByTestId("rewards-locked")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Withdraw rewards" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Stop staking" })).toBeDisabled();
+  // A payment goes ahead without them.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Send from the Cardano account" }).click();
+  await expect(page.getByText("of rewards")).toHaveCount(0);
+
+  // Never registered: not staking, and the deposit said up front.
+  koios.stakes.clear();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("staking-row")).toContainText("Not staking");
+  await page.getByTestId("staking-row").click();
+  await expect(page.getByRole("heading", { name: "Not staking" })).toBeVisible();
+  await expect(page.getByText("The first time takes a 2 ₳ deposit")).toBeVisible();
+  await page.getByRole("button", { name: "Choose a pool" }).click();
+  await page.getByLabel("Search pools").fill("logic");
+  await page.getByTestId("pool-results").getByRole("button", { name: /^LOGIC,/ }).click();
+  await page.getByRole("button", { name: "Stake with LOGIC" }).click();
+  await expect(page.getByTestId("staking-review")).toContainText("Deposit2 ₳");
+  expect(koios.submitted).toHaveLength(0);
+});
+
+test("settings: payments spend the staking rewards until switched off", async ({ context }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "Send from the Cardano account" }).click();
+  await expect(page.getByText("₳ available, with 57.475311 ₳ of rewards")).toBeVisible();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  const toggle = page.getByRole("switch", { name: "Use staking rewards when spending" });
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByText("Rewards wait until you withdraw them")).toBeVisible();
+  await snap(page, "settings-staking");
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  // A new page reads the setting: the rewards are left out.
+  const popup = await openApp(context, "popup");
+  await cardanoTab(popup);
+  await popup.getByRole("button", { name: "Send from the Cardano account" }).click();
+  await expect(popup.getByText(/₳ available$/)).toBeVisible();
+  await expect(popup.getByText("of rewards")).toHaveCount(0);
+});
+
 test("every wallet screen in the popup, for the look", async ({ context, koios }) => {
   // Restoring happens in a tab; the popup then opens on the unlocked wallet.
   const page = await openApp(context);
@@ -1188,6 +1400,28 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
   await addTokens(popup, ["tUSDM"]);
   await popup.getByLabel("Amount of tUSDM").fill("1000");
   await shot("send");
+  await back();
+  await popup.getByTestId("staking-row").click();
+  await expect(popup.getByTestId("your-pool-facts")).toBeVisible();
+  await shot("staking");
+  await popup.getByRole("button", { name: "Change pool" }).click();
+  await expect(popup.getByTestId("pool-results")).toBeVisible();
+  await shot("pools");
+  await popup.getByLabel("Search pools").fill("tprep");
+  await popup.getByTestId("pool-results").getByRole("button").first().click();
+  await expect(popup.getByTestId("pool-details-facts")).toBeVisible();
+  await shot("pool-details");
+  await back();
+  await back();
+  await popup.getByRole("button", { name: "Change", exact: true }).click();
+  await popup.getByRole("radio", { name: /^A DRep/ }).click();
+  await expect(popup.getByTestId("drep-results")).toBeVisible();
+  await shot("voting-search");
+  await popup.getByLabel("Search DReps").fill(LOGIC_DREP);
+  await popup.getByTestId("drep-results").getByRole("button").click();
+  await expect(popup.getByTestId("drep-details")).toBeVisible();
+  await shot("voting");
+  await back();
   await back();
 
   await popup.getByRole("tab", { name: "Seedelf" }).click();

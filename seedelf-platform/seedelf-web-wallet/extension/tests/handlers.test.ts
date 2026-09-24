@@ -11,7 +11,8 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(t = testBalances()): Context {
-  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins } = t;
+  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences } =
+    t;
   return {
     wasm: loadTestWasm(),
     wallet,
@@ -25,6 +26,8 @@ function context(t = testBalances()): Context {
     contacts,
     activity,
     coins,
+    staking,
+    preferences,
     version: "0.1.0",
     network: "preprod",
     networks: ["preprod"],
@@ -123,11 +126,11 @@ describe("handlers", () => {
     t.clock.now += 60_000;
     const fresh = (await handle({ type: "utxos", refresh: true }, ctx)) as UtxoLists;
     expect(fresh.updatedAt).toBe(t.clock.now);
-    expect(reads()).toBe(before + 3);
+    expect(reads()).toBe(before + 4);
     t.clock.now += 60_000;
     const again = (await handle({ type: "history", of: "seedelf", refresh: true }, ctx)) as { updatedAt?: number };
     expect(again.updatedAt).toBe(t.clock.now);
-    expect(reads()).toBe(before + 6);
+    expect(reads()).toBe(before + 8);
   });
 
   it("recognizes only known requests", () => {

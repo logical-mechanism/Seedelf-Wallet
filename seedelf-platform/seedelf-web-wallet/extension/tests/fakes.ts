@@ -10,9 +10,20 @@ import { Collateral } from "../src/background/collateral";
 import { ContactsService } from "../src/background/contacts";
 import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
-import { Koios, type FetchLike, type KoiosUtxo } from "../src/background/koios";
+import {
+  Koios,
+  type FetchLike,
+  type KoiosAccountInfo,
+  type KoiosDrepInfo,
+  type KoiosDrepName,
+  type KoiosPool,
+  type KoiosPoolInfo,
+  type KoiosUtxo,
+} from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
+import { PreferencesService } from "../src/background/preferences";
 import { SendService } from "../src/background/send";
+import { StakingService } from "../src/background/staking";
 import { PrivateStore } from "../src/background/private-store";
 import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
@@ -112,6 +123,18 @@ export const withdrawPreprod = fixture("withdraw-preprod.json") as Record<
   "amount" | "max" | "remove",
   { request: Record<string, any>; evaluation: unknown; final: { fee: { total: string } } }
 >;
+/** The 12-word phrase's stake key, every live pool, and two DReps, on preprod (tests/fixtures/record-staking.mjs). */
+export const stakingPreprod = fixture("staking-preprod.json") as {
+  stake: string;
+  account_info: KoiosAccountInfo[];
+  totals: Array<{ epoch_no: number; supply: string }>;
+  epoch_params: Array<{ optimal_pool_count: number }>;
+  pool_list: KoiosPool[];
+  pool_info: KoiosPoolInfo[];
+  drep_info: KoiosDrepInfo[];
+  drep_metadata: KoiosDrepName[];
+};
+
 /** A real mint round trip on preprod (tests/fixtures/record-mint.mjs). */
 export const mintPreprod = fixture("mint-preprod.json") as {
   evaluation: unknown;
@@ -139,6 +162,8 @@ export interface FakeKoios {
   added: KoiosUtxo[];
   /** More UTxOs under account payment keys: at an enterprise address, say. */
   addedToAccounts: KoiosUtxo[];
+  /** Each stake key's `account_info`, by stake address: the recorded 12-word account's to begin with. */
+  stakes: Map<string, KoiosAccountInfo>;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -157,6 +182,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     spent: new Set(),
     added: [],
     addedToAccounts: [],
+    stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -204,6 +230,18 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_addresses ?? [];
       } else if (path === "account_utxos") {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_utxos ?? [];
+      } else if (path === "account_info") {
+        rows = body._stake_addresses.flatMap((s: string) => fake.stakes.get(s) ?? []);
+      } else if (path === "pool_list") {
+        rows = stakingPreprod.pool_list;
+      } else if (path === "totals") {
+        rows = stakingPreprod.totals;
+      } else if (path === "pool_info") {
+        rows = stakingPreprod.pool_info.filter((p) => body._pool_bech32_ids.includes(p.pool_id_bech32));
+      } else if (path === "drep_info") {
+        rows = stakingPreprod.drep_info.filter((d) => body._drep_ids.includes(d.drep_id));
+      } else if (path === "drep_metadata") {
+        rows = stakingPreprod.drep_metadata.filter((d) => body._drep_ids.includes(d.drep_id));
       } else {
         return new Response("not found", { status: 404 });
       }
@@ -249,15 +287,18 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const koiosFor = () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined);
   const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor });
   const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now });
+  const preferences = new PreferencesService(t.local);
   const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
     session: t.session,
+    local: t.local,
     koios: koiosFor,
     now: () => t.clock.now,
     sleep: options?.sleep ?? (async () => undefined),
     activity,
     coins,
+    preferences,
   };
   return {
     ...t,
@@ -282,10 +323,15 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
       ...deps,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),
+    staking: new StakingService({
+      ...deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    }),
     pending: new PendingService(deps),
     store,
     activity,
     coins,
+    preferences,
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
   };
 }

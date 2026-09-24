@@ -102,15 +102,23 @@ describe("balances", () => {
     const t = testBalances();
     await t.wallet.create(phrase(12).phrase, PASSWORD);
     const first = await t.balances.get("preprod");
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["account_addresses", "credential_utxos", "credential_utxos"]);
+    // The account, the contract and the stake key; the first time, the pool's ticker too.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual([
+      "account_addresses",
+      "account_info",
+      "credential_utxos",
+      "credential_utxos",
+      "pool_info",
+    ]);
 
     t.clock.now += 5 * 60_000;
     expect(await t.balances.get("preprod")).toEqual(first);
-    expect(t.koios.calls).toHaveLength(3);
+    expect(t.koios.calls).toHaveLength(5);
 
+    // The ticker is remembered for the session.
     const fresh = await t.balances.get("preprod", true);
     expect(fresh.updatedAt).toBe(t.clock.now);
-    expect(t.koios.calls).toHaveLength(6);
+    expect(t.koios.calls).toHaveLength(9);
   });
 
   it("shares one reading between pages asking at once", async () => {
@@ -118,7 +126,7 @@ describe("balances", () => {
     await t.wallet.create(phrase(12).phrase, PASSWORD);
     const [a, b] = await Promise.all([t.balances.get("preprod", true), t.balances.get("preprod", true)]);
     expect(a).toEqual(b);
-    expect(t.koios.calls).toHaveLength(3);
+    expect(t.koios.calls).toHaveLength(5);
   });
 
   it("needs the wallet unlocked, and lock wipes the cache", async () => {

@@ -16,6 +16,7 @@ import { Choice } from "../components/Choice";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { adaWithTokens, formatAda, shortHex } from "../format";
+import { WithdrawalRow } from "./CardanoSend";
 
 const SOURCES: Record<MintSource, string> = { account: "Cardano account", seedelf: "Seedelf balance" };
 
@@ -84,6 +85,7 @@ export function CreateSeedelf({
           <Row label="Paid from" value={SOURCES[summary.from]} />
           <Row label="Locked with it" value={`${formatAda(summary.lovelace)} ₳`} />
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
+          <WithdrawalRow withdrawal={summary.withdrawal} />
           <Row label={`Back to your ${SOURCES[summary.from]}`} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
         </ReviewRows>
         <p className="note">

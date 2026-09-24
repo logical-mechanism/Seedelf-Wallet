@@ -51,9 +51,80 @@ export interface KoiosTxOut {
   asset_list: Array<{ policy_id: string; asset_name: string; quantity: string }> | null;
 }
 
+/** A stake key's standing: `account_info`. No row at all means it was never registered. */
+export interface KoiosAccountInfo {
+  stake_address: string;
+  status: "registered" | "not registered";
+  /** `pool1…`, or null. */
+  delegated_pool: string | null;
+  /** A DRep's ID (CIP-129), `drep_always_abstain`, `drep_always_no_confidence`, or null. */
+  delegated_drep: string | null;
+  /** Lovelace that can be withdrawn now. */
+  rewards_available: string;
+  /** The deposit paid when it was registered (lovelace). */
+  deposit: string;
+}
+
+/** A live pool, with only what the pool browser reads: `pool_list`. */
+export interface KoiosPool {
+  pool_id_bech32: string;
+  ticker: string | null;
+  /** 0 to 1. */
+  margin: number | null;
+  /** Lovelace. */
+  fixed_cost: string | null;
+  pledge: string | null;
+  active_stake: string | null;
+  retiring_epoch: number | null;
+}
+
+/** One pool's details: `pool_info`. */
+export interface KoiosPoolInfo {
+  pool_id_bech32: string;
+  meta_json: { name?: string; ticker?: string; homepage?: string; description?: string } | null;
+  margin: number | null;
+  fixed_cost: string | null;
+  pledge: string | null;
+  live_pledge: string | null;
+  live_stake: string | null;
+  /** A percentage: 100 is saturated. */
+  live_saturation: number | null;
+  live_delegators: number | null;
+  block_count: number | null;
+  pool_status: "registered" | "retiring" | "retired";
+  retiring_epoch: number | null;
+}
+
+/** A DRep: `drep_info`. */
+export interface KoiosDrepInfo {
+  drep_id: string;
+  drep_status: "registered" | "retired";
+  /** Voted or updated recently enough to count. */
+  active: boolean;
+  expires_epoch_no: number | null;
+  /** Voting power: the stake delegated to it (lovelace). */
+  amount: string;
+  live_delegator_count: number | null;
+}
+
+/** A DRep's name from its CIP-119 metadata: `drep_metadata`, the name only. */
+export interface KoiosDrepName {
+  drep_id: string;
+  /** A string, or a JSON-LD `{ "@value": … }`, or anything its author wrote. */
+  givenName: unknown;
+}
+
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 const PAGE_SIZE = 1000;
+
+/** The columns each staking query asks for: what the wallet shows, nothing else. */
+const POOL_COLUMNS = "pool_id_bech32,ticker,margin,fixed_cost,pledge,active_stake,retiring_epoch";
+const POOL_INFO_COLUMNS =
+  "pool_id_bech32,meta_json,margin,fixed_cost,pledge,live_pledge,live_stake,live_saturation,live_delegators,block_count,pool_status,retiring_epoch";
+const DREP_INFO_COLUMNS = "drep_id,drep_status,active,expires_epoch_no,amount,live_delegator_count";
+/** CIP-119's name only: a DRep's image would be fetched from anywhere its author chose. */
+const DREP_NAME_COLUMNS = "drep_id,meta_json->body->givenName";
 const RETRY_DELAYS_MS = [1000, 3000];
 const TIMEOUT_MS = 20_000;
 
@@ -82,6 +153,30 @@ function koiosTrouble(status: number, path: string): string {
   if (status === 429) return "Koios is limiting requests from your connection. Wait a minute and try again.";
   if (status >= 500) return `Koios is having trouble right now (${status} for ${path}). Try again in a minute.`;
   return `Koios refused the request (${status} for ${path}).`;
+}
+
+/**
+ * The ledger's staking refusals in plain words. Most mean the account changed
+ * between Review and Send: an epoch paid more rewards, say, and a withdrawal
+ * must take exactly the balance.
+ */
+function stakingRefusal(text: string): string | undefined {
+  if (text.includes("WithdrawalsNotInRewards")) {
+    return "Your staking rewards changed since you reviewed this: a new epoch may have paid more. Review it again.";
+  }
+  if (text.includes("NotDelegatedToDRep")) {
+    return "The network won't pay out rewards until your voting power is delegated. Delegate it on the Staking page, then try again.";
+  }
+  if (text.includes("DelegateeStakePoolNotRegistered")) {
+    return "That pool isn't registered any more: it may have retired. Choose another.";
+  }
+  if (text.includes("DelegateeDRepNotRegistered")) {
+    return "That DRep isn't registered any more. Choose another, or always abstain.";
+  }
+  if (/StakeKey(Not)?Registered|IncorrectDeposit|NonZeroRewardAccountBalance/.test(text)) {
+    return "Your account's staking changed since you reviewed this. Refresh, and review it again.";
+  }
+  return undefined;
 }
 
 export class Koios {
@@ -140,6 +235,54 @@ export class Koios {
     });
   }
 
+  /** A stake key's standing; undefined when it was never registered. */
+  async accountInfo(stakeAddress: string): Promise<KoiosAccountInfo | undefined> {
+    const [row] = await this.post<KoiosAccountInfo>("account_info", { _stake_addresses: [stakeAddress] });
+    return row;
+  }
+
+  /** Every live pool (not retiring or retired), 1,000 a request. */
+  async poolList(): Promise<KoiosPool[]> {
+    const rows: KoiosPool[] = [];
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const page = await this.request<KoiosPool>(
+        "GET",
+        "pool_list",
+        undefined,
+        `pool_status=eq.registered&select=${POOL_COLUMNS}&order=pool_id_bech32.asc&offset=${offset}&limit=${PAGE_SIZE}`,
+      );
+      rows.push(...page);
+      if (page.length < PAGE_SIZE) return rows;
+    }
+  }
+
+  /** The current supply of ADA (lovelace): what a pool's saturation is measured against. */
+  async supply(): Promise<string> {
+    const [row] = await this.request<{ supply: string }>(
+      "GET",
+      "totals",
+      undefined,
+      "select=epoch_no,supply&order=epoch_no.desc&limit=1",
+    );
+    if (!row) throw new KoiosError("Koios returned no totals.");
+    return row.supply;
+  }
+
+  /** Details of the pools asked for (`pool1…`), in no particular order. */
+  poolInfo(poolIds: string[]): Promise<KoiosPoolInfo[]> {
+    return this.post<KoiosPoolInfo>("pool_info", { _pool_bech32_ids: poolIds }, `select=${POOL_INFO_COLUMNS}`);
+  }
+
+  /** The DReps asked for (CIP-129 IDs); ones Koios doesn't know are left out. */
+  drepInfo(drepIds: string[]): Promise<KoiosDrepInfo[]> {
+    return this.post<KoiosDrepInfo>("drep_info", { _drep_ids: drepIds }, `select=${DREP_INFO_COLUMNS}`);
+  }
+
+  /** The DReps' names from their metadata; ones with none are left out. */
+  drepNames(drepIds: string[]): Promise<KoiosDrepName[]> {
+    return this.post<KoiosDrepName>("drep_metadata", { _drep_ids: drepIds }, `select=${DREP_NAME_COLUMNS}`);
+  }
+
   /** The current epoch's protocol parameters: one `epoch_params` row, passed to WebAssembly as is. */
   async epochParams(): Promise<Record<string, unknown>> {
     const [row] = await this.request<Record<string, unknown>>("GET", "epoch_params", undefined, "limit=1");
@@ -195,6 +338,8 @@ export class Koios {
         "The network refused it: a UTxO it spends is already spent. Koios may have shown an out-of-date view of the chain. Wait a minute, refresh, and review it again.",
       );
     }
+    const staking = stakingRefusal(text);
+    if (staking) throw new KoiosError(staking);
     if (!response.ok) throw new KoiosError(`The network rejected the transaction: ${text.slice(0, 500)}`);
     return JSON.parse(text) as string;
   }

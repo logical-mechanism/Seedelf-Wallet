@@ -1,13 +1,13 @@
 // Settings, from the gear in the top bar: contacts, the Cardano account's
-// collateral, the recovery phrase (the password again first, even while
-// unlocked), a new password, removing the wallet from this browser, and what
-// this is. Nothing here asks Koios anything, except setting a collateral
-// that needs a transaction.
+// collateral, whether payments spend the staking rewards, the recovery phrase
+// (the password again first, even while unlocked), a new password, removing
+// the wallet from this browser, and what this is. Nothing here asks Koios
+// anything, except setting a collateral that needs a transaction.
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { NETWORKS } from "../../networks";
-import type { Status } from "../../shared/rpc";
+import type { Preferences, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ContactsPage, useContacts } from "../components/Contacts";
@@ -51,6 +51,7 @@ export function Settings({
           <MenuRow icon={<VaultIcon size={16} />} label="Collateral" onClick={() => setPage("collateral")} />
         </ul>
       </section>
+      <SpendRewards />
       <section className="section" aria-labelledby="security-title">
         <h2 id="security-title">Security</h2>
         <ul className="list">
@@ -76,6 +77,56 @@ export function Settings({
         </p>
       </section>
     </Screen>
+  );
+}
+
+/** Whether a payment from the Cardano account withdraws the staking rewards too. */
+function SpendRewards() {
+  const [prefs, setPrefs] = useState<Preferences>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    call("preferences", {}).then(setPrefs, (e: Error) => setError(e.message));
+  }, []);
+
+  async function toggle() {
+    if (!prefs) return;
+    try {
+      setPrefs(await call("preferences-set", { spendRewards: !prefs.spendRewards }));
+      setError(undefined);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <section className="section" aria-labelledby="staking-settings-title">
+      <h2 id="staking-settings-title">Staking</h2>
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="spend-rewards-label">Use staking rewards when spending</span>
+          <span className="note" id="spend-rewards-note">
+            {prefs?.spendRewards === false
+              ? "Rewards wait until you withdraw them on the Staking page."
+              : "A send, a move-in or a seedelf paid by your Cardano account withdraws the rewards too."}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={prefs?.spendRewards ?? false}
+          aria-labelledby="spend-rewards-label"
+          aria-describedby="spend-rewards-note"
+          onClick={toggle}
+          disabled={!prefs}
+        />
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 

@@ -72,7 +72,8 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 | TypeScript | The manifest, the vault and wallet state, the Koios and giveme.my clients, and the worker's services and handlers against the real WASM, over recorded preprod answers | Vitest (`npm test`) |
 | End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the popup and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. |
 | Live reads | The balance scan and the ADA Handle lookup against the real preprod Koios | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`; skipped otherwise |
-| Live | Real preprod transactions from the built extension, by hand, never in CI | `node e2e/live/run.mjs all` runs every flow in one browser session on the private test wallet, waiting for each to confirm, and prints the hashes. `run.mjs` also takes single flows: `mint live-1 account + move-in 25.5`. |
+| Probes | Transactions checked against preprod's node and scripts, submitting nothing | `node tests/fixtures/probe-staking.mjs`: every staking transaction through Ogmios's decoder, and an account-paid mint with the rewards through the real policy. The `record-*.mjs` scripts do the same for the Seedelf spends, and keep what they recorded as fixtures. |
+| Live | Real preprod transactions from the built extension, by hand, never in CI | `node e2e/live/run.mjs all` runs every Seedelf flow in one browser session on the private test wallet, waiting for each to confirm, and prints the hashes. `node e2e/live/run.mjs staking` stakes, delegates the vote and changes pool; `withdraw-rewards` and `unstake` wait until rewards arrive. `run.mjs` also takes single flows: `mint live-1 account + move-in 25.5`. |
 | Manual | What a script can't see, before each release | [The preprod checklist](#preprod-checklist-before-a-release) |
 
 ## Preprod checklist before a release
@@ -96,7 +97,9 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the pop
    - move in;
    - send to a seedelf, pasting a name someone else gave you;
    - withdraw to an address and to a `$handle`;
-   - remove a seedelf.
+   - remove a seedelf;
+   - stake with a pool from the browser, change pool, delegate the vote to a DRep by its ID, withdraw rewards, and stop staking;
+   - send with *Use staking rewards when spending* on, then off.
 
    Read every review and every privacy note as you go.
 6. **Mistakes and failures:**
@@ -111,16 +114,17 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 
 1. **Bump the version:** `npm version <x.y.z> --no-git-tag-version` in `extension/`. It updates `package.json` and `package-lock.json`, and the manifest takes its version from there. Every upload needs a higher version than the last.
 2. **Refresh the token list:** `npm run tokens` in `extension/`. Read the diff of `src/tokens/registry.*.json`, and any "also claimed by" warning, before committing it. To add a token, vet its unit and put it in `src/tokens/list.json` first; `node scripts/tokens.mjs find <network> <TICKER>` shows the registry's entries for a ticker.
-3. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
-4. **Build the package:** `npm run package` in `extension/`.
+3. **Refresh the DRep list:** `npm run dreps` in `extension/`. It rewrites `src/dreps/<network>.json` with every registered DRep that has a name; skim the diff for anything odd before committing it.
+4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
+5. **Build the package:** `npm run package` in `extension/`.
    - It builds with `VITE_STORE_BUILD=true`, so there's no dev key.
    - It refuses a `dist/` with a key, or one whose version doesn't match `package.json`.
    - It adds `licenses/THIRD-PARTY.txt`: every Rust crate compiled into the WebAssembly, every bundled npm package, and SecretBox, each with its licence text. It fails if one of them ships no licence and has no known fallback (`scripts/third-party.mjs`).
    - It writes `release/seedelf-wallet-<version>.zip` and prints its SHA-256. The zip is reproducible: the same sources and toolchain give the same bytes.
-5. **Test the store build:** `npm run e2e` runs every end-to-end test on it. Load `dist/` unpacked in a fresh Chrome profile once, and click through onboarding and Home.
-6. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`.
-7. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
-8. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
+6. **Test the store build:** `npm run e2e` runs every end-to-end test on it. Load `dist/` unpacked in a fresh Chrome profile once, and click through onboarding and Home.
+7. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`.
+8. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
+9. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
 
 ## Sharing with testers before launch
 

@@ -14,12 +14,14 @@
 | Which Seedelf UTxOs are yours | To show your Seedelf balance. | **Worked out on your device.** It's kept in session storage and cleared when you lock. Nobody is told. |
 | Your contacts, your Seedelf history, and the UTxOs you lock | To name who you pay, list what you sent and received, and keep the UTxOs you chose out of your payments. | **On your device only**, encrypted with a key derived from your recovery phrase, so they can't be read while the wallet is locked. Removing the wallet deletes them. |
 | An ADA Handle you withdraw to | To find the address it belongs to. | **Sent to Koios**, which looks up who holds the handle. Pasting an address instead asks Koios nothing. |
+| Your staking: your pool, where your voting power goes, your rewards | To show them, and to build the staking changes you approve. | **Sent to Koios**, as your stake address. A pool or a DRep you look up is sent to Koios too. Like every transaction, a staking change is public once it's on the blockchain. |
+| Your settings (whether payments spend your staking rewards) and the list of stake pools | To remember your choice, and to browse pools without asking Koios each time. | **On your device only.** The pool list is the same for everyone. Removing the wallet deletes your settings. |
 | The number of failed unlocks | To slow down password guessing. | **On your device only.** |
 
 ## The services the extension talks to
 
 - **Koios** (`preprod.koios.rest`), a public Cardano API run by the Koios community.
-  - It sees your IP address and what the wallet asks: your Cardano account, the whole Seedelf contract, and the transactions you submit.
+  - It sees your IP address and what the wallet asks: your Cardano account and its staking, the whole Seedelf contract, the pools and DReps you look at, and the transactions you submit.
   - From that it can tell that your Cardano account uses Seedelf. It can't tell which Seedelf UTxOs are yours, because that check runs on your device.
 - **giveme.my** (`www.giveme.my`), a collateral service for Seedelf transactions.
   - It sees your IP address and each Seedelf transaction it adds collateral to.

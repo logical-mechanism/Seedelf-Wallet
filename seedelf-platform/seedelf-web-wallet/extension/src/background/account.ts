@@ -13,14 +13,18 @@
 // move-in, mint or send adds `epoch_params` alongside.
 //
 // To spend, what the user locked and the collateral are left out
-// (coin-control.ts); the collateral comes back on its own, for a mint.
+// (coin-control.ts); the collateral comes back on its own, for a mint. When
+// the user spends staking rewards (preferences.ts), `account_info` is read
+// alongside too, and the whole reward balance rides along, if the account's
+// vote is delegated: Conway pays out nothing otherwise.
 
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import { discoverChain } from "./chain";
 import type { CoinControlService } from "./coin-control";
-import type { Koios, KoiosUtxo } from "./koios";
+import type { Koios, KoiosAccountInfo, KoiosUtxo } from "./koios";
+import type { PreferencesService } from "./preferences";
 import { readFresh, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
 import type { Keys, Wallet } from "./wallet";
@@ -104,21 +108,53 @@ export function nothingInAccount(held: number, empty: string): Error {
   );
 }
 
+export interface SpendingAccount {
+  params: Record<string, unknown>;
+  /** What may be spent: not locked, not the collateral. */
+  utxos: PathedUtxo[];
+  collateral?: PathedUtxo;
+  /** How many UTxOs the account holds in all. */
+  held: number;
+  /** The stake key's standing, when it was read; undefined too when it was never registered. */
+  stake?: KoiosAccountInfo;
+  /** The rewards to withdraw along with the payment (lovelace), when the user spends them and can. */
+  withdrawal?: string;
+}
+
 /**
- * To spend from the account (a move-in, an account-paid mint, a send): the
- * UTxOs that may be spent, fresh (not locked, not the collateral), the
- * collateral, how many UTxOs the account holds in all, and the protocol
- * parameters.
+ * To spend from the account (a move-in, an account-paid mint, a send, a
+ * staking transaction): the UTxOs that may be spent, fresh, the collateral,
+ * and the protocol parameters. The stake key is read too for `stake`, or
+ * when the user spends rewards.
  */
 export async function readAccount(
-  deps: AccountDeps & { coins: CoinControlService },
+  deps: AccountDeps & { coins: CoinControlService; preferences?: PreferencesService },
   network: NetworkName,
-): Promise<{ params: Record<string, unknown>; utxos: PathedUtxo[]; collateral?: PathedUtxo; held: number }> {
-  const spent = await deps.wallet.withKeys(() => spentSet(deps.session));
-  const [{ utxos }, params] = await Promise.all([
+  { stake: readStake = false } = {},
+): Promise<SpendingAccount> {
+  const { wasm, wallet } = deps;
+  const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+  const [spent, stakeAddress, preferences] = await Promise.all([
+    wallet.withKeys(() => spentSet(deps.session)),
+    wallet.withKeys(({ cardano }) => cardano.stakeAddress(net)),
+    deps.preferences?.get(),
+  ]);
+  const spendRewards = preferences?.spendRewards ?? false;
+  const koios = deps.koios(network);
+  const [{ utxos }, params, stake] = await Promise.all([
     readAccountUtxos(deps, network, spent),
-    deps.koios(network).epochParams(),
+    koios.epochParams(),
+    readStake || spendRewards ? koios.accountInfo(stakeAddress) : undefined,
   ]);
   const { spendable, collateral } = await deps.coins.account(network, utxos);
-  return { params, utxos: spendable, collateral, held: utxos.length };
+  const withdrawable =
+    spendRewards && stake?.status === "registered" && stake.delegated_drep && BigInt(stake.rewards_available) > 0n;
+  return {
+    params,
+    utxos: spendable,
+    collateral,
+    held: utxos.length,
+    stake,
+    ...(withdrawable ? { withdrawal: stake.rewards_available } : {}),
+  };
 }

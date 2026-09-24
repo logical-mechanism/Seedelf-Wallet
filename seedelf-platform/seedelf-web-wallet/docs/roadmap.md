@@ -29,7 +29,7 @@ The wallet is built in **chunks**, each about one working session.
 | 11b | Size and live runs | ✅ | A smaller WebAssembly module: a size-tuned cargo profile (`wasm-opt` measured and left out). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
 | 11c | Testers | ✅ | The unlisted, preprod-only Chrome Web Store listing, ready for the user to submit: `npm run package` (the store build, third-party notices, a reproducible zip), the listing text and privacy policy in [store/](store/README.md), the images from `npm run store:images`, and a release checklist. Same plan. |
 | 12 | Style and flow | ✅ | The user tested the built wallet and sent findings; 29 items, each decided with the user. Among them: a loading splash, a Tokens screen and a bundled token list, a token picker with any amount of each, Settings, Activity, Contacts, an incremental contract scan, Send from the Cardano account, the minimum ADA worked out, Receive on the Seedelf tab, spending everything under the account's payment keys, a UTxOs screen on both sides with locks, the Cardano account's collateral in Settings, and Refresh on UTxOs and Activity. **Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).** |
-| 13 | Staking and voting | ⬜ | The wallet becomes a full Cardano wallet with Seedelf built in: a Staking page (one pool, rewards spent automatically or by hand), and voting delegation (Always abstain, No confidence, or a DRep). Certificates patched into Pallas's transactions. **Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md).** |
+| 13 | Staking and voting | ✅ | The wallet becomes a full Cardano wallet with Seedelf built in: a Staking page (one pool, rewards spent automatically or by hand), a pool browser, and voting delegation (Always abstain, No confidence, or a DRep). Certificates patched into Pallas's transactions. **Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md).** |
 
 ## After v1
 
@@ -40,6 +40,25 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md), whose *Status* says where the build departed from it.
+  - **What landed:**
+    - **Core:** `seedelf-core/src/staking.rs` patches certificates and a withdrawal into a built account transaction and writes the new body hash into the `BuiltTransaction`, so signing is unchanged. `build::account_staking` (a payment to `Payee::Nobody`) delegates, delegates the vote, withdraws, or stops; `move_in`, `account_send` and `account_mint` take a `&Staking` for rewards riding along. `ProtocolParameters` gains `key_deposit`.
+    - **WebAssembly:** `buildStaking`, `poolId`, `drepId`, and `withdrawal` on the move-in, send and account-mint requests; the stake key `2/0` signs inside it.
+    - **Worker:** `account_info` in every balance reading (`Balances.cardano.staking`), `staking.ts` (the pool list kept a day in `chrome.storage.local`, a pool's and a DRep's details, builds), `preferences.ts` (`spendRewards`, on by default), and staking refusals in plain words at submit.
+    - **UI:** Home's staking row and locked-rewards warning, the Cardano total with the rewards, Staking, the pool browser, the vote, the rewards in Send / Move in / Create reviews, and Settings' switch.
+    - **Docs:** the new positioning in the README, privacy.md, the store listing and the manifest's summary ("A Cardano wallet with private payments built in…"), for the user to resubmit. Store images regenerated; screenshot 5 is now "A full Cardano wallet".
+    - **DRep search** (the user asked after the PR opened): `npm run dreps` bundles every registered DRep with a name (`src/dreps/`: 61 on preprod, 452 on mainnet), and the vote page searches it by name or ID with no requests; a pasted ID still works for one registered since the release. Run it at each release, like `npm run tokens`.
+  - **Checked on preprod without spending:** `tests/fixtures/probe-staking.mjs`. Every staking transaction decodes on the node (Ogmios answers `[]`), and an account-paid mint with the rewards passes the real policy at the same budget.
+  - **Not done:** the live run. It needs the user's go-ahead: `node e2e/live/run.mjs staking` on the private test wallet (stake with TPREP, always abstain, then LOGIC), and later `withdraw-rewards` and `unstake`, once rewards arrive 15 to 20 days on.
+  - **Surprises:**
+    - Koios's `account_info` returns no row at all for a stake key that was never registered.
+    - `pool_list` has tickers but no names, and only the active stake: saturation needs `totals` and `optimal_pool_count` too, so browsing costs 3 requests on preprod, not 1.
+    - PostgREST's JSON-path `select` works on Koios's POST endpoints (`meta_json->body->givenName`), so a DRep's name comes without its metadata's bulk, or its image.
+    - The recorded 12-word account's rewards (57.475311 ₳) now ride along in the e2e and Vitest flows by default. Tests about something else keep their meaning: bigger amounts, or rewards spending switched off (`spent.test.ts`).
+    - The WebAssembly module grew from 424 to 439 KB gzipped (bech32 and the certificates); the store zip from 900 KB to 952 KB.
+  - **Tests:** cargo 241 (core 123, of which 12 are staking; WASM native 34), WASM Node 33, Vitest 196 (+2 live), Playwright 34.
+  - **Next:** the user's review of the staking screens, and the live run. The follow-up left (staking in the Cardano Activity) is in the plan. Then the after-v1 items.
 
 - **2026-09-24: chunk 12 done** (`web-wallet/style-flow`). Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).
   - **What landed:** the user's 29 findings, each with its decision in the plan's list. Items 21–29 came after the PR opened: UTxOs on each Home tab, locks on both sides (from each row too), the collateral in Settings, Refresh on UTxOs and Activity, no "Unnamed" stand-in for an untagged seedelf, and a centred transaction banner. The store images are regenerated (Home changed); the listing text isn't, until chunk 13's new positioning.

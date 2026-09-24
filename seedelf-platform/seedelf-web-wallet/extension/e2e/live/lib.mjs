@@ -97,6 +97,17 @@ export async function reviewAndSend(page, testId, name) {
   await page.getByRole("button", { name: "Send" }).click();
 }
 
+/** Logs the staking review that's open and screenshots it, then presses Send. */
+export async function sendReviewed(page, name) {
+  const review = page.getByTestId("staking-review");
+  await review.waitFor({ timeout: 90_000 }).catch(async () => {
+    throw new Error(`no review: ${await page.getByRole("alert").allTextContents()}`);
+  });
+  log("review:", (await review.innerText()).replace(/\n/g, " | "));
+  await page.screenshot({ path: `test-results/live-${name}-review.png`, fullPage: true });
+  await page.getByRole("button", { name: "Send" }).click();
+}
+
 /** Waits for the sent banner, then for the network to confirm (`text`) and the balances to be read again. */
 export async function confirmed(page, text) {
   const banner = page.getByTestId("pending-tx");

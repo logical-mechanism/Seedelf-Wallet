@@ -263,3 +263,23 @@ export const VaultIcon = icon(
     <circle cx="12" cy="12" r="2" />
   </>,
 );
+
+/** chart-pie: staking */
+export const PieIcon = icon(
+  <>
+    <path d="M21 12c.552 0 1.005-.449.95-.998a10 10 0 0 0-8.953-8.951c-.55-.055-.998.398-.998.95v8a1 1 0 0 0 1 1z" />
+    <path d="M21.21 15.89A10 10 0 1 1 8 2.83" />
+  </>,
+);
+
+/** landmark: voting power */
+export const LandmarkIcon = icon(
+  <>
+    <path d="M10 18v-7" />
+    <path d="M11.12 2.198a2 2 0 0 1 1.76.006l7.866 3.847c.476.233.31.949-.22.949H3.474c-.53 0-.695-.716-.22-.949z" />
+    <path d="M14 18v-7" />
+    <path d="M18 18v-7" />
+    <path d="M3 22h18" />
+    <path d="M6 18v-7" />
+  </>,
+);

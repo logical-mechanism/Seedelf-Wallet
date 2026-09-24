@@ -2,6 +2,25 @@
 
 **Why:** on 2026-09-24 the user settled what the wallet is: **a Cardano wallet with private payments built in**, more like Lace, not a stealth wallet you keep beside another one. Users shouldn't need a second wallet for the Cardano side. Chunk 12 added Send from the Cardano account; this chunk adds staking and voting delegation. Branch `web-wallet/staking`, from `seedelf-web-wallet` once chunk 12 is merged. It's big, so it may split into 13a (the core and staking) and 13b (voting, spending rewards, the new positioning), one PR each.
 
+## Status (2026-09-24)
+
+**Built in one PR** on `web-wallet/staking`, not split into 13a and 13b: every item in *Scope* below. **Not done:** the live preprod run, which needs the user's go-ahead (`node e2e/live/run.mjs staking`, then `withdraw-rewards` and `unstake` once rewards arrive).
+
+**Where it went differently from the plan:**
+
+- **One certificate to register and delegate:** Conway's `StakeRegDeleg` and `VoteRegDeleg`, not a registration then a delegation as Lace does. Fewer bytes, the same effect.
+- **`BuiltTransaction::sign` is fine after all.** The patch writes the new body hash into the `BuiltTransaction` (Pallas doesn't export its byte types, but their fields are public), so `sign` signs the right hash, and the signing code needed no change. A patch after signing is refused.
+- **`Payee::Nobody`**: a staking transaction is an account payment that pays no one, so it shares the move-in's UTxO choice and change.
+- **The pool list has tickers, not names.** `pool_list` has no name column, and `pool_metadata` includes every pool that ever was (682 on preprod), with no status to filter by. Names come with a pool's details, and search is by ticker or pool ID.
+- **Saturation needs two more requests:** `pool_list` has only the active stake, so the browser adds `totals` (the supply) and `epoch_params` (`optimal_pool_count`). All three are kept for a day. Checked: LOGIC's worked out as 18.79%, `pool_info`'s live figure 18.80%.
+- **The ticker on Home** comes from what the session read, the pool list on the device, or one `pool_info` a session (in session storage: it says which pool is the user's).
+- **Home's Cardano balance counts the rewards,** as Lace's does; `Balances.cardano.lovelace` stays the UTxOs', and the forms add the rewards only while they ride along.
+- **A DRep's name only:** `drep_metadata` with `select=drep_id,meta_json->body->givenName`. Its image is never fetched.
+- **DReps are searched by name, not only pasted by ID** (the user asked, after the PR opened): the wallet ships its own list of named DReps (`npm run dreps`, `src/dreps/`), as it does its token list. The follow-up below is done.
+- **The pinned choices in a list,** as radio rows with a line each, not a segmented switch: "Always no confidence" needs saying what it does.
+
+**Checked on preprod without spending anything** ([`tests/fixtures/probe-staking.mjs`](../../extension/tests/fixtures/probe-staking.mjs)): every kind of staking transaction for the public 12-word account decodes on the node's Conway decoder (Ogmios `evaluateTransaction` answers `[]`), and an account-paid mint with its 57.475311 ₳ of rewards riding along passes the real seedelf policy (72,835 memory, 21,396,008 steps, the same as without).
+
 ## Start here
 
 1. `git fetch origin && git checkout -b web-wallet/staking origin/seedelf-web-wallet`
@@ -60,11 +79,13 @@ From `_reference/lace` (2.4.0): a staking page per account with the pool's stats
 
 ### 5. Koios requests
 
+As built:
+
 | When | Requests |
 |---|---|
-| A balance reading | 4 (was 3): `account_info` joins, alongside |
+| A balance reading | 4 (was 3): `account_info` joins, alongside. The first of a session with a pool also asks its `pool_info` for the ticker, unless the pool list on the device has it |
 | Opening Staking | 1: `pool_info` for the current pool |
-| Browsing pools | 1 on preprod (559 live pools), 3 on mainnet (2,891), then none for a day |
+| Browsing pools | 3 on preprod (559 live pools: `pool_list`, `totals`, `epoch_params`), 5 on mainnet (2,891), then none for a day |
 | A pool's details | 1: `pool_info` |
 | A DRep by ID | 2: `drep_info` and `drep_metadata` |
 | Any staking build | 4: `account_addresses`, `credential_utxos`, `account_info`, `epoch_params` |
@@ -82,5 +103,5 @@ README, privacy.md and flows.md (a Staking section); architecture.md (certificat
 
 ## Follow-ups, not this chunk
 
-- **A browsable DRep list with names.** `drep_list` is 2 requests on mainnet (1,050 registered), but names come from `drep_metadata`, and Koios's public tier refuses request bodies over 5,120 bytes: about 80 IDs a call, so 13 calls and about 4 MB a day. Better: ship a name list with each release, as the token list does (`npm run tokens`), and read live status only for the DRep picked.
+- ~~A browsable DRep list with names.~~ **Done in this chunk, at the user's request (2026-09-24):** `npm run dreps` bundles every registered DRep with a name (preprod 61 of 290, mainnet 452 of 1,050: 5 and 37 KB), and the vote page searches it by name or ID with no requests. Only the DRep picked is read live. A DRep registered since the release is found by pasting its ID. Koios has no bulk list of names: `drep_list` has none, and `drep_metadata` answers only for the IDs given (75 a request under the 5,120-byte body limit), so a live list would cost 14 requests a day on mainnet.
 - Rewards history, and the Cardano Activity's certificates and withdrawals (`tx_info` with `_certs` and `_withdrawals`).

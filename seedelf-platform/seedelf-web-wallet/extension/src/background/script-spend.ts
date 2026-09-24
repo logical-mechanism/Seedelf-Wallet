@@ -26,6 +26,7 @@ import type { CoinControlService } from "./coin-control";
 import type { Collateral } from "./collateral";
 import { forgetContractView, readContractView, type ContractView } from "./contract-scan";
 import { SpentInputError, type Koios, type KoiosUtxo } from "./koios";
+import type { PreferencesService } from "./preferences";
 import { SESSION_PENDING } from "./pending";
 import { rememberSpent } from "./spent";
 import type { Area } from "./storage";
@@ -48,6 +49,8 @@ export interface ScriptSpendDeps {
   activity?: ActivityService;
   /** Leaves out what the user locked, on both sides. */
   coins: CoinControlService;
+  /** Whether an account-paid spend (a mint, a send) spends staking rewards too. */
+  preferences?: PreferencesService;
 }
 
 /** A built transaction waiting in session storage for Send. */

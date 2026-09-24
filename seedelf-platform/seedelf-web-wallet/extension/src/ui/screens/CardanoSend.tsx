@@ -15,16 +15,20 @@ import { DestinationField, useDestination } from "../components/Destination";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, lockedAside, shortHex, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, formatQuantity, lockedAside, rewardsAside, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { tokenLabel } from "../tokens";
 
 export function CardanoSend({
   cardano,
+  rewards,
   onCancel,
   onSent,
 }: {
+  /** What can pay: `lovelace` includes `rewards`. */
   cardano: Balances["cardano"];
+  /** Staking rewards that ride along (lovelace), when any do. */
+  rewards?: string;
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
@@ -101,6 +105,7 @@ export function CardanoSend({
             );
           })}
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
+          <WithdrawalRow withdrawal={summary.withdrawal} />
           <Row label="Back to your Cardano account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="UTxOs spent" value={String(summary.inputs)} />
         </ReviewRows>
@@ -117,7 +122,7 @@ export function CardanoSend({
       title="Send"
       titleId="send-title"
       onBack={onCancel}
-      aside={`${formatAda(cardano.lovelace)} ₳ available${lockedAside(cardano)}`}
+      aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!ready || busy}>
@@ -151,7 +156,8 @@ export function CardanoSend({
       </div>
       {max ? (
         <p className="note" data-testid="send-max-note">
-          Everything except the fee and what the tokens you keep need. Your collateral and any UTxOs you locked stay put.
+          Everything except the fee and what the tokens you keep need{rewards ? ", staking rewards included" : ""}. Your
+          collateral and any UTxOs you locked stay put.
         </p>
       ) : (
         withTokens && <MinimumHint />
@@ -165,6 +171,12 @@ export function CardanoSend({
       </Callout>
     </Screen>
   );
+}
+
+/** The staking rewards a payment from the account spent, when it did. */
+export function WithdrawalRow({ withdrawal }: { withdrawal?: string }) {
+  if (!withdrawal || BigInt(withdrawal) === 0n) return null;
+  return <Row label="Staking rewards spent" value={`${formatAda(withdrawal)} ₳`} />;
 }
 
 function OwnNote() {

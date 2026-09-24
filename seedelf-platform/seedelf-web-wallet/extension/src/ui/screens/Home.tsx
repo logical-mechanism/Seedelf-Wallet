@@ -1,7 +1,9 @@
 // Home, in two tabs. Seedelf: the Seedelf balance with Receive (your
 // seedelfs: their names, and Remove), Send, Withdraw and Create, and its
-// tokens. Cardano account: the account's balance and tokens, Receive, Send
-// and Move in. Each tab opens its Activity and its UTxOs, where UTxOs are
+// tokens. Cardano account: the account's balance (its staking rewards
+// included) and tokens, Receive, Send and Move in, and a staking row that
+// opens Staking, with a warning while rewards are locked for want of a vote
+// delegation. Each tab opens its Activity and its UTxOs, where UTxOs are
 // locked; the forms get only what's unlocked. Until the wallet has a seedelf
 // and a Seedelf balance, a checklist shows the order that keeps them apart:
 // fund the account, create the seedelf, then move in (privacy.md, mint first).
@@ -12,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { Account, Balances, PendingTx, SeedelfInfo } from "../../shared/rpc";
+import type { Account, Balances, PendingTx, Preferences, SeedelfInfo, StakeInfo } from "../../shared/rpc";
 import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
@@ -25,6 +27,7 @@ import {
   DoneIcon,
   HistoryIcon,
   MoveInIcon,
+  PieIcon,
   ReceiveIcon,
   SendIcon,
   SproutIcon,
@@ -32,13 +35,14 @@ import {
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { formatAda, plural, unlocked } from "../format";
+import { formatAda, plural, poolLabel, rewardsLocked, spentRewards, unlocked, withRewards } from "../format";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
 import { Receive, ReceiveSeedelf } from "./Receive";
 import { RemoveSeedelf } from "./RemoveSeedelf";
+import { Staking } from "./Staking";
 import { Tokens } from "./Tokens";
 import { Transfer } from "./Transfer";
 import { Utxos } from "./Utxos";
@@ -53,6 +57,10 @@ const SENT: Record<PendingTx["kind"], string> = {
   remove: "Seedelf removal",
   send: "Payment",
   collateral: "Collateral payment",
+  stake: "Delegation",
+  vote: "Vote delegation",
+  "withdraw-rewards": "Reward withdrawal",
+  unstake: "Stop staking",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Move-in confirmed",
@@ -62,6 +70,10 @@ const CONFIRMED: Record<PendingTx["kind"], string> = {
   remove: "Seedelf removed",
   send: "Payment confirmed",
   collateral: "Collateral set",
+  stake: "Now staking",
+  vote: "Voting power delegated",
+  "withdraw-rewards": "Rewards withdrawn",
+  unstake: "Staking stopped",
 };
 
 /** Read again on open when the last reading is older than this. */
@@ -82,8 +94,18 @@ export function Home() {
   const [now, setNow] = useState(Date.now);
   const [tab, setTab] = useState<Tab>("seedelf");
   const [screen, setScreen] = useState<
-    "home" | "receive" | "receive-seedelf" | "move-in" | "send" | "create" | "transfer" | "withdraw"
+    | "home"
+    | "receive"
+    | "receive-seedelf"
+    | "move-in"
+    | "send"
+    | "create"
+    | "transfer"
+    | "withdraw"
+    | "staking"
+    | "staking-vote"
   >("home");
+  const [prefs, setPrefs] = useState<Preferences>();
   const [removing, setRemoving] = useState<SeedelfInfo>();
   const [tokensOf, setTokensOf] = useState<Tab>();
   const [activityOf, setActivityOf] = useState<Tab>();
@@ -120,6 +142,7 @@ export function Home() {
 
   useEffect(() => {
     call("account", {}).then(setAccount, (e: Error) => setError(e.message));
+    call("preferences", {}).then(setPrefs, () => setPrefs({ spendRewards: true }));
     void load(false).then((b) => {
       if (b && Date.now() - b.updatedAt > STALE_MS) void load(true);
     });
@@ -139,8 +162,16 @@ export function Home() {
   }, [watching, watch]);
 
   const seedelfs = balances?.seedelf.seedelfs ?? [];
-  // What the forms may spend: each side less what's locked.
-  const free = balances && { ...balances, seedelf: unlocked(balances.seedelf), cardano: unlocked(balances.cardano) };
+  // What the forms may spend: each side less what's locked, and the account's
+  // staking rewards when a payment spends them too.
+  const spendRewards = prefs?.spendRewards ?? true;
+  const rewards = balances ? spentRewards(balances.cardano.staking, spendRewards) : 0n;
+  const rewardsProp = rewards > 0n ? rewards.toString() : undefined;
+  const free = balances && {
+    ...balances,
+    seedelf: unlocked(balances.seedelf),
+    cardano: withRewards(unlocked(balances.cardano), rewards),
+  };
   const canSpend = !!free && free.seedelf.utxos > 0 && !watching;
   const spendTitle = watching
     ? BUSY
@@ -184,8 +215,24 @@ export function Home() {
       />
     );
   }
-  if (screen === "move-in" && free) return <MoveIn cardano={free.cardano} onCancel={home} onSent={sent} />;
-  if (screen === "send" && free) return <CardanoSend cardano={free.cardano} onCancel={home} onSent={sent} />;
+  if (screen === "move-in" && free) {
+    return <MoveIn cardano={free.cardano} rewards={rewardsProp} onCancel={home} onSent={sent} />;
+  }
+  if (screen === "send" && free) {
+    return <CardanoSend cardano={free.cardano} rewards={rewardsProp} onCancel={home} onSent={sent} />;
+  }
+  if ((screen === "staking" || screen === "staking-vote") && balances) {
+    return (
+      <Staking
+        staking={balances.cardano.staking}
+        spendRewards={spendRewards}
+        blocked={watching ? BUSY : undefined}
+        start={screen === "staking-vote" ? "vote" : "overview"}
+        onBack={home}
+        onSent={sent}
+      />
+    );
+  }
   if (screen === "create" && free) return <CreateSeedelf balances={free} onCancel={home} onSent={sent} />;
   if (screen === "transfer" && free) return <Transfer seedelf={free.seedelf} onCancel={home} onSent={sent} />;
   if (screen === "withdraw" && free) return <Withdraw seedelf={free.seedelf} onCancel={home} onSent={sent} />;
@@ -314,7 +361,7 @@ export function Home() {
               <h1 id="cardano-account" className="hero__label">
                 Cardano account
               </h1>
-              <Amount lovelace={balances?.cardano.lovelace} testId="cardano-lovelace" />
+              <Amount lovelace={balances && accountTotal(balances.cardano)} testId="cardano-lovelace" />
               <span className="hero__meta" data-testid="cardano-meta">
                 {balances
                   ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used${lockedMeta(balances.cardano)}`
@@ -346,6 +393,21 @@ export function Home() {
               </div>
             </div>
 
+            {balances && <StakingRow staking={balances.cardano.staking} onOpen={() => setScreen("staking")} />}
+            {balances && rewardsLocked(balances.cardano.staking) && (
+              <Callout tone="warn" testId="home-rewards-locked">
+                <div className="stack-tight">
+                  <span>
+                    Your {formatAda(balances.cardano.staking.rewards)} ₳ of staking rewards are locked until you delegate
+                    your voting power.
+                  </span>
+                  <button type="button" className="link align-start" onClick={() => setScreen("staking-vote")}>
+                    Delegate your vote
+                  </button>
+                </div>
+              </Callout>
+            )}
+
             {balances && seedelfs.length === 0 && (
               <Callout tone="privacy" testId="mint-first">
                 Create your seedelf before moving money in: then what you move in isn't tied to it.
@@ -376,6 +438,36 @@ export function Home() {
 /** " · 5 ₳ locked" under a balance, when some of it is. */
 function lockedMeta(side: Balances["seedelf" | "cardano"]): string {
   return side.locked.utxos ? ` · ${formatAda(side.locked.lovelace)} ₳ locked` : "";
+}
+
+/** Everything the account holds: its UTxOs and its staking rewards, as other wallets show it. */
+function accountTotal(cardano: Balances["cardano"]): string {
+  return (BigInt(cardano.lovelace) + BigInt(cardano.staking.rewards)).toString();
+}
+
+/** "Staking with LOGIC · 57.47 ₳ rewards", or "Not staking": opens Staking. */
+function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => void }) {
+  const rewards = BigInt(staking.rewards) > 0n;
+  return (
+    <section className="section">
+      <ul className="list">
+        <li>
+          <button type="button" className="menu-row" onClick={onOpen} data-testid="staking-row">
+            <span className="menu-row__icon">
+              <PieIcon size={16} />
+            </span>
+            <span className="menu-row__text">
+              <span>{staking.pool ? `Staking with ${poolLabel(staking.pool)}` : "Not staking"}</span>
+              <span className="menu-row__sub">
+                {staking.pool || rewards ? `${formatAda(staking.rewards)} ₳ rewards` : "Stake to earn rewards"}
+              </span>
+            </span>
+            <ChevronRightIcon size={16} />
+          </button>
+        </li>
+      </ul>
+    </section>
+  );
 }
 
 /** Opens this tab's Activity, or its UTxOs. */

@@ -10,7 +10,9 @@
 // its staking part (account.ts). Keys come from the gap limit over the
 // addresses that have used the account's stake key. Asking by payment key
 // also leaves out what anyone can pair with our stake key: their own payment
-// key or script, which proves nothing about us.
+// key or script, which proves nothing about us. The stake key's standing
+// (`account_info`: the pool, the vote, the rewards) is read alongside
+// (staking.ts).
 //
 // What the user locked, and the Cardano account's collateral, are counted in
 // the balance and reported apart (coin-control.ts), fresh on every request,
@@ -24,7 +26,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { Balances, Locked, SeedelfInfo } from "../shared/rpc";
+import type { Balances, Locked, SeedelfInfo, StakeInfo } from "../shared/rpc";
 import { readAccountUtxos, type Account, type PathedUtxo } from "./account";
 import { registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses, type ActivityService } from "./activity";
@@ -32,6 +34,7 @@ import { SESSION_ACCOUNT_UTXOS_PREFIX, type CoinControlService } from "./coin-co
 import { readContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
 import { spentSet } from "./spent";
+import { readStake } from "./staking";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, type Keys, type Wallet } from "./wallet";
 
@@ -60,6 +63,8 @@ export interface BalanceDeps {
   activity?: ActivityService;
   /** What's locked on each side. */
   coins: CoinControlService;
+  /** chrome.storage.local, where the pool list is kept: a pool's ticker is looked up there first. */
+  local?: Area;
 }
 
 const NOTHING: Locked = { lovelace: "0", tokens: [], utxos: 0 };
@@ -105,14 +110,19 @@ export class BalanceService {
   }
 
   private async read(network: NetworkName): Promise<Balances> {
-    const { wallet, session, now, contract = CONTRACT_V1 } = this.deps;
+    const { wasm, wallet, session, now, contract = CONTRACT_V1 } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
 
     // Network calls happen outside withKeys, so they never hold up a lock.
-    const spent = await wallet.withKeys(() => spentSet(session));
-    const [{ account, utxos }, view] = await Promise.all([
+    const [spent, stake] = await Promise.all([
+      wallet.withKeys(() => spentSet(session)),
+      wallet.withKeys(({ cardano }) => cardano.stakeAddress(net)),
+    ]);
+    const [{ account, utxos }, view, staking] = await Promise.all([
       readAccountUtxos(this.deps, network, spent),
       // The contract: in full when due, otherwise only what's new (contract-scan.ts).
       readContractView(this.deps, network),
+      readStake(this.deps, network, stake),
     ]);
 
     // The result is cached only while still unlocked.
@@ -121,7 +131,7 @@ export class BalanceService {
         network,
         updatedAt: now(),
         seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId),
-        cardano: this.cardanoSide(account, utxos),
+        cardano: this.cardanoSide(account, utxos, staking),
       };
       await session.set(SESSION_BALANCES_PREFIX + network, balances);
       // The UTxOs screen and what's locked read these.
@@ -150,7 +160,7 @@ export class BalanceService {
     return { lovelace: lovelace.toString(), tokens, utxos: spendable.length, seedelfs, locked: NOTHING };
   }
 
-  private cardanoSide(account: Account, utxos: PathedUtxo[]): Balances["cardano"] {
+  private cardanoSide(account: Account, utxos: PathedUtxo[], staking: StakeInfo): Balances["cardano"] {
     const { lovelace, tokens } = sumValue(utxos.map((p) => p.utxo));
     return {
       lovelace: lovelace.toString(),
@@ -158,6 +168,7 @@ export class BalanceService {
       utxos: utxos.length,
       addressesUsed: account.used,
       locked: NOTHING,
+      staking,
     };
   }
 }

@@ -58,6 +58,7 @@ After a rebuild, press the reload arrow on the extension's card.
 | `npm run build` | WASM plus the extension (`build:wasm`, then `build:ext`) |
 | `npm run build:store` | The same with `VITE_STORE_BUILD=true`: no dev key, so Chrome or the store picks the ID |
 | `npm run tokens` | Rebuilds the wallet's token list (`src/tokens/registry.<network>.json`) from `src/tokens/list.json` and the Cardano token registry, through Koios. Run at each release. |
+| `npm run dreps` | Rebuilds the wallet's list of named DReps (`src/dreps/<network>.json`) from Koios, for the vote page's search. Run at each release. |
 | `npm run package` | A store build, plus `licenses/THIRD-PARTY.txt`, zipped reproducibly into `release/seedelf-wallet-<version>.zip` for the Web Store (`scripts/package.mjs`, `scripts/third-party.mjs`) |
 | `npm run dev` | Rebuilds the extension into `dist/` on change (development mode, with source maps) |
 | `npm run typecheck` | `tsc --noEmit` |
@@ -105,16 +106,20 @@ src/
     format.ts           ADA and token amounts, token names
     tokens.ts           tokens as the lists show them: the token list's ticker and logo, NFT or not, sort, search
   tokens/               list.json (the tokens the wallet knows by name) and registry.<network>.json (npm run tokens)
+  dreps/                <network>.json: the registered DReps with a name, for the vote page's search (npm run dreps)
 public/                 icons and logos resized from ../brand; fonts/ (Inter); licenses/ (Inter's OFL, Lucide's ISC)
 tests/                  Vitest (vectors/: independent SecretBox vectors; fixtures/: recorded preprod Koios responses
                         and synthetic owned UTxOs, remade by fixtures/record-koios.mjs; a stealth mint's real preprod
                         evaluation and giveme.my answer, remade by fixtures/record-mint.mjs; an account-paid mint's
                         real preprod evaluation, remade by fixtures/record-account-mint.mjs; a transfer's real
                         preprod evaluation and giveme.my answer, remade by fixtures/record-transfer.mjs; withdrawals
-                        and a removal's real preprod evaluations, remade by fixtures/record-withdraw.mjs)
+                        and a removal's real preprod evaluations, remade by fixtures/record-withdraw.mjs; the staking
+                        answers (account_info, every live pool, pools and DReps), remade by fixtures/record-staking.mjs;
+                        fixtures/probe-staking.mjs checks the staking transactions against preprod, keeping nothing)
 e2e/                    Playwright: support.ts (launch, the fake Koios, shared steps), extension.spec.ts,
                         store-images.spec.ts; live/ holds the live preprod runs
-scripts/                package.mjs (the store zip), third-party.mjs (the licence notices), tokens.mjs (the token list)
+scripts/                package.mjs (the store zip), third-party.mjs (the licence notices), tokens.mjs (the token list),
+                        dreps.mjs (the DRep list)
 release/                the store zip (gitignored)
 ```
 

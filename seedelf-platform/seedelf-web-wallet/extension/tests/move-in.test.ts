@@ -31,7 +31,14 @@ describe("move-in", () => {
     });
     expect(Number(summary.fee)).toBeGreaterThan(150_000);
     expect(t.koios.submitted).toHaveLength(0);
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["account_addresses", "credential_utxos", "epoch_params"]);
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual([
+      "account_addresses",
+      "account_info",
+      "credential_utxos",
+      "epoch_params",
+    ]);
+    // The account's staking rewards go in too (preferences.ts).
+    expect(summary.withdrawal).toBe("57475311");
 
     // The signed transaction waits in session storage, and it is the one summarized.
     const built = await t.session.get<{ txCbor: string; txHash: string }>(SESSION_BUILT);

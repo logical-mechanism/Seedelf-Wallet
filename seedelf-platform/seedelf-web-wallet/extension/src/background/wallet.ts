@@ -16,6 +16,7 @@ import type { NetworkName } from "../networks";
 import { passwordProblem } from "../shared/password";
 import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
+import { LOCAL_PREFERENCES } from "./preferences";
 import { PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
 import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord } from "./vault";
 
@@ -195,7 +196,7 @@ export class Wallet {
     return this.serial(async () => {
       await this.wipe();
       const records = PRIVATE_RECORDS.map((name) => PRIVATE_PREFIX + name);
-      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, ...records);
+      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records);
       this.deps.changed();
     });
   }

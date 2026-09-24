@@ -14,6 +14,7 @@ The protocol-level analysis lives in the root [README](../../../README.md#what-i
 - **Amounts and tokens.** Seedelf does not hide or mix value.
 - **The transaction graph and timing.**
 - **Which normal addresses paid into or received from the contract,** such as the Cardano account and one-time accounts.
+- **Everything the Cardano account does,** staking included: its pool, where its vote goes, and its rewards.
 - **The user's IP address,** as seen by Koios and giveme.my.
 
 ## Rules the wallet enforces
@@ -80,7 +81,12 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Contacts** (who the user pays), the Seedelf history, and **the UTxOs the user locked** (with the collateral chosen) are kept on disk, but **never unencrypted** (decided in chunk 12): sealed under a key derived from the phrase, unreadable while locked, deleted with the wallet. Saving or checking a contact, or locking a UTxO, asks no one anything.
   - **The UTxOs screen** lists the Seedelf UTxOs by outpoint, from the last reading. It says that looking one up on an explorer tells that site which UTxO you care about.
 - **The Cardano account's collateral** (chunk 12) is only ever put up by what the account signs anyway (an account-paid mint). Seedelf spends never use it: giveme.my lends theirs (rule 2), so no UTxO of the user's tags a private spend. Setting one by payment is a 5 ₳ payment from the account to itself, in the open.
+- **Staking and voting** (chunk 13) are the Cardano account's, and public, as in any wallet: the pool, the vote delegation, the rewards and every withdrawal name the account's stake key. The Staking page, the vote page and each review say so.
+  - **Seedelf money can't be staked.** It has no staking part, so it earns nothing while it's in Seedelf, and no stake key links a user's seedelfs. The Staking page says so.
+  - **Rewards spent along with a payment** (on by default, a Settings switch) add a withdrawal to a send, a move-in or an account-paid mint. It names the stake key, which the account's base addresses carry anyway, so it links nothing new. A move-in with rewards moves them into Seedelf with the rest.
+  - **What Koios learns:** every balance reading asks for the account's `account_info`, and its pool's `pool_info` once a session. The pool list is the same for everyone and kept on the device for a day. Searching DReps asks no one: the list of named DReps ships with the wallet. Picking one reads it from Koios, which then knows which one you're considering, as delegating to it will tell everyone.
+  - **Nothing from anywhere else:** a DRep's metadata is read through Koios, its name only. Its image, which could be on any site, is never fetched.
 
-## Not for holding
+## Holding and staking
 
-Seedelf funds sit at an address with no staking part, so they earn no staking rewards. That's the cost of not linking a user's seedelfs through a staking key. The wallet is for moving money privately; long-term staked holdings belong in a normal wallet.
+Seedelf funds sit at an address with no staking part, so they earn no staking rewards. That's the cost of not linking a user's seedelfs through a staking key. Since chunk 13, money that sits can stay in the Cardano account, staked with a pool, and move into Seedelf when it should move privately.

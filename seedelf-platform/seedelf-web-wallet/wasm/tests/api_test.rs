@@ -122,6 +122,7 @@ mod move_in {
             utxos,
             lovelace: lovelace.map(String::from),
             tokens,
+            withdrawal: None,
         }
     }
 
@@ -393,6 +394,7 @@ mod move_in {
             to: to.into(),
             lovelace: lovelace.map(String::from),
             tokens,
+            withdrawal: None,
         }
     }
 
@@ -922,6 +924,7 @@ mod account_mint {
             collateral: None,
             label: label.into(),
             evaluation,
+            withdrawal: None,
         }
     }
 
@@ -1759,5 +1762,414 @@ mod withdraw {
         assert!(!own(&theirs()));
         assert!(!own(&contract()));
         assert!(!own("nope"));
+    }
+}
+
+mod staking {
+    use std::collections::{BTreeSet, HashMap};
+
+    use pallas_crypto::hash::Hasher;
+    use pallas_crypto::key::ed25519::{PublicKey, Signature};
+    use pallas_primitives::conway::{self, Certificate, DRep};
+    use pallas_primitives::{Fragment, StakeCredential};
+    use pallas_traverse::MultiEraTx;
+    use seedelf_crypto::cardano::{CardanoAccount, Role};
+    use seedelf_wasm::api::{
+        self, PathedUtxo, SendRequest, StakeStateIn, StakingAction, StakingRequest,
+    };
+    use serde_json::Value;
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const LOGIC: &str = "pool1rccstu3l9ty3k0a5cd06fl3szsss9r34dcg5j38fqgq9kvng0tg";
+    const LOGIC_DREP: &str = "drep1ydmraa6kv8cvmry059v608tehl50nfmg0z764lmsqkvwurs40sw2z";
+
+    fn fixture(path: &str) -> Value {
+        let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn params() -> Value {
+        fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone()
+    }
+
+    /// The 12-word phrase's recorded preprod account UTxOs, each with its path.
+    fn account_utxos(account: &CardanoAccount) -> Vec<PathedUtxo> {
+        let doc = fixture("../extension/tests/fixtures/koios-preprod.json");
+        let stake = account.stake_address(true).unwrap().to_bech32().unwrap();
+        let mut paths = HashMap::new();
+        for role in [Role::Receive, Role::Change] {
+            for index in 0..20 {
+                let addr = account
+                    .base_address(true, role, index)
+                    .unwrap()
+                    .to_bech32()
+                    .unwrap();
+                paths.insert(addr, (role as u32, index));
+            }
+        }
+        doc["accounts"][&stake]["account_utxos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|row| {
+                let (role, index) = *paths.get(row["address"].as_str().unwrap())?;
+                Some(PathedUtxo {
+                    utxo: serde_json::from_value(row.clone()).unwrap(),
+                    role,
+                    index,
+                })
+            })
+            .collect()
+    }
+
+    /// The account as Koios's `account_info` recorded it: registered, with
+    /// LOGIC, always abstaining, and 57.475311 ADA of rewards.
+    fn recorded() -> StakeStateIn {
+        let doc = fixture("../extension/tests/fixtures/staking-preprod.json");
+        let info = &doc["account_info"][0];
+        StakeStateIn {
+            registered: info["status"] == "registered",
+            deposit: info["deposit"].as_str().unwrap().into(),
+            rewards: info["rewards_available"].as_str().unwrap().into(),
+            drep: info["delegated_drep"].as_str().map(String::from),
+        }
+    }
+
+    fn unregistered() -> StakeStateIn {
+        StakeStateIn {
+            registered: false,
+            deposit: "0".into(),
+            rewards: "0".into(),
+            drep: None,
+        }
+    }
+
+    fn request(
+        account: &CardanoAccount,
+        action: StakingAction,
+        state: StakeStateIn,
+    ) -> StakingRequest {
+        StakingRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos: account_utxos(account),
+            action,
+            state,
+        }
+    }
+
+    struct Signed {
+        certificates: Vec<Certificate>,
+        withdrawals: Vec<(Vec<u8>, u64)>,
+        /// Key hashes, hex, of every valid signature.
+        signers: BTreeSet<String>,
+        /// The spent UTxOs' payment keys, hex.
+        payment_keys: BTreeSet<String>,
+    }
+
+    /// Decodes a signed transaction and checks each signature is over its id.
+    fn signed(account: &CardanoAccount, tx_cbor: &str, tx_hash: &str) -> Signed {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        assert_eq!(hex::encode(*tx.hash()), tx_hash);
+        let mut signers = BTreeSet::new();
+        for w in tx.vkey_witnesses().iter() {
+            let key: [u8; 32] = w.vkey.to_vec().try_into().unwrap();
+            let sig: [u8; 64] = w.signature.to_vec().try_into().unwrap();
+            assert!(
+                PublicKey::from(key).verify(tx.hash(), &Signature::from(sig)),
+                "a signature over the transaction's own id"
+            );
+            signers.insert(hex::encode(Hasher::<224>::hash(&key)));
+        }
+        let creds: HashMap<String, String> = account_utxos(account)
+            .into_iter()
+            .map(|p| {
+                (
+                    format!("{}#{}", p.utxo.tx_hash, p.utxo.tx_index),
+                    p.utxo.payment_cred,
+                )
+            })
+            .collect();
+        let payment_keys = tx
+            .inputs()
+            .iter()
+            .map(|i| creds[&format!("{}#{}", hex::encode(*i.hash()), i.index())].clone())
+            .collect();
+        let body = conway::Tx::decode_fragment(&bytes)
+            .unwrap()
+            .transaction_body;
+        Signed {
+            certificates: body.certificates.map(|c| c.to_vec()).unwrap_or_default(),
+            withdrawals: body
+                .withdrawals
+                .map(|w| w.iter().map(|(a, l)| (a.to_vec(), *l)).collect())
+                .unwrap_or_default(),
+            signers,
+            payment_keys,
+        }
+    }
+
+    fn stake_key(account: &CardanoAccount) -> String {
+        hex::encode(account.key_hash(Role::Staking, 0).unwrap())
+    }
+
+    fn cred(account: &CardanoAccount) -> StakeCredential {
+        StakeCredential::AddrKeyhash(account.key_hash(Role::Staking, 0).unwrap())
+    }
+
+    #[test]
+    fn the_first_delegation_registers_and_signs_with_the_stake_key() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let delegate = StakingAction::Delegate {
+            pool: format!(" {LOGIC}\n"),
+        };
+        let result = api::stake(&account, request(&account, delegate, unregistered())).unwrap();
+        assert_eq!(result.pool.as_deref(), Some(LOGIC), "the pool, read back");
+        assert_eq!(result.drep, None);
+        assert_eq!(
+            (
+                result.deposit.as_str(),
+                result.refund.as_str(),
+                result.withdrawal.as_str()
+            ),
+            ("2000000", "0", "0")
+        );
+
+        let tx = signed(&account, &result.tx_cbor, &result.tx_hash);
+        let pool = seedelf_core::staking::parse_pool_id(LOGIC).unwrap();
+        assert_eq!(
+            tx.certificates,
+            vec![Certificate::StakeRegDeleg(cred(&account), pool, 2_000_000)]
+        );
+        // The spent UTxOs' payment keys and the stake key, nobody else.
+        let mut expected = tx.payment_keys.clone();
+        expected.insert(stake_key(&account));
+        assert_eq!(tx.signers, expected);
+        // Pure ADA first, largest first: the 3 and a 2 ADA UTxO cover the
+        // deposit, the fee and the change.
+        assert_eq!(result.inputs, 2);
+    }
+
+    #[test]
+    fn an_account_mint_spends_the_rewards_and_the_stake_key_signs_for_them() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let sk = seedelf_crypto::derivation::seedelf_key_v1(PHRASE, 0).unwrap();
+        let mint = |evaluation: Option<Value>| api::AccountMintRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos: account_utxos(&account),
+            collateral: None,
+            label: "rewards".into(),
+            withdrawal: Some("57475311".into()),
+            evaluation,
+        };
+        let draft = api::draft_account_mint(&account, sk, mint(None)).unwrap();
+        let draft_tx = conway::Tx::decode_fragment(&hex::decode(&draft.draft_cbor).unwrap())
+            .unwrap()
+            .transaction_body;
+        assert!(
+            draft_tx.withdrawals.is_some(),
+            "Ogmios evaluates the withdrawal too"
+        );
+
+        let evaluation = fixture("../../seedelf-core/tests/fixtures/ogmios/account_mint.json");
+        let result = api::finish_account_mint(&account, sk, mint(Some(evaluation))).unwrap();
+        assert_eq!(result.withdrawal, "57475311");
+        let tx = signed(&account, &result.tx_cbor, &result.tx_hash);
+        assert!(tx.signers.contains(&stake_key(&account)));
+        assert_eq!(tx.withdrawals.len(), 1);
+    }
+
+    #[test]
+    fn changes_pool_and_delegates_the_vote_without_a_deposit() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let other = "pool1sh4cddrln788xmnjnsqhdwj9e7th3c3ck3zjk7ny9znwj44t8he";
+        let result = api::stake(
+            &account,
+            request(
+                &account,
+                StakingAction::Delegate { pool: other.into() },
+                recorded(),
+            ),
+        )
+        .unwrap();
+        let tx = signed(&account, &result.tx_cbor, &result.tx_hash);
+        assert!(matches!(
+            tx.certificates[..],
+            [Certificate::StakeDelegation(..)]
+        ));
+        assert!(
+            tx.withdrawals.is_empty(),
+            "a change of pool leaves the rewards"
+        );
+        assert_eq!(result.deposit, "0");
+
+        // A DRep by its CIP-129 ID: Logical Mechanism's is a script.
+        let result = api::stake(
+            &account,
+            request(
+                &account,
+                StakingAction::Vote {
+                    drep: LOGIC_DREP.into(),
+                },
+                recorded(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(result.drep.as_deref(), Some(LOGIC_DREP));
+        let tx = signed(&account, &result.tx_cbor, &result.tx_hash);
+        let script = seedelf_core::staking::parse_drep(LOGIC_DREP).unwrap();
+        assert!(matches!(script, DRep::Script(_)));
+        assert_eq!(
+            tx.certificates,
+            vec![Certificate::VoteDeleg(cred(&account), script)]
+        );
+        assert!(tx.signers.contains(&stake_key(&account)));
+
+        // Always abstain, registering first.
+        let result = api::stake(
+            &account,
+            request(
+                &account,
+                StakingAction::Vote {
+                    drep: "drep_always_abstain".into(),
+                },
+                unregistered(),
+            ),
+        )
+        .unwrap();
+        let tx = signed(&account, &result.tx_cbor, &result.tx_hash);
+        assert_eq!(
+            tx.certificates,
+            vec![Certificate::VoteRegDeleg(
+                cred(&account),
+                DRep::Abstain,
+                2_000_000
+            )]
+        );
+    }
+
+    #[test]
+    fn withdraws_the_rewards_and_stops_staking() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let reward_account = account.stake_address(true).unwrap().to_vec();
+
+        let result = api::stake(
+            &account,
+            request(&account, StakingAction::Withdraw, recorded()),
+        )
+        .unwrap();
+        assert_eq!(result.withdrawal, "57475311");
+        let tx = signed(&account, &result.tx_cbor, &result.tx_hash);
+        assert!(tx.certificates.is_empty());
+        assert_eq!(tx.withdrawals, vec![(reward_account.clone(), 57_475_311)]);
+        assert!(tx.signers.contains(&stake_key(&account)));
+
+        let result =
+            api::stake(&account, request(&account, StakingAction::Stop, recorded())).unwrap();
+        assert_eq!(
+            (result.refund.as_str(), result.withdrawal.as_str()),
+            ("2000000", "57475311")
+        );
+        let tx = signed(&account, &result.tx_cbor, &result.tx_hash);
+        assert_eq!(
+            tx.certificates,
+            vec![Certificate::UnReg(cred(&account), 2_000_000)]
+        );
+        assert_eq!(tx.withdrawals, vec![(reward_account, 57_475_311)]);
+    }
+
+    #[test]
+    fn refuses_what_the_ledger_would() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let err = |action: StakingAction, state: StakeStateIn| {
+            api::stake(&account, request(&account, action, state))
+                .unwrap_err()
+                .to_string()
+        };
+        let locked = StakeStateIn {
+            drep: None,
+            ..recorded()
+        };
+        assert!(err(StakingAction::Withdraw, locked.clone()).contains("voting power"));
+        assert!(err(StakingAction::Stop, locked).contains("voting power"));
+        assert!(err(StakingAction::Withdraw, unregistered()).contains("no rewards"));
+        assert!(err(StakingAction::Stop, unregistered()).contains("isn't staking"));
+        assert!(
+            err(
+                StakingAction::Delegate {
+                    pool: LOGIC_DREP.into()
+                },
+                recorded()
+            )
+            .contains("stake pool ID")
+        );
+        assert!(err(StakingAction::Vote { drep: LOGIC.into() }, recorded()).contains("DRep ID"));
+        let odd = StakeStateIn {
+            rewards: "-1".into(),
+            ..recorded()
+        };
+        assert!(err(StakingAction::Withdraw, odd).contains("whole number"));
+
+        // A UTxO that isn't at its path is refused before anything is signed.
+        let mut r = request(&account, StakingAction::Withdraw, recorded());
+        r.utxos[0].index += 1;
+        assert!(api::stake(&account, r).is_err());
+    }
+
+    #[test]
+    fn a_send_spends_the_rewards_and_the_stake_key_signs_for_them() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let to = account
+            .base_address(true, Role::Receive, 5)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let send = |withdrawal: Option<&str>| SendRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos: account_utxos(&account),
+            to: to.clone(),
+            lovelace: None,
+            tokens: vec![],
+            withdrawal: withdrawal.map(String::from),
+        };
+        let plain = api::account_send(&account, send(None)).unwrap();
+        assert_eq!(plain.withdrawal, "0");
+        let tx = signed(&account, &plain.tx_cbor, &plain.tx_hash);
+        assert!(
+            !tx.signers.contains(&stake_key(&account)),
+            "no rewards, no stake key"
+        );
+
+        let with = api::account_send(&account, send(Some("57475311"))).unwrap();
+        assert_eq!(with.withdrawal, "57475311");
+        let tx = signed(&account, &with.tx_cbor, &with.tx_hash);
+        assert!(tx.signers.contains(&stake_key(&account)));
+        assert_eq!(tx.withdrawals.len(), 1);
+        // Max sends the rewards too, less the stake key's witness in the fee.
+        let more: u64 =
+            with.lovelace.parse::<u64>().unwrap() - plain.lovelace.parse::<u64>().unwrap();
+        let extra_fee: u64 = with.fee.parse::<u64>().unwrap() - plain.fee.parse::<u64>().unwrap();
+        assert_eq!(more + extra_fee, 57_475_311);
+
+        // Nothing to withdraw is no withdrawal.
+        let none = api::account_send(&account, send(Some("0"))).unwrap();
+        assert_eq!(none.withdrawal, "0");
+    }
+
+    #[test]
+    fn reads_pool_and_drep_ids_the_way_koios_names_them() {
+        let hex = "1e3105f23f2ac91b3fb4c35fa4fe301421028e356e114944e902005b";
+        assert_eq!(api::pool_id(hex).unwrap(), LOGIC);
+        assert_eq!(api::pool_id(LOGIC).unwrap(), LOGIC);
+        assert!(api::pool_id("pool1").is_err());
+        assert_eq!(api::drep_id(LOGIC_DREP).unwrap(), LOGIC_DREP);
+        assert_eq!(
+            api::drep_id("drep_always_no_confidence").unwrap(),
+            "drep_always_no_confidence"
+        );
+        assert!(api::drep_id(LOGIC).is_err());
     }
 }

@@ -49,6 +49,14 @@ function title(e: ActivityEntry, of: Of): string {
       return "Sent";
     case "collateral":
       return "Set collateral";
+    case "stake":
+      return "Staked";
+    case "vote":
+      return "Delegated voting power";
+    case "withdraw-rewards":
+      return "Withdrew rewards";
+    case "unstake":
+      return "Stopped staking";
   }
 }
 

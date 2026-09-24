@@ -198,7 +198,15 @@ describe("mint paid by the Cardano account (mint first, then move in)", () => {
     expect(Number(summary.fee.total)).toBe(Number(summary.fee.size) + Number(summary.fee.compute) + Number(summary.fee.scriptReference));
     expect(Number(summary.fee.scriptReference)).toBe(519 * 15); // the seedelf policy only
 
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["account_addresses", "credential_utxos", "epoch_params", "ogmios"]);
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual([
+      "account_addresses",
+      "account_info",
+      "credential_utxos",
+      "epoch_params",
+      "ogmios",
+    ]);
+    // The account's staking rewards pay for it too (preferences.ts).
+    expect(summary.withdrawal).toBe("57475311");
     expect(t.collateral.asked).toHaveLength(0);
     expect(t.koios.submitted).toHaveLength(0);
 

@@ -9,6 +9,7 @@ repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
 
 [dependencies]
 anyhow = "1.0.98"
+bech32 = "0.9.1"
 blstrs = "0.7.1"
 hex = "0.4.3"
 hex-literal = "1.0.0"

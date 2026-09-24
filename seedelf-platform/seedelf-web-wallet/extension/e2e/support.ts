@@ -70,6 +70,7 @@ export const accountMintPreprod = fixture("account-mint-preprod.json");
 export const transferPreprod = fixture("transfer-preprod.json");
 export const withdrawPreprod = fixture("withdraw-preprod.json");
 export const activityPreprod = fixture("activity-preprod.json");
+export const stakingPreprod = fixture("staking-preprod.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -92,6 +93,8 @@ export interface KoiosFake {
   evaluation: unknown;
   /** Who holds each NFT, by `policy.name`, for asset_nft_address (ADA Handles). */
   nfts: Map<string, string>;
+  /** Each stake key's account_info, by stake address: the recorded 12-word account's to begin with. */
+  stakes: Map<string, Record<string, unknown>>;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
@@ -108,6 +111,10 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     }
     if (path === "epoch_params") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(epochParams) });
+    }
+    if (path === "pool_list" || path === "totals") {
+      const rows = path === "pool_list" ? stakingPreprod.pool_list : stakingPreprod.totals;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     if (path === "ogmios") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(koios.evaluation) });
@@ -137,6 +144,15 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     if (path === "tx_status") {
       const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: koios.confirmations }));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
+    const staking: Record<string, (b: any) => unknown[]> = {
+      account_info: (b) => b._stake_addresses.flatMap((s: string) => koios.stakes.get(s) ?? []),
+      pool_info: (b) => stakingPreprod.pool_info.filter((p: any) => b._pool_bech32_ids.includes(p.pool_id_bech32)),
+      drep_info: (b) => stakingPreprod.drep_info.filter((d: any) => b._drep_ids.includes(d.drep_id)),
+      drep_metadata: (b) => stakingPreprod.drep_metadata.filter((d: any) => b._drep_ids.includes(d.drep_id)),
+    };
+    if (staking[path]) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(staking[path]!(body)) });
     }
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
     // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
@@ -189,6 +205,7 @@ export const test = base.extend<{ scale: number; userDataDir: string; koios: Koi
       // The real preprod evaluation of a stealth mint of the 12-word phrase's 25 ₳ UTxO.
       evaluation: mintPreprod.evaluation,
       nfts: new Map(),
+      stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
     });
   },
   context: async ({ scale, userDataDir, koios }, use) => {
