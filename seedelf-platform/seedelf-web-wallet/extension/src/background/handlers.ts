@@ -6,7 +6,9 @@ import type * as Wasm from "@seedelf/wasm";
 import type { NetworkName } from "../networks";
 import type { Message, Requests, Status } from "../shared/rpc";
 import type { BalanceService } from "./balances";
+import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
+import type { PendingService } from "./pending";
 import type { Wallet } from "./wallet";
 
 export interface Context {
@@ -14,6 +16,8 @@ export interface Context {
   wallet: Wallet;
   balances: BalanceService;
   moveIn: MoveInService;
+  mint: MintService;
+  pending: PendingService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -51,8 +55,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.moveIn.build(ctx.network, message.lovelace, message.tokens);
     case "move-in-submit":
       return ctx.moveIn.submit(ctx.network, message.txHash);
+    case "mint-build":
+      return ctx.mint.build(ctx.network, message.label);
+    case "mint-submit":
+      return ctx.mint.submit(ctx.network, message.txHash);
     case "pending-tx":
-      return ctx.moveIn.pending();
+      return ctx.pending.pending();
     case "reset-wallet":
       await wallet.reset();
       return status(ctx);

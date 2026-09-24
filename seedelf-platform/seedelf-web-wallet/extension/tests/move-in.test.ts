@@ -3,7 +3,8 @@
 // then watch it.
 import { describe, expect, it } from "vitest";
 
-import { SESSION_BUILT, SESSION_PENDING } from "../src/background/move-in";
+import { SESSION_BUILT } from "../src/background/move-in";
+import { SESSION_PENDING } from "../src/background/pending";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
 import { testBalances, vectors } from "./fakes";
@@ -50,22 +51,22 @@ describe("move-in", () => {
     const t = await unlocked();
     const summary = await t.moveIn.build("preprod", "5000000", []);
     const pending = await t.moveIn.submit("preprod", summary.txHash);
-    expect(pending).toEqual({ network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
+    expect(pending).toEqual({ kind: "move-in", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
     expect(t.koios.submitted).toHaveLength(1);
     expect(txIdOf(t.koios.submitted[0]!)).toBe(summary.txHash);
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
 
     // Not on chain yet: still watching.
-    expect(await t.moveIn.pending()).toMatchObject({ txHash: summary.txHash, confirmations: null });
+    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, confirmations: null });
     expect(await t.session.get(SESSION_PENDING)).toBeDefined();
 
     // Confirmed: stop watching and drop the stale balances.
     await t.session.set(`${SESSION_BALANCES_PREFIX}preprod`, { stale: true });
     t.koios.confirmations = 1;
-    expect(await t.moveIn.pending()).toMatchObject({ confirmations: 1 });
+    expect(await t.pending.pending()).toMatchObject({ confirmations: 1 });
     expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
     expect(await t.session.get(`${SESSION_BALANCES_PREFIX}preprod`)).toBeUndefined();
-    expect(await t.moveIn.pending()).toBeNull();
+    expect(await t.pending.pending()).toBeNull();
   });
 
   it("stops watching after 10 minutes", async () => {
@@ -73,8 +74,8 @@ describe("move-in", () => {
     const summary = await t.moveIn.build("preprod", "5000000", []);
     await t.moveIn.submit("preprod", summary.txHash);
     t.clock.now += 11 * 60_000;
-    expect(await t.moveIn.pending()).toMatchObject({ confirmations: null });
-    expect(await t.moveIn.pending()).toBeNull();
+    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
+    expect(await t.pending.pending()).toBeNull();
   });
 
   it("refuses to send anything but the reviewed transaction", async () => {
@@ -104,6 +105,6 @@ describe("move-in", () => {
     await t.wallet.lock();
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
     await expect(t.moveIn.build("preprod", "5000000", [])).rejects.toThrow("locked");
-    await expect(t.moveIn.pending()).rejects.toThrow("locked");
+    await expect(t.pending.pending()).rejects.toThrow("locked");
   });
 });

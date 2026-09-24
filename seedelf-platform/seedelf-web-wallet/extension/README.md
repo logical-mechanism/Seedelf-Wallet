@@ -2,7 +2,7 @@
 
 The Chrome (MV3) extension: React + TypeScript + Vite, with the Rust core loaded as WebAssembly in the service worker.
 
-It can create or restore a wallet, lock it with a password, show what the wallet holds (the Seedelf balance and seedelfs, and the Cardano account), and move funds from the Cardano account into Seedelf. Creating a seedelf comes next (roadmap chunk 8).
+It can create or restore a wallet, lock it with a password, show what the wallet holds (the Seedelf balance and seedelfs, and the Cardano account), move funds from the Cardano account into Seedelf, and create a seedelf. Transfer comes next (roadmap chunk 9).
 
 ## Screens
 
@@ -13,8 +13,9 @@ It can create or restore a wallet, lock it with a password, show what the wallet
 | Restore | Onboarding | 12, 15 or 24 words, one box each with BIP39 autocomplete; pasting a phrase fills every box. Then a password. |
 | Unlock | Locked | Password, the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
-| Home | Unlocked | The Seedelf balance (ADA, tokens, your seedelfs), the Cardano account (ADA, tokens, receive address with copy and QR, stake address, **Move in**), the Seedelf identity, and Refresh. A sent move-in shows as a banner until it confirms. The lock button is in the top bar. |
+| Home | Unlocked | The Seedelf balance (ADA, tokens, your seedelfs, **Create a seedelf**), the Cardano account (ADA, tokens, receive address with copy and QR, stake address, **Move in**), the Seedelf identity, and Refresh. A sent move-in or mint shows as a banner until it confirms. The lock button is in the top bar. |
 | Move in | From Home | An ADA amount or Max, and tokens to bring along; then a review of what moves, the fee and the change; then Send |
+| Create a seedelf | From Home | An optional tag (printable ASCII, 15 at most) with a live preview; then a review of the token name, the ADA locked with it, the fee and the change; then Send, which is when giveme.my is asked for the collateral |
 
 The flows are described in [../docs/flows.md](../docs/flows.md#onboarding).
 
@@ -46,9 +47,10 @@ After a rebuild, press the reload arrow on the extension's card.
 | `npm run build` | WASM plus the extension (`build:wasm`, then `build:ext`) |
 | `npm run dev` | Rebuilds the extension into `dist/` on change (development mode, with source maps) |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios client, the balance scan over recorded preprod responses, the handlers (all with the real WASM and the shared vectors), and formatting |
+| `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios and giveme.my clients, the balance scan over recorded preprod responses, move-in and mint (on a real preprod Ogmios evaluation), the handlers (all with the real WASM and the shared vectors), and formatting |
 | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts` | Optional: the balance scan against the real preprod Koios. Skipped otherwise, so CI stays offline. |
-| `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, and balances. Koios answers from the recorded fixtures and every other host is blocked. Screenshots land in `test-results/`. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
+| `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, balances, move-in, and creating a seedelf. Koios, Ogmios and giveme.my answer from the recorded fixtures and every other host is blocked. Since only giveme.my's real key can sign, the mint test stops at Send: it checks that a forged witness is refused and nothing is submitted. Screenshots land in `test-results/`. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
+| `node e2e/live/move-in.mjs [ada]`, `node e2e/live/mint.mjs [tag]` | Live preprod runs of the built extension with nothing intercepted: they submit real transactions from the test wallet in `.preprod-test-wallet.txt` (gitignored). Move in first; the mint is paid from Seedelf. |
 
 ## Layout
 
@@ -58,11 +60,15 @@ src/
   networks.ts           Koios and collateral endpoints per network
   shared/rpc.ts         typed request/response messages between the UI and the worker
   shared/password.ts    the password rule and strength hint (UI and worker)
+  shared/label.ts       the seedelf tag rule and token-name preview (the worker's WASM enforces it too)
   background/
     sw.ts               service worker entry: listeners, the auto-lock alarm
     wallet.ts           wallet state, lock, auto-lock and unlock back-off
     balances.ts         the balance reading: contract scan, account discovery, session cache
-    move-in.ts          build (in WASM), hold, submit and watch a move-in
+    move-in.ts          build (in WASM), hold and submit a move-in
+    mint.ts             create a seedelf: draft, Ogmios, finish (in WASM); at Send, giveme.my, sign, submit
+    pending.ts          the submitted transaction being watched, until it confirms
+    collateral.ts       the giveme.my client
     koios.ts, chain.ts  the Koios client; pure helpers (registers, gap limit, sums, seedelf tags)
     vault.ts            the vault record in chrome.storage.local
     secret-box/         SBV1 encryption, adapted from Lace (Apache-2.0)
@@ -70,13 +76,14 @@ src/
     storage.ts, wasm.ts chrome.storage wrapper, lazy WASM init
   ui/
     App.tsx             shell: top bar, picks the screen from the worker's status
-    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, MoveIn
+    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, MoveIn, CreateSeedelf
     components/         PhraseInput (per-word autocomplete), SetPassword, CopyField, QrCode, TokenList, icons
     format.ts           ADA and token amounts, token names
 public/                 icons and logos, resized from ../brand
 tests/                  Vitest (vectors/: independent SecretBox vectors; fixtures/: recorded preprod Koios responses
-                        and synthetic owned UTxOs, remade by fixtures/record-koios.mjs)
-e2e/                    Playwright
+                        and synthetic owned UTxOs, remade by fixtures/record-koios.mjs, and a mint's real preprod
+                        evaluation and giveme.my answer, remade by fixtures/record-mint.mjs)
+e2e/                    Playwright; live/ holds the live preprod runs
 ```
 
 See [../docs/](../docs/) for the design, especially [architecture.md](../docs/architecture.md) and [development.md](../docs/development.md).

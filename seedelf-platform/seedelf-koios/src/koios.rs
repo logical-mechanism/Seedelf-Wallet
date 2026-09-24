@@ -384,10 +384,15 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
         .header("content-type", "application/json")
         .json(&payload)
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
 
-    response.json().await
+    // Ogmios answers a transaction it can't evaluate (a script fails, an
+    // input is unknown) with 400 and a JSON-RPC `error` saying why. Pass
+    // that on to the caller instead of a bare status.
+    if response.status() == reqwest::StatusCode::BAD_REQUEST {
+        return response.json().await;
+    }
+    response.error_for_status()?.json().await
 }
 
 /// Submits a transaction body to witness collateral using a specified API endpoint.
@@ -817,6 +822,9 @@ pub async fn address_transactions(
 /// so we fetch these per command rather than baking them in.
 #[derive(Debug, Clone)]
 pub struct ProtocolParameters {
+    /// The linear fee: `min_fee_a` lovelace per byte plus `min_fee_b`.
+    pub min_fee_a: u64,
+    pub min_fee_b: u64,
     pub coins_per_utxo_size: u64,
     pub price_mem: f64,
     pub price_step: f64,
@@ -828,14 +836,16 @@ impl ProtocolParameters {
     /// Split from [`epoch_params`] so callers that fetch Koios JSON
     /// themselves (the web wallet, through WebAssembly) parse it the same way.
     pub fn from_koios(params: &Value) -> Result<Self> {
-        let coins_per_utxo_size: u64 = params["coins_per_utxo_size"]
-            .as_u64()
-            .or_else(|| {
-                params["coins_per_utxo_size"]
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-            })
-            .ok_or_else(|| anyhow!("Missing coins_per_utxo_size"))?;
+        // Koios gives lovelace amounts as numbers or as strings.
+        let lovelace = |field: &str| {
+            params[field]
+                .as_u64()
+                .or_else(|| params[field].as_str().and_then(|s| s.parse().ok()))
+                .ok_or_else(|| anyhow!("Missing {field}"))
+        };
+        let min_fee_a: u64 = lovelace("min_fee_a")?;
+        let min_fee_b: u64 = lovelace("min_fee_b")?;
+        let coins_per_utxo_size: u64 = lovelace("coins_per_utxo_size")?;
         let price_mem: f64 = params["price_mem"]
             .as_f64()
             .ok_or_else(|| anyhow!("Missing price_mem"))?;
@@ -850,6 +860,8 @@ impl ProtocolParameters {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(ProtocolParameters {
+            min_fee_a,
+            min_fee_b,
             coins_per_utxo_size,
             price_mem,
             price_step,

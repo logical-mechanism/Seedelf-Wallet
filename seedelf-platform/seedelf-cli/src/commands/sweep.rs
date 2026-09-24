@@ -379,7 +379,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         .len()
         .try_into()
         .unwrap();
-    let tx_fee: u64 = fee::linear_fee(tx_size);
+    let tx_fee: u64 = fee::linear_fee(&params, tx_size);
 
     let compute_fee: u64 = total_computation_fee(&params, budgets.clone());
 

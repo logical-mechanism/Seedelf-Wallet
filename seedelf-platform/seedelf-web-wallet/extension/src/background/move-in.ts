@@ -5,9 +5,8 @@
 // build   reads the account and the protocol parameters, then builds and
 //         signs inside WebAssembly, and keeps the signed transaction in
 //         session storage until the user confirms it.
-// submit  sends exactly that transaction, then watches it.
-// pending reports the watched transaction's confirmations. It stops watching
-//         once it's on chain, or after 10 minutes.
+// submit  sends exactly that transaction, then hands it to the pending
+//         watch (pending.ts).
 
 import type * as Wasm from "@seedelf/wasm";
 
@@ -15,18 +14,15 @@ import type { NetworkName } from "../networks";
 import type { MoveInSummary, PendingTx, TokenRef } from "../shared/rpc";
 import { discoverAccount } from "./balances";
 import type { Koios } from "./koios";
+import { SESSION_PENDING } from "./pending";
 import type { Area } from "./storage";
-import { SESSION_BALANCES_PREFIX, type Wallet } from "./wallet";
+import type { Wallet } from "./wallet";
 
 /** chrome.storage.session: the move-in built last, until it's confirmed or replaced. */
 export const SESSION_BUILT = "seedelf.moveIn.built";
-/** chrome.storage.session: the submitted transaction being watched. */
-export const SESSION_PENDING = "seedelf.pendingTx";
 
 /** A built move-in is only submitted within this long; after that, build again. */
 const BUILT_TTL_MS = 10 * 60_000;
-/** Stop watching a submitted transaction after this long. */
-const WATCH_MS = 10 * 60_000;
 
 interface Built extends MoveInSummary {
   txCbor: string;
@@ -85,29 +81,11 @@ export class MoveInService {
     const submitted = await this.deps.koios(network).submitTx(bytes);
     if (submitted !== txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
 
-    const pending: PendingTx = { network, txHash, submittedAt: now(), confirmations: null };
+    const pending: PendingTx = { kind: "move-in", network, txHash, submittedAt: now(), confirmations: null };
     await wallet.withKeys(async () => {
       await session.remove(SESSION_BUILT);
       await session.set(SESSION_PENDING, pending);
     });
     return pending;
-  }
-
-  /** The watched transaction with fresh confirmations, or null. Clears it once confirmed or stale. */
-  async pending(): Promise<PendingTx | null> {
-    const { wallet, session, now } = this.deps;
-    const pending = await wallet.withKeys(() => session.get<PendingTx>(SESSION_PENDING));
-    if (!pending) return null;
-    const statuses = await this.deps.koios(pending.network).txStatus([pending.txHash]);
-    const confirmations = statuses.get(pending.txHash) ?? null;
-    const current: PendingTx = { ...pending, confirmations };
-    if (confirmations !== null || now() - pending.submittedAt > WATCH_MS) {
-      await wallet.withKeys(async () => {
-        await session.remove(SESSION_PENDING);
-        // The next balance reading should see the new UTxOs.
-        if (confirmations !== null) await session.remove(SESSION_BALANCES_PREFIX + pending.network);
-      });
-    }
-    return current;
   }
 }

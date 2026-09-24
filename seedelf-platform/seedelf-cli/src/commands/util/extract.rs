@@ -205,7 +205,7 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
         .len()
         .try_into()
         .unwrap();
-    let tx_fee = fee::linear_fee(tx_size);
+    let tx_fee = fee::linear_fee(&params, tx_size);
     println!(
         "{} {}",
         "\nTx Size Fee:".bright_blue(),

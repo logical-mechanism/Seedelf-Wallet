@@ -22,15 +22,23 @@ pub mod api {
 
     use anyhow::{Result, anyhow, bail};
     use blstrs::Scalar;
+    use cryptoxide::hkdf::{hkdf_expand, hkdf_extract};
+    use cryptoxide::sha2::Sha256;
     use ff::Field;
+    use pallas_crypto::hash::{Hash, Hasher};
+    use pallas_crypto::key::ed25519::{PublicKey, SecretKey, Signature};
+    use pallas_wallet::PrivateKey;
+    use rand_core::{OsRng, RngCore};
     use seedelf_core::address::wallet_contract;
-    use seedelf_core::build::{self, MoveInAmount};
-    use seedelf_core::constants::{VARIANT, get_config};
+    use seedelf_core::build::{self, Budgets, Chain, MoveInAmount};
+    use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::derivation;
     use seedelf_crypto::register::Register;
     use seedelf_crypto::schnorr;
-    use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
+    use seedelf_koios::koios::{
+        ProtocolParameters, UtxoResponse, contains_policy_id, extract_bytes_with_logging,
+    };
     use serde::{Deserialize, Serialize};
 
     /// Parses a secret scalar from 32 big-endian bytes in hex. Rejects
@@ -228,6 +236,289 @@ pub mod api {
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             inputs: built.inputs.len(),
+        })
+    }
+
+    /// HKDF salt for one-time keys, v1.
+    pub const ONE_TIME_SALT: &[u8] = b"seedelf-one-time-key-v1";
+
+    /// The one-time key of a Seedelf spend: HKDF-SHA-256 with the Seedelf
+    /// secret as the key material and a fresh random 32-byte `seed` as the
+    /// info. The seed can wait in session storage between Review and Send
+    /// (a worker restart loses memory); without the Seedelf key it gives
+    /// nothing, and the key itself never leaves WebAssembly. A new seed per
+    /// spend keeps every one-time key new (privacy rule 1).
+    pub fn one_time_key(sk: &Scalar, seed: &[u8; 32]) -> PrivateKey {
+        let mut ikm = sk.to_bytes_be();
+        let mut prk = [0u8; 32];
+        hkdf_extract(Sha256::new(), ONE_TIME_SALT, &ikm, &mut prk);
+        let mut okm = [0u8; 32];
+        hkdf_expand(Sha256::new(), &prk, seed, &mut okm);
+        let key = PrivateKey::from(SecretKey::from(okm));
+        ikm.fill(0);
+        prk.fill(0);
+        okm.fill(0);
+        key
+    }
+
+    fn key_hash(key: &PrivateKey) -> Hash<28> {
+        Hasher::<224>::hash(key.public_key().as_ref())
+    }
+
+    fn network_flag(network: &str) -> Result<bool> {
+        match network {
+            "preprod" => Ok(true),
+            "mainnet" => Ok(false),
+            other => bail!("unknown network {other}"),
+        }
+    }
+
+    fn seed_from_hex(seed: &str) -> Result<[u8; 32]> {
+        hex::decode(seed)
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or_else(|| anyhow!("the one-time key's seed must be 32 bytes of hex"))
+    }
+
+    /// The personal tag rule: at most 15 characters of printable ASCII, so it
+    /// fits the token name whole and reads back as text.
+    pub fn check_label(label: &str) -> Result<()> {
+        if let Some(c) = label.chars().find(|c| !(' '..='~').contains(c)) {
+            bail!("A label can use letters, digits, spaces and ASCII punctuation, not {c:?}");
+        }
+        if label.len() > 15 {
+            bail!("A label is at most 15 characters, got {}", label.len());
+        }
+        Ok(())
+    }
+
+    /// Creating a seedelf, as JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MintRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        /// The wallet's spendable contract UTxOs (owned, no seedelf), as Koios
+        /// returns them. Each is checked here.
+        pub utxos: Vec<UtxoResponse>,
+        /// The personal tag; see [`check_label`].
+        pub label: String,
+        /// The one-time key's seed from the draft (hex). The draft draws it.
+        pub seed: Option<String>,
+        /// Ogmios's answer to evaluating the draft.
+        pub evaluation: Option<serde_json::Value>,
+    }
+
+    #[derive(Serialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OutRef {
+        pub tx_hash: String,
+        pub tx_index: u64,
+    }
+
+    /// The draft for Ogmios, and the seed to finish it with.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MintDraft {
+        pub seed: String,
+        pub draft_cbor: String,
+        pub inputs: Vec<OutRef>,
+    }
+
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct FeeOut {
+        pub size: String,
+        pub compute: String,
+        pub script_reference: String,
+        pub total: String,
+    }
+
+    /// A finished, unsigned mint and what it does. Amounts in lovelace.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MintResult {
+        /// Unsigned: `signScriptSpend` adds giveme.my's and the one-time key's signatures.
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub seed: String,
+        pub token_name: String,
+        /// Locked with the seedelf.
+        pub lovelace: String,
+        pub fee: FeeOut,
+        /// Back into the Seedelf balance.
+        pub change_lovelace: String,
+        pub change_tokens: usize,
+        pub change_outputs: usize,
+        pub inputs: Vec<OutRef>,
+    }
+
+    fn mint_spend(
+        sk: Scalar,
+        request: &MintRequest,
+        seed: &[u8; 32],
+    ) -> Result<(build::ScriptSpend, build::SeedelfMint)> {
+        let network_flag = network_flag(&request.network)?;
+        let chain = Chain {
+            params: ProtocolParameters::from_koios(&request.params)?,
+            network_flag,
+            config: get_config(VARIANT, network_flag)?,
+        };
+        check_label(&request.label)?;
+        let policy = &chain.config.contract.seedelf_policy_id;
+        for utxo in &request.utxos {
+            let owned = extract_bytes_with_logging(&utxo.inline_datum)
+                .map(|register| register.is_owned(sk).unwrap_or(false))
+                .unwrap_or(false);
+            if !owned {
+                bail!(
+                    "UTxO {}#{} isn't this wallet's",
+                    utxo.tx_hash,
+                    utxo.tx_index
+                );
+            }
+            if contains_policy_id(&utxo.asset_list, policy) {
+                bail!(
+                    "UTxO {}#{} holds a seedelf; creating one never spends another",
+                    utxo.tx_hash,
+                    utxo.tx_index
+                );
+            }
+        }
+        let owner = Register::create(sk)?;
+        let seedelf = owner.clone().rerandomize()?;
+        let signer = key_hash(&one_time_key(&sk, seed));
+        let mut minted = build::mint(
+            &chain,
+            &request.utxos,
+            &request.label,
+            &seedelf,
+            &owner,
+            signer,
+        )?;
+        let spend = minted
+            .spend
+            .clone()
+            .proven(|register, vkh| schnorr::create_proof(register.clone(), sk, vkh.to_string()))?;
+        minted.spend = spend.clone();
+        Ok((spend, minted))
+    }
+
+    fn out_refs(spend: &build::ScriptSpend) -> Vec<OutRef> {
+        spend
+            .inputs()
+            .into_iter()
+            .map(|u| OutRef {
+                tx_hash: u.tx_hash,
+                tx_index: u.tx_index,
+            })
+            .collect()
+    }
+
+    /// Step 1 of creating a seedelf: picks the UTxOs, proves them, and drafts
+    /// the transaction for Ogmios to evaluate, under a new one-time key.
+    pub fn draft_mint(sk: Scalar, request: MintRequest) -> Result<MintDraft> {
+        let mut seed = [0u8; 32];
+        OsRng.fill_bytes(&mut seed);
+        let (spend, _) = mint_spend(sk, &request, &seed)?;
+        Ok(MintDraft {
+            seed: hex::encode(seed),
+            draft_cbor: hex::encode(&spend.draft()?.tx_bytes.0),
+            inputs: out_refs(&spend),
+        })
+    }
+
+    /// Step 2: the same mint, finished with the budgets Ogmios measured on the
+    /// draft. `request` is the draft's, plus its `seed` and the `evaluation`.
+    pub fn finish_mint(sk: Scalar, request: MintRequest) -> Result<MintResult> {
+        let seed = seed_from_hex(
+            request
+                .seed
+                .as_deref()
+                .ok_or_else(|| anyhow!("finishing a mint needs the draft's seed"))?,
+        )?;
+        let evaluation = request
+            .evaluation
+            .as_ref()
+            .ok_or_else(|| anyhow!("finishing a mint needs Ogmios's evaluation"))?;
+        let budgets = Budgets::from_ogmios(evaluation)?;
+        let (spend, minted) = mint_spend(sk, &request, &seed)?;
+        let built = spend.finalize(&budgets)?;
+        Ok(MintResult {
+            tx_cbor: hex::encode(&built.tx.tx_bytes.0),
+            tx_hash: hex::encode(built.tx.tx_hash.0),
+            seed: hex::encode(seed),
+            token_name: hex::encode(&minted.token_name),
+            lovelace: minted.lovelace.to_string(),
+            fee: FeeOut {
+                size: built.fee.size.to_string(),
+                compute: built.fee.compute.to_string(),
+                script_reference: built.fee.script_reference.to_string(),
+                total: built.fee.total.to_string(),
+            },
+            change_lovelace: built.change_lovelace.to_string(),
+            change_tokens: built.change_tokens.items.len(),
+            change_outputs: built.change_outputs,
+            inputs: out_refs(&spend),
+        })
+    }
+
+    /// Signing a finished script spend at Send, as JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SignRequest {
+        /// The unsigned transaction from `finishMint`.
+        pub tx_cbor: String,
+        /// Its one-time key's seed.
+        pub seed: String,
+        /// giveme.my's answer: `{ "witness": hex }`.
+        pub collateral: serde_json::Value,
+    }
+
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SignResult {
+        pub tx_cbor: String,
+        pub tx_hash: String,
+    }
+
+    /// Signs a finished script spend: checks giveme.my's signature over the
+    /// transaction, then adds it and the one-time key's own.
+    pub fn sign_script_spend(sk: Scalar, request: SignRequest) -> Result<SignResult> {
+        sign_with_collateral_key(sk, request, PublicKey::from(COLLATERAL_PUBLIC_KEY))
+    }
+
+    /// [`sign_script_spend`] against any collateral key, so tests can sign
+    /// with a stand-in for giveme.my's.
+    pub fn sign_with_collateral_key(
+        sk: Scalar,
+        request: SignRequest,
+        collateral_key: PublicKey,
+    ) -> Result<SignResult> {
+        let bytes =
+            hex::decode(&request.tx_cbor).map_err(|e| anyhow!("the transaction isn't hex: {e}"))?;
+        let key = one_time_key(&sk, &seed_from_hex(&request.seed)?);
+        let hash = build::tx_id(&bytes)?;
+        if !build::required_signers(&bytes)?.contains(&key_hash(&key)) {
+            bail!("This transaction wasn't built with that one-time key");
+        }
+        let collateral = build::collateral_signature(&request.collateral)?;
+        if !collateral_key.verify(hash, &Signature::from(collateral)) {
+            bail!(
+                "The collateral service's signature doesn't match this transaction, so it wasn't sent"
+            );
+        }
+        let signed = build::add_witnesses(
+            &bytes,
+            &[
+                (key.public_key(), key.sign(hash)),
+                (collateral_key, Signature::from(collateral)),
+            ],
+        )?;
+        Ok(SignResult {
+            tx_cbor: hex::encode(signed),
+            tx_hash: hex::encode(hash),
         })
     }
 
@@ -526,6 +817,41 @@ pub fn build_move_in(
     let request: api::MoveInRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad move-in request: {e}")))?;
     let result = api::move_in(&account.inner, key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Creating a seedelf, step 1: picks the Seedelf UTxOs that pay, proves them
+/// under a new one-time key, and drafts the transaction. `request` is JSON
+/// (`api::MintRequest`); the result is JSON (`api::MintDraft`): the draft for
+/// Ogmios to evaluate, and the seed that `finishMint` and `signScriptSpend`
+/// re-derive the one-time key from.
+#[wasm_bindgen(js_name = draftMint)]
+pub fn draft_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::MintRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
+    let result = api::draft_mint(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Creating a seedelf, step 2: the draft's request plus its `seed` and
+/// Ogmios's `evaluation`. Returns JSON (`api::MintResult`): the unsigned
+/// transaction with its real budgets and fee, and what it does.
+#[wasm_bindgen(js_name = finishMint)]
+pub fn finish_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::MintRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
+    let result = api::finish_mint(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Signs a finished Seedelf spend at Send (`api::SignRequest` as JSON):
+/// checks giveme.my's collateral signature against its public key, then adds
+/// it and the one-time key's. Returns JSON (`api::SignResult`).
+#[wasm_bindgen(js_name = signScriptSpend)]
+pub fn sign_script_spend(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::SignRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad signing request: {e}")))?;
+    let result = api::sign_script_spend(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 

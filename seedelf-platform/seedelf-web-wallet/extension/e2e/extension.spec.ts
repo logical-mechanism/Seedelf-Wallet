@@ -32,6 +32,7 @@ function launch(userDataDir: string): Promise<BrowserContext> {
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../tests/fixtures/${name}`, import.meta.url), "utf8"));
 const koiosPreprod = fixture("koios-preprod.json");
 const ownedUtxos = fixture("owned-utxos.json").owned_utxos;
+const mintPreprod = fixture("mint-preprod.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -44,6 +45,10 @@ interface KoiosFake {
   submitted: string[];
   /** What tx_status reports. */
   confirmations: number | null;
+  /** giveme.my's answer; by default its recorded refusal of a transaction it can't validate. */
+  collateral: { status: number; body: unknown };
+  /** Transactions giveme.my was asked to witness. */
+  collateralAsked: number;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
@@ -59,6 +64,10 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     }
     if (path === "epoch_params") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(epochParams) });
+    }
+    if (path === "ogmios") {
+      // The real preprod evaluation of a mint of the 12-word phrase's 25 ₳ UTxO.
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(mintPreprod.evaluation) });
     }
     const body = request.postDataJSON();
     if (path === "tx_status") {
@@ -77,8 +86,18 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     if (!rows) return route.fulfill({ status: 404, body: "" });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
   });
+  await context.route("https://www.giveme.my/preprod/collateral/", async (route) => {
+    koios.collateralAsked++;
+    return route.fulfill({
+      status: koios.collateral.status,
+      contentType: "application/json",
+      body: JSON.stringify(koios.collateral.body),
+    });
+  });
   // Nothing else leaves the browser.
-  await context.route(/^https?:\/\/(?!preprod\.koios\.rest)/, (route) => route.abort());
+  await context.route(/^https?:\/\/(?!preprod\.koios\.rest|www\.giveme\.my\/preprod\/collateral\/$)/, (route) =>
+    route.abort(),
+  );
 }
 
 const test = base.extend<{ userDataDir: string; koios: KoiosFake; context: BrowserContext }>({
@@ -88,7 +107,13 @@ const test = base.extend<{ userDataDir: string; koios: KoiosFake; context: Brows
     rmSync(dir, { recursive: true, force: true });
   },
   koios: async ({}, use) => {
-    await use({ calls: [], submitted: [], confirmations: null });
+    await use({
+      calls: [],
+      submitted: [],
+      confirmations: null,
+      collateral: { status: mintPreprod.collateral.status, body: mintPreprod.collateral.answer },
+      collateralAsked: 0,
+    });
   },
   context: async ({ userDataDir, koios }, use) => {
     const context = await launch(userDataDir);
@@ -437,6 +462,52 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   await page.getByRole("button", { name: "← Back" }).click();
   await expect(page.getByTestId("seedelf-lovelace")).toBeVisible();
   expect(koios.submitted).toHaveLength(0);
+});
+
+test("create a seedelf: tag rules, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Create a seedelf" }).click();
+
+  // The tag: printable ASCII, 15 characters at most, previewed as it will read.
+  const tag = page.getByLabel("Personal tag (optional)");
+  await expect(page.getByTestId("mint-preview")).toContainText("Listed as Unnamed");
+  await tag.fill("héllo");
+  await expect(page.getByRole("alert")).toContainText("not “é”");
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  await tag.fill("a tag far too long for it");
+  await expect(tag).toHaveValue("a tag far too l");
+  await tag.fill("my tag");
+  await expect(page.getByTestId("mint-preview")).toContainText("Listed as my tag");
+  await expect(page.getByTestId("mint-preview")).toContainText("5eed0e1f6d7920746167…");
+  await page.screenshot({ path: "test-results/mint-form.png", fullPage: true });
+  await page.getByRole("button", { name: "Review" }).click();
+
+  // Ogmios measured it; giveme.my hasn't heard of it yet.
+  const review = page.getByTestId("mint-review");
+  await expect(review).toContainText("Seedelfmy tag");
+  await expect(review).toContainText("Locked with it1.74986 ₳");
+  await expect(review).toContainText("Network fee0.2");
+  await expect(review).toContainText("Back to your Seedelf balance22.99");
+  expect(koios.calls).toContain("ogmios");
+  expect(koios.collateralAsked).toBe(0);
+  await page.screenshot({ path: "test-results/mint-review.png", fullPage: true });
+
+  // giveme.my refuses (its answer to a transaction it can't validate).
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction: Transaction Fails Validation");
+  // A witness that isn't giveme.my's key over this transaction is caught in WebAssembly.
+  koios.collateral = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("alert")).toContainText("doesn't match this transaction, so it wasn't sent");
+  expect(koios.collateralAsked).toBe(2);
+  expect(koios.submitted).toHaveLength(0);
+  await page.screenshot({ path: "test-results/mint-refused.png", fullPage: true });
+
+  await page.getByRole("button", { name: "← Back" }).click();
+  await page.getByRole("button", { name: "← Back" }).click();
+  await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
 });
 
 test("a worker that lost its WASM file explains itself and recovers", async ({ userDataDir }) => {

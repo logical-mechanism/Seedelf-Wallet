@@ -90,13 +90,30 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
 
 ## Create a seedelf
 
-This is the equivalent of the CLI's `util mint`: a stealth mint paid from the Seedelf balance.
+This is the equivalent of the CLI's `util mint`: a stealth mint paid from the Seedelf balance. Built in chunk 8.
 
-1. The user picks an optional personal tag.
-2. The wallet spends owned UTxOs, which needs Schnorr proofs, a fresh one-time key, and giveme.my collateral.
-3. It mints the token and puts it in a UTxO holding a freshly re-randomized register.
+1. **Create a seedelf** on the Seedelf card. It's disabled while the Seedelf balance is empty or a transaction is still confirming.
+2. **An optional personal tag:** at most 15 characters of printable ASCII.
+   - It's previewed as the wallet will list it, along with how the token name starts.
+   - Anyone can read it on chain.
+3. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
+   - The worker reads the contract and the protocol parameters.
+   - WebAssembly picks the UTxOs that pay (pure ADA first, as few as it can), proves them under a new one-time key, and drafts the transaction.
+   - Ogmios, through Koios, measures its scripts, and WebAssembly finishes it.
+   - The review shows the tag, the token name, the ADA locked with the seedelf (about 1.75 ₳, the minimum for its UTxO), the fee (about 0.26 ₳), and the change back to Seedelf.
+4. **Send.** Only now does giveme.my see the transaction.
+   - WebAssembly checks giveme.my's signature, adds it and the one-time key's, and exactly the reviewed transaction is submitted.
+   - A banner follows it to "Seedelf created", and it's listed under **Your seedelfs**.
 
-The new seedelf is never linked to the Cardano account.
+Details:
+
+- The seedelf sits under a fresh re-randomization of the user's own register. Minting to someone else's register (the CLI's `--generator` and `--public-value`) isn't offered.
+- The token is named after the smallest input spent (`5eed0e1f` ‖ tag ‖ its output index ‖ its tx id, cut to 32 bytes), because that's what the policy checks. So the name is only known once the UTxOs are picked.
+- Only removing the seedelf (chunk 10) gives back the ADA locked with it.
+
+**This links the seedelf to the Cardano account when your own move-in paid for it** (see [privacy.md](privacy.md#known-links)). Your first live mint on preprod spent exactly the UTxO its move-in had just created. A stealth mint only hides the payer when the Seedelf balance came from other people's Seedelf payments: hidden money paying for a hidden seedelf.
+
+**Next (chunk 8b): mint first, then move in.** The first seedelf is paid by the Cardano account (the CLI's `create`), which links the account to the name openly but to nothing else. Later move-ins then look exactly like paying someone else's seedelf, so the Seedelf balance isn't tied to the name. The stealth mint stays for a Seedelf balance that holds received money.
 
 The CLI's `create` is different: an outside wallet pays for the mint, which links that wallet to the seedelf. See the root [README](../../../README.md#implicit-tracking-methods) (first implicit tracking method). The web wallet doesn't need that path.
 
@@ -107,7 +124,7 @@ This is the equivalent of the CLI's `transfer`:
 1. Look up the recipient seedelf's register.
 2. Re-randomize it for the payment output.
 3. Re-randomize our own base register for change.
-4. Spend the chosen owned UTxOs. Each gets its own proof, bound to a fresh random one-time key.
+4. Spend the chosen owned UTxOs. Each gets its own proof, bound to a new one-time key, as in [Create a seedelf](#create-a-seedelf).
 
 Collateral comes from giveme.my, and the fee is paid from the inputs.
 

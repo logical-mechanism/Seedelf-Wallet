@@ -103,6 +103,18 @@ export class Koios {
     return JSON.parse(text) as string;
   }
 
+  /**
+   * Has Ogmios, through Koios, run the scripts in an unsigned transaction.
+   * Returns Ogmios's JSON-RPC answer as is: `result` lists what each script
+   * used, or `error` says why they refused (Koios passes that on with status
+   * 400). WebAssembly reads either. Retried like a read: evaluating changes
+   * nothing.
+   */
+  evaluate(txCborHex: string): Promise<unknown> {
+    const body = { jsonrpc: "2.0", method: "evaluateTransaction", params: { transaction: { cbor: txCborHex } } };
+    return this.send<unknown>("POST", "ogmios", body, "", { answer400: true });
+  }
+
   /** Confirmations for each transaction; `null` until it's on chain. */
   async txStatus(txHashes: string[]): Promise<Map<string, number | null>> {
     const rows = await this.post<{ tx_hash: string; num_confirmations: number | null }>("tx_status", {
@@ -124,7 +136,18 @@ export class Koios {
     return this.request<T>("POST", path, body, query);
   }
 
-  private async request<T>(method: "GET" | "POST", path: string, body: unknown, query = ""): Promise<T[]> {
+  private request<T>(method: "GET" | "POST", path: string, body: unknown, query = ""): Promise<T[]> {
+    return this.send<T[]>(method, path, body, query);
+  }
+
+  /** One request, retried on rate limits, server errors and lost connections. `answer400` reads a 400's JSON too. */
+  private async send<R>(
+    method: "GET" | "POST",
+    path: string,
+    body: unknown,
+    query = "",
+    { answer400 = false } = {},
+  ): Promise<R> {
     const url = `${this.base}/${path}${query ? `?${query}` : ""}`;
     for (let attempt = 0; ; attempt++) {
       let response: Response | undefined;
@@ -139,7 +162,7 @@ export class Koios {
           body: method === "POST" ? JSON.stringify(body) : undefined,
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
-        if (response.ok) return (await response.json()) as T[];
+        if (response.ok || (answer400 && response.status === 400)) return (await response.json()) as R;
         failure = koiosTrouble(response.status, path);
       } catch (e) {
         failure = unreachable(e);

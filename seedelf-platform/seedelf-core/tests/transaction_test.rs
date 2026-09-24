@@ -10,6 +10,8 @@ use seedelf_koios::koios::ProtocolParameters;
 /// `*_minimum_lovelace_*` and are set to plausible values.
 fn fixture_params() -> ProtocolParameters {
     ProtocolParameters {
+        min_fee_a: 44,
+        min_fee_b: 155_381,
         coins_per_utxo_size: 4_310,
         price_mem: 0.0577,
         price_step: 0.0000721,
@@ -132,6 +134,15 @@ fn token_name_truncates_long_labels() {
     let label_hex_full = hex::encode(long_label);
     let label_hex_truncated = &label_hex_full[..30];
     assert_eq!(&hex[8..8 + 30], label_hex_truncated);
+}
+
+#[test]
+fn token_name_refuses_an_index_past_one_byte() {
+    // The policy prepends the index as one byte (lib/token_name.ak).
+    let name = transaction::seedelf_token_name("".to_string(), Some(&vec![input(0x11, 255)]));
+    assert_eq!(&hex::encode(name.unwrap())[8..10], "ff");
+    let err = transaction::seedelf_token_name("".to_string(), Some(&vec![input(0x11, 256)]));
+    assert!(err.unwrap_err().to_string().contains("output #256"));
 }
 
 #[test]

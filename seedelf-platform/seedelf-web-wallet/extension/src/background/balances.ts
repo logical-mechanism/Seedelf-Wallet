@@ -94,7 +94,7 @@ export class BalanceService {
   private seedelfSide(keys: Keys, utxos: KoiosUtxo[], policyId: string): Balances["seedelf"] {
     const seedelfs: SeedelfInfo[] = [];
     const spendable: KoiosUtxo[] = [];
-    for (const utxo of utxos.filter((u) => this.isOwned(keys, u))) {
+    for (const utxo of ownedUtxos(this.deps.wasm, keys, utxos)) {
       const name = seedelfTokenOf(utxo, policyId);
       if (name) seedelfs.push({ assetName: name, label: seedelfLabel(name), lovelace: utxo.value });
       else spendable.push(utxo);
@@ -102,20 +102,6 @@ export class BalanceService {
     seedelfs.sort((a, b) => (a.label ?? "￿").localeCompare(b.label ?? "￿") || a.assetName.localeCompare(b.assetName));
     const { lovelace, tokens } = sumValue(spendable);
     return { lovelace: lovelace.toString(), tokens, utxos: spendable.length, seedelfs };
-  }
-
-  private isOwned(keys: Keys, utxo: KoiosUtxo): boolean {
-    const hex = registerOf(utxo);
-    if (!hex) return false;
-    const register = new this.deps.wasm.Register(hex.generator, hex.publicValue);
-    try {
-      return keys.seedelf.isOwned(register);
-    } catch {
-      // Points that don't decode, or aren't in the prime-order subgroup, can't be ours to spend.
-      return false;
-    } finally {
-      register.free();
-    }
   }
 
   private cardanoSide(
@@ -134,6 +120,23 @@ export class BalanceService {
       addressesUsed: account.used,
     };
   }
+}
+
+/** The wallet-contract UTxOs whose register is ours (g^x == u, checked in WebAssembly). */
+export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[]): KoiosUtxo[] {
+  return utxos.filter((utxo) => {
+    const hex = registerOf(utxo);
+    if (!hex) return false;
+    const register = new wasm.Register(hex.generator, hex.publicValue);
+    try {
+      return keys.seedelf.isOwned(register);
+    } catch {
+      // Points that don't decode, or aren't in the prime-order subgroup, can't be ours to spend.
+      return false;
+    } finally {
+      register.free();
+    }
+  });
 }
 
 /** Where an account address sits: chain (0 receive, 1 change) and index. */

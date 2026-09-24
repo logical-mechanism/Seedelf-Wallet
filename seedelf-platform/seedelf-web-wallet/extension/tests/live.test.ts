@@ -25,7 +25,10 @@ describe.skipIf(!process.env.LIVE_KOIOS)("live preprod Koios", () => {
     console.log(`live preprod in ${Math.round(performance.now() - started)} ms:`, JSON.stringify(b.cardano), JSON.stringify(b.seedelf));
     expect(b.cardano.addressesUsed).toBeGreaterThanOrEqual(4);
     expect(b.cardano.utxos).toBeGreaterThan(0);
-    // No phrase wallet owns contract UTxOs on preprod yet.
-    expect(b.seedelf.utxos).toBe(0);
+    // Since 2026-09-24 this public phrase owns real contract UTxOs: the first
+    // live move-in and seedelf mint. Anyone can spend them, so check their
+    // shape, not how many there are.
+    expect(b.seedelf.seedelfs.every((s) => s.assetName.startsWith("5eed0e1f"))).toBe(true);
+    expect(BigInt(b.seedelf.lovelace)).toBeGreaterThanOrEqual(0n);
   }, 60_000);
 });
