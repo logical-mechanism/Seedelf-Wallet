@@ -1,9 +1,11 @@
 // Service worker entry. Listeners are registered synchronously, before any
 // await, so the event that woke the worker is never lost.
 
-import { defaultNetwork, enabledNetworks } from "../networks";
+import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
 import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
+import { BalanceService } from "./balances";
 import { handle, type Context } from "./handlers";
+import { Koios } from "./koios";
 import { chromeArea } from "./storage";
 import { Wallet } from "./wallet";
 import { loadWasm } from "./wasm";
@@ -23,21 +25,33 @@ const autoLock = {
 let context: Promise<Context> | undefined;
 
 function getContext(): Promise<Context> {
-  context ??= loadWasm().then((wasm) => ({
-    wasm,
-    wallet: new Wallet({
+  context ??= loadWasm().then((wasm) => {
+    const session = chromeArea(chrome.storage.session);
+    const wallet = new Wallet({
       wasm,
       local: chromeArea(chrome.storage.local),
-      session: chromeArea(chrome.storage.session),
+      session,
       now: Date.now,
       autoLock,
       // No page open means nobody is listening; that's fine.
       changed: () => void chrome.runtime.sendMessage(STATE_CHANGED).catch(() => undefined),
-    }),
-    version: __VERSION__,
-    network: defaultNetwork(__MAINNET_ENABLED__),
-    networks: enabledNetworks(__MAINNET_ENABLED__),
-  }));
+    });
+    const balances = new BalanceService({
+      wasm,
+      wallet,
+      session,
+      koios: (network) => new Koios(NETWORKS[network].koios),
+      now: Date.now,
+    });
+    return {
+      wasm,
+      wallet,
+      balances,
+      version: __VERSION__,
+      network: defaultNetwork(__MAINNET_ENABLED__),
+      networks: enabledNetworks(__MAINNET_ENABLED__),
+    };
+  });
   return context;
 }
 

@@ -47,6 +47,9 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - Any rewards on that credential go to whoever holds it, not to the user. That's fine for money passing through, but the UI should say so.
 - **Crowd size:** privacy grows with the number of honest users (the flood-attack section of the root README). With few users, timing and amounts carry most of the risk. The wallet should say that plainly and not overpromise.
 - **Network:** Koios and giveme.my see the user's IP address, and Koios has no Tor access. A VPN helps; see the root README's IP-tracking section.
+  - A balance reading asks Koios about the Cardano account and the whole wallet contract at the same moment. Koios can tell that the account's owner uses Seedelf, though not which contract UTxOs are theirs: the ownership check runs in the extension.
+  - The wallet only reads the chain when Home opens (at most once a minute) or on Refresh. It never polls in the background.
+- **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk, and it's wiped on lock.
 
 ## Not for holding
 

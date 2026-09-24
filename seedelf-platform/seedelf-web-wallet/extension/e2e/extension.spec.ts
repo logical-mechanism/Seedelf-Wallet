@@ -25,14 +25,53 @@ function launch(userDataDir: string): Promise<BrowserContext> {
   });
 }
 
-const test = base.extend<{ userDataDir: string; context: BrowserContext }>({
+// Koios answers from the recorded preprod fixtures (tests/fixtures), so no
+// test touches the live network. Playwright sees the service worker's fetches.
+const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../tests/fixtures/${name}`, import.meta.url), "utf8"));
+const koiosPreprod = fixture("koios-preprod.json");
+const ownedUtxos = fixture("owned-utxos.json").owned_utxos;
+
+interface KoiosFake {
+  calls: string[];
+  /** When set, every request fails with this status. */
+  failWith?: number;
+}
+
+async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
+  await context.route("https://preprod.koios.rest/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.split("/").pop()!;
+    koios.calls.push(path);
+    if (koios.failWith) return route.fulfill({ status: koios.failWith, body: "" });
+    const body = request.postDataJSON();
+    const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
+    const rows =
+      path === "credential_utxos"
+        ? [...koiosPreprod.contract_utxos, ...ownedUtxos]
+        : path === "account_addresses"
+          ? (account?.account_addresses ?? [])
+          : path === "account_utxos"
+            ? (account?.account_utxos ?? [])
+            : null;
+    if (!rows) return route.fulfill({ status: 404, body: "" });
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  // Nothing else leaves the browser.
+  await context.route(/^https?:\/\/(?!preprod\.koios\.rest)/, (route) => route.abort());
+}
+
+const test = base.extend<{ userDataDir: string; koios: KoiosFake; context: BrowserContext }>({
   userDataDir: async ({}, use) => {
     const dir = mkdtempSync(join(tmpdir(), "seedelf-e2e-"));
     await use(dir);
     rmSync(dir, { recursive: true, force: true });
   },
-  context: async ({ userDataDir }, use) => {
+  koios: async ({}, use) => {
+    await use({ calls: [] });
+  },
+  context: async ({ userDataDir, koios }, use) => {
     const context = await launch(userDataDir);
+    await fakeKoios(context, koios);
     await use(context);
     await context.close();
   },
@@ -239,4 +278,60 @@ test("a browser restart comes back locked; unlock takes well under 1.5 s", async
   } finally {
     await restarted.close();
   }
+});
+
+const lovelaceOf = (utxos: Array<{ value: string }>) => utxos.reduce((n, u) => n + BigInt(u.value), 0n);
+const ada = (lovelace: bigint) => {
+  const whole = (lovelace / 1_000_000n).toLocaleString("en-US");
+  const fraction = (lovelace % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole;
+};
+
+test("home shows the Seedelf balance, seedelfs and the Cardano account", async ({ context, koios }) => {
+  const v = vector(12);
+  const page = await openApp(context);
+  await restore(page, v.phrase);
+
+  // Synthetic owned contract UTxOs: 25 + 3 ADA, a token, and a seedelf with 1.5 ADA.
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await expect(page.getByTestId("seedelf-tokens")).toContainText("tUSDM");
+  await expect(page.getByTestId("seedelf-tokens")).toContainText("1,234.56");
+  await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
+  await expect(page.getByTestId("seedelfs")).toContainText("1.5 ₳");
+
+  // The real preprod account of this public test phrase.
+  const account = koiosPreprod.accounts[v.preprod.stake];
+  await expect(page.getByTestId("cardano-lovelace")).toHaveText(`${ada(lovelaceOf(account.account_utxos))} ₳`);
+  await expect(page.getByText("4 addresses used")).toBeVisible();
+  await expect(page.getByTestId("cardano-tokens")).toContainText("LINK");
+  await expect(page.getByTestId("updated")).toHaveText("Updated just now");
+  expect(koios.calls.sort()).toEqual(["account_addresses", "account_utxos", "credential_utxos"]);
+
+  await page.getByRole("button", { name: "Show QR code" }).click();
+  const qr = page.getByRole("img", { name: "QR code of the receive address" });
+  await expect(qr).toBeVisible();
+  await qr.screenshot({ path: "test-results/receive-qr.png" });
+  await page.screenshot({ path: "test-results/home-balances.png", fullPage: true });
+
+  // The popup opens from the worker's reading; Refresh reads the chain again.
+  const popup = await openApp(context, "popup");
+  await expect(popup.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await popup.screenshot({ path: "test-results/home-balances-popup.png", fullPage: true });
+  expect(koios.calls).toHaveLength(3);
+  await popup.getByRole("button", { name: "Refresh" }).click();
+  await expect.poll(() => koios.calls.length).toBe(6);
+  await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
+});
+
+test("home says so when Koios can't be read", async ({ context, koios }) => {
+  koios.failWith = 400;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByRole("alert")).toContainText("Koios answered 400");
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("— ₳");
+
+  koios.failWith = undefined;
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
