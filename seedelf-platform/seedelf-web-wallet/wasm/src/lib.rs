@@ -25,6 +25,7 @@ pub mod api {
     use cryptoxide::hkdf::{hkdf_expand, hkdf_extract};
     use cryptoxide::sha2::Sha256;
     use ff::Field;
+    use pallas_addresses::{Address, ShelleyDelegationPart};
     use pallas_crypto::hash::{Hash, Hasher};
     use pallas_crypto::key::ed25519::{PublicKey, SecretKey, Signature};
     use pallas_txbuilder::BuiltTransaction;
@@ -139,6 +140,25 @@ pub mod api {
             bail!("the amount is more than all the ADA there is (45 billion)");
         }
         Ok(lovelace)
+    }
+
+    /// Token amounts from the extension, each a whole number above zero.
+    fn assets_of(tokens: &[TokenAmount]) -> Result<Assets> {
+        let mut assets = Assets::new();
+        for t in tokens {
+            let quantity: u64 = t.quantity.parse().ok().filter(|q| *q > 0).ok_or_else(|| {
+                anyhow!(
+                    "a token amount must be a whole number above zero, got {:?}",
+                    t.quantity
+                )
+            })?;
+            assets = assets.add(Asset::new(
+                t.policy_id.clone(),
+                t.asset_name.clone(),
+                quantity,
+            )?)?;
+        }
+        Ok(assets)
     }
 
     fn token_amount(a: &Asset) -> TokenAmount {
@@ -735,24 +755,10 @@ pub mod api {
         check_spendable(sk, &chain, &request.utxos)?;
         let register = recipient_register(&chain, &request.to, &request.recipient)?;
         let to_self = register.is_owned(sk).unwrap_or(false);
-        let mut tokens = Assets::new();
-        for t in &request.tokens {
-            let quantity: u64 = t.quantity.parse().ok().filter(|q| *q > 0).ok_or_else(|| {
-                anyhow!(
-                    "a token amount must be a whole number above zero, got {:?}",
-                    t.quantity
-                )
-            })?;
-            tokens = tokens.add(Asset::new(
-                t.policy_id.clone(),
-                t.asset_name.clone(),
-                quantity,
-            )?)?;
-        }
         let payment = Payment {
             register,
             lovelace: lovelace_of(&request.lovelace)?,
-            tokens,
+            tokens: assets_of(&request.tokens)?,
         };
         let signer = key_hash(&one_time_key(&sk, seed));
         let spend = build::transfer(
@@ -798,6 +804,262 @@ pub mod api {
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
             inputs: out_refs(&spend),
+        })
+    }
+
+    /// The most UTxOs Max spends at once: the CLI's `MAXIMUM_WALLET_UTXOS`.
+    /// Twenty wallet-script spends fit a transaction's budget with room.
+    pub const MAX_WITHDRAW_UTXOS: usize = 20;
+
+    /// A destination address from the extension: bech32, and one a
+    /// withdrawal can pay (`build::is_payable_address`).
+    fn payable_address(chain: &Chain, to: &str) -> Result<Address> {
+        let addr =
+            Address::from_bech32(to.trim()).map_err(|_| anyhow!("That isn't a Cardano address"))?;
+        if !build::is_payable_address(&addr, chain.network_flag) {
+            let network = if chain.network_flag {
+                "preprod"
+            } else {
+                "mainnet"
+            };
+            bail!(
+                "Withdrawals go to a normal {network} address: not a script, stake or other network's address"
+            );
+        }
+        Ok(addr)
+    }
+
+    /// Paying an address from the Seedelf balance, as JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WithdrawRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        /// The wallet's spendable contract UTxOs (owned, no seedelf), as Koios
+        /// returns them. Each is checked here.
+        pub utxos: Vec<UtxoResponse>,
+        /// The destination: a bech32 key address on this network.
+        pub to: String,
+        /// Lovelace as a decimal string; `null` sends everything (Max).
+        pub lovelace: Option<String>,
+        /// Tokens to send with an amount; Max sends every token instead.
+        pub tokens: Vec<TokenAmount>,
+        /// The one-time key's seed from the draft (hex). The draft draws it.
+        pub seed: Option<String>,
+        /// Ogmios's answer to evaluating the draft.
+        pub evaluation: Option<serde_json::Value>,
+    }
+
+    /// A finished, unsigned withdrawal and what it does. Amounts in lovelace.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WithdrawResult {
+        /// Unsigned: `signScriptSpend` adds giveme.my's and the one-time key's signatures.
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub seed: String,
+        pub to: String,
+        /// Everything (Max), rather than an amount.
+        pub max: bool,
+        /// What the address receives.
+        pub lovelace: String,
+        pub tokens: Vec<TokenAmount>,
+        pub fee: FeeOut,
+        /// Back into the Seedelf balance (nothing, for Max).
+        pub change_lovelace: String,
+        pub change_tokens: usize,
+        pub change_outputs: usize,
+        pub inputs: Vec<OutRef>,
+        /// Spendable UTxOs Max left for another withdrawal.
+        pub left: usize,
+    }
+
+    /// The withdrawal, proven, and how many UTxOs Max left out.
+    fn withdraw_spend(
+        sk: Scalar,
+        request: &WithdrawRequest,
+        seed: &[u8; 32],
+    ) -> Result<(ScriptSpend, usize)> {
+        let chain = chain_of(&request.network, &request.params)?;
+        check_spendable(sk, &chain, &request.utxos)?;
+        let to = payable_address(&chain, &request.to)?;
+        let owner = Register::create(sk)?;
+        let signer = key_hash(&one_time_key(&sk, seed));
+        let (spend, left) = match &request.lovelace {
+            Some(l) => {
+                let tokens = assets_of(&request.tokens)?;
+                let spend = build::sweep(
+                    &chain,
+                    &request.utxos,
+                    &to,
+                    lovelace_of(l)?,
+                    &tokens,
+                    &owner,
+                    signer,
+                )?;
+                (spend, 0)
+            }
+            None => {
+                if !request.tokens.is_empty() {
+                    bail!("Max sends every token, so it takes no token amounts");
+                }
+                if request.utxos.is_empty() {
+                    bail!("There's nothing in the Seedelf balance to withdraw");
+                }
+                // The largest first, as many as fit.
+                let mut utxos = request.utxos.clone();
+                utxos.sort_by_key(|u| std::cmp::Reverse(u.value.parse::<u64>().unwrap_or(0)));
+                let left = utxos.len().saturating_sub(MAX_WITHDRAW_UTXOS);
+                utxos.truncate(MAX_WITHDRAW_UTXOS);
+                (build::sweep_all(&chain, &utxos, &to, &owner, signer)?, left)
+            }
+        };
+        Ok((prove_with(sk, spend)?, left))
+    }
+
+    /// Step 1 of a withdrawal: checks the address, picks the UTxOs, proves
+    /// them, and drafts the transaction for Ogmios, under a new one-time key.
+    pub fn draft_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<SpendDraft> {
+        let seed = new_seed();
+        let (spend, _) = withdraw_spend(sk, &request, &seed)?;
+        draft_of(&spend, &seed)
+    }
+
+    /// Step 2: the same withdrawal, finished with the budgets Ogmios measured.
+    pub fn finish_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
+        let (seed, budgets) = finishing(
+            "withdrawal",
+            request.seed.as_deref(),
+            request.evaluation.as_ref(),
+        )?;
+        let (spend, left) = withdraw_spend(sk, &request, &seed)?;
+        let built = spend.finalize(&budgets)?;
+        let max = request.lovelace.is_none();
+        let (lovelace, tokens) = match &request.lovelace {
+            None => (built.change_lovelace, built.change_tokens.clone()),
+            Some(l) => (lovelace_of(l)?, assets_of(&request.tokens)?),
+        };
+        Ok(WithdrawResult {
+            tx_cbor: hex::encode(&built.tx.tx_bytes.0),
+            tx_hash: hex::encode(built.tx.tx_hash.0),
+            seed: hex::encode(seed),
+            to: request.to.trim().to_string(),
+            max,
+            lovelace: lovelace.to_string(),
+            tokens: tokens.items.iter().map(token_amount).collect(),
+            fee: fee_out(&built.fee),
+            change_lovelace: if max {
+                "0".into()
+            } else {
+                built.change_lovelace.to_string()
+            },
+            change_tokens: if max {
+                0
+            } else {
+                built.change_tokens.items.len()
+            },
+            change_outputs: if max { 0 } else { built.change_outputs },
+            inputs: out_refs(&spend),
+            left,
+        })
+    }
+
+    /// Removing one of this wallet's seedelfs, as JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct RemoveRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        /// The contract UTxO holding the seedelf, as Koios returns it.
+        pub utxo: UtxoResponse,
+        /// Where its ADA goes: a bech32 key address, or `null` for the Seedelf balance.
+        pub to: Option<String>,
+        /// The one-time key's seed from the draft (hex). The draft draws it.
+        pub seed: Option<String>,
+        /// Ogmios's answer to evaluating the draft.
+        pub evaluation: Option<serde_json::Value>,
+    }
+
+    /// A finished, unsigned removal and what it does. Amounts in lovelace.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct RemoveResult {
+        /// Unsigned: `signScriptSpend` adds giveme.my's and the one-time key's signatures.
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub seed: String,
+        /// The seedelf burned: its token name, hex.
+        pub name: String,
+        /// Where its ADA goes; `null` is the Seedelf balance.
+        pub to: Option<String>,
+        /// What comes back: the ADA locked with it, less the fee.
+        pub lovelace: String,
+        pub fee: FeeOut,
+        pub inputs: Vec<OutRef>,
+    }
+
+    fn remove_spend(
+        sk: Scalar,
+        request: &RemoveRequest,
+        seed: &[u8; 32],
+    ) -> Result<(ScriptSpend, Vec<u8>)> {
+        let chain = chain_of(&request.network, &request.params)?;
+        let utxo = &request.utxo;
+        let owned = extract_bytes_with_logging(&utxo.inline_datum)
+            .is_some_and(|register| register.is_owned(sk).unwrap_or(false));
+        if !owned {
+            bail!("That seedelf isn't this wallet's");
+        }
+        let name = build::seedelf_in(&chain, utxo)?;
+        let signer = key_hash(&one_time_key(&sk, seed));
+        let mut spend = build::remove(&chain, utxo, &Register::create(sk)?, signer)?;
+        if let Some(to) = &request.to {
+            spend = spend.change_to(&payable_address(&chain, to)?);
+        }
+        Ok((prove_with(sk, spend)?, name))
+    }
+
+    /// Step 1 of removing a seedelf: checks it's this wallet's, proves its
+    /// UTxO, and drafts the burn for Ogmios, under a new one-time key.
+    pub fn draft_remove(sk: Scalar, request: RemoveRequest) -> Result<SpendDraft> {
+        let seed = new_seed();
+        let (spend, _) = remove_spend(sk, &request, &seed)?;
+        draft_of(&spend, &seed)
+    }
+
+    /// Step 2: the same removal, finished with the budgets Ogmios measured.
+    pub fn finish_remove(sk: Scalar, request: RemoveRequest) -> Result<RemoveResult> {
+        let (seed, budgets) = finishing(
+            "removal",
+            request.seed.as_deref(),
+            request.evaluation.as_ref(),
+        )?;
+        let (spend, name) = remove_spend(sk, &request, &seed)?;
+        let built = spend.finalize(&budgets)?;
+        Ok(RemoveResult {
+            tx_cbor: hex::encode(&built.tx.tx_bytes.0),
+            tx_hash: hex::encode(built.tx.tx_hash.0),
+            seed: hex::encode(seed),
+            name: hex::encode(name),
+            to: request.to.as_ref().map(|t| t.trim().to_string()),
+            lovelace: built.change_lovelace.to_string(),
+            fee: fee_out(&built.fee),
+            inputs: out_refs(&spend),
+        })
+    }
+
+    /// Whether `address` carries this account's staking key: every address a
+    /// normal wallet shows for the account does. Paying it from Seedelf links
+    /// the money back to the account.
+    pub fn is_own_address(account: &CardanoAccount, address: &str) -> Result<bool> {
+        let stake = account.key_hash(Role::Staking, 0)?;
+        Ok(match Address::from_bech32(address.trim()) {
+            Ok(Address::Shelley(shelley)) => {
+                matches!(shelley.delegation(), ShelleyDelegationPart::Key(h) if *h == stake)
+            }
+            _ => false,
         })
     }
 
@@ -1080,6 +1342,13 @@ impl WasmCardanoAccount {
         self.address(network, cardano::Role::Change, index)
     }
 
+    /// Whether `address` carries this account's staking key, as every
+    /// address a normal wallet shows for it does. Unreadable addresses aren't.
+    #[wasm_bindgen(js_name = isOwnAddress)]
+    pub fn is_own_address(&self, address: &str) -> Result<bool, JsError> {
+        api::is_own_address(&self.inner, address).map_err(js_error)
+    }
+
     /// The account's reward (stake) address.
     #[wasm_bindgen(js_name = stakeAddress)]
     pub fn stake_address(&self, network: Network) -> Result<String, JsError> {
@@ -1232,6 +1501,49 @@ pub fn finish_account_mint(
     let request: api::AccountMintRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
     let result = api::finish_account_mint(&account.inner, key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A withdrawal, step 1: checks the address, picks the Seedelf UTxOs (or up
+/// to 20 for Max), proves them under a new one-time key, and drafts the
+/// transaction. `request` is JSON (`api::WithdrawRequest`); the result is
+/// JSON (`api::SpendDraft`).
+#[wasm_bindgen(js_name = draftWithdraw)]
+pub fn draft_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::WithdrawRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
+    let result = api::draft_withdraw(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A withdrawal, step 2: the draft's request plus its `seed` and Ogmios's
+/// `evaluation`. Returns JSON (`api::WithdrawResult`).
+#[wasm_bindgen(js_name = finishWithdraw)]
+pub fn finish_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::WithdrawRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
+    let result = api::finish_withdraw(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Removing a seedelf, step 1: checks the UTxO is this wallet's and holds
+/// one seedelf, proves it, and drafts the burn. `request` is JSON
+/// (`api::RemoveRequest`); the result is JSON (`api::SpendDraft`).
+#[wasm_bindgen(js_name = draftRemove)]
+pub fn draft_remove(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::RemoveRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad removal request: {e}")))?;
+    let result = api::draft_remove(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Removing a seedelf, step 2: the draft's request plus its `seed` and
+/// Ogmios's `evaluation`. Returns JSON (`api::RemoveResult`).
+#[wasm_bindgen(js_name = finishRemove)]
+pub fn finish_remove(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::RemoveRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad removal request: {e}")))?;
+    let result = api::finish_remove(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
