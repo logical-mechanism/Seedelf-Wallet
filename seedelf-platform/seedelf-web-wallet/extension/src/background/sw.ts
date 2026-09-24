@@ -13,8 +13,10 @@ import { Koios } from "./koios";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
+import { PreferencesService } from "./preferences";
 import { PrivateStore } from "./private-store";
 import { SendService } from "./send";
+import { StakingService } from "./staking";
 import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { chromeArea } from "./storage";
@@ -39,9 +41,10 @@ function getContext(): Promise<Context> {
   if (context) return context;
   context = loadWasm().then((wasm) => {
     const session = chromeArea(chrome.storage.session);
+    const local = chromeArea(chrome.storage.local);
     const wallet = new Wallet({
       wasm,
-      local: chromeArea(chrome.storage.local),
+      local,
       session,
       now: Date.now,
       autoLock,
@@ -49,18 +52,20 @@ function getContext(): Promise<Context> {
       changed: () => void chrome.runtime.sendMessage(STATE_CHANGED).catch(() => undefined),
     });
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
-    const store = new PrivateStore({ wallet, local: chromeArea(chrome.storage.local) });
+    const store = new PrivateStore({ wallet, local });
+    const preferences = new PreferencesService(local);
     const activity = new ActivityService({ wallet, session, store, koios });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now });
-    const balances = new BalanceService({ wasm, wallet, session, koios, now: Date.now, activity, coins });
-    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins });
+    const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins });
+    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
-    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins };
+    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins, preferences };
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
     const withdraw = new WithdrawService(spends);
     const send = new SendService(spends);
+    const staking = new StakingService({ ...spends, local });
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
     return {
       wasm,
@@ -75,6 +80,8 @@ function getContext(): Promise<Context> {
       contacts,
       activity,
       coins,
+      staking,
+      preferences,
       version: __VERSION__,
       network: defaultNetwork(__MAINNET_ENABLED__),
       networks: enabledNetworks(__MAINNET_ENABLED__),

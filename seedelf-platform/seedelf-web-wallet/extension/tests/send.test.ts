@@ -42,7 +42,14 @@ describe("send", () => {
     expect(summary.changeTokens).toBeGreaterThan(0); // the rest of the tUSDM, and the other tokens
     expect(t.koios.submitted).toHaveLength(0);
     expect(t.collateral.asked).toHaveLength(0);
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["account_addresses", "credential_utxos", "epoch_params"]);
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual([
+      "account_addresses",
+      "account_info",
+      "credential_utxos",
+      "epoch_params",
+    ]);
+    // The account's staking rewards pay for it too (preferences.ts).
+    expect(summary.withdrawal).toBe("57475311");
 
     const built = await t.session.get<{ txCbor: string; txHash: string }>(SESSION_SEND);
     expect(built!.txHash).toBe(summary.txHash);

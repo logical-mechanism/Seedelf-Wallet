@@ -53,6 +53,10 @@ const SENT: Record<PendingTx["kind"], string> = {
   remove: "Seedelf removal",
   send: "Payment",
   collateral: "Collateral payment",
+  stake: "Delegation",
+  vote: "Vote delegation",
+  "withdraw-rewards": "Reward withdrawal",
+  unstake: "Stop staking",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Move-in confirmed",
@@ -62,6 +66,10 @@ const CONFIRMED: Record<PendingTx["kind"], string> = {
   remove: "Seedelf removed",
   send: "Payment confirmed",
   collateral: "Collateral set",
+  stake: "Now staking",
+  vote: "Voting power delegated",
+  "withdraw-rewards": "Rewards withdrawn",
+  unstake: "Staking stopped",
 };
 
 /** Read again on open when the last reading is older than this. */

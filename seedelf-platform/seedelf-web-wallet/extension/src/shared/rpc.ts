@@ -85,6 +85,28 @@ export interface Locked {
   utxos: number;
 }
 
+/** A stake pool, as far as the wallet knows it. */
+export interface PoolRef {
+  /** `pool1…`. */
+  id: string;
+  ticker?: string;
+  name?: string;
+}
+
+/** Where the Cardano account's stake key stands (Koios's `account_info`). Lovelace amounts are decimal strings. */
+export interface StakeInfo {
+  /** Registered: it can be delegated, and earn rewards. */
+  registered: boolean;
+  /** The pool it's staked with. */
+  pool: PoolRef | null;
+  /** Its vote delegation: a DRep's ID (CIP-129), `drep_always_abstain` or `drep_always_no_confidence`; null for none. */
+  drep: string | null;
+  /** Rewards that can be withdrawn. */
+  rewards: string;
+  /** The deposit paid to register it: stopping staking gets it back. */
+  deposit: string;
+}
+
 /** What the wallet holds on one network. Lovelace amounts are decimal strings. */
 export interface Balances {
   network: NetworkName;
@@ -92,8 +114,107 @@ export interface Balances {
   updatedAt: number;
   /** UTxOs in the wallet contract this wallet owns, except those holding a seedelf (as in the CLI's `balance`). */
   seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[]; locked: Locked };
-  /** The Cardano account (CIP-1852 account 0). */
-  cardano: { lovelace: string; tokens: TokenAmount[]; utxos: number; addressesUsed: number; locked: Locked };
+  /** The Cardano account (CIP-1852 account 0): `lovelace` is its UTxOs', without the rewards in `staking`. */
+  cardano: {
+    lovelace: string;
+    tokens: TokenAmount[];
+    utxos: number;
+    addressesUsed: number;
+    locked: Locked;
+    staking: StakeInfo;
+  };
+}
+
+/** A live stake pool in the browser. Lovelace amounts are decimal strings. */
+export interface PoolRow {
+  id: string;
+  ticker?: string;
+  /** 0 to 1: the share of rewards the pool keeps, after its cost. */
+  margin: number;
+  /** What the pool takes each epoch before the margin. */
+  cost: string;
+  pledge: string;
+  /** Stake in the current snapshot. */
+  stake: string;
+  /** A percentage: past 100, every delegator's rewards shrink. */
+  saturation: number;
+}
+
+/** Every live pool, kept on the device for a day: it's the same for everyone. */
+export interface PoolList {
+  pools: PoolRow[];
+  /** When it was read (ms since the epoch). */
+  updatedAt: number;
+}
+
+/** One pool's details (Koios's `pool_info`). */
+export interface PoolDetails extends PoolRef {
+  homepage?: string;
+  description?: string;
+  margin: number;
+  cost: string;
+  pledge: string;
+  /** What the owners actually hold staked: below `pledge`, the pool earns less. */
+  livePledge: string;
+  stake: string;
+  saturation: number;
+  delegators: number;
+  blocks: number;
+  status: "registered" | "retiring" | "retired";
+  /** The epoch it retires in, when it's retiring. */
+  retiringEpoch: number | null;
+}
+
+/** A DRep (Koios's `drep_info`, and its name from `drep_metadata`). */
+export interface DrepDetails {
+  /** CIP-129. */
+  id: string;
+  name?: string;
+  status: "registered" | "retired";
+  /** Voted recently enough to count: an inactive DRep's votes don't. */
+  active: boolean;
+  expiresEpoch: number | null;
+  /** The stake delegated to it (lovelace). */
+  votingPower: string;
+  delegators: number;
+}
+
+/** Something to do with the Cardano account's stake key. */
+export type StakingAction =
+  /** Stake with a pool (`pool1…`), registering first when needed. */
+  | { kind: "delegate"; pool: string }
+  /** Delegate the vote: a DRep's ID, `drep_always_abstain` or `drep_always_no_confidence`. */
+  | { kind: "vote"; drep: string }
+  | { kind: "withdraw" }
+  /** Withdraw the rewards, unregister, and get the deposit back. */
+  | { kind: "stop" };
+
+/** A built and signed staking transaction, waiting for the user to send it. Amounts are lovelace strings. */
+export interface StakingSummary {
+  network: NetworkName;
+  txHash: string;
+  action: StakingAction;
+  /** The pool staked with, as `pool1…`. */
+  pool: string | null;
+  /** The vote, as Koios names it. */
+  drep: string | null;
+  fee: string;
+  /** Paid to register the stake key. */
+  deposit: string;
+  /** Returned by unregistering it. */
+  refund: string;
+  /** Rewards withdrawn. */
+  withdrawal: string;
+  /** Back to the Cardano account's receive address. */
+  changeLovelace: string;
+  changeTokens: number;
+  inputs: number;
+}
+
+/** The user's settings, kept on the device. */
+export interface Preferences {
+  /** Spend staking rewards whenever the Cardano account pays (a send, a move-in, a mint). */
+  spendRewards: boolean;
 }
 
 export type UtxoSide = "seedelf" | "cardano";
@@ -151,6 +272,8 @@ export interface MoveInSummary {
   tokens: Array<TokenRef & { quantity: string }>;
   /** How many new contract UTxOs hold it. */
   depositOutputs: number;
+  /** Staking rewards withdrawn to pay for it. */
+  withdrawal?: string;
   /** Back to the Cardano account's receive address. */
   changeLovelace: string;
   changeTokens: number;
@@ -172,6 +295,8 @@ export interface MintSummary {
   /** Locked with the seedelf; only removing it gets this back. */
   lovelace: string;
   fee: { size: string; compute: string; scriptReference: string; total: string };
+  /** Staking rewards withdrawn to pay for it (an account-paid mint only). */
+  withdrawal?: string;
   /** Back to where it was paid from: the Cardano account's `0/0`, or the Seedelf balance. */
   changeLovelace: string;
   changeTokens: number;
@@ -259,6 +384,8 @@ export interface SendSummary extends WithdrawDestination {
   minimum: string | null;
   tokens: TokenQuantity[];
   fee: string;
+  /** Staking rewards withdrawn to pay for it. */
+  withdrawal?: string;
   /** Back to the Cardano account's receive address. */
   changeLovelace: string;
   changeTokens: number;
@@ -284,7 +411,18 @@ export interface RemoveSummary {
 
 /** A submitted transaction the wallet is watching. */
 export interface PendingTx {
-  kind: "move-in" | "mint" | "transfer" | "withdraw" | "remove" | "send" | "collateral";
+  kind:
+    | "move-in"
+    | "mint"
+    | "transfer"
+    | "withdraw"
+    | "remove"
+    | "send"
+    | "collateral"
+    | "stake"
+    | "vote"
+    | "withdraw-rewards"
+    | "unstake";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -376,6 +514,18 @@ export interface Requests {
   "collateral-build": { payload: None; result: SendSummary };
   /** Submits the collateral payment built last, if its hash matches. */
   "collateral-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Every live pool: kept on the device for a day, or read again with `refresh`. */
+  pools: { payload: { refresh?: boolean }; result: PoolList };
+  /** One pool's details, fresh. */
+  pool: { payload: { id: string }; result: PoolDetails };
+  /** A DRep by its ID (CIP-129 or CIP-105): its standing and name. */
+  drep: { payload: { id: string }; result: DrepDetails };
+  /** Builds and signs a staking transaction without submitting it. */
+  "stake-build": { payload: { action: StakingAction }; result: StakingSummary };
+  /** Submits the staking transaction built last, if its hash matches. */
+  "stake-submit": { payload: { txHash: string }; result: PendingTx };
+  preferences: { payload: None; result: Preferences };
+  "preferences-set": { payload: Partial<Preferences>; result: Preferences };
 }
 
 export type RequestName = keyof Requests;
@@ -429,6 +579,13 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "collateral-reclaim",
   "collateral-build",
   "collateral-submit",
+  "pools",
+  "pool",
+  "drep",
+  "stake-build",
+  "stake-submit",
+  "preferences",
+  "preferences-set",
 ]);
 
 export function isMessage(value: unknown): value is Message {

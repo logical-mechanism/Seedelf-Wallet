@@ -12,7 +12,9 @@ import type { ContactsService } from "./contacts";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
+import type { PreferencesService } from "./preferences";
 import type { SendService } from "./send";
+import type { StakingService } from "./staking";
 import type { TransferService } from "./transfer";
 import type { WithdrawService } from "./withdraw";
 import type { Wallet } from "./wallet";
@@ -30,6 +32,8 @@ export interface Context {
   contacts: ContactsService;
   activity: ActivityService;
   coins: CoinControlService;
+  staking: StakingService;
+  preferences: PreferencesService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -135,6 +139,20 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.send.buildCollateral(ctx.network);
     case "collateral-submit":
       return ctx.send.submitCollateral(ctx.network, message.txHash);
+    case "pools":
+      return ctx.staking.pools(ctx.network, message.refresh ?? false);
+    case "pool":
+      return ctx.staking.pool(ctx.network, message.id);
+    case "drep":
+      return ctx.staking.drep(ctx.network, message.id);
+    case "stake-build":
+      return ctx.staking.build(ctx.network, message.action);
+    case "stake-submit":
+      return ctx.staking.submit(ctx.network, message.txHash);
+    case "preferences":
+      return ctx.preferences.get();
+    case "preferences-set":
+      return ctx.preferences.set(message);
   }
 }
 

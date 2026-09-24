@@ -28,6 +28,8 @@ describe("spent UTxOs", () => {
   async function movedIn(sleep?: (ms: number) => Promise<void>) {
     const t = testBalances({ sleep });
     await t.wallet.create(v.phrase, PASSWORD);
+    // Only the UTxOs pay: the account's staking rewards would cover these amounts.
+    await t.preferences.set({ spendRewards: false });
     const before = await t.balances.get("preprod");
     const summary = await t.moveIn.build("preprod", "10000000", []);
     await t.moveIn.submit("preprod", summary.txHash);

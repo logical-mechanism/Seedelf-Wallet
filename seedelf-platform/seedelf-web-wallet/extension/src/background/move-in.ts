@@ -17,6 +17,7 @@ import type { ActivityService } from "./activity";
 import type { CoinControlService } from "./coin-control";
 import type { Koios } from "./koios";
 import { SESSION_PENDING } from "./pending";
+import type { PreferencesService } from "./preferences";
 import { rememberSpent } from "./spent";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
@@ -44,6 +45,8 @@ export interface MoveInDeps {
   activity?: ActivityService;
   /** Leaves out what the user locked, and the collateral. */
   coins: CoinControlService;
+  /** Whether staking rewards are spent along with it. */
+  preferences?: PreferencesService;
 }
 
 export class MoveInService {
@@ -56,11 +59,11 @@ export class MoveInService {
    */
   async build(network: NetworkName, lovelace: string | null, tokens: TokenQuantity[]): Promise<MoveInSummary> {
     const { wasm, wallet, session, now } = this.deps;
-    const { params, utxos, held } = await readAccount(this.deps, network);
+    const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
     if (utxos.length === 0) throw nothingInAccount(held, "Your Cardano account is empty, so there's nothing to move in.");
 
     return wallet.withKeys(async (keys) => {
-      const request = { network, params, utxos, lovelace, tokens };
+      const request = { network, params, utxos, lovelace, tokens, withdrawal };
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
       const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };
       const summary: MoveInSummary = { ...rest, network };

@@ -54,6 +54,9 @@ interface AccountPages {
   more: boolean;
 }
 
+/** What the Seedelf history notes when it's sent: flows that touch the Seedelf balance or a seedelf. */
+const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set(["move-in", "transfer", "withdraw", "mint", "remove"]);
+
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
 const shortHex = (hex: string) => (hex.length > 20 ? `${hex.slice(0, 12)}…${hex.slice(-6)}` : hex);
 const feeOf = (fee: unknown) => (typeof fee === "string" ? fee : (fee as { total?: string } | undefined)?.total);
@@ -83,8 +86,8 @@ export class ActivityService {
    * counted again as arrivals.
    */
   sent(network: NetworkName, pending: PendingTx, summary: object): Promise<void> {
-    // A payment from the Cardano account isn't Seedelf's: its Activity comes from Koios.
-    if (pending.kind === "send" || pending.kind === "collateral") return Promise.resolve();
+    // A payment or a staking change on the Cardano account isn't Seedelf's: its Activity comes from Koios.
+    if (!SEEDELF_KINDS.has(pending.kind)) return Promise.resolve();
     const s = summary as Record<string, any>;
     const tokens = Array.isArray(s.tokens) ? s.tokens.length : 0;
     const shared = { txHash: pending.txHash, at: pending.submittedAt, lovelace: String(s.lovelace ?? "0"), tokens, fee: feeOf(s.fee) };

@@ -41,8 +41,8 @@ export class MintService {
 
   private async buildFromAccount(network: NetworkName, label: string): Promise<MintSummary> {
     const { wasm } = this.deps;
-    const { params, utxos, collateral, held } = await readAccount(this.deps, network);
-    const request = { network, params, label, utxos, collateral };
+    const { params, utxos, collateral, held, withdrawal } = await readAccount(this.deps, network);
+    const request = { network, params, label, utxos, collateral, withdrawal };
     if (request.utxos.length === 0) {
       throw nothingInAccount(held, "Your Cardano account is empty. Fund it first; the seedelf is paid from there.");
     }

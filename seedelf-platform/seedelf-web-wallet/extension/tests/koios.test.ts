@@ -164,4 +164,32 @@ describe("Koios client: transactions", () => {
     expect([...status]).toEqual([["aa", 3], ["bb", null]]);
     expect(calls[0]!.body).toEqual({ _tx_hashes: ["aa", "bb"] });
   });
+  it("reads a stake key's standing, and nothing for one never registered", async () => {
+    const info = { stake_address: "stake_test1u", status: "registered", rewards_available: "5", deposit: "2000000" };
+    const { koios, calls } = scripted([Response.json([info]), Response.json([])]);
+    expect(await koios.accountInfo("stake_test1u")).toEqual(info);
+    expect(await koios.accountInfo("stake_test1never")).toBeUndefined();
+    expect(calls[0]).toEqual({ url: `${BASE}/account_info`, body: { _stake_addresses: ["stake_test1u"] } });
+  });
+
+  it("pages the live pools with a GET, asking only for the columns the browser shows", async () => {
+    const pools = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ pool_id_bech32: `pool${from + i}` }));
+    const { koios, calls } = scripted([Response.json(pools(1000)), Response.json(pools(3, 1000))]);
+    expect(await koios.poolList()).toHaveLength(1003);
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe("/api/v1/pool_list");
+    expect(url.searchParams.get("pool_status")).toBe("eq.registered");
+    expect(url.searchParams.get("select")).toBe("pool_id_bech32,ticker,margin,fixed_cost,pledge,active_stake,retiring_epoch");
+    expect(calls.map((c) => new URL(c.url).searchParams.get("offset"))).toEqual(["0", "1000"]);
+    expect(calls[0]!.body).toBeUndefined();
+  });
+
+  it("explains the ledger's staking refusals", async () => {
+    const refused = (error: string) => scripted([new Response(error, { status: 400 })]).koios.submitTx(new Uint8Array([1]));
+    await expect(refused("WithdrawalsNotInRewardsCERTS")).rejects.toThrow("rewards changed since you reviewed");
+    await expect(refused("ConwayWdrlNotDelegatedToDRep")).rejects.toThrow("voting power is delegated");
+    await expect(refused("DelegateeDRepNotRegisteredDELEG")).rejects.toThrow("DRep isn't registered any more");
+    await expect(refused("StakeKeyNotRegisteredDELEG")).rejects.toThrow("staking changed since you reviewed");
+    await expect(refused("SomethingElse")).rejects.toThrow("The network rejected the transaction: SomethingElse");
+  });
 });
