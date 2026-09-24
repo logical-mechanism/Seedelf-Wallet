@@ -1,7 +1,7 @@
 // Inline icons, copied from Lucide (lucide-static 1.48.0): only the ones the
 // wallet uses, each under its Lucide name. Lucide is ISC, and some icons
-// (arrow-down-left, check, chevron-left, external-link, info, lock, log-in,
-// log-out, trash-2, x) come from Feather, MIT. Both notices ship in the
+// (arrow-down-left, check, chevron-left, chevron-right, external-link, info,
+// lock, log-in, log-out, search, trash-2, x) come from Feather, MIT. Both notices ship in the
 // extension as licenses/lucide-ISC.txt.
 
 import type { ReactNode } from "react";
@@ -181,5 +181,85 @@ export const CloseIcon = icon(
   <>
     <path d="M18 6 6 18" />
     <path d="m6 6 12 12" />
+  </>,
+);
+
+/** settings */
+export const SettingsIcon = icon(
+  <>
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
+  </>,
+);
+
+/** users */
+export const UsersIcon = icon(
+  <>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </>,
+);
+
+/** history */
+export const HistoryIcon = icon(
+  <>
+    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+    <path d="M3 3v5h5" />
+    <path d="M12 7v5l4 2" />
+  </>,
+);
+
+/** arrow-up-right */
+export const ArrowUpRightIcon = icon(
+  <>
+    <path d="M7 7h10v10" />
+    <path d="M7 17 17 7" />
+  </>,
+);
+
+/** search */
+export const SearchIcon = icon(
+  <>
+    <path d="m21 21-4.34-4.34" />
+    <circle cx="11" cy="11" r="8" />
+  </>,
+);
+
+/** chevron-right */
+export const ChevronRightIcon = icon(<path d="m9 18 6-6-6-6" />);
+
+/** lock-open */
+export const LockOpenIcon = icon(
+  <>
+    <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+  </>,
+);
+
+/** coins */
+export const CoinsIcon = icon(
+  <>
+    <path d="M13.744 17.736a6 6 0 1 1-7.48-7.48" />
+    <path d="M15 6h1v4" />
+    <path d="m6.134 14.768.866-.5 2 3.464" />
+    <circle cx="16" cy="8" r="6" />
+  </>,
+);
+
+/** vault */
+export const VaultIcon = icon(
+  <>
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+    <path d="m7.9 7.9 2.7 2.7" />
+    <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+    <path d="m13.4 10.6 2.7-2.7" />
+    <circle cx="7.5" cy="16.5" r=".5" fill="currentColor" />
+    <path d="m7.9 16.1 2.7-2.7" />
+    <circle cx="16.5" cy="16.5" r=".5" fill="currentColor" />
+    <path d="m13.4 13.4 2.7 2.7" />
+    <circle cx="12" cy="12" r="2" />
   </>,
 );

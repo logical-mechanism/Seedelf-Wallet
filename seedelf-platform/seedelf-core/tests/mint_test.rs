@@ -1075,16 +1075,23 @@ mod account {
     }
 
     #[test]
-    fn the_account_pays_and_its_5_ada_utxo_is_the_collateral() {
+    fn the_account_pays_and_a_5_ada_utxo_it_doesnt_spend_is_the_collateral() {
         let p = payer();
         let available = [
             at(&p, 0x30, 0, 10_000_000, &[]),
             at(&p, 0x31, 1, 5_000_000, &[]),
             at(&p, 0x32, 2, 3_000_000, &[("tok", 7)]),
         ];
-        let mint = build::account_mint(&p.chain, &available, "account-mint", &p.seedelf, &p.change)
-            .unwrap();
-        // The largest pure-ADA UTxO pays; the 5 ADA one is never spent, only put up.
+        let mint = build::account_mint(
+            &p.chain,
+            &available,
+            None,
+            "account-mint",
+            &p.seedelf,
+            &p.change,
+        )
+        .unwrap();
+        // The largest pure-ADA UTxO pays; the 5 ADA one isn't needed, so it's put up.
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
         assert_eq!(mint.collateral().tx_hash, available[1].tx_hash);
         assert!(
@@ -1100,6 +1107,35 @@ mod account {
     }
 
     #[test]
+    fn the_collateral_set_aside_is_put_up_and_never_spent() {
+        let p = payer();
+        let set_aside = at(&p, 0x35, 0, 5_000_000, &[]);
+        // Listed or not, it's left out of the inputs; the rest pays.
+        for available in [
+            vec![at(&p, 0x36, 1, 3_500_000, &[]), set_aside.clone()],
+            vec![at(&p, 0x36, 1, 3_500_000, &[])],
+        ] {
+            let mint = build::account_mint(
+                &p.chain,
+                &available,
+                Some(&set_aside),
+                "account-mint",
+                &p.seedelf,
+                &p.change,
+            )
+            .unwrap();
+            assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
+            assert_eq!(
+                outpoints(std::slice::from_ref(mint.collateral())),
+                outpoints(std::slice::from_ref(&set_aside))
+            );
+            let tx = assert_sound(&p, &mint, &mint.finalize(&recorded()).unwrap());
+            assert_eq!(tx.collateral.len(), 1);
+            assert!(!tx.inputs.contains(&tx.collateral[0]));
+        }
+    }
+
+    #[test]
     fn a_token_utxo_can_be_the_collateral() {
         // Like the public phrase's preprod account after its move-in: every UTxO holds tokens.
         let p = payer();
@@ -1109,8 +1145,15 @@ mod account {
             at(&p, 0x40, 0, 12_000_000, &many),
             at(&p, 0x41, 1, 4_000_000, &[("tok", 1)]),
         ];
-        let mint = build::account_mint(&p.chain, &available, "account-mint", &p.seedelf, &p.change)
-            .unwrap();
+        let mint = build::account_mint(
+            &p.chain,
+            &available,
+            None,
+            "account-mint",
+            &p.seedelf,
+            &p.change,
+        )
+        .unwrap();
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
         assert_eq!(mint.collateral().tx_hash, available[1].tx_hash);
         let built = mint.finalize(&recorded()).unwrap();
@@ -1124,21 +1167,36 @@ mod account {
     fn spends_as_few_as_it_can_and_can_put_up_a_spent_utxo() {
         let p = payer();
         // 2 ADA alone leaves change below its minimum; 1.5 more is enough.
+        // (The 5 ADA UTxO is the collateral set aside, so it doesn't pay.)
         let available = [
             at(&p, 0x50, 0, 1_500_000, &[]),
             at(&p, 0x51, 1, 2_000_000, &[]),
             at(&p, 0x52, 2, 5_000_000, &[]),
         ];
-        let mint = build::account_mint(&p.chain, &available, "account-mint", &p.seedelf, &p.change)
-            .unwrap();
+        let mint = build::account_mint(
+            &p.chain,
+            &available,
+            Some(&available[2]),
+            "account-mint",
+            &p.seedelf,
+            &p.change,
+        )
+        .unwrap();
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..2]));
         assert_eq!(mint.collateral().tx_hash, available[2].tx_hash);
         assert_sound(&p, &mint, &mint.finalize(&recorded()).unwrap());
 
         // With one UTxO, it's both an input and the collateral.
         let single = [at(&p, 0x60, 0, 4_000_000, &[])];
-        let mint =
-            build::account_mint(&p.chain, &single, "account-mint", &p.seedelf, &p.change).unwrap();
+        let mint = build::account_mint(
+            &p.chain,
+            &single,
+            None,
+            "account-mint",
+            &p.seedelf,
+            &p.change,
+        )
+        .unwrap();
         assert_eq!(mint.collateral().tx_hash, single[0].tx_hash);
         let tx = assert_sound(&p, &mint, &mint.finalize(&recorded()).unwrap());
         assert_eq!(tx.inputs, tx.collateral);
@@ -1148,7 +1206,7 @@ mod account {
     fn explains_what_is_wrong() {
         let p = payer();
         let err = |available: &[UtxoResponse]| {
-            build::account_mint(&p.chain, available, "", &p.seedelf, &p.change)
+            build::account_mint(&p.chain, available, None, "", &p.seedelf, &p.change)
                 .err()
                 .expect("an error")
                 .to_string()
@@ -1158,13 +1216,28 @@ mod account {
                 .contains("Not enough ADA in the Cardano account for the seedelf")
         );
         assert!(err(&[]).contains("nothing in the Cardano account"));
-        // A 5 ADA pure UTxO alone is never spent.
-        assert!(err(&[at(&p, 0x71, 0, 5_000_000, &[])]).contains("Not enough ADA"));
+        // The collateral set aside is never spent, so alone it pays for nothing.
+        let five = at(&p, 0x71, 0, 5_000_000, &[]);
+        let e = build::account_mint(
+            &p.chain,
+            std::slice::from_ref(&five),
+            Some(&five),
+            "",
+            &p.seedelf,
+            &p.change,
+        )
+        .err()
+        .unwrap();
+        assert!(
+            e.to_string().contains("nothing in the Cardano account"),
+            "{e}"
+        );
         let bad = Register::new("00".repeat(48), "00".repeat(48));
         assert!(
             build::account_mint(
                 &p.chain,
                 &[at(&p, 0x72, 0, 9_000_000, &[])],
+                None,
                 "",
                 &bad,
                 &p.change
@@ -1177,6 +1250,7 @@ mod account {
         let mint = build::account_mint(
             &p.chain,
             &[at(&p, 0x73, 0, 9_000_000, &[])],
+            None,
             "",
             &p.seedelf,
             &p.change,

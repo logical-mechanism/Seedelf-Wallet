@@ -94,7 +94,74 @@ describe("sanitizeAda: supply", () => {
     expect(sanitizeAda("12", "99999999999999999999999999999999999999999")).toEqual(refused);
     expect(sanitizeAda("12", "45000000000.000001")).toEqual(refused);
     expect(sanitizeAda("12", "45,000,000,001")).toEqual(refused);
-    expect(sanitizeAda("12", "45000000000")).toEqual({ value: "45000000000" });
-    expect(sanitizeAda("12", "44999999999.9999999")).toMatchObject({ value: "44999999999.999999" });
+    expect(sanitizeAda("12", "45000000000")).toEqual({ value: "45,000,000,000" });
+    expect(sanitizeAda("12", "44999999999.9999999")).toMatchObject({ value: "44,999,999,999.999999" });
+  });
+});
+
+describe("sanitizeAmount: commas", () => {
+  it("groups the thousands again wherever commas were typed or deleted", async () => {
+    const { sanitizeAda } = await import("../src/ui/format");
+    expect(sanitizeAda("", "3,000,000,00")).toEqual({ value: "300,000,000" });
+    expect(sanitizeAda("", "1234567.5")).toEqual({ value: "1,234,567.5" });
+    expect(sanitizeAda("", "1,2,3,4")).toEqual({ value: "1,234" });
+    expect(sanitizeAda("", "0,000,5")).toEqual({ value: "5" });
+    expect(sanitizeAda("", "1000.")).toEqual({ value: "1,000." });
+    expect(sanitizeAda("", "999")).toEqual({ value: "999" });
+  });
+});
+
+describe("sanitizeAmount: a token", () => {
+  const rules = (decimals: number, held: bigint) => ({
+    decimals,
+    max: held,
+    notANumber: "number",
+    tooPrecise: "precise",
+    tooMuch: "too much",
+  });
+
+  it("refuses more than the wallet holds, keeping the previous value", async () => {
+    const { sanitizeAmount } = await import("../src/ui/format");
+    // 1,234.56 held, 2 decimals.
+    const held = rules(2, 123_456n);
+    expect(sanitizeAmount("200", "2000", held)).toEqual({ value: "200", note: "too much" });
+    expect(sanitizeAmount("", "1234.57", held)).toEqual({ value: "", note: "too much" });
+    expect(sanitizeAmount("", "1234.56", held)).toEqual({ value: "1,234.56" });
+    expect(sanitizeAmount("", "1234.567", held)).toEqual({ value: "1,234.56", note: "precise" });
+  });
+
+  it("takes whole units only when the token has no decimals", async () => {
+    const { sanitizeAmount } = await import("../src/ui/format");
+    const whole = rules(0, 3_000_000_000n);
+    expect(sanitizeAmount("", "1000000", whole)).toEqual({ value: "1,000,000" });
+    expect(sanitizeAmount("", "12.", whole)).toEqual({ value: "12" });
+    expect(sanitizeAmount("", "12.5", whole)).toEqual({ value: "12", note: "precise" });
+    expect(sanitizeAmount("", "3000000001", whole)).toEqual({ value: "", note: "too much" });
+    expect(sanitizeAmount("5", "x", whole)).toEqual({ value: "5", note: "number" });
+  });
+});
+
+describe("the caret among regrouped digits", () => {
+  it("stays after the same digits however the commas moved", async () => {
+    const { caretAfter } = await import("../src/ui/format");
+    // Backspace at the end of 3,000,000,000: the end of 300,000,000.
+    expect(caretAfter("3,000,000,00", 12, "300,000,000")).toBe(11);
+    // A digit typed after "1,00" in "1,000": after the fifth digit of 10,000.
+    expect(caretAfter("1,0000", 5, "10,000")).toBe(5);
+    // Before everything stays before everything.
+    expect(caretAfter("5,000", 0, "5,000")).toBe(0);
+    // After "12" of a pasted "1234": after the 2 of "1,234".
+    expect(caretAfter("1234", 2, "1,234")).toBe(3);
+  });
+
+  it("takes the digit beside a comma deleted on its own", async () => {
+    const { deleteBesideComma } = await import("../src/ui/format");
+    // Backspace just after the comma of "12,345": the 2 goes.
+    expect(deleteBesideComma("12,345", "12345", 2, "deleteContentBackward")).toEqual({ text: "1345", caret: 1 });
+    // Delete just before it: the 3 goes.
+    expect(deleteBesideComma("12,345", "12345", 2, "deleteContentForward")).toEqual({ text: "1245", caret: 2 });
+    // Anything else is left as it is.
+    expect(deleteBesideComma("12,345", "12,34", 5, "deleteContentBackward")).toEqual({ text: "12,34", caret: 5 });
+    expect(deleteBesideComma("1,234", "1,2345", 6, "insertText")).toEqual({ text: "1,2345", caret: 6 });
   });
 });

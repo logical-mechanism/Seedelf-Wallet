@@ -39,6 +39,35 @@ export interface TokenAmount {
   fingerprint: string;
 }
 
+/** Something that happened in one of the wallet's two balances, for Activity. */
+export interface ActivityEntry {
+  txHash: string;
+  /** When: the block's time, or when this wallet sent it (ms since the epoch). */
+  at: number;
+  /** "received" and "sent" are anyone's; the rest are this wallet's own flows. */
+  kind: "received" | "sent" | PendingTx["kind"];
+  /** Into the balance, out of it, or neither (a seedelf's locked ADA). */
+  direction: "in" | "out" | "none";
+  /** ADA moved, as lovelace (a decimal string, no sign). */
+  lovelace: string;
+  /** How many kinds of token moved with it. */
+  tokens: number;
+  /** The network fee, when this wallet paid it (lovelace). */
+  fee?: string;
+  /** Who or where: a seedelf's tag, a $handle, an address. */
+  detail?: string;
+}
+
+/** A name for a seedelf or an address this wallet pays, kept sealed on the device. */
+export interface Contact {
+  id: string;
+  name: string;
+  /** A seedelf's full name, or an address or `$handle` to withdraw to. */
+  kind: "seedelf" | "address";
+  value: string;
+  network: NetworkName;
+}
+
 /** One of the user's seedelfs: a named token in a UTxO the wallet owns. */
 export interface SeedelfInfo {
   /** The full token name, hex. */
@@ -49,18 +78,62 @@ export interface SeedelfInfo {
   lovelace: string;
 }
 
+/** What's kept out of every payment on one side: locked UTxOs, and the Cardano account's collateral. */
+export interface Locked {
+  lovelace: string;
+  tokens: TokenAmount[];
+  utxos: number;
+}
+
 /** What the wallet holds on one network. Lovelace amounts are decimal strings. */
 export interface Balances {
   network: NetworkName;
   /** When the chain was read (ms since the epoch). */
   updatedAt: number;
   /** UTxOs in the wallet contract this wallet owns, except those holding a seedelf (as in the CLI's `balance`). */
-  seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[] };
+  seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[]; locked: Locked };
   /** The Cardano account (CIP-1852 account 0). */
-  cardano: { lovelace: string; tokens: TokenAmount[]; utxos: number; addressesUsed: number };
+  cardano: { lovelace: string; tokens: TokenAmount[]; utxos: number; addressesUsed: number; locked: Locked };
 }
 
-/** A token to bring along on a move-in; it moves in full. */
+export type UtxoSide = "seedelf" | "cardano";
+
+/** One UTxO of the wallet's, for the UTxOs screen. */
+export interface UtxoInfo {
+  txHash: string;
+  index: number;
+  lovelace: string;
+  tokens: TokenAmount[];
+  /** The block that made it, when known. */
+  blockHeight?: number;
+  /** The Cardano account's address holding it. */
+  address?: string;
+  /** Kept out of every payment (the collateral always is). */
+  locked: boolean;
+  /** The Cardano account's collateral. */
+  collateral?: boolean;
+  /** It holds one of your seedelfs: its full token name, and its tag when it reads as text. Only removing it spends the UTxO. */
+  seedelf?: { name: string; label?: string };
+}
+
+/** Both sides' UTxOs, largest first. */
+export interface UtxoLists {
+  seedelf: UtxoInfo[];
+  cardano: UtxoInfo[];
+  /** When the balance reading they come from was made (ms since the epoch). */
+  updatedAt?: number;
+}
+
+/** The Cardano account's collateral: 5 ₳ set aside for transactions that run a script. */
+export type CollateralStatus =
+  /** `by`: the wallet took a 5 ₳ UTxO the account held, or you set it. */
+  | { state: "set"; utxo: UtxoInfo; by: "wallet" | "you" }
+  /** The payment that makes it is on its way. */
+  | { state: "waiting"; txHash: string }
+  /** `reclaimed`: you returned it, so the wallet doesn't take one by itself. `candidate`: a 5 ₳ UTxO it can be, with no transaction. */
+  | { state: "none"; reclaimed: boolean; candidate?: UtxoInfo };
+
+/** A token, by its policy and hex name. */
 export interface TokenRef {
   policyId: string;
   assetName: string;
@@ -73,6 +146,8 @@ export interface MoveInSummary {
   fee: string;
   /** Into Seedelf. */
   lovelace: string;
+  /** The least the deposit could carry: an amount below it was raised to it. Null for Max. */
+  minimum: string | null;
   tokens: Array<TokenRef & { quantity: string }>;
   /** How many new contract UTxOs hold it. */
   depositOutputs: number;
@@ -128,6 +203,8 @@ export interface TransferSummary {
   /** Paying one of your own seedelfs: the payment comes back to your Seedelf balance. */
   toSelf: boolean;
   lovelace: string;
+  /** The least the payment could carry: an amount below it was raised to it. */
+  minimum: string;
   tokens: TokenQuantity[];
   fee: { size: string; compute: string; scriptReference: string; total: string };
   /** Back into the Seedelf balance. */
@@ -156,6 +233,8 @@ export interface WithdrawSummary extends WithdrawDestination {
   max: boolean;
   /** What the address receives. */
   lovelace: string;
+  /** The least the payment could carry: an amount below it was raised to it. Null for Max. */
+  minimum: string | null;
   tokens: TokenQuantity[];
   fee: { size: string; compute: string; scriptReference: string; total: string };
   /** Back into the Seedelf balance: nothing, for Max. */
@@ -166,6 +245,25 @@ export interface WithdrawSummary extends WithdrawDestination {
   inputs: number;
   /** Seedelf UTxOs Max left for another withdrawal (it takes 20 at most). */
   left: number;
+}
+
+/** A built and signed payment from the Cardano account, waiting for the user to send it. Amounts are lovelace strings. */
+export interface SendSummary extends WithdrawDestination {
+  network: NetworkName;
+  txHash: string;
+  /** The most possible (Max), rather than an amount. */
+  max: boolean;
+  /** What the address receives. */
+  lovelace: string;
+  /** The least the payment could carry: an amount below it was raised to it. Null for Max. */
+  minimum: string | null;
+  tokens: TokenQuantity[];
+  fee: string;
+  /** Back to the Cardano account's receive address. */
+  changeLovelace: string;
+  changeTokens: number;
+  /** How many of the account's UTxOs pay for it. */
+  inputs: number;
 }
 
 /** Where a removed seedelf's ADA goes: the Cardano account's `0/0`, or back into the Seedelf balance. */
@@ -186,7 +284,7 @@ export interface RemoveSummary {
 
 /** A submitted transaction the wallet is watching. */
 export interface PendingTx {
-  kind: "move-in" | "mint" | "transfer" | "withdraw" | "remove";
+  kind: "move-in" | "mint" | "transfer" | "withdraw" | "remove" | "send" | "collateral";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -211,8 +309,8 @@ export interface Requests {
   /** The last reading, or a new one if there is none or `refresh` is set. */
   balances: { payload: { refresh?: boolean }; result: Balances };
   wordlist: { payload: None; result: string[] };
-  /** Builds and signs a move-in without submitting it. `lovelace` null moves the most possible. */
-  "move-in-build": { payload: { lovelace: string | null; tokens: TokenRef[] }; result: MoveInSummary };
+  /** Builds and signs a move-in without submitting it. `lovelace` null moves the most possible; below what the deposit needs, it's raised to that. */
+  "move-in-build": { payload: { lovelace: string | null; tokens: TokenQuantity[] }; result: MoveInSummary };
   /** Submits the move-in built last, if its hash matches. */
   "move-in-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds a seedelf mint (Ogmios measures its scripts) without sending it. */
@@ -221,13 +319,13 @@ export interface Requests {
   "mint-submit": { payload: { txHash: string }; result: PendingTx };
   /** Finds a seedelf by its full name in the wallet contract, as read from Koios. */
   "transfer-lookup": { payload: { to: string }; result: SeedelfLookup };
-  /** Builds a transfer to a seedelf (Ogmios measures its spends) without sending it. */
+  /** Builds a transfer to a seedelf (Ogmios measures its spends) without sending it. `lovelace` below what the payment needs is raised to that. */
   "transfer-build": { payload: { to: string; lovelace: string; tokens: TokenQuantity[] }; result: TransferSummary };
   /** Submits the transfer built last, if its hash matches, once giveme.my has witnessed it. */
   "transfer-submit": { payload: { txHash: string }; result: PendingTx };
-  /** Reads a withdrawal's destination: an address, or `$handle` looked up through Koios. */
-  "withdraw-resolve": { payload: { to: string }; result: WithdrawDestination };
-  /** Builds a withdrawal (`lovelace` null sends everything) without sending it. */
+  /** Reads a withdrawal's or a send's destination: an address, or `$handle` looked up through Koios. */
+  "resolve-destination": { payload: { to: string }; result: WithdrawDestination };
+  /** Builds a withdrawal (`lovelace` null sends everything; below what the payment needs, it's raised to that) without sending it. */
   "withdraw-build": {
     payload: { to: string; lovelace: string | null; tokens: TokenQuantity[] };
     result: WithdrawSummary;
@@ -238,9 +336,46 @@ export interface Requests {
   "remove-build": { payload: { name: string; to: RemoveTo }; result: RemoveSummary };
   /** Submits the removal built last, if its hash matches, once giveme.my has witnessed it. */
   "remove-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Builds and signs a payment from the Cardano account without submitting it. `lovelace` as for a move-in. */
+  "send-build": { payload: { to: string; lovelace: string | null; tokens: TokenQuantity[] }; result: SendSummary };
+  /** Submits the payment built last, if its hash matches. */
+  "send-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };
   "reset-wallet": { payload: None; result: Status };
+  /** The recovery phrase's words, for Settings; the password again, even while unlocked. */
+  "reveal-phrase": { payload: { password: string }; result: { words: string[] } };
+  /** Seals the vault under a new password. */
+  "change-password": { payload: { current: string; next: string }; result: None };
+  /** This network's contacts, by name. */
+  contacts: { payload: None; result: Contact[] };
+  /** Adds a contact, or changes the one with `id`; returns the contacts. */
+  "contact-save": { payload: { id?: string; name: string; value: string }; result: Contact[] };
+  "contact-remove": { payload: { id: string }; result: Contact[] };
+  /**
+   * One balance's activity, newest first; `more` reads the next page (the
+   * Cardano account only). `refresh` reads the balances again first, for the
+   * Seedelf side's arrivals; the Cardano side asks Koios for what's newer
+   * every time. `updatedAt`: when what's shown was read.
+   */
+  history: {
+    payload: { of: "seedelf" | "cardano"; more?: boolean; refresh?: boolean };
+    result: { entries: ActivityEntry[]; more: boolean; updatedAt?: number };
+  };
+  /** Both sides' UTxOs, from the last reading, or a new one with `refresh`. */
+  utxos: { payload: { refresh?: boolean }; result: UtxoLists };
+  /** Locks or unlocks one UTxO (`txhash#index`): a locked one is left out of every payment. */
+  "utxo-lock": { payload: { of: UtxoSide; utxo: string; locked: boolean }; result: UtxoLists };
+  /** The Cardano account's collateral, from the last reading. */
+  collateral: { payload: None; result: CollateralStatus };
+  /** Makes a 5 ₳ UTxO the account holds its collateral, with no transaction. */
+  "collateral-use": { payload: { utxo: string }; result: CollateralStatus };
+  /** Returns the collateral to the balance. */
+  "collateral-reclaim": { payload: None; result: CollateralStatus };
+  /** Builds and signs a 5 ₳ payment to the account's own `0/0`, whose output becomes the collateral. */
+  "collateral-build": { payload: None; result: SendSummary };
+  /** Submits the collateral payment built last, if its hash matches. */
+  "collateral-submit": { payload: { txHash: string }; result: PendingTx };
 }
 
 export type RequestName = keyof Requests;
@@ -272,13 +407,28 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "transfer-lookup",
   "transfer-build",
   "transfer-submit",
-  "withdraw-resolve",
+  "resolve-destination",
   "withdraw-build",
   "withdraw-submit",
   "remove-build",
   "remove-submit",
+  "send-build",
+  "send-submit",
   "pending-tx",
   "reset-wallet",
+  "reveal-phrase",
+  "change-password",
+  "contacts",
+  "contact-save",
+  "contact-remove",
+  "history",
+  "utxos",
+  "utxo-lock",
+  "collateral",
+  "collateral-use",
+  "collateral-reclaim",
+  "collateral-build",
+  "collateral-submit",
 ]);
 
 export function isMessage(value: unknown): value is Message {

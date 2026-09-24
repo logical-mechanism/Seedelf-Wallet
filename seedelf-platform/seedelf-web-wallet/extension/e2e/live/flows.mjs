@@ -2,7 +2,7 @@
 // ending when the network confirms it (see lib.mjs). Each takes the
 // wallet from openWallet() and the flow's arguments, and returns the
 // transaction hash.
-import { balances, confirmed, log, reviewAndSend, seedelfName } from "./lib.mjs";
+import { balances, confirmed, log, reviewAndSend, seedelfName, yourSeedelfs } from "./lib.mjs";
 
 const home = (page) => page.getByRole("tab", { name: "Seedelf" }).click();
 
@@ -16,16 +16,23 @@ export const FLOWS = {
     await page.getByRole("button", { name: from === "account" ? "Cardano account" : "Seedelf balance" }).click();
     await reviewAndSend(page, "mint-review", `mint-${from}`);
     const txHash = await confirmed(page, "Seedelf created");
-    await page.getByTestId("seedelfs").getByText(tag, { exact: true }).waitFor({ timeout: 60_000 });
+    await yourSeedelfs(page, (list) => list.getByText(tag, { exact: true }).waitFor({ timeout: 60_000 }));
     return txHash;
   },
 
   /** `move-in [ada]`: ADA and every token the Cardano account holds, into the Seedelf balance. */
   async "move-in"({ page }, ada = "10") {
-    await page.getByRole("tab", { name: "Cardano account" }).click();
+    await page.getByRole("tab", { name: "Cardano", exact: true }).click();
     await page.getByRole("button", { name: "Move in" }).click();
-    await page.getByLabel("Amount").fill(ada);
-    for (const box of await page.getByRole("checkbox").all()) await box.check();
+    await page.getByLabel("Amount", { exact: true }).fill(ada);
+    const add = page.getByRole("button", { name: "Add tokens" });
+    if (await add.count()) {
+      await add.click();
+      const picker = page.getByRole("dialog", { name: "Add tokens" });
+      await picker.getByRole("button", { name: /^Select all/ }).click();
+      await picker.getByRole("button", { name: /^Add \d+ tokens?$/ }).click();
+    }
+    for (const all of await page.getByRole("button", { name: /^All of / }).all()) await all.click();
     await reviewAndSend(page, "move-in-review", "move-in");
     return confirmed(page, "Move-in confirmed");
   },
@@ -49,7 +56,7 @@ export const FLOWS = {
   /** `withdraw [ada|max] [address|$handle]`: by default to the wallet's own receive address (flagged, allowed). */
   async withdraw({ page }, amount = "5.5", to) {
     if (!to) {
-      await page.getByRole("tab", { name: "Cardano account" }).click();
+      await page.getByRole("tab", { name: "Cardano", exact: true }).click();
       await page.getByRole("button", { name: "Receive" }).click();
       to = await page.getByTestId("receive-address").getAttribute("data-value");
       await page.getByRole("button", { name: "Back", exact: true }).click();
@@ -72,6 +79,7 @@ export const FLOWS = {
   async remove({ page }, tag = "live-mint", to = "account") {
     if (to !== "account" && to !== "seedelf") throw new Error("remove: send the freed ADA to account or seedelf");
     await home(page);
+    await page.getByRole("button", { name: "Receive into Seedelf" }).click();
     await page.getByRole("button", { name: `Remove ${tag}`, exact: true }).click();
     await page.getByRole("button", { name: to === "account" ? "Cardano account" : "Seedelf balance" }).click();
     await reviewAndSend(page, "remove-review", `remove-${to}`);

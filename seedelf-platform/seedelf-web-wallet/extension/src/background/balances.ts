@@ -1,15 +1,20 @@
 // Balances: read the chain through Koios and work out what this wallet owns.
 //
 // Seedelf side: every UTxO in the wallet contract, kept when the register in
-// its datum is ours (g^x == u, checked in WebAssembly). This is what the CLI's
+// its datum is ours (g^x == u, checked in WebAssembly). The contract is read
+// in full only when due, otherwise from the last block seen (contract-scan.ts). This is what the CLI's
 // `balance` does, and UTxOs holding a seedelf are listed as seedelfs rather
 // than counted in the balance, also as in the CLI.
 //
-// Cardano side: the addresses that have used the account's stake key, walked
-// with the gap limit along the receive and change chains, then the account's
-// UTxOs, keeping only those at addresses this wallet derived. Anyone can pair
-// their own payment key or script with our stake key, so the stake key alone
-// proves nothing.
+// Cardano side: every UTxO under one of the account's payment keys, whatever
+// its staking part (account.ts). Keys come from the gap limit over the
+// addresses that have used the account's stake key. Asking by payment key
+// also leaves out what anyone can pair with our stake key: their own payment
+// key or script, which proves nothing about us.
+//
+// What the user locked, and the Cardano account's collateral, are counted in
+// the balance and reported apart (coin-control.ts), fresh on every request,
+// since locking a UTxO doesn't read the chain again.
 //
 // The reading is cached per network in chrome.storage.session and wiped on lock.
 // A reading that still lists a UTxO this wallet has spent came from a Koios
@@ -19,10 +24,14 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { Balances, SeedelfInfo } from "../shared/rpc";
-import { discoverChain, registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
+import type { Balances, Locked, SeedelfInfo } from "../shared/rpc";
+import { readAccountUtxos, type Account, type PathedUtxo } from "./account";
+import { registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses, type ActivityService } from "./activity";
+import { SESSION_ACCOUNT_UTXOS_PREFIX, type CoinControlService } from "./coin-control";
+import { readContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
-import { readFresh, spentSet, unspent } from "./spent";
+import { spentSet } from "./spent";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, type Keys, type Wallet } from "./wallet";
 
@@ -47,7 +56,13 @@ export interface BalanceDeps {
   contract?: ContractConfig;
   /** Waits between readings; tests don't. */
   sleep?: (ms: number) => Promise<void>;
+  /** Notes new UTxOs of ours as arrivals in the Seedelf history. */
+  activity?: ActivityService;
+  /** What's locked on each side. */
+  coins: CoinControlService;
 }
+
+const NOTHING: Locked = { lovelace: "0", tokens: [], utxos: 0 };
 
 export class BalanceService {
   private readonly inFlight = new Map<NetworkName, Promise<Balances>>();
@@ -56,6 +71,18 @@ export class BalanceService {
 
   /** The cached reading, or a new one when there's none or `refresh` is set. Throws if locked. */
   async get(network: NetworkName, refresh = false): Promise<Balances> {
+    return this.withLocked(network, await this.reading(network, refresh));
+  }
+
+  /** When the kept reading was made, without reading anything; undefined when there's none. Throws if locked. */
+  async lastRead(network: NetworkName): Promise<number | undefined> {
+    const cached = await this.deps.wallet.withKeys(() =>
+      this.deps.session.get<Balances>(SESSION_BALANCES_PREFIX + network),
+    );
+    return cached?.updatedAt;
+  }
+
+  private async reading(network: NetworkName, refresh: boolean): Promise<Balances> {
     if (!refresh) {
       const cached = await this.deps.wallet.withKeys(() =>
         this.deps.session.get<Balances>(SESSION_BALANCES_PREFIX + network),
@@ -71,69 +98,66 @@ export class BalanceService {
     return reading;
   }
 
+  /** The reading with what's locked on each side now. */
+  private async withLocked(network: NetworkName, b: Balances): Promise<Balances> {
+    const locked = await this.deps.coins.locked(network);
+    return { ...b, seedelf: { ...b.seedelf, locked: locked.seedelf }, cardano: { ...b.cardano, locked: locked.cardano } };
+  }
+
   private async read(network: NetworkName): Promise<Balances> {
-    const { wasm, wallet, session, now, contract = CONTRACT_V1 } = this.deps;
-    const koios = this.deps.koios(network);
-    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const { wallet, session, now, contract = CONTRACT_V1 } = this.deps;
 
     // Network calls happen outside withKeys, so they never hold up a lock.
-    const [stake, spent] = await wallet.withKeys(
-      async ({ cardano }) => [cardano.stakeAddress(net), await spentSet(session)] as const,
-    );
-    const [usedAddresses, accountRead, contractRead] = await readFresh(
-      spent,
-      () =>
-        Promise.all([
-          koios.accountAddresses(stake),
-          koios.accountUtxos(stake),
-          koios.credentialUtxos([contract.walletContractHash]),
-        ]),
-      ([, account, contract]) => [...account, ...contract],
-      this.deps.sleep,
-    );
-    const accountUtxos = unspent(accountRead, spent);
-    const contractUtxos = unspent(contractRead, spent);
+    const spent = await wallet.withKeys(() => spentSet(session));
+    const [{ account, utxos }, view] = await Promise.all([
+      readAccountUtxos(this.deps, network, spent),
+      // The contract: in full when due, otherwise only what's new (contract-scan.ts).
+      readContractView(this.deps, network),
+    ]);
 
-    // Ownership is decided, and the result cached, only while still unlocked.
-    return wallet.withKeys(async (keys) => {
+    // The result is cached only while still unlocked.
+    const balances = await wallet.withKeys(async () => {
       const balances: Balances = {
         network,
         updatedAt: now(),
-        seedelf: this.seedelfSide(keys, contractUtxos, contract.seedelfPolicyId),
-        cardano: this.cardanoSide(keys, net, new Set(usedAddresses), accountUtxos),
+        seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId),
+        cardano: this.cardanoSide(account, utxos),
       };
       await session.set(SESSION_BALANCES_PREFIX + network, balances);
+      // The UTxOs screen and what's locked read these.
+      await session.set(SESSION_ACCOUNT_UTXOS_PREFIX + network, utxos);
+      // Activity reads the account's transactions against these.
+      const addresses: AccountAddresses = { stake: account.stake, addresses: account.addresses };
+      await session.set(SESSION_ACCOUNT_ADDRESSES_PREFIX + network, addresses);
       return balances;
     });
+    // The history never holds up, or breaks, a balance reading.
+    await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
+    return balances;
   }
 
-  private seedelfSide(keys: Keys, utxos: KoiosUtxo[], policyId: string): Balances["seedelf"] {
+  /** `owned`: this wallet's contract UTxOs. */
+  private seedelfSide(owned: KoiosUtxo[], policyId: string): Balances["seedelf"] {
     const seedelfs: SeedelfInfo[] = [];
     const spendable: KoiosUtxo[] = [];
-    for (const utxo of ownedUtxos(this.deps.wasm, keys, utxos)) {
+    for (const utxo of owned) {
       const name = seedelfTokenOf(utxo, policyId);
       if (name) seedelfs.push({ assetName: name, label: seedelfLabel(name), lovelace: utxo.value });
       else spendable.push(utxo);
     }
     seedelfs.sort((a, b) => (a.label ?? "￿").localeCompare(b.label ?? "￿") || a.assetName.localeCompare(b.assetName));
     const { lovelace, tokens } = sumValue(spendable);
-    return { lovelace: lovelace.toString(), tokens, utxos: spendable.length, seedelfs };
+    return { lovelace: lovelace.toString(), tokens, utxos: spendable.length, seedelfs, locked: NOTHING };
   }
 
-  private cardanoSide(
-    keys: Keys,
-    net: Wasm.Network,
-    used: ReadonlySet<string>,
-    utxos: KoiosUtxo[],
-  ): Balances["cardano"] {
-    const account = discoverAccount(keys, net, used);
-    const mine = utxos.filter((u) => account.paths.has(u.address));
-    const { lovelace, tokens } = sumValue(mine);
+  private cardanoSide(account: Account, utxos: PathedUtxo[]): Balances["cardano"] {
+    const { lovelace, tokens } = sumValue(utxos.map((p) => p.utxo));
     return {
       lovelace: lovelace.toString(),
       tokens,
-      utxos: mine.length,
+      utxos: utxos.length,
       addressesUsed: account.used,
+      locked: NOTHING,
     };
   }
 }
@@ -153,42 +177,4 @@ export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[]): K
       register.free();
     }
   });
-}
-
-/** The account's UTxOs at addresses it derived, each with its key's path, for WebAssembly to sign. */
-export function pathedUtxos(
-  keys: Keys,
-  net: Wasm.Network,
-  used: ReadonlySet<string>,
-  utxos: KoiosUtxo[],
-): Array<{ utxo: KoiosUtxo } & KeyPath> {
-  const { paths } = discoverAccount(keys, net, used);
-  return utxos.flatMap((utxo) => {
-    const path = paths.get(utxo.address);
-    return path ? [{ utxo, ...path }] : [];
-  });
-}
-
-/** Where an account address sits: chain (0 receive, 1 change) and index. */
-export interface KeyPath {
-  role: 0 | 1;
-  index: number;
-}
-
-/**
- * The Cardano account's addresses, found with the gap limit on the receive
- * and change chains, each with its path. `used` is the set of addresses Koios
- * lists under the account's stake key.
- */
-export function discoverAccount(
-  keys: Keys,
-  net: Wasm.Network,
-  used: ReadonlySet<string>,
-): { paths: Map<string, KeyPath>; used: number } {
-  const receive = discoverChain(used, (i) => keys.cardano.receiveAddress(net, i));
-  const change = discoverChain(used, (i) => keys.cardano.changeAddress(net, i));
-  const paths = new Map<string, KeyPath>();
-  receive.addresses.forEach((a, index) => paths.set(a, { role: 0, index }));
-  change.addresses.forEach((a, index) => paths.set(a, { role: 1, index }));
-  return { paths, used: receive.used + change.used };
 }

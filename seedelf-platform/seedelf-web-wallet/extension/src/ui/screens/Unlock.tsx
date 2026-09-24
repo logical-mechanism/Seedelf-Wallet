@@ -6,6 +6,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
+import { PasswordField } from "../components/PasswordField";
 import { Screen } from "../components/Screen";
 
 export function Unlock({
@@ -61,17 +62,7 @@ export function Unlock({
       <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={88} height={88} />
       <h1>Welcome back</h1>
       <form className="stack unlock__form" onSubmit={submit}>
-        <div className="field">
-          <label htmlFor="password">Password</label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoFocus
-          />
-        </div>
+        <PasswordField id="password" value={password} onChange={setPassword} autoFocus />
         {error && (
           <p className="error" role="alert">
             {error}

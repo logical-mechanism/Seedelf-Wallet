@@ -41,6 +41,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
     koios: () => new Koios("https://preprod.koios.rest/api/v1", t.koios.fetch, async () => undefined),
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     now: () => t.clock.now,
+    coins: t.coins,
   });
   return { service, calls };
 }
@@ -110,13 +111,22 @@ describe("transfer", () => {
     expect(summary).toMatchObject({ to: MINE, label: "web-wallet", toSelf: true, inputs: 1 });
   });
 
+  it("raises a short amount to the least the payment needs", async () => {
+    const t = await unlocked();
+    const tokens = [{ ...transferPreprod.tokens[0]!, quantity: "1" }];
+    for (const asked of ["0", "1000000"]) {
+      const summary = await t.transfer.build("preprod", THEIRS, asked, tokens);
+      expect(summary.lovelace).toBe(summary.minimum);
+      expect(BigInt(summary.minimum)).toBeGreaterThan(1_000_000n);
+    }
+  });
+
   it("explains what stops a transfer", async () => {
     const t = await unlocked();
     await expect(t.transfer.build("preprod", "5eed0e1f", "2000000", [])).rejects.toThrow(SEEDELF_NAME_RULE);
     await expect(t.transfer.build("preprod", `5eed0e1f${"00".repeat(28)}`, "2000000", [])).rejects.toThrow(
       "No seedelf with that name",
     );
-    await expect(t.transfer.build("preprod", THEIRS, "1000000", [])).rejects.toThrow("needs at least");
     await expect(t.transfer.build("preprod", THEIRS, "30000000", [])).rejects.toThrow("Not enough ADA");
     const tooMany = [{ ...transferPreprod.tokens[0]!, quantity: "1234560001" }];
     await expect(t.transfer.build("preprod", THEIRS, "2000000", tooMany)).rejects.toThrow("holds only 1234560000");

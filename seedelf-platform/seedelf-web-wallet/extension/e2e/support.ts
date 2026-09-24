@@ -7,11 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base, chromium, type BrowserContext, type Page } from "@playwright/test";
+import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
 
 import { txIdOf } from "../tests/fixtures/cbor";
 
-export { expect } from "@playwright/test";
+export { expect };
 
 export const dist = fileURLToPath(new URL("../dist", import.meta.url));
 
@@ -69,6 +69,7 @@ export const mintPreprod = fixture("mint-preprod.json");
 export const accountMintPreprod = fixture("account-mint-preprod.json");
 export const transferPreprod = fixture("transfer-preprod.json");
 export const withdrawPreprod = fixture("withdraw-preprod.json");
+export const activityPreprod = fixture("activity-preprod.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -77,6 +78,8 @@ export interface KoiosFake {
   calls: string[];
   /** When set, every request fails with this status. */
   failWith?: number;
+  /** When set, every answer waits this long (ms), as a slow Koios would. */
+  delayMs?: number;
   /** Transactions submitted, by id. */
   submitted: string[];
   /** What tx_status reports. */
@@ -96,6 +99,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").pop()!;
     koios.calls.push(path);
+    if (koios.delayMs) await new Promise((resolve) => setTimeout(resolve, koios.delayMs));
     if (koios.failWith) return route.fulfill({ status: koios.failWith, body: "" });
     if (path === "submittx") {
       const id = txIdOf(new Uint8Array(request.postDataBuffer()!));
@@ -115,19 +119,41 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const body = request.postDataJSON();
+    if (path === "account_txs" || path === "tx_info") {
+      const query = new URL(request.url()).searchParams;
+      const all: Array<{ tx_hash: string; block_height: number }> =
+        path === "tx_info"
+          ? activityPreprod.tx_info.filter((t: { tx_hash: string }) => body._tx_hashes.includes(t.tx_hash))
+          : body._stake_address === activityPreprod.stake
+            ? activityPreprod.account_txs.filter(
+                (t: { block_height: number }) =>
+                  body._after_block_height === undefined || t.block_height > body._after_block_height,
+              )
+            : [];
+      const offset = Number(query.get("offset") ?? 0);
+      const rows = path === "tx_info" ? all : all.slice(offset, offset + Number(query.get("limit") ?? 1000));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
     if (path === "tx_status") {
       const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: koios.confirmations }));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
+    // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
+    const after = Number(/gt\.(\d+)/.exec(new URL(request.url()).searchParams.get("block_height") ?? "")?.[1] ?? -1);
+    // credential_utxos: the wallet contract's, or the accounts' by payment key.
+    const credentials: string[] = body?._payment_credentials ?? [];
+    const byKey = Object.values(koiosPreprod.accounts as Record<string, { account_utxos: Array<{ payment_cred: string }> }>)
+      .flatMap((a) => a.account_utxos)
+      .filter((u) => credentials.includes(u.payment_cred));
     const rows =
       path === "credential_utxos"
-        ? [...koiosPreprod.contract_utxos, ...ownedUtxos]
+        ? credentials.includes(koiosPreprod.wallet_contract)
+          ? [...koiosPreprod.contract_utxos, ...ownedUtxos].filter((u) => (u.block_height ?? 0) > after)
+          : byKey
         : path === "account_addresses"
           ? (account?.account_addresses ?? [])
-          : path === "account_utxos"
-            ? (account?.account_utxos ?? [])
-            : null;
+          : null;
     if (!rows) return route.fulfill({ status: 404, body: "" });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
   });
@@ -210,9 +236,19 @@ export async function snap(page: Page, name: string) {
   await feet("");
 }
 
+/** Picks tokens in a form's "Add tokens" picker: the ones named, or every one. */
+export async function addTokens(page: Page, names?: string[]) {
+  await page.getByRole("button", { name: /^Add (more )?tokens$/ }).click();
+  const picker = page.getByRole("dialog", { name: "Add tokens" });
+  if (names) for (const name of names) await picker.getByRole("button", { name, exact: true }).click();
+  else await picker.getByRole("button", { name: /^Select all/ }).click();
+  await picker.getByRole("button", { name: /^Add \d+ tokens?$/ }).click();
+  await expect(picker).toHaveCount(0);
+}
+
 /** Home's Cardano account tab. */
 export async function cardanoTab(page: Page) {
-  await page.getByRole("tab", { name: "Cardano account" }).click();
+  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
 }
 
 /** Home → Cardano account → Receive: the receive and stake addresses. */

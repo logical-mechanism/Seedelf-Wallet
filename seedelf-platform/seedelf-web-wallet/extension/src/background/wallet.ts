@@ -8,13 +8,20 @@
 // browser closes). A restarted worker re-derives the keys from there instead
 // of asking for the password again. See docs/architecture.md#service-worker.
 
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import { passwordProblem } from "../shared/password";
 import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
+import { PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
 import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord } from "./vault";
+
+/** HKDF salt of the key that seals private records on the device, v1. */
+const STORE_SALT = new TextEncoder().encode("seedelf-web-wallet-private-store-v1");
+const STORE_INFO = new TextEncoder().encode("records");
 
 /** Lock after this long without UI activity. */
 export const AUTO_LOCK_MS = 15 * 60_000;
@@ -152,11 +159,43 @@ export class Wallet {
     });
   }
 
+  /**
+   * The recovery phrase, for Settings: only with the password, even while
+   * unlocked, and a wrong one counts towards the unlock back-off.
+   */
+  revealPhrase(password: string): Promise<string[]> {
+    return this.serial(async () => {
+      const entropy = await this.openWithPassword(password);
+      try {
+        return this.deps.wasm.entropyToPhrase(entropy).split(" ");
+      } finally {
+        entropy.fill(0);
+      }
+    });
+  }
+
+  /** Seals the vault under a new password; the current one proves who's asking. */
+  changePassword(current: string, next: string): Promise<void> {
+    return this.serial(async () => {
+      const problem = passwordProblem(next);
+      if (problem) throw new Error(problem);
+      const entropy = await this.openWithPassword(current);
+      try {
+        const record = (await this.deps.local.get<VaultRecord>(VAULT_KEY))!;
+        const sealed = await sealVault(entropy, next, record.createdAt);
+        await this.deps.local.set(VAULT_KEY, sealed);
+      } finally {
+        entropy.fill(0);
+      }
+    });
+  }
+
   /** Deletes the vault. The UI asks for a typed confirmation first. */
   reset(): Promise<void> {
     return this.serial(async () => {
       await this.wipe();
-      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES);
+      const records = PRIVATE_RECORDS.map((name) => PRIVATE_PREFIX + name);
+      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, ...records);
       this.deps.changed();
     });
   }
@@ -187,6 +226,25 @@ export class Wallet {
     return this.serial(async () => {
       if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
       return task(this.keys!);
+    });
+  }
+
+  /**
+   * Runs `task` with the key that seals this wallet's private records on the
+   * device (private-store.ts): HKDF-SHA-256 of the vault's entropy, so it
+   * exists only while unlocked. It's zeroed afterwards. Throws if locked.
+   */
+  withStoreKey<T>(task: (key: Uint8Array) => T | Promise<T>): Promise<T> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      const entropy = fromBase64((await this.deps.session.get<string>(SESSION_ENTROPY))!);
+      const key = hkdf(sha256, entropy, STORE_SALT, STORE_INFO, 32);
+      entropy.fill(0);
+      try {
+        return await task(key);
+      } finally {
+        key.fill(0);
+      }
     });
   }
 
@@ -261,6 +319,27 @@ export class Wallet {
     this.keys?.seedelf.free();
     this.keys?.cardano.free();
     this.keys = undefined;
+  }
+
+  /**
+   * The vault's entropy, for an unlocked wallet that asks for its password
+   * again. The caller zeroes it. Wrong passwords count, and wait, like unlock's.
+   */
+  private async openWithPassword(password: string): Promise<Uint8Array> {
+    if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+    const wait = await this.remainingBackoff();
+    if (wait > 0) throw new Error(`Too many wrong passwords. Try again in ${Math.ceil(wait / 1000)} s.`);
+    const record = (await this.deps.local.get<VaultRecord>(VAULT_KEY))!;
+    try {
+      const entropy = await openVault(record, password);
+      await this.deps.local.remove(UNLOCK_FAILURES);
+      return entropy;
+    } catch (e) {
+      if (!(e instanceof WrongPasswordError)) throw e;
+      const failures = await this.failures();
+      await this.deps.local.set(UNLOCK_FAILURES, { count: failures.count + 1, lastFailureAt: this.deps.now() });
+      throw e;
+    }
   }
 
   private async failures(): Promise<UnlockFailures> {

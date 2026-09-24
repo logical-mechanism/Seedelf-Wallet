@@ -11,6 +11,7 @@ import type { Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { EyeIcon } from "../components/Icons";
+import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput } from "../components/PhraseInput";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
@@ -102,14 +103,7 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
           Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website.
         </Callout>
         <div className={revealed ? "phrase-reveal" : "phrase-reveal phrase-reveal--hidden"}>
-          <ol className="phrase-grid" data-testid="recovery-phrase" aria-hidden={!revealed}>
-            {phrase.map((word, i) => (
-              <li className="word word--static" key={i}>
-                <span className="word__n">{i + 1}</span>
-                <span className="word__text">{revealed ? word : "••••••"}</span>
-              </li>
-            ))}
-          </ol>
+          <PhraseGrid words={phrase} revealed={revealed} />
           {!revealed && (
             <button className="secondary phrase-reveal__button" onClick={() => setRevealed(true)} disabled={!phrase.length}>
               <EyeIcon />

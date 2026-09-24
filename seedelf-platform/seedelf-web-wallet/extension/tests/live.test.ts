@@ -4,23 +4,36 @@
 import { describe, expect, it } from "vitest";
 
 import { BalanceService } from "../src/background/balances";
+import { CoinControlService } from "../src/background/coin-control";
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
-import { ADA_HANDLE_POLICY, WithdrawService } from "../src/background/withdraw";
+import { ADA_HANDLE_POLICY } from "../src/background/destination";
+import { PrivateStore } from "../src/background/private-store";
+import { WithdrawService } from "../src/background/withdraw";
 import { NETWORKS } from "../src/networks";
 import { loadTestWasm, testWallet, vectors } from "./fakes";
+
+const coinsOf = (t: ReturnType<typeof testWallet>) =>
+  new CoinControlService({
+    wallet: t.wallet,
+    session: t.session,
+    store: new PrivateStore({ wallet: t.wallet, local: t.local }),
+    now: Date.now,
+  });
 
 describe.skipIf(!process.env.LIVE_KOIOS)("live preprod Koios", () => {
   it("reads a public test phrase's account and scans the whole contract", async () => {
     const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
     const t = testWallet();
     await t.wallet.create(v.phrase, "correct horse battery");
+    const urls: string[] = [];
     const balances = new BalanceService({
       wasm: loadTestWasm(),
       wallet: t.wallet,
       session: t.session,
-      koios: () => new Koios(NETWORKS.preprod.koios),
+      koios: () => new Koios(NETWORKS.preprod.koios, (url, init) => (urls.push(url), fetch(url, init))),
       now: Date.now,
+      coins: coinsOf(t),
     });
     const started = performance.now();
     const b = await balances.get("preprod", true);
@@ -32,6 +45,13 @@ describe.skipIf(!process.env.LIVE_KOIOS)("live preprod Koios", () => {
     // shape, not how many there are.
     expect(b.seedelf.seedelfs.every((s) => s.assetName.startsWith("5eed0e1f"))).toBe(true);
     expect(BigInt(b.seedelf.lovelace)).toBeGreaterThanOrEqual(0n);
+
+    // The next reading asks only for UTxOs newer than the last block seen, and agrees.
+    const again = await balances.get("preprod", true);
+    const scans = urls.filter((u) => u.includes("/credential_utxos"));
+    expect(scans).toHaveLength(2);
+    expect(scans[1]).toMatch(/block_height=gt\.\d+/);
+    expect(again.seedelf).toEqual(b.seedelf);
   }, 60_000);
 
   it("finds real ADA Handles, a plain one and a CIP-68 one", async () => {
@@ -46,6 +66,7 @@ describe.skipIf(!process.env.LIVE_KOIOS)("live preprod Koios", () => {
       koios: () => koios,
       collateral: () => new Collateral(NETWORKS.preprod.collateral),
       now: Date.now,
+      coins: coinsOf(t),
     });
     // Both held by key addresses on 2026-09-24. Whoever holds them now is who they pay.
     for (const [handle, assetName] of [

@@ -33,12 +33,28 @@ describe("Koios client", () => {
     ]);
   });
 
+  it("asks only for UTxOs in blocks after a height, when given one", async () => {
+    const { koios, calls } = scripted([Response.json(rows(1))]);
+    await koios.credentialUtxos(["94bc"], 5214886);
+    expect(calls[0]!.url).toBe(
+      `${BASE}/credential_utxos?block_height=gt.5214886&order=tx_hash.asc,tx_index.asc&offset=0&limit=1000`,
+    );
+  });
+
   it("pages 1000 rows at a time until a short page", async () => {
     const { koios, calls } = scripted([Response.json(rows(1000)), Response.json(rows(1000, 1000)), Response.json(rows(7, 2000))]);
-    const all = await koios.accountUtxos("stake_test1u");
+    const all = await koios.credentialUtxos(["94bc"]);
     expect(all).toHaveLength(2007);
     expect(calls.map((c) => new URL(c.url).searchParams.get("offset"))).toEqual(["0", "1000", "2000"]);
-    expect(calls[0]!.body).toEqual({ _stake_addresses: ["stake_test1u"], _extended: true });
+    expect(calls[0]!.body).toEqual({ _payment_credentials: ["94bc"], _extended: true });
+  });
+
+  it("asks about at most 75 credentials a request, to stay under Koios's 5,120-byte body limit", async () => {
+    const { koios, calls } = scripted([Response.json(rows(2)), Response.json(rows(1, 2))]);
+    const credentials = Array.from({ length: 80 }, (_, i) => i.toString(16).padStart(56, "0"));
+    expect(await koios.credentialUtxos(credentials)).toHaveLength(3);
+    expect(calls.map((c) => c.body._payment_credentials.length)).toEqual([75, 5]);
+    expect(Math.max(...calls.map((c) => JSON.stringify(c.body).length))).toBeLessThan(5120);
   });
 
   it("reads an account's used addresses, including empty ones", async () => {
@@ -53,11 +69,11 @@ describe("Koios client", () => {
 
   it("explains a connection that fails, and a rate limit", async () => {
     const offline = scripted([new TypeError("Failed to fetch"), new TypeError("Failed to fetch"), new TypeError("Failed to fetch")]);
-    await expect(offline.koios.accountUtxos("x")).rejects.toThrow(
+    await expect(offline.koios.credentialUtxos(["x"])).rejects.toThrow(
       "Couldn't reach Koios, the service the wallet reads Cardano from (Failed to fetch). Check your internet connection",
     );
     const limited = scripted([429, 429, 429].map((status) => new Response("", { status })));
-    await expect(limited.koios.accountUtxos("x")).rejects.toThrow("Koios is limiting requests from your connection");
+    await expect(limited.koios.credentialUtxos(["x"])).rejects.toThrow("Koios is limiting requests from your connection");
   });
 
   it("retries rate limits, server errors and network failures, then succeeds", async () => {
@@ -80,7 +96,7 @@ describe("Koios client", () => {
 
   it("doesn't retry a request Koios rejects", async () => {
     const { koios, calls } = scripted([new Response("bad", { status: 400 })]);
-    await expect(koios.accountUtxos("x")).rejects.toThrow("Koios refused the request (400 for account_utxos).");
+    await expect(koios.credentialUtxos(["x"])).rejects.toThrow("Koios refused the request (400 for credential_utxos).");
     expect(calls).toHaveLength(1);
   });
 });

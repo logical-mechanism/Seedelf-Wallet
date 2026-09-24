@@ -79,8 +79,8 @@ export function CreateSeedelf({
         }
       >
         <ReviewRows testId="mint-review">
-          <Row label="Seedelf" value={summary.label || "Unnamed"} strong />
-          <Row label="Token name" value={shortHex(summary.tokenName, 16, 8)} title={summary.tokenName} />
+          {summary.label && <Row label="Seedelf" value={summary.label} strong />}
+          <Row label="Token name" value={shortHex(summary.tokenName, 16, 8)} title={summary.tokenName} strong={!summary.label} />
           <Row label="Paid from" value={SOURCES[summary.from]} />
           <Row label="Locked with it" value={`${formatAda(summary.lovelace)} ₳`} />
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
@@ -134,7 +134,13 @@ export function CreateSeedelf({
           </p>
         ) : (
           <p className="note" id="mint-label-note" data-testid="mint-preview">
-            Listed as <strong>{tag || "Unnamed"}</strong>, with a token name starting{" "}
+            {tag ? (
+              <>
+                Listed as <strong>{tag}</strong>, with a token name starting{" "}
+              </>
+            ) : (
+              <>With no tag, it's listed by its token name alone, starting </>
+            )}
             <code>{tokenNamePrefix(tag)}…</code>. Up to {LABEL_MAX} letters, digits, spaces or ASCII punctuation. Anyone
             can read it on chain.
           </p>

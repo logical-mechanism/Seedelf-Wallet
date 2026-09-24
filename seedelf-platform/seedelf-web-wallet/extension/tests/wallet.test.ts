@@ -202,6 +202,43 @@ describe("wallet", () => {
     ]);
   });
 
+  it("shows the recovery phrase only for the password, and counts wrong ones", async () => {
+    const { wallet, local } = testWallet();
+    const v = cardano.find((v) => v.phrase.split(" ").length === 24)!;
+    await wallet.create(v.phrase, PASSWORD);
+    expect(await wallet.revealPhrase(PASSWORD)).toEqual(v.phrase.split(" "));
+
+    await expect(wallet.revealPhrase("not the password")).rejects.toThrow("Wrong password");
+    expect(await local.get(UNLOCK_FAILURES)).toMatchObject({ count: 1 });
+    // The back-off applies here too, and a right password clears it once the wait is over.
+    await expect(wallet.revealPhrase(PASSWORD)).rejects.toThrow("Too many wrong passwords");
+    expect(await wallet.state()).toBe("unlocked");
+
+    await wallet.lock();
+    await expect(wallet.revealPhrase(PASSWORD)).rejects.toThrow("locked");
+  });
+
+  it("changes the password: the new one unlocks, the old one doesn't", async () => {
+    const { wallet, local } = testWallet();
+    const v = cardano.find((v) => v.phrase.split(" ").length === 12)!;
+    await wallet.create(v.phrase, PASSWORD);
+    const before = await local.get<{ blob: string; createdAt: number }>(VAULT_KEY);
+
+    await expect(wallet.changePassword(PASSWORD, "short")).rejects.toThrow("at least 12");
+    await expect(wallet.changePassword("not the password", "a new long passphrase")).rejects.toThrow("Wrong password");
+    await local.remove(UNLOCK_FAILURES);
+    await wallet.changePassword(PASSWORD, "a new long passphrase");
+    const after = await local.get<{ blob: string; createdAt: number }>(VAULT_KEY);
+    expect(after!.blob).not.toBe(before!.blob);
+    expect(after!.createdAt).toBe(before!.createdAt);
+
+    await wallet.lock();
+    expect(await wallet.unlock(PASSWORD)).toMatchObject({ unlocked: false, wrongPassword: true });
+    await local.remove(UNLOCK_FAILURES);
+    expect(await wallet.unlock("a new long passphrase")).toEqual({ unlocked: true });
+    expect(await wallet.revealPhrase("a new long passphrase")).toEqual(v.phrase.split(" "));
+  });
+
   it("reset deletes the vault", async () => {
     const { wallet, local, session } = testWallet();
     await wallet.create(cardano[0]!.phrase, PASSWORD);

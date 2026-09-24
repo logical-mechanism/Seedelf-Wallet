@@ -4,14 +4,14 @@
 import { describe, expect, it } from "vitest";
 
 import { handle, type Context } from "../src/background/handlers";
-import type { Account, Balances, Status, UnlockResult } from "../src/shared/rpc";
+import type { Account, Balances, Status, UnlockResult, UtxoLists } from "../src/shared/rpc";
 import { isMessage } from "../src/shared/rpc";
 import { loadTestWasm, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 
-function context(): Context {
-  const { wallet, balances, moveIn, mint, transfer, withdraw, pending } = testBalances();
+function context(t = testBalances()): Context {
+  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins } = t;
   return {
     wasm: loadTestWasm(),
     wallet,
@@ -20,7 +20,11 @@ function context(): Context {
     mint,
     transfer,
     withdraw,
+    send,
     pending,
+    contacts,
+    activity,
+    coins,
     version: "0.1.0",
     network: "preprod",
     networks: ["preprod"],
@@ -101,6 +105,31 @@ describe("handlers", () => {
     expect(b.seedelf.seedelfs.map((s) => s.label)).toEqual(["web-wallet"]);
   });
 
+  it("refreshes UTxOs and the Seedelf history with a balance reading; opening them reads nothing", async () => {
+    const t = testBalances();
+    const ctx = context(t);
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    const first = (await handle({ type: "balances" }, ctx)) as Balances;
+    const reads = () => t.koios.calls.length;
+    const before = reads();
+
+    const lists = (await handle({ type: "utxos" }, ctx)) as UtxoLists;
+    const history = (await handle({ type: "history", of: "seedelf" }, ctx)) as { updatedAt?: number };
+    expect(lists.updatedAt).toBe(first.updatedAt);
+    expect(history.updatedAt).toBe(first.updatedAt);
+    expect(reads()).toBe(before);
+
+    t.clock.now += 60_000;
+    const fresh = (await handle({ type: "utxos", refresh: true }, ctx)) as UtxoLists;
+    expect(fresh.updatedAt).toBe(t.clock.now);
+    expect(reads()).toBe(before + 3);
+    t.clock.now += 60_000;
+    const again = (await handle({ type: "history", of: "seedelf", refresh: true }, ctx)) as { updatedAt?: number };
+    expect(again.updatedAt).toBe(t.clock.now);
+    expect(reads()).toBe(before + 6);
+  });
+
   it("recognizes only known requests", () => {
     expect(isMessage({ type: "unlock", password: "x" })).toBe(true);
     expect(isMessage({ type: "mint-build", label: "" })).toBe(true);
@@ -108,7 +137,15 @@ describe("handlers", () => {
     expect(isMessage({ type: "transfer-lookup", to: "5eed0e1f" })).toBe(true);
     expect(isMessage({ type: "transfer-build", to: "", lovelace: "1", tokens: [] })).toBe(true);
     expect(isMessage({ type: "transfer-submit", txHash: "ab" })).toBe(true);
-    for (const type of ["withdraw-resolve", "withdraw-build", "withdraw-submit", "remove-build", "remove-submit"]) {
+    for (const type of [
+      "resolve-destination",
+      "withdraw-build",
+      "withdraw-submit",
+      "remove-build",
+      "remove-submit",
+      "send-build",
+      "send-submit",
+    ]) {
       expect(isMessage({ type })).toBe(true);
     }
     expect(isMessage({ type: "preview" })).toBe(false);

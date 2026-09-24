@@ -266,7 +266,8 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  width: 76px;
+  /* Four fit the popup's hero: Receive, Send, Withdraw, Create. */
+  width: 64px;
   font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-2);
@@ -544,8 +545,35 @@ main {
 
 .list__actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   justify-content: flex-end;
+}
+
+/* A second line across the whole row. */
+.list__full {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+}
+
+/* components/MiddleEllipsis.tsx: the head gives way, the tail never does. */
+.middle-ellipsis {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+  font: 11.5px/1.5 var(--mono);
+  color: var(--muted);
+}
+
+.middle-ellipsis__head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.middle-ellipsis__tail {
+  flex: none;
 }
 
 /* Text */
@@ -1039,9 +1067,408 @@ main {
   margin-top: var(--s4);
 }
 
-.show-more {
+/* Tokens (components/TokenList.tsx, screens/Tokens.tsx): a row is the logo or
+   two letters, the ticker or name over a second line, and the amount. */
+
+.avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.avatar--large {
+  width: 56px;
+  height: 56px;
+  font-size: 18px;
+}
+
+.avatar--nft {
+  border-radius: var(--r-xs);
+}
+
+/* Logos can be dark or have holes: a light disc behind them. */
+.avatar--logo {
+  object-fit: contain;
+  background: #e9edf2;
+}
+
+/* Activity (screens/Activity.tsx): what came in, went out, or neither. */
+.activity__icon {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.activity__icon--in,
+.activity__amount--in {
+  color: var(--accent);
+}
+
+.avatar--contact {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.avatar--tint-0 {
+  background: #134e4a;
+}
+.avatar--tint-1 {
+  background: #1e3a5f;
+}
+.avatar--tint-2 {
+  background: #3b2f5e;
+}
+.avatar--tint-3 {
+  background: #4a3423;
+}
+.avatar--tint-4 {
+  background: #2f4a2a;
+}
+.avatar--tint-5 {
+  background: #4a2437;
+}
+
+.token-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: var(--s3);
+  row-gap: 1px;
+  align-items: center;
+  padding: 9px var(--s2);
+  margin: 0 calc(-1 * var(--s2));
+  width: calc(100% + 2 * var(--s2));
+  border-radius: var(--r-sm);
+  text-align: left;
+  transition: background-color 120ms;
+}
+
+.token-row:hover {
+  background: var(--surface-2);
+}
+
+/* Selected in the token picker. */
+.token-row--on,
+.token-row--on:hover {
+  background: var(--accent-soft);
+}
+
+.token-row--on .token-row__amount {
+  color: var(--accent);
+}
+
+.token-row .avatar {
+  grid-row: 1 / 3;
+}
+
+.token-row__label {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-row__amount {
+  grid-row: 1 / 3;
+  grid-column: 3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.token-row__sub {
+  grid-column: 2;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 36px;
+  border-radius: var(--r-pill);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.view-all:hover {
+  background: var(--surface-2);
+}
+
+.token-tools {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+}
+
+.search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.search svg {
+  position: absolute;
+  left: 12px;
+  pointer-events: none;
+}
+
+.search input {
+  padding-left: 36px;
+  border-radius: var(--r-pill);
+}
+
+.segmented--small {
+  flex: none;
+}
+
+.segmented--small .segmented__item {
+  min-height: 30px;
+  padding: 0 var(--s3);
+  font-size: 12px;
+}
+
+.empty {
+  padding: var(--s5) 0;
+}
+
+/* UTxOs (screens/Utxos.tsx): an Activity-style row, with what a UTxO is kept
+   for (locked, the collateral, a seedelf) as a tag. */
+.utxo__icon--kept {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.utxo-tag {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+}
+
+/* A UTxO's tokens, all of them: a box of their own that scrolls, so the
+   details keep their size however many there are. */
+.utxo-tokens--all {
+  max-height: 260px;
+  overflow-y: auto;
+  border-radius: var(--r-sm);
+}
+
+/* A row, then its lock: the row opens the details, the lock toggles at once. */
+.utxo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.utxo-row .token-row {
+  width: calc(100% + var(--s2));
+  margin-right: 0;
+}
+
+.utxo-row__lock {
+  width: 34px;
+  height: 34px;
+}
+
+.utxo-row .icon-button {
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.utxo-row .icon-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+/* Settings (screens/Settings.tsx): rows that open a page, and outside links. */
+
+.menu-row {
+  width: calc(100% + 2 * var(--s2));
+  margin: 0 calc(-1 * var(--s2));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+  padding: 11px var(--s2);
+  border-radius: var(--r-sm);
+  text-align: left;
+  font-weight: 500;
+  color: var(--text);
+  transition: background-color 120ms;
+}
+
+.menu-row:hover {
+  background: var(--surface-2);
+}
+
+.menu-row__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.menu-row--danger,
+.menu-row--danger .menu-row__icon {
+  color: var(--danger-text);
+}
+
+.menu-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   align-self: flex-start;
-  margin-top: 2px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.menu-link:hover {
+  text-decoration: underline;
+}
+
+/* A modal (components/Modal.tsx), centred over a dimmed page. It never grows
+   past the window: its body scrolls, so nothing is cut off in the popup. */
+
+.modal {
+  width: calc(100% - 2 * var(--s4));
+  max-width: 440px;
+  max-height: calc(100dvh - 2 * var(--s4));
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: #171c25;
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: modal-in 160ms ease-out;
+}
+
+.modal[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s4) var(--s4) var(--s2);
+}
+
+.modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4) var(--s4);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.modal__foot {
+  display: flex;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s4);
+  border-top: 1px solid var(--border);
+}
+
+.modal__foot > * {
+  flex: 1;
+}
+
+.modal__title {
+  font-size: var(--text-lg);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes modal-in {
+  from {
+    transform: scale(0.97);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal {
+    animation: none;
+  }
+}
+
+.token-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.token-details__top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  text-align: center;
+}
+
+.token-details__amount {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* In a token's details, the ids read as plain rows rather than boxes. */
+.token-details .copy-field__value {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.token-details__listed {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 .refresh-row {
@@ -1073,6 +1500,105 @@ main {
   .spin {
     animation: none;
   }
+}
+
+/* The loading splash (components/Splash.tsx): the emblem on navy, breathing,
+   with a teal arc circling it; it fades out into the wallet. Under reduced
+   motion only the fades stay. */
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 45%, #0a2a4a 0%, var(--navy) 42%, #000c2c 100%);
+  animation: splash-in 200ms ease-out both;
+}
+
+.splash--leave {
+  pointer-events: none;
+  animation: splash-out 320ms ease-in both;
+}
+
+.splash__mark {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  display: grid;
+  place-items: center;
+}
+
+.splash__ring {
+  position: absolute;
+  inset: 0;
+  animation: spin 1.6s linear infinite;
+}
+
+.splash__track,
+.splash__arc {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.splash__track {
+  stroke: rgb(0 196 188 / 0.12);
+}
+
+.splash__arc {
+  stroke: var(--teal);
+  stroke-linecap: round;
+  stroke-dasharray: 22 78;
+}
+
+.splash__emblem {
+  animation: splash-breathe 1.2s ease-in-out infinite alternate;
+}
+
+.splash--leave .splash__emblem {
+  animation: splash-grow 320ms ease-in both;
+}
+
+@keyframes splash-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes splash-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes splash-breathe {
+  from {
+    transform: scale(0.97);
+    filter: drop-shadow(0 0 8px rgb(0 196 188 / 0.2));
+  }
+  to {
+    transform: scale(1.03);
+    filter: drop-shadow(0 0 22px rgb(0 196 188 / 0.45));
+  }
+}
+
+@keyframes splash-grow {
+  to {
+    transform: scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash__ring,
+  .splash__emblem,
+  .splash--leave .splash__emblem {
+    animation: none;
+  }
+}
+
+/* Home stays hidden under the splash, so its empty balances never show. */
+.home--hidden {
+  visibility: hidden;
 }
 
 /* Getting started: fund the account, create the seedelf, move in. */
@@ -1141,6 +1667,43 @@ main {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* A sent transaction (components/TxBanner.tsx): centred, its Dismiss a
+   neutral pill so it stands out on the teal of a confirmed one. */
+.tx-banner {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.tx-banner__title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.tx-banner .callout__icon {
+  display: inline-flex;
+}
+
+.tx-banner__dismiss {
+  margin-top: 2px;
+  padding: 5px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-strong);
+  background: rgb(255 255 255 / 0.1);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background-color 120ms;
+}
+
+.tx-banner__dismiss:hover {
+  background: rgb(255 255 255 / 0.18);
 }
 
 .banner__link {
@@ -1225,36 +1788,6 @@ main {
   margin-bottom: 6px;
 }
 
-.token-picker__row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  font-weight: 400;
-  font-size: var(--text-md);
-  color: var(--text);
-  cursor: pointer;
-}
-
-.token-picker__row:has(input:checked) {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-}
-
-.token-picker__row input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.token-picker__row .list__name {
-  flex: 1;
-}
-
 .token-amount {
   display: flex;
   flex-direction: column;
@@ -1273,6 +1806,19 @@ main {
   font-weight: 400;
   font-size: var(--text-md);
   color: var(--text);
+}
+
+.token-amount__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.token-amount__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .token-amount__row input {

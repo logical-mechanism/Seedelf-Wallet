@@ -11,11 +11,13 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { MoveInSummary, PendingTx, TokenRef } from "../shared/rpc";
-import { pathedUtxos } from "./balances";
+import type { MoveInSummary, PendingTx, TokenQuantity } from "../shared/rpc";
+import { nothingInAccount, readAccount } from "./account";
+import type { ActivityService } from "./activity";
+import type { CoinControlService } from "./coin-control";
 import type { Koios } from "./koios";
 import { SESSION_PENDING } from "./pending";
-import { readFresh, rememberSpent, spentSet, unspent } from "./spent";
+import { rememberSpent } from "./spent";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
 
@@ -38,30 +40,27 @@ export interface MoveInDeps {
   now: () => number;
   /** Waits between reads of a Koios backend that's behind (spent.ts); tests don't. */
   sleep?: (ms: number) => Promise<void>;
+  /** Writes the move-in into the Seedelf history once it's submitted. */
+  activity?: ActivityService;
+  /** Leaves out what the user locked, and the collateral. */
+  coins: CoinControlService;
 }
 
 export class MoveInService {
   constructor(private readonly deps: MoveInDeps) {}
 
-  async build(network: NetworkName, lovelace: string | null, tokens: TokenRef[]): Promise<MoveInSummary> {
+  /**
+   * `tokens` come along in the quantities given; the rest of each stays in
+   * the account. `lovelace` below what the deposit needs is raised to it, so
+   * "0" moves only that.
+   */
+  async build(network: NetworkName, lovelace: string | null, tokens: TokenQuantity[]): Promise<MoveInSummary> {
     const { wasm, wallet, session, now } = this.deps;
-    const koios = this.deps.koios(network);
-    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-
-    // Fresh chain state, read outside the wallet's queue.
-    const [stake, spent] = await wallet.withKeys(
-      async ({ cardano }) => [cardano.stakeAddress(net), await spentSet(session)] as const,
-    );
-    const [used, utxos, params] = await readFresh(
-      spent,
-      () => Promise.all([koios.accountAddresses(stake), koios.accountUtxos(stake), koios.epochParams()]),
-      ([, utxos]) => utxos,
-      this.deps.sleep,
-    );
+    const { params, utxos, held } = await readAccount(this.deps, network);
+    if (utxos.length === 0) throw nothingInAccount(held, "Your Cardano account is empty, so there's nothing to move in.");
 
     return wallet.withKeys(async (keys) => {
-      const pathed = pathedUtxos(keys, net, new Set(used), unspent(utxos, spent));
-      const request = { network, params, utxos: pathed, lovelace, tokens };
+      const request = { network, params, utxos, lovelace, tokens };
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
       const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };
       const summary: MoveInSummary = { ...rest, network };
@@ -89,6 +88,7 @@ export class MoveInService {
       await session.remove(SESSION_BUILT);
       await session.set(SESSION_PENDING, pending);
     });
+    await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
     return pending;
   }
 }

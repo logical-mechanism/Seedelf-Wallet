@@ -12,6 +12,7 @@
 | Your password | It unlocks the wallet. | **Never stored or sent.** |
 | Your addresses, balances and transactions | To show your balance, and to build, check and send your transactions. | **Sent to Koios**, to read the Cardano blockchain and to submit the transactions you approve. **Seedelf spends also go to giveme.my**, which adds shared collateral. |
 | Which Seedelf UTxOs are yours | To show your Seedelf balance. | **Worked out on your device.** It's kept in session storage and cleared when you lock. Nobody is told. |
+| Your contacts, your Seedelf history, and the UTxOs you lock | To name who you pay, list what you sent and received, and keep the UTxOs you chose out of your payments. | **On your device only**, encrypted with a key derived from your recovery phrase, so they can't be read while the wallet is locked. Removing the wallet deletes them. |
 | An ADA Handle you withdraw to | To find the address it belongs to. | **Sent to Koios**, which looks up who holds the handle. Pasting an address instead asks Koios nothing. |
 | The number of failed unlocks | To slow down password guessing. | **On your device only.** |
 

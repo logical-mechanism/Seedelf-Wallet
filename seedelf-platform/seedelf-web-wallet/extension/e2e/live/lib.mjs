@@ -54,25 +54,35 @@ export async function openWallet() {
   };
 }
 
-/** Home's balances and seedelfs, on one line. Leaves Home on the Seedelf tab. */
+/** Home's balances, and the seedelfs from Receive, on one line. Leaves Home on the Seedelf tab. */
 export async function balances(page) {
   await page.getByRole("tab", { name: "Seedelf" }).click();
   const seedelf = await page.getByTestId("seedelf-lovelace").textContent();
-  const seedelfs = await page
-    .getByTestId("seedelfs")
-    .innerText({ timeout: 1000 })
-    .catch(() => "(none)");
-  await page.getByRole("tab", { name: "Cardano account" }).click();
+  const seedelfs = await yourSeedelfs(page, (list) => list.innerText({ timeout: 1000 }).catch(() => "(none)"));
+  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
   const cardano = await page.getByTestId("cardano-lovelace").textContent();
   await page.getByRole("tab", { name: "Seedelf" }).click();
   return `Seedelf ${seedelf} | Cardano ${cardano} | seedelfs: ${seedelfs.replace(/\n/g, " ")}`;
 }
 
-/** A seedelf's full name, from its row on Home, by its exact tag. */
+/** Opens the Seedelf tab's Receive, hands `read` its list of your seedelfs, then goes back to Home. */
+export async function yourSeedelfs(page, read) {
+  await page.getByRole("tab", { name: "Seedelf" }).click();
+  await page.getByRole("button", { name: "Receive into Seedelf" }).click();
+  try {
+    return await read(page.getByTestId("seedelfs"));
+  } finally {
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+  }
+}
+
+/** A seedelf's full name, from its row in Receive, by its exact tag. */
 export async function seedelfName(page, tag) {
-  const row = page.getByTestId("seedelfs").getByRole("listitem").filter({ has: page.getByText(tag, { exact: true }) });
-  if ((await row.count()) !== 1) throw new Error(`expected one seedelf tagged "${tag}", found ${await row.count()}`);
-  return row.getAttribute("title");
+  return yourSeedelfs(page, async (list) => {
+    const row = list.getByRole("listitem").filter({ has: page.getByText(tag, { exact: true }) });
+    if ((await row.count()) !== 1) throw new Error(`expected one seedelf tagged "${tag}", found ${await row.count()}`);
+    return row.getAttribute("title");
+  });
 }
 
 /** Presses Review, logs the review and screenshots it, then presses Send. */

@@ -8,10 +8,12 @@ import { NETWORKS } from "../networks";
 import type { Status } from "../shared/rpc";
 import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
-import { ExpandIcon, LockIcon } from "./components/Icons";
+import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
 import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
+import { Settings } from "./screens/Settings";
 import { Reset, Unlock } from "./screens/Unlock";
+import { NetworkContext } from "./network";
 import { openInTab, startFromHash, view } from "./view";
 
 export function App() {
@@ -19,6 +21,7 @@ export function App() {
   const [error, setError] = useState<string>();
   const [resetting, setResetting] = useState(false);
   const [start, setStart] = useState(startFromHash);
+  const [settings, setSettings] = useState(false);
 
   const refresh = useCallback(() => {
     call("status", {}).then(
@@ -48,6 +51,7 @@ export function App() {
   }, [unlocked]);
 
   async function lock() {
+    setSettings(false);
     setStatus(await call("lock", {}));
   }
 
@@ -74,6 +78,17 @@ export function App() {
     );
   } else if (status.state === "locked") {
     screen = <Unlock retryAfterMs={status.retryAfterMs} onUnlocked={refresh} onForgot={() => setResetting(true)} />;
+  } else if (settings) {
+    screen = (
+      <Settings
+        status={status}
+        onBack={() => setSettings(false)}
+        onRemoved={(s) => {
+          setSettings(false);
+          setStatus(s);
+        }}
+      />
+    );
   } else {
     screen = <Home />;
   }
@@ -90,6 +105,17 @@ export function App() {
         )}
         <span className="topbar__spacer" />
         {unlocked && (
+          <button
+            className="icon-button"
+            onClick={() => setSettings(!settings)}
+            aria-label="Settings"
+            aria-pressed={settings}
+            title="Settings"
+          >
+            <SettingsIcon />
+          </button>
+        )}
+        {unlocked && (
           <button className="icon-button" onClick={lock} aria-label="Lock" title="Lock">
             <LockIcon />
           </button>
@@ -101,7 +127,9 @@ export function App() {
         )}
       </header>
 
-      <main>{screen}</main>
+      <main>
+        <NetworkContext.Provider value={status?.network ?? "preprod"}>{screen}</NetworkContext.Provider>
+      </main>
 
       <footer className="footer">
         Seedelf Wallet {status?.version ?? ""} · {network?.label ?? "…"}

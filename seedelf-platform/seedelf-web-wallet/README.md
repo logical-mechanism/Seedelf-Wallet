@@ -23,6 +23,7 @@ Money comes in, moves privately, and goes out. It isn't meant to sit here.
 - See your balance: your seedelfs and the funds they hold.
 - **Cardano account:** the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
 - **Move in:** move funds from the Cardano account into your Seedelf balance.
+- **Send:** pay any address from the Cardano account, in the open, as any Cardano wallet does.
 - **Create a seedelf:** mint your named seedelf so others can pay you. Minting links the seedelf to whatever paid for it, so by default the Cardano account pays for it, before any money is moved in (see [privacy.md](docs/privacy.md#known-links)).
 - **Transfer:** send funds privately from your Seedelf balance to any seedelf, by its full name.
 - **Withdraw:** send funds from your seedelfs to any Cardano address, or remove a seedelf.
@@ -33,7 +34,9 @@ Money comes in, moves privately, and goes out. It isn't meant to sit here.
 2. Use a dApp with that account.
 3. Whatever comes back is swept into a seedelf automatically.
 
-**Not planned:** staking, governance, swaps, hardware wallets, other chains, mobile. We add features only if there's demand.
+**Next: staking and voting delegation** (chunk 13). The wallet becomes a full Cardano wallet with private payments built in: stake the Cardano account with one pool, spend its rewards, and delegate its vote (Always abstain, No confidence, or a DRep). See [plans/chunk-13-staking.md](docs/plans/chunk-13-staking.md).
+
+**Not planned:** voting on proposals or registering as a DRep, swaps, hardware wallets, other chains, mobile. We add features only if there's demand.
 
 ## Relationship to the CLI
 

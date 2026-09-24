@@ -110,16 +110,17 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the pop
 The listing's text, its images and the privacy policy are in [store/](store/README.md), laid out by the dashboard's tabs. The owner of the developer account uploads the package by hand.
 
 1. **Bump the version:** `npm version <x.y.z> --no-git-tag-version` in `extension/`. It updates `package.json` and `package-lock.json`, and the manifest takes its version from there. Every upload needs a higher version than the last.
-2. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
-3. **Build the package:** `npm run package` in `extension/`.
+2. **Refresh the token list:** `npm run tokens` in `extension/`. Read the diff of `src/tokens/registry.*.json`, and any "also claimed by" warning, before committing it. To add a token, vet its unit and put it in `src/tokens/list.json` first; `node scripts/tokens.mjs find <network> <TICKER>` shows the registry's entries for a ticker.
+3. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
+4. **Build the package:** `npm run package` in `extension/`.
    - It builds with `VITE_STORE_BUILD=true`, so there's no dev key.
    - It refuses a `dist/` with a key, or one whose version doesn't match `package.json`.
    - It adds `licenses/THIRD-PARTY.txt`: every Rust crate compiled into the WebAssembly, every bundled npm package, and SecretBox, each with its licence text. It fails if one of them ships no licence and has no known fallback (`scripts/third-party.mjs`).
    - It writes `release/seedelf-wallet-<version>.zip` and prints its SHA-256. The zip is reproducible: the same sources and toolchain give the same bytes.
-4. **Test the store build:** `npm run e2e` runs every end-to-end test on it. Load `dist/` unpacked in a fresh Chrome profile once, and click through onboarding and Home.
-5. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`.
-6. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
-7. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
+5. **Test the store build:** `npm run e2e` runs every end-to-end test on it. Load `dist/` unpacked in a fresh Chrome profile once, and click through onboarding and Home.
+6. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`.
+7. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
+8. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
 
 ## Sharing with testers before launch
 

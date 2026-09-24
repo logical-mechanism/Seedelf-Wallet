@@ -59,10 +59,16 @@ test("flags paying your own seedelf, and explains a bad transfer", () => {
   const final = JSON.parse(finishTransfer(key, JSON.stringify({ ...own, seed: "42".repeat(32), evaluation: recorded.evaluation })));
   assert.equal(final.toSelf, true);
 
+  // Too little ADA goes up to the least the payment needs.
+  const short = JSON.parse(
+    finishTransfer(key, JSON.stringify({ ...request, lovelace: "0", seed: "42".repeat(32), evaluation: recorded.evaluation })),
+  );
+  assert.equal(short.lovelace, short.minimum);
+  assert.ok(Number(short.minimum) > 1_000_000 && Number(short.minimum) < 2_000_000, short.minimum);
+
   assert.throws(() => draftTransfer(key, "{}"), /bad transfer request/);
   assert.throws(() => draftTransfer(key, JSON.stringify({ ...request, to: "5eed0e1f" })), /64 hex characters/);
   assert.throws(() => draftTransfer(key, JSON.stringify({ ...request, utxos: owned })), /holds a seedelf/);
-  assert.throws(() => draftTransfer(key, JSON.stringify({ ...request, lovelace: "1000000" })), /needs at least/);
   assert.throws(() => finishTransfer(key, JSON.stringify(request)), /seed/);
   key.free();
 });

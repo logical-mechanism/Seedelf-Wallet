@@ -22,7 +22,7 @@ async function unlocked() {
 describe("move-in", () => {
   it("builds and signs a move-in without sending it", async () => {
     const t = await unlocked();
-    const summary = await t.moveIn.build("preprod", "25000000", [TUSDM]);
+    const summary = await t.moveIn.build("preprod", "25000000", [{ ...TUSDM, quantity: "3000000000" }]);
     expect(summary).toMatchObject({
       network: "preprod",
       lovelace: "25000000",
@@ -31,12 +31,23 @@ describe("move-in", () => {
     });
     expect(Number(summary.fee)).toBeGreaterThan(150_000);
     expect(t.koios.submitted).toHaveLength(0);
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["account_addresses", "account_utxos", "epoch_params"]);
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["account_addresses", "credential_utxos", "epoch_params"]);
 
     // The signed transaction waits in session storage, and it is the one summarized.
     const built = await t.session.get<{ txCbor: string; txHash: string }>(SESSION_BUILT);
     expect(built!.txHash).toBe(summary.txHash);
     expect(txIdOf(Uint8Array.from(Buffer.from(built!.txCbor, "hex")))).toBe(summary.txHash);
+  });
+
+  it("moves part of a token, and the rest stays in the account", async () => {
+    const t = await unlocked();
+    const summary = await t.moveIn.build("preprod", "25000000", [{ ...TUSDM, quantity: "1250000000" }]);
+    expect(summary.tokens).toEqual([{ ...TUSDM, quantity: "1250000000" }]);
+    const whole = await t.moveIn.build("preprod", "25000000", [{ ...TUSDM, quantity: "3000000000" }]);
+    expect(summary.changeTokens).toBe(whole.changeTokens + 1);
+    await expect(t.moveIn.build("preprod", "25000000", [{ ...TUSDM, quantity: "3000000001" }])).rejects.toThrow(
+      "holds only 3000000000",
+    );
   });
 
   it("moves the most possible with Max", async () => {
@@ -97,10 +108,22 @@ describe("move-in", () => {
     expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
   });
 
+  it("raises a short amount to the least the deposit needs", async () => {
+    const t = await unlocked();
+    const short = await t.moveIn.build("preprod", "500000", []);
+    expect(short.lovelace).toBe(short.minimum);
+    expect(BigInt(short.minimum!)).toBeGreaterThan(500_000n);
+    // Only a token: the ADA it needs, and no more.
+    const token = await t.moveIn.build("preprod", "0", [{ ...TUSDM, quantity: "1" }]);
+    expect(token.lovelace).toBe(token.minimum);
+    expect(BigInt(token.minimum!)).toBeGreaterThan(BigInt(short.minimum!));
+    const max = await t.moveIn.build("preprod", null, []);
+    expect(max.minimum).toBeNull();
+  });
+
   it("explains an impossible move and needs the wallet unlocked", async () => {
     const t = await unlocked();
     await expect(t.moveIn.build("preprod", "999999999999999", [])).rejects.toThrow("Not enough ADA");
-    await expect(t.moveIn.build("preprod", "500000", [])).rejects.toThrow("needs at least");
     await t.moveIn.build("preprod", "5000000", []);
     await t.wallet.lock();
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();

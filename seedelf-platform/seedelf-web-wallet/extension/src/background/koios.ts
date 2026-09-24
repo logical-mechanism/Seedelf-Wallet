@@ -20,8 +20,35 @@ export interface KoiosUtxo {
   stake_address: string | null;
   payment_cred: string | null;
   block_height: number | null;
+  /** Unix seconds of the block that made it. */
+  block_time?: number;
   inline_datum: { bytes: string; value: unknown } | null;
   asset_list: KoiosAsset[] | null;
+}
+
+/** One of an account's transactions: `account_txs`. */
+export interface KoiosAccountTx {
+  tx_hash: string;
+  block_height: number;
+  /** Unix seconds. */
+  block_time: number;
+}
+
+/** A transaction's inputs and outputs: `tx_info`, with only what Activity reads. */
+export interface KoiosTxInfo {
+  tx_hash: string;
+  block_height: number;
+  /** Unix seconds. */
+  tx_timestamp: number;
+  fee: string;
+  inputs: KoiosTxOut[];
+  outputs: KoiosTxOut[];
+}
+
+export interface KoiosTxOut {
+  payment_addr: { bech32: string };
+  value: string;
+  asset_list: Array<{ policy_id: string; asset_name: string; quantity: string }> | null;
 }
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -30,7 +57,16 @@ const PAGE_SIZE = 1000;
 const RETRY_DELAYS_MS = [1000, 3000];
 const TIMEOUT_MS = 20_000;
 
+/**
+ * Payment credentials in one `credential_utxos` request. Koios's public tier
+ * refuses bodies over 5,120 bytes; 75 hex key hashes are about 4.5 KB.
+ */
+export const CREDENTIALS_PER_REQUEST = 75;
+
 export class KoiosError extends Error {}
+
+/** The network refused a transaction because an input it spends is already spent. */
+export class SpentInputError extends KoiosError {}
 
 /** A request that never got an answer: offline, or blocked on the way. */
 function unreachable(e: unknown): string {
@@ -55,9 +91,19 @@ export class Koios {
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
   ) {}
 
-  /** Every UTxO whose payment credential is one of `credentials` (key or script hashes, hex). */
-  credentialUtxos(credentials: string[]): Promise<KoiosUtxo[]> {
-    return this.paged("credential_utxos", { _payment_credentials: credentials, _extended: true });
+  /**
+   * Every UTxO whose payment credential is one of `credentials` (key or
+   * script hashes, hex); with `after`, only those in blocks after it. At most
+   * `CREDENTIALS_PER_REQUEST` go in a request.
+   */
+  async credentialUtxos(credentials: string[], after?: number): Promise<KoiosUtxo[]> {
+    const filter = after === undefined ? "" : `block_height=gt.${after}`;
+    const rows: KoiosUtxo[] = [];
+    for (let i = 0; i < credentials.length; i += CREDENTIALS_PER_REQUEST) {
+      const body = { _payment_credentials: credentials.slice(i, i + CREDENTIALS_PER_REQUEST), _extended: true };
+      rows.push(...(await this.paged<KoiosUtxo>("credential_utxos", body, filter)));
+    }
+    return rows;
   }
 
   /** Every address that has used this stake key, including ones now empty. */
@@ -69,9 +115,29 @@ export class Koios {
     return rows[0]?.addresses ?? [];
   }
 
-  /** Every UTxO at an address with this stake key. Anyone can build such an address, so filter by payment key. */
-  accountUtxos(stakeAddress: string): Promise<KoiosUtxo[]> {
-    return this.paged("account_utxos", { _stake_addresses: [stakeAddress], _extended: true });
+  /**
+   * An account's transactions, newest first: `limit` of them from `offset`,
+   * or with `after`, only those in blocks after it (one request, up to 1,000).
+   */
+  accountTxs(stakeAddress: string, { after, offset = 0, limit = 20 }: { after?: number; offset?: number; limit?: number }) {
+    const body = { _stake_address: stakeAddress, ...(after === undefined ? {} : { _after_block_height: after }) };
+    const page = after === undefined ? `&offset=${offset}&limit=${limit}` : "&limit=1000";
+    return this.post<KoiosAccountTx>("account_txs", body, `order=block_height.desc,tx_hash.asc${page}`);
+  }
+
+  /** Inputs, outputs and fee of up to 20 transactions, in one request; nothing else. */
+  txInfo(txHashes: string[]): Promise<KoiosTxInfo[]> {
+    if (!txHashes.length) return Promise.resolve([]);
+    return this.post<KoiosTxInfo>("tx_info", {
+      _tx_hashes: txHashes,
+      _inputs: true,
+      _metadata: false,
+      _assets: true,
+      _withdrawals: false,
+      _certs: false,
+      _scripts: false,
+      _bytecode: false,
+    });
   }
 
   /** The current epoch's protocol parameters: one `epoch_params` row, passed to WebAssembly as is. */
@@ -125,7 +191,7 @@ export class Koios {
     // A UTxO it spends is already spent: Koios showed the wallet an old view
     // of the chain (spent.ts), or this transaction already went through.
     if (text.includes("BadInputsUTxO")) {
-      throw new KoiosError(
+      throw new SpentInputError(
         "The network refused it: a UTxO it spends is already spent. Koios may have shown an out-of-date view of the chain. Wait a minute, refresh, and review it again.",
       );
     }
@@ -153,10 +219,15 @@ export class Koios {
     return new Map(rows.map((r) => [r.tx_hash, r.num_confirmations]));
   }
 
-  private async paged<T>(path: string, body: unknown): Promise<T[]> {
+  /** All the rows, 1,000 a request; `filter` narrows them on Koios's side (PostgREST, e.g. `block_height=gt.5`). */
+  private async paged<T>(path: string, body: unknown, filter = ""): Promise<T[]> {
     const rows: T[] = [];
     for (let offset = 0; ; offset += PAGE_SIZE) {
-      const page = await this.post<T>(path, body, `order=tx_hash.asc,tx_index.asc&offset=${offset}&limit=${PAGE_SIZE}`);
+      const page = await this.post<T>(
+        path,
+        body,
+        `${filter ? `${filter}&` : ""}order=tx_hash.asc,tx_index.asc&offset=${offset}&limit=${PAGE_SIZE}`,
+      );
       rows.push(...page);
       if (page.length < PAGE_SIZE) return rows;
     }

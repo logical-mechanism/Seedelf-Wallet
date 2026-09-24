@@ -60,7 +60,8 @@ mod move_in {
     use pallas_traverse::MultiEraTx;
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::schnorr::random_scalar;
-    use seedelf_wasm::api::{self, MoveInRequest, PathedUtxo, TokenRef};
+    use seedelf_koios::koios::UtxoResponse;
+    use seedelf_wasm::api::{self, MoveInRequest, PathedUtxo, SendRequest, TokenAmount};
     use serde_json::Value;
 
     const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -113,7 +114,7 @@ mod move_in {
     fn request(
         utxos: Vec<PathedUtxo>,
         lovelace: Option<&str>,
-        tokens: Vec<TokenRef>,
+        tokens: Vec<TokenAmount>,
     ) -> MoveInRequest {
         MoveInRequest {
             network: "preprod".into(),
@@ -144,9 +145,11 @@ mod move_in {
             .collect();
 
         let sk = random_scalar();
-        let tusdm = TokenRef {
+        // Part of the account's 3,000,000,000 tUSDM; the rest stays with the change.
+        let tusdm = TokenAmount {
             policy_id: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9".into(),
             asset_name: "0014df10745553444d".into(),
+            quantity: "1000000000".into(),
         };
         let result = api::move_in(
             &account,
@@ -157,7 +160,9 @@ mod move_in {
         assert_eq!(result.lovelace, "25000000");
         assert_eq!(result.tokens.len(), 1);
         assert_eq!(result.tokens[0].policy_id, tusdm.policy_id);
-        assert_eq!(result.tokens[0].quantity, "3000000000");
+        assert_eq!(result.tokens[0].quantity, "1000000000");
+        // The change: the rest of the tUSDM, and the token that shares its UTxO.
+        assert_eq!(result.change_tokens, 2);
 
         let bytes = hex::decode(&result.tx_cbor).unwrap();
         let tx = MultiEraTx::decode(&bytes).unwrap();
@@ -202,7 +207,8 @@ mod move_in {
         )
         .unwrap_err();
         assert!(
-            err.to_string().contains("is not at the account's address"),
+            err.to_string()
+                .contains("is not under the account's payment key"),
             "{err}"
         );
 
@@ -231,6 +237,344 @@ mod move_in {
             err.to_string().contains("receive (0) or change (1)"),
             "{err}"
         );
+    }
+
+    /// A UTxO under the account's receive key 0, with `delegation` as its
+    /// staking part: an enterprise address (none), or someone else's stake key.
+    fn stray(
+        account: &CardanoAccount,
+        n: u8,
+        payment: pallas_addresses::ShelleyPaymentPart,
+        delegation: pallas_addresses::ShelleyDelegationPart,
+        lovelace: u64,
+    ) -> PathedUtxo {
+        let address = pallas_addresses::ShelleyAddress::new(
+            pallas_addresses::Network::Testnet,
+            payment,
+            delegation,
+        );
+        PathedUtxo {
+            utxo: UtxoResponse {
+                tx_hash: hex::encode([n; 32]),
+                tx_index: 0,
+                address: pallas_addresses::Address::Shelley(address)
+                    .to_bech32()
+                    .unwrap(),
+                value: lovelace.to_string(),
+                payment_cred: hex::encode(account.key_hash(Role::Receive, 0).unwrap()),
+                asset_list: Some(vec![]),
+                ..Default::default()
+            },
+            role: 0,
+            index: 0,
+        }
+    }
+
+    #[test]
+    fn spends_the_payment_keys_money_whatever_its_staking_part() {
+        use pallas_addresses::{ShelleyDelegationPart, ShelleyPaymentPart};
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let key = account.key_hash(Role::Receive, 0).unwrap();
+        let theirs = CardanoAccount::from_phrase(PHRASE, 1)
+            .unwrap()
+            .key_hash(Role::Staking, 0)
+            .unwrap();
+        let enterprise = stray(
+            &account,
+            0xe1,
+            ShelleyPaymentPart::Key(key),
+            ShelleyDelegationPart::Null,
+            40_000_000,
+        );
+        let franken = stray(
+            &account,
+            0xf1,
+            ShelleyPaymentPart::Key(key),
+            ShelleyDelegationPart::Key(theirs),
+            30_000_000,
+        );
+
+        // Both are ours: Max spends them, signed by receive key 0 alone.
+        let result = api::move_in(
+            &account,
+            random_scalar(),
+            request(vec![enterprise, franken], None, vec![]),
+        )
+        .unwrap();
+        assert_eq!(result.inputs, 2);
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        let witnesses = tx.vkey_witnesses();
+        assert_eq!(witnesses.len(), 1);
+        let vkey: [u8; 32] = witnesses[0].vkey.to_vec().try_into().unwrap();
+        assert_eq!(pallas_crypto::hash::Hasher::<224>::hash(&vkey), key);
+
+        // A script whose hash happens to be our key's is not ours to sign for.
+        let script = stray(
+            &account,
+            0x5c,
+            ShelleyPaymentPart::Script(key),
+            ShelleyDelegationPart::Null,
+            40_000_000,
+        );
+        let err = api::move_in(
+            &account,
+            random_scalar(),
+            request(vec![script], None, vec![]),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("is not under the account's payment key"),
+            "{err}"
+        );
+    }
+
+    fn tusdm(quantity: &str) -> TokenAmount {
+        TokenAmount {
+            policy_id: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9".into(),
+            asset_name: "0014df10745553444d".into(),
+            quantity: quantity.into(),
+        }
+    }
+
+    #[test]
+    fn a_short_move_in_goes_up_to_the_least_the_deposit_needs() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        for asked in ["0", "900000"] {
+            let result = api::move_in(
+                &account,
+                random_scalar(),
+                request(account_utxos(&account), Some(asked), vec![tusdm("1")]),
+            )
+            .unwrap();
+            let minimum = result.minimum.clone().unwrap();
+            assert_eq!(result.lovelace, minimum, "{asked} goes up to the minimum");
+            let minimum: u64 = minimum.parse().unwrap();
+            assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
+        }
+        // Max has no minimum to speak of.
+        let max = api::move_in(
+            &account,
+            random_scalar(),
+            request(account_utxos(&account), None, vec![]),
+        )
+        .unwrap();
+        assert_eq!(max.minimum, None);
+    }
+
+    /// The 15-word vector phrase's receive address: someone else's.
+    fn theirs() -> String {
+        let doc: Value = serde_json::from_str(include_str!(
+            "../../../seedelf-crypto/tests/vectors/cardano_account.json"
+        ))
+        .unwrap();
+        doc["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["account"] == 0 && v["phrase"].as_str().unwrap().split(' ').count() == 15)
+            .unwrap()["preprod"]["receive_0"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn send(
+        utxos: Vec<PathedUtxo>,
+        to: &str,
+        lovelace: Option<&str>,
+        tokens: Vec<TokenAmount>,
+    ) -> SendRequest {
+        SendRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos,
+            to: to.into(),
+            lovelace: lovelace.map(String::from),
+            tokens,
+        }
+    }
+
+    /// An output's address, lovelace and tokens, `policy.name` → quantity.
+    type Paid = (String, u64, Vec<(String, u64)>);
+
+    fn outputs(tx_cbor: &str) -> Vec<Paid> {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        tx.outputs()
+            .iter()
+            .map(|o| {
+                let tokens = o
+                    .value()
+                    .assets()
+                    .iter()
+                    .flat_map(|p| {
+                        p.assets()
+                            .iter()
+                            .map(|a| {
+                                (
+                                    format!(
+                                        "{}.{}",
+                                        hex::encode(*p.policy()),
+                                        hex::encode(a.name())
+                                    ),
+                                    a.output_coin().unwrap(),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                (
+                    o.address().unwrap().to_bech32().unwrap(),
+                    o.value().coin(),
+                    tokens,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sends_to_an_address_signed_by_exactly_the_inputs_keys() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let utxos = account_utxos(&account);
+        let creds: std::collections::HashMap<String, String> = utxos
+            .iter()
+            .map(|p| {
+                (
+                    format!("{}#{}", p.utxo.tx_hash, p.utxo.tx_index),
+                    p.utxo.payment_cred.clone(),
+                )
+            })
+            .collect();
+        let to = theirs();
+        let result = api::account_send(
+            &account,
+            send(utxos, &to, Some("3000000"), vec![tusdm("1000000000")]),
+        )
+        .unwrap();
+        assert!(!result.max);
+        assert_eq!(result.to, to);
+        assert_eq!(result.lovelace, "3000000");
+        assert_eq!(result.tokens, vec![tusdm("1000000000")]);
+        assert_eq!(
+            result.change_tokens, 2,
+            "the rest of the tUSDM, and its neighbour"
+        );
+
+        // Exactly the payment to the address, and nothing into the contract.
+        let outs = outputs(&result.tx_cbor);
+        let paid: Vec<_> = outs.iter().filter(|(a, _, _)| *a == to).collect();
+        assert_eq!(paid.len(), 1);
+        assert_eq!(paid[0].1, 3_000_000);
+        assert_eq!(
+            paid[0].2,
+            vec![(
+                "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9.0014df10745553444d"
+                    .to_string(),
+                1_000_000_000
+            )]
+        );
+        let home = account
+            .base_address(true, Role::Receive, 0)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        assert!(
+            outs.iter().all(|(a, _, _)| *a == to || *a == home),
+            "the rest is change to 0/0"
+        );
+
+        // Signed by exactly the spent inputs' payment keys, every signature valid.
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        assert_eq!(hex::encode(*tx.hash()), result.tx_hash);
+        let mut signers = BTreeSet::new();
+        for w in tx.vkey_witnesses().iter() {
+            let key: [u8; 32] = w.vkey.to_vec().try_into().unwrap();
+            let sig: [u8; 64] = w.signature.to_vec().try_into().unwrap();
+            assert!(PublicKey::from(key).verify(tx.hash(), &Signature::from(sig)));
+            signers.insert(hex::encode(pallas_crypto::hash::Hasher::<224>::hash(&key)));
+        }
+        let spent: BTreeSet<String> = tx
+            .inputs()
+            .iter()
+            .map(|i| creds[&format!("{}#{}", hex::encode(*i.hash()), i.index())].clone())
+            .collect();
+        assert_eq!(signers, spent);
+
+        // Only the tokens: the least ADA they need.
+        let result = api::account_send(
+            &account,
+            send(account_utxos(&account), &to, Some("0"), vec![tusdm("1")]),
+        )
+        .unwrap();
+        assert_eq!(Some(result.lovelace.clone()), result.minimum);
+        let minimum: u64 = result.lovelace.parse().unwrap();
+        assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
+        let outs = outputs(&result.tx_cbor);
+        assert_eq!(outs.iter().find(|(a, _, _)| *a == to).unwrap().1, minimum);
+
+        // Max: everything but the fee and what the change needs.
+        let max =
+            api::account_send(&account, send(account_utxos(&account), &to, None, vec![])).unwrap();
+        assert!(max.max);
+        assert_eq!(max.minimum, None);
+        assert_eq!(max.inputs, 6);
+    }
+
+    #[test]
+    fn send_refuses_what_would_lose_money() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let err = |to: &str, lovelace: &str| {
+            api::account_send(
+                &account,
+                send(account_utxos(&account), to, Some(lovelace), vec![]),
+            )
+            .unwrap_err()
+            .to_string()
+        };
+        let contract = {
+            let config = seedelf_core::constants::get_config(1, true).unwrap();
+            seedelf_core::address::wallet_contract(true, config.contract.wallet_contract_hash)
+                .to_bech32()
+                .unwrap()
+        };
+        let mainnet = account
+            .base_address(false, Role::Receive, 0)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let stake = account.stake_address(true).unwrap().to_bech32().unwrap();
+        for bad in [contract.as_str(), mainnet.as_str(), stake.as_str()] {
+            assert!(
+                err(bad, "2000000").contains("normal preprod address"),
+                "{bad}"
+            );
+        }
+        assert!(err("nope", "2000000").contains("isn't a Cardano address"));
+        assert!(err(&theirs(), "999999999999999").contains("for this payment"));
+
+        let mut moved = account_utxos(&account);
+        moved[0].index += 1;
+        let e = api::account_send(&account, send(moved, &theirs(), Some("2000000"), vec![]))
+            .unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("is not under the account's payment key"),
+            "{e}"
+        );
+        let e = api::account_send(
+            &account,
+            send(
+                account_utxos(&account),
+                &theirs(),
+                Some("2000000"),
+                vec![tusdm("0")],
+            ),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("more than none"), "{e}");
     }
 }
 
@@ -575,6 +919,7 @@ mod account_mint {
             network: "preprod".into(),
             params: fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone(),
             utxos,
+            collateral: None,
             label: label.into(),
             evaluation,
         }
@@ -644,6 +989,63 @@ mod account_mint {
     }
 
     #[test]
+    fn puts_up_the_collateral_set_aside_and_signs_for_it() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let mut utxos = account_utxos(&account);
+        let set_aside = utxos.pop().unwrap();
+        let out_ref = |p: &PathedUtxo| (p.utxo.tx_hash.clone(), p.utxo.tx_index);
+        let with =
+            |utxos: Vec<PathedUtxo>, collateral: PathedUtxo, evaluation| AccountMintRequest {
+                collateral: Some(collateral),
+                ..request(utxos, "first", evaluation)
+            };
+
+        let result = api::finish_account_mint(
+            &account,
+            sk,
+            with(utxos, set_aside.clone(), Some(evaluation())),
+        )
+        .unwrap();
+        let expected = out_ref(&set_aside);
+        assert_eq!(
+            (
+                result.collateral.tx_hash.clone(),
+                result.collateral.tx_index
+            ),
+            expected
+        );
+        assert!(
+            result
+                .inputs
+                .iter()
+                .all(|i| (i.tx_hash.clone(), i.tx_index) != expected)
+        );
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        let signers: BTreeSet<String> = tx
+            .vkey_witnesses()
+            .iter()
+            .map(|w| hex::encode(pallas_crypto::hash::Hasher::<224>::hash(&w.vkey.to_vec())))
+            .collect();
+        assert!(
+            signers.contains(&set_aside.utxo.payment_cred),
+            "the collateral's key signs"
+        );
+
+        // A collateral that isn't the account's is refused, like any UTxO.
+        let mut moved = set_aside.clone();
+        moved.index += 1;
+        let e = api::draft_account_mint(&account, sk, with(account_utxos(&account), moved, None))
+            .unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("is not under the account's payment key"),
+            "{e}"
+        );
+    }
+
+    #[test]
     fn refuses_what_it_must_not_sign_or_write() {
         let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
@@ -657,7 +1059,7 @@ mod account_mint {
                 sk,
                 request(moved, "", None)
             ))
-            .contains("is not at the account's address")
+            .contains("is not under the account's payment key")
         );
         assert!(
             err(api::draft_account_mint(
@@ -856,6 +1258,28 @@ mod transfer {
         assert!(!result.tx_cbor.contains(&found.public_value));
     }
 
+    #[test]
+    fn a_short_amount_goes_up_to_the_least_the_payment_needs() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        // "0" with a token: only the ADA the token needs.
+        for asked in ["0", "1000000"] {
+            let mut r = request();
+            r.lovelace = asked.into();
+            let result = finish(sk, r);
+            let minimum: u64 = result.minimum.parse().unwrap();
+            assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
+            assert_eq!(
+                result.lovelace, result.minimum,
+                "{asked} goes up to the minimum"
+            );
+            assert_eq!(outputs(&result.tx_cbor)[0].1, minimum);
+        }
+        // More than the minimum is paid as asked.
+        let result = finish(sk, request());
+        assert_eq!(result.lovelace, "5000000");
+        assert!(result.minimum.parse::<u64>().unwrap() < 5_000_000);
+    }
+
     fn register_from_utxo(utxo: &UtxoResponse) -> Register {
         let fields = &utxo.inline_datum.as_ref().unwrap().value["fields"];
         Register::new(
@@ -945,9 +1369,6 @@ mod transfer {
         let mut r = request();
         r.lovelace = "45000000000000001".into();
         assert!(err(r).contains("45 billion"));
-        let mut r = request();
-        r.lovelace = "1000000".into();
-        assert!(err(r).contains("needs at least"));
         let mut r = request();
         r.tokens[0].quantity = "1234560001".into();
         assert!(err(r).contains("holds only 1234560000"));
@@ -1123,6 +1544,44 @@ mod withdraw {
     }
 
     #[test]
+    fn a_short_amount_goes_up_to_the_least_the_payment_needs() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let rec = recorded();
+        let finish = |lovelace: &str| {
+            api::finish_withdraw(
+                sk,
+                with_evaluation(request("amount"), |r| {
+                    r.lovelace = Some(lovelace.into());
+                    r.seed = Some("42".repeat(32));
+                    r.evaluation = Some(rec["amount"]["evaluation"].clone());
+                }),
+            )
+            .unwrap()
+        };
+        for asked in ["0", "500000"] {
+            let result = finish(asked);
+            let minimum = result.minimum.clone().unwrap();
+            assert_eq!(result.lovelace, minimum, "{asked} goes up to the minimum");
+            let minimum: u64 = minimum.parse().unwrap();
+            assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
+            assert_eq!(outputs(&result.tx_cbor)[0], (theirs(), minimum));
+        }
+        let result = finish("5000000");
+        assert_eq!(result.lovelace, "5000000");
+
+        // Max has no minimum to speak of.
+        let max = api::finish_withdraw(
+            sk,
+            with_evaluation(request("max"), |r| {
+                r.seed = Some("42".repeat(32));
+                r.evaluation = Some(rec["max"]["evaluation"].clone());
+            }),
+        )
+        .unwrap();
+        assert_eq!(max.minimum, None);
+    }
+
+    #[test]
     fn max_takes_the_twenty_largest_and_says_what_is_left() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let base = owned().into_iter().next().unwrap();
@@ -1234,9 +1693,6 @@ mod withdraw {
                 .to_string()
                 .contains("isn't this wallet's")
         );
-        let mut r = request("amount");
-        r.lovelace = Some("500000".into());
-        assert!(err(r).contains("needs at least"));
 
         // Removing: only this wallet's seedelf, from a UTxO holding one.
         let theirs: Vec<UtxoResponse> = serde_json::from_value(

@@ -12,7 +12,7 @@ use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::Output;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::assets::Assets;
-use seedelf_core::build::{self, MoveInAmount, fake_signer, minimum_deposit};
+use seedelf_core::build::{self, AccountAmount, fake_signer, minimum_deposit};
 use seedelf_core::constants::get_config;
 use seedelf_core::transaction::calculate_min_required_utxo;
 use seedelf_crypto::cardano::{CardanoAccount, Role};
@@ -96,7 +96,7 @@ struct Decoded {
     size_signed: u64,
 }
 
-fn decode(built: &build::MoveIn, signers: usize) -> Decoded {
+fn decode(built: &build::AccountPayment, signers: usize) -> Decoded {
     let mut signed = built.tx.clone();
     for _ in 0..signers {
         signed = signed.sign(fake_signer()).unwrap();
@@ -162,7 +162,18 @@ fn register_of(datum: DatumOption) -> Option<Register> {
 }
 
 /// The checks every move-in must pass.
-fn assert_sound(w: &World, available: &[UtxoResponse], built: &build::MoveIn) -> Decoded {
+fn assert_sound(w: &World, available: &[UtxoResponse], built: &build::AccountPayment) -> Decoded {
+    assert_paid(w, available, built, None)
+}
+
+/// The checks every account payment must pass; a send's outputs to `to` are
+/// the payment.
+fn assert_paid(
+    w: &World,
+    available: &[UtxoResponse],
+    built: &build::AccountPayment,
+    to: Option<&Address>,
+) -> Decoded {
     let signers = built
         .inputs
         .iter()
@@ -234,16 +245,12 @@ fn assert_sound(w: &World, available: &[UtxoResponse], built: &build::MoveIn) ->
                 "register is re-randomized"
             );
         } else {
-            assert_eq!(o.address, w.change, "anything else is change to 0/0");
+            assert!(
+                o.address == w.change || Some(&o.address) == to,
+                "anything else is the payment or change to 0/0"
+            );
             assert!(o.register.is_none());
         }
-    }
-    // Never a 5 ADA pure-ADA UTxO.
-    for u in &spent {
-        assert!(
-            !(u.value == "5000000" && u.asset_list.as_ref().is_none_or(|a| a.is_empty())),
-            "collateral spent"
-        );
     }
     tx
 }
@@ -258,7 +265,7 @@ fn deposits(w: &World, tx: &Decoded) -> (u64, usize) {
 }
 
 #[test]
-fn moves_an_amount_from_pure_ada_first_and_leaves_collateral() {
+fn moves_an_amount_from_pure_ada_first() {
     let w = world();
     let available = vec![
         utxo(&w, 1, 0, 5_000_000, vec![]),
@@ -269,7 +276,7 @@ fn moves_an_amount_from_pure_ada_first_and_leaves_collateral() {
     let built = build::move_in(
         &w.params,
         &available,
-        MoveInAmount::Lovelace(20_000_000),
+        AccountAmount::Lovelace(20_000_000),
         &[],
         &w.owner,
         &w.wallet,
@@ -300,7 +307,7 @@ fn adds_inputs_until_the_change_is_valid() {
     let built = build::move_in(
         &w.params,
         &available,
-        MoveInAmount::Lovelace(9_500_000),
+        AccountAmount::Lovelace(9_500_000),
         &[],
         &w.owner,
         &w.wallet,
@@ -326,11 +333,11 @@ fn picked_tokens_move_in_full_and_the_rest_come_back() {
         utxo(&w, 2, 1, 1_500_000, vec![token("tUSDM", 300)]),
         utxo(&w, 3, 2, 30_000_000, vec![]),
     ];
-    let picked = vec![(POLICY.to_string(), hex::encode("tUSDM"))];
+    let picked = vec![(POLICY.to_string(), hex::encode("tUSDM"), 1000)];
     let built = build::move_in(
         &w.params,
         &available,
-        MoveInAmount::Lovelace(5_000_000),
+        AccountAmount::Lovelace(5_000_000),
         &picked,
         &w.owner,
         &w.wallet,
@@ -374,6 +381,40 @@ fn picked_tokens_move_in_full_and_the_rest_come_back() {
 }
 
 #[test]
+fn part_of_a_token_moves_in_and_the_rest_comes_back() {
+    let w = world();
+    let available = vec![
+        utxo(&w, 1, 0, 2_000_000, vec![token("tUSDM", 700)]),
+        utxo(&w, 2, 1, 1_500_000, vec![token("tUSDM", 300)]),
+        utxo(&w, 3, 2, 30_000_000, vec![]),
+    ];
+    let picked = vec![(POLICY.to_string(), hex::encode("tUSDM"), 250)];
+    let built = build::move_in(
+        &w.params,
+        &available,
+        AccountAmount::Lovelace(5_000_000),
+        &picked,
+        &w.owner,
+        &w.wallet,
+        &w.change,
+    )
+    .unwrap();
+    let tx = assert_sound(&w, &available, &built);
+    let key = (POLICY.to_string(), hex::encode("tUSDM"));
+    let held_at = |addr: &Address| -> u64 {
+        tx.outputs
+            .iter()
+            .filter(|o| o.address == *addr)
+            .filter_map(|o| o.assets.get(&key))
+            .sum()
+    };
+    assert_eq!(held_at(&w.wallet), 250);
+    assert_eq!(held_at(&w.change), 750);
+    assert_eq!(built.tokens.items[0].amount, 250);
+    assert_eq!(built.change_tokens.items[0].amount, 750);
+}
+
+#[test]
 fn max_moves_everything_but_the_fee_and_the_change_floor() {
     let w = world();
     let available = vec![
@@ -384,7 +425,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
     let built = build::move_in(
         &w.params,
         &available,
-        MoveInAmount::Max,
+        AccountAmount::Max,
         &[],
         &w.owner,
         &w.wallet,
@@ -393,7 +434,11 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
 
-    assert_eq!(tx.inputs.len(), 2, "everything but the collateral");
+    assert_eq!(
+        tx.inputs.len(),
+        3,
+        "everything it's given, a 5 ADA UTxO too"
+    );
     let change: Vec<&Out> = tx
         .outputs
         .iter()
@@ -407,7 +452,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
     );
     assert_eq!(
         built.lovelace,
-        14_345_678 - built.fee - built.change_lovelace
+        19_345_678 - built.fee - built.change_lovelace
     );
 
     // With no tokens staying, Max leaves no change at all.
@@ -418,7 +463,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
     let all = build::move_in(
         &w.params,
         &pure,
-        MoveInAmount::Max,
+        AccountAmount::Max,
         &[],
         &w.owner,
         &w.wallet,
@@ -435,9 +480,9 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
 fn many_tokens_split_twenty_to_an_output() {
     let w = world();
     let tokens: Vec<Asset> = (0..25).map(|i| token(&format!("t{i:02}"), 1)).collect();
-    let picked: Vec<(String, String)> = tokens
+    let picked: Vec<(String, String, u64)> = tokens
         .iter()
-        .map(|t| (t.policy_id.clone(), t.asset_name.clone()))
+        .map(|t| (t.policy_id.clone(), t.asset_name.clone(), 1))
         .collect();
     let available = vec![
         utxo(&w, 1, 0, 3_000_000, tokens),
@@ -446,7 +491,7 @@ fn many_tokens_split_twenty_to_an_output() {
     let built = build::move_in(
         &w.params,
         &available,
-        MoveInAmount::Lovelace(10_000_000),
+        AccountAmount::Lovelace(10_000_000),
         &picked,
         &w.owner,
         &w.wallet,
@@ -455,7 +500,7 @@ fn many_tokens_split_twenty_to_an_output() {
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
     assert_eq!(deposits(&w, &tx), (10_000_000, 2));
-    assert_eq!(built.deposit_outputs, 2);
+    assert_eq!(built.outputs, 2);
 }
 
 #[test]
@@ -465,7 +510,7 @@ fn explains_what_is_wrong() {
         utxo(&w, 1, 0, 5_000_000, vec![]),
         utxo(&w, 2, 0, 10_000_000, vec![token("nft", 1)]),
     ];
-    let err = |amount, picked: &[(String, String)]| {
+    let err = |amount, picked: &[(String, String, u64)]| {
         build::move_in(
             &w.params, &available, amount, picked, &w.owner, &w.wallet, &w.change,
         )
@@ -474,25 +519,38 @@ fn explains_what_is_wrong() {
         .unwrap_or_default()
     };
     assert!(
-        err(MoveInAmount::Lovelace(500_000), &[]).contains("needs at least"),
+        err(AccountAmount::Lovelace(500_000), &[]).contains("needs at least"),
         "below a contract output's minimum"
     );
     assert!(
-        err(MoveInAmount::Lovelace(9_900_000), &[]).contains("Not enough ADA"),
+        err(AccountAmount::Lovelace(14_900_000), &[]).contains("Not enough ADA"),
         "more than there is"
     );
     assert!(
         err(
-            MoveInAmount::Lovelace(2_000_000),
-            &[(POLICY.to_string(), hex::encode("absent"))]
+            AccountAmount::Lovelace(2_000_000),
+            &[(POLICY.to_string(), hex::encode("absent"), 1)]
         )
         .contains("doesn't hold")
     );
-    let only_collateral = vec![utxo(&w, 3, 0, 5_000_000, vec![])];
+    assert!(
+        err(
+            AccountAmount::Lovelace(2_000_000),
+            &[(POLICY.to_string(), hex::encode("nft"), 2)]
+        )
+        .contains("holds only 1")
+    );
+    assert!(
+        err(
+            AccountAmount::Lovelace(2_000_000),
+            &[(POLICY.to_string(), hex::encode("nft"), 0)]
+        )
+        .contains("more than none")
+    );
     let e = build::move_in(
         &w.params,
-        &only_collateral,
-        MoveInAmount::Max,
+        &[],
+        AccountAmount::Max,
         &[],
         &w.owner,
         &w.wallet,
@@ -502,4 +560,212 @@ fn explains_what_is_wrong() {
     .unwrap();
     assert!(e.to_string().contains("nothing"), "{e}");
     assert!(minimum_deposit(&w.params, &Assets::new()).unwrap() > 1_000_000);
+}
+
+// ---------------------------------------------------------------------------
+// Send: the Cardano account pays an address
+// ---------------------------------------------------------------------------
+
+/// Someone else's address: another account of the same phrase.
+fn elsewhere() -> Address {
+    CardanoAccount::from_phrase(PHRASE, 1)
+        .unwrap()
+        .base_address(true, Role::Receive, 0)
+        .unwrap()
+}
+
+fn paid_to<'a>(tx: &'a Decoded, to: &Address) -> Vec<&'a Out> {
+    tx.outputs.iter().filter(|o| o.address == *to).collect()
+}
+
+#[test]
+fn sends_an_amount_and_part_of_a_token_to_an_address() {
+    let w = world();
+    let to = elsewhere();
+    let available = vec![
+        utxo(&w, 1, 0, 5_000_000, vec![]),
+        utxo(
+            &w,
+            2,
+            0,
+            2_000_000,
+            vec![token("tUSDM", 1000), token("keep", 1)],
+        ),
+        utxo(&w, 3, 2, 30_000_000, vec![]),
+    ];
+    let picked = vec![(POLICY.to_string(), hex::encode("tUSDM"), 250)];
+    let built = build::account_send(
+        &w.params,
+        &available,
+        AccountAmount::Lovelace(3_000_000),
+        &picked,
+        &to,
+        true,
+        &w.change,
+    )
+    .unwrap();
+    let tx = assert_paid(&w, &available, &built, Some(&to));
+
+    let paid = paid_to(&tx, &to);
+    assert_eq!(paid.len(), 1, "one output pays");
+    // The web wallet's collateral payment relies on this: its 5 ADA is output 0.
+    assert_eq!(tx.outputs[0].address, to, "the payment is the first output");
+    assert_eq!(paid[0].lovelace, 3_000_000);
+    let key = (POLICY.to_string(), hex::encode("tUSDM"));
+    assert_eq!(paid[0].assets.get(&key), Some(&250));
+    assert_eq!(paid[0].assets.len(), 1, "only the picked token goes");
+    assert_eq!(built.outputs, 1);
+    assert!(deposits(&w, &tx).1 == 0, "nothing goes into the contract");
+    let change: u64 = paid_to(&tx, &w.change)
+        .iter()
+        .filter_map(|o| o.assets.get(&key))
+        .sum();
+    assert_eq!(change, 750, "the rest of the token comes back");
+    assert_eq!(built.change_tokens.items.len(), 2, "tUSDM's rest and keep");
+}
+
+#[test]
+fn send_max_pays_everything_but_the_fee_and_the_change_floor() {
+    let w = world();
+    let to = elsewhere();
+    let available = vec![
+        utxo(&w, 1, 0, 5_000_000, vec![]),
+        utxo(&w, 2, 0, 12_345_678, vec![]),
+        utxo(&w, 3, 4, 2_000_000, vec![token("keep", 5)]),
+    ];
+    let built = build::account_send(
+        &w.params,
+        &available,
+        AccountAmount::Max,
+        &[],
+        &to,
+        true,
+        &w.change,
+    )
+    .unwrap();
+    let tx = assert_paid(&w, &available, &built, Some(&to));
+    assert_eq!(
+        tx.inputs.len(),
+        3,
+        "everything it's given, a 5 ADA UTxO too"
+    );
+    assert_eq!(paid_to(&tx, &to)[0].lovelace, built.lovelace);
+    assert_eq!(
+        built.lovelace,
+        19_345_678 - built.fee - built.change_lovelace
+    );
+    assert_eq!(built.change_tokens.items.len(), 1, "the token stays");
+}
+
+#[test]
+fn send_refuses_what_would_lose_money() {
+    let w = world();
+    let available = vec![utxo(&w, 2, 0, 20_000_000, vec![token("nft", 1)])];
+    let err = |to: &Address, lovelace| {
+        build::account_send(
+            &w.params,
+            &available,
+            AccountAmount::Lovelace(lovelace),
+            &[],
+            to,
+            true,
+            &w.change,
+        )
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default()
+    };
+    // A script (the wallet contract itself: the output would carry no datum).
+    assert!(err(&w.wallet, 2_000_000).contains("normal preprod address"));
+    // Mainnet, from preprod.
+    let mainnet = w.account.base_address(false, Role::Receive, 0).unwrap();
+    assert!(err(&mainnet, 2_000_000).contains("normal preprod address"));
+    // Below the output's minimum.
+    assert!(err(&elsewhere(), 500_000).contains("needs at least"));
+    // More than there is.
+    assert!(err(&elsewhere(), 19_990_000).contains("for this payment"));
+}
+
+#[test]
+fn a_payment_of_exactly_the_minimum_is_valid() {
+    let w = world();
+    let to = elsewhere();
+    let available = vec![
+        utxo(
+            &w,
+            2,
+            0,
+            2_000_000,
+            vec![token("tUSDM", 1000), token("nft", 1)],
+        ),
+        utxo(&w, 3, 2, 30_000_000, vec![]),
+    ];
+    let picked = vec![
+        (POLICY.to_string(), hex::encode("tUSDM"), 400),
+        (POLICY.to_string(), hex::encode("nft"), 1),
+    ];
+    let tokens = Assets {
+        items: picked
+            .iter()
+            .map(|(p, n, q)| seedelf_core::assets::Asset::new(p.clone(), n.clone(), *q).unwrap())
+            .collect(),
+    };
+
+    // To an address: one output, at exactly its minimum.
+    let minimum = build::minimum_address_payment(&w.params, &to, &tokens).unwrap();
+    assert_eq!(
+        minimum,
+        build::Payee::Address(&to)
+            .minimum(&w.params, &tokens)
+            .unwrap()
+    );
+    assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
+    let sent = build::account_send(
+        &w.params,
+        &available,
+        AccountAmount::Lovelace(minimum),
+        &picked,
+        &to,
+        true,
+        &w.change,
+    )
+    .unwrap();
+    let tx = assert_paid(&w, &available, &sent, Some(&to));
+    assert_eq!(paid_to(&tx, &to)[0].lovelace, minimum);
+    let short = build::account_send(
+        &w.params,
+        &available,
+        AccountAmount::Lovelace(minimum - 1),
+        &picked,
+        &to,
+        true,
+        &w.change,
+    );
+    assert!(short.is_err(), "a lovelace less is refused");
+
+    // Into Seedelf: the deposit's minimum.
+    let deposit = minimum_deposit(&w.params, &tokens).unwrap();
+    let payee = build::Payee::Seedelf {
+        owner: &w.owner,
+        wallet_addr: &w.wallet,
+    };
+    assert_eq!(deposit, payee.minimum(&w.params, &tokens).unwrap());
+    let moved = build::move_in(
+        &w.params,
+        &available,
+        AccountAmount::Lovelace(deposit),
+        &picked,
+        &w.owner,
+        &w.wallet,
+        &w.change,
+    )
+    .unwrap();
+    let tx = assert_sound(&w, &available, &moved);
+    assert_eq!(deposits(&w, &tx), (deposit, 1));
+
+    // A payment to a seedelf is one contract output, as a deposit of up to 20 tokens is.
+    assert_eq!(
+        build::minimum_seedelf_payment(&w.params, &tokens).unwrap(),
+        deposit
+    );
 }

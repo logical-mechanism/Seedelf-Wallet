@@ -51,6 +51,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
 - **Exit:** withdrawing to where the money came from re-links the chain. This is the second implicit tracking method in the root README. Withdraw somewhere else, or keep the funds in Seedelf.
   - The withdraw form says so. It warns when the destination is this wallet's own Cardano account (any address carrying its staking key): that links the account to the Seedelf UTxOs spent, and so to whoever paid them in.
   - **Max** spends up to 20 UTxOs in one transaction, which ties them together (see *Co-spending*).
+- **Sending from the Cardano account** (chunk 12) is an ordinary Cardano payment: anyone can see it came from the account, and so from whoever funded it. It doesn't touch Seedelf. The form says so, and that paying from the Seedelf balance instead avoids the link.
 - **Removing a seedelf:** its ADA goes somewhere, and that's linked to the seedelf's name.
   - By default it goes to the Cardano account, which a mint-first seedelf is linked to already.
   - Back into the Seedelf balance, it ties the name to that new UTxO, and to whatever it's later spent with. That's the right place only for a seedelf the Seedelf balance paid for (a stealth mint).
@@ -63,17 +64,22 @@ The wallet can't prevent these, so it should make them visible to the user inste
 - **Co-spending:** spending several UTxOs in one transaction suggests they share an owner.
   - Coin selection should spend as few inputs as it can.
   - It should avoid mixing funds with different histories, such as round-trip returns and fresh deposits, when it doesn't need to.
+  - **Locking a UTxO** (chunk 12) keeps it out of every spend, Max included, so a user can keep such funds apart by hand.
 - **The one-time account's staking part (decided): the shared Seedelf staking hash,** the same as the CLI's External Wallet (`seedelf-core/src/address.rs`, `dapp_address`).
   - dApps see a normal base address, and the staking part doesn't identify the user.
   - The trade-off is that it marks the address as a Seedelf address.
   - Any rewards on that credential go to whoever holds it, not to the user. That's fine for money passing through, but the UI should say so.
 - **Crowd size:** privacy grows with the number of honest users (the flood-attack section of the root README). With few users, timing and amounts carry most of the risk. The wallet should say that plainly and not overpromise.
 - **Network:** Koios and giveme.my see the user's IP address, and Koios has no Tor access. A VPN helps; see the root README's IP-tracking section.
-  - A balance reading asks Koios about the Cardano account and the whole wallet contract at the same moment. Koios can tell that the account's owner uses Seedelf, though not which contract UTxOs are theirs: the ownership check runs in the extension.
+  - A balance reading asks Koios about the Cardano account and the whole wallet contract at the same moment (between full reads, the part of it after the last block seen). Koios can tell that the account's owner uses Seedelf, though not which contract UTxOs are theirs: the ownership check runs in the extension, on every row.
   - The wallet only reads the chain when Home opens (at most once a minute) or on Refresh. It never polls in the background.
-  - **Finding a recipient** reads the whole wallet contract, the same query a balance reading makes, and picks the seedelf's UTxO in the extension. The wallet never asks Koios about the recipient's token (`asset_utxos` and the like): that would tell Koios exactly who is being paid.
-  - **An ADA Handle can't be found that way:** withdrawing to `$name` asks Koios who holds that handle (`asset_nft_address`), so Koios learns it. The transaction names the address anyway once it's submitted. Pasting the address instead asks Koios nothing.
-- **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk, and it's wiped on lock.
+  - **Token names and logos come from a list inside the extension** (`src/tokens/`, refreshed at each release). Asking Koios about the tokens in the Seedelf balance would tell it which contract UTxOs are yours, so the wallet never does.
+  - **Finding a recipient** uses the contract as the balance reading sees it, and picks the seedelf's UTxO in the extension. The wallet never asks Koios about the recipient's token (`asset_utxos` and the like): that would tell Koios exactly who is being paid.
+  - **An ADA Handle can't be found that way:** withdrawing or sending to `$name` asks Koios who holds that handle (`asset_nft_address`), so Koios learns it. The transaction names the address anyway once it's submitted. Pasting the address instead asks Koios nothing.
+- **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk unencrypted, and the session copy is wiped on lock.
+  - **Contacts** (who the user pays), the Seedelf history, and **the UTxOs the user locked** (with the collateral chosen) are kept on disk, but **never unencrypted** (decided in chunk 12): sealed under a key derived from the phrase, unreadable while locked, deleted with the wallet. Saving or checking a contact, or locking a UTxO, asks no one anything.
+  - **The UTxOs screen** lists the Seedelf UTxOs by outpoint, from the last reading. It says that looking one up on an explorer tells that site which UTxO you care about.
+- **The Cardano account's collateral** (chunk 12) is only ever put up by what the account signs anyway (an account-paid mint). Seedelf spends never use it: giveme.my lends theirs (rule 2), so no UTxO of the user's tags a private spend. Setting one by payment is a 5 ₳ payment from the account to itself, in the open.
 
 ## Not for holding
 

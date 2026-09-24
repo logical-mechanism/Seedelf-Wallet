@@ -5,10 +5,14 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { Message, Requests, Status } from "../shared/rpc";
+import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
+import type { CoinControlService } from "./coin-control";
+import type { ContactsService } from "./contacts";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
+import type { SendService } from "./send";
 import type { TransferService } from "./transfer";
 import type { WithdrawService } from "./withdraw";
 import type { Wallet } from "./wallet";
@@ -21,7 +25,11 @@ export interface Context {
   mint: MintService;
   transfer: TransferService;
   withdraw: WithdrawService;
+  send: SendService;
   pending: PendingService;
+  contacts: ContactsService;
+  activity: ActivityService;
+  coins: CoinControlService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -69,7 +77,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.transfer.build(ctx.network, message.to, message.lovelace, message.tokens);
     case "transfer-submit":
       return ctx.transfer.submit(ctx.network, message.txHash);
-    case "withdraw-resolve":
+    case "resolve-destination":
       return ctx.withdraw.resolve(ctx.network, message.to);
     case "withdraw-build":
       return ctx.withdraw.build(ctx.network, message.to, message.lovelace, message.tokens);
@@ -79,11 +87,54 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.withdraw.buildRemove(ctx.network, message.name, message.to);
     case "remove-submit":
       return ctx.withdraw.submitRemove(ctx.network, message.txHash);
+    case "send-build":
+      return ctx.send.build(ctx.network, message.to, message.lovelace, message.tokens);
+    case "send-submit":
+      return ctx.send.submit(ctx.network, message.txHash);
     case "pending-tx":
       return ctx.pending.pending();
     case "reset-wallet":
       await wallet.reset();
       return status(ctx);
+    case "reveal-phrase":
+      return { words: await wallet.revealPhrase(message.password) };
+    case "change-password":
+      await wallet.changePassword(message.current, message.next);
+      return null;
+    case "contacts":
+      return ctx.contacts.list(ctx.network);
+    case "contact-save":
+      return ctx.contacts.save(ctx.network, message);
+    case "contact-remove":
+      return ctx.contacts.remove(ctx.network, message.id);
+    case "history": {
+      if (message.of === "seedelf") {
+        // Arrivals are noted by a balance reading: Refresh makes one, and otherwise the history asks nothing.
+        const updatedAt = message.refresh
+          ? (await ctx.balances.get(ctx.network, true)).updatedAt
+          : await ctx.balances.lastRead(ctx.network);
+        return { entries: await ctx.activity.seedelf(ctx.network), more: false, updatedAt };
+      }
+      // The Cardano side asks Koios for what's newer on every call.
+      return { ...(await ctx.activity.cardano(ctx.network, message.more ?? false)), updatedAt: Date.now() };
+    }
+    // Coin control reads the last balance reading, so there must be one.
+    case "utxos":
+      await ctx.balances.get(ctx.network, message.refresh ?? false);
+      return ctx.coins.lists(ctx.network);
+    case "utxo-lock":
+      return ctx.coins.setLocked(ctx.network, message.of, message.utxo, message.locked);
+    case "collateral":
+      await ctx.balances.get(ctx.network);
+      return ctx.coins.collateral(ctx.network);
+    case "collateral-use":
+      return ctx.coins.use(ctx.network, message.utxo);
+    case "collateral-reclaim":
+      return ctx.coins.reclaim(ctx.network);
+    case "collateral-build":
+      return ctx.send.buildCollateral(ctx.network);
+    case "collateral-submit":
+      return ctx.send.submitCollateral(ctx.network, message.txHash);
   }
 }
 

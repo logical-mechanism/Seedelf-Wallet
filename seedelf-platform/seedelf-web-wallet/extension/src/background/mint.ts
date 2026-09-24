@@ -17,9 +17,8 @@
 
 import type { NetworkName } from "../networks";
 import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
-import { pathedUtxos } from "./balances";
-import { keep, measure, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
-import { readFresh, spentSet, unspent } from "./spent";
+import { nothingInAccount, readAccount } from "./account";
+import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the mint built last, until it's sent or replaced. */
 export const SESSION_MINT = "seedelf.mint.built";
@@ -41,28 +40,11 @@ export class MintService {
   }
 
   private async buildFromAccount(network: NetworkName, label: string): Promise<MintSummary> {
-    const { wasm, wallet } = this.deps;
-    const koios = this.deps.koios(network);
-    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-
-    // Fresh chain state, read outside the wallet's queue.
-    const [stake, spent] = await wallet.withKeys(
-      async ({ cardano }) => [cardano.stakeAddress(net), await spentSet(this.deps.session)] as const,
-    );
-    const [used, utxos, params] = await readFresh(
-      spent,
-      () => Promise.all([koios.accountAddresses(stake), koios.accountUtxos(stake), koios.epochParams()]),
-      ([, utxos]) => utxos,
-      this.deps.sleep,
-    );
-    const request = await wallet.withKeys((keys) => ({
-      network,
-      params,
-      label,
-      utxos: pathedUtxos(keys, net, new Set(used), unspent(utxos, spent)),
-    }));
+    const { wasm } = this.deps;
+    const { params, utxos, collateral, held } = await readAccount(this.deps, network);
+    const request = { network, params, label, utxos, collateral };
     if (request.utxos.length === 0) {
-      throw new Error("Your Cardano account is empty. Fund it first; the seedelf is paid from there.");
+      throw nothingInAccount(held, "Your Cardano account is empty. Fund it first; the seedelf is paid from there.");
     }
 
     const finished = await measure<MintResult>(
@@ -76,16 +58,11 @@ export class MintService {
   }
 
   private async buildStealth(network: NetworkName, label: string): Promise<MintSummary> {
-    const { wasm, wallet } = this.deps;
-    const { contractUtxos, params } = await readContract(this.deps, network);
-    const request = await wallet.withKeys((keys) => ({
-      network,
-      params,
-      label,
-      utxos: spendable(this.deps, keys, contractUtxos),
-    }));
+    const { wasm } = this.deps;
+    const { view, utxos, params } = await readContract(this.deps, network);
+    const request = { network, params, label, utxos };
     if (request.utxos.length === 0) {
-      throw new Error("Your Seedelf balance is empty. Move some ADA in first; the seedelf is paid from there.");
+      throw nothingToSpend(this.deps, view, "Your Seedelf balance is empty. Move some ADA in first; the seedelf is paid from there.");
     }
 
     const finished = await measure<MintResult>(

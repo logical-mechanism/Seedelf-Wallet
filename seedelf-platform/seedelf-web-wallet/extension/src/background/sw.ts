@@ -3,13 +3,18 @@
 
 import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
 import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
+import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
+import { CoinControlService } from "./coin-control";
 import { Collateral } from "./collateral";
+import { ContactsService } from "./contacts";
 import { handle, type Context } from "./handlers";
 import { Koios } from "./koios";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
+import { PrivateStore } from "./private-store";
+import { SendService } from "./send";
 import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { chromeArea } from "./storage";
@@ -44,12 +49,18 @@ function getContext(): Promise<Context> {
       changed: () => void chrome.runtime.sendMessage(STATE_CHANGED).catch(() => undefined),
     });
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
-    const balances = new BalanceService({ wasm, wallet, session, koios, now: Date.now });
-    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now });
+    const store = new PrivateStore({ wallet, local: chromeArea(chrome.storage.local) });
+    const activity = new ActivityService({ wallet, session, store, koios });
+    const contacts = new ContactsService({ wasm, store });
+    const coins = new CoinControlService({ wallet, session, store, now: Date.now });
+    const balances = new BalanceService({ wasm, wallet, session, koios, now: Date.now, activity, coins });
+    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
-    const mint = new MintService({ wasm, wallet, session, koios, collateral, now: Date.now });
-    const transfer = new TransferService({ wasm, wallet, session, koios, collateral, now: Date.now });
-    const withdraw = new WithdrawService({ wasm, wallet, session, koios, collateral, now: Date.now });
+    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins };
+    const mint = new MintService(spends);
+    const transfer = new TransferService(spends);
+    const withdraw = new WithdrawService(spends);
+    const send = new SendService(spends);
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
     return {
       wasm,
@@ -59,7 +70,11 @@ function getContext(): Promise<Context> {
       mint,
       transfer,
       withdraw,
+      send,
       pending,
+      contacts,
+      activity,
+      coins,
       version: __VERSION__,
       network: defaultNetwork(__MAINNET_ENABLED__),
       networks: enabledNetworks(__MAINNET_ENABLED__),
