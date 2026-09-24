@@ -15,6 +15,7 @@ import type { MoveInSummary, PendingTx, TokenRef } from "../shared/rpc";
 import { pathedUtxos } from "./balances";
 import type { Koios } from "./koios";
 import { SESSION_PENDING } from "./pending";
+import { readFresh, rememberSpent, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
 
@@ -35,6 +36,8 @@ export interface MoveInDeps {
   session: Area;
   koios: (network: NetworkName) => Koios;
   now: () => number;
+  /** Waits between reads of a Koios backend that's behind (spent.ts); tests don't. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export class MoveInService {
@@ -46,15 +49,18 @@ export class MoveInService {
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
 
     // Fresh chain state, read outside the wallet's queue.
-    const stake = await wallet.withKeys(({ cardano }) => cardano.stakeAddress(net));
-    const [used, utxos, params] = await Promise.all([
-      koios.accountAddresses(stake),
-      koios.accountUtxos(stake),
-      koios.epochParams(),
-    ]);
+    const [stake, spent] = await wallet.withKeys(
+      async ({ cardano }) => [cardano.stakeAddress(net), await spentSet(session)] as const,
+    );
+    const [used, utxos, params] = await readFresh(
+      spent,
+      () => Promise.all([koios.accountAddresses(stake), koios.accountUtxos(stake), koios.epochParams()]),
+      ([, utxos]) => utxos,
+      this.deps.sleep,
+    );
 
     return wallet.withKeys(async (keys) => {
-      const pathed = pathedUtxos(keys, net, new Set(used), utxos);
+      const pathed = pathedUtxos(keys, net, new Set(used), unspent(utxos, spent));
       const request = { network, params, utxos: pathed, lovelace, tokens };
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
       const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };
@@ -79,6 +85,7 @@ export class MoveInService {
 
     const pending: PendingTx = { kind: "move-in", network, txHash, submittedAt: now(), confirmations: null };
     await wallet.withKeys(async () => {
+      await rememberSpent(session, bytes);
       await session.remove(SESSION_BUILT);
       await session.set(SESSION_PENDING, pending);
     });

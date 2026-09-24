@@ -91,8 +91,8 @@ describe("move-in", () => {
   it("shows why the network rejected it, and keeps the built transaction", async () => {
     const t = await unlocked();
     const summary = await t.moveIn.build("preprod", "5000000", []);
-    t.koios.rejectSubmit = "BadInputsUTxO";
-    await expect(t.moveIn.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction: BadInputsUTxO");
+    t.koios.rejectSubmit = "ValueNotConservedUTxO";
+    await expect(t.moveIn.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction: ValueNotConservedUTxO");
     expect(await t.session.get(SESSION_BUILT)).toBeDefined();
     expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
   });

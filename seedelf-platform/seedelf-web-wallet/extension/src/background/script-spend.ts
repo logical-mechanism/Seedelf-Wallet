@@ -23,6 +23,7 @@ import { seedelfTokenOf } from "./chain";
 import type { Collateral } from "./collateral";
 import type { Koios, KoiosUtxo } from "./koios";
 import { SESSION_PENDING } from "./pending";
+import { readFresh, rememberSpent, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
 import type { Keys, Wallet } from "./wallet";
 
@@ -37,6 +38,8 @@ export interface ScriptSpendDeps {
   collateral: (network: NetworkName) => Collateral;
   now: () => number;
   contract?: ContractConfig;
+  /** Waits between reads of a Koios backend that's behind (spent.ts); tests don't. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** A built transaction waiting in session storage for Send. */
@@ -52,18 +55,24 @@ export interface Kept {
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
-/** The whole wallet contract and the protocol parameters, fresh, read outside the wallet's queue. */
+/**
+ * The whole wallet contract, less what this wallet has already spent
+ * (spent.ts), and the protocol parameters: fresh, read outside the wallet's queue.
+ */
 export async function readContract(
   deps: ScriptSpendDeps,
   network: NetworkName,
 ): Promise<{ contractUtxos: KoiosUtxo[]; params: Record<string, unknown> }> {
   const { contract = CONTRACT_V1 } = deps;
   const koios = deps.koios(network);
-  const [contractUtxos, params] = await Promise.all([
-    koios.credentialUtxos([contract.walletContractHash]),
-    koios.epochParams(),
-  ]);
-  return { contractUtxos, params };
+  const spent = await deps.wallet.withKeys(() => spentSet(deps.session));
+  const [contractUtxos, params] = await readFresh(
+    spent,
+    () => Promise.all([koios.credentialUtxos([contract.walletContractHash]), koios.epochParams()]),
+    ([utxos]) => utxos,
+    deps.sleep,
+  );
+  return { contractUtxos: unspent(contractUtxos, spent), params };
 }
 
 /** What the Seedelf balance counts, and a Seedelf spend may pay with: owned UTxOs that don't hold a seedelf. */
@@ -132,11 +141,13 @@ export async function send(
     if (signed.txHash !== txHash) throw new Error("Signing changed the transaction, so it wasn't sent.");
     txCbor = signed.txCbor;
   }
-  const submitted = await deps.koios(network).submitTx(hexBytes(txCbor));
+  const bytes = hexBytes(txCbor);
+  const submitted = await deps.koios(network).submitTx(bytes);
   if (submitted !== txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
 
   const pending: PendingTx = { kind, network, txHash, submittedAt: now(), confirmations: null };
   await wallet.withKeys(async () => {
+    await rememberSpent(session, bytes);
     await session.remove(key);
     await session.set(SESSION_PENDING, pending);
   });
