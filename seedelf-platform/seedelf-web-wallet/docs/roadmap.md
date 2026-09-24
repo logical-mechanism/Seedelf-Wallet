@@ -18,13 +18,13 @@ The wallet is built in **chunks**, each about one working session.
 | 2 | Seedelf key derivation | ✅ | Implement the v1 HKDF spec ([keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation)) in `seedelf-crypto` with frozen test vectors. Expose it through WASM and check the vectors from TS. |
 | 3 | Cardano keys | ✅ | Phrase → CIP-1852 Cardano account (account `0'`): receive, change and stake addresses, in Rust (`pallas-wallet`). Checked against Lace's library (`@cardano-sdk`). |
 | 4 | Extension scaffold | ✅ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
-| 5 | Vault and lock | ⬜ | SecretBox vault, create/restore onboarding, unlock, `chrome.storage.session`, auto-lock, unlock back-off. |
+| 5 | Vault and lock | 🚧 | SecretBox vault, create/restore onboarding (restore has per-word BIP39 autocomplete, like Lace and Eternl), unlock, `chrome.storage.session`, auto-lock, unlock back-off. **Full plan: [plans/chunk-05-vault-and-lock.md](plans/chunk-05-vault-and-lock.md).** |
 | 6 | Balance | ⬜ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. |
 | 7 | Builder extraction + move in | ⬜ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ⬜ | Stealth mint (`util mint`) with giveme.my collateral. |
 | 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
 | 10 | Withdraw | ⬜ | `sweep` and `remove`. |
-| 11 | Polish and testers | ⬜ | UI style pass, Playwright end-to-end tests on preprod, unlisted Web Store listing. |
+| 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
 
 ## After v1
 
@@ -35,6 +35,12 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-23: chunk 5 planned; not started.**
+  - The branch `web-wallet/vault-lock` exists, and its full plan is [plans/chunk-05-vault-and-lock.md](plans/chunk-05-vault-and-lock.md). A new session starts there.
+  - Two user requests are folded in:
+    - Per-word phrase autocomplete, in chunk 5.
+    - A much closer match to Lace's dark mode, in chunk 11, or earlier if the user wants it.
 
 - **2026-09-23: chunk 4 done** (`web-wallet/extension-scaffold`).
   - **What landed:** `extension/`, built with Vite 8 (Rolldown), React 19, TypeScript 7 and an MV3 manifest.
