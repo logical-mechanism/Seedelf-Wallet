@@ -2,9 +2,10 @@
 //!
 //! A thin layer over `seedelf-crypto`: every protocol rule (torsion checks,
 //! same-`d` re-randomization, the `vkh`-bound Fiat-Shamir challenge) is
-//! enforced there, not here. The secret scalar lives inside a [`SeedelfKey`]
-//! and never crosses back into JavaScript; re-randomization scalars are
-//! drawn and dropped inside `seedelf-crypto`.
+//! enforced there, not here. Secrets stay inside WebAssembly: the Seedelf
+//! scalar in a [`SeedelfKey`] and the Cardano HD keys in a
+//! [`WasmCardanoAccount`] never cross back into JavaScript; re-randomization
+//! scalars are drawn and dropped inside `seedelf-crypto`.
 //!
 //! Each export is a small wrapper around a plain-Rust function in [`api`] so
 //! the logic can be tested natively; the wrappers only convert errors into
@@ -12,7 +13,7 @@
 
 use blstrs::Scalar;
 use ff::Field;
-use seedelf_crypto::{derivation, register, schnorr};
+use seedelf_crypto::{cardano, derivation, register, schnorr};
 use wasm_bindgen::prelude::*;
 
 /// Plain-Rust implementations behind the exports, testable off-wasm.
@@ -180,6 +181,82 @@ impl Drop for SeedelfKey {
         // Best effort: overwrite the scalar before the memory is released.
         self.sk = Scalar::ZERO;
         std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Which Cardano network an address is for.
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub enum Network {
+    Preprod = 0,
+    Mainnet = 1,
+}
+
+impl Network {
+    /// The CLI's convention: `true` means preprod.
+    fn flag(self) -> bool {
+        matches!(self, Network::Preprod)
+    }
+}
+
+/// The wallet's Cardano account: standard CIP-1852 keys from the recovery
+/// phrase, so the same phrase shows the same account in Lace, Eternl or
+/// Yoroi. The private keys stay inside WebAssembly memory; call `free()` to
+/// drop them.
+#[wasm_bindgen(js_name = CardanoAccount)]
+pub struct WasmCardanoAccount {
+    inner: cardano::CardanoAccount,
+}
+
+#[wasm_bindgen(js_class = CardanoAccount)]
+impl WasmCardanoAccount {
+    /// Account `account` (`m/1852'/1815'/account'`) of a 12-, 15- or 24-word
+    /// phrase. v1 of the wallet uses account 0.
+    #[wasm_bindgen(js_name = fromPhrase)]
+    pub fn from_phrase(phrase: &str, account: u32) -> Result<WasmCardanoAccount, JsError> {
+        cardano::CardanoAccount::from_phrase(phrase, account)
+            .map(|inner| WasmCardanoAccount { inner })
+            .map_err(js_error)
+    }
+
+    /// The account public key (public key || chain code), hex. Enough to
+    /// derive every address without the private key.
+    #[wasm_bindgen(js_name = accountPublicKey)]
+    pub fn account_public_key(&self) -> String {
+        hex::encode(self.inner.account_public_key().as_bytes())
+    }
+
+    /// The receive address `0/index`, delegated to the account's staking key.
+    #[wasm_bindgen(js_name = receiveAddress)]
+    pub fn receive_address(&self, network: Network, index: u32) -> Result<String, JsError> {
+        self.address(network, cardano::Role::Receive, index)
+    }
+
+    /// The change address `1/index`, delegated to the account's staking key.
+    #[wasm_bindgen(js_name = changeAddress)]
+    pub fn change_address(&self, network: Network, index: u32) -> Result<String, JsError> {
+        self.address(network, cardano::Role::Change, index)
+    }
+
+    /// The account's reward (stake) address.
+    #[wasm_bindgen(js_name = stakeAddress)]
+    pub fn stake_address(&self, network: Network) -> Result<String, JsError> {
+        self.inner
+            .stake_address(network.flag())
+            .and_then(|a| a.to_bech32().map_err(anyhow::Error::from))
+            .map_err(js_error)
+    }
+
+    fn address(
+        &self,
+        network: Network,
+        role: cardano::Role,
+        index: u32,
+    ) -> Result<String, JsError> {
+        self.inner
+            .base_address(network.flag(), role, index)
+            .and_then(|a| a.to_bech32().map_err(anyhow::Error::from))
+            .map_err(js_error)
     }
 }
 

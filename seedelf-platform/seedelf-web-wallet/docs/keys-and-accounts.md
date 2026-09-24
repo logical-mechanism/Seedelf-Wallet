@@ -6,7 +6,7 @@ A wallet is one **BIP39 recovery phrase**. New wallets get 24 words (256 bits of
 
 - **Cardano tree:** standard CIP-1852 derivation (`m/1852'/1815'/account'/role/index`) from the usual Icarus master key.
   - Because it is standard, the phrase also restores the Cardano side in Lace, Eternl and other wallets.
-  - Those wallets see the deposit account. They never see seedelfs.
+  - Those wallets see the Cardano account. They never see seedelfs.
 - **Seedelf key:** one BLS12-381 scalar `x`, derived from the same phrase by a separate, Seedelf-specific derivation.
   - The two trees are independent: knowing one reveals nothing about the other.
 
@@ -45,7 +45,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 - **Phrase rules (wallet policy, applied before the derivation):**
   - New phrases are 24 words. Restore accepts 12, 15 or 24 BIP39 English words with a valid checksum. These are the lengths Lace accepts; 18 and 21 are refused.
   - The rule is checked before the derivation, which works the same for any length. Accepting another length later wouldn't change any existing wallet's keys.
-  - **Restoring another wallet's phrase:** if someone restores a phrase from Lace or Yoroi, the deposit account is that wallet's standard account 0. The Seedelf wallet can then see and spend those funds, and the Seedelf key is new.
+  - **Restoring another wallet's phrase:** if someone restores a phrase from Lace or Yoroi, the Cardano account is that wallet's standard account 0. The Seedelf wallet can then see and spend those funds, and the Seedelf key is new.
   - Case and extra whitespace are ignored. The seed is always computed from the canonical words.
   - `generatePhrase` and `validatePhrase` in the WebAssembly module apply these rules, and `validatePhrase` says what is wrong.
 - **One implementation:** the derivation lives in Rust (`seedelf-crypto`), and the extension uses it through WebAssembly (`SeedelfKey.fromPhrase`).
@@ -55,13 +55,46 @@ if x == 0: derivation error                 probability ≈ 2^-255
 | Account | What it is | Address | Lifetime |
 |---|---|---|---|
 | **Seedelf** | The scalar `x`. The base register is `(G1, G1^x)`. Each seedelf's root UTxO holds a re-randomized copy that senders use. | Wallet contract (script address, no staking part) | Permanent |
-| **Deposit** | CIP-1852 account `0'`, payment `0/0`, staking `2/0` | Standard base address | Permanent. Money passes through it and doesn't stay. |
-| **One-time** (round-trip phase) | CIP-1852 account `1'`, payment `0/i`, a fresh `i` each session | Base address with the shared Seedelf staking part, the same as the CLI's External Wallet. See [privacy.md](privacy.md#known-links). | One session, then retired |
+| **Cardano** | CIP-1852 account `0'` in v1: receive keys `0/i`, change keys `1/i`, staking key `2/0` | Standard base addresses | Permanent. See [The Cardano account](#the-cardano-account). |
+| **One-time** (round-trip phase) | Reserved CIP-1852 account `24301'` (`0x5EED`), payment `0/i`, a fresh `i` each session | Base address with the shared Seedelf staking part, the same as the CLI's External Wallet. See [privacy.md](privacy.md#known-links). | One session, then retired |
 
-- **The deposit account is what exchanges and other wallets pay.** It is linked to the user by definition, so it is never used as a one-time account.
+- **The Cardano account is what exchanges and other wallets pay.** It is linked to the user by definition, so it is never used as a one-time account.
 - **One-time accounts are how funds leave Seedelf to use a contract.** The wallet sweeps them back automatically (see [flows.md](flows.md#contract-round-trip)).
   - On restore, scan them with a gap limit so any leftovers are found.
 - **The CLI has the same concept:** its External Wallet (`seedelf-cli/src/commands/external/`), a normal address tied to the Seedelf key. The web wallet reaches it through HD derivation instead.
+
+## The Cardano account
+
+The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano wallet account, and the wallet's non-private side. What it holds depends on where the phrase came from:
+
+- **A new Seedelf phrase:** a fresh, empty account.
+- **A restored Lace, Yoroi or Eternl phrase:** that wallet's first account, with the same addresses, UTxOs, tokens, NFTs, staking key and delegation, and any collateral.
+
+**Implementation:** [`seedelf-crypto/src/cardano.rs`](../../seedelf-crypto/src/cardano.rs).
+
+- **Master key:** the Icarus master key (CIP-3) from `pallas-wallet`.
+- **Derivation:** `m/1852'/1815'/account'/role/index`.
+- **Vectors:** [`seedelf-crypto/tests/vectors/cardano_account.json`](../../seedelf-crypto/tests/vectors/cardano_account.json).
+  - They cover 12-, 15- and 24-word phrases, accounts 0 and 1, and both networks.
+  - They match `@cardano-sdk/key-management`, the library Lace uses: 80 of 80 values.
+
+**Rules:**
+
+1. **Account `0'` only in v1, but all of it.**
+   - Discovery scans both the receive (`0/i`) and change (`1/i`) chains with the standard gap limit of 20, so a restored wallet shows its full balance (roadmap chunk 6).
+   - Every function takes the account index, so more accounts can come later. A picker would discover accounts in order (0, 1, 2, … stopping at the first one never used), the way BIP44 does.
+2. **Leave collateral alone.**
+   - Lace's collateral is just a pure-ADA UTxO of exactly 5 ADA, which Lace marks as reserved in its own local storage; nothing on-chain says so.
+   - The web wallet never needs it: move-in runs no script, and Seedelf spends use giveme.my.
+   - Like the CLI (`seedelf-core::utxos::collect_address_utxos`), coin selection skips those UTxOs unless the user explicitly chooses "move everything".
+3. **Tokens and NFTs are shown.** Move-in moves ADA by default, and tokens only when the user picks them. Each Seedelf UTxO can only hold so many tokens (see the root README's *Wallet Limitations*).
+4. **Staking is untouched.**
+   - Delegation, rewards and governance stay with the user's main wallet.
+   - Moving ADA into Seedelf lowers the stake behind that delegation, because Seedelf addresses have no staking part.
+5. **Using it alongside another wallet is fine.** Both wallets can spend the same UTxOs. If both try at once, one transaction simply fails.
+6. **It is not private.** For a restored wallet, this account is the user's public identity, and the UI never suggests otherwise.
+
+**The Seedelf key is separate.** It stays on its own account 0 whichever Cardano account is used.
 
 ## Password and vault
 

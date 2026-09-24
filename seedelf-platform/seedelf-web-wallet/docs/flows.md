@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart LR
-  Ext["Exchange or<br/>other wallet"] -- "pay" --> Dep["Deposit account"]
+  Ext["Exchange or<br/>other wallet"] -- "pay" --> Dep["Cardano account"]
   Dep -- "move in" --> S["Seedelf balance<br/>(wallet contract)"]
   S -- "transfer" --> Other["Any seedelf"]
   S -- "withdraw" --> Addr["Any address"]
@@ -26,9 +26,9 @@ flowchart LR
 - **Restore:**
   1. Enter the phrase (12, 15 or 24 words) and set a password.
   2. Scan the wallet contract for owned registers.
-  3. Scan the deposit account.
+  3. Scan the Cardano account (account `0'`, receive and change addresses, gap limit 20).
   4. Scan one-time accounts up to a gap limit.
-- **Phrase warning, shown during create:** "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your deposit account and nothing else."
+- **Phrase warning, shown during create:** "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
 
 ## Lock and unlock
 
@@ -38,18 +38,19 @@ flowchart LR
 
 See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 
-## Deposit
+## Receive (Cardano account)
 
-Show the deposit address and a QR code. Anything that can pay a Cardano address can fund the wallet.
+Show the receive address `0/0` and a QR code. Anything that can pay a Cardano address can fund the wallet. For a restored wallet, the funds already in the account show up here too.
 
-## Move in (deposit → Seedelf)
+## Move in (Cardano account → Seedelf)
 
 This is the equivalent of the CLI's `external sweep`:
 
-- **What it does:** the deposit account pays into the wallet contract. Each output gets a freshly re-randomized copy of the user's own base register.
-- **Signing:** only the deposit key signs.
+- **What it does:** the Cardano account pays into the wallet contract. Each output gets a freshly re-randomized copy of the user's own base register.
+- **Signing:** only the Cardano account's payment keys sign.
+- **What moves:** ADA by default, and tokens only when the user picks them. Pure-ADA 5 ADA UTxOs (another wallet's collateral) are skipped unless the user chooses "move everything".
 - **No seedelf needed.** No script runs and no collateral is needed.
-- **Privacy:** it links the deposit account to *some* register UTxOs, but not to any seedelf name.
+- **Privacy:** it links the Cardano account to *some* register UTxOs, but not to any seedelf name.
 
 ## Create a seedelf
 
@@ -59,7 +60,7 @@ This is the equivalent of the CLI's `util mint`: a stealth mint paid from the Se
 2. The wallet spends owned UTxOs, which needs Schnorr proofs, a fresh one-time key, and giveme.my collateral.
 3. It mints the token and puts it in a UTxO holding a freshly re-randomized register.
 
-The new seedelf is never linked to the deposit account.
+The new seedelf is never linked to the Cardano account.
 
 The CLI's `create` is different: an outside wallet pays for the mint, which links that wallet to the seedelf. See the root [README](../../../README.md#implicit-tracking-methods) (first implicit tracking method). The web wallet doesn't need that path.
 

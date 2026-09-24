@@ -21,9 +21,9 @@ Money comes in, moves privately, and goes out. It isn't meant to sit here.
 
 - Create or restore a wallet from a recovery phrase, then lock it with a password.
 - See your balance: your seedelfs and the funds they hold.
-- **Deposit:** a normal Cardano address that any wallet or exchange can pay.
-- **Move in:** move funds from the deposit account into your Seedelf balance.
-- **Create a seedelf:** mint your named seedelf so others can pay you. It is paid from your Seedelf balance, so it is never linked to your deposit account.
+- **Cardano account:** the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
+- **Move in:** move funds from the Cardano account into your Seedelf balance.
+- **Create a seedelf:** mint your named seedelf so others can pay you. It is paid from your Seedelf balance, so it is never linked to your Cardano account.
 - **Transfer:** send funds privately from your seedelfs to any seedelf.
 - **Withdraw:** send funds from your seedelfs to any Cardano address, or remove a seedelf.
 
@@ -51,7 +51,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 |---|---|
 | [architecture.md](docs/architecture.md) | How the extension is structured, crypto in WebAssembly, chain data, storage, and what we borrow from Lace |
 | [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
-| [flows.md](docs/flows.md) | Onboarding, deposit, move in, create, transfer, withdraw, contract round trip |
+| [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, contract round trip |
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
 | [development.md](docs/development.md) | The branching rule, running it in Chrome before the Web Store, test funds, the testing layers, sharing with testers |
 | [roadmap.md](docs/roadmap.md) | Build chunks, their status, and handoff notes between sessions |
@@ -78,6 +78,7 @@ Every Lace path in these docs is relative to that checkout.
   - The unlocked key is kept in `chrome.storage.session` (memory-only, cleared when the browser closes).
   - So the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every restart.
   - See [architecture.md](docs/architecture.md#service-worker).
-- **One-time accounts:** base addresses with the shared Seedelf staking part, the same as the CLI's External Wallet. See [privacy.md](docs/privacy.md#known-links).
+- **Cardano account:** CIP-1852 account `0'` for v1. Every function takes the account index, so more accounts can come later. See [keys-and-accounts.md](docs/keys-and-accounts.md#the-cardano-account).
+- **One-time accounts:** a reserved account index that real wallets never reach, with base addresses using the shared Seedelf staking part like the CLI's External Wallet. See [privacy.md](docs/privacy.md#known-links).
 - **Transaction building:** the CLI's Rust (Pallas) builders, separated from network calls and compiled to WebAssembly. See [architecture.md](docs/architecture.md#transaction-building).
 - **UI stack:** React + TypeScript + Vite, with plain CSS.

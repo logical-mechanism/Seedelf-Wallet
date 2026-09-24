@@ -16,10 +16,10 @@ The wallet is built in **chunks**, each about one working session.
 |---|---|---|---|
 | 1 | WASM foundation | ✅ | Create the `seedelf-web-wallet/wasm` crate (a workspace member). Expose register create, re-randomize, the ownership check and the Schnorr proof. Build with `wasm-bindgen` and smoke-test from JS. |
 | 2 | Seedelf key derivation | ✅ | Implement the v1 HKDF spec ([keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation)) in `seedelf-crypto` with frozen test vectors. Expose it through WASM and check the vectors from TS. |
-| 3 | Cardano keys | ⬜ | Phrase → CIP-1852 deposit account and address. Rust (`pallas-wallet`) or a JS library, decided in the chunk. Check against a known wallet's addresses. |
+| 3 | Cardano keys | ✅ | Phrase → CIP-1852 Cardano account (account `0'`): receive, change and stake addresses, in Rust (`pallas-wallet`). Checked against Lace's library (`@cardano-sdk`). |
 | 4 | Extension scaffold | ⬜ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
 | 5 | Vault and lock | ⬜ | SecretBox vault, create/restore onboarding, unlock, `chrome.storage.session`, auto-lock, unlock back-off. |
-| 6 | Balance | ⬜ | TS Koios client, contract scan using the ownership check, deposit balance, list of seedelfs. |
+| 6 | Balance | ⬜ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. |
 | 7 | Builder extraction + move in | ⬜ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ⬜ | Stealth mint (`util mint`) with giveme.my collateral. |
 | 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
@@ -36,6 +36,22 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-23: chunk 3 done** (`web-wallet/cardano-keys`).
+  - **What landed:** `seedelf-crypto/src/cardano.rs`, `CardanoAccount`.
+    - Icarus master key (CIP-3) via `pallas-wallet`, then `m/1852'/1815'/account'/role/index`.
+    - Base addresses for receive and change, plus the stake address, on either network.
+    - The account xpub.
+  - **WASM:** `CardanoAccount` and a `Network` enum. The module is now about 590 KB before `wasm-opt`; shrinking it is a job for chunk 4 or 11.
+  - **Verified against Lace's library.** `seedelf-crypto/tests/vectors/cardano_account.json` (12/15/24 words, accounts 0 and 1, preprod and mainnet) matches `@cardano-sdk/key-management` 0.29.13's `InMemoryKeyAgent` on all 80 values.
+    - I ran the check with a Node script that loaded the installed SDK from another local project.
+    - The Rust and WASM tests read the same file.
+  - **Decided this chunk:**
+    - "Deposit account" is renamed "Cardano account". For a restored Lace or Yoroi phrase, it is that wallet's account 0.
+    - v1 uses account `0'` only, but every function takes the index.
+    - The six Cardano-account rules are in [keys-and-accounts.md](keys-and-accounts.md#the-cardano-account). They include: coin selection skips 5 ADA pure-ADA UTxOs (someone's collateral), as the CLI does; and staking is left alone.
+    - One-time accounts move to the reserved account `24301'` (`0x5EED`). Account `1'` could be a real Lace account and would link one-time addresses back to the user.
+  - **Not done here:** signing (chunk 7) and address discovery (chunk 6).
+  - **Next:** chunk 4, the extension scaffold.
 - **2026-09-23: chunk 2 done** (`web-wallet/key-derivation`).
   - **What landed:** the v1 derivation, frozen, in `seedelf-crypto/src/derivation.rs`:
     - `parse_phrase`: checksum and case/whitespace normalization, with user-facing errors. New phrases are 24 words; restore accepts 12, 15 or 24, like Lace.
