@@ -384,10 +384,15 @@ pub async fn evaluate_transaction(tx_cbor: String, network_flag: bool) -> Result
         .header("content-type", "application/json")
         .json(&payload)
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
 
-    response.json().await
+    // Ogmios answers a transaction it can't evaluate (a script fails, an
+    // input is unknown) with 400 and a JSON-RPC `error` saying why. Pass
+    // that on to the caller instead of a bare status.
+    if response.status() == reqwest::StatusCode::BAD_REQUEST {
+        return response.json().await;
+    }
+    response.error_for_status()?.json().await
 }
 
 /// Submits a transaction body to witness collateral using a specified API endpoint.

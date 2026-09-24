@@ -135,6 +135,15 @@ fn token_name_truncates_long_labels() {
 }
 
 #[test]
+fn token_name_refuses_an_index_past_one_byte() {
+    // The policy prepends the index as one byte (lib/token_name.ak).
+    let name = transaction::seedelf_token_name("".to_string(), Some(&vec![input(0x11, 255)]));
+    assert_eq!(&hex::encode(name.unwrap())[8..10], "ff");
+    let err = transaction::seedelf_token_name("".to_string(), Some(&vec![input(0x11, 256)]));
+    assert!(err.unwrap_err().to_string().contains("output #256"));
+}
+
+#[test]
 fn token_name_rejects_missing_inputs() {
     assert!(transaction::seedelf_token_name("".to_string(), None).is_err());
     assert!(transaction::seedelf_token_name("".to_string(), Some(&vec![])).is_err());

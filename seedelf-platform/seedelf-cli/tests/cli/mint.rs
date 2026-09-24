@@ -19,7 +19,7 @@ async fn mint_creates_one_seedelf_and_conserves_value() {
         .mount_credential_utxos(vec![wallet_utxo(scenario.scalar, 1, 10_000_000, &[])])
         .await;
     // mint evaluates one spend per input plus the mint script.
-    scenario.mount_evaluate(2).await;
+    scenario.mount_evaluate_mint(1).await;
     scenario.mount_collateral().await;
     scenario.mount_submit().await;
 

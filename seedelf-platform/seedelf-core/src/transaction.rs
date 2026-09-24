@@ -123,6 +123,14 @@ pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Result<
             })
         })
         .context("Smallest Input Not Found")?;
+    // The policy prepends the index as a single byte, so it can't name a token
+    // after an output past #255; anything longer here would misalign the hex.
+    if smallest_input.txo_index > 255 {
+        anyhow::bail!(
+            "A seedelf can't be named after output #{} of a transaction (the contract takes a one-byte index)",
+            smallest_input.txo_index
+        );
+    }
     // format the tx index
     let formatted_index: String = format!("{:02x}", smallest_input.txo_index);
     let tx_hash_hex: String = hex::encode(smallest_input.tx_hash.0);

@@ -376,6 +376,28 @@ impl Scenario {
             .await;
     }
 
+    /// Mount Ogmios `evaluateTransaction` for a mint: one budget per spent
+    /// input, plus the seedelf policy's, as Ogmios labels them.
+    pub async fn mount_evaluate_mint(&self, spends: usize) {
+        let mut budgets: Vec<Value> = (0..spends)
+            .map(|i| {
+                json!({
+                    "validator": {"index": i, "purpose": "spend"},
+                    "budget": {"cpu": 250_000_000u64, "memory": 800_000u64}
+                })
+            })
+            .collect();
+        budgets.push(json!({
+            "validator": {"index": 0, "purpose": "mint"},
+            "budget": {"cpu": 90_000_000u64, "memory": 300_000u64}
+        }));
+        Mock::given(method("POST"))
+            .and(path("/api/v1/ogmios"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": budgets})))
+            .mount(&self.server)
+            .await;
+    }
+
     /// Mount the collateral-witness service with a dummy 64-byte signature.
     /// The CLI attaches the witness without verifying it.
     pub async fn mount_collateral(&self) {
