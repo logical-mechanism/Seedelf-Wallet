@@ -2,14 +2,20 @@
 //
 // Cardano account: its address as a QR code and text, and its stake address.
 // This is how a new wallet gets its first ADA.
-// Seedelf: the full names of your seedelfs, each with Copy. A name is what
-// people pay privately; without one, the screen says to create it first.
+// Seedelf: your seedelfs, each with its whole name on one line (cut in the
+// middle only when it doesn't fit), Copy, the ADA locked with it, and Remove.
+// A name is what people pay privately; without one, the screen says to
+// create it first.
 
 import type { Account, SeedelfInfo } from "../../shared/rpc";
 import { Callout } from "../components/Callout";
+import { CopyButton } from "../components/CopyButton";
 import { CopyField } from "../components/CopyField";
+import { TrashIcon } from "../components/Icons";
+import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import { QrCode } from "../components/QrCode";
 import { Screen } from "../components/Screen";
+import { formatAda } from "../format";
 
 export function Receive({ account, onBack }: { account: Account; onBack: () => void }) {
   return (
@@ -36,12 +42,17 @@ export function ReceiveSeedelf({
   onBack,
   onCreate,
   createTitle,
+  onRemove,
+  removeTitle,
 }: {
   seedelfs: SeedelfInfo[];
   onBack: () => void;
   onCreate: () => void;
   /** Why Create is disabled, if it is. */
   createTitle?: string;
+  onRemove: (seedelf: SeedelfInfo) => void;
+  /** Why Remove is disabled, if it is. */
+  removeTitle?: string;
 }) {
   if (seedelfs.length === 0) {
     return (
@@ -69,17 +80,38 @@ export function ReceiveSeedelf({
         Give out a seedelf's whole name: tags aren't unique. Anyone with a Seedelf wallet can pay it, and nobody can tell
         the payment is yours.
       </p>
-      <div className="stack" data-testid="receive-seedelfs">
-        {seedelfs.map((s) => (
-          <CopyField
-            key={s.assetName}
-            label={s.label ?? "Unnamed seedelf"}
-            value={s.assetName}
-            copyLabel={`Copy the name of ${s.label ?? "this seedelf"}`}
-            testId={`receive-seedelf-${s.assetName}`}
-          />
-        ))}
-      </div>
+      <section className="section" aria-labelledby="your-seedelfs">
+        <h2 id="your-seedelfs">Your seedelfs</h2>
+        <ul className="list" data-testid="seedelfs">
+          {seedelfs.map((s) => {
+            const tag = s.label ?? "this seedelf";
+            return (
+              <li key={s.assetName} className="list__row" title={s.assetName}>
+                <span className="list__name">{s.label ?? "Unnamed"}</span>
+                <span className="list__actions">
+                  <span className="list__value" title="Locked with it: Remove gives it back">
+                    {formatAda(s.lovelace)} ₳
+                  </span>
+                  <CopyButton value={s.assetName} label={`Copy the name of ${tag}`} />
+                  <button
+                    type="button"
+                    className="icon-button icon-button--small"
+                    aria-label={`Remove ${tag}`}
+                    onClick={() => onRemove(s)}
+                    disabled={!!removeTitle}
+                    title={removeTitle ?? "Remove this seedelf"}
+                  >
+                    <TrashIcon size={14} />
+                  </button>
+                </span>
+                <span className="list__full">
+                  <MiddleEllipsis text={s.assetName} testId={`seedelf-name-${s.assetName}`} />
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
       <Callout tone="privacy">
         A seedelf's name is public, and linked to whatever paid to create it. What's paid to it isn't.
       </Callout>

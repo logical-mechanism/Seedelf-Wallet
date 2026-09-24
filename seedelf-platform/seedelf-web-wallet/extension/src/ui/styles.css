@@ -545,8 +545,35 @@ main {
 
 .list__actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   justify-content: flex-end;
+}
+
+/* A second line across the whole row. */
+.list__full {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+}
+
+/* components/MiddleEllipsis.tsx: the head gives way, the tail never does. */
+.middle-ellipsis {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+  font: 11.5px/1.5 var(--mono);
+  color: var(--muted);
+}
+
+.middle-ellipsis__head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.middle-ellipsis__tail {
+  flex: none;
 }
 
 /* Text */

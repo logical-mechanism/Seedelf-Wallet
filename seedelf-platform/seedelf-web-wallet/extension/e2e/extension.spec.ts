@@ -236,8 +236,8 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await expect(page.getByTestId("seedelf-tokens")).toContainText("tUSDM");
   await expect(page.getByTestId("seedelf-tokens")).toContainText("1,234.56");
-  await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
-  await expect(page.getByTestId("seedelfs")).toContainText("1.5 ₳");
+  // Your seedelfs live in Receive, not on Home.
+  await expect(page.getByTestId("seedelfs")).toHaveCount(0);
 
   // The real preprod account of this public test phrase.
   await cardanoTab(page);
@@ -257,15 +257,23 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await snap(page, "receive");
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("tab", { name: "Seedelf" }).click();
-  await expect(page.getByTestId("seedelfs")).toBeVisible();
+  await expect(page.getByTestId("seedelf-lovelace")).toBeVisible();
   await snap(page, "home-balances");
 
-  // Seedelf's Receive: each seedelf's whole name, with Copy, and no requests.
+  // Seedelf's Receive: your seedelfs, each with the ADA locked with it, Copy,
+  // Remove, and its whole name on one line. No requests.
   const mine: string = ownedUtxos[2].asset_list[0].asset_name;
   await page.getByRole("button", { name: "Receive into Seedelf" }).click();
-  await expect(page.getByTestId("receive-seedelfs").getByTestId(`receive-seedelf-${mine}`)).toHaveText(mine);
-  await expect(page.getByTestId("receive-seedelfs")).toContainText("web-wallet");
-  await expect(page.getByRole("button", { name: "Copy the name of web-wallet" })).toBeVisible();
+  const seedelfs = page.getByTestId("seedelfs");
+  await expect(seedelfs).toContainText("web-wallet");
+  await expect(seedelfs).toContainText("1.5 ₳");
+  await expect(seedelfs.getByRole("button", { name: "Copy the name of web-wallet" })).toBeVisible();
+  await expect(seedelfs.getByRole("button", { name: "Remove web-wallet" })).toBeEnabled();
+  const name = page.getByTestId(`seedelf-name-${mine}`);
+  await expect(name).toHaveText(mine);
+  // At full size it all fits: nothing is cut.
+  const cut = () => name.locator(".middle-ellipsis__head").evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(await cut()).toBe(false);
   await snap(page, "receive-seedelf");
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
@@ -277,6 +285,13 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await popup.getByRole("button", { name: "Refresh" }).click();
   await expect.poll(() => koios.calls.length).toBe(6);
   await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
+
+  // In the narrow popup the name is cut in the middle, keeping its start and end.
+  await popup.getByRole("button", { name: "Receive into Seedelf" }).click();
+  const narrow = popup.getByTestId(`seedelf-name-${mine}`);
+  await expect(narrow).toHaveText(mine);
+  expect(await narrow.locator(".middle-ellipsis__head").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  await expect(narrow.locator(".middle-ellipsis__tail")).toHaveText(mine.slice(-6));
 });
 
 test("receive into Seedelf without a seedelf says to create one first", async ({ context }) => {
@@ -777,7 +792,7 @@ test("create a seedelf from the Seedelf balance: tag rules, review, and nothing 
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
 });
 
 test("send to a seedelf: paste its name, see it found, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
@@ -788,13 +803,15 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
 
-  // Each of your seedelfs has its full name one click away, to give out or paste.
+  // Each of your seedelfs has its full name in Receive, to give out or paste.
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Receive into Seedelf" }).click();
   const copy = page.getByRole("button", { name: "Copy the name of web-wallet" });
   await copy.click();
   await expect(copy).toHaveText("Copied");
   const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
   expect(await clipboard()).toBe(mine);
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Send to a seedelf" }).click();
 
   // Only a whole name is looked up; pasted in capitals with spaces, it still is one.
@@ -900,10 +917,15 @@ test("remove a seedelf: where its ADA goes, review, and nothing sent without giv
   koios.evaluation = withdrawPreprod.remove.evaluation;
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
-  await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Receive into Seedelf" }).click();
   await page.getByRole("button", { name: "Remove web-wallet" }).click();
 
   await expect(page.getByRole("heading", { name: "Remove web-wallet" })).toBeVisible();
+  // Back returns to your seedelfs, and Remove again.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
+  await page.getByRole("button", { name: "Remove web-wallet" }).click();
   const note = page.getByTestId("remove-to-note");
   await expect(note).toContainText("links nothing new");
   await page.getByRole("button", { name: "Seedelf balance" }).click();
@@ -975,13 +997,18 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
     ["Send to a seedelf", "transfer"],
     ["Withdraw", "withdraw"],
     ["Create a seedelf", "create-seedelf"],
-    ["Remove web-wallet", "remove"],
   ] as const) {
     await popup.getByRole("button", { name: button }).click();
     await expect(popup.getByRole("heading", { level: 1 })).toBeVisible();
     await shot(name);
     await back();
   }
+  await popup.getByRole("button", { name: "Receive into Seedelf" }).click();
+  await popup.getByRole("button", { name: "Remove web-wallet" }).click();
+  await expect(popup.getByRole("heading", { level: 1 })).toBeVisible();
+  await shot("remove");
+  await back();
+  await back();
   expect(koios.submitted).toHaveLength(0);
 
   await popup.getByRole("button", { name: "Activity" }).click();

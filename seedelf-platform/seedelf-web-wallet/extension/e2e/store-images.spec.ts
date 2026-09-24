@@ -104,7 +104,7 @@ test("the Web Store listing's images", async ({ context }) => {
   const back = () => popup.getByRole("button", { name: "Back", exact: true }).click();
   const shots: Array<[Buffer, string, string]> = [];
 
-  await expect(popup.getByTestId("seedelfs")).toContainText("web-wallet");
+  await expect(popup.getByTestId("seedelf-tokens")).toContainText("tUSDM");
   await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
   shots.push([
     await shoot(),

@@ -2,7 +2,7 @@
 // ending when the network confirms it (see lib.mjs). Each takes the
 // wallet from openWallet() and the flow's arguments, and returns the
 // transaction hash.
-import { balances, confirmed, log, reviewAndSend, seedelfName } from "./lib.mjs";
+import { balances, confirmed, log, reviewAndSend, seedelfName, yourSeedelfs } from "./lib.mjs";
 
 const home = (page) => page.getByRole("tab", { name: "Seedelf" }).click();
 
@@ -16,7 +16,7 @@ export const FLOWS = {
     await page.getByRole("button", { name: from === "account" ? "Cardano account" : "Seedelf balance" }).click();
     await reviewAndSend(page, "mint-review", `mint-${from}`);
     const txHash = await confirmed(page, "Seedelf created");
-    await page.getByTestId("seedelfs").getByText(tag, { exact: true }).waitFor({ timeout: 60_000 });
+    await yourSeedelfs(page, (list) => list.getByText(tag, { exact: true }).waitFor({ timeout: 60_000 }));
     return txHash;
   },
 
@@ -79,6 +79,7 @@ export const FLOWS = {
   async remove({ page }, tag = "live-mint", to = "account") {
     if (to !== "account" && to !== "seedelf") throw new Error("remove: send the freed ADA to account or seedelf");
     await home(page);
+    await page.getByRole("button", { name: "Receive into Seedelf" }).click();
     await page.getByRole("button", { name: `Remove ${tag}`, exact: true }).click();
     await page.getByRole("button", { name: to === "account" ? "Cardano account" : "Seedelf balance" }).click();
     await reviewAndSend(page, "remove-review", `remove-${to}`);

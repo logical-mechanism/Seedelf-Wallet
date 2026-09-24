@@ -1,7 +1,7 @@
 // Home, in two tabs. Seedelf: the Seedelf balance with Receive (your
-// seedelfs' names), Send, Withdraw and Create, its tokens and your seedelfs.
-// Cardano account: the account's balance and tokens, Receive, Send and Move
-// in. Until the wallet has a seedelf and a Seedelf
+// seedelfs: their names, and Remove), Send, Withdraw and Create, and its
+// tokens. Cardano account: the account's balance and tokens, Receive, Send
+// and Move in. Until the wallet has a seedelf and a Seedelf
 // balance, a checklist shows the order that keeps them apart: fund the
 // account, create the seedelf, then move in (privacy.md, mint first).
 // Balances come from the worker's last reading; it reads the chain again
@@ -15,7 +15,6 @@ import type { Account, Balances, PendingTx, SeedelfInfo } from "../../shared/rpc
 import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
-import { CopyButton } from "../components/CopyButton";
 import { Splash, useSplash } from "../components/Splash";
 import {
   ChevronRightIcon,
@@ -29,7 +28,6 @@ import {
   SendIcon,
   SpinnerIcon,
   SproutIcon,
-  TrashIcon,
   WithdrawIcon,
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
@@ -153,19 +151,28 @@ export function Home() {
     setRemoving(undefined);
   };
   const home = () => setScreen("home");
+  // Remove is reached from Receive, and Back returns there.
+  if (removing) {
+    return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
+  }
   if (screen === "receive" && account) return <Receive account={account} onBack={home} />;
   if (screen === "receive-seedelf") {
-    const create = () => setScreen("create");
-    return <ReceiveSeedelf seedelfs={seedelfs} onBack={home} onCreate={create} createTitle={canCreate ? undefined : createTitle} />;
+    return (
+      <ReceiveSeedelf
+        seedelfs={seedelfs}
+        onBack={home}
+        onCreate={() => setScreen("create")}
+        createTitle={canCreate ? undefined : createTitle}
+        onRemove={setRemoving}
+        removeTitle={watching ? BUSY : undefined}
+      />
+    );
   }
   if (screen === "move-in" && balances) return <MoveIn cardano={balances.cardano} onCancel={home} onSent={sent} />;
   if (screen === "send" && balances) return <CardanoSend cardano={balances.cardano} onCancel={home} onSent={sent} />;
   if (screen === "create" && balances) return <CreateSeedelf balances={balances} onCancel={home} onSent={sent} />;
   if (screen === "transfer" && balances) return <Transfer seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
   if (screen === "withdraw" && balances) return <Withdraw seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
-  if (removing) {
-    return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
-  }
   if (activityOf) {
     const pendingHash = watching ? pending?.txHash : undefined;
     return <Activity of={activityOf} pendingHash={pendingHash} onBack={() => setActivityOf(undefined)} />;
@@ -267,35 +274,6 @@ export function Home() {
                   testId="seedelf-tokens"
                   onViewAll={() => setTokensOf("seedelf")}
                 />
-              </section>
-            )}
-
-            {seedelfs.length > 0 && (
-              <section className="section" aria-labelledby="your-seedelfs">
-                <h2 id="your-seedelfs">Your seedelfs</h2>
-                <ul className="list" data-testid="seedelfs">
-                  {seedelfs.map((s) => (
-                    <li key={s.assetName} className="list__row" title={s.assetName}>
-                      <span className="list__name">{s.label ?? "Unnamed"}</span>
-                      <span className="list__value">{formatAda(s.lovelace)} ₳</span>
-                      <code className="list__sub">{shortHex(s.assetName, 12, 6)}</code>
-                      <span className="list__actions">
-                        <CopyButton value={s.assetName} label={`Copy the name of ${s.label ?? "this seedelf"}`} />
-                        <button
-                          type="button"
-                          className="icon-button icon-button--small"
-                          aria-label={`Remove ${s.label ?? "this seedelf"}`}
-                          onClick={() => setRemoving(s)}
-                          disabled={watching}
-                          title={watching ? BUSY : "Remove this seedelf"}
-                        >
-                          <TrashIcon size={14} />
-                        </button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="note">Copy a seedelf's full name to give to anyone who wants to pay you.</p>
               </section>
             )}
 

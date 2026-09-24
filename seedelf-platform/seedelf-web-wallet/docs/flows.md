@@ -42,12 +42,11 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
   - "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
 - **Home** has two tabs, and under them when the chain was last read, and **Refresh**.
   - **Seedelf:**
-    - the **Seedelf balance**: ADA in the contract UTxOs this wallet owns, with round **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf) actions;
-    - its tokens: the first five (fungible first, by name, then NFTs) and **View all**. Tapping a token opens its details;
-    - **your seedelfs**, with their tags, the ADA locked with each, a **Copy** button for each full name (to give to anyone who wants to pay you, or to paste into Send to a seedelf) and **Remove**.
+    - the **Seedelf balance**: ADA in the contract UTxOs this wallet owns, with round **Receive** (your seedelfs), **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf) actions;
+    - its tokens: the first five (fungible first, by name, then NFTs) and **View all**. Tapping a token opens its details.
 
     The base register's public value isn't shown: a seedelf's name is what people pay, and nothing else takes the public value.
-  - **Cardano account:** its ADA, how many addresses it has used, **Receive** and **Move in**, and its tokens (as on the Seedelf tab). Until a seedelf exists, a note says to create one before moving money in.
+  - **Cardano account:** its ADA, how many addresses it has used, **Receive**, **Send** and **Move in**, and its tokens (as on the Seedelf tab). Until a seedelf exists, a note says to create one before moving money in.
   - **While the first reading loads** (after an unlock, a restore or a create), a splash covers Home instead of empty balances: the emblem on navy with a teal arc circling it. It fades out into the wallet when the balances arrive. A cached reading shows Home at once, and the splash gives up after about 8 s, so a slow Koios can't hide Refresh or an error.
   - **Tokens** (from **View all**): one balance's tokens in two tabs, **Tokens** and **NFTs**, with a search (name, ticker, policy ID, fingerprint) and a sort (name or amount), 50 rows at a time.
     - **A token's details** open in a modal, centred and never taller than the window: the amount, the policy ID, the asset name and the fingerprint, each with Copy.
@@ -91,12 +90,14 @@ Anything that can pay a Cardano address can fund the wallet. The screen also say
 
 ## Receive (Seedelf)
 
-**Receive** on the Seedelf tab (chunk 12) lists your seedelfs, each by its tag with its whole name and **Copy**, so the name is one tap from Home rather than at the bottom of it. It asks Koios nothing: the names come from the last balance reading.
+**Receive** on the Seedelf tab (chunk 12) is where your seedelfs live: each by its tag, with the ADA locked with it, **Copy** for its whole name (to give to anyone who wants to pay you, or to paste into Send to a seedelf) and **Remove**. It asks Koios nothing: the list comes from the last balance reading.
+
+- The whole name sits on one line under the tag. When it doesn't fit, as in the popup, it's cut in the middle (`5eed0e1f7765…ababab`), keeping the last six characters; the cut moves with the width (`MiddleEllipsis`, CSS only). Copy and the tooltip always give all of it.
 
 - It says to give out the whole name, since tags aren't unique, and that nobody can tell a payment to it is yours.
 - Its privacy note: the name is public, and linked to whatever paid to create it; what's paid to it isn't.
 - With no seedelf yet, it says to create one first, with **Create a seedelf** (disabled, with the reason, while the account can't pay for it).
-- *Your seedelfs* at the bottom of Home stays, for the ADA locked with each and **Remove**.
+- Home no longer lists them (it did until chunk 12). Back from a removal returns here.
 
 ## Move in (Cardano account → Seedelf)
 
@@ -164,7 +165,7 @@ The steps:
 5. **Send.**
    - Account: submits the transaction signed at review.
    - Stealth: only now does giveme.my see it. WebAssembly checks giveme.my's signature and adds it with the one-time key's.
-   - Either way, exactly the reviewed transaction is submitted. A banner follows it to "Seedelf created", and it's listed under **Your seedelfs**.
+   - Either way, exactly the reviewed transaction is submitted. A banner follows it to "Seedelf created", and it's listed in the Seedelf tab's **Receive**.
 
 Details:
 
@@ -218,7 +219,7 @@ Built in chunk 10, by the same core code as the CLI's `sweep` and `remove` (`see
 
 ### Remove a seedelf
 
-1. **Remove** on a row of *Your seedelfs*.
+1. **Remove** on a seedelf's row in the Seedelf tab's **Receive**.
 2. **Send what's freed to:**
    - **Cardano account** (the default), its receive address `0/0`. A seedelf the account paid for (the default since chunk 8b) is linked to it anyway, so this links nothing new.
    - **Seedelf balance**, under a fresh copy of your register. This is for a seedelf you minted from the Seedelf balance. For one the account paid for, it ties the seedelf's name to that new UTxO, and to whatever it's later spent with.
