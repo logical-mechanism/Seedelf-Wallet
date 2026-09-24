@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
 import { SESSION_PENDING } from "../src/background/pending";
-import { ADA_HANDLE_POLICY, SESSION_REMOVE, SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
+import { ADA_HANDLE_POLICY } from "../src/background/destination";
+import { SESSION_REMOVE, SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors, withdrawPreprod } from "./fakes";
 
@@ -109,9 +110,19 @@ describe("withdraw", () => {
     expect(summary.tokens).toHaveLength(1);
   });
 
+  it("raises a short amount to the least the payment needs", async () => {
+    const t = await unlocked();
+    t.koios.evaluation = withdrawPreprod.amount.evaluation;
+    const short = await t.withdraw.build("preprod", THEIRS, "500000", []);
+    expect(short.lovelace).toBe(short.minimum);
+    expect(BigInt(short.minimum!)).toBeGreaterThan(500_000n);
+    const token = await t.withdraw.build("preprod", THEIRS, "0", [{ ...TUSDM[0]!, quantity: "1" }]);
+    expect(token.lovelace).toBe(token.minimum);
+    expect(BigInt(token.minimum!)).toBeGreaterThan(BigInt(short.minimum!));
+  });
+
   it("explains what stops a withdrawal", async () => {
     const t = await unlocked();
-    await expect(t.withdraw.build("preprod", THEIRS, "500000", [])).rejects.toThrow("needs at least");
     await expect(t.withdraw.build("preprod", THEIRS, "30000000", [])).rejects.toThrow("Not enough ADA");
     await expect(t.withdraw.build("preprod", "nope", "5000000", [])).rejects.toThrow("isn't a Cardano address");
     expect(t.koios.calls.map((c) => c.path)).not.toContain("ogmios");

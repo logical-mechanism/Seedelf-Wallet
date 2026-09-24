@@ -1,6 +1,7 @@
 // Send to a seedelf: pay someone's seedelf from the Seedelf balance. The
 // recipient is pasted by full name (tags aren't unique), looked up in the
-// wallet contract, and shown before anything is built. The worker builds the
+// wallet contract, and shown before anything is built. With tokens, the
+// amount may stay empty: only the ADA they need goes. The worker builds the
 // transfer, with Ogmios measuring its spends, and nothing is sent until the
 // user has reviewed it and pressed Send.
 
@@ -9,13 +10,13 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { Balances, PendingTx, SeedelfLookup, TransferSummary } from "../../shared/rpc";
 import { SEEDELF_NAME_RULE, seedelfName } from "../../shared/seedelf-name";
 import { call } from "../background";
-import { AdaInput, RoundNote } from "../components/AdaInput";
+import { AdaInput, lovelaceToSend, MinimumHint, MinimumNote, RoundNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { ContactEditor, ContactPicker, useContacts } from "../components/Contacts";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, parseAda, shortHex, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, formatQuantity, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { tokenLabel } from "../tokens";
 
@@ -63,13 +64,13 @@ export function Transfer({
     };
   }, [name]);
 
-  const lovelace = parseAda(amount);
+  const tokens = tokenChoices(seedelf.tokens, tokenAmounts);
+  const withTokens = tokens.sent.length > 0;
+  const lovelace = lovelaceToSend(amount, withTokens);
   const round = typeof lovelace === "string" && BigInt(lovelace) % 1_000_000n === 0n;
   // The builder decides exactly (fee, change); this catches the obvious case early.
   const tooMuch = typeof lovelace === "string" && BigInt(lovelace) > BigInt(seedelf.lovelace);
-  const tokens = tokenChoices(seedelf.tokens, tokenAmounts);
-  const ready =
-    found.state === "found" && typeof lovelace === "string" && lovelace !== "0" && !tooMuch && tokens.ok;
+  const ready = found.state === "found" && typeof lovelace === "string" && !tooMuch && tokens.ok;
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -130,6 +131,7 @@ export function Transfer({
           <Row label="Back to your Seedelf balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="Seedelf UTxOs spent" value={String(summary.inputs)} />
         </ReviewRows>
+        <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
         {summary.toSelf && (
           <Callout tone="warn" testId="transfer-to-self">
             This seedelf is yours: the payment comes back to your Seedelf balance, less the fee.
@@ -221,14 +223,21 @@ export function Transfer({
 
       <div className="field">
         <label htmlFor="transfer-amount">Amount</label>
-        <AdaInput id="transfer-amount" value={amount} onChange={setAmount} autoFocus={false} />
+        <AdaInput
+          id="transfer-amount"
+          value={amount}
+          onChange={setAmount}
+          placeholder={withTokens ? "Minimum" : "0"}
+          autoFocus={false}
+        />
         {tooMuch && (
           <p className="field-note" data-testid="transfer-too-much">
             That's more than the {formatAda(seedelf.lovelace)} ₳ in your Seedelf balance.
           </p>
         )}
       </div>
-      <RoundNote warn={!!lovelace && !round}>
+      {withTokens && <MinimumHint />}
+      <RoundNote warn={!!lovelace && lovelace !== "0" && !round}>
         Round amounts, like 100 ₳, are harder to match to the move-in that paid for them.
       </RoundNote>
 

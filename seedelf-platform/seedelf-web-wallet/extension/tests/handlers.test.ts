@@ -11,7 +11,7 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(): Context {
-  const { wallet, balances, moveIn, mint, transfer, withdraw, pending, contacts, activity } = testBalances();
+  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity } = testBalances();
   return {
     wasm: loadTestWasm(),
     wallet,
@@ -20,6 +20,7 @@ function context(): Context {
     mint,
     transfer,
     withdraw,
+    send,
     pending,
     contacts,
     activity,
@@ -110,7 +111,15 @@ describe("handlers", () => {
     expect(isMessage({ type: "transfer-lookup", to: "5eed0e1f" })).toBe(true);
     expect(isMessage({ type: "transfer-build", to: "", lovelace: "1", tokens: [] })).toBe(true);
     expect(isMessage({ type: "transfer-submit", txHash: "ab" })).toBe(true);
-    for (const type of ["withdraw-resolve", "withdraw-build", "withdraw-submit", "remove-build", "remove-submit"]) {
+    for (const type of [
+      "resolve-destination",
+      "withdraw-build",
+      "withdraw-submit",
+      "remove-build",
+      "remove-submit",
+      "send-build",
+      "send-submit",
+    ]) {
       expect(isMessage({ type })).toBe(true);
     }
     expect(isMessage({ type: "preview" })).toBe(false);

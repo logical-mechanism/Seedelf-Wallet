@@ -43,6 +43,8 @@ function title(e: ActivityEntry, of: Of): string {
       return of === "seedelf" ? "Withdrew" : "Withdrawn from Seedelf";
     case "remove":
       return "Removed a seedelf";
+    case "send":
+      return "Sent";
   }
 }
 

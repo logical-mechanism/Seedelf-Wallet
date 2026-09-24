@@ -51,6 +51,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
 - **Exit:** withdrawing to where the money came from re-links the chain. This is the second implicit tracking method in the root README. Withdraw somewhere else, or keep the funds in Seedelf.
   - The withdraw form says so. It warns when the destination is this wallet's own Cardano account (any address carrying its staking key): that links the account to the Seedelf UTxOs spent, and so to whoever paid them in.
   - **Max** spends up to 20 UTxOs in one transaction, which ties them together (see *Co-spending*).
+- **Sending from the Cardano account** (chunk 12) is an ordinary Cardano payment: anyone can see it came from the account, and so from whoever funded it. It doesn't touch Seedelf. The form says so, and that paying from the Seedelf balance instead avoids the link.
 - **Removing a seedelf:** its ADA goes somewhere, and that's linked to the seedelf's name.
   - By default it goes to the Cardano account, which a mint-first seedelf is linked to already.
   - Back into the Seedelf balance, it ties the name to that new UTxO, and to whatever it's later spent with. That's the right place only for a seedelf the Seedelf balance paid for (a stealth mint).
@@ -73,7 +74,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - The wallet only reads the chain when Home opens (at most once a minute) or on Refresh. It never polls in the background.
   - **Token names and logos come from a list inside the extension** (`src/tokens/`, refreshed at each release). Asking Koios about the tokens in the Seedelf balance would tell it which contract UTxOs are yours, so the wallet never does.
   - **Finding a recipient** uses the contract as the balance reading sees it, and picks the seedelf's UTxO in the extension. The wallet never asks Koios about the recipient's token (`asset_utxos` and the like): that would tell Koios exactly who is being paid.
-  - **An ADA Handle can't be found that way:** withdrawing to `$name` asks Koios who holds that handle (`asset_nft_address`), so Koios learns it. The transaction names the address anyway once it's submitted. Pasting the address instead asks Koios nothing.
+  - **An ADA Handle can't be found that way:** withdrawing or sending to `$name` asks Koios who holds that handle (`asset_nft_address`), so Koios learns it. The transaction names the address anyway once it's submitted. Pasting the address instead asks Koios nothing.
 - **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk, and it's wiped on lock.
   - **Contacts** (who the user pays) and the Seedelf history are kept on disk, but **never unencrypted** (decided in chunk 12): sealed under a key derived from the phrase, unreadable while locked, deleted with the wallet. Saving or checking a contact asks no one anything.
 

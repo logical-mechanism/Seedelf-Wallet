@@ -108,10 +108,22 @@ describe("move-in", () => {
     expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
   });
 
+  it("raises a short amount to the least the deposit needs", async () => {
+    const t = await unlocked();
+    const short = await t.moveIn.build("preprod", "500000", []);
+    expect(short.lovelace).toBe(short.minimum);
+    expect(BigInt(short.minimum!)).toBeGreaterThan(500_000n);
+    // Only a token: the ADA it needs, and no more.
+    const token = await t.moveIn.build("preprod", "0", [{ ...TUSDM, quantity: "1" }]);
+    expect(token.lovelace).toBe(token.minimum);
+    expect(BigInt(token.minimum!)).toBeGreaterThan(BigInt(short.minimum!));
+    const max = await t.moveIn.build("preprod", null, []);
+    expect(max.minimum).toBeNull();
+  });
+
   it("explains an impossible move and needs the wallet unlocked", async () => {
     const t = await unlocked();
     await expect(t.moveIn.build("preprod", "999999999999999", [])).rejects.toThrow("Not enough ADA");
-    await expect(t.moveIn.build("preprod", "500000", [])).rejects.toThrow("needs at least");
     await t.moveIn.build("preprod", "5000000", []);
     await t.wallet.lock();
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();

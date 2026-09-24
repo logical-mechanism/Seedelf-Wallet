@@ -614,6 +614,69 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   expect(koios.submitted).toHaveLength(0);
 });
 
+test("send from the Cardano account: a token with only the ADA it needs, review, send, then watch it confirm", async ({
+  context,
+  koios,
+}) => {
+  const theirs = vector(15).preprod.receive_0;
+  koios.nfts.set(`f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a.${Buffer.from("bob").toString("hex")}`, theirs);
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Send from the Cardano account" }).click();
+
+  // An address or a handle; the account's own address is flagged.
+  const to = page.getByLabel("To", { exact: true });
+  await to.fill(vector(12).preprod.receive_0);
+  await expect(page.getByTestId("send-own")).toContainText("your own Cardano account");
+  await to.fill("$bob");
+  await expect(page.getByTestId("send-to-note")).toContainText("$bob is");
+  await expect(page.getByTestId("send-own")).toHaveCount(0);
+
+  // Nothing to send yet. A token alone is enough: the amount can stay empty.
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  await expect(page.getByTestId("minimum-hint")).toHaveCount(0);
+  await addTokens(page, ["tUSDM"]);
+  await page.getByLabel("Amount of tUSDM").fill("1000");
+  await expect(page.getByTestId("minimum-hint")).toContainText("only the ADA they need");
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveAttribute("placeholder", "Minimum");
+  await snap(page, "send-form");
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const review = page.getByTestId("send-review");
+  await expect(review).toContainText("To$bob");
+  await expect(review).toContainText("1,000 tUSDM");
+  await expect(review).toContainText("Back to your Cardano account");
+  await expect(page.getByTestId("minimum-note")).toContainText("is the least ADA the network accepts with these tokens");
+  await expect(page.getByTestId("minimum-note")).not.toContainText("Raised");
+  await snap(page, "send-review");
+  expect(koios.submitted).toHaveLength(0);
+
+  // Too little ADA is raised to that least, and the review says from what.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByLabel("Amount", { exact: true }).fill("0.5");
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByTestId("minimum-note")).toContainText("Raised from 0.5 ₳");
+
+  // Signed at review: Send only submits, and giveme.my is never asked.
+  await page.getByRole("button", { name: "Send" }).click();
+  const banner = page.getByTestId("pending-tx");
+  await expect(banner).toContainText("Payment sent. Waiting for the network");
+  expect(koios.submitted).toHaveLength(1);
+  expect(koios.collateralAsked).toBe(0);
+  await expect(page.getByRole("button", { name: "Send from the Cardano account" })).toBeDisabled();
+  // Reading $bob once as typed; each review read it again, and the account; then the submit.
+  const review1 = ["asset_nft_address", "account_addresses", "account_utxos", "epoch_params"];
+  const sent = koios.calls.slice(reads, koios.calls.indexOf("submittx") + 1);
+  expect(sent.sort()).toEqual(["asset_nft_address", ...review1, ...review1, "submittx"].sort());
+
+  koios.confirmations = 1;
+  const popup = await openApp(context, "popup");
+  await expect(popup.getByTestId("pending-tx")).toContainText("Payment confirmed");
+});
+
 test("create a seedelf from the Cardano account: review, send, then watch it confirm", async ({ context, koios }) => {
   koios.evaluation = accountMintPreprod.evaluation;
   const page = await openApp(context);
@@ -878,6 +941,11 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
   await expect(popup.getByTestId("move-in-review")).toBeVisible();
   await shot("move-in-review");
   await back();
+  await back();
+  await popup.getByRole("button", { name: "Send from the Cardano account" }).click();
+  await addTokens(popup, ["tUSDM"]);
+  await popup.getByLabel("Amount of tUSDM").fill("1000");
+  await shot("send");
   await back();
 
   await popup.getByRole("tab", { name: "Seedelf" }).click();

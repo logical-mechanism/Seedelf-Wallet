@@ -6,6 +6,7 @@
 flowchart LR
   Ext["Exchange or<br/>other wallet"] -- "pay" --> Dep["Cardano account"]
   Dep -- "move in" --> S["Seedelf balance<br/>(wallet contract)"]
+  Dep -- "send" --> Addr
   S -- "transfer" --> Other["Any seedelf"]
   S -- "withdraw" --> Addr["Any address"]
   S -- "out" --> OT["One-time account"]
@@ -96,6 +97,7 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
 - **What the user chooses:**
   - An **ADA amount, or Max**.
   - **Tokens to bring along:** **Add tokens** opens a searchable picker; each picked token gets an amount box, with Max for all of it. The rest of a token stays in the account. Send and Withdraw pick tokens the same way.
+  - **The minimum ADA is worked out.** With tokens, the amount can stay empty (the box says "Minimum"): only the least ADA the deposit needs moves. An amount below that least, with or without tokens, is raised to it. The review says so ("1.17 ₳ is the least ADA the network accepts with these tokens", or "Raised from 0.5 ₳: …"). Send and Withdraw work the same way. Lace instead shows the minimum as an error and waits for the user to type it.
   - The form nudges towards round amounts, which are harder to match to a later withdrawal.
 - **Which UTxOs are spent:**
   - Every UTxO holding a token being brought along.
@@ -116,6 +118,18 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
 - **Signing:** only the Cardano account's payment keys sign, one signature per key, inside WebAssembly.
 - **No seedelf needed.** No script runs and no collateral is needed.
 - **Privacy:** it links the Cardano account to *some* register UTxOs, but not to any seedelf name. The form says so.
+
+## Send (Cardano account → any address)
+
+An ordinary Cardano payment from the account, so a user needn't open another wallet to pay from it. Built by `seedelf-core::build::account_send`, which shares the move-in's UTxO choice, change and signing. Added in chunk 12.
+
+1. **Send** on the Cardano account tab, between Receive and Move in. It's disabled while the account is empty or a transaction is still confirming.
+2. **To:** an address or an ADA Handle, read and checked exactly as for a withdrawal, with Contacts. Your own account's address gets a note: the payment comes back, less the fee.
+3. **What's sent:** an ADA amount or Max, and tokens from the picker. The minimum ADA is worked out as for a move-in. **Max** is the move-in's: everything but the fee and what the tokens you keep need, and 5 ₳ UTxOs stay put. It pays one output; the change goes back to `0/0`.
+4. **Review:** where it goes, the amount and tokens, the fee, the change and how many UTxOs pay. The account's keys sign here, inside WebAssembly.
+5. **Send** submits exactly the reviewed transaction. No script runs, so no collateral and no giveme.my. A banner follows it to "Payment confirmed". It's listed in the Cardano account's Activity from Koios, not in the Seedelf history.
+
+**Privacy:** it's paid in the open, from the account. The form says so, and that paying from Seedelf instead avoids the link.
 
 ## Create a seedelf
 
@@ -159,7 +173,7 @@ This is the equivalent of the CLI's `transfer`, built by the same core code (`se
    - The wallet looks the name up in the whole wallet contract, the query a balance reading already makes, and shows "Found: *tag* · 5eed0e1f…", or "No seedelf with that name on preprod."
    - Koios is never asked about the recipient's token (see [privacy.md](privacy.md#known-links)).
    - **Your own seedelf** is allowed, with a warning: the payment comes back to your Seedelf balance, less the fee.
-3. **What's sent:** an ADA amount (the move-in rules: 6 decimals, the supply cap, "more than you have"), and optionally part of any token in the Seedelf balance, each with its own amount.
+3. **What's sent:** an ADA amount (the move-in rules: 6 decimals, the supply cap, "more than you have", and the minimum worked out), and optionally part of any token in the Seedelf balance, each with its own amount.
    - One recipient per transfer, and no Max: withdraw (chunk 10) is for sending everything.
    - The form nudges towards round amounts, and says that sending right after moving in is easy to match by timing.
 4. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
@@ -187,7 +201,7 @@ Built in chunk 10, by the same core code as the CLI's `sweep` and `remove` (`see
    - Only a normal address on this network is accepted: not a script (its output would carry no datum), not a stake address, not the other network. The same goes for the address a handle resolves to.
    - **Your own Cardano account gets a warning:** withdrawing there links the money back to it, and to whoever paid it into Seedelf. The wallet recognizes any address carrying the account's staking key, as every address a normal wallet shows for the account does.
 3. **What's sent:**
-   - An **amount** (the move-in rules: 6 decimals, the supply cap, "more than you have"), plus optional token amounts, as for a transfer. The change goes back into the Seedelf balance under fresh copies of your register.
+   - An **amount** (the move-in rules: 6 decimals, the supply cap, "more than you have", and the minimum worked out), plus optional token amounts, as for a transfer. The change goes back into the Seedelf balance under fresh copies of your register.
    - Or **Max:** everything, up to 20 UTxOs at once (a transaction fits about that many script spends), with every token, less the fee. The largest go first, and the review says how many are left for another withdrawal. The form notes that spending them together ties them to each other.
    - The form nudges towards round amounts, and says that withdrawing to where the money came from links it back.
 4. **Review:** where it goes (the handle and its address, full on hover), the amount or "Everything", the tokens, the fee, the change, and how many UTxOs pay. The fee is about 0.27 ₳ for two inputs.

@@ -13,6 +13,7 @@ import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
 import { PrivateStore } from "./private-store";
+import { SendService } from "./send";
 import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { chromeArea } from "./storage";
@@ -57,6 +58,7 @@ function getContext(): Promise<Context> {
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
     const withdraw = new WithdrawService(spends);
+    const send = new SendService(spends);
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
     return {
       wasm,
@@ -66,6 +68,7 @@ function getContext(): Promise<Context> {
       mint,
       transfer,
       withdraw,
+      send,
       pending,
       contacts,
       activity,

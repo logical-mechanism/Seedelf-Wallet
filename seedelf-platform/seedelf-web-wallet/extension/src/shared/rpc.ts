@@ -102,6 +102,8 @@ export interface MoveInSummary {
   fee: string;
   /** Into Seedelf. */
   lovelace: string;
+  /** The least the deposit could carry: an amount below it was raised to it. Null for Max. */
+  minimum: string | null;
   tokens: Array<TokenRef & { quantity: string }>;
   /** How many new contract UTxOs hold it. */
   depositOutputs: number;
@@ -157,6 +159,8 @@ export interface TransferSummary {
   /** Paying one of your own seedelfs: the payment comes back to your Seedelf balance. */
   toSelf: boolean;
   lovelace: string;
+  /** The least the payment could carry: an amount below it was raised to it. */
+  minimum: string;
   tokens: TokenQuantity[];
   fee: { size: string; compute: string; scriptReference: string; total: string };
   /** Back into the Seedelf balance. */
@@ -185,6 +189,8 @@ export interface WithdrawSummary extends WithdrawDestination {
   max: boolean;
   /** What the address receives. */
   lovelace: string;
+  /** The least the payment could carry: an amount below it was raised to it. Null for Max. */
+  minimum: string | null;
   tokens: TokenQuantity[];
   fee: { size: string; compute: string; scriptReference: string; total: string };
   /** Back into the Seedelf balance: nothing, for Max. */
@@ -195,6 +201,25 @@ export interface WithdrawSummary extends WithdrawDestination {
   inputs: number;
   /** Seedelf UTxOs Max left for another withdrawal (it takes 20 at most). */
   left: number;
+}
+
+/** A built and signed payment from the Cardano account, waiting for the user to send it. Amounts are lovelace strings. */
+export interface SendSummary extends WithdrawDestination {
+  network: NetworkName;
+  txHash: string;
+  /** The most possible (Max), rather than an amount. */
+  max: boolean;
+  /** What the address receives. */
+  lovelace: string;
+  /** The least the payment could carry: an amount below it was raised to it. Null for Max. */
+  minimum: string | null;
+  tokens: TokenQuantity[];
+  fee: string;
+  /** Back to the Cardano account's receive address. */
+  changeLovelace: string;
+  changeTokens: number;
+  /** How many of the account's UTxOs pay for it. */
+  inputs: number;
 }
 
 /** Where a removed seedelf's ADA goes: the Cardano account's `0/0`, or back into the Seedelf balance. */
@@ -215,7 +240,7 @@ export interface RemoveSummary {
 
 /** A submitted transaction the wallet is watching. */
 export interface PendingTx {
-  kind: "move-in" | "mint" | "transfer" | "withdraw" | "remove";
+  kind: "move-in" | "mint" | "transfer" | "withdraw" | "remove" | "send";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -240,7 +265,7 @@ export interface Requests {
   /** The last reading, or a new one if there is none or `refresh` is set. */
   balances: { payload: { refresh?: boolean }; result: Balances };
   wordlist: { payload: None; result: string[] };
-  /** Builds and signs a move-in without submitting it. `lovelace` null moves the most possible. */
+  /** Builds and signs a move-in without submitting it. `lovelace` null moves the most possible; below what the deposit needs, it's raised to that. */
   "move-in-build": { payload: { lovelace: string | null; tokens: TokenQuantity[] }; result: MoveInSummary };
   /** Submits the move-in built last, if its hash matches. */
   "move-in-submit": { payload: { txHash: string }; result: PendingTx };
@@ -250,13 +275,13 @@ export interface Requests {
   "mint-submit": { payload: { txHash: string }; result: PendingTx };
   /** Finds a seedelf by its full name in the wallet contract, as read from Koios. */
   "transfer-lookup": { payload: { to: string }; result: SeedelfLookup };
-  /** Builds a transfer to a seedelf (Ogmios measures its spends) without sending it. */
+  /** Builds a transfer to a seedelf (Ogmios measures its spends) without sending it. `lovelace` below what the payment needs is raised to that. */
   "transfer-build": { payload: { to: string; lovelace: string; tokens: TokenQuantity[] }; result: TransferSummary };
   /** Submits the transfer built last, if its hash matches, once giveme.my has witnessed it. */
   "transfer-submit": { payload: { txHash: string }; result: PendingTx };
-  /** Reads a withdrawal's destination: an address, or `$handle` looked up through Koios. */
-  "withdraw-resolve": { payload: { to: string }; result: WithdrawDestination };
-  /** Builds a withdrawal (`lovelace` null sends everything) without sending it. */
+  /** Reads a withdrawal's or a send's destination: an address, or `$handle` looked up through Koios. */
+  "resolve-destination": { payload: { to: string }; result: WithdrawDestination };
+  /** Builds a withdrawal (`lovelace` null sends everything; below what the payment needs, it's raised to that) without sending it. */
   "withdraw-build": {
     payload: { to: string; lovelace: string | null; tokens: TokenQuantity[] };
     result: WithdrawSummary;
@@ -267,6 +292,10 @@ export interface Requests {
   "remove-build": { payload: { name: string; to: RemoveTo }; result: RemoveSummary };
   /** Submits the removal built last, if its hash matches, once giveme.my has witnessed it. */
   "remove-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Builds and signs a payment from the Cardano account without submitting it. `lovelace` as for a move-in. */
+  "send-build": { payload: { to: string; lovelace: string | null; tokens: TokenQuantity[] }; result: SendSummary };
+  /** Submits the payment built last, if its hash matches. */
+  "send-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };
   "reset-wallet": { payload: None; result: Status };
@@ -312,11 +341,13 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "transfer-lookup",
   "transfer-build",
   "transfer-submit",
-  "withdraw-resolve",
+  "resolve-destination",
   "withdraw-build",
   "withdraw-submit",
   "remove-build",
   "remove-submit",
+  "send-build",
+  "send-submit",
   "pending-tx",
   "reset-wallet",
   "reveal-phrase",

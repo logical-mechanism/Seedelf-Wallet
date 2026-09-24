@@ -11,7 +11,7 @@ import type { NetworkName } from "../networks";
 import type { Contact } from "../shared/rpc";
 import { seedelfName } from "../shared/seedelf-name";
 import type { PrivateStore } from "./private-store";
-import { HANDLE } from "./withdraw";
+import { HANDLE } from "./destination";
 
 /** The longest name a contact can have. */
 export const CONTACT_NAME_MAX = 40;
@@ -71,7 +71,7 @@ export class ContactsService {
     }
     const { wasm } = this.deps;
     try {
-      wasm.checkWithdrawAddress(trimmed, network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod);
+      wasm.checkPayableAddress(trimmed, network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod);
     } catch (e) {
       throw new Error(`That isn't a seedelf's full name, a $handle, or an address you can pay. ${(e as Error).message}`);
     }

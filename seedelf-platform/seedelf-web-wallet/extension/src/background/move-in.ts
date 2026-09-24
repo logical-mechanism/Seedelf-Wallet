@@ -12,11 +12,11 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { MoveInSummary, PendingTx, TokenQuantity } from "../shared/rpc";
-import { pathedUtxos } from "./balances";
+import { readAccount } from "./account";
 import type { ActivityService } from "./activity";
 import type { Koios } from "./koios";
 import { SESSION_PENDING } from "./pending";
-import { readFresh, rememberSpent, spentSet, unspent } from "./spent";
+import { rememberSpent } from "./spent";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
 
@@ -46,26 +46,17 @@ export interface MoveInDeps {
 export class MoveInService {
   constructor(private readonly deps: MoveInDeps) {}
 
-  /** `tokens` come along in the quantities given; the rest of each stays in the account. */
+  /**
+   * `tokens` come along in the quantities given; the rest of each stays in
+   * the account. `lovelace` below what the deposit needs is raised to it, so
+   * "0" moves only that.
+   */
   async build(network: NetworkName, lovelace: string | null, tokens: TokenQuantity[]): Promise<MoveInSummary> {
     const { wasm, wallet, session, now } = this.deps;
-    const koios = this.deps.koios(network);
-    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-
-    // Fresh chain state, read outside the wallet's queue.
-    const [stake, spent] = await wallet.withKeys(
-      async ({ cardano }) => [cardano.stakeAddress(net), await spentSet(session)] as const,
-    );
-    const [used, utxos, params] = await readFresh(
-      spent,
-      () => Promise.all([koios.accountAddresses(stake), koios.accountUtxos(stake), koios.epochParams()]),
-      ([, utxos]) => utxos,
-      this.deps.sleep,
-    );
+    const { params, utxos } = await readAccount(this.deps, network);
 
     return wallet.withKeys(async (keys) => {
-      const pathed = pathedUtxos(keys, net, new Set(used), unspent(utxos, spent));
-      const request = { network, params, utxos: pathed, lovelace, tokens };
+      const request = { network, params, utxos, lovelace, tokens };
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
       const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };
       const summary: MoveInSummary = { ...rest, network };

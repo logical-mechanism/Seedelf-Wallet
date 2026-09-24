@@ -11,6 +11,7 @@ import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
 import { Koios, type FetchLike, type KoiosUtxo } from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
+import { SendService } from "../src/background/send";
 import { PrivateStore } from "../src/background/private-store";
 import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
@@ -229,7 +230,7 @@ export function fakeCollateral(): FakeCollateral {
   return fake;
 }
 
-/** A wallet plus the balance, move-in, mint, transfer, withdraw and pending services over the fake Koios and giveme.my. */
+/** A wallet plus the balance, move-in, mint, transfer, withdraw, send and pending services over the fake Koios and giveme.my. */
 export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) => Promise<void> }) {
   const t = testWallet();
   const koios = fakeKoios(options);
@@ -263,6 +264,10 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),
     withdraw: new WithdrawService({
+      ...deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    }),
+    send: new SendService({
       ...deps,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),

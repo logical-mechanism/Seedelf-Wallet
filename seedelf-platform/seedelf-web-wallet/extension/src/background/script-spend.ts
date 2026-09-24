@@ -140,8 +140,9 @@ export async function send(
   try {
     submitted = await deps.koios(network).submitTx(bytes);
   } catch (e) {
-    // The kept view had a spent UTxO as ours: read the contract in full next time.
-    if (e instanceof SpentInputError) await forgetContractView(deps, network);
+    // The kept view had a spent UTxO as ours: read the contract in full next
+    // time. (A transaction signed at review spends the account, not the contract.)
+    if (e instanceof SpentInputError && built.seed !== undefined) await forgetContractView(deps, network);
     throw e;
   }
   if (submitted !== txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);

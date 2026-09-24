@@ -240,6 +240,10 @@ struct NotEnough(&'static str);
 const MOVE_IN_SHORT: NotEnough =
     NotEnough("Not enough ADA in the Cardano account for this move, its fee and the change");
 
+/// An account payment's inputs can't pay for it.
+const SEND_SHORT: NotEnough =
+    NotEnough("Not enough ADA in the Cardano account for this payment, its fee and the change");
+
 /// An account-paid mint's inputs can't pay for it.
 const ACCOUNT_MINT_SHORT: NotEnough =
     NotEnough("Not enough ADA in the Cardano account for the seedelf, its fee and the change");
@@ -309,26 +313,65 @@ pub fn external_sweep(
     Ok((tx, fee))
 }
 
-/// How much ADA a move-in takes into Seedelf.
+/// How much ADA the Cardano account pays, into Seedelf or to an address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MoveInAmount {
+pub enum AccountAmount {
     Lovelace(u64),
-    /// Everything that can move: all ADA but the fee and the minimum the
+    /// Everything that can go: all ADA but the fee and the minimum the
     /// change needs to carry the tokens that stay.
     Max,
 }
 
-/// A built move-in: the unsigned transaction and what it does.
-pub struct MoveIn {
+/// Where the Cardano account pays.
+#[derive(Clone, Copy)]
+pub enum Payee<'a> {
+    /// Into the wallet contract, under fresh re-randomizations of `owner`
+    /// (the user's base register): a move-in. Tokens go
+    /// `MAXIMUM_TOKENS_PER_UTXO` to an output.
+    Seedelf {
+        owner: &'a Register,
+        wallet_addr: &'a Address,
+    },
+    /// A key address, in one output.
+    Address(&'a Address),
+}
+
+impl Payee<'_> {
+    /// The least lovelace a payment of `tokens` here must carry.
+    pub fn minimum(&self, params: &ProtocolParameters, tokens: &Assets) -> Result<u64> {
+        match self {
+            Payee::Seedelf { .. } => minimum_deposit(params, tokens),
+            Payee::Address(to) => minimum_address_payment(params, to, tokens),
+        }
+    }
+
+    fn outputs(
+        &self,
+        params: &ProtocolParameters,
+        lovelace: u64,
+        tokens: &Assets,
+    ) -> Result<Vec<Output>> {
+        match self {
+            Payee::Seedelf { owner, wallet_addr } => {
+                deposit_outputs(params, wallet_addr, owner, lovelace, tokens)
+            }
+            Payee::Address(to) => Ok(vec![pay_address(params, to, lovelace, tokens)?]),
+        }
+    }
+}
+
+/// A built payment from the Cardano account (a move-in or a send): the
+/// unsigned transaction and what it does.
+pub struct AccountPayment {
     pub tx: BuiltTransaction,
     /// The spent UTxOs, in input order; each needs its payment key's signature.
     pub inputs: Vec<UtxoResponse>,
     pub fee: u64,
-    /// Lovelace and tokens into the wallet contract.
+    /// Lovelace and tokens paid.
     pub lovelace: u64,
     pub tokens: Assets,
-    /// How many wallet-contract outputs hold them.
-    pub deposit_outputs: usize,
+    /// How many outputs hold them.
+    pub outputs: usize,
     /// What goes back to the Cardano account.
     pub change_lovelace: u64,
     pub change_tokens: Assets,
@@ -340,7 +383,7 @@ pub struct MoveIn {
 /// - `available` is the account's UTxOs (key addresses the caller can sign
 ///   for). A pure-ADA UTxO of exactly 5 ADA is never spent: it's probably
 ///   another wallet's collateral, as in the CLI.
-/// - `picked` tokens move in the quantities asked, as `(policy, name,
+/// - `picked` tokens go in the quantities asked, as `(policy, name,
 ///   quantity)` in hex. Every UTxO holding one is spent, and what's left of
 ///   it goes back with the change.
 /// - Otherwise pure-ADA UTxOs are spent first, largest first, then other
@@ -350,12 +393,58 @@ pub struct MoveIn {
 pub fn move_in(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
-    amount: MoveInAmount,
+    amount: AccountAmount,
     picked: &[(String, String, u64)],
     owner: &Register,
     wallet_addr: &Address,
     change_addr: &Address,
-) -> Result<MoveIn> {
+) -> Result<AccountPayment> {
+    let payee = Payee::Seedelf { owner, wallet_addr };
+    account_payment(
+        params,
+        available,
+        amount,
+        picked,
+        payee,
+        change_addr,
+        MOVE_IN_SHORT,
+    )
+}
+
+/// Send: the Cardano account pays `to`, a key address on this network
+/// (`network_flag`: `true` is preprod), in one output. The UTxOs are chosen,
+/// and the change made, as for [`move_in`].
+pub fn account_send(
+    params: &ProtocolParameters,
+    available: &[UtxoResponse],
+    amount: AccountAmount,
+    picked: &[(String, String, u64)],
+    to: &Address,
+    network_flag: bool,
+    change_addr: &Address,
+) -> Result<AccountPayment> {
+    check_payable(to, network_flag)?;
+    let payee = Payee::Address(to);
+    account_payment(
+        params,
+        available,
+        amount,
+        picked,
+        payee,
+        change_addr,
+        SEND_SHORT,
+    )
+}
+
+fn account_payment(
+    params: &ProtocolParameters,
+    available: &[UtxoResponse],
+    amount: AccountAmount,
+    picked: &[(String, String, u64)],
+    payee: Payee,
+    change_addr: &Address,
+    short: NotEnough,
+) -> Result<AccountPayment> {
     let eligible: Vec<UtxoResponse> = collect_address_utxos(available.to_vec())?;
     let holds_picked = |u: &UtxoResponse| {
         u.asset_list.as_ref().is_some_and(|assets| {
@@ -377,7 +466,7 @@ pub fn move_in(
             bail!("The Cardano account doesn't hold the token {policy}.{name}");
         }
         if *quantity == 0 {
-            bail!("Move more than none of the token {policy}.{name}, or leave it out");
+            bail!("Choose more than none of the token {policy}.{name}, or leave it out");
         }
         if *quantity > held {
             bail!("The Cardano account holds only {held} of the token {policy}.{name}");
@@ -394,21 +483,13 @@ pub fn move_in(
     });
 
     let attempt = |selected: &[UtxoResponse]| {
-        build_move_in(
-            params,
-            selected,
-            amount,
-            picked,
-            owner,
-            wallet_addr,
-            change_addr,
-        )
+        build_account_payment(params, selected, amount, picked, payee, change_addr, short)
     };
 
-    if amount == MoveInAmount::Max {
+    if amount == AccountAmount::Max {
         let all: Vec<UtxoResponse> = mandatory.into_iter().chain(rest).collect();
         if all.is_empty() {
-            bail!("There is nothing in the Cardano account to move");
+            bail!("There is nothing in the Cardano account to spend");
         }
         return attempt(&all);
     }
@@ -429,20 +510,20 @@ pub fn move_in(
             Err(e) => return Err(e),
         }
     }
-    Err(last_error.unwrap_or_else(|| MOVE_IN_SHORT.into()))
+    Err(last_error.unwrap_or_else(|| short.into()))
 }
 
-fn build_move_in(
+fn build_account_payment(
     params: &ProtocolParameters,
     selected: &[UtxoResponse],
-    amount: MoveInAmount,
+    amount: AccountAmount,
     picked: &[(String, String, u64)],
-    owner: &Register,
-    wallet_addr: &Address,
+    payee: Payee,
     change_addr: &Address,
-) -> Result<MoveIn> {
+    short: NotEnough,
+) -> Result<AccountPayment> {
     let (total, all_tokens) = assets_of(selected.to_vec())?;
-    // How much of each held token moves in (0 for tokens not picked).
+    // How much of each held token is paid (0 for tokens not picked).
     let asked = |a: &Asset| {
         let policy = hex::encode(a.policy_id);
         let name = hex::encode(&a.token_name);
@@ -451,7 +532,7 @@ fn build_move_in(
             .find(|(p, n, _)| *p == policy && *n == name)
             .map_or(0, |(_, _, q)| (*q).min(a.amount))
     };
-    let moving = Assets {
+    let paying = Assets {
         items: all_tokens
             .items
             .iter()
@@ -481,50 +562,50 @@ fn build_move_in(
         .len();
     let change_floor = minimum_change(params, change_addr, &staying)?;
 
-    let mut deposit = 0;
+    let mut paid = 0;
     let mut change = 0;
     let mut outputs = 0;
     let (fee, staged) = settle_fee(params, signers, |fee| {
-        (deposit, change) = match amount {
-            MoveInAmount::Lovelace(lovelace) => {
+        (paid, change) = match amount {
+            AccountAmount::Lovelace(lovelace) => {
                 let change = total
                     .checked_sub(lovelace)
                     .and_then(|rest| rest.checked_sub(fee))
-                    .ok_or(MOVE_IN_SHORT)?;
+                    .ok_or(short)?;
                 (lovelace, change)
             }
-            MoveInAmount::Max => {
-                let deposit = total
+            AccountAmount::Max => {
+                let paid = total
                     .checked_sub(fee)
                     .and_then(|rest| rest.checked_sub(change_floor))
-                    .ok_or(MOVE_IN_SHORT)?;
-                (deposit, change_floor)
+                    .ok_or(short)?;
+                (paid, change_floor)
             }
         };
-        let deposits = deposit_outputs(params, wallet_addr, owner, deposit, &moving)?;
-        outputs = deposits.len();
+        let payments = payee.outputs(params, paid, &paying)?;
+        outputs = payments.len();
         let mut tx = StagingTransaction::new();
         for input in &inputs {
             tx = tx.input(input.clone());
         }
-        for output in deposits {
+        for output in payments {
             tx = tx.output(output);
         }
-        for output in change_outputs(params, change_addr, change, &staying, MOVE_IN_SHORT)? {
+        for output in change_outputs(params, change_addr, change, &staying, short)? {
             tx = tx.output(output);
         }
         Ok(tx.fee(fee))
     })?;
 
-    Ok(MoveIn {
+    Ok(AccountPayment {
         tx: staged
             .build_conway_raw()
             .context("Failed To Build The Transaction")?,
         inputs: selected.to_vec(),
         fee,
-        lovelace: deposit,
-        tokens: moving,
-        deposit_outputs: outputs,
+        lovelace: paid,
+        tokens: paying,
+        outputs,
         change_lovelace: change,
         change_tokens: staying,
     })
@@ -1454,7 +1535,7 @@ fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, A
             if payment.tokens.items.iter().any(|a| a.amount == 0) {
                 bail!("A payment can't send none of a token");
             }
-            let minimum = wallet_minimum_lovelace_with_assets(&chain.params, payment.tokens.clone())?;
+            let minimum = minimum_seedelf_payment(&chain.params, &payment.tokens)?;
             if payment.lovelace < minimum {
                 bail!(
                     "A payment to a seedelf{} needs at least {} ADA",
@@ -1466,6 +1547,12 @@ fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, A
             Ok((output, payment.tokens.clone()))
         })
         .collect()
+}
+
+/// The least lovelace a payment to a seedelf with `tokens` must carry: one
+/// contract output under a register.
+pub fn minimum_seedelf_payment(params: &ProtocolParameters, tokens: &Assets) -> Result<u64> {
+    wallet_minimum_lovelace_with_assets(params, tokens.clone())
 }
 
 /// Lovelace as ADA, with all six decimals.
@@ -1492,29 +1579,48 @@ pub fn is_payable_address(addr: &Address, network_flag: bool) -> bool {
 }
 
 fn check_address(chain: &Chain, addr: &Address) -> Result<()> {
-    if !is_payable_address(addr, chain.network_flag) {
-        let network = if chain.network_flag {
-            "preprod"
-        } else {
-            "mainnet"
-        };
+    check_payable(addr, chain.network_flag)
+}
+
+fn check_payable(addr: &Address, network_flag: bool) -> Result<()> {
+    if !is_payable_address(addr, network_flag) {
+        let network = if network_flag { "preprod" } else { "mainnet" };
         bail!(
-            "Withdrawals go to a normal {network} address: not a script, stake or other network's address"
+            "Payments go to a normal {network} address: not a script, stake or other network's address"
         );
     }
     Ok(())
 }
 
-/// The output paying `to` exactly `lovelace` and `tokens`, above its minimum.
-fn address_output(chain: &Chain, to: &Address, lovelace: u64, tokens: &Assets) -> Result<Output> {
-    check_address(chain, to)?;
-    if tokens.items.iter().any(|a| a.amount == 0) {
-        bail!("A payment can't send none of a token");
-    }
+/// The least lovelace an output paying `to` exactly `tokens` must carry.
+pub fn minimum_address_payment(
+    params: &ProtocolParameters,
+    to: &Address,
+    tokens: &Assets,
+) -> Result<u64> {
     let bech32 = to
         .to_bech32()
         .map_err(|e| anyhow::anyhow!("Failed to encode the address: {e}"))?;
-    let minimum = address_minimum_lovelace_with_assets(&chain.params, &bech32, tokens.clone())?;
+    address_minimum_lovelace_with_assets(params, &bech32, tokens.clone())
+}
+
+/// The output paying `to` exactly `lovelace` and `tokens`, above its minimum.
+fn address_output(chain: &Chain, to: &Address, lovelace: u64, tokens: &Assets) -> Result<Output> {
+    check_address(chain, to)?;
+    pay_address(&chain.params, to, lovelace, tokens)
+}
+
+/// [`address_output`] for an address already checked.
+fn pay_address(
+    params: &ProtocolParameters,
+    to: &Address,
+    lovelace: u64,
+    tokens: &Assets,
+) -> Result<Output> {
+    if tokens.items.iter().any(|a| a.amount == 0) {
+        bail!("A payment can't send none of a token");
+    }
+    let minimum = minimum_address_payment(params, to, tokens)?;
     if lovelace < minimum {
         bail!(
             "A payment to that address{} needs at least {} ADA",

@@ -11,6 +11,7 @@ import type { ContactsService } from "./contacts";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
+import type { SendService } from "./send";
 import type { TransferService } from "./transfer";
 import type { WithdrawService } from "./withdraw";
 import type { Wallet } from "./wallet";
@@ -23,6 +24,7 @@ export interface Context {
   mint: MintService;
   transfer: TransferService;
   withdraw: WithdrawService;
+  send: SendService;
   pending: PendingService;
   contacts: ContactsService;
   activity: ActivityService;
@@ -73,7 +75,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.transfer.build(ctx.network, message.to, message.lovelace, message.tokens);
     case "transfer-submit":
       return ctx.transfer.submit(ctx.network, message.txHash);
-    case "withdraw-resolve":
+    case "resolve-destination":
       return ctx.withdraw.resolve(ctx.network, message.to);
     case "withdraw-build":
       return ctx.withdraw.build(ctx.network, message.to, message.lovelace, message.tokens);
@@ -83,6 +85,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.withdraw.buildRemove(ctx.network, message.name, message.to);
     case "remove-submit":
       return ctx.withdraw.submitRemove(ctx.network, message.txHash);
+    case "send-build":
+      return ctx.send.build(ctx.network, message.to, message.lovelace, message.tokens);
+    case "send-submit":
+      return ctx.send.submit(ctx.network, message.txHash);
     case "pending-tx":
       return ctx.pending.pending();
     case "reset-wallet":

@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import { BalanceService } from "../src/background/balances";
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
-import { ADA_HANDLE_POLICY, WithdrawService } from "../src/background/withdraw";
+import { ADA_HANDLE_POLICY } from "../src/background/destination";
+import { WithdrawService } from "../src/background/withdraw";
 import { NETWORKS } from "../src/networks";
 import { loadTestWasm, testWallet, vectors } from "./fakes";
 

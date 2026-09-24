@@ -1,6 +1,6 @@
 // Home, in two tabs. Seedelf: the Seedelf balance, its tokens and your
-// seedelfs. Cardano account: the account's balance and tokens, Receive and
-// Move in. Until the wallet has a seedelf and a Seedelf
+// seedelfs. Cardano account: the account's balance and tokens, Receive, Send
+// and Move in. Until the wallet has a seedelf and a Seedelf
 // balance, a checklist shows the order that keeps them apart: fund the
 // account, create the seedelf, then move in (privacy.md, mint first).
 // Balances come from the worker's last reading; it reads the chain again
@@ -35,6 +35,7 @@ import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
 import { explorerUrl, formatAda, plural, shortHex, timeAgo } from "../format";
 import { Activity } from "./Activity";
+import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
 import { Receive } from "./Receive";
@@ -50,6 +51,7 @@ const SENT: Record<PendingTx["kind"], string> = {
   transfer: "Transfer",
   withdraw: "Withdrawal",
   remove: "Seedelf removal",
+  send: "Payment",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Move-in confirmed",
@@ -57,6 +59,7 @@ const CONFIRMED: Record<PendingTx["kind"], string> = {
   transfer: "Transfer confirmed",
   withdraw: "Withdrawal confirmed",
   remove: "Seedelf removed",
+  send: "Payment confirmed",
 };
 
 /** Read again on open when the last reading is older than this. */
@@ -75,7 +78,9 @@ export function Home() {
   const [error, setError] = useState<string>();
   const [now, setNow] = useState(Date.now);
   const [tab, setTab] = useState<Tab>("seedelf");
-  const [screen, setScreen] = useState<"home" | "receive" | "move-in" | "create" | "transfer" | "withdraw">("home");
+  const [screen, setScreen] = useState<"home" | "receive" | "move-in" | "send" | "create" | "transfer" | "withdraw">(
+    "home",
+  );
   const [removing, setRemoving] = useState<SeedelfInfo>();
   const [tokensOf, setTokensOf] = useState<Tab>();
   const [activityOf, setActivityOf] = useState<Tab>();
@@ -137,6 +142,7 @@ export function Home() {
   const home = () => setScreen("home");
   if (screen === "receive" && account) return <Receive account={account} onBack={home} />;
   if (screen === "move-in" && balances) return <MoveIn cardano={balances.cardano} onCancel={home} onSent={sent} />;
+  if (screen === "send" && balances) return <CardanoSend cardano={balances.cardano} onCancel={home} onSent={sent} />;
   if (screen === "create" && balances) return <CreateSeedelf balances={balances} onCancel={home} onSent={sent} />;
   if (screen === "transfer" && balances) return <Transfer seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
   if (screen === "withdraw" && balances) return <Withdraw seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
@@ -161,6 +167,7 @@ export function Home() {
       : undefined;
   const canCreate = !!balances && (balances.cardano.utxos > 0 || balances.seedelf.utxos > 0) && !watching;
   const createTitle = watching ? BUSY : balances && !canCreate ? "Fund your Cardano account first: it pays for the seedelf" : undefined;
+  // Move in and Send both spend the account.
   const canMoveIn = !!balances && balances.cardano.utxos > 0 && !watching;
 
   return (
@@ -298,6 +305,14 @@ export function Home() {
                   label="Receive"
                   onClick={() => setScreen("receive")}
                   disabled={!account}
+                />
+                <ActionButton
+                  icon={<SendIcon />}
+                  label="Send"
+                  name="Send from the Cardano account"
+                  onClick={() => setScreen("send")}
+                  disabled={!canMoveIn}
+                  title={watching ? BUSY : undefined}
                 />
                 <ActionButton
                   primary

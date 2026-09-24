@@ -1,22 +1,25 @@
-// Move in: ADA (an amount, or Max) and any amounts of tokens from the Cardano
-// account into the Seedelf balance. With tokens, the amount may stay empty:
-// only the ADA they need moves. The worker builds and signs; nothing is sent
-// until the user has reviewed the result and pressed Send.
+// Send from the Cardano account: pay any normal address, or an ADA Handle,
+// as any Cardano wallet does. An amount with optional tokens (with tokens,
+// the amount may stay empty: only the ADA they need goes), or the most
+// possible (Max). It's paid in the open; the privacy note says how to pay
+// without that link. The worker builds and signs; nothing is sent until the
+// user has reviewed it and pressed Send.
 
 import { useState, type FormEvent } from "react";
 
-import type { Balances, MoveInSummary, PendingTx } from "../../shared/rpc";
+import type { Balances, PendingTx, SendSummary } from "../../shared/rpc";
 import { call } from "../background";
-import { AdaInput, lovelaceToSend, MinimumHint, MinimumNote, RoundNote } from "../components/AdaInput";
+import { AdaInput, lovelaceToSend, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { DestinationField, useDestination } from "../components/Destination";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, formatQuantity, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { tokenLabel } from "../tokens";
 
-export function MoveIn({
+export function CardanoSend({
   cardano,
   onCancel,
   onSent,
@@ -25,21 +28,22 @@ export function MoveIn({
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const network = useNetwork();
+  const [to, setTo] = useState("");
+  const read = useDestination(to);
   const [amount, setAmount] = useState("");
   const [max, setMax] = useState(false);
   const [tokenAmounts, setTokenAmounts] = useState<Record<string, string>>({});
-  const [summary, setSummary] = useState<MoveInSummary>();
+  const [summary, setSummary] = useState<SendSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
   const tokens = tokenChoices(cardano.tokens, tokenAmounts);
   const withTokens = tokens.sent.length > 0;
   const lovelace = max ? null : lovelaceToSend(amount, withTokens);
-  const round = typeof lovelace === "string" && BigInt(lovelace) % 1_000_000n === 0n;
   // The builder decides exactly (fee, change, collateral UTxOs); this catches the obvious case early.
   const tooMuch = typeof lovelace === "string" && BigInt(lovelace) > BigInt(cardano.lovelace);
-  const ready = tokens.ok && (max || (typeof lovelace === "string" && !tooMuch));
-  const network = useNetwork();
+  const ready = read.state === "read" && tokens.ok && (max || (typeof lovelace === "string" && !tooMuch));
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -47,7 +51,7 @@ export function MoveIn({
     setBusy(true);
     setError(undefined);
     try {
-      setSummary(await call("move-in-build", { lovelace: lovelace ?? null, tokens: tokens.sent }));
+      setSummary(await call("send-build", { to: to.trim(), lovelace: lovelace ?? null, tokens: tokens.sent }));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -60,7 +64,7 @@ export function MoveIn({
     setBusy(true);
     setError(undefined);
     try {
-      onSent(await call("move-in-submit", { txHash: summary.txHash }));
+      onSent(await call("send-submit", { txHash: summary.txHash }));
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -70,8 +74,8 @@ export function MoveIn({
   if (summary) {
     return (
       <Screen
-        title="Review the move"
-        titleId="move-in-review"
+        title="Review the payment"
+        titleId="send-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
         aside="Nothing is sent until you press Send"
@@ -82,27 +86,27 @@ export function MoveIn({
           </button>
         }
       >
-        <ReviewRows testId="move-in-review">
-          <Row label="Into Seedelf" value={`${formatAda(summary.lovelace)} ₳`} strong />
+        <ReviewRows testId="send-review">
+          <Row label="To" value={summary.handle ? `$${summary.handle}` : shortHex(summary.address, 16, 8)} title={summary.address} strong />
+          {summary.handle && <Row label="Address" value={shortHex(summary.address, 16, 8)} title={summary.address} />}
+          <Row label="Amount" value={`${formatAda(summary.lovelace)} ₳`} strong />
           {summary.tokens.map((t) => {
-            const known = cardano.tokens.find((c) => key(c) === key(t));
+            const held = cardano.tokens.find((h) => key(h) === key(t));
             return (
               <Row
                 key={key(t)}
                 label=""
-                value={`${formatQuantity(t.quantity, known?.decimals ?? 0)} ${tokenLabel(network, t)}`}
+                value={`${formatQuantity(t.quantity, held?.decimals ?? 0)} ${tokenLabel(network, t)}`}
               />
             );
           })}
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
           <Row label="Back to your Cardano account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
-          <Row label="New Seedelf UTxOs" value={String(summary.depositOutputs)} />
+          <Row label="UTxOs spent" value={String(summary.inputs)} />
         </ReviewRows>
         <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
-        <p className="note">
-          The new UTxOs are locked to fresh copies of your Seedelf key's register. It takes about a minute for the network
-          to confirm them.
-        </p>
+        {summary.own && <OwnNote />}
+        <p className="note">It takes about a minute for the network to confirm.</p>
       </Screen>
     );
   }
@@ -110,8 +114,8 @@ export function MoveIn({
   return (
     <Screen
       onSubmit={review}
-      title="Move in"
-      titleId="move-in-title"
+      title="Send"
+      titleId="send-title"
       onBack={onCancel}
       aside={`${formatAda(cardano.lovelace)} ₳ available`}
       error={error}
@@ -121,47 +125,53 @@ export function MoveIn({
         </button>
       }
     >
-      <p className="note">Move ADA, and any amount of your tokens, from your Cardano account into your Seedelf balance.</p>
+      <DestinationField id="send-to" value={to} onChange={setTo} read={read} />
+      {read.state === "read" && read.destination.own && <OwnNote />}
 
       <div className="field">
-        <label htmlFor="move-in-amount">Amount</label>
+        <label htmlFor="send-amount">Amount</label>
         <AdaInput
-          id="move-in-amount"
+          id="send-amount"
           value={amount}
           onChange={setAmount}
           disabled={max}
           shown="Max"
           placeholder={withTokens ? "Minimum" : "0"}
+          autoFocus={false}
         >
           <button type="button" className="chip" aria-pressed={max} onClick={() => setMax(!max)}>
             Max
           </button>
         </AdaInput>
         {tooMuch && (
-          <p className="field-note" data-testid="move-in-too-much">
+          <p className="field-note" data-testid="send-too-much">
             That's more than the {formatAda(cardano.lovelace)} ₳ in your Cardano account.
           </p>
         )}
       </div>
       {max ? (
-        <p className="note">Everything except the fee and what the tokens you keep need. UTxOs of exactly 5 ₳ stay put: another wallet may use them as collateral.</p>
+        <p className="note" data-testid="send-max-note">
+          Everything except the fee and what the tokens you keep need. UTxOs of exactly 5 ₳ stay put: another wallet may
+          use them as collateral.
+        </p>
       ) : (
-        <>
-          {withTokens && <MinimumHint />}
-          <RoundNote warn={!!lovelace && lovelace !== "0" && !round}>
-            Round amounts, like 100 ₳, are harder to match to a later withdrawal.
-          </RoundNote>
-        </>
+        withTokens && <MinimumHint />
       )}
 
-      <TokenAmounts
-        held={cardano.tokens}
-        typed={tokenAmounts}
-        onChange={setTokenAmounts}
-        legend="Bring tokens along (optional)"
-      />
+      <TokenAmounts held={cardano.tokens} typed={tokenAmounts} onChange={setTokenAmounts} />
 
-      <Callout tone="privacy">Moving in links your Cardano account to the new Seedelf UTxOs, but not to any seedelf name.</Callout>
+      <Callout tone="privacy">
+        This pays from your Cardano account in the open: anyone can see it came from you. To pay without that link, move
+        the money into Seedelf and send it from there.
+      </Callout>
     </Screen>
+  );
+}
+
+function OwnNote() {
+  return (
+    <Callout tone="warn" testId="send-own">
+      This is your own Cardano account: the payment comes back to it, less the fee.
+    </Callout>
   );
 }
