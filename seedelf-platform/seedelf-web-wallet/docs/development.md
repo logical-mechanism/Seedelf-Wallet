@@ -72,7 +72,8 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 | TypeScript | The manifest, the vault and wallet state, the Koios and giveme.my clients, and the worker's services and handlers against the real WASM, over recorded preprod answers | Vitest (`npm test`) |
 | End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the popup and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. |
 | Live reads | The balance scan and the ADA Handle lookup against the real preprod Koios | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`; skipped otherwise |
-| Live | Real preprod transactions from the built extension, by hand, never in CI | `node e2e/live/run.mjs all` runs every flow in one browser session on the private test wallet, waiting for each to confirm, and prints the hashes. `run.mjs` also takes single flows: `mint live-1 account + move-in 25.5`. |
+| Probes | Transactions checked against preprod's node and scripts, submitting nothing | `node tests/fixtures/probe-staking.mjs`: every staking transaction through Ogmios's decoder, and an account-paid mint with the rewards through the real policy. The `record-*.mjs` scripts do the same for the Seedelf spends, and keep what they recorded as fixtures. |
+| Live | Real preprod transactions from the built extension, by hand, never in CI | `node e2e/live/run.mjs all` runs every Seedelf flow in one browser session on the private test wallet, waiting for each to confirm, and prints the hashes. `node e2e/live/run.mjs staking` stakes, delegates the vote and changes pool; `withdraw-rewards` and `unstake` wait until rewards arrive. `run.mjs` also takes single flows: `mint live-1 account + move-in 25.5`. |
 | Manual | What a script can't see, before each release | [The preprod checklist](#preprod-checklist-before-a-release) |
 
 ## Preprod checklist before a release
@@ -96,7 +97,9 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the pop
    - move in;
    - send to a seedelf, pasting a name someone else gave you;
    - withdraw to an address and to a `$handle`;
-   - remove a seedelf.
+   - remove a seedelf;
+   - stake with a pool from the browser, change pool, delegate the vote to a DRep by its ID, withdraw rewards, and stop staking;
+   - send with *Use staking rewards when spending* on, then off.
 
    Read every review and every privacy note as you go.
 6. **Mistakes and failures:**

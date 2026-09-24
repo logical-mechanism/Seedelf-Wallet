@@ -7,6 +7,7 @@ flowchart LR
   Ext["Exchange or<br/>other wallet"] -- "pay" --> Dep["Cardano account"]
   Dep -- "move in" --> S["Seedelf balance<br/>(wallet contract)"]
   Dep -- "send" --> Addr
+  Dep -. "stake, vote" .-> Pool["A pool, a DRep"]
   S -- "transfer" --> Other["Any seedelf"]
   S -- "withdraw" --> Addr["Any address"]
   S -- "out" --> OT["One-time account"]
@@ -156,6 +157,26 @@ An ordinary Cardano payment from the account, so a user needn't open another wal
 5. **Send** submits exactly the reviewed transaction. No script runs, so no collateral and no giveme.my. A banner follows it to "Payment confirmed". It's listed in the Cardano account's Activity from Koios, not in the Seedelf history.
 
 **Privacy:** it's paid in the open, from the account. The form says so, and that paying from Seedelf instead avoids the link.
+
+## Staking and voting (Cardano account)
+
+Stake the Cardano account with a pool, spend or withdraw its rewards, and delegate its vote, as in Lace, so a user needs no second wallet. Built in chunk 13 by `seedelf-core::build::account_staking` and the `staking` module, which patch certificates and a withdrawal into an account transaction (see [architecture.md](architecture.md#transaction-building)). Only the Cardano account stakes: Seedelf money has no staking part.
+
+- **Home:** the Cardano tab's balance counts the rewards, as other wallets do. Under it, a staking row ("Staking with LOGIC · 57.47 ₳ rewards", or "Not staking") opens Staking. While there are rewards and the vote isn't delegated, a warning says the rewards are locked and offers **Delegate your vote**: Conway pays nothing out otherwise.
+- **Staking page:** read fresh on opening (the pool's `pool_info`: one request).
+  - **Your pool:** ticker and name, saturation, margin, cost, pledge, delegators and blocks, and Lace's warnings: retiring or retired, oversaturated, pledge not met (the pool then earns nothing). **Change pool** opens the browser.
+  - **Not staking:** why to stake, the 2 ₳ deposit the first time, and **Choose a pool**.
+  - **Rewards:** the amount and **Withdraw rewards** (the whole balance: the ledger takes nothing less). It's disabled with nothing to withdraw, or while the rewards are locked.
+  - **Voting power:** where it goes now, and **Change** (or **Delegate**).
+  - **Stop staking:** withdraws the rewards, unregisters the stake key and returns its deposit, in one transaction. Disabled while rewards are locked, since it must withdraw them.
+- **Pool browser:** every live pool, kept on the device for a day (one `pool_list` page on preprod, three on mainnet, with `totals` and `epoch_params` for saturation). Search by ticker or pool ID; sort by ticker, least saturated, lowest margin, lowest cost or highest pledge; 50 rows at a time. A pool opens its details (one `pool_info`) and **Stake with …**. Your pool is marked, and can't be chosen again. Names come with the details only: `pool_list` has tickers, and every pool's name would cost several requests a day.
+- **Vote:** Always abstain, Always no confidence, or **A DRep**: paste its ID (CIP-129 or CIP-105) and **Look up** (`drep_info` and `drep_metadata`: its name, status, voting power and delegators). An inactive DRep gets a warning (its votes don't count until it votes again; the rewards unlock either way); a retired one can't be chosen. There's no list of DReps yet.
+- **Review, then Send:** each change is built and signed at review, like a send: the payment keys that pay the fee, and the stake key (`2/0`), inside WebAssembly. The review shows the pool or the vote, any deposit, refund or rewards withdrawn, the fee and the change. Send only submits. A banner follows it ("Delegation sent" … "Now staking").
+- **What each costs Koios:** a balance reading is 4 requests (was 3), plus the pool's `pool_info` once a session for its ticker. A build is 4: `account_addresses`, `credential_utxos`, `account_info`, `epoch_params`.
+- **Spending rewards** (Settings: *Use staking rewards when spending*, on by default): a send, a move-in or an account-paid mint reads `account_info` fresh and withdraws the whole reward balance along with it, if the vote is delegated. The forms count the rewards in what's available ("…, with 57.47 ₳ of rewards"), Max takes them too, and the review says what was spent. Off, the rewards wait for **Withdraw rewards**, and the stake key isn't read at all.
+- **Refusals, in plain words:** an epoch paying more rewards between Review and Send ("review it again"), a pool or DRep that's gone, rewards withdrawn without a vote delegation, or an account whose staking changed underneath.
+
+**Privacy:** staking and voting are public and name the account. Every screen says so, and the Staking page says Seedelf money can't be staked.
 
 ## Create a seedelf
 

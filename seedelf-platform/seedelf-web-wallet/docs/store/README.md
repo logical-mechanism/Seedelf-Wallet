@@ -28,13 +28,13 @@ Upload `extension/release/seedelf-wallet-0.1.0.zip`.
 **Summary** (from the manifest's `description`; the store allows 132 characters):
 
 ```text
-A Cardano stealth wallet. Pay and get paid through Seedelf, where no UTxO says who owns it.
+A Cardano wallet with private payments built in. Stake, send, and pay anyone through Seedelf, where no UTxO says who owns it.
 ```
 
 **Description:**
 
 ```text
-Seedelf Wallet is a browser wallet for Seedelf, the stealth wallet on Cardano.
+Seedelf Wallet is a Cardano wallet with private payments built in: Seedelf, the stealth wallet on Cardano. You don't need a second wallet for the everyday Cardano side.
 
 This is a test build for early testers. It runs on Cardano's preprod test network, with test ADA only. Get test ADA from the Cardano testnet faucet.
 
@@ -42,7 +42,9 @@ Seedelf hides who owns money. Each payment to a seedelf reaches its owner under 
 
 What you can do:
 • Create a wallet, or restore one from a 12, 15 or 24-word recovery phrase, and lock it with a password.
-• Use its Cardano account: a normal account that any wallet or faucet can pay. A phrase from Lace or Eternl opens that wallet's first account.
+• Use its Cardano account: a normal account that any wallet or faucet can pay, and that pays any address or ADA Handle. A phrase from Lace or Eternl opens that wallet's first account.
+• Stake the Cardano account with a pool, from a list of every live pool, and spend or withdraw the rewards.
+• Delegate its voting power: always abstain, always no confidence, or a DRep by its ID.
 • Create a seedelf: a name you give out so that anyone can pay you.
 • Move ADA and tokens from the Cardano account into your Seedelf balance.
 • Send to any seedelf by its name.
@@ -53,7 +55,7 @@ What it doesn't hide:
 • Moving money in, and withdrawing it, link your Cardano account to what you move. Each screen says what it links, and the wallet warns you before a step ties your accounts together.
 • Privacy grows with the number of people who use Seedelf, and today there are few.
 
-It isn't for holding. Seedelf funds earn no staking rewards, so keep long-term holdings in your main wallet.
+Seedelf money earns no staking rewards: it has no staking part, which is what keeps your seedelfs from being linked together. Money that sits can stay staked in the Cardano account, and move through Seedelf when it should move privately.
 
 How it works:
 • Everything is built and signed inside the extension. The cryptography and the transaction building are Rust, compiled to WebAssembly and shipped in the package.
@@ -89,7 +91,7 @@ Open source (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
 **Single purpose:**
 
 ```text
-Seedelf Wallet is a Cardano wallet for the Seedelf stealth wallet contract. It keeps the user's recovery phrase encrypted on their device, and lets them create a seedelf, move ADA into Seedelf, send it to other seedelfs, and withdraw it, while keeping who owns each UTxO private.
+Seedelf Wallet is a Cardano wallet with the Seedelf stealth wallet contract built in. It keeps the user's recovery phrase encrypted on their device, and lets them send and stake from their Cardano account, create a seedelf, move ADA into Seedelf, send it to other seedelfs, and withdraw it, while keeping who owns each UTxO private.
 ```
 
 **Permission justifications:**
@@ -98,7 +100,7 @@ Seedelf Wallet is a Cardano wallet for the Seedelf stealth wallet contract. It k
 |---|---|
 | `storage` | `Keeps the wallet on the user's device: the recovery phrase, encrypted with the user's password, in chrome.storage.local, and the unlocked session in chrome.storage.session, which is memory-only and cleared when the wallet locks or the browser closes. Nothing is synced.` |
 | `alarms` | `Locks the wallet automatically after 15 minutes without use. A one-minute alarm checks the time since the user last did something.` |
-| Host `https://preprod.koios.rest/*` | `Koios is the public Cardano API the wallet uses to read the user's balances and UTxOs, to evaluate scripts, and to submit the transactions the user approves.` |
+| Host `https://preprod.koios.rest/*` | `Koios is the public Cardano API the wallet uses to read the user's balances, UTxOs and staking, and the stake pools and DReps, to evaluate scripts, and to submit the transactions the user approves.` |
 | Host `https://www.giveme.my/*` | `giveme.my adds shared collateral to Seedelf script transactions. The wallet sends it each such transaction to witness, so that the user's own address never appears as collateral.` |
 
 **Remote code:** No, I am not using remote code.
@@ -110,7 +112,7 @@ All code ships in the package, including the WebAssembly module (Rust compiled t
 **Data usage.** Check these two, and leave the rest unchecked:
 
 - **Authentication information:** the recovery phrase and the password. The phrase is kept encrypted on the device; the password is never stored.
-- **Financial and payment information:** the wallet's addresses, balances and transactions, sent to Koios and giveme.my to read the chain and to send transactions.
+- **Financial and payment information:** the wallet's addresses, balances, staking and transactions, sent to Koios and giveme.my to read the chain and to send transactions.
 
 Then certify all three statements: no selling or transferring data outside the approved use cases, no use unrelated to the single purpose, and no creditworthiness or lending use.
 

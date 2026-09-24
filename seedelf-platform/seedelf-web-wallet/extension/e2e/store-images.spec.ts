@@ -146,10 +146,11 @@ test("the Web Store listing's images", async ({ context }) => {
 
   await cardanoTab(popup);
   await expect(popup.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await expect(popup.getByTestId("staking-row")).toContainText("Staking with LOGIC");
   shots.push([
     await shoot(),
-    "A Cardano account built in",
-    "Restore a Lace or Eternl phrase, or make a new one. Fund the account, then move money in.",
+    "A full Cardano wallet",
+    "Send, stake with a pool and delegate your vote. Restore a Lace or Eternl phrase, or make a new one.",
   ]);
 
   const browser = await chromium.launch();

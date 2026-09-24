@@ -6,10 +6,17 @@
 //   npm run build
 //   node e2e/live/run.mjs all
 //   node e2e/live/run.mjs mint live-1 account + move-in 25.5
+//   node e2e/live/run.mjs staking
 //
 // Flows (flows.mjs): mint [tag] [account|seedelf], move-in [ada],
 // transfer [ada] [tag|name], withdraw [ada|max] [address|$handle],
-// remove [tag] [account|seedelf].
+// remove [tag] [account|seedelf], stake [ticker|pool1…],
+// vote [abstain|no-confidence|drep1…], withdraw-rewards, unstake.
+//
+// "staking" stakes with TPREP (registering the key if it isn't), delegates
+// the vote to always abstain, then moves to LOGIC. Rewards take 15 to 20
+// days to arrive, so withdraw-rewards and unstake are run on their own,
+// later.
 //
 // "all" is the whole lifecycle, in the order that keeps a new wallet's
 // seedelf apart from what it moves in: mint (account), move in, a stealth
@@ -20,8 +27,11 @@ import { log, openWallet } from "./lib.mjs";
 
 const ALL = "mint live-1 account + move-in 25.5 + mint live-2 seedelf + transfer 3.3 live-1 + withdraw 5.5 + remove live-2 seedelf";
 
+const STAKING = "stake TPREP + vote abstain + stake LOGIC";
+
 const words = process.argv.slice(2).join(" ").trim() || "all";
-const steps = (words === "all" ? ALL : words).split("+").map((s) => s.trim().split(/\s+/));
+const preset = { all: ALL, staking: STAKING }[words] ?? words;
+const steps = preset.split("+").map((s) => s.trim().split(/\s+/));
 for (const [name] of steps) if (!FLOWS[name]) throw new Error(`no flow "${name}": ${Object.keys(FLOWS).join(", ")}`);
 
 const wallet = await openWallet();

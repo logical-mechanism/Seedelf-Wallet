@@ -1,19 +1,22 @@
 # Seedelf Web Wallet
 
-A Chrome extension for Seedelf, the Cardano stealth wallet.
+A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardano stealth wallet.
 
 > **Status:** early build, preprod only. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
 
-Seedelf is where money moves privately on Cardano. The web wallet is for people who will never use a terminal. It has one recovery phrase, one password, a balance screen and private transfers.
+Seedelf is where money moves privately on Cardano. The web wallet is for people who will never use a terminal. It has one recovery phrase and one password, and two sides:
 
-It sits **next to** your main wallet and doesn't replace it. Staking, governance, DeFi and long-term holdings stay in Lace, Eternl, and similar wallets. This is by design:
+- **The Cardano account:** a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. For a restored Lace or Yoroi phrase, it's the same account. You don't need a second wallet.
+- **Seedelf:** the private side. Move money in, pay anyone's seedelf, and withdraw anywhere, with no UTxO saying who owns it.
 
-- **No staking.** Seedelf funds sit at a script address with no staking part, so they earn no rewards and carry no voting weight.
-- **Why no staking key.** A per-user staking key would link all of a user's seedelfs together.
+Seedelf money can't be staked, by design:
 
-Money comes in, moves privately, and goes out. It isn't meant to sit here.
+- Seedelf funds sit at a script address with no staking part, so they earn no rewards and carry no voting weight.
+- A per-user staking key would link all of a user's seedelfs together.
+
+So money that sits stays staked in the Cardano account, and moves through Seedelf when it should move privately.
 
 ## Scope
 
@@ -24,6 +27,8 @@ Money comes in, moves privately, and goes out. It isn't meant to sit here.
 - **Cardano account:** the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
 - **Move in:** move funds from the Cardano account into your Seedelf balance.
 - **Send:** pay any address from the Cardano account, in the open, as any Cardano wallet does.
+- **Staking** (chunk 13): stake the Cardano account with one pool, from a browser of every live pool. Rewards are spent along with anything the account pays, or withdrawn by hand. Stop staking returns the 2 ₳ deposit.
+- **Voting delegation** (chunk 13): Always abstain, Always no confidence, or a DRep by its ID. Conway pays out no rewards until the vote is delegated, and the wallet says so.
 - **Create a seedelf:** mint your named seedelf so others can pay you. Minting links the seedelf to whatever paid for it, so by default the Cardano account pays for it, before any money is moved in (see [privacy.md](docs/privacy.md#known-links)).
 - **Transfer:** send funds privately from your Seedelf balance to any seedelf, by its full name.
 - **Withdraw:** send funds from your seedelfs to any Cardano address, or remove a seedelf.
@@ -34,9 +39,9 @@ Money comes in, moves privately, and goes out. It isn't meant to sit here.
 2. Use a dApp with that account.
 3. Whatever comes back is swept into a seedelf automatically.
 
-**Next: staking and voting delegation** (chunk 13). The wallet becomes a full Cardano wallet with private payments built in: stake the Cardano account with one pool, spend its rewards, and delegate its vote (Always abstain, No confidence, or a DRep). See [plans/chunk-13-staking.md](docs/plans/chunk-13-staking.md).
+**Next, maybe:** a browsable list of DReps, and the Cardano account's staking changes and withdrawals in its Activity. See [plans/chunk-13-staking.md](docs/plans/chunk-13-staking.md#follow-ups-not-this-chunk).
 
-**Not planned:** voting on proposals or registering as a DRep, swaps, hardware wallets, other chains, mobile. We add features only if there's demand.
+**Not planned:** voting on proposals or registering as a DRep, several pools per account, swaps, hardware wallets, other chains, mobile. We add features only if there's demand.
 
 ## Relationship to the CLI
 
@@ -54,7 +59,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 |---|---|
 | [architecture.md](docs/architecture.md) | How the extension is structured, crypto in WebAssembly, chain data, storage, and what we borrow from Lace |
 | [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
-| [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, contract round trip |
+| [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, staking, contract round trip |
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
 | [development.md](docs/development.md) | The branching rule, running it in Chrome, test funds, the testing layers, the release checklist, sharing with testers |
 | [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
