@@ -22,7 +22,7 @@ The wallet is built in **chunks**, each about one working session.
 | 6 | Balance | ✅ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. QR code for the receive address. |
 | 7 | Builder extraction + move in | ✅ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
-| 8b | Mint first | ⬜ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, giveme.my collateral), before any move-in. The stealth mint stays for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
+| 8b | Mint first | ✅ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
 | 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
 | 10 | Withdraw | ⬜ | `sweep` and `remove`. |
 | 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
@@ -36,6 +36,31 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 8b done** (`web-wallet/mint-first`).
+  - **Why:** the user pointed out that a mint links the seedelf to whatever pays for it. See chunk 8's note, and privacy rule 5.
+  - **Rust:** `build::account_mint` / `AccountMint`, which drafts and finalizes like a `ScriptSpend`.
+    - Key inputs: pure ADA first, never a 5 ₳ pure UTxO.
+    - Change goes to `0/0`.
+    - Only the seedelf policy runs, by reference. There are no proofs, no one-time key and no required signers.
+    - `change_outputs` now takes its "not enough" error.
+  - **Changed from the roadmap row: the collateral is the account's own UTxO, not giveme.my.**
+    - That's what the CLI's `create` does, and the transaction names the account anyway.
+    - It lets WASM sign at review like a move-in, with no giveme.my at Send.
+    - Order of preference: ADA-only, then at least 2 ₳, then not spent, then 5 ₳, then the largest.
+    - A token UTxO can be collateral, since the collateral return gives its tokens back. **Found live:** after the user's move-in, every UTxO in the public 12-word account holds tokens.
+    - With one UTxO, it's both an input and the collateral.
+  - **WASM:** `draftAccountMint` and `finishAccountMint` (signed). Move-in's path checks and per-key signing are now shared helpers.
+  - **Extension:**
+    - `MintService.build(network, label, from)`; `MintSummary.from`.
+    - Create has a "Pay with" choice (Cardano account by default, or Seedelf balance), each with a note on what it links.
+    - Home's Cardano card says to create a seedelf before moving in, until one exists.
+  - **Checked live without submitting:** an account-paid draft from the public 12-word phrase's real preprod UTxOs passes the real policy under Ogmios. The mint uses 72,836 memory and 21.4M steps; the fee is 212,868 for 999 bytes.
+    - `extension/tests/fixtures/record-account-mint.mjs` records it.
+    - The fixture keeps no CBOR: a signed transaction over public-phrase UTxOs shouldn't sit in the repo.
+  - **Tests:** core `mint_test` 15 (4 new: collateral choice, token collateral, overlap, errors, and fees against the ledger's formula); `seedelf-wasm` native 12 and Node 24; Vitest 91; Playwright 15. The account path runs through Send to "Seedelf created", since no giveme.my signature is needed.
+  - **Not done:** a live account-paid mint. From a funded account with no seedelf yet, create one by hand, then record the tx hash here.
+  - **Next:** chunk 9, transfer.
 
 - **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).
   - **Decided with the user:**

@@ -82,7 +82,7 @@ export function Home() {
     return <MoveIn cardano={balances.cardano} onCancel={() => setScreen("home")} onSent={sent} />;
   }
   if (screen === "create" && balances) {
-    return <CreateSeedelf seedelf={balances.seedelf} onCancel={() => setScreen("home")} onSent={sent} />;
+    return <CreateSeedelf balances={balances} onCancel={() => setScreen("home")} onSent={sent} />;
   }
   const what = pending?.kind === "mint" ? "Seedelf mint" : "Move-in";
 
@@ -143,12 +143,12 @@ export function Home() {
             type="button"
             className="secondary align-start"
             onClick={() => setScreen("create")}
-            disabled={!balances || balances.seedelf.utxos === 0 || watching}
+            disabled={!balances || (balances.cardano.utxos === 0 && balances.seedelf.utxos === 0) || watching}
             title={
               watching
                 ? "Wait for the last transaction to confirm"
-                : balances?.seedelf.utxos === 0
-                  ? "Move some ADA in first: a seedelf is paid from your Seedelf balance"
+                : balances && balances.cardano.utxos === 0 && balances.seedelf.utxos === 0
+                  ? "Fund your Cardano account first: it pays for the seedelf"
                   : undefined
             }
           >
@@ -180,6 +180,11 @@ export function Home() {
           </>
         )}
         <p className="note">Anything that can pay a Cardano address can fund this wallet.</p>
+        {balances && balances.seedelf.seedelfs.length === 0 && (
+          <p className="note" data-testid="mint-first">
+            Create your seedelf before moving money in: then what you move in isn't tied to it.
+          </p>
+        )}
         <button
           type="button"
           className="primary"

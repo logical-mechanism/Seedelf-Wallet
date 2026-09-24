@@ -139,6 +139,20 @@ export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[]): K
   });
 }
 
+/** The account's UTxOs at addresses it derived, each with its key's path, for WebAssembly to sign. */
+export function pathedUtxos(
+  keys: Keys,
+  net: Wasm.Network,
+  used: ReadonlySet<string>,
+  utxos: KoiosUtxo[],
+): Array<{ utxo: KoiosUtxo } & KeyPath> {
+  const { paths } = discoverAccount(keys, net, used);
+  return utxos.flatMap((utxo) => {
+    const path = paths.get(utxo.address);
+    return path ? [{ utxo, ...path }] : [];
+  });
+}
+
 /** Where an account address sits: chain (0 receive, 1 change) and index. */
 export interface KeyPath {
   role: 0 | 1;

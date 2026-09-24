@@ -12,7 +12,7 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { MoveInSummary, PendingTx, TokenRef } from "../shared/rpc";
-import { discoverAccount } from "./balances";
+import { pathedUtxos } from "./balances";
 import type { Koios } from "./koios";
 import { SESSION_PENDING } from "./pending";
 import type { Area } from "./storage";
@@ -54,11 +54,7 @@ export class MoveInService {
     ]);
 
     return wallet.withKeys(async (keys) => {
-      const { paths } = discoverAccount(keys, net, new Set(used));
-      const pathed = utxos.flatMap((utxo) => {
-        const path = paths.get(utxo.address);
-        return path ? [{ utxo, ...path }] : [];
-      });
+      const pathed = pathedUtxos(keys, net, new Set(used), utxos);
       const request = { network, params, utxos: pathed, lovelace, tokens };
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
       const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };

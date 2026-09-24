@@ -141,7 +141,8 @@ button:focus-visible {
   outline-offset: 1px;
 }
 
-label {
+label,
+.label {
   font-weight: 600;
   font-size: 12.5px;
 }

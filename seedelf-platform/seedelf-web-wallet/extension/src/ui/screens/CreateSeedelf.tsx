@@ -1,23 +1,30 @@
-// Create a seedelf: a stealth mint paid from the Seedelf balance. The worker
-// builds it, with Ogmios measuring its scripts, and nothing is sent until the
-// user has reviewed it and pressed Send. Only then does giveme.my see it.
+// Create a seedelf. A mint links the seedelf to whatever pays for it, so the
+// Cardano account pays by default: minted before any move-in, the seedelf is
+// linked to the account openly, and money moved in afterwards isn't tied to
+// it. The Seedelf balance can pay instead (a stealth mint), which only hides
+// the payer when that balance came from other people's Seedelf payments. The
+// worker builds it, with Ogmios measuring its script, and nothing is sent
+// until the user has reviewed it and pressed Send.
 
 import { useState, type FormEvent } from "react";
 
 import { LABEL_MAX, labelProblem, tokenNamePrefix } from "../../shared/label";
-import type { Balances, MintSummary, PendingTx } from "../../shared/rpc";
+import type { Balances, MintSource, MintSummary, PendingTx } from "../../shared/rpc";
 import { call } from "../background";
 import { formatAda, shortHex } from "../format";
 
+const SOURCES: Record<MintSource, string> = { account: "Cardano account", seedelf: "Seedelf balance" };
+
 export function CreateSeedelf({
-  seedelf,
+  balances,
   onCancel,
   onSent,
 }: {
-  seedelf: Balances["seedelf"];
+  balances: Balances;
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const [from, setFrom] = useState<MintSource>(balances.cardano.utxos > 0 ? "account" : "seedelf");
   const [label, setLabel] = useState("");
   const [summary, setSummary] = useState<MintSummary>();
   const [busy, setBusy] = useState(false);
@@ -32,7 +39,7 @@ export function CreateSeedelf({
     setBusy(true);
     setError(undefined);
     try {
-      setSummary(await call("mint-build", { label: tag }));
+      setSummary(await call("mint-build", { label: tag, from }));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -68,13 +75,17 @@ export function CreateSeedelf({
         <dl className="review" data-testid="mint-review">
           <Row label="Seedelf" value={summary.label || "Unnamed"} strong />
           <Row label="Token name" value={shortHex(summary.tokenName, 16, 8)} title={summary.tokenName} />
+          <Row label="Paid from" value={SOURCES[summary.from]} />
           <Row label="Locked with it" value={`${formatAda(summary.lovelace)} ₳`} />
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-          <Row label="Back to your Seedelf balance" value={change} />
+          <Row label={`Back to your ${SOURCES[summary.from]}`} value={change} />
         </dl>
         <p className="note">
-          Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the network to confirm.
-          Only removing the seedelf gives back the ADA locked with it.
+          {summary.from === "seedelf"
+            ? "Send asks giveme.my to lend the collateral, then submits. "
+            : "Send submits it. "}
+          It takes about a minute for the network to confirm. Only removing the seedelf gives back the ADA locked with
+          it.
         </p>
         {error && (
           <p className="error" role="alert">
@@ -94,7 +105,10 @@ export function CreateSeedelf({
         <button type="button" className="link" onClick={onCancel}>
           ← Back
         </button>
-        <span className="note">{formatAda(seedelf.lovelace)} ₳ in Seedelf</span>
+        <span className="note">
+          {formatAda(from === "account" ? balances.cardano.lovelace : balances.seedelf.lovelace)} ₳ in your{" "}
+          {SOURCES[from]}
+        </span>
       </div>
       <h1 id="mint-title">Create a seedelf</h1>
       <p className="note">
@@ -126,12 +140,31 @@ export function CreateSeedelf({
       )}
 
       <p className="note">
-        About 1.75 ₳ stays locked with the seedelf, and the network fee is about 0.3 ₳. The review shows the exact
+        About 1.75 ₳ stays locked with the seedelf, and the network fee is about 0.25 ₳. The review shows the exact
         amounts.
       </p>
-      <div className="callout">
-        It's paid from your Seedelf balance. If you moved that money in from your Cardano account, the seedelf can be traced
-        back to the account. It only stays hidden when the balance came from other people's Seedelf payments.
+
+      <span className="label" id="mint-from">
+        Pay with
+      </span>
+      <div className="segmented" role="group" aria-labelledby="mint-from">
+        {(["account", "seedelf"] as const).map((source) => (
+          <button
+            key={source}
+            type="button"
+            className={from === source ? "segmented__item segmented__item--on" : "segmented__item"}
+            aria-pressed={from === source}
+            disabled={(source === "account" ? balances.cardano.utxos : balances.seedelf.utxos) === 0}
+            onClick={() => setFrom(source)}
+          >
+            {SOURCES[source]}
+          </button>
+        ))}
+      </div>
+      <div className="callout" data-testid="mint-from-note">
+        {from === "account"
+          ? "The seedelf is linked to your Cardano account openly. Money you move in afterwards isn't tied to it: a move-in looks the same as paying anyone's seedelf. So create your seedelf before moving money in."
+          : "A stealth mint. It only keeps the seedelf apart from your Cardano account when your Seedelf balance came from other people's Seedelf payments. Money you moved in yourself can be traced back to the account."}
       </div>
       {error && (
         <p className="error" role="alert">

@@ -33,6 +33,7 @@ const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../tests/fixt
 const koiosPreprod = fixture("koios-preprod.json");
 const ownedUtxos = fixture("owned-utxos.json").owned_utxos;
 const mintPreprod = fixture("mint-preprod.json");
+const accountMintPreprod = fixture("account-mint-preprod.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -49,6 +50,8 @@ interface KoiosFake {
   collateral: { status: number; body: unknown };
   /** Transactions giveme.my was asked to witness. */
   collateralAsked: number;
+  /** What Ogmios answers every evaluation with. */
+  evaluation: unknown;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
@@ -66,8 +69,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(epochParams) });
     }
     if (path === "ogmios") {
-      // The real preprod evaluation of a mint of the 12-word phrase's 25 ₳ UTxO.
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(mintPreprod.evaluation) });
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(koios.evaluation) });
     }
     const body = request.postDataJSON();
     if (path === "tx_status") {
@@ -113,6 +115,8 @@ const test = base.extend<{ userDataDir: string; koios: KoiosFake; context: Brows
       confirmations: null,
       collateral: { status: mintPreprod.collateral.status, body: mintPreprod.collateral.answer },
       collateralAsked: 0,
+      // The real preprod evaluation of a stealth mint of the 12-word phrase's 25 ₳ UTxO.
+      evaluation: mintPreprod.evaluation,
     });
   },
   context: async ({ userDataDir, koios }, use) => {
@@ -464,11 +468,47 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   expect(koios.submitted).toHaveLength(0);
 });
 
-test("create a seedelf: tag rules, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
+test("create a seedelf from the Cardano account: review, send, then watch it confirm", async ({ context, koios }) => {
+  koios.evaluation = accountMintPreprod.evaluation;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await page.getByRole("button", { name: "Create a seedelf" }).click();
+
+  // The Cardano account pays by default, and says what that links.
+  await expect(page.getByRole("button", { name: "Cardano account" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("mint-from-note")).toContainText("create your seedelf before moving money in");
+  await page.getByLabel("Personal tag (optional)").fill("first");
+  await page.screenshot({ path: "test-results/account-mint-form.png", fullPage: true });
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const review = page.getByTestId("mint-review");
+  await expect(review).toContainText("Seedelffirst");
+  await expect(review).toContainText("Paid fromCardano account");
+  await expect(review).toContainText("Locked with it1.74986 ₳");
+  await expect(review).toContainText("Back to your Cardano account");
+  await page.screenshot({ path: "test-results/account-mint-review.png", fullPage: true });
+  expect(koios.submitted).toHaveLength(0);
+
+  // Signed at review: Send only submits, and giveme.my is never asked.
+  await page.getByRole("button", { name: "Send" }).click();
+  const banner = page.getByTestId("pending-tx");
+  await expect(banner).toContainText("Seedelf mint sent. Waiting for the network");
+  expect(koios.submitted).toHaveLength(1);
+  expect(koios.collateralAsked).toBe(0);
+  await expect(page.getByRole("button", { name: "Create a seedelf" })).toBeDisabled();
+  koios.confirmations = 1;
+  const popup = await openApp(context, "popup");
+  await expect(popup.getByTestId("pending-tx")).toContainText("Seedelf created");
+});
+
+test("create a seedelf from the Seedelf balance: tag rules, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "Create a seedelf" }).click();
+  await page.getByRole("button", { name: "Seedelf balance" }).click();
+  await expect(page.getByTestId("mint-from-note")).toContainText("A stealth mint");
 
   // The tag: printable ASCII, 15 characters at most, previewed as it will read.
   const tag = page.getByLabel("Personal tag (optional)");

@@ -23,7 +23,7 @@ Money comes in, moves privately, and goes out. It isn't meant to sit here.
 - See your balance: your seedelfs and the funds they hold.
 - **Cardano account:** the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
 - **Move in:** move funds from the Cardano account into your Seedelf balance.
-- **Create a seedelf:** mint your named seedelf so others can pay you. Minting links the seedelf to whatever paid for it, so the first seedelf will be minted before any move-in (chunk 8b; see [privacy.md](docs/privacy.md#known-links)).
+- **Create a seedelf:** mint your named seedelf so others can pay you. Minting links the seedelf to whatever paid for it, so by default the Cardano account pays for it, before any money is moved in (see [privacy.md](docs/privacy.md#known-links)).
 - **Transfer:** send funds privately from your seedelfs to any seedelf.
 - **Withdraw:** send funds from your seedelfs to any Cardano address, or remove a seedelf.
 

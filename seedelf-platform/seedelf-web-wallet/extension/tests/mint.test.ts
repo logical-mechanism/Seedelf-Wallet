@@ -10,7 +10,7 @@ import { MintService, SESSION_MINT } from "../src/background/mint";
 import { SESSION_PENDING } from "../src/background/pending";
 import { Wallet } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, testBalances, vectors } from "./fakes";
+import { accountMintPreprod, loadTestWasm, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const hex = (s: string) => Buffer.from(s).toString("hex");
@@ -40,12 +40,13 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
   return { service, calls };
 }
 
-describe("mint", () => {
+describe("stealth mint (paid from the Seedelf balance)", () => {
   it("builds a seedelf mint, measured by Ogmios, without sending anything", async () => {
     const t = await unlocked();
-    const summary = await t.mint.build("preprod", "web-wallet");
+    const summary = await t.mint.build("preprod", "web-wallet", "seedelf");
     expect(summary).toMatchObject({
       network: "preprod",
+      from: "seedelf",
       label: "web-wallet",
       // Named after the 25 ₳ UTxO, the one that pays.
       tokenName: `5eed0e1f${hex("web-wallet")}00${"a1".repeat(32)}`.slice(0, 64),
@@ -76,7 +77,7 @@ describe("mint", () => {
 
   it("explains what stops a mint", async () => {
     const t = await unlocked();
-    await expect(t.mint.build("preprod", "sixteen chars!!!")).rejects.toThrow("at most 15");
+    await expect(t.mint.build("preprod", "sixteen chars!!!", "seedelf")).rejects.toThrow("at most 15");
     t.koios.evaluation = {
       jsonrpc: "2.0",
       error: {
@@ -85,21 +86,21 @@ describe("mint", () => {
         data: [{ validator: { index: 0, purpose: "spend" }, error: { code: 3012, data: { validationError: "boom\nCaused by: (error)" } } }],
       },
     };
-    await expect(t.mint.build("preprod", "")).rejects.toThrow(
+    await expect(t.mint.build("preprod", "", "seedelf")).rejects.toThrow(
       "The Seedelf contract refused this transaction (spending input 0: Caused by: (error))",
     );
 
     const empty = await unlocked({ owned: false });
-    await expect(empty.mint.build("preprod", "")).rejects.toThrow("Your Seedelf balance is empty");
+    await expect(empty.mint.build("preprod", "", "seedelf")).rejects.toThrow("Your Seedelf balance is empty");
     expect(empty.koios.calls.map((c) => c.path)).not.toContain("ogmios");
 
     await t.wallet.lock();
-    await expect(t.mint.build("preprod", "")).rejects.toThrow("locked");
+    await expect(t.mint.build("preprod", "", "seedelf")).rejects.toThrow("locked");
   });
 
   it("sends nothing when giveme.my refuses, or its signature doesn't check out", async () => {
     const t = await unlocked();
-    const summary = await t.mint.build("preprod", "");
+    const summary = await t.mint.build("preprod", "", "seedelf");
 
     // The recorded answer to a transaction giveme.my can't validate.
     await expect(t.mint.submit("preprod", summary.txHash)).rejects.toThrow(
@@ -118,7 +119,7 @@ describe("mint", () => {
 
   it("signs after a worker restart: the one-time key comes back from the seed", async () => {
     const t = await unlocked();
-    const summary = await t.mint.build("preprod", "");
+    const summary = await t.mint.build("preprod", "", "seedelf");
     // A new worker: new wallet object and services over the same session storage.
     const wasm = loadTestWasm();
     const wallet = new Wallet({
@@ -144,7 +145,7 @@ describe("mint", () => {
 
   it("submits exactly the signed transaction, then watches it", async () => {
     const t = await unlocked();
-    const summary = await t.mint.build("preprod", "web-wallet");
+    const summary = await t.mint.build("preprod", "web-wallet", "seedelf");
     const built = (await t.session.get<Stored>(SESSION_MINT))!;
     t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
     // Stands in for WebAssembly's signing (Rust tests cover it): returns the transaction as it came.
@@ -166,7 +167,7 @@ describe("mint", () => {
   it("refuses to send anything but the reviewed transaction", async () => {
     const t = await unlocked();
     await expect(t.mint.submit("preprod", "00".repeat(32))).rejects.toThrow("isn't ready to send");
-    const summary = await t.mint.build("preprod", "");
+    const summary = await t.mint.build("preprod", "", "seedelf");
     await expect(t.mint.submit("preprod", "11".repeat(32))).rejects.toThrow("isn't ready to send");
     await expect(t.mint.submit("mainnet", summary.txHash)).rejects.toThrow("isn't ready to send");
 
@@ -182,5 +183,47 @@ describe("mint", () => {
     // Lock forgets the built mint.
     await t.wallet.lock();
     expect(await t.session.get(SESSION_MINT)).toBeUndefined();
+  });
+});
+
+describe("mint paid by the Cardano account (mint first, then move in)", () => {
+  it("builds and signs it at review, with only Koios and Ogmios asked", async () => {
+    const t = await unlocked();
+    t.koios.evaluation = accountMintPreprod.evaluation;
+    const summary = await t.mint.build("preprod", "first", "account");
+    expect(summary).toMatchObject({ network: "preprod", from: "account", label: "first", lovelace: "1749860" });
+    expect(summary.tokenName.startsWith(`5eed0e1f${hex("first")}`)).toBe(true);
+    expect(Number(summary.fee.total)).toBe(Number(summary.fee.size) + Number(summary.fee.compute) + Number(summary.fee.scriptReference));
+    expect(Number(summary.fee.scriptReference)).toBe(519 * 15); // the seedelf policy only
+
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["account_addresses", "account_utxos", "epoch_params", "ogmios"]);
+    expect(t.collateral.asked).toHaveLength(0);
+    expect(t.koios.submitted).toHaveLength(0);
+
+    // Signed now: the stored transaction is the draft's shape plus the account's witnesses.
+    const built = (await t.session.get<Stored>(SESSION_MINT))!;
+    expect(built.seed).toBeUndefined();
+    expect(txIdOf(bytes(built.txCbor))).toBe(summary.txHash);
+  });
+
+  it("submits exactly the signed transaction, without giveme.my", async () => {
+    const t = await unlocked();
+    t.koios.evaluation = accountMintPreprod.evaluation;
+    const summary = await t.mint.build("preprod", "", "account");
+    const built = (await t.session.get<Stored>(SESSION_MINT))!;
+    const pending = await t.mint.submit("preprod", summary.txHash);
+    expect(t.collateral.asked).toHaveLength(0);
+    expect(t.koios.submitted.map((b) => Buffer.from(b).toString("hex"))).toEqual([built.txCbor]);
+    expect(pending).toMatchObject({ kind: "mint", txHash: summary.txHash, confirmations: null });
+    expect(await t.session.get(SESSION_MINT)).toBeUndefined();
+  });
+
+  it("says when the account can't pay", async () => {
+    // The 15-word vector phrase: no recorded preprod UTxOs.
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!;
+    const t = testBalances();
+    await t.wallet.create(v.phrase, PASSWORD);
+    await expect(t.mint.build("preprod", "", "account")).rejects.toThrow("Your Cardano account is empty");
+    expect(t.koios.calls.map((c) => c.path)).not.toContain("ogmios");
   });
 });
