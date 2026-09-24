@@ -37,6 +37,7 @@ describe("balances", () => {
         },
       ],
       seedelfs: [{ assetName: ownedUtxos[2]!.asset_list![0]!.asset_name, label: "web-wallet", lovelace: "1500000" }],
+      locked: { lovelace: "0", tokens: [], utxos: 0 },
     });
 
     // Real preprod: this account has used 0/0, 0/1, 0/2 and 1/0.
@@ -48,7 +49,7 @@ describe("balances", () => {
     const t = testBalances();
     await t.wallet.create(phrase(24).phrase, PASSWORD);
     const b = await t.balances.get("preprod");
-    expect(b.seedelf).toEqual({ lovelace: "0", utxos: 0, tokens: [], seedelfs: [] });
+    expect(b.seedelf).toEqual({ lovelace: "0", utxos: 0, tokens: [], seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } });
   });
 
   it("ignores UTxOs that only borrow the account's stake key", async () => {
@@ -116,7 +117,7 @@ describe("balances", () => {
     const t = testBalances();
     await t.wallet.create(phrase(12).phrase, PASSWORD);
     const [a, b] = await Promise.all([t.balances.get("preprod", true), t.balances.get("preprod", true)]);
-    expect(a).toBe(b);
+    expect(a).toEqual(b);
     expect(t.koios.calls).toHaveLength(3);
   });
 

@@ -36,6 +36,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
     koios: () => new Koios("https://preprod.koios.rest/api/v1", t.koios.fetch, async () => undefined),
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     now: () => t.clock.now,
+    coins: t.coins,
   });
   return { service, calls };
 }
@@ -137,6 +138,7 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
       koios: () => new Koios("https://preprod.koios.rest/api/v1", t.koios.fetch, async () => undefined),
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       now: () => t.clock.now,
+      coins: t.coins,
     });
     t.collateral.answer = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
     // It got past the one-time key (same key re-derived) to giveme.my's signature.

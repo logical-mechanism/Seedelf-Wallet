@@ -12,6 +12,10 @@
 // also leaves out what anyone can pair with our stake key: their own payment
 // key or script, which proves nothing about us.
 //
+// What the user locked, and the Cardano account's collateral, are counted in
+// the balance and reported apart (coin-control.ts), fresh on every request,
+// since locking a UTxO doesn't read the chain again.
+//
 // The reading is cached per network in chrome.storage.session and wiped on lock.
 // A reading that still lists a UTxO this wallet has spent came from a Koios
 // backend that's behind (spent.ts): it's read again, a few times, and what's
@@ -20,10 +24,11 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { Balances, SeedelfInfo } from "../shared/rpc";
+import type { Balances, Locked, SeedelfInfo } from "../shared/rpc";
 import { readAccountUtxos, type Account, type PathedUtxo } from "./account";
 import { registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses, type ActivityService } from "./activity";
+import { SESSION_ACCOUNT_UTXOS_PREFIX, type CoinControlService } from "./coin-control";
 import { readContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
 import { spentSet } from "./spent";
@@ -53,7 +58,11 @@ export interface BalanceDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Notes new UTxOs of ours as arrivals in the Seedelf history. */
   activity?: ActivityService;
+  /** What's locked on each side. */
+  coins: CoinControlService;
 }
+
+const NOTHING: Locked = { lovelace: "0", tokens: [], utxos: 0 };
 
 export class BalanceService {
   private readonly inFlight = new Map<NetworkName, Promise<Balances>>();
@@ -62,6 +71,10 @@ export class BalanceService {
 
   /** The cached reading, or a new one when there's none or `refresh` is set. Throws if locked. */
   async get(network: NetworkName, refresh = false): Promise<Balances> {
+    return this.withLocked(network, await this.reading(network, refresh));
+  }
+
+  private async reading(network: NetworkName, refresh: boolean): Promise<Balances> {
     if (!refresh) {
       const cached = await this.deps.wallet.withKeys(() =>
         this.deps.session.get<Balances>(SESSION_BALANCES_PREFIX + network),
@@ -75,6 +88,12 @@ export class BalanceService {
       this.inFlight.set(network, reading);
     }
     return reading;
+  }
+
+  /** The reading with what's locked on each side now. */
+  private async withLocked(network: NetworkName, b: Balances): Promise<Balances> {
+    const locked = await this.deps.coins.locked(network);
+    return { ...b, seedelf: { ...b.seedelf, locked: locked.seedelf }, cardano: { ...b.cardano, locked: locked.cardano } };
   }
 
   private async read(network: NetworkName): Promise<Balances> {
@@ -97,6 +116,8 @@ export class BalanceService {
         cardano: this.cardanoSide(account, utxos),
       };
       await session.set(SESSION_BALANCES_PREFIX + network, balances);
+      // The UTxOs screen and what's locked read these.
+      await session.set(SESSION_ACCOUNT_UTXOS_PREFIX + network, utxos);
       // Activity reads the account's transactions against these.
       const addresses: AccountAddresses = { stake: account.stake, addresses: account.addresses };
       await session.set(SESSION_ACCOUNT_ADDRESSES_PREFIX + network, addresses);
@@ -118,7 +139,7 @@ export class BalanceService {
     }
     seedelfs.sort((a, b) => (a.label ?? "￿").localeCompare(b.label ?? "￿") || a.assetName.localeCompare(b.assetName));
     const { lovelace, tokens } = sumValue(spendable);
-    return { lovelace: lovelace.toString(), tokens, utxos: spendable.length, seedelfs };
+    return { lovelace: lovelace.toString(), tokens, utxos: spendable.length, seedelfs, locked: NOTHING };
   }
 
   private cardanoSide(account: Account, utxos: PathedUtxo[]): Balances["cardano"] {
@@ -128,6 +149,7 @@ export class BalanceService {
       tokens,
       utxos: utxos.length,
       addressesUsed: account.used,
+      locked: NOTHING,
     };
   }
 }

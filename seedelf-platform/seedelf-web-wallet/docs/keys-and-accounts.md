@@ -84,10 +84,11 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
    - Discovery scans both the receive (`0/i`) and change (`1/i`) chains with the standard gap limit of 20, so a restored wallet shows its full balance. Built in chunk 6; see [architecture.md](architecture.md#chain-data).
    - Everything under the account's payment keys is the account's, whatever the address's staking part: enterprise addresses, and our key with someone else's stake key, are found and spent too (chunk 12).
    - Every function takes the account index, so more accounts can come later. A picker would discover accounts in order (0, 1, 2, … stopping at the first one never used), the way BIP44 does.
-2. **Leave collateral alone.**
-   - Lace's collateral is just a pure-ADA UTxO of exactly 5 ADA, which Lace marks as reserved in its own local storage; nothing on-chain says so.
-   - The web wallet never needs it: move-in runs no script, and Seedelf spends use giveme.my.
-   - Like the CLI (`seedelf-core::utxos::collect_address_utxos`), move-in never spends those UTxOs, not even with Max. They have to be moved with the other wallet.
+2. **One collateral, set aside, as in Lace (chunk 12).**
+   - Lace's collateral is just a pure-ADA UTxO of exactly 5 ADA, which Lace marks as reserved in its own local storage; nothing on-chain says so. The web wallet does the same, in Settings → Collateral.
+   - With none chosen, the wallet takes the oldest pure 5 ADA UTxO the account holds (no transaction), so another wallet's collateral on the same phrase stays put. Reclaiming it stops that; setting one with none to take pays 5 ADA to `0/0`.
+   - It's kept out of every payment, and put up only by the account-paid mint: move-in and send run no script, and Seedelf spends use giveme.my.
+   - Until chunk 12, move-in and send never spent any pure 5 ADA UTxO, as the CLI's `collect_address_utxos` doesn't. Now only the collateral, and the UTxOs the user locked, stay put.
 3. **Tokens and NFTs are shown.** Move-in moves ADA by default, and tokens only when the user picks them. Each Seedelf UTxO can only hold so many tokens (see the root README's *Wallet Limitations*).
 4. **Staking is untouched.**
    - Delegation, rewards and governance stay with the user's main wallet.
@@ -118,7 +119,7 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
   - **Show recovery phrase** opens the vault with the password again, even while unlocked, and shows the words. A wrong password counts towards the unlock back-off and waits like one.
   - **Change password** opens the vault with the current password and seals the same entropy under the new one, keeping `createdAt`. The same back-off applies.
   - **Remove wallet** deletes the vault after the typed confirmation (`delete wallet`), as Forgot password does, and every private record with it.
-- **Private records** (contacts, the Seedelf history) are sealed under a second key: HKDF-SHA-256 of the entropy with its own salt (`seedelf-web-wallet-private-store-v1`), so it has nothing to do with the Seedelf or Cardano keys. See [architecture.md](architecture.md#storage).
+- **Private records** (contacts, the Seedelf history, the locked UTxOs and the collateral) are sealed under a second key: HKDF-SHA-256 of the entropy with its own salt (`seedelf-web-wallet-private-store-v1`), so it has nothing to do with the Seedelf or Cardano keys. See [architecture.md](architecture.md#storage).
 - **Password rule:** at least 12 characters, with no composition rules. The UI shows a rough strength hint, and the worker enforces the length. (The CLI asks for 14 characters with character classes; the two are separate products.)
 - **Performance:** unlock takes about 190 ms in the service worker, measured end to end in Playwright (Argon2id in pure JS, plus both key derivations in WebAssembly). That's well under the 1.5 s budget, so no faster Argon2id is needed. Lace's `setArgon2idImplementation` hook is kept in case that changes.
 - **Lock and wipe:**

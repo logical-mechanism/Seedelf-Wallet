@@ -78,16 +78,58 @@ export interface SeedelfInfo {
   lovelace: string;
 }
 
+/** What's kept out of every payment on one side: locked UTxOs, and the Cardano account's collateral. */
+export interface Locked {
+  lovelace: string;
+  tokens: TokenAmount[];
+  utxos: number;
+}
+
 /** What the wallet holds on one network. Lovelace amounts are decimal strings. */
 export interface Balances {
   network: NetworkName;
   /** When the chain was read (ms since the epoch). */
   updatedAt: number;
   /** UTxOs in the wallet contract this wallet owns, except those holding a seedelf (as in the CLI's `balance`). */
-  seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[] };
+  seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[]; locked: Locked };
   /** The Cardano account (CIP-1852 account 0). */
-  cardano: { lovelace: string; tokens: TokenAmount[]; utxos: number; addressesUsed: number };
+  cardano: { lovelace: string; tokens: TokenAmount[]; utxos: number; addressesUsed: number; locked: Locked };
 }
+
+export type UtxoSide = "seedelf" | "cardano";
+
+/** One UTxO of the wallet's, for the UTxOs screen. */
+export interface UtxoInfo {
+  txHash: string;
+  index: number;
+  lovelace: string;
+  tokens: TokenAmount[];
+  /** The block that made it, when known. */
+  blockHeight?: number;
+  /** The Cardano account's address holding it. */
+  address?: string;
+  /** Kept out of every payment (the collateral always is). */
+  locked: boolean;
+  /** The Cardano account's collateral. */
+  collateral?: boolean;
+  /** It holds one of your seedelfs (its tag, or its name): only removing the seedelf spends it. */
+  seedelf?: string;
+}
+
+/** Both sides' UTxOs, largest first. */
+export interface UtxoLists {
+  seedelf: UtxoInfo[];
+  cardano: UtxoInfo[];
+}
+
+/** The Cardano account's collateral: 5 ₳ set aside for transactions that run a script. */
+export type CollateralStatus =
+  /** `by`: the wallet took a 5 ₳ UTxO the account held, or you set it. */
+  | { state: "set"; utxo: UtxoInfo; by: "wallet" | "you" }
+  /** The payment that makes it is on its way. */
+  | { state: "waiting"; txHash: string }
+  /** `reclaimed`: you returned it, so the wallet doesn't take one by itself. `candidate`: a 5 ₳ UTxO it can be, with no transaction. */
+  | { state: "none"; reclaimed: boolean; candidate?: UtxoInfo };
 
 /** A token, by its policy and hex name. */
 export interface TokenRef {
@@ -240,7 +282,7 @@ export interface RemoveSummary {
 
 /** A submitted transaction the wallet is watching. */
 export interface PendingTx {
-  kind: "move-in" | "mint" | "transfer" | "withdraw" | "remove" | "send";
+  kind: "move-in" | "mint" | "transfer" | "withdraw" | "remove" | "send" | "collateral";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -310,6 +352,20 @@ export interface Requests {
   "contact-remove": { payload: { id: string }; result: Contact[] };
   /** One balance's activity, newest first; `more` reads the next page (the Cardano account only). */
   history: { payload: { of: "seedelf" | "cardano"; more?: boolean }; result: { entries: ActivityEntry[]; more: boolean } };
+  /** Both sides' UTxOs, from the last reading. */
+  utxos: { payload: None; result: UtxoLists };
+  /** Locks or unlocks one UTxO (`txhash#index`): a locked one is left out of every payment. */
+  "utxo-lock": { payload: { of: UtxoSide; utxo: string; locked: boolean }; result: UtxoLists };
+  /** The Cardano account's collateral, from the last reading. */
+  collateral: { payload: None; result: CollateralStatus };
+  /** Makes a 5 ₳ UTxO the account holds its collateral, with no transaction. */
+  "collateral-use": { payload: { utxo: string }; result: CollateralStatus };
+  /** Returns the collateral to the balance. */
+  "collateral-reclaim": { payload: None; result: CollateralStatus };
+  /** Builds and signs a 5 ₳ payment to the account's own `0/0`, whose output becomes the collateral. */
+  "collateral-build": { payload: None; result: SendSummary };
+  /** Submits the collateral payment built last, if its hash matches. */
+  "collateral-submit": { payload: { txHash: string }; result: PendingTx };
 }
 
 export type RequestName = keyof Requests;
@@ -356,6 +412,13 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "contact-save",
   "contact-remove",
   "history",
+  "utxos",
+  "utxo-lock",
+  "collateral",
+  "collateral-use",
+  "collateral-reclaim",
+  "collateral-build",
+  "collateral-submit",
 ]);
 
 export function isMessage(value: unknown): value is Message {

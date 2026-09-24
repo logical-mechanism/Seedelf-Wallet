@@ -11,11 +11,15 @@
 // (`account_addresses`); then every payment key in that range is asked about
 // by credential (`credential_utxos`). Two requests, one after the other, and a
 // move-in, mint or send adds `epoch_params` alongside.
+//
+// To spend, what the user locked and the collateral are left out
+// (coin-control.ts); the collateral comes back on its own, for a mint.
 
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import { discoverChain } from "./chain";
+import type { CoinControlService } from "./coin-control";
 import type { Koios, KoiosUtxo } from "./koios";
 import { readFresh, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
@@ -91,15 +95,30 @@ export async function readAccountUtxos(
   return { account: { ...found, stake }, utxos };
 }
 
-/** To spend from the account (a move-in, an account-paid mint, a send): its UTxOs, fresh, and the protocol parameters. */
+/** Why the account has nothing to pay with: `held` from readAccount, `empty` for an empty account. */
+export function nothingInAccount(held: number, empty: string): Error {
+  return new Error(
+    held
+      ? "Everything in your Cardano account is locked or is its collateral. Unlock a UTxO on its UTxOs screen first."
+      : empty,
+  );
+}
+
+/**
+ * To spend from the account (a move-in, an account-paid mint, a send): the
+ * UTxOs that may be spent, fresh (not locked, not the collateral), the
+ * collateral, how many UTxOs the account holds in all, and the protocol
+ * parameters.
+ */
 export async function readAccount(
-  deps: AccountDeps,
+  deps: AccountDeps & { coins: CoinControlService },
   network: NetworkName,
-): Promise<{ params: Record<string, unknown>; utxos: PathedUtxo[] }> {
+): Promise<{ params: Record<string, unknown>; utxos: PathedUtxo[]; collateral?: PathedUtxo; held: number }> {
   const spent = await deps.wallet.withKeys(() => spentSet(deps.session));
   const [{ utxos }, params] = await Promise.all([
     readAccountUtxos(deps, network, spent),
     deps.koios(network).epochParams(),
   ]);
-  return { params, utxos };
+  const { spendable, collateral } = await deps.coins.account(network, utxos);
+  return { params, utxos: spendable, collateral, held: utxos.length };
 }

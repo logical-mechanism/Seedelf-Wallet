@@ -80,7 +80,7 @@ flowchart LR
   - `wasm/bench.mjs` measures the size and the speed of a build.
 - **Network-free builders** live in [`seedelf-core/src/build.rs`](../../seedelf-core/src/build.rs). A builder takes chain data the caller already has (protocol parameters, UTxOs as Koios returns them, deserialized into the same `seedelf-koios` types) and returns an unsigned transaction.
   - `external_sweep`: the CLI's `external sweep`, now a thin `run()` around it. Its offline tests pass unchanged.
-  - `move_in` and `account_send`: the web wallet's move-in and its send from the Cardano account (see [flows.md](flows.md#move-in-cardano-account--seedelf)). Both are one account payment to a `Payee`: into Seedelf (deposits, tokens 20 to an output) or to a key address (one output). They share the UTxO choice, the change and the 5 ₳ rule.
+  - `move_in` and `account_send`: the web wallet's move-in and its send from the Cardano account (see [flows.md](flows.md#move-in-cardano-account--seedelf)). Both are one account payment to a `Payee`: into Seedelf (deposits, tokens 20 to an output) or to a key address (one output). They share the UTxO choice and the change, and may spend any UTxO they're given: the web wallet leaves out its collateral and the UTxOs the user locked ([coin control](#chain-data), chunk 12). Until then they never spent a pure 5 ₳ UTxO, as the CLI's `collect_address_utxos` doesn't.
   - `mint`: the CLI's `util mint`, now a thin `run()` around it, and the web wallet's stealth [Create a seedelf](flows.md#create-a-seedelf).
   - `transfer` and `transfer_from`: the CLI's `transfer`, now a thin `run()` around them, and the web wallet's [Send to a seedelf](flows.md#transfer-seedelf--any-seedelf) (chunk 9).
     - Each payment goes under a fresh re-randomization of the recipient's register, as found on chain with their seedelf.
@@ -88,8 +88,8 @@ flowchart LR
   - `sweep`, `sweep_from` and `sweep_all`: the CLI's `sweep`, now a thin `run()` around them, and the web wallet's [Withdraw](flows.md#send-to-an-address) (chunk 10). `is_payable_address` accepts only a Shelley address on this network with no script in it, as the CLI always has.
   - `remove`: the CLI's `remove` and the web wallet's [Remove a seedelf](flows.md#remove-a-seedelf). It spends the UTxO holding exactly one seedelf and burns it (`ScriptSpend::mint` with −1).
   - `account_mint`: a seedelf paid by the Cardano account (chunk 8b; the CLI's `create`, still inline in the CLI).
-    - Key inputs pay: pure ADA first, never a 5 ₳ pure UTxO.
-    - One of the account's own UTxOs is the collateral. If it holds tokens, the collateral return gives them back.
+    - Key inputs pay: pure ADA first.
+    - The collateral is the web wallet's set-aside one when it has one (never an input), otherwise one of the account's own UTxOs. If it holds tokens, the collateral return gives them back.
     - It's drafted and finalized like a script spend, but only the policy runs: no proofs, no one-time key, no giveme.my.
   - Shared pieces: `deposit_outputs` (contract outputs under fresh re-randomizations, tokens 20 to an output), and `settle_fee`, which signs each draft with one throwaway key per signer and reprices until the fee covers the signed size.
   - **The least ADA a payment can carry** has a function per kind: `minimum_deposit` (a move-in), `minimum_address_payment` (a withdrawal or a send) and `minimum_seedelf_payment` (a transfer), each the same sum the builder checks. The builders still refuse less, as the CLI expects; the web wallet's WebAssembly raises a smaller amount to it (so "0" with tokens sends only that) and reports the least as `minimum` (chunk 12).
@@ -189,6 +189,10 @@ flowchart LR
   - A balance reading or a build whose answer lists one of them is read again, up to three more times, 3 s apart.
   - What's spent is left out either way, so a stale answer can't be built on.
 - **Activity (chunk 12, `activity.ts`):** the Seedelf history makes no requests (sends are written at submit, arrivals come from the contract scan), sealed in the private store. The Cardano account's comes from `account_txs` (newest first, 20 a page; after the newest block read, to catch up) and one `tx_info` a page, with only inputs, outputs and assets turned on (about 2 KB a transaction). The pages stay in `chrome.storage.session`; the account's addresses come from the last balance reading.
+- **Coin control (chunk 12, `coin-control.ts`):** the UTxOs the user locked, per side, and the Cardano account's collateral. None of it asks Koios anything: the UTxOs screen and the locked amounts read the last balance reading's UTxOs (`seedelf.accountUtxos.<network>`) and the contract scan's.
+  - **Locked** UTxOs are left out before WebAssembly sees the UTxOs, in `readAccount` (a move-in, a send, an account-paid mint) and `readContract` (every Seedelf spend). The balance still counts them, and reports them apart (`locked` on each side), fresh on every request. A seedelf's UTxO can't be locked, and the collateral is reclaimed, not unlocked.
+  - **The collateral** is one pure-ADA 5 ₳ UTxO under the account: the one the user chose, or else the oldest the account holds, unless the user reclaimed it. It's always left out of payments, and passed to `draftAccountMint` as the mint's collateral. Setting one with none to take is a send of 5 ₳ to the account's own `0/0` (`SendService.buildCollateral`); its output 0 is the collateral from Send on, and it's "waiting" until a reading has it, for up to 10 minutes.
+  - The choices are a private record (`coins.<network>`), sealed like Contacts: which Seedelf UTxOs are the user's is exactly what the contract hides.
 - **ADA Handles (chunk 10):** `asset_nft_address` for the handle policy (`f0ff48bb…`, the same on preprod), the plain name and then the CIP-68 one. Only when the user types `$name` as a withdrawal's or a send's destination, and again at Review.
 - **A send from the Cardano account (chunk 12):** Review reads the destination (a handle: one or two requests) and the account (three); Send is one `submittx`. The pending watch then asks `tx_status`, as for every transaction.
 - **Finding a recipient (chunk 9):** the contract as the scan has it; the UTxO holding the seedelf is picked in the extension. Koios is never asked about the recipient's token.
@@ -208,7 +212,8 @@ flowchart LR
 | `chrome.storage.session` | `seedelf.balances.<network>` | The last balance reading, only while unlocked |
 | `chrome.storage.session` | `seedelf.contract.<network>` | This wallet's contract UTxOs, each seedelf's UTxO and the last block seen (`contract-scan.ts`), only while unlocked |
 | `chrome.storage.session` | `seedelf.accountAddresses.<network>`, `seedelf.accountActivity.<network>` | The account's stake address and addresses (from the balance reading), and its Activity pages, only while unlocked |
-| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts`, and `history.<network>` (the Seedelf history). See below. |
+| `chrome.storage.session` | `seedelf.accountUtxos.<network>` | The account's UTxOs with their key paths, from the balance reading, for the UTxOs screen and what's locked; only while unlocked |
+| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts`, `history.<network>` (the Seedelf history), and `coins.<network>` (the locked UTxOs and the collateral). See below. |
 
 - **Private records** (`private-store.ts`, chunk 12) are what the wallet keeps on disk that says something about its user.
   - Each one is JSON sealed with XChaCha20-Poly1305 under a random 24-byte nonce, with the record's key as associated data.

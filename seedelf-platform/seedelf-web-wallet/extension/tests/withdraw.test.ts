@@ -43,6 +43,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
     koios: () => new Koios("https://preprod.koios.rest/api/v1", t.koios.fetch, async () => undefined),
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     now: () => t.clock.now,
+    coins: t.coins,
   });
 }
 

@@ -1,9 +1,10 @@
 // Home, in two tabs. Seedelf: the Seedelf balance with Receive (your
 // seedelfs: their names, and Remove), Send, Withdraw and Create, and its
 // tokens. Cardano account: the account's balance and tokens, Receive, Send
-// and Move in. Until the wallet has a seedelf and a Seedelf
-// balance, a checklist shows the order that keeps them apart: fund the
-// account, create the seedelf, then move in (privacy.md, mint first).
+// and Move in. Each tab opens its Activity and its UTxOs, where UTxOs are
+// locked; the forms get only what's unlocked. Until the wallet has a seedelf
+// and a Seedelf balance, a checklist shows the order that keeps them apart:
+// fund the account, create the seedelf, then move in (privacy.md, mint first).
 // Balances come from the worker's last reading; it reads the chain again
 // when that is over a minute old, or on Refresh. A sent move-in, seedelf
 // mint, transfer, withdrawal or removal shows as a banner until the network
@@ -18,6 +19,7 @@ import { Callout } from "../components/Callout";
 import { Splash, useSplash } from "../components/Splash";
 import {
   ChevronRightIcon,
+  CoinsIcon,
   DoneIcon,
   ExternalIcon,
   HistoryIcon,
@@ -32,7 +34,7 @@ import {
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { explorerUrl, formatAda, plural, shortHex, timeAgo } from "../format";
+import { explorerUrl, formatAda, plural, shortHex, timeAgo, unlocked } from "../format";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
@@ -41,6 +43,7 @@ import { Receive, ReceiveSeedelf } from "./Receive";
 import { RemoveSeedelf } from "./RemoveSeedelf";
 import { Tokens } from "./Tokens";
 import { Transfer } from "./Transfer";
+import { Utxos } from "./Utxos";
 import { Withdraw } from "./Withdraw";
 
 /** How the banner names a sent transaction, and says it's confirmed. */
@@ -51,6 +54,7 @@ const SENT: Record<PendingTx["kind"], string> = {
   withdraw: "Withdrawal",
   remove: "Seedelf removal",
   send: "Payment",
+  collateral: "Collateral payment",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Move-in confirmed",
@@ -59,6 +63,7 @@ const CONFIRMED: Record<PendingTx["kind"], string> = {
   withdraw: "Withdrawal confirmed",
   remove: "Seedelf removed",
   send: "Payment confirmed",
+  collateral: "Collateral set",
 };
 
 /** Read again on open when the last reading is older than this. */
@@ -69,6 +74,7 @@ const WATCH_EVERY_MS = 15_000;
 type Tab = "seedelf" | "cardano";
 
 const BUSY = "Wait for the last transaction to confirm";
+const ALL_LOCKED = "Every UTxO here is locked: unlock one under UTxOs";
 
 export function Home() {
   const [account, setAccount] = useState<Account>();
@@ -83,6 +89,7 @@ export function Home() {
   const [removing, setRemoving] = useState<SeedelfInfo>();
   const [tokensOf, setTokensOf] = useState<Tab>();
   const [activityOf, setActivityOf] = useState<Tab>();
+  const [utxosOf, setUtxosOf] = useState<Tab>();
   const [pending, setPending] = useState<PendingTx | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
@@ -134,16 +141,27 @@ export function Home() {
   }, [watching, watch]);
 
   const seedelfs = balances?.seedelf.seedelfs ?? [];
-  const canSpend = !!balances && balances.seedelf.utxos > 0 && !watching;
+  // What the forms may spend: each side less what's locked.
+  const free = balances && { ...balances, seedelf: unlocked(balances.seedelf), cardano: unlocked(balances.cardano) };
+  const canSpend = !!free && free.seedelf.utxos > 0 && !watching;
   const spendTitle = watching
     ? BUSY
     : balances && balances.seedelf.utxos === 0
       ? "Move some ADA in first: these are paid from your Seedelf balance"
+      : free && free.seedelf.utxos === 0
+        ? ALL_LOCKED
+        : undefined;
+  const canCreate = !!free && (free.cardano.utxos > 0 || free.seedelf.utxos > 0) && !watching;
+  const createTitle = watching
+    ? BUSY
+    : balances && !canCreate
+      ? balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
+        ? ALL_LOCKED
+        : "Fund your Cardano account first: it pays for the seedelf"
       : undefined;
-  const canCreate = !!balances && (balances.cardano.utxos > 0 || balances.seedelf.utxos > 0) && !watching;
-  const createTitle = watching ? BUSY : balances && !canCreate ? "Fund your Cardano account first: it pays for the seedelf" : undefined;
   // Move in and Send both spend the account.
-  const canMoveIn = !!balances && balances.cardano.utxos > 0 && !watching;
+  const canMoveIn = !!free && free.cardano.utxos > 0 && !watching;
+  const moveInTitle = watching ? BUSY : balances && free && balances.cardano.utxos > 0 && !canMoveIn ? ALL_LOCKED : undefined;
 
   const sent = (p: PendingTx) => {
     setPending(p);
@@ -168,11 +186,11 @@ export function Home() {
       />
     );
   }
-  if (screen === "move-in" && balances) return <MoveIn cardano={balances.cardano} onCancel={home} onSent={sent} />;
-  if (screen === "send" && balances) return <CardanoSend cardano={balances.cardano} onCancel={home} onSent={sent} />;
-  if (screen === "create" && balances) return <CreateSeedelf balances={balances} onCancel={home} onSent={sent} />;
-  if (screen === "transfer" && balances) return <Transfer seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
-  if (screen === "withdraw" && balances) return <Withdraw seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
+  if (screen === "move-in" && free) return <MoveIn cardano={free.cardano} onCancel={home} onSent={sent} />;
+  if (screen === "send" && free) return <CardanoSend cardano={free.cardano} onCancel={home} onSent={sent} />;
+  if (screen === "create" && free) return <CreateSeedelf balances={free} onCancel={home} onSent={sent} />;
+  if (screen === "transfer" && free) return <Transfer seedelf={free.seedelf} onCancel={home} onSent={sent} />;
+  if (screen === "withdraw" && free) return <Withdraw seedelf={free.seedelf} onCancel={home} onSent={sent} />;
   if (activityOf) {
     const pendingHash = watching ? pending?.txHash : undefined;
     return <Activity of={activityOf} pendingHash={pendingHash} onBack={() => setActivityOf(undefined)} />;
@@ -180,6 +198,10 @@ export function Home() {
   if (tokensOf && balances) {
     const back = () => setTokensOf(undefined);
     return <Tokens tokens={balances[tokensOf].tokens} of={tokensOf} onBack={back} />;
+  }
+  if (utxosOf) {
+    // Locking changes what's locked, not the reading: the kept reading comes back with it, no request.
+    return <Utxos of={utxosOf} onBack={() => setUtxosOf(undefined)} onChanged={() => void load(false)} />;
   }
 
   return (
@@ -217,7 +239,9 @@ export function Home() {
                 Seedelf balance
               </h1>
               <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
-              <span className="hero__meta">{balances ? plural(balances.seedelf.utxos, "UTxO") : "\u00a0"}</span>
+              <span className="hero__meta" data-testid="seedelf-meta">
+                {balances ? `${plural(balances.seedelf.utxos, "UTxO")}${lockedMeta(balances.seedelf)}` : "\u00a0"}
+              </span>
               <div className="hero__actions">
                 <ActionButton
                   icon={<ReceiveIcon />}
@@ -277,7 +301,7 @@ export function Home() {
               </section>
             )}
 
-            <ActivityLink onClick={() => setActivityOf("seedelf")} />
+            <Links onActivity={() => setActivityOf("seedelf")} onUtxos={() => setUtxosOf("seedelf")} />
           </section>
         ) : (
           <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
@@ -286,8 +310,10 @@ export function Home() {
                 Cardano account
               </h1>
               <Amount lovelace={balances?.cardano.lovelace} testId="cardano-lovelace" />
-              <span className="hero__meta">
-                {balances ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used` : "\u00a0"}
+              <span className="hero__meta" data-testid="cardano-meta">
+                {balances
+                  ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used${lockedMeta(balances.cardano)}`
+                  : "\u00a0"}
               </span>
               <div className="hero__actions">
                 <ActionButton
@@ -302,7 +328,7 @@ export function Home() {
                   name="Send from the Cardano account"
                   onClick={() => setScreen("send")}
                   disabled={!canMoveIn}
-                  title={watching ? BUSY : undefined}
+                  title={moveInTitle}
                 />
                 <ActionButton
                   primary
@@ -310,7 +336,7 @@ export function Home() {
                   label="Move in"
                   onClick={() => setScreen("move-in")}
                   disabled={!canMoveIn}
-                  title={watching ? BUSY : undefined}
+                  title={moveInTitle}
                 />
               </div>
             </div>
@@ -332,7 +358,7 @@ export function Home() {
               </section>
             )}
 
-            <ActivityLink onClick={() => setActivityOf("cardano")} />
+            <Links onActivity={() => setActivityOf("cardano")} onUtxos={() => setUtxosOf("cardano")} />
           </section>
         )}
 
@@ -358,17 +384,35 @@ export function Home() {
   );
 }
 
-/** Opens this tab's Activity. */
-function ActivityLink({ onClick }: { onClick: () => void }) {
+/** " · 5 ₳ locked" under a balance, when some of it is. */
+function lockedMeta(side: Balances["seedelf" | "cardano"]): string {
+  return side.locked.utxos ? ` · ${formatAda(side.locked.lovelace)} ₳ locked` : "";
+}
+
+/** Opens this tab's Activity, or its UTxOs. */
+function Links({ onActivity, onUtxos }: { onActivity: () => void; onUtxos: () => void }) {
   return (
     <section className="section">
-      <button type="button" className="menu-row" onClick={onClick}>
-        <span className="menu-row__icon">
-          <HistoryIcon size={16} />
-        </span>
-        <span>Activity</span>
-        <ChevronRightIcon size={16} />
-      </button>
+      <ul className="list">
+        <li>
+          <button type="button" className="menu-row" onClick={onActivity}>
+            <span className="menu-row__icon">
+              <HistoryIcon size={16} />
+            </span>
+            <span>Activity</span>
+            <ChevronRightIcon size={16} />
+          </button>
+        </li>
+        <li>
+          <button type="button" className="menu-row" onClick={onUtxos}>
+            <span className="menu-row__icon">
+              <CoinsIcon size={16} />
+            </span>
+            <span>UTxOs</span>
+            <ChevronRightIcon size={16} />
+          </button>
+        </li>
+      </ul>
     </section>
   );
 }

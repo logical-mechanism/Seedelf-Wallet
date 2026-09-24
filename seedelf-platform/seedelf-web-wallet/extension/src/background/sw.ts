@@ -5,6 +5,7 @@ import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
 import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
+import { CoinControlService } from "./coin-control";
 import { Collateral } from "./collateral";
 import { ContactsService } from "./contacts";
 import { handle, type Context } from "./handlers";
@@ -51,10 +52,11 @@ function getContext(): Promise<Context> {
     const store = new PrivateStore({ wallet, local: chromeArea(chrome.storage.local) });
     const activity = new ActivityService({ wallet, session, store, koios });
     const contacts = new ContactsService({ wasm, store });
-    const balances = new BalanceService({ wasm, wallet, session, koios, now: Date.now, activity });
-    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity });
+    const coins = new CoinControlService({ wallet, session, store, now: Date.now });
+    const balances = new BalanceService({ wasm, wallet, session, koios, now: Date.now, activity, coins });
+    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
-    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity };
+    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins };
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
     const withdraw = new WithdrawService(spends);
@@ -72,6 +74,7 @@ function getContext(): Promise<Context> {
       pending,
       contacts,
       activity,
+      coins,
       version: __VERSION__,
       network: defaultNetwork(__MAINNET_ENABLED__),
       networks: enabledNetworks(__MAINNET_ENABLED__),

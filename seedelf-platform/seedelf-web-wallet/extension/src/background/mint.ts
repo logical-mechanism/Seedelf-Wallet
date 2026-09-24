@@ -17,8 +17,8 @@
 
 import type { NetworkName } from "../networks";
 import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
-import { readAccount } from "./account";
-import { keep, measure, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
+import { nothingInAccount, readAccount } from "./account";
+import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the mint built last, until it's sent or replaced. */
 export const SESSION_MINT = "seedelf.mint.built";
@@ -41,10 +41,10 @@ export class MintService {
 
   private async buildFromAccount(network: NetworkName, label: string): Promise<MintSummary> {
     const { wasm } = this.deps;
-    const { params, utxos } = await readAccount(this.deps, network);
-    const request = { network, params, label, utxos };
+    const { params, utxos, collateral, held } = await readAccount(this.deps, network);
+    const request = { network, params, label, utxos, collateral };
     if (request.utxos.length === 0) {
-      throw new Error("Your Cardano account is empty. Fund it first; the seedelf is paid from there.");
+      throw nothingInAccount(held, "Your Cardano account is empty. Fund it first; the seedelf is paid from there.");
     }
 
     const finished = await measure<MintResult>(
@@ -59,10 +59,10 @@ export class MintService {
 
   private async buildStealth(network: NetworkName, label: string): Promise<MintSummary> {
     const { wasm } = this.deps;
-    const { view, params } = await readContract(this.deps, network);
-    const request = { network, params, label, utxos: spendable(this.deps, view) };
+    const { view, utxos, params } = await readContract(this.deps, network);
+    const request = { network, params, label, utxos };
     if (request.utxos.length === 0) {
-      throw new Error("Your Seedelf balance is empty. Move some ADA in first; the seedelf is paid from there.");
+      throw nothingToSpend(this.deps, view, "Your Seedelf balance is empty. Move some ADA in first; the seedelf is paid from there.");
     }
 
     const finished = await measure<MintResult>(

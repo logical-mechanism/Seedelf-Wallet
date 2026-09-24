@@ -16,7 +16,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { ContactEditor, ContactPicker, useContacts } from "../components/Contacts";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, shortHex, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, formatQuantity, lockedAside, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { tokenLabel } from "../tokens";
 
@@ -152,7 +152,11 @@ export function Transfer({
       title="Send to a seedelf"
       titleId="transfer-title"
       onBack={onCancel}
-      aside={`${formatAda(seedelf.lovelace)} ₳ in your Seedelf balance`}
+      aside={
+        seedelf.locked.utxos
+          ? `${formatAda(seedelf.lovelace)} ₳ available${lockedAside(seedelf)}`
+          : `${formatAda(seedelf.lovelace)} ₳ in your Seedelf balance`
+      }
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!ready || busy}>

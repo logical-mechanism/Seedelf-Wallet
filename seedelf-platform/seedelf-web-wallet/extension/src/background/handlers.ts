@@ -7,6 +7,7 @@ import type { NetworkName } from "../networks";
 import type { Message, Requests, Status } from "../shared/rpc";
 import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
+import type { CoinControlService } from "./coin-control";
 import type { ContactsService } from "./contacts";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
@@ -28,6 +29,7 @@ export interface Context {
   pending: PendingService;
   contacts: ContactsService;
   activity: ActivityService;
+  coins: CoinControlService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -109,6 +111,23 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return message.of === "seedelf"
         ? { entries: await ctx.activity.seedelf(ctx.network), more: false }
         : ctx.activity.cardano(ctx.network, message.more ?? false);
+    // Coin control reads the last balance reading, so there must be one.
+    case "utxos":
+      await ctx.balances.get(ctx.network);
+      return ctx.coins.lists(ctx.network);
+    case "utxo-lock":
+      return ctx.coins.setLocked(ctx.network, message.of, message.utxo, message.locked);
+    case "collateral":
+      await ctx.balances.get(ctx.network);
+      return ctx.coins.collateral(ctx.network);
+    case "collateral-use":
+      return ctx.coins.use(ctx.network, message.utxo);
+    case "collateral-reclaim":
+      return ctx.coins.reclaim(ctx.network);
+    case "collateral-build":
+      return ctx.send.buildCollateral(ctx.network);
+    case "collateral-submit":
+      return ctx.send.submitCollateral(ctx.network, message.txHash);
   }
 }
 

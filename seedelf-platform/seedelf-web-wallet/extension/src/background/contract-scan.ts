@@ -98,6 +98,12 @@ export async function readContractView(
   });
 }
 
+/** The view as the last read left it, without reading anything; undefined before the first. Call it while unlocked. */
+export async function keptContractView(session: Area, network: NetworkName): Promise<ContractView | undefined> {
+  const kept = await session.get<Kept>(SESSION_CONTRACT_PREFIX + network);
+  return kept && { owned: kept.owned, seedelfs: kept.seedelfs };
+}
+
 /** Makes the next read full: the network refused an input the kept view had as unspent. */
 export async function forgetContractView(deps: Pick<ScanDeps, "wallet" | "session">, network: NetworkName) {
   const key = SESSION_CONTRACT_PREFIX + network;

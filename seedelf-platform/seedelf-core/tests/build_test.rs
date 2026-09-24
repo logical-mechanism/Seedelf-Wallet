@@ -252,13 +252,6 @@ fn assert_paid(
             assert!(o.register.is_none());
         }
     }
-    // Never a 5 ADA pure-ADA UTxO.
-    for u in &spent {
-        assert!(
-            !(u.value == "5000000" && u.asset_list.as_ref().is_none_or(|a| a.is_empty())),
-            "collateral spent"
-        );
-    }
     tx
 }
 
@@ -272,7 +265,7 @@ fn deposits(w: &World, tx: &Decoded) -> (u64, usize) {
 }
 
 #[test]
-fn moves_an_amount_from_pure_ada_first_and_leaves_collateral() {
+fn moves_an_amount_from_pure_ada_first() {
     let w = world();
     let available = vec![
         utxo(&w, 1, 0, 5_000_000, vec![]),
@@ -441,7 +434,11 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
 
-    assert_eq!(tx.inputs.len(), 2, "everything but the collateral");
+    assert_eq!(
+        tx.inputs.len(),
+        3,
+        "everything it's given, a 5 ADA UTxO too"
+    );
     let change: Vec<&Out> = tx
         .outputs
         .iter()
@@ -455,7 +452,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
     );
     assert_eq!(
         built.lovelace,
-        14_345_678 - built.fee - built.change_lovelace
+        19_345_678 - built.fee - built.change_lovelace
     );
 
     // With no tokens staying, Max leaves no change at all.
@@ -526,7 +523,7 @@ fn explains_what_is_wrong() {
         "below a contract output's minimum"
     );
     assert!(
-        err(AccountAmount::Lovelace(9_900_000), &[]).contains("Not enough ADA"),
+        err(AccountAmount::Lovelace(14_900_000), &[]).contains("Not enough ADA"),
         "more than there is"
     );
     assert!(
@@ -550,10 +547,9 @@ fn explains_what_is_wrong() {
         )
         .contains("more than none")
     );
-    let only_collateral = vec![utxo(&w, 3, 0, 5_000_000, vec![])];
     let e = build::move_in(
         &w.params,
-        &only_collateral,
+        &[],
         AccountAmount::Max,
         &[],
         &w.owner,
@@ -612,6 +608,8 @@ fn sends_an_amount_and_part_of_a_token_to_an_address() {
 
     let paid = paid_to(&tx, &to);
     assert_eq!(paid.len(), 1, "one output pays");
+    // The web wallet's collateral payment relies on this: its 5 ADA is output 0.
+    assert_eq!(tx.outputs[0].address, to, "the payment is the first output");
     assert_eq!(paid[0].lovelace, 3_000_000);
     let key = (POLICY.to_string(), hex::encode("tUSDM"));
     assert_eq!(paid[0].assets.get(&key), Some(&250));
@@ -646,11 +644,15 @@ fn send_max_pays_everything_but_the_fee_and_the_change_floor() {
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
-    assert_eq!(tx.inputs.len(), 2, "everything but the collateral");
+    assert_eq!(
+        tx.inputs.len(),
+        3,
+        "everything it's given, a 5 ADA UTxO too"
+    );
     assert_eq!(paid_to(&tx, &to)[0].lovelace, built.lovelace);
     assert_eq!(
         built.lovelace,
-        14_345_678 - built.fee - built.change_lovelace
+        19_345_678 - built.fee - built.change_lovelace
     );
     assert_eq!(built.change_tokens.items.len(), 1, "the token stays");
 }

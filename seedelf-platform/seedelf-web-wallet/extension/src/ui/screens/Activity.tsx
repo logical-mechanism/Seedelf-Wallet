@@ -45,6 +45,8 @@ function title(e: ActivityEntry, of: Of): string {
       return "Removed a seedelf";
     case "send":
       return "Sent";
+    case "collateral":
+      return "Set collateral";
   }
 }
 

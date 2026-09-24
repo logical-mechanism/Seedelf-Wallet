@@ -1,6 +1,8 @@
-// Settings, from the gear in the top bar: the recovery phrase (the password
-// again first, even while unlocked), a new password, removing the wallet from
-// this browser, and what this is. Nothing here asks Koios anything.
+// Settings, from the gear in the top bar: contacts, the Cardano account's
+// collateral, the recovery phrase (the password again first, even while
+// unlocked), a new password, removing the wallet from this browser, and what
+// this is. Nothing here asks Koios anything, except setting a collateral
+// that needs a transaction.
 
 import { useState, type FormEvent, type ReactNode } from "react";
 
@@ -9,18 +11,19 @@ import type { Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ContactsPage, useContacts } from "../components/Contacts";
-import { ChevronRightIcon, ExternalIcon, EyeIcon, LockIcon, TrashIcon, UsersIcon } from "../components/Icons";
+import { ChevronRightIcon, ExternalIcon, EyeIcon, LockIcon, TrashIcon, UsersIcon, VaultIcon } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
+import { Collateral } from "./Collateral";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/seedelf-web-wallet/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
-type Page = "menu" | "contacts" | "phrase" | "password" | "remove";
+type Page = "menu" | "contacts" | "collateral" | "phrase" | "password" | "remove";
 
 export function Settings({
   status,
@@ -34,6 +37,7 @@ export function Settings({
   const [page, setPage] = useState<Page>("menu");
   const menu = () => setPage("menu");
   if (page === "contacts") return <Contacts onBack={menu} />;
+  if (page === "collateral") return <Collateral onBack={menu} />;
   if (page === "phrase") return <ShowPhrase onBack={menu} />;
   if (page === "password") return <ChangePassword onBack={menu} />;
   if (page === "remove") return <RemoveWallet onBack={menu} onRemoved={onRemoved} />;
@@ -44,6 +48,7 @@ export function Settings({
         <h2 id="wallet-title">Wallet</h2>
         <ul className="list">
           <MenuRow icon={<UsersIcon size={16} />} label="Contacts" onClick={() => setPage("contacts")} />
+          <MenuRow icon={<VaultIcon size={16} />} label="Collateral" onClick={() => setPage("collateral")} />
         </ul>
       </section>
       <section className="section" aria-labelledby="security-title">

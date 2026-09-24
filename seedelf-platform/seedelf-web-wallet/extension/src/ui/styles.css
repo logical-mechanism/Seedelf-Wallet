@@ -1247,6 +1247,23 @@ main {
   padding: var(--s5) 0;
 }
 
+/* UTxOs (screens/Utxos.tsx): an Activity-style row, with what a UTxO is kept
+   for (locked, the collateral, a seedelf) as a tag. */
+.utxo__icon--kept {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.utxo-tag {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+}
+
 /* Settings (screens/Settings.tsx): rows that open a page, and outside links. */
 
 .menu-row {

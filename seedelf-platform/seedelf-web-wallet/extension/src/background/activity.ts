@@ -84,7 +84,7 @@ export class ActivityService {
    */
   sent(network: NetworkName, pending: PendingTx, summary: object): Promise<void> {
     // A payment from the Cardano account isn't Seedelf's: its Activity comes from Koios.
-    if (pending.kind === "send") return Promise.resolve();
+    if (pending.kind === "send" || pending.kind === "collateral") return Promise.resolve();
     const s = summary as Record<string, any>;
     const tokens = Array.isArray(s.tokens) ? s.tokens.length : 0;
     const shared = { txHash: pending.txHash, at: pending.submittedAt, lovelace: String(s.lovelace ?? "0"), tokens, fee: feeOf(s.fee) };

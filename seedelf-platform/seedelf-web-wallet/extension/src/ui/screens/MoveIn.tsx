@@ -12,7 +12,7 @@ import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, formatQuantity, lockedAside, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { tokenLabel } from "../tokens";
 
@@ -113,7 +113,7 @@ export function MoveIn({
       title="Move in"
       titleId="move-in-title"
       onBack={onCancel}
-      aside={`${formatAda(cardano.lovelace)} ₳ available`}
+      aside={`${formatAda(cardano.lovelace)} ₳ available${lockedAside(cardano)}`}
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!ready || busy}>
@@ -139,12 +139,14 @@ export function MoveIn({
         </AdaInput>
         {tooMuch && (
           <p className="field-note" data-testid="move-in-too-much">
-            That's more than the {formatAda(cardano.lovelace)} ₳ in your Cardano account.
+            That's more than the {formatAda(cardano.lovelace)} ₳ available in your Cardano account.
           </p>
         )}
       </div>
       {max ? (
-        <p className="note">Everything except the fee and what the tokens you keep need. UTxOs of exactly 5 ₳ stay put: another wallet may use them as collateral.</p>
+        <p className="note">
+          Everything except the fee and what the tokens you keep need. Your collateral and any UTxOs you locked stay put.
+        </p>
       ) : (
         <>
           {withTokens && <MinimumHint />}

@@ -12,8 +12,9 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { MoveInSummary, PendingTx, TokenQuantity } from "../shared/rpc";
-import { readAccount } from "./account";
+import { nothingInAccount, readAccount } from "./account";
 import type { ActivityService } from "./activity";
+import type { CoinControlService } from "./coin-control";
 import type { Koios } from "./koios";
 import { SESSION_PENDING } from "./pending";
 import { rememberSpent } from "./spent";
@@ -41,6 +42,8 @@ export interface MoveInDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Writes the move-in into the Seedelf history once it's submitted. */
   activity?: ActivityService;
+  /** Leaves out what the user locked, and the collateral. */
+  coins: CoinControlService;
 }
 
 export class MoveInService {
@@ -53,7 +56,8 @@ export class MoveInService {
    */
   async build(network: NetworkName, lovelace: string | null, tokens: TokenQuantity[]): Promise<MoveInSummary> {
     const { wasm, wallet, session, now } = this.deps;
-    const { params, utxos } = await readAccount(this.deps, network);
+    const { params, utxos, held } = await readAccount(this.deps, network);
+    if (utxos.length === 0) throw nothingInAccount(held, "Your Cardano account is empty, so there's nothing to move in.");
 
     return wallet.withKeys(async (keys) => {
       const request = { network, params, utxos, lovelace, tokens };

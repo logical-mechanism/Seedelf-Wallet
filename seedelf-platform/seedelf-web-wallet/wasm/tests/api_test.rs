@@ -919,6 +919,7 @@ mod account_mint {
             network: "preprod".into(),
             params: fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone(),
             utxos,
+            collateral: None,
             label: label.into(),
             evaluation,
         }
@@ -985,6 +986,63 @@ mod account_mint {
         assert_eq!(signers, spent);
         assert_eq!(tx.vkey_witnesses().len(), spent.len());
         assert!(tx.required_signers().is_empty());
+    }
+
+    #[test]
+    fn puts_up_the_collateral_set_aside_and_signs_for_it() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let mut utxos = account_utxos(&account);
+        let set_aside = utxos.pop().unwrap();
+        let out_ref = |p: &PathedUtxo| (p.utxo.tx_hash.clone(), p.utxo.tx_index);
+        let with =
+            |utxos: Vec<PathedUtxo>, collateral: PathedUtxo, evaluation| AccountMintRequest {
+                collateral: Some(collateral),
+                ..request(utxos, "first", evaluation)
+            };
+
+        let result = api::finish_account_mint(
+            &account,
+            sk,
+            with(utxos, set_aside.clone(), Some(evaluation())),
+        )
+        .unwrap();
+        let expected = out_ref(&set_aside);
+        assert_eq!(
+            (
+                result.collateral.tx_hash.clone(),
+                result.collateral.tx_index
+            ),
+            expected
+        );
+        assert!(
+            result
+                .inputs
+                .iter()
+                .all(|i| (i.tx_hash.clone(), i.tx_index) != expected)
+        );
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        let signers: BTreeSet<String> = tx
+            .vkey_witnesses()
+            .iter()
+            .map(|w| hex::encode(pallas_crypto::hash::Hasher::<224>::hash(&w.vkey.to_vec())))
+            .collect();
+        assert!(
+            signers.contains(&set_aside.utxo.payment_cred),
+            "the collateral's key signs"
+        );
+
+        // A collateral that isn't the account's is refused, like any UTxO.
+        let mut moved = set_aside.clone();
+        moved.index += 1;
+        let e = api::draft_account_mint(&account, sk, with(account_utxos(&account), moved, None))
+            .unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("is not under the account's payment key"),
+            "{e}"
+        );
     }
 
     #[test]

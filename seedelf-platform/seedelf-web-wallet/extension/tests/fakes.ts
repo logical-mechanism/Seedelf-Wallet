@@ -5,6 +5,7 @@ import * as wasm from "@seedelf/wasm";
 
 import { ActivityService } from "../src/background/activity";
 import { BalanceService } from "../src/background/balances";
+import { CoinControlService } from "../src/background/coin-control";
 import { Collateral } from "../src/background/collateral";
 import { ContactsService } from "../src/background/contacts";
 import { MintService } from "../src/background/mint";
@@ -247,6 +248,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   let ids = 0;
   const koiosFor = () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined);
   const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor });
+  const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now });
   const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
@@ -255,6 +257,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     now: () => t.clock.now,
     sleep: options?.sleep ?? (async () => undefined),
     activity,
+    coins,
   };
   return {
     ...t,
@@ -282,6 +285,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     pending: new PendingService(deps),
     store,
     activity,
+    coins,
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
   };
 }

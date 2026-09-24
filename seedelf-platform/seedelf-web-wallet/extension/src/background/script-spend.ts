@@ -22,6 +22,7 @@ import type { PendingTx } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
 import type { ActivityService } from "./activity";
+import type { CoinControlService } from "./coin-control";
 import type { Collateral } from "./collateral";
 import { forgetContractView, readContractView, type ContractView } from "./contract-scan";
 import { SpentInputError, type Koios, type KoiosUtxo } from "./koios";
@@ -45,6 +46,8 @@ export interface ScriptSpendDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Writes each spend into the Seedelf history once it's submitted. */
   activity?: ActivityService;
+  /** Leaves out what the user locked, on both sides. */
+  coins: CoinControlService;
 }
 
 /** A built transaction waiting in session storage for Send. */
@@ -60,17 +63,30 @@ export interface Kept {
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
-/** This wallet's view of the contract (contract-scan.ts), and the protocol parameters. */
+/**
+ * This wallet's view of the contract (contract-scan.ts), what a Seedelf
+ * spend may pay with (`utxos`: owned, holding no seedelf, and not locked),
+ * and the protocol parameters.
+ */
 export async function readContract(
   deps: ScriptSpendDeps,
   network: NetworkName,
-): Promise<{ view: ContractView; params: Record<string, unknown> }> {
+): Promise<{ view: ContractView; utxos: KoiosUtxo[]; params: Record<string, unknown> }> {
   const [view, params] = await Promise.all([readContractView(deps, network), deps.koios(network).epochParams()]);
-  return { view, params };
+  return { view, utxos: await deps.coins.seedelf(network, spendable(deps, view)), params };
 }
 
-/** What the Seedelf balance counts, and a Seedelf spend may pay with: owned UTxOs that don't hold a seedelf. */
-export function spendable(deps: ScriptSpendDeps, view: ContractView): KoiosUtxo[] {
+/** Why a Seedelf spend has nothing to pay with: `utxos` from readContract, `empty` for an empty balance. */
+export function nothingToSpend(deps: Pick<ScriptSpendDeps, "contract">, view: ContractView, empty: string): Error {
+  return new Error(
+    spendable(deps, view).length
+      ? "Every UTxO in your Seedelf balance is locked. Unlock one on its UTxOs screen first."
+      : empty,
+  );
+}
+
+/** What the Seedelf balance counts: owned UTxOs that don't hold a seedelf. */
+export function spendable(deps: Pick<ScriptSpendDeps, "contract">, view: ContractView): KoiosUtxo[] {
   const { contract = CONTRACT_V1 } = deps;
   return view.owned.filter((u) => !seedelfTokenOf(u, contract.seedelfPolicyId));
 }

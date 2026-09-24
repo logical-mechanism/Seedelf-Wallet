@@ -24,7 +24,7 @@ import type {
 import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { resolveDestination } from "./destination";
-import { keep, measure, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
+import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the withdrawal built last, until it's sent or replaced. */
 export const SESSION_WITHDRAW = "seedelf.withdraw.built";
@@ -62,10 +62,10 @@ export class WithdrawService {
   ): Promise<WithdrawSummary> {
     const { wasm } = this.deps;
     const destination = await this.resolve(network, to);
-    const { view, params } = await readContract(this.deps, network);
-    const request = { network, params, utxos: spendable(this.deps, view), to: destination.address, lovelace, tokens };
+    const { view, utxos, params } = await readContract(this.deps, network);
+    const request = { network, params, utxos, to: destination.address, lovelace, tokens };
     if (request.utxos.length === 0) {
-      throw new Error("Your Seedelf balance is empty, so there's nothing to withdraw.");
+      throw nothingToSpend(this.deps, view, "Your Seedelf balance is empty, so there's nothing to withdraw.");
     }
     const finished = await measure<WithdrawResult>(
       this.deps,

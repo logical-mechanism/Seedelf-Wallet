@@ -90,7 +90,7 @@ pub mod api {
         pub tokens: Vec<TokenAmount>,
     }
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, Clone)]
     pub struct PathedUtxo {
         pub utxo: UtxoResponse,
         /// 0 = receive chain, 1 = change chain.
@@ -692,7 +692,13 @@ pub mod api {
         pub network: String,
         /// One row of Koios's `epoch_params`.
         pub params: serde_json::Value,
+        /// What may be spent: the extension leaves out its collateral and
+        /// the UTxOs its user locked.
         pub utxos: Vec<PathedUtxo>,
+        /// The account's collateral, set aside: put up, never spent. Without
+        /// one, the mint puts up one of `utxos`.
+        #[serde(default)]
+        pub collateral: Option<PathedUtxo>,
         /// The personal tag; see [`check_label`].
         pub label: String,
         /// Ogmios's answer to evaluating the draft.
@@ -741,11 +747,26 @@ pub mod api {
     ) -> Result<(build::AccountMint, Paths)> {
         let chain = chain_of(&request.network, &request.params)?;
         check_label(&request.label)?;
-        let paths = check_paths(account, chain.network_flag, &request.utxos)?;
+        let mut paths = check_paths(account, chain.network_flag, &request.utxos)?;
+        if let Some(c) = &request.collateral {
+            paths.extend(check_paths(
+                account,
+                chain.network_flag,
+                std::slice::from_ref(c),
+            )?);
+        }
         let available: Vec<UtxoResponse> = request.utxos.iter().map(|p| p.utxo.clone()).collect();
+        let collateral = request.collateral.as_ref().map(|c| &c.utxo);
         let seedelf = Register::create(sk)?.rerandomize()?;
         let change = account.base_address(chain.network_flag, Role::Receive, 0)?;
-        let mint = build::account_mint(&chain, &available, &request.label, &seedelf, &change)?;
+        let mint = build::account_mint(
+            &chain,
+            &available,
+            collateral,
+            &request.label,
+            &seedelf,
+            &change,
+        )?;
         Ok((mint, paths))
     }
 

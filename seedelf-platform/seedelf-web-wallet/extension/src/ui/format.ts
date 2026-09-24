@@ -1,6 +1,8 @@
 // Display formatting for amounts and token names. Amounts arrive as integer
 // strings and are handled as bigint, so nothing is rounded on the way.
 
+import type { Locked, TokenAmount } from "../shared/rpc";
+
 /** An integer amount with `decimals` places, grouped and with trailing zeros trimmed: "1,234.5". */
 export function formatQuantity(quantity: string, decimals: number): string {
   const value = BigInt(quantity);
@@ -182,3 +184,19 @@ export function adaWithTokens(lovelace: string, tokens: number): string {
 
 /** A token's key in maps and React lists: `policy.name`. */
 export const tokenKey = (t: { policyId: string; assetName: string }) => `${t.policyId}.${t.assetName}`;
+
+/** One side of the balances less what's locked on it: what a payment can use. */
+export function unlocked<S extends { lovelace: string; tokens: TokenAmount[]; utxos: number; locked: Locked }>(side: S): S {
+  if (!side.locked.utxos) return side;
+  const locked = new Map(side.locked.tokens.map((t) => [tokenKey(t), BigInt(t.quantity)]));
+  const tokens = side.tokens
+    .map((t) => ({ ...t, quantity: (BigInt(t.quantity) - (locked.get(tokenKey(t)) ?? 0n)).toString() }))
+    .filter((t) => BigInt(t.quantity) > 0n);
+  const lovelace = (BigInt(side.lovelace) - BigInt(side.locked.lovelace)).toString();
+  return { ...side, lovelace, tokens, utxos: side.utxos - side.locked.utxos };
+}
+
+/** " · 5 ₳ locked" when some of a balance side is locked, for a form's line under its title. */
+export function lockedAside(side: { locked: Locked }): string {
+  return side.locked.utxos ? ` · ${formatAda(side.locked.lovelace)} ₳ locked` : "";
+}

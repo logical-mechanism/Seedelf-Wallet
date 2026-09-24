@@ -32,7 +32,7 @@ use crate::transaction::{
     decode_tx_hash, reference_utxo, seedelf_minimum_lovelace, seedelf_token_name,
     wallet_minimum_lovelace_with_assets,
 };
-use crate::utxos::{assets_of, collect_address_utxos};
+use crate::utxos::assets_of;
 
 /// A throwaway ed25519 key, used to sign a draft so its size includes a
 /// realistic witness. The signature is discarded.
@@ -380,9 +380,9 @@ pub struct AccountPayment {
 /// Move-in: the Cardano account pays into the wallet contract under fresh
 /// re-randomizations of `owner`, the user's base register. No script runs.
 ///
-/// - `available` is the account's UTxOs (key addresses the caller can sign
-///   for). A pure-ADA UTxO of exactly 5 ADA is never spent: it's probably
-///   another wallet's collateral, as in the CLI.
+/// - `available` is what may be spent: key addresses the caller can sign
+///   for. Every one of them can be; the caller leaves out what it keeps (the
+///   web wallet's collateral and the UTxOs its user locked).
 /// - `picked` tokens go in the quantities asked, as `(policy, name,
 ///   quantity)` in hex. Every UTxO holding one is spent, and what's left of
 ///   it goes back with the change.
@@ -445,7 +445,7 @@ fn account_payment(
     change_addr: &Address,
     short: NotEnough,
 ) -> Result<AccountPayment> {
-    let eligible: Vec<UtxoResponse> = collect_address_utxos(available.to_vec())?;
+    let eligible: Vec<UtxoResponse> = available.to_vec();
     let holds_picked = |u: &UtxoResponse| {
         u.asset_list.as_ref().is_some_and(|assets| {
             assets.iter().any(|a| {
@@ -1742,9 +1742,10 @@ pub fn remove(
 // instead of a browser wallet.
 //
 // Nothing in the contract is spent, so there are no proofs and no one-time
-// key. The collateral is one of the account's own UTxOs, as in the CLI: this
-// transaction names the account anyway. It needn't be ADA-only: the
-// collateral return gives back its tokens, which Babbage and later allow.
+// key. The collateral is one of the account's own UTxOs, as in the CLI (the
+// web wallet's set-aside one, when it has one): this transaction names the
+// account anyway. It needn't be ADA-only: the collateral return gives back
+// its tokens, which Babbage and later allow.
 // ---------------------------------------------------------------------------
 
 /// The least an ADA-only account UTxO should hold to be put up as collateral:
@@ -1921,16 +1922,17 @@ impl AccountMint {
     }
 }
 
-/// Mints a seedelf paid by the Cardano account. `available` is the account's
-/// UTxOs (key addresses the caller can sign for):
+/// Mints a seedelf paid by the Cardano account. `available` is what may be
+/// spent (key addresses the caller can sign for), as for [`move_in`]:
 ///
 /// - Inputs: pure ADA first, largest first, then token UTxOs, as few as pay
-///   for the seedelf, the fee and valid change. A pure-ADA UTxO of exactly
-///   5 ADA is never spent (it's probably another wallet's collateral).
-/// - Collateral: any of `available`, preferring an ADA-only one, then one of
-///   at least 2 ADA (3/2 of the fee plus the return), then one that isn't
-///   spent, then a 5 ADA one, then the largest. Its tokens, if any, come
-///   back with the collateral return.
+///   for the seedelf, the fee and valid change.
+/// - Collateral: `collateral` when given (the web wallet's, set aside: it's
+///   never an input, even if `available` lists it). Otherwise any of
+///   `available`, preferring an ADA-only one, then one of at least 2 ADA (3/2
+///   of the fee plus the return), then one that isn't spent, then a 5 ADA
+///   one, then the largest. Its tokens, if any, come back with the
+///   collateral return.
 /// - The token is named after the smallest input, with `label` cut to 15
 ///   bytes; it sits in the contract under `seedelf`, used as given (pass a
 ///   fresh re-randomization). Tokens in the inputs go back with the change,
@@ -1938,6 +1940,7 @@ impl AccountMint {
 pub fn account_mint(
     chain: &Chain,
     available: &[UtxoResponse],
+    collateral: Option<&UtxoResponse>,
     label: &str,
     seedelf: &Register,
     change_addr: &Address,
@@ -1945,13 +1948,19 @@ pub fn account_mint(
     if !is_payable(seedelf) {
         bail!("The seedelf's register isn't made of valid points");
     }
-    if available.is_empty() {
-        bail!("There is nothing in the Cardano account to pay for a seedelf");
-    }
     let pure_ada = |u: &UtxoResponse| u.asset_list.as_ref().is_none_or(|a| a.is_empty());
     let lovelace_of = |u: &UtxoResponse| u.value.parse::<u64>().unwrap_or(0);
+    let same =
+        |a: &UtxoResponse, b: &UtxoResponse| a.tx_hash == b.tx_hash && a.tx_index == b.tx_index;
 
-    let mut spendable: Vec<UtxoResponse> = collect_address_utxos(available.to_vec())?;
+    let mut spendable: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| collateral.is_none_or(|c| !same(u, c)))
+        .cloned()
+        .collect();
+    if spendable.is_empty() {
+        bail!("There is nothing in the Cardano account to pay for a seedelf");
+    }
     spendable.sort_by_key(|u| (!pure_ada(u), std::cmp::Reverse(lovelace_of(u))));
 
     let config = &chain.config;
@@ -1963,11 +1972,7 @@ pub fn account_mint(
     let mut last_error = None;
     for k in 1..=spendable.len() {
         let inputs = &spendable[..k];
-        let spent = |u: &UtxoResponse| {
-            inputs
-                .iter()
-                .any(|i| i.tx_hash == u.tx_hash && i.tx_index == u.tx_index)
-        };
+        let spent = |u: &UtxoResponse| inputs.iter().any(|i| same(i, u));
         let mut candidates: Vec<&UtxoResponse> = available.iter().collect();
         candidates.sort_by_key(|u| {
             (
@@ -1978,7 +1983,7 @@ pub fn account_mint(
                 std::cmp::Reverse(lovelace_of(u)),
             )
         });
-        let Some(collateral) = candidates.first() else {
+        let Some(collateral) = collateral.or(candidates.first().copied()) else {
             bail!("There is nothing in the Cardano account to pay for a seedelf");
         };
 
@@ -1991,7 +1996,7 @@ pub fn account_mint(
         let mint = AccountMint {
             chain: chain.clone(),
             inputs: inputs.to_vec(),
-            collateral: (*collateral).clone(),
+            collateral: collateral.clone(),
             seedelf: seedelf_output,
             redeemer: redeemer.clone(),
             change_addr: change_addr.clone(),

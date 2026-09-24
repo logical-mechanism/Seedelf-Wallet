@@ -669,13 +669,131 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   await expect(page.getByRole("alert")).toContainText("Not enough ADA");
 
   await page.getByRole("button", { name: "Max" }).click();
-  await expect(page.getByText("UTxOs of exactly 5 ₳ stay put")).toBeVisible();
+  await expect(page.getByText("Your collateral and any UTxOs you locked stay put")).toBeVisible();
   await page.getByRole("button", { name: "Review" }).click();
   await expect(page.getByTestId("move-in-review")).toContainText("Back to your Cardano account");
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("cardano-lovelace")).toBeVisible();
   expect(koios.submitted).toHaveLength(0);
+});
+
+test("UTxOs: each balance's from the last reading, and a locked one kept out of its payments", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  const reads = koios.calls.length;
+
+  // Seedelf: the two UTxOs the balance counts, and the seedelf's.
+  await page.getByRole("button", { name: "UTxOs", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Seedelf UTxOs" })).toBeVisible();
+  const list = page.getByTestId("utxos");
+  await expect(list.getByRole("listitem")).toHaveCount(3);
+  await expect(list).toContainText("Seedelf");
+  await snap(page, "utxos-seedelf");
+  await list.getByRole("button", { name: /^25 ₳, a1a1/ }).click();
+  const details = page.getByRole("dialog", { name: "25 ₳" });
+  await expect(details.getByTestId("utxo-state")).toHaveText("Spent by payments as needed.");
+  await details.getByRole("button", { name: "Lock", exact: true }).click();
+  await expect(details.getByTestId("utxo-state")).toHaveText("Locked: left out of every payment.");
+  await details.getByRole("button", { name: "Close" }).click();
+  await expect(list.getByRole("button", { name: /^25 ₳, locked, a1a1/ })).toBeVisible();
+  await expect(page.getByText("3 UTxOs · 1 locked")).toBeVisible();
+  // A seedelf's UTxO only moves when the seedelf is removed: nothing to lock.
+  await list.getByRole("button", { name: /seedelf/ }).click();
+  await expect(page.getByRole("dialog", { name: "1.5 ₳" })).toContainText("Only removing the seedelf spends it");
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Lock", exact: true })).toHaveCount(0);
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // Home still counts it, and says it's locked; Withdraw offers only the rest.
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await expect(page.getByTestId("seedelf-meta")).toHaveText("2 UTxOs · 25 ₳ locked");
+  await page.getByRole("button", { name: "Withdraw" }).click();
+  await expect(page.getByText("3 ₳ available · 25 ₳ locked")).toBeVisible();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // Cardano: lock the biggest, and Send offers less.
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "UTxOs", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Cardano account UTxOs" })).toBeVisible();
+  await expect(page.getByTestId("utxos").getByRole("listitem")).toHaveCount(6);
+  await page.getByTestId("utxos").getByRole("button").first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByTestId("utxo-address")).toBeVisible();
+  await expect(dialog.getByTestId("utxo-tokens")).toBeVisible();
+  await dialog.getByRole("button", { name: "Lock", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Unlock" })).toBeVisible();
+  await snap(page, "utxo-details");
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("cardano-meta")).toHaveText("4 addresses used · 10,338.538725 ₳ locked");
+  await page.getByRole("button", { name: "Send from the Cardano account" }).click();
+  await expect(page.getByText(/₳ available · 10,338\.538725 ₳ locked$/)).toBeVisible();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // None of it asked Koios anything, or sent anything.
+  expect(koios.calls).toHaveLength(reads);
+  expect(koios.submitted).toHaveLength(0);
+});
+
+test("collateral: set in Settings by paying 5 ₳ to yourself, then watched on Home", async ({ context, koios }) => {
+  // The 12-word phrase's account holds no 5 ₳ UTxO, so setting one is a payment.
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Collateral" }).click();
+  await expect(page.getByTestId("collateral-none")).toContainText("pays 5 ₳ from your Cardano account to itself");
+  await snap(page, "collateral-none");
+  await page.getByRole("button", { name: "Set collateral" }).click();
+  const review = page.getByTestId("collateral-review");
+  await expect(review).toContainText("ToYour Cardano account");
+  await expect(review).toContainText("Set aside5 ₳");
+  await snap(page, "collateral-review");
+  expect(koios.submitted).toHaveLength(0);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("collateral-waiting")).toBeVisible();
+  expect(koios.submitted).toHaveLength(1);
+  expect(koios.collateralAsked).toBe(0);
+  await snap(page, "collateral-waiting");
+
+  // Home watches it like any other transaction.
+  await page.getByRole("button", { name: "Done" }).click();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Collateral payment sent");
+  koios.confirmations = 1;
+  await expect(page.getByTestId("pending-tx")).toContainText("Collateral set", { timeout: 20_000 });
+});
+
+test("collateral: the wallet takes a 5 ₳ UTxO the account holds; reclaimed, it's set again with no transaction", async ({ context, koios }) => {
+  // The 24-word phrase's account holds six UTxOs of exactly 5 ₳.
+  const page = await openApp(context);
+  await restore(page, vector(24).phrase);
+  await cardanoTab(page);
+  await expect(page.getByTestId("cardano-meta")).toHaveText("2 addresses used · 5 ₳ locked");
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Collateral" }).click();
+  const set = page.getByTestId("collateral-set");
+  await expect(set).toContainText("Collateral5 ₳");
+  await expect(set).toContainText("Set byThe wallet: a 5 ₳ UTxO your account held");
+  await snap(page, "collateral-set");
+  await page.getByRole("button", { name: "Reclaim collateral" }).click();
+  await expect(page.getByTestId("collateral-none")).toContainText("with no transaction");
+  await expect(page.getByText("You reclaimed it")).toBeVisible();
+  await page.getByRole("button", { name: "Set collateral" }).click();
+  await expect(set).toContainText("Set byYou");
+  expect(koios.submitted).toHaveLength(0);
+  expect(koios.calls).toHaveLength(reads);
+
+  // UTxOs lists it as the collateral, reclaimed only in Settings.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "UTxOs", exact: true }).click();
+  await page.getByTestId("utxos").getByRole("button", { name: /collateral/ }).click();
+  await expect(page.getByTestId("utxo-collateral")).toBeVisible();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Lock", exact: true })).toHaveCount(0);
 });
 
 test("send from the Cardano account: a token with only the ADA it needs, review, send, then watch it confirm", async ({
@@ -1048,10 +1166,18 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
   await expect(popup.getByTestId("activity")).toBeVisible();
   await shot("activity");
   await back();
+  await popup.getByRole("button", { name: "UTxOs", exact: true }).click();
+  await expect(popup.getByTestId("utxos")).toBeVisible();
+  await shot("utxos");
+  await back();
 
   await popup.getByRole("button", { name: "Settings" }).click();
   await expect(popup.getByRole("heading", { name: "Settings" })).toBeVisible();
   await shot("settings");
+  await popup.getByRole("button", { name: "Collateral" }).click();
+  await expect(popup.getByTestId("collateral-none")).toBeVisible();
+  await shot("collateral");
+  await back();
   await popup.getByRole("button", { name: "Settings" }).click();
 
   await popup.getByRole("button", { name: "Lock" }).click();

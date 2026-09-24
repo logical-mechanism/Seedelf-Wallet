@@ -64,6 +64,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
 - **Co-spending:** spending several UTxOs in one transaction suggests they share an owner.
   - Coin selection should spend as few inputs as it can.
   - It should avoid mixing funds with different histories, such as round-trip returns and fresh deposits, when it doesn't need to.
+  - **Locking a UTxO** (chunk 12) keeps it out of every spend, Max included, so a user can keep such funds apart by hand.
 - **The one-time account's staking part (decided): the shared Seedelf staking hash,** the same as the CLI's External Wallet (`seedelf-core/src/address.rs`, `dapp_address`).
   - dApps see a normal base address, and the staking part doesn't identify the user.
   - The trade-off is that it marks the address as a Seedelf address.
@@ -75,8 +76,10 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Token names and logos come from a list inside the extension** (`src/tokens/`, refreshed at each release). Asking Koios about the tokens in the Seedelf balance would tell it which contract UTxOs are yours, so the wallet never does.
   - **Finding a recipient** uses the contract as the balance reading sees it, and picks the seedelf's UTxO in the extension. The wallet never asks Koios about the recipient's token (`asset_utxos` and the like): that would tell Koios exactly who is being paid.
   - **An ADA Handle can't be found that way:** withdrawing or sending to `$name` asks Koios who holds that handle (`asset_nft_address`), so Koios learns it. The transaction names the address anyway once it's submitted. Pasting the address instead asks Koios nothing.
-- **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk, and it's wiped on lock.
-  - **Contacts** (who the user pays) and the Seedelf history are kept on disk, but **never unencrypted** (decided in chunk 12): sealed under a key derived from the phrase, unreadable while locked, deleted with the wallet. Saving or checking a contact asks no one anything.
+- **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk unencrypted, and the session copy is wiped on lock.
+  - **Contacts** (who the user pays), the Seedelf history, and **the UTxOs the user locked** (with the collateral chosen) are kept on disk, but **never unencrypted** (decided in chunk 12): sealed under a key derived from the phrase, unreadable while locked, deleted with the wallet. Saving or checking a contact, or locking a UTxO, asks no one anything.
+  - **The UTxOs screen** lists the Seedelf UTxOs by outpoint, from the last reading. It says that looking one up on an explorer tells that site which UTxO you care about.
+- **The Cardano account's collateral** (chunk 12) is only ever put up by what the account signs anyway (an account-paid mint). Seedelf spends never use it: giveme.my lends theirs (rule 2), so no UTxO of the user's tags a private spend. Setting one by payment is a 5 ₳ payment from the account to itself, in the open.
 
 ## Not for holding
 

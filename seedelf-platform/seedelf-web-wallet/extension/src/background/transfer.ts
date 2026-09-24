@@ -20,7 +20,7 @@ import { SEEDELF_NAME_RULE, seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { readContractView, type ContractView } from "./contract-scan";
 import type { KoiosUtxo } from "./koios";
-import { keep, measure, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
+import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 import { outpoint } from "./spent";
 
 /** chrome.storage.session: the transfer built last, until it's sent or replaced. */
@@ -47,11 +47,11 @@ export class TransferService {
   async build(network: NetworkName, to: string, lovelace: string, tokens: TokenQuantity[]): Promise<TransferSummary> {
     const { wasm } = this.deps;
     const name = nameOf(to);
-    const { view, params } = await readContract(this.deps, network);
+    const { view, utxos, params } = await readContract(this.deps, network);
     const recipient = find(view, name, network);
-    const request = { network, params, utxos: spendable(this.deps, view), to: name, recipient, lovelace, tokens };
+    const request = { network, params, utxos, to: name, recipient, lovelace, tokens };
     if (request.utxos.length === 0) {
-      throw new Error("Your Seedelf balance is empty. Move some ADA in first; transfers are paid from there.");
+      throw nothingToSpend(this.deps, view, "Your Seedelf balance is empty. Move some ADA in first; transfers are paid from there.");
     }
 
     const finished = await measure<TransferResult>(

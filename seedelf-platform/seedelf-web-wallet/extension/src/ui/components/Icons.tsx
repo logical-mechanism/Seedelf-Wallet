@@ -230,3 +230,36 @@ export const SearchIcon = icon(
 /** chevron-right */
 export const ChevronRightIcon = icon(<path d="m9 18 6-6-6-6" />);
 
+/** lock-open */
+export const LockOpenIcon = icon(
+  <>
+    <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+  </>,
+);
+
+/** coins */
+export const CoinsIcon = icon(
+  <>
+    <path d="M13.744 17.736a6 6 0 1 1-7.48-7.48" />
+    <path d="M15 6h1v4" />
+    <path d="m6.134 14.768.866-.5 2 3.464" />
+    <circle cx="16" cy="8" r="6" />
+  </>,
+);
+
+/** vault */
+export const VaultIcon = icon(
+  <>
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+    <path d="m7.9 7.9 2.7 2.7" />
+    <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+    <path d="m13.4 10.6 2.7-2.7" />
+    <circle cx="7.5" cy="16.5" r=".5" fill="currentColor" />
+    <path d="m7.9 16.1 2.7-2.7" />
+    <circle cx="16.5" cy="16.5" r=".5" fill="currentColor" />
+    <path d="m13.4 13.4 2.7 2.7" />
+    <circle cx="12" cy="12" r="2" />
+  </>,
+);

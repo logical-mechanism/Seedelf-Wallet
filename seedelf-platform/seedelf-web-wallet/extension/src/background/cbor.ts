@@ -59,6 +59,13 @@ const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "
 
 /** The inputs a transaction spends, as `txhash#index`: its body's key 0, a list or a tagged set. */
 export function txInputs(tx: Uint8Array): string[] {
+  const inputs = bodyOutpoints(tx, 0);
+  if (!inputs) throw new Error("the transaction has no inputs");
+  return inputs;
+}
+
+/** The outpoints under one key of a transaction's body (0 the inputs, 13 the collateral), or undefined. */
+export function bodyOutpoints(tx: Uint8Array, field: 0 | 13): string[] | undefined {
   if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
   const body = head(tx, 1);
   if (body.major !== 5 || body.indefinite) throw new Error("the transaction body isn't a map");
@@ -66,10 +73,10 @@ export function txInputs(tx: Uint8Array): string[] {
   for (let i = 0; i < body.n; i++) {
     const key = head(tx, p);
     const value = skip(tx, p);
-    if (key.major === 0 && key.n === 0) return outpoints(tx, value);
+    if (key.major === 0 && key.n === field) return outpoints(tx, value);
     p = skip(tx, value);
   }
-  throw new Error("the transaction has no inputs");
+  return undefined;
 }
 
 function outpoints(b: Uint8Array, pos: number): string[] {

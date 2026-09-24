@@ -16,7 +16,7 @@ import { DestinationField, useDestination } from "../components/Destination";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, plural, shortHex, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, formatQuantity, lockedAside, plural, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { tokenLabel } from "../tokens";
 
@@ -131,7 +131,11 @@ export function Withdraw({
       title="Withdraw"
       titleId="withdraw-title"
       onBack={onCancel}
-      aside={`${formatAda(seedelf.lovelace)} ₳ in your Seedelf balance`}
+      aside={
+        seedelf.locked.utxos
+          ? `${formatAda(seedelf.lovelace)} ₳ available${lockedAside(seedelf)}`
+          : `${formatAda(seedelf.lovelace)} ₳ in your Seedelf balance`
+      }
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!ready || busy}>
@@ -159,14 +163,14 @@ export function Withdraw({
         </AdaInput>
         {tooMuch && (
           <p className="field-note" data-testid="withdraw-too-much">
-            That's more than the {formatAda(seedelf.lovelace)} ₳ in your Seedelf balance.
+            That's more than the {formatAda(seedelf.lovelace)} ₳ {seedelf.locked.utxos ? "available" : "in your Seedelf balance"}.
           </p>
         )}
       </div>
       {max ? (
         <p className="note" data-testid="withdraw-max-note">
           Everything in your Seedelf balance, up to 20 UTxOs at once, with every token, less the fee. Spending them
-          together ties them to each other.
+          together ties them to each other.{seedelf.locked.utxos ? " UTxOs you locked stay put." : ""}
         </p>
       ) : (
         <>

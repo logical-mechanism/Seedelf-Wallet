@@ -67,7 +67,7 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 - **Failed unlocks:** exponential back-off (1 s, 2 s, 4 s … capped at 60 s), enforced by the worker. The unlock screen shows the countdown.
 - **Forgot password:** "Restore from your phrase" deletes the wallet from this browser after a typed confirmation (`delete wallet`), then goes straight to restore.
 
-**Settings** (the gear in the top bar, while unlocked): **Contacts**, **Show recovery phrase** (the password again first), **Change password**, **Remove wallet** (typed confirmation), and About (the version, the network, the source code and the privacy policy). Settings asks Koios nothing.
+**Settings** (the gear in the top bar, while unlocked): **Contacts**, **Collateral**, **Show recovery phrase** (the password again first), **Change password**, **Remove wallet** (typed confirmation), and About (the version, the network, the source code and the privacy policy). Settings asks Koios nothing, except to set a collateral by payment.
 
 **Activity** (the row at the bottom of each Home tab), newest first and grouped by day, after Lace's Activity tab. Each entry opens its details, with the transaction on Cardanoscan.
 
@@ -75,6 +75,19 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 - **Cardano account:** from Koios, which knows the account already: 20 transactions a page (`account_txs` and one `tx_info`), only while Activity is open, and **Load more** for the next 20. Opening it again asks only for what's newer. Each entry is what the transaction did to the account's own addresses; a move-in or a mint this wallet made is named as such.
 
 **Contacts** name the seedelfs and addresses (or `$handles`) the user pays, after Lace's address book. They're managed in Settings, picked with **Contacts** above Send's seedelf name or Withdraw's destination, and saved from either form with **Save to contacts** once it's found. They're encrypted on the device (see [privacy.md](privacy.md#known-links)).
+
+**UTxOs** (the row under Activity on each Home tab, chunk 12) lists that balance's UTxOs from the last reading, asking Koios nothing: the kept ones first (locked, the collateral, a seedelf's), then the largest. Each shows its ADA, how many tokens, and its outpoint, and opens its details: the tokens, the transaction (with Copy), the output and block, and on the Cardano side the address.
+
+- **Lock** in a UTxO's details keeps it out of every payment from that balance, Max included; **Unlock** returns it. Home still counts it, and says so under the balance ("2 UTxOs · 25 ₳ locked"). The forms offer only what's unlocked, their line under the title says what's locked, and with everything locked they say why they're disabled.
+- A seedelf's UTxO has no Lock: only removing the seedelf spends it. The collateral has none either: it's reclaimed in Settings.
+- The Seedelf side's privacy note: only this wallet can tell these are yours, and looking one up on an explorer tells that site. The choices are encrypted on the device, like Contacts.
+
+**Collateral** (Settings, chunk 12, after Lace's) is 5 ₳ of the Cardano account set aside for transactions that run a script: today, creating a seedelf from the account. It's only taken if the script fails, which the wallet checks before sending (Ogmios), and it's kept out of every payment.
+
+- **Set by the wallet:** with none chosen, the wallet takes the oldest UTxO of exactly 5 ₳ and nothing else that the account holds, with no transaction. The page says so.
+- **Set collateral:** from such a UTxO, nothing is sent. With none, it pays 5 ₳ from the account to its own `0/0` (a review, then Send; only the fee leaves the account). A banner follows it to "Collateral set", and the page says it's waiting until then.
+- **Reclaim collateral** returns it to the balance at once, with no transaction. The wallet then takes none by itself until one is set again.
+- Its privacy note: Seedelf spends never put it up; giveme.my lends theirs.
 
 See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 
@@ -114,7 +127,7 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
   - Every UTxO holding a token being brought along.
   - Then pure-ADA UTxOs, largest first.
   - Then other token UTxOs, until the amount, the fee and valid change are covered.
-  - **Never** a pure-ADA UTxO of exactly 5 ADA: it's probably another wallet's collateral. Those have to be moved with that wallet.
+  - **Never** the account's collateral, or a UTxO the user locked (see *UTxOs* and *Collateral* above). Until chunk 12 no pure-ADA UTxO of exactly 5 ADA was ever spent, in case it was another wallet's collateral; now only the collateral stays put.
   - **Max** spends every other UTxO and keeps only the minimum ADA that the tokens staying behind need.
 - **Outputs:**
   - The contract deposits, tokens 20 to an output.
@@ -136,7 +149,7 @@ An ordinary Cardano payment from the account, so a user needn't open another wal
 
 1. **Send** on the Cardano account tab, between Receive and Move in. It's disabled while the account is empty or a transaction is still confirming.
 2. **To:** an address or an ADA Handle, read and checked exactly as for a withdrawal, with Contacts. Your own account's address gets a note: the payment comes back, less the fee.
-3. **What's sent:** an ADA amount or Max, and tokens from the picker. The minimum ADA is worked out as for a move-in. **Max** is the move-in's: everything but the fee and what the tokens you keep need, and 5 ₳ UTxOs stay put. It pays one output; the change goes back to `0/0`.
+3. **What's sent:** an ADA amount or Max, and tokens from the picker. The minimum ADA is worked out as for a move-in. **Max** is the move-in's: everything but the fee and what the tokens you keep need, and the collateral and locked UTxOs stay put. It pays one output; the change goes back to `0/0`.
 4. **Review:** where it goes, the amount and tokens, the fee, the change and how many UTxOs pay. The account's keys sign here, inside WebAssembly.
 5. **Send** submits exactly the reviewed transaction. No script runs, so no collateral and no giveme.my. A banner follows it to "Payment confirmed". It's listed in the Cardano account's Activity from Koios, not in the Seedelf history.
 
@@ -160,7 +173,7 @@ The steps:
 3. **Pay with:** Cardano account (the default) or Seedelf balance, each with a note on what it links.
 4. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
    - WebAssembly picks the UTxOs that pay (pure ADA first, as few as it can) and drafts the transaction. Ogmios, through Koios, measures the policy (and the spends, for a stealth mint), and WebAssembly finishes it.
-   - **Account:** one of the account's own UTxOs is the collateral, as in the CLI: ADA-only if there is one, a 5 ₳ one first. A token UTxO also works, since the collateral return gives its tokens back. The account's keys sign here, as for a move-in. The fee is about 0.21 ₳, because only the policy runs.
+   - **Account:** the account's collateral is put up (see *Collateral* above). Without one, one of its UTxOs is, as in the CLI: ADA-only if there is one, a 5 ₳ one first. A token UTxO also works, since the collateral return gives its tokens back. The account's keys sign here, as for a move-in. The fee is about 0.21 ₳, because only the policy runs.
    - **Stealth:** the inputs are proven under a new one-time key, and giveme.my will lend the collateral. The fee is about 0.26 ₳.
    - The review shows the tag, the token name, what pays, the ADA locked with the seedelf (about 1.75 ₳, the minimum for its UTxO), the fee, and the change.
 5. **Send.**
