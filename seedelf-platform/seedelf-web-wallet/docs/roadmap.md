@@ -20,7 +20,7 @@ The wallet is built in **chunks**, each about one working session.
 | 4 | Extension scaffold | ✅ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
 | 5 | Vault and lock | ✅ | SecretBox vault, create/restore onboarding (restore has per-word BIP39 autocomplete, like Lace and Eternl), unlock, `chrome.storage.session`, auto-lock, unlock back-off. Plan: [plans/chunk-05-vault-and-lock.md](plans/chunk-05-vault-and-lock.md). |
 | 6 | Balance | ✅ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. QR code for the receive address. |
-| 7 | Builder extraction + move in | ⬜ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
+| 7 | Builder extraction + move in | ✅ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ⬜ | Stealth mint (`util mint`) with giveme.my collateral. |
 | 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
 | 10 | Withdraw | ⬜ | `sweep` and `remove`. |
@@ -35,6 +35,39 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-23: chunk 7 done** (`web-wallet/move-in`). Plan: [plans/chunk-07-move-in.md](plans/chunk-07-move-in.md).
+  - **Decided with the user:**
+    - Move-in takes an ADA amount or Max, plus a token picker (a picked token moves in full).
+    - After sending, the wallet watches `tx_status` every 15 s, then refreshes.
+    - Change goes to `0/0`.
+    - The live run is on a fresh test wallet the user funds.
+  - **Rust:**
+    - `seedelf-core` now compiles to WebAssembly. The only blocker was `seedelf-koios`'s reqwest timeouts, now gated off on wasm32.
+    - `seedelf-core/src/build.rs` holds network-free builders:
+      - `deposit_outputs`: fresh re-randomized registers, tokens 20 to an output.
+      - `settle_fee`: one throwaway signature per signer, repriced until it covers the signed size.
+      - `external_sweep`: the CLI command is now a thin `run()` around it, and its offline tests pass unchanged.
+      - `move_in`: never spends a 5-ADA pure-ADA UTxO.
+    - `ProtocolParameters::from_koios` parses a Koios row. The platform CLAUDE.md's "no `build_*`" rule is reversed.
+  - **WASM:** `buildMoveIn` checks each UTxO against its `role/index`, builds, and signs once per payment key. The module is now 1.6 MB (468 KB gzipped); `wasm-opt` is chunk 11.
+  - **Extension:**
+    - The Koios client gains `epochParams`, `submitTx` (never retried) and `txStatus`.
+    - `move-in.ts` builds, holds the signed tx in session storage until **Send**, submits exactly it, and watches it.
+    - Lock now clears all of `chrome.storage.session`.
+    - UI: Move in (form → review → send) and a pending banner that resumes on reopen.
+  - **Fixes from the user's manual testing:**
+    - **"Failed to fetch" and nothing else.** A rebuild under a running extension left the old worker asking for a deleted, hash-named WASM file, and the failure was cached. Now the start is retried, "The wallet couldn't start" offers Try again or Reload the extension, and Koios errors are in plain words.
+    - **`AdaInput`:** at most 6 decimals (truncated, with a note), nothing above the 45 billion ADA supply, and a note when the amount exceeds the balance. The WASM builder refuses over-supply amounts too.
+  - **Tests:** core builder 6; `seedelf-wasm` native 6 (witnesses verify against the tx hash, and the signers are exactly the inputs' keys, on the real recorded preprod UTxOs); Node 21; Vitest 79 + 1 live; Playwright 13; the CLI's offline tests (11) are green.
+  - **Not done: the live preprod move-in.**
+    - The test wallet in `extension/.preprod-test-wallet.txt` (gitignored) was never funded.
+    - The user tried the flow by hand in their own wallet, but no transaction hash was recorded.
+    - To finish: fund that wallet, `npm run build`, then `node e2e/live/move-in.mjs 10`. It restores the wallet, moves 10 tADA plus any tokens, waits for confirmation, and prints the result.
+  - **Next:**
+    - The user plans CSS and UX fixes as part of the Lace style and flow pass (chunk 11). Keep new screens simple until then.
+    - Chunk 8, create a seedelf (`util mint`), is the first script spend. It needs the draft/finalize split around `evaluate_transaction` and the giveme.my collateral witness. Write its plan first.
+    - A real owned contract UTxO (from a live move-in) would let chunk 8 test on-chain.
 
 - **2026-09-23: chunk 6 done** (`web-wallet/balances`).
   - **Decided with the user:** the receive-address QR code is in (`uqr`, MIT, a port of Nayuki's generator). Balances are read when Home opens, if the last reading is over a minute old, and on Refresh; there's no background polling.

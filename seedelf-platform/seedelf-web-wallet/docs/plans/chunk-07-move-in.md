@@ -1,5 +1,7 @@
 # Chunk 7 plan: builder extraction and move-in
 
+> **Done on 2026-09-23, except the live preprod run** (the test wallet wasn't funded). The [roadmap handoff note](../roadmap.md#handoff-notes) has what was built and how to finish the live run.
+
 **Branch:** `web-wallet/move-in`, created from `seedelf-web-wallet` at `1e70e35` (after PR #250). `main` had nothing new to merge. It ends with a PR back into `seedelf-web-wallet`.
 
 ## Start here (new session)
