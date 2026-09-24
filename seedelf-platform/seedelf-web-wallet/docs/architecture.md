@@ -71,7 +71,7 @@ flowchart LR
 - **One implementation.** The CLI already builds every Seedelf transaction with Pallas: registers, reference-script spends, the fee and ex-unit loop, and the collateral-service witness. Offline integration tests cover it. Reusing it gives the same single implementation as the crypto.
 - **The rejected option was a TypeScript library.** Lace's `TransactionBuilder` has no reference inputs, so we would have had to port the Seedelf logic by hand.
 
-**Status (chunk 9):** move-in, creating a seedelf and transfer are built on it.
+**Status (chunk 10):** every v1 transaction is built on it: move-in, creating a seedelf, transfer, withdraw and removing a seedelf.
 
 - **`seedelf-core` compiles to WebAssembly.** The one blocker was `seedelf-koios` setting `connect_timeout` (and `timeout`) on its HTTP client; `reqwest`'s browser build has neither, so both are gated with `#[cfg(not(target_arch = "wasm32"))]`.
 - **The WebAssembly module is now about 2.3 MB** (582 KB gzipped), up from 1.6 MB before the script-spend code. It's loaded from the extension itself, so this only costs a moment on the worker's first start. `wasm-opt` is chunk 11.
@@ -82,12 +82,15 @@ flowchart LR
   - `transfer` and `transfer_from`: the CLI's `transfer`, now a thin `run()` around them, and the web wallet's [Send to a seedelf](flows.md#transfer-seedelf--any-seedelf) (chunk 9).
     - Each payment goes under a fresh re-randomization of the recipient's register, as found on chain with their seedelf.
     - `is_payable` refuses a register that a payment would be lost under: points that don't decode, torsion points, or the identity. `is_valid` alone lets the identity through, and anyone can prove the zero key behind it. Both mints use it too.
+  - `sweep`, `sweep_from` and `sweep_all`: the CLI's `sweep`, now a thin `run()` around them, and the web wallet's [Withdraw](flows.md#send-to-an-address) (chunk 10). `is_payable_address` accepts only a Shelley address on this network with no script in it, as the CLI always has.
+  - `remove`: the CLI's `remove` and the web wallet's [Remove a seedelf](flows.md#remove-a-seedelf). It spends the UTxO holding exactly one seedelf and burns it (`ScriptSpend::mint` with −1).
   - `account_mint`: a seedelf paid by the Cardano account (chunk 8b; the CLI's `create`, still inline in the CLI).
     - Key inputs pay: pure ADA first, never a 5 ₳ pure UTxO.
     - One of the account's own UTxOs is the collateral. If it holds tokens, the collateral return gives them back.
     - It's drafted and finalized like a script spend, but only the policy runs: no proofs, no one-time key, no giveme.my.
   - Shared pieces: `deposit_outputs` (contract outputs under fresh re-randomizations, tokens 20 to an output), and `settle_fee`, which signs each draft with one throwaway key per signer and reprices until the fee covers the signed size.
-- **Script spends share one shape, `ScriptSpend`** (chunk 8). Mint and transfer are built on it; sweep and remove (chunk 10) are the same shape with other outputs.
+- **Script spends share one shape, `ScriptSpend`** (chunk 8). Mint, transfer, sweep and remove are all built on it.
+  - The change goes back into the contract under fresh copies of the payer's register, or, with `change_to(addr)`, to a key address: that's how `sweep_all` sends everything, and how a removal pays an address.
   - Owned contract inputs, each unlocked by a Schnorr proof bound to the one-time key's hash. The proofs come from a closure, so core never holds the Seedelf secret.
   - giveme.my's collateral UTxO, returned minus 3/2 of the fee. The scripts are read from reference inputs. The one-time key and giveme.my's key are the required signers.
   - **Two phases.** `draft()` gives every redeemer the transaction's maximum budget, for Ogmios to evaluate. `finalize(budgets)` puts in the measured budgets and settles an even fee. The fee covers the size with both signatures, the budgets at the protocol's prices, and 15 lovelace per reference-script byte.
@@ -99,16 +102,16 @@ flowchart LR
 - **Protocol parameters** are parsed by `ProtocolParameters::from_koios`, so the extension passes Koios's `epoch_params` row through WebAssembly unchanged.
 - **Signing stays in WebAssembly.**
   - Move-in: `buildMoveIn(account, key, requestJson)` checks that every UTxO sits at the address its `role/index` derives, builds with `move_in`, and signs once per distinct payment key.
-  - Script spends: `draftMint` or `draftTransfer`, then `finishMint` or `finishTransfer`, then `signScriptSpend` at Send. `signScriptSpend` checks giveme.my's signature against its public key over the transaction id before adding it. giveme.my checks a transaction against the chain before it signs, and refuses one whose inputs it can't find ("Transaction Fails Validation").
+  - Script spends: `draftMint`, `draftTransfer`, `draftWithdraw` or `draftRemove`, then the matching `finish…`, then `signScriptSpend` at Send. `signScriptSpend` checks giveme.my's signature against its public key over the transaction id before adding it. giveme.my checks a transaction against the chain before it signs, and refuses one whose inputs it can't find ("Transaction Fails Validation").
   - Keys never reach JavaScript.
 - **The one-time key is derived, not drawn** (web wallet only). It is HKDF-SHA-256 with the Seedelf scalar as the key material, the salt `seedelf-one-time-key-v1`, and a random 32-byte seed as the info.
   - **Why:** Chrome stops an idle worker after about 30 seconds, and reading a review can take longer. The unsigned transaction and the seed wait in `chrome.storage.session`, and Send re-derives the key inside WebAssembly, even in a restarted worker.
   - **Is it safe to store the seed?** The seed gives nothing without the Seedelf key, and session storage already holds the vault entropy while unlocked.
   - A new seed per spend means a new key per spend (privacy rule 1). The CLI still draws its one-time keys at random.
 
-- **In the worker, `script-spend.ts` holds the flow every Seedelf spend shares:** read the whole contract and the protocol parameters, draft → Ogmios → finish, keep the unsigned transaction and its seed in session storage until Send, then giveme.my → `signScriptSpend` → submit → the pending watch. `mint.ts` and `transfer.ts` use it; sweep and remove plug in next.
+- **In the worker, `script-spend.ts` holds the flow every Seedelf spend shares:** read the whole contract and the protocol parameters, draft → Ogmios → finish, keep the unsigned transaction and its seed in session storage until Send, then giveme.my → `signScriptSpend` → submit → the pending watch. `mint.ts`, `transfer.ts` and `withdraw.ts` use it.
 
-**What's left:** sweep and remove (chunk 10) move onto `ScriptSpend`. The CLI's `create` and `fund` stay inside their `run()`s; the web wallet doesn't need them.
+**In the CLI,** every script spend ends in `seedelf-cli/src/commands/spend.rs`: prove, evaluate, finish, giveme.my, sign, submit. Only `create` and `fund` still build inside their `run()`s; the web wallet doesn't need them.
 
 **Tests guard it.** The CLI's offline integration tests (`seedelf-cli/tests/cli/`) check value conservation, min-UTxO and valid change registers for each command, and `seedelf-core/tests/build_test.rs` checks the builders directly.
 
@@ -169,6 +172,7 @@ flowchart LR
 - **Tokens** show the name as text when it decodes as UTF-8 (after dropping a CIP-68 label such as `0014df10`), otherwise as hex, with the decimals Koios reports. No token images are fetched: they would reveal holdings to more servers, and the page CSP allows only the extension's own images.
 - **When it reads the chain:** when Home opens, if the last reading is over a minute old, and on **Refresh**. There's no background polling. The reading is cached per network in `chrome.storage.session` (it says which contract UTxOs are the user's, so it never goes to disk) and wiped on lock.
 - **Transactions (chunks 7 and 8):** `epoch_params`, `ogmios` (`evaluateTransaction`; a 400 carries Ogmios's reason), `submittx` (never retried) and `tx_status`.
+- **ADA Handles (chunk 10):** `asset_nft_address` for the handle policy (`f0ff48bb…`, the same on preprod), the plain name and then the CIP-68 one. Only when the user types `$name` as a withdrawal's destination.
 - **Finding a recipient (chunk 9):** the same `credential_utxos` query for the whole contract; the UTxO holding the seedelf is picked in the extension. Koios is never asked about the recipient's token.
 - **Collateral for Seedelf spends comes from the giveme.my service**, exactly as in the CLI (`seedelf-koios`). See [privacy.md](privacy.md).
 - **All requests come from the user's IP.** The IP-tracking caveats in the root [README](../../../README.md#de-anonymizing-via-ip-tracking) apply. The extension adds no analytics or telemetry.

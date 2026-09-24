@@ -49,6 +49,11 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Mint paid by the account, then move in:** only the account and the name are linked. The balance stays ambiguous. This is the default.
   - **Stealth mint from received money:** hides the payer. That's the case the stealth mint is for.
 - **Exit:** withdrawing to where the money came from re-links the chain. This is the second implicit tracking method in the root README. Withdraw somewhere else, or keep the funds in Seedelf.
+  - The withdraw form says so. It warns when the destination is this wallet's own Cardano account (any address carrying its staking key): that links the account to the Seedelf UTxOs spent, and so to whoever paid them in.
+  - **Max** spends up to 20 UTxOs in one transaction, which ties them together (see *Co-spending*).
+- **Removing a seedelf:** its ADA goes somewhere, and that's linked to the seedelf's name.
+  - By default it goes to the Cardano account, which a mint-first seedelf is linked to already.
+  - Back into the Seedelf balance, it ties the name to that new UTxO, and to whatever it's later spent with. That's the right place only for a seedelf the Seedelf balance paid for (a stealth mint).
 - **Unique amounts and timing:** depositing 1,234.567 ADA and withdrawing roughly 1,234.4 ADA an hour later is an easy match. The UI should nudge users towards round amounts and not rushing.
 - **Transfer:** the payment can't be linked to the recipient's seedelf. The payer's side is an ordinary spend, though.
   - Its inputs, and the change in the same transaction, trace back through the transaction graph to where that money came from.
@@ -67,6 +72,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - A balance reading asks Koios about the Cardano account and the whole wallet contract at the same moment. Koios can tell that the account's owner uses Seedelf, though not which contract UTxOs are theirs: the ownership check runs in the extension.
   - The wallet only reads the chain when Home opens (at most once a minute) or on Refresh. It never polls in the background.
   - **Finding a recipient** reads the whole wallet contract, the same query a balance reading makes, and picks the seedelf's UTxO in the extension. The wallet never asks Koios about the recipient's token (`asset_utxos` and the like): that would tell Koios exactly who is being paid.
+  - **An ADA Handle can't be found that way:** withdrawing to `$name` asks Koios who holds that handle (`asset_nft_address`), so Koios learns it. The transaction names the address anyway once it's submitted. Pasting the address instead asks Koios nothing.
 - **On this device:** which contract UTxOs are the user's is kept only in memory and `chrome.storage.session`, never on disk, and it's wiped on lock.
 
 ## Not for holding
