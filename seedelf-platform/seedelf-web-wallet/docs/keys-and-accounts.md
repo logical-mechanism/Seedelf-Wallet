@@ -98,16 +98,24 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
 
 ## Password and vault
 
-- **The vault is one SecretBox blob** that seals the phrase entropy under the user's password. Every key is re-derived on unlock, so no derived keys are stored.
-- **SecretBox `SBV1`** (from Lace, `packages/lib/core/src/secret-box/`):
-  - **Key derivation:** Argon2id with m = 19456 KiB, t = 2, p = 1, giving a 32-byte key.
-  - **Cipher:** ChaCha20-Poly1305.
+**Built in chunk 5.** The code is in [`extension/src/background/`](../extension/src/background/): `vault.ts`, `wallet.ts` and `secret-box/`.
+
+- **The vault is one SecretBox blob** that seals the phrase's BIP39 entropy under the user's password. It holds 16, 20 or 32 bytes for 12, 15 or 24 words; the words themselves are never stored.
+  - Every key is re-derived on unlock, so no derived key is stored.
+  - It lives in `chrome.storage.local` under `seedelf.vault`, as `{ version: 1, blob: <base64>, createdAt }`.
+  - The entropy ↔ phrase conversion is in Rust (`seedelf_crypto::derivation::{phrase_to_entropy, entropy_to_phrase}`), with the same rules as `parse_phrase`.
+  - Unlock goes straight from entropy to keys inside WebAssembly (`SeedelfKey.fromEntropy`, `CardanoAccount.fromEntropy`), so the phrase never becomes a JavaScript string after onboarding.
+- **SecretBox `SBV1`**, adapted from Lace (`packages/lib/core/src/secret-box/`) into [`secret-box/`](../extension/src/background/secret-box/). Those files stay under Apache-2.0, with Lace's notice and our changes listed in that folder's README.
+  - **Key derivation:** Argon2id with m = 19456 KiB, t = 2, p = 1, giving a 32-byte key (`@noble/hashes`).
+  - **Cipher:** ChaCha20-Poly1305 (`@noble/ciphers`).
   - **Header:** 48 bytes: magic `SBV1`, a 32-byte salt and a 12-byte nonce. It is authenticated as associated data.
   - **Changing parameters** means a new magic (`SBV2`), never a silent change.
+  - Lace's legacy EMIP-003 path is left out; this wallet only ever writes `SBV1`.
+  - **Checked independently:** `extension/tests/vectors/secret_box_sbv1.json` was made with Python's `argon2-cffi` (the reference Argon2) and `cryptography`'s ChaCha20Poly1305. The TypeScript code reproduces its keys and blobs byte for byte.
 - **Password check:** opening the vault proves the password, because the authentication tag fails otherwise. We have one blob, so Lace's separate "sentinel" value isn't needed.
-- **Performance:** `@noble/hashes` Argon2id is pure JS, so measure unlock time.
-  - Lace allows swapping in a faster implementation (`setArgon2idImplementation`).
-  - Another option is the Rust `argon2` crate inside our WebAssembly module.
+- **Password rule:** at least 12 characters, with no composition rules. The UI shows a rough strength hint, and the worker enforces the length. (The CLI asks for 14 characters with character classes; the two are separate products.)
+- **Performance:** unlock takes about 190 ms in the service worker, measured end to end in Playwright (Argon2id in pure JS, plus both key derivations in WebAssembly). That's well under the 1.5 s budget, so no faster Argon2id is needed. Lace's `setArgon2idImplementation` hook is kept in case that changes.
 - **Lock and wipe:**
-  - On lock, zero the entropy, the derived keys and `x` in memory.
-  - Never keep the password after use.
+  - On lock, the worker frees the WebAssembly key objects, which overwrite `x` and the Cardano account key before releasing them, and clears `chrome.storage.session`.
+  - Entropy buffers and the password's bytes are zeroed after use. JavaScript strings can't be zeroed, so the password string and the phrase typed during onboarding are simply dropped.
+  - The password is never kept after use.

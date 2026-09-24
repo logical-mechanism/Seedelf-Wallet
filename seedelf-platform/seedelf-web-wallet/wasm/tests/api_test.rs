@@ -39,3 +39,16 @@ fn rerandomized_register_stays_owned_and_proves() {
     assert!(api::verify_proof(&register, &z, &g_r, &vkh).unwrap());
     assert!(!api::verify_proof(&register, &z, &g_r, &"cd".repeat(28)).unwrap());
 }
+
+#[test]
+fn with_phrase_rebuilds_the_vault_phrase() {
+    let entropy = [0u8; 32];
+    let words = api::with_phrase(&entropy, |p| Ok(p.split(' ').count())).unwrap();
+    assert_eq!(words, 24);
+    assert!(
+        api::with_phrase(&[0u8; 24], |_| Ok(())).is_err(),
+        "18 words"
+    );
+    let failed: anyhow::Result<()> = api::with_phrase(&entropy, |_| anyhow::bail!("inner"));
+    assert_eq!(failed.unwrap_err().to_string(), "inner");
+}

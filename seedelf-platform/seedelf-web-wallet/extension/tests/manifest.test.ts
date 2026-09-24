@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { buildManifest, DEV_KEY } from "../src/manifest";
@@ -15,7 +17,14 @@ describe("manifest", () => {
       "connect-src 'self' https://preprod.koios.rest https://www.giveme.my",
     );
     expect(m.content_security_policy.extension_pages).not.toContain("api.koios.rest");
-    expect(m).not.toHaveProperty("permissions");
+    expect(m.permissions).toEqual(["storage", "alarms"]);
+    expect(m.icons).toEqual({
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png",
+    });
+    expect(m.action.default_icon).toBe(m.icons);
   });
 
   it("adds mainnet hosts only behind the flag", () => {
@@ -38,5 +47,12 @@ describe("manifest", () => {
     const hex = createHash("sha256").update(Buffer.from(DEV_KEY, "base64")).digest("hex").slice(0, 32);
     const id = [...hex].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");
     expect(id).toBe("jfekiogplaamnceifeehipmomhojngcb");
+  });
+
+  it("ships every icon the manifest names", () => {
+    const m = buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: false });
+    for (const path of Object.values(m.icons)) {
+      expect(existsSync(new URL(`../public/${path}`, import.meta.url)), path).toBe(true);
+    }
   });
 });

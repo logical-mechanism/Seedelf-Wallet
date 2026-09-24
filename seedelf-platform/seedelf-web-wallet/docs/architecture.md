@@ -6,7 +6,7 @@ Keep it light: a small Manifest V3 extension, the Seedelf crypto and transaction
 
 ```mermaid
 flowchart LR
-  UI["UI<br/>(popup or full tab)"] -- "typed RPC over a port" --> SW
+  UI["UI<br/>(popup or full tab)"] -- "typed RPC (runtime messages)" --> SW
   subgraph SW["Service worker"]
     Vault["Vault + lock"]
     Wallet["Wallet state"]
@@ -21,23 +21,25 @@ flowchart LR
 - **Service worker:** owns everything that matters.
   - While unlocked, it holds the decrypted secret. It is the only place secrets ever exist.
   - It also holds wallet state, builds and signs transactions, and makes all network calls.
-- **UI:** renders state and sends the user's actions to the service worker. It never holds keys.
+- **UI:** renders state and sends the user's actions to the service worker. It never holds keys. The only secret it ever sees is the recovery phrase, while the user writes it down or types it in during onboarding.
 - **Content scripts:** v1 has none. They arrive with the contract round trip, to offer CIP-30 on one-time accounts.
   - This matters for security: v1 injects nothing into web pages.
   - v1 only needs host permissions for Koios and giveme.my, not `<all_urls>`.
 
 ## Service worker
 
-- **The worker owns the state and the UI mirrors it.** The UI takes a snapshot on open, then receives updates. This is Lace's model, minus its framework.
-- **Chrome kills an idle worker after about 30 seconds.** State must reload from storage on every wake-up.
+- **The worker owns the state and the UI mirrors it.** The UI takes a snapshot on open (the `status` request), then refreshes whenever the worker broadcasts `state-changed`, for example on auto-lock. This is Lace's model, minus its framework.
+  - The wallet states are `no-wallet`, `locked` and `unlocked` (`extension/src/background/wallet.ts`).
+  - The worker runs state changes one at a time, so two pages can't race each other past the unlock back-off.
+- **Chrome kills an idle worker after about 30 seconds.** State must reload from storage on every wake-up. The worker's timers don't survive either, so auto-lock uses `chrome.alarms`.
   - Register event listeners synchronously, before the first `await`, or the event that woke the worker is lost.
 - **The worker is an ES module** (`"type": "module"` in the manifest).
   - Static imports of the extension's own files are fine. The build emits `sw.js` plus a shared chunk.
   - Dynamic `import()` and top-level `await` are not allowed in service workers, so WASM initializes lazily: `loadWasm()` in `extension/src/background/wasm.ts`.
   - Lace's classic-worker `importScripts` preloading isn't needed.
-- **Staying unlocked across restarts (decided).** A worker restart loses everything held in memory, including the unlocked key. The popup can't hold the key either, because it closes as soon as the user clicks away.
-  - On unlock, the key goes into `chrome.storage.session`. That storage is in memory only, never written to disk, cleared when the browser closes, and not readable by content scripts.
-  - A restarted worker reads the key back from there.
+- **Staying unlocked across restarts (built in chunk 5).** A worker restart loses everything held in memory, including the unlocked keys. The popup can't hold the keys either, because it closes as soon as the user clicks away.
+  - On unlock, the vault's entropy goes into `chrome.storage.session` (`seedelf.entropy`), along with the time of the last activity (`seedelf.lastActivity`). That storage is in memory only, never written to disk, cleared when the browser closes, and not readable by content scripts.
+  - A restarted worker re-derives the keys from there, unless the auto-lock deadline has passed, in which case it locks.
   - **Lock** (manual or auto-lock) clears the key from session storage as well as from memory.
   - The result: the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every idle restart.
 
@@ -143,14 +145,26 @@ The building moves into network-free functions in `seedelf-core`: a draft step, 
 
 ## Storage
 
-- **`chrome.storage.local` holds three things:**
-  - the encrypted vault: a single SecretBox blob, see [keys-and-accounts.md](keys-and-accounts.md#password-and-vault)
-  - non-secret settings
-  - cached chain data
+**Permissions:** `storage` and `alarms`, plus the host permissions for the enabled network's Koios and giveme.my.
+
+| Where | Key | What |
+|---|---|---|
+| `chrome.storage.local` | `seedelf.vault` | The encrypted vault: a single SecretBox blob, see [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) |
+| `chrome.storage.local` | `seedelf.unlockFailures` | `{ count, lastFailureAt }` for the unlock back-off |
+| `chrome.storage.session` | `seedelf.entropy` | The vault entropy, only while unlocked |
+| `chrome.storage.session` | `seedelf.lastActivity` | When the user last did something, for auto-lock |
+
+Non-secret settings and cached chain data join `chrome.storage.local` in later chunks.
+
 - **Decrypted secrets live only in service-worker memory and `chrome.storage.session`** (see above).
-- **They are wiped on lock.** Lace keeps the last verified password in memory after use (`packages/contract/authentication-prompt/src/store/auth-secret-accessor.ts`), and we won't.
-- **Auto-lock** after a period of inactivity.
-- **Failed unlocks** trigger an exponential back-off.
+- **They are wiped on lock.** Lace keeps the last verified password in memory after use (`packages/contract/authentication-prompt/src/store/auth-secret-accessor.ts`), and we don't.
+- **Auto-lock** after 15 minutes without activity.
+  - While unlocked, the UI reports activity (a key press or a click) to the worker, at most every 30 seconds.
+  - A `chrome.alarms` alarm checks once a minute, and every request checks too.
+  - A settings screen for the delay can come later.
+- **Failed unlocks** trigger an exponential back-off: 1 s, 2 s, 4 s and so on, capped at 60 s (Lace's values).
+  - Unlike Lace, the worker enforces it: an attempt that comes too early is refused before the password is even tried.
+  - The count is kept in `chrome.storage.local`, so restarting the worker or the browser doesn't reset it. The right password resets it.
 
 ## UI
 
@@ -158,15 +172,17 @@ The building moves into network-free functions in `seedelf-core`: a draft step, 
   - One build emits the popup/tab page, `sw.js`, the WASM asset, and `manifest.json` (generated by `extension/src/manifest.ts`).
   - The page CSP is `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'` plus the enabled network's Koios and giveme.my origins only.
   - No heavy component library.
-  - Plain CSS with design tokens for light and dark themes.
+  - Plain CSS with design tokens for light and dark themes. The colours come from the Seedelf logo (navy `#011833`, teal `#00c4bc`), and the dark theme follows Lace's structure.
   - Not Lace's React Native / Expo stack.
 - **Lace's flows and visual language may inspire ours:** spacing, corner radius, light and dark themes, screen-to-screen flow.
 - **We don't take Lace's name, logo or brand assets,** and we don't take its commercial fonts (Brandon Grotesque and Proxima Nova are in its repo but not licensed to us).
-- **Icons** only under a compatible license.
+- **Our own brand:** the Seedelf logo set is in [brand/](../brand/). The extension ships resized copies (`extension/public/`).
+- **Icons** only under a compatible license. The few UI icons so far are drawn inline for this project.
 - **Popup plus full tab (decided), like Eternl:**
   - Clicking the toolbar icon opens a popup.
   - An "expand" button opens the same app in a full browser tab.
   - One responsive UI serves both.
+  - Onboarding (create or restore) opens in a full tab, as in Lace and Eternl, because a popup closes as soon as the user clicks elsewhere.
   - No side panel. Lace opens in a side panel, which feels cramped.
 
 ## What we borrow from Lace
@@ -175,7 +191,7 @@ Paths are relative to a `lace-extension@2.4.0` checkout (see the [README](../REA
 
 | What | Lace path | How we use it |
 |---|---|---|
-| SecretBox (Argon2id + ChaCha20-Poly1305) | `packages/lib/core/src/secret-box/` | Adopt |
+| SecretBox (Argon2id + ChaCha20-Poly1305) | `packages/lib/core/src/secret-box/` | Adopted in `extension/src/background/secret-box/` (Apache-2.0, without the EMIP-003 path) |
 | Typed RPC between extension contexts | `packages/lib/extension-messaging/src/` | Adapt; it's about 1.8k lines and needs RxJS |
 | Service-worker boot order and install preloading | `apps/lace-extension/src/sw-script/` | Pattern |
 | Worker-owned store mirrored in the UI | `apps/lace-extension/src/util/connect-store.ts`, `apps/lace-extension/src/sw-script/create-remote-store.ts` | Pattern |

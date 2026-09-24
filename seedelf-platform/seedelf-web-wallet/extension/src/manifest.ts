@@ -11,6 +11,9 @@ import { enabledNetworks, networkOrigins } from "./networks.ts";
 export const DEV_KEY =
   "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqswlP9QH0iugVcCP5EqIZK/i6IRI29WwHe6R5ng2hQ8w1lSZvqAJ0aTNY8/CrCr79ROgPMfMubq2ErJQAJ0OlD2frXpbl7gj1KFV16z+HRpZkapcVtTCD2r+rEocPt+ryx0w+5Y+m+uWNXUgCNL6sdHXC8qidMpkXJ4Y2onvV7BJRAoptpiv8dgdsFb8pIgdjiNBdR/Uaow/QKHWOE5clcgiP0QOMRfmeGIv/8ChDnTneLiRw6I6rIOtAXbvi/Ay2SO00Yoje7N7KCHUhqQscekyHpBvjOANNAs4lv9+qgEFhVPaq51COoXfSmuIzuefXKA5v5zcTSvbS/Fzv+vz0QIDAQAB";
 
+/** The emblem at Chrome's icon sizes (public/icons, from ../brand). */
+const ICONS = Object.fromEntries([16, 32, 48, 128].map((n) => [String(n), `icons/icon-${n}.png`]));
+
 export interface ManifestOptions {
   version: string;
   mainnetEnabled: boolean;
@@ -25,14 +28,18 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
     short_name: "Seedelf",
     description: "A Cardano stealth wallet.",
     version,
+    icons: ICONS,
     action: {
       default_title: "Seedelf Wallet",
       default_popup: "index.html",
+      default_icon: ICONS,
     },
     background: {
       service_worker: "sw.js",
       type: "module",
     },
+    // storage: the vault and the unlocked session; alarms: auto-lock.
+    permissions: ["storage", "alarms"],
     host_permissions: origins.map((o) => `${o}/*`),
     // WebAssembly needs 'wasm-unsafe-eval'; connect-src limits network access
     // to the extension itself and the wallet's own services.

@@ -1,5 +1,7 @@
 # Chunk 5 plan: vault, onboarding and lock
 
+> **Done on 2026-09-23.** What was built, and where it differs from this plan, is in the [roadmap handoff note](../roadmap.md#handoff-notes).
+
 **Branch:** `web-wallet/vault-lock`, created from `seedelf-web-wallet` at `b3e9383` (after PR #248). It ends with a PR back into `seedelf-web-wallet`.
 
 ## Start here (new session)
