@@ -5,6 +5,7 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { Message, Requests, Status } from "../shared/rpc";
+import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
 import type { ContactsService } from "./contacts";
 import type { MintService } from "./mint";
@@ -24,6 +25,7 @@ export interface Context {
   withdraw: WithdrawService;
   pending: PendingService;
   contacts: ContactsService;
+  activity: ActivityService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -97,6 +99,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.contacts.save(ctx.network, message);
     case "contact-remove":
       return ctx.contacts.remove(ctx.network, message.id);
+    case "history":
+      return message.of === "seedelf"
+        ? { entries: await ctx.activity.seedelf(ctx.network), more: false }
+        : ctx.activity.cardano(ctx.network, message.more ?? false);
   }
 }
 

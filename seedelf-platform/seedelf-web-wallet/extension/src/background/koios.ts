@@ -20,8 +20,35 @@ export interface KoiosUtxo {
   stake_address: string | null;
   payment_cred: string | null;
   block_height: number | null;
+  /** Unix seconds of the block that made it. */
+  block_time?: number;
   inline_datum: { bytes: string; value: unknown } | null;
   asset_list: KoiosAsset[] | null;
+}
+
+/** One of an account's transactions: `account_txs`. */
+export interface KoiosAccountTx {
+  tx_hash: string;
+  block_height: number;
+  /** Unix seconds. */
+  block_time: number;
+}
+
+/** A transaction's inputs and outputs: `tx_info`, with only what Activity reads. */
+export interface KoiosTxInfo {
+  tx_hash: string;
+  block_height: number;
+  /** Unix seconds. */
+  tx_timestamp: number;
+  fee: string;
+  inputs: KoiosTxOut[];
+  outputs: KoiosTxOut[];
+}
+
+export interface KoiosTxOut {
+  payment_addr: { bech32: string };
+  value: string;
+  asset_list: Array<{ policy_id: string; asset_name: string; quantity: string }> | null;
 }
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -79,6 +106,31 @@ export class Koios {
   /** Every UTxO at an address with this stake key. Anyone can build such an address, so filter by payment key. */
   accountUtxos(stakeAddress: string): Promise<KoiosUtxo[]> {
     return this.paged("account_utxos", { _stake_addresses: [stakeAddress], _extended: true });
+  }
+
+  /**
+   * An account's transactions, newest first: `limit` of them from `offset`,
+   * or with `after`, only those in blocks after it (one request, up to 1,000).
+   */
+  accountTxs(stakeAddress: string, { after, offset = 0, limit = 20 }: { after?: number; offset?: number; limit?: number }) {
+    const body = { _stake_address: stakeAddress, ...(after === undefined ? {} : { _after_block_height: after }) };
+    const page = after === undefined ? `&offset=${offset}&limit=${limit}` : "&limit=1000";
+    return this.post<KoiosAccountTx>("account_txs", body, `order=block_height.desc,tx_hash.asc${page}`);
+  }
+
+  /** Inputs, outputs and fee of up to 20 transactions, in one request; nothing else. */
+  txInfo(txHashes: string[]): Promise<KoiosTxInfo[]> {
+    if (!txHashes.length) return Promise.resolve([]);
+    return this.post<KoiosTxInfo>("tx_info", {
+      _tx_hashes: txHashes,
+      _inputs: true,
+      _metadata: false,
+      _assets: true,
+      _withdrawals: false,
+      _certs: false,
+      _scripts: false,
+      _bytecode: false,
+    });
   }
 
   /** The current epoch's protocol parameters: one `epoch_params` row, passed to WebAssembly as is. */

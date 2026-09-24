@@ -472,6 +472,42 @@ test("contacts: save a seedelf from Send, pick it again, and keep them in Settin
   expect(koios.calls.slice(reads).filter((c) => c !== "credential_utxos")).toEqual([]);
 });
 
+test("activity: the Seedelf history from the device, the Cardano account's from Koios", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+
+  // Seedelf: what arrived, noted from the balance reading; Koios isn't asked.
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Activity" }).click();
+  await expect(page.getByRole("heading", { name: "Seedelf activity" })).toBeVisible();
+  const list = page.getByTestId("activity");
+  await expect(list.getByRole("listitem")).toHaveCount(2);
+  await expect(list).toContainText("+25 ₳");
+  await expect(list).toContainText("+3 ₳ and 1 token");
+  expect(koios.calls).toHaveLength(reads);
+  await snap(page, "activity-seedelf");
+  await list.getByRole("button").first().click();
+  const details = page.getByRole("dialog", { name: "Received" });
+  await expect(details.getByRole("link", { name: "View on Cardanoscan" })).toHaveAttribute(
+    "href",
+    /^https:\/\/preprod\.cardanoscan\.io\/transaction\/[0-9a-f]{64}$/,
+  );
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // Cardano account: a page of 20 is two requests; Load more, two more.
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "Activity" }).click();
+  await expect(page.getByRole("heading", { name: "Cardano account activity" })).toBeVisible();
+  await expect(list.getByRole("listitem")).toHaveCount(20);
+  expect(koios.calls.slice(reads)).toEqual(["account_txs", "tx_info"]);
+  await snap(page, "activity-cardano");
+  await page.getByRole("button", { name: "Load more" }).click();
+  await expect(list.getByRole("listitem")).toHaveCount(40);
+  expect(koios.calls.slice(reads)).toEqual(["account_txs", "tx_info", "account_txs", "tx_info"]);
+});
+
 test("move in: amount and a token, review, send, then watch it confirm", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
@@ -857,6 +893,11 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
     await back();
   }
   expect(koios.submitted).toHaveLength(0);
+
+  await popup.getByRole("button", { name: "Activity" }).click();
+  await expect(popup.getByTestId("activity")).toBeVisible();
+  await shot("activity");
+  await back();
 
   await popup.getByRole("button", { name: "Settings" }).click();
   await expect(popup.getByRole("heading", { name: "Settings" })).toBeVisible();

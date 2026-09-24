@@ -21,6 +21,7 @@ import type { NetworkName } from "../networks";
 import type { PendingTx } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
+import type { ActivityService } from "./activity";
 import type { Collateral } from "./collateral";
 import { forgetContractView, readContractView, type ContractView } from "./contract-scan";
 import { SpentInputError, type Koios, type KoiosUtxo } from "./koios";
@@ -42,6 +43,8 @@ export interface ScriptSpendDeps {
   contract?: ContractConfig;
   /** Waits between reads of a Koios backend that's behind (spent.ts); tests don't. */
   sleep?: (ms: number) => Promise<void>;
+  /** Writes each spend into the Seedelf history once it's submitted. */
+  activity?: ActivityService;
 }
 
 /** A built transaction waiting in session storage for Send. */
@@ -149,5 +152,6 @@ export async function send(
     await session.remove(key);
     await session.set(SESSION_PENDING, pending);
   });
+  await deps.activity?.sent(network, pending, built).catch(() => undefined);
   return pending;
 }

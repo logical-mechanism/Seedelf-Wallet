@@ -69,6 +69,7 @@ export const mintPreprod = fixture("mint-preprod.json");
 export const accountMintPreprod = fixture("account-mint-preprod.json");
 export const transferPreprod = fixture("transfer-preprod.json");
 export const withdrawPreprod = fixture("withdraw-preprod.json");
+export const activityPreprod = fixture("activity-preprod.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -118,6 +119,21 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const body = request.postDataJSON();
+    if (path === "account_txs" || path === "tx_info") {
+      const query = new URL(request.url()).searchParams;
+      const all: Array<{ tx_hash: string; block_height: number }> =
+        path === "tx_info"
+          ? activityPreprod.tx_info.filter((t: { tx_hash: string }) => body._tx_hashes.includes(t.tx_hash))
+          : body._stake_address === activityPreprod.stake
+            ? activityPreprod.account_txs.filter(
+                (t: { block_height: number }) =>
+                  body._after_block_height === undefined || t.block_height > body._after_block_height,
+              )
+            : [];
+      const offset = Number(query.get("offset") ?? 0);
+      const rows = path === "tx_info" ? all : all.slice(offset, offset + Number(query.get("limit") ?? 1000));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
     if (path === "tx_status") {
       const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: koios.confirmations }));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });

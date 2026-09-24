@@ -22,6 +22,7 @@ import type * as Wasm from "@seedelf/wasm";
 import type { NetworkName } from "../networks";
 import type { Balances, SeedelfInfo } from "../shared/rpc";
 import { discoverChain, registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses, type ActivityService } from "./activity";
 import { readContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
 import { readFresh, spentSet, unspent } from "./spent";
@@ -49,6 +50,8 @@ export interface BalanceDeps {
   contract?: ContractConfig;
   /** Waits between readings; tests don't. */
   sleep?: (ms: number) => Promise<void>;
+  /** Notes new UTxOs of ours as arrivals in the Seedelf history. */
+  activity?: ActivityService;
 }
 
 export class BalanceService {
@@ -95,16 +98,23 @@ export class BalanceService {
     const accountUtxos = unspent(accountRead, spent);
 
     // The result is cached only while still unlocked.
-    return wallet.withKeys(async (keys) => {
+    const balances = await wallet.withKeys(async (keys) => {
+      const account = discoverAccount(keys, net, new Set(usedAddresses));
       const balances: Balances = {
         network,
         updatedAt: now(),
         seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId),
-        cardano: this.cardanoSide(keys, net, new Set(usedAddresses), accountUtxos),
+        cardano: this.cardanoSide(account, accountUtxos),
       };
       await session.set(SESSION_BALANCES_PREFIX + network, balances);
+      // Activity reads the account's transactions against these.
+      const addresses: AccountAddresses = { stake, addresses: [...account.paths.keys()] };
+      await session.set(SESSION_ACCOUNT_ADDRESSES_PREFIX + network, addresses);
       return balances;
     });
+    // The history never holds up, or breaks, a balance reading.
+    await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
+    return balances;
   }
 
   /** `owned`: this wallet's contract UTxOs. */
@@ -121,13 +131,7 @@ export class BalanceService {
     return { lovelace: lovelace.toString(), tokens, utxos: spendable.length, seedelfs };
   }
 
-  private cardanoSide(
-    keys: Keys,
-    net: Wasm.Network,
-    used: ReadonlySet<string>,
-    utxos: KoiosUtxo[],
-  ): Balances["cardano"] {
-    const account = discoverAccount(keys, net, used);
+  private cardanoSide(account: ReturnType<typeof discoverAccount>, utxos: KoiosUtxo[]): Balances["cardano"] {
     const mine = utxos.filter((u) => account.paths.has(u.address));
     const { lovelace, tokens } = sumValue(mine);
     return {

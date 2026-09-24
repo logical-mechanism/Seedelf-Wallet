@@ -1071,6 +1071,17 @@ main {
   background: #e9edf2;
 }
 
+/* Activity (screens/Activity.tsx): what came in, went out, or neither. */
+.activity__icon {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.activity__icon--in,
+.activity__amount--in {
+  color: var(--accent);
+}
+
 .avatar--contact {
   background: var(--accent-soft);
   color: var(--accent);

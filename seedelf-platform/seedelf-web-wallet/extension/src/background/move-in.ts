@@ -13,6 +13,7 @@ import type * as Wasm from "@seedelf/wasm";
 import type { NetworkName } from "../networks";
 import type { MoveInSummary, PendingTx, TokenQuantity } from "../shared/rpc";
 import { pathedUtxos } from "./balances";
+import type { ActivityService } from "./activity";
 import type { Koios } from "./koios";
 import { SESSION_PENDING } from "./pending";
 import { readFresh, rememberSpent, spentSet, unspent } from "./spent";
@@ -38,6 +39,8 @@ export interface MoveInDeps {
   now: () => number;
   /** Waits between reads of a Koios backend that's behind (spent.ts); tests don't. */
   sleep?: (ms: number) => Promise<void>;
+  /** Writes the move-in into the Seedelf history once it's submitted. */
+  activity?: ActivityService;
 }
 
 export class MoveInService {
@@ -90,6 +93,7 @@ export class MoveInService {
       await session.remove(SESSION_BUILT);
       await session.set(SESSION_PENDING, pending);
     });
+    await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
     return pending;
   }
 }

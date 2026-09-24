@@ -69,6 +69,11 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 
 **Settings** (the gear in the top bar, while unlocked): **Contacts**, **Show recovery phrase** (the password again first), **Change password**, **Remove wallet** (typed confirmation), and About (the version, the network, the source code and the privacy policy). Settings asks Koios nothing.
 
+**Activity** (the row at the bottom of each Home tab), newest first and grouped by day, after Lace's Activity tab. Each entry opens its details, with the transaction on Cardanoscan.
+
+- **Seedelf:** what this wallet sent, written down at Send from the summary the user reviewed, and what arrived, noted from the balance reading (one entry per transaction; the wallet's own change and a UTxO holding a seedelf don't count). It asks Koios nothing, and never about one transaction. It's encrypted on the device, and starts from when this wallet first saw each payment.
+- **Cardano account:** from Koios, which knows the account already: 20 transactions a page (`account_txs` and one `tx_info`), only while Activity is open, and **Load more** for the next 20. Opening it again asks only for what's newer. Each entry is what the transaction did to the account's own addresses; a move-in or a mint this wallet made is named as such.
+
 **Contacts** name the seedelfs and addresses (or `$handles`) the user pays, after Lace's address book. They're managed in Settings, picked with **Contacts** above Send's seedelf name or Withdraw's destination, and saved from either form with **Save to contacts** once it's found. They're encrypted on the device (see [privacy.md](privacy.md#known-links)).
 
 See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.

@@ -17,8 +17,10 @@ import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
 import { Splash, useSplash } from "../components/Splash";
 import {
+  ChevronRightIcon,
   DoneIcon,
   ExternalIcon,
+  HistoryIcon,
   InfoIcon,
   MoveInIcon,
   ReceiveIcon,
@@ -32,6 +34,7 @@ import {
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
 import { explorerUrl, formatAda, plural, shortHex, timeAgo } from "../format";
+import { Activity } from "./Activity";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
 import { Receive } from "./Receive";
@@ -75,6 +78,7 @@ export function Home() {
   const [screen, setScreen] = useState<"home" | "receive" | "move-in" | "create" | "transfer" | "withdraw">("home");
   const [removing, setRemoving] = useState<SeedelfInfo>();
   const [tokensOf, setTokensOf] = useState<Tab>();
+  const [activityOf, setActivityOf] = useState<Tab>();
   const [pending, setPending] = useState<PendingTx | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
@@ -138,6 +142,10 @@ export function Home() {
   if (screen === "withdraw" && balances) return <Withdraw seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
   if (removing) {
     return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
+  }
+  if (activityOf) {
+    const pendingHash = watching ? pending?.txHash : undefined;
+    return <Activity of={activityOf} pendingHash={pendingHash} onBack={() => setActivityOf(undefined)} />;
   }
   if (tokensOf && balances) {
     const back = () => setTokensOf(undefined);
@@ -271,6 +279,8 @@ export function Home() {
                 <p className="note">Copy a seedelf's full name to give to anyone who wants to pay you.</p>
               </section>
             )}
+
+            <ActivityLink onClick={() => setActivityOf("seedelf")} />
           </section>
         ) : (
           <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
@@ -316,6 +326,8 @@ export function Home() {
                 />
               </section>
             )}
+
+            <ActivityLink onClick={() => setActivityOf("cardano")} />
           </section>
         )}
 
@@ -338,6 +350,21 @@ export function Home() {
         </div>
       </div>
     </>
+  );
+}
+
+/** Opens this tab's Activity. */
+function ActivityLink({ onClick }: { onClick: () => void }) {
+  return (
+    <section className="section">
+      <button type="button" className="menu-row" onClick={onClick}>
+        <span className="menu-row__icon">
+          <HistoryIcon size={16} />
+        </span>
+        <span>Activity</span>
+        <ChevronRightIcon size={16} />
+      </button>
+    </section>
   );
 }
 

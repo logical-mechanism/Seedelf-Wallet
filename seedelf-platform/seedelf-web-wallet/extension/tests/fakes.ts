@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import * as wasm from "@seedelf/wasm";
 
+import { ActivityService } from "../src/background/activity";
 import { BalanceService } from "../src/background/balances";
 import { Collateral } from "../src/background/collateral";
 import { ContactsService } from "../src/background/contacts";
@@ -89,6 +90,13 @@ export const ownedUtxos = fixture("owned-utxos.json").owned_utxos as KoiosUtxo[]
 /** A real account-paid mint evaluated on preprod (tests/fixtures/record-account-mint.mjs). */
 export const accountMintPreprod = fixture("account-mint-preprod.json") as { evaluation: unknown };
 /** A real transfer on preprod: its request and Ogmios's evaluation (tests/fixtures/record-transfer.mjs). */
+/** The 12-word phrase's real preprod account: its newest transactions and their tx_info. */
+export const activityPreprod = fixture("activity-preprod.json") as {
+  stake: string;
+  account_txs: Array<{ tx_hash: string; block_height: number; block_time: number }>;
+  tx_info: Array<{ tx_hash: string; block_height: number }>;
+};
+
 export const transferPreprod = fixture("transfer-preprod.json") as {
   to: string;
   lovelace: string;
@@ -175,6 +183,13 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
         const after = /^gt\.(\d+)$/.exec(searchParams.get("block_height") ?? "");
         if (after) rows = (rows as KoiosUtxo[]).filter((u) => (u.block_height ?? 0) > Number(after[1]));
+      } else if (path === "account_txs") {
+        // Newest first, as the recorded answer is; after a block, or a page of it.
+        const all = body._stake_address === activityPreprod.stake ? activityPreprod.account_txs : [];
+        const after = body._after_block_height;
+        rows = after === undefined ? all : all.filter((t) => t.block_height > after);
+      } else if (path === "tx_info") {
+        rows = activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash));
       } else if (path === "account_addresses") {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_addresses ?? [];
       } else if (path === "account_utxos") {
@@ -221,13 +236,16 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const collateral = fakeCollateral();
   const store = new PrivateStore({ wallet: t.wallet, local: t.local });
   let ids = 0;
+  const koiosFor = () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined);
+  const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor });
   const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
     session: t.session,
-    koios: () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined),
+    koios: koiosFor,
     now: () => t.clock.now,
     sleep: options?.sleep ?? (async () => undefined),
+    activity,
   };
   return {
     ...t,
@@ -250,6 +268,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     }),
     pending: new PendingService(deps),
     store,
+    activity,
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
   };
 }

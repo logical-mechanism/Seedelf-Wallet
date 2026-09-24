@@ -185,6 +185,7 @@ flowchart LR
   - The worker remembers the inputs of every transaction it submits (`spent.ts`, in `chrome.storage.session`, wiped on lock).
   - A balance reading or a build whose answer lists one of them is read again, up to three more times, 3 s apart.
   - What's spent is left out either way, so a stale answer can't be built on.
+- **Activity (chunk 12, `activity.ts`):** the Seedelf history makes no requests (sends are written at submit, arrivals come from the contract scan), sealed in the private store. The Cardano account's comes from `account_txs` (newest first, 20 a page; after the newest block read, to catch up) and one `tx_info` a page, with only inputs, outputs and assets turned on (about 2 KB a transaction). The pages stay in `chrome.storage.session`; the account's addresses come from the last balance reading.
 - **ADA Handles (chunk 10):** `asset_nft_address` for the handle policy (`f0ff48bb…`, the same on preprod), the plain name and then the CIP-68 one. Only when the user types `$name` as a withdrawal's destination.
 - **Finding a recipient (chunk 9):** the contract as the scan has it; the UTxO holding the seedelf is picked in the extension. Koios is never asked about the recipient's token.
 - **Collateral for Seedelf spends comes from the giveme.my service**, exactly as in the CLI (`seedelf-koios`). See [privacy.md](privacy.md).
@@ -202,7 +203,8 @@ flowchart LR
 | `chrome.storage.session` | `seedelf.lastActivity` | When the user last did something, for auto-lock |
 | `chrome.storage.session` | `seedelf.balances.<network>` | The last balance reading, only while unlocked |
 | `chrome.storage.session` | `seedelf.contract.<network>` | This wallet's contract UTxOs, each seedelf's UTxO and the last block seen (`contract-scan.ts`), only while unlocked |
-| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts` (chunk 12), and the Seedelf history per network. See below. |
+| `chrome.storage.session` | `seedelf.accountAddresses.<network>`, `seedelf.accountActivity.<network>` | The account's stake address and addresses (from the balance reading), and its Activity pages, only while unlocked |
+| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts`, and `history.<network>` (the Seedelf history). See below. |
 
 - **Private records** (`private-store.ts`, chunk 12) are what the wallet keeps on disk that says something about its user.
   - Each one is JSON sealed with XChaCha20-Poly1305 under a random 24-byte nonce, with the record's key as associated data.

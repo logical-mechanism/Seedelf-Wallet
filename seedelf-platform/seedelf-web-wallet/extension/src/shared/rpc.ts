@@ -39,6 +39,25 @@ export interface TokenAmount {
   fingerprint: string;
 }
 
+/** Something that happened in one of the wallet's two balances, for Activity. */
+export interface ActivityEntry {
+  txHash: string;
+  /** When: the block's time, or when this wallet sent it (ms since the epoch). */
+  at: number;
+  /** "received" and "sent" are anyone's; the rest are this wallet's own flows. */
+  kind: "received" | "sent" | PendingTx["kind"];
+  /** Into the balance, out of it, or neither (a seedelf's locked ADA). */
+  direction: "in" | "out" | "none";
+  /** ADA moved, as lovelace (a decimal string, no sign). */
+  lovelace: string;
+  /** How many kinds of token moved with it. */
+  tokens: number;
+  /** The network fee, when this wallet paid it (lovelace). */
+  fee?: string;
+  /** Who or where: a seedelf's tag, a $handle, an address. */
+  detail?: string;
+}
+
 /** A name for a seedelf or an address this wallet pays, kept sealed on the device. */
 export interface Contact {
   id: string;
@@ -260,6 +279,8 @@ export interface Requests {
   /** Adds a contact, or changes the one with `id`; returns the contacts. */
   "contact-save": { payload: { id?: string; name: string; value: string }; result: Contact[] };
   "contact-remove": { payload: { id: string }; result: Contact[] };
+  /** One balance's activity, newest first; `more` reads the next page (the Cardano account only). */
+  history: { payload: { of: "seedelf" | "cardano"; more?: boolean }; result: { entries: ActivityEntry[]; more: boolean } };
 }
 
 export type RequestName = keyof Requests;
@@ -303,6 +324,7 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "contacts",
   "contact-save",
   "contact-remove",
+  "history",
 ]);
 
 export function isMessage(value: unknown): value is Message {
