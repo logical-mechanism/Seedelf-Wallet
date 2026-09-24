@@ -114,8 +114,14 @@ export function Transfer({
         }
       >
         <ReviewRows testId="transfer-review">
-          <Row label="To" value={summary.label ?? "Unnamed seedelf"} strong />
-          <Row label="Seedelf name" value={shortHex(summary.to, 16, 8)} title={summary.to} />
+          {summary.label ? (
+            <>
+              <Row label="To" value={summary.label} strong />
+              <Row label="Seedelf name" value={shortHex(summary.to, 16, 8)} title={summary.to} />
+            </>
+          ) : (
+            <Row label="To" value={shortHex(summary.to, 16, 8)} title={summary.to} strong />
+          )}
           <Row label="Amount" value={`${formatAda(summary.lovelace)} ₳`} strong />
           {summary.tokens.map((t) => {
             const held = seedelf.tokens.find((h) => key(h) === key(t));
@@ -197,7 +203,8 @@ export function Transfer({
             </p>
           ) : found.state === "found" ? (
             <p className="note">
-              Found: <strong>{found.seedelf.label ?? "Unnamed"}</strong> · <code>{shortHex(found.seedelf.name, 12, 6)}</code>
+              Found: {found.seedelf.label && <><strong>{found.seedelf.label}</strong> · </>}
+              <code>{shortHex(found.seedelf.name, 12, 6)}</code>
               {saved ? (
                 <> · your contact {saved.name}</>
               ) : (

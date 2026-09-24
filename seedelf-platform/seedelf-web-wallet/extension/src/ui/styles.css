@@ -1264,6 +1264,14 @@ main {
   border: 1px solid var(--accent-line);
 }
 
+/* A UTxO's tokens, all of them: a box of their own that scrolls, so the
+   details keep their size however many there are. */
+.utxo-tokens--all {
+  max-height: 260px;
+  overflow-y: auto;
+  border-radius: var(--r-sm);
+}
+
 /* A row, then its lock: the row opens the details, the lock toggles at once. */
 .utxo-row {
   display: grid;
@@ -1659,6 +1667,43 @@ main {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* A sent transaction (components/TxBanner.tsx): centred, its Dismiss a
+   neutral pill so it stands out on the teal of a confirmed one. */
+.tx-banner {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.tx-banner__title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.tx-banner .callout__icon {
+  display: inline-flex;
+}
+
+.tx-banner__dismiss {
+  margin-top: 2px;
+  padding: 5px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-strong);
+  background: rgb(255 255 255 / 0.1);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background-color 120ms;
+}
+
+.tx-banner__dismiss:hover {
+  background: rgb(255 255 255 / 0.18);
 }
 
 .banner__link {

@@ -18,23 +18,21 @@ import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
 import { RefreshRow } from "../components/RefreshRow";
 import { Splash, useSplash } from "../components/Splash";
+import { TxBanner } from "../components/TxBanner";
 import {
   ChevronRightIcon,
   CoinsIcon,
   DoneIcon,
-  ExternalIcon,
   HistoryIcon,
-  InfoIcon,
   MoveInIcon,
   ReceiveIcon,
   SendIcon,
-  SpinnerIcon,
   SproutIcon,
   WithdrawIcon,
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { explorerUrl, formatAda, plural, shortHex, unlocked } from "../format";
+import { formatAda, plural, unlocked } from "../format";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
@@ -490,37 +488,20 @@ function Pending({ pending, watching, onDismiss }: { pending: PendingTx; watchin
   const confirmed = pending.confirmations !== null;
   const what = SENT[pending.kind];
   return (
-    <section className={confirmed ? "callout callout--done" : "callout"} role="status" data-testid="pending-tx">
-      <span className="callout__icon">
-        {confirmed ? (
-          <DoneIcon size={16} />
-        ) : watching ? (
-          <span className="spin">
-            <SpinnerIcon size={16} />
-          </span>
-        ) : (
-          <InfoIcon size={16} />
-        )}
-      </span>
-      <div className="callout__body banner">
-        <strong>
-          {confirmed
-            ? CONFIRMED[pending.kind]
-            : watching
-              ? `${what} sent. Waiting for the network…`
-              : `${what} not confirmed yet`}
-        </strong>
-        <a href={explorerUrl(pending.network, pending.txHash)} target="_blank" rel="noreferrer" className="banner__link">
-          {shortHex(pending.txHash, 10, 6)} on Cardanoscan
-          <ExternalIcon size={12} />
-        </a>
-        {!watching && (
-          <button type="button" className="link align-start" onClick={onDismiss}>
-            Dismiss
-          </button>
-        )}
-      </div>
-    </section>
+    <TxBanner
+      state={confirmed ? "done" : watching ? "waiting" : "stale"}
+      title={
+        confirmed
+          ? CONFIRMED[pending.kind]
+          : watching
+            ? `${what} sent. Waiting for the network…`
+            : `${what} not confirmed yet`
+      }
+      network={pending.network}
+      txHash={pending.txHash}
+      onDismiss={watching ? undefined : onDismiss}
+      testId="pending-tx"
+    />
   );
 }
 

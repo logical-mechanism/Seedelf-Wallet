@@ -112,8 +112,8 @@ export interface UtxoInfo {
   locked: boolean;
   /** The Cardano account's collateral. */
   collateral?: boolean;
-  /** It holds one of your seedelfs (its tag, or its name): only removing the seedelf spends it. */
-  seedelf?: string;
+  /** It holds one of your seedelfs: its full token name, and its tag when it reads as text. Only removing it spends the UTxO. */
+  seedelf?: { name: string; label?: string };
 }
 
 /** Both sides' UTxOs, largest first. */

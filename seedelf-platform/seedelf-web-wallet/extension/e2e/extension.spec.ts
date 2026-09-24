@@ -662,6 +662,8 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   const readsBefore = koios.calls.filter((c) => c === "credential_utxos").length;
   const popup = await openApp(context, "popup");
   await expect(popup.getByTestId("pending-tx")).toContainText("Move-in confirmed");
+  await expect(popup.getByRole("button", { name: "Dismiss" })).toBeVisible();
+  await snap(popup, "pending-confirmed");
   await expect.poll(() => koios.calls.filter((c) => c === "credential_utxos").length).toBeGreaterThan(readsBefore);
   await popup.getByRole("button", { name: "Dismiss" }).click();
   await expect(popup.getByTestId("pending-tx")).toHaveCount(0);
@@ -713,6 +715,12 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   // A seedelf's UTxO only moves when the seedelf is removed: nothing to lock.
   await list.getByRole("button", { name: /seedelf/ }).click();
   await expect(page.getByRole("dialog", { name: "1.5 ₳" })).toContainText("Only removing the seedelf spends it");
+  // Its name is cut to fit, with Copy for all of it; nothing spills out of the modal.
+  const holder: string = ownedUtxos[2].asset_list[0].asset_name;
+  await expect(page.getByTestId("utxo-seedelf-name")).toHaveAttribute("data-value", holder);
+  await expect(page.getByTestId("utxo-seedelf-name")).not.toHaveText(holder);
+  const body = page.getByRole("dialog").locator(".modal__body");
+  expect(await body.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await expect(page.getByRole("dialog").getByRole("button", { name: "Lock", exact: true })).toHaveCount(0);
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
@@ -820,6 +828,18 @@ test("collateral: the wallet takes a 5 ₳ UTxO the account holds; reclaimed, it
   await page.getByTestId("utxos").getByRole("button", { name: /collateral/ }).click();
   await expect(page.getByTestId("utxo-collateral")).toBeVisible();
   await expect(page.getByRole("dialog").getByRole("button", { name: "Lock", exact: true })).toHaveCount(0);
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+
+  // A UTxO with many tokens shows five, then all of them in a box that scrolls.
+  await page.getByTestId("utxos").getByRole("button", { name: /^48\.442988 ₳/ }).click();
+  const tokens = page.getByTestId("utxo-tokens");
+  await expect(tokens).toContainText("8 tokens");
+  await expect(tokens.locator(".review__row")).toHaveCount(5);
+  await tokens.getByRole("button", { name: "Show all 8 tokens" }).click();
+  await expect(tokens.locator(".review__row")).toHaveCount(8);
+  await snap(page, "utxo-many-tokens");
+  await tokens.getByRole("button", { name: "Show fewer" }).click();
+  await expect(tokens.locator(".review__row")).toHaveCount(5);
 });
 
 test("send from the Cardano account: a token with only the ADA it needs, review, send, then watch it confirm", async ({
@@ -929,7 +949,9 @@ test("create a seedelf from the Seedelf balance: tag rules, review, and nothing 
 
   // The tag: printable ASCII, 15 characters at most, previewed as it will read.
   const tag = page.getByLabel("Personal tag (optional)");
-  await expect(page.getByTestId("mint-preview")).toContainText("Listed as Unnamed");
+  // With no tag there's no stand-in name: "Unnamed" could be someone's tag.
+  await expect(page.getByTestId("mint-preview")).toContainText("With no tag, it's listed by its token name alone");
+  await expect(page.getByTestId("mint-preview")).not.toContainText("Unnamed");
   await tag.fill("héllo");
   await expect(page.getByRole("alert")).toContainText("not “é”");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();

@@ -11,14 +11,14 @@ import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyField } from "../components/CopyField";
-import { CoinsIcon, LockIcon, LockOpenIcon, SproutIcon, VaultIcon } from "../components/Icons";
+import { CoinsIcon, LockIcon, LockOpenIcon, SearchIcon, SproutIcon, VaultIcon } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { formatAda, formatQuantity, plural, shortHex, tokenKey } from "../format";
+import { formatAda, plural, shortHex, tokenKey } from "../format";
 import { useNetwork } from "../network";
-import { tokenLabel } from "../tokens";
+import { searchTokens, sortTokens, viewToken } from "../tokens";
 
 const ref = (u: UtxoInfo) => `${u.txHash}#${u.index}`;
 
@@ -191,7 +191,6 @@ function UtxoDetails({
   onLock: (lock: boolean) => void;
   onClose: () => void;
 }) {
-  const network = useNetwork();
   const foot = lockable(utxo) ? (
     <>
       {error && (
@@ -209,9 +208,24 @@ function UtxoDetails({
     <Modal title={`${formatAda(utxo.lovelace)} ₳`} titleId="utxo-details-title" onClose={onClose} foot={foot}>
       <div className="stack" data-testid="utxo-details">
         {utxo.seedelf ? (
-          <Callout tone="info">
-            It holds your seedelf <strong>{utxo.seedelf}</strong>. Only removing the seedelf spends it.
-          </Callout>
+          <>
+            <Callout tone="info">
+              {utxo.seedelf.label ? (
+                <>
+                  It holds your seedelf <strong>{utxo.seedelf.label}</strong>.
+                </>
+              ) : (
+                "It holds one of your seedelfs."
+              )}{" "}
+              Only removing the seedelf spends it.
+            </Callout>
+            <CopyField
+              label="Seedelf name"
+              value={utxo.seedelf.name}
+              display={shortHex(utxo.seedelf.name, 14, 8)}
+              testId="utxo-seedelf-name"
+            />
+          </>
         ) : utxo.collateral ? (
           <Callout tone="info" testId="utxo-collateral">
             Your collateral: put up by transactions that run a script, and otherwise kept. Reclaim it in Settings, under
@@ -222,13 +236,7 @@ function UtxoDetails({
             {utxo.locked ? "Locked: left out of every payment." : "Spent by payments as needed."}
           </p>
         )}
-        {utxo.tokens.length > 0 && (
-          <ReviewRows testId="utxo-tokens">
-            {utxo.tokens.map((t, i) => (
-              <Row key={tokenKey(t)} label={i === 0 ? "Tokens" : ""} value={`${formatQuantity(t.quantity, t.decimals)} ${tokenLabel(network, t)}`} />
-            ))}
-          </ReviewRows>
-        )}
+        <UtxoTokens tokens={utxo.tokens} />
         <CopyField label="Transaction" value={utxo.txHash} display={shortHex(utxo.txHash, 14, 8)} testId="utxo-tx" />
         <ReviewRows testId="utxo-output">
           <Row label="Output" value={String(utxo.index)} />
@@ -239,5 +247,65 @@ function UtxoDetails({
         )}
       </div>
     </Modal>
+  );
+}
+
+/** How many of a UTxO's tokens its details show before Show all. */
+const PREVIEW = 5;
+/** From this many tokens, Show all has a search. */
+const SEARCH_FROM = 10;
+
+/**
+ * A UTxO's tokens, by name: the first five, then Show all, which lists them
+ * all in a box of its own height, scrolling, with a search when there are
+ * many. So a UTxO holding hundreds doesn't stretch its details.
+ */
+function UtxoTokens({ tokens }: { tokens: UtxoInfo["tokens"] }) {
+  const network = useNetwork();
+  const [all, setAll] = useState(false);
+  const [query, setQuery] = useState("");
+  const views = useMemo(() => sortTokens(tokens.map((t) => viewToken(network, t)), "name"), [network, tokens]);
+  if (!views.length) return null;
+  const shown = all ? searchTokens(views, query) : views.slice(0, PREVIEW);
+  return (
+    <div className="stack-tight" data-testid="utxo-tokens">
+      <span className="label">{plural(views.length, "token")}</span>
+      {all && views.length > SEARCH_FROM && (
+        <label className="search">
+          <SearchIcon size={16} />
+          <input
+            type="search"
+            aria-label="Search this UTxO's tokens"
+            placeholder="Name, ticker or ID"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            spellCheck={false}
+          />
+        </label>
+      )}
+      <div className={all ? "utxo-tokens utxo-tokens--all" : "utxo-tokens"}>
+        {shown.length ? (
+          <ReviewRows testId="utxo-token-rows">
+            {shown.map((v) => (
+              <Row key={tokenKey(v.token)} label={v.label} value={v.amount} title={v.sub} />
+            ))}
+          </ReviewRows>
+        ) : (
+          <p className="note center">No token matches.</p>
+        )}
+      </div>
+      {views.length > PREVIEW && (
+        <button
+          type="button"
+          className="view-all"
+          onClick={() => {
+            setAll(!all);
+            setQuery("");
+          }}
+        >
+          {all ? "Show fewer" : `Show all ${views.length} tokens`}
+        </button>
+      )}
+    </div>
   );
 }

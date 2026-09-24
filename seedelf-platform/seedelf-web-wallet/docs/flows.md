@@ -80,7 +80,8 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 **UTxOs** (the row under Activity on each Home tab, chunk 12) lists that balance's UTxOs from the last reading, asking Koios nothing (**Refresh** there is Home's, a new balance reading): the kept ones first (locked, the collateral, a seedelf's), then the largest. Each shows its ADA, how many tokens, and its outpoint, and opens its details: the tokens, the transaction (with Copy), the output and block, and on the Cardano side the address.
 
 - **The lock at the end of a row** locks or unlocks it at once; **Lock** in its details does the same. A locked UTxO is kept out of every payment from that balance, Max included. The list keeps its order while you toggle; locked ones come first the next time it's read. Home still counts it, and says so under the balance ("2 UTxOs · 25 ₳ locked"). The forms offer only what's unlocked, their line under the title says what's locked, and with everything locked they say why they're disabled.
-- A seedelf's UTxO has no Lock: only removing the seedelf spends it. The collateral has none either: it's reclaimed in Settings.
+- A seedelf's UTxO has no Lock: only removing the seedelf spends it. Its details name the seedelf by its tag, and show its token name cut to fit, with Copy. The collateral has no Lock either: it's reclaimed in Settings.
+- A UTxO's details list its first five tokens, then **Show all**, a box of its own that scrolls (with a search from 10 tokens), so a UTxO holding hundreds doesn't stretch them.
 - The Seedelf side's privacy note: only this wallet can tell these are yours, and looking one up on an explorer tells that site. The choices are encrypted on the device, like Contacts.
 
 **Collateral** (Settings, chunk 12, after Lace's) is 5 ₳ of the Cardano account set aside for transactions that run a script: today, creating a seedelf from the account. It's only taken if the script fails, which the wallet checks before sending (Ogmios), and it's kept out of every payment.
@@ -171,6 +172,7 @@ The steps:
 2. **An optional personal tag:** at most 15 characters of printable ASCII.
    - It's previewed as the wallet will list it, along with how the token name starts.
    - Anyone can read it on chain.
+   - Without one, the wallet shows the seedelf by its token name alone, never a stand-in such as "Unnamed", which could be someone's tag.
 3. **Pay with:** Cardano account (the default) or Seedelf balance, each with a note on what it links.
 4. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
    - WebAssembly picks the UTxOs that pay (pure ADA first, as few as it can) and drafts the transaction. Ogmios, through Koios, measures the policy (and the spends, for a stealth mint), and WebAssembly finishes it.

@@ -29,7 +29,7 @@ export function RemoveSeedelf({
   const [summary, setSummary] = useState<RemoveSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const name = seedelf.label ?? "Unnamed seedelf";
+  const name = seedelf.label ?? "a seedelf";
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -73,8 +73,8 @@ export function RemoveSeedelf({
         }
       >
         <ReviewRows testId="remove-review">
-          <Row label="Seedelf" value={summary.label ?? "Unnamed"} strong />
-          <Row label="Token name" value={shortHex(summary.name, 16, 8)} title={summary.name} />
+          {summary.label && <Row label="Seedelf" value={summary.label} strong />}
+          <Row label="Token name" value={shortHex(summary.name, 16, 8)} title={summary.name} strong={!summary.label} />
           <Row label={`Back to your ${DESTINATIONS[summary.to]}`} value={`${formatAda(summary.lovelace)} ₳`} strong />
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
         </ReviewRows>

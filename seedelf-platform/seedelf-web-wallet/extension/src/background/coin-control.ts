@@ -148,7 +148,8 @@ export class CoinControlService {
       if (!name) return { ...info(u), locked: lockedSeedelf.has(outpoint(u)) };
       // The seedelf is named, not counted among the tokens.
       const tokens = info(u).tokens.filter((t) => !(t.policyId === contract.seedelfPolicyId && t.assetName === name));
-      return { ...info(u), tokens, locked: false, seedelf: seedelfLabel(name) ?? name };
+      const label = seedelfLabel(name);
+      return { ...info(u), tokens, locked: false, seedelf: { name, ...(label ? { label } : {}) } };
     });
     const cardano = fresh.map(
       (p): UtxoInfo => ({

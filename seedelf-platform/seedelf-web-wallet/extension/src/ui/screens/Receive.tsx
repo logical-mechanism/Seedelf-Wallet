@@ -87,7 +87,8 @@ export function ReceiveSeedelf({
             const tag = s.label ?? "this seedelf";
             return (
               <li key={s.assetName} className="list__row" title={s.assetName}>
-                <span className="list__name">{s.label ?? "Unnamed"}</span>
+                {/* No tag, no stand-in: "Unnamed" could be someone's tag. */}
+                <span className="list__name">{s.label ?? ""}</span>
                 <span className="list__actions">
                   <span className="list__value" title="Locked with it: Remove gives it back">
                     {formatAda(s.lovelace)} ₳

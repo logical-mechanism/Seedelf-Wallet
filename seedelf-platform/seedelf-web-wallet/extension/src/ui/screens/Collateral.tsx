@@ -13,10 +13,10 @@ import { useCallback, useEffect, useState } from "react";
 import type { CollateralStatus, SendSummary } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
-import { ExternalIcon, SpinnerIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { explorerUrl, formatAda, shortHex } from "../format";
+import { TxBanner } from "../components/TxBanner";
+import { formatAda, shortHex } from "../format";
 import { useNetwork } from "../network";
 
 export function Collateral({ onBack }: { onBack: () => void }) {
@@ -117,20 +117,13 @@ export function Collateral({ onBack }: { onBack: () => void }) {
     );
   } else if (status.state === "waiting") {
     body = (
-      <section className="callout" role="status" data-testid="collateral-waiting">
-        <span className="callout__icon">
-          <span className="spin">
-            <SpinnerIcon size={16} />
-          </span>
-        </span>
-        <div className="callout__body banner">
-          <strong>Waiting for the network to confirm the payment that sets it</strong>
-          <a href={explorerUrl(network, status.txHash)} target="_blank" rel="noreferrer" className="banner__link">
-            {shortHex(status.txHash, 10, 6)} on Cardanoscan
-            <ExternalIcon size={12} />
-          </a>
-        </div>
-      </section>
+      <TxBanner
+        state="waiting"
+        title="Waiting for the network to confirm the payment that sets it"
+        network={network}
+        txHash={status.txHash}
+        testId="collateral-waiting"
+      />
     );
     foot = (
       <button type="button" className="primary" onClick={onBack}>

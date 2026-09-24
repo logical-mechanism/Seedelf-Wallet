@@ -140,7 +140,7 @@ describe("locked UTxOs", () => {
     const { seedelf } = await t.coins.lists("preprod");
     expect(seedelf.map(at).sort()).toEqual(ownedUtxos.map(at).sort());
     const holder = seedelf.find((u) => u.seedelf)!;
-    expect(holder).toMatchObject({ seedelf: "web-wallet", locked: false, tokens: [] });
+    expect(holder).toMatchObject({ seedelf: { label: "web-wallet" }, locked: false, tokens: [] });
     await expect(t.coins.setLocked("preprod", "seedelf", at(holder), true)).rejects.toThrow("only removing it");
 
     const big = seedelf.find((u) => u.lovelace === "25000000")!;
