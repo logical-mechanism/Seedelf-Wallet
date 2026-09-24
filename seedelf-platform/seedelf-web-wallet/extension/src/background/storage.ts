@@ -7,6 +7,7 @@ export interface Area {
   get<T>(key: string): Promise<T | undefined>;
   set(key: string, value: unknown): Promise<void>;
   remove(...keys: string[]): Promise<void>;
+  clear(): Promise<void>;
 }
 
 export function chromeArea(area: chrome.storage.StorageArea): Area {
@@ -16,6 +17,7 @@ export function chromeArea(area: chrome.storage.StorageArea): Area {
     },
     set: (key, value) => area.set({ [key]: value }),
     remove: (...keys) => area.remove(keys),
+    clear: () => area.clear(),
   };
 }
 

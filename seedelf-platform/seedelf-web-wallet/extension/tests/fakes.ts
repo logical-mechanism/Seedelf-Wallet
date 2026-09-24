@@ -4,8 +4,10 @@ import { readFileSync } from "node:fs";
 import * as wasm from "@seedelf/wasm";
 
 import { BalanceService } from "../src/background/balances";
+import { MoveInService } from "../src/background/move-in";
 import { Koios, type FetchLike, type KoiosUtxo } from "../src/background/koios";
 import type { Area } from "../src/background/storage";
+import { txIdOf } from "./fixtures/cbor";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
 
 /** An in-memory chrome.storage area. Values go through JSON, as Chrome's do. */
@@ -24,6 +26,9 @@ export function memoryArea(): MemoryArea {
     },
     async remove(...keys) {
       for (const k of keys) data.delete(k);
+    },
+    async clear() {
+      data.clear();
     },
   };
 }
@@ -78,22 +83,46 @@ export const ownedUtxos = fixture("owned-utxos.json").owned_utxos as KoiosUtxo[]
 export interface FakeKoios {
   fetch: FetchLike;
   calls: Array<{ path: string; query: string; body: any }>;
-  /** Resolves pending requests; while `hold` is set, requests wait for it. */
+  /** While set, requests wait for it to resolve. */
   hold?: Promise<void>;
+  /** Transactions submitted, as bytes. */
+  submitted: Uint8Array[];
+  /** When set, submits fail with this message. */
+  rejectSubmit?: string;
+  /** What `tx_status` reports for every transaction. */
+  confirmations: number | null;
 }
+
+/** Real preprod protocol parameters (the CLI's and core's test fixture). */
+export const epochParams = JSON.parse(
+  readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
+) as unknown[];
 
 /** A fetch that answers from the fixtures, paging like Koios does. */
 export function fakeKoios({ owned = true } = {}): FakeKoios {
   const fake: FakeKoios = {
     calls: [],
+    submitted: [],
+    confirmations: null,
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
-      const body = JSON.parse(String(init.body));
+      if (path === "submittx") {
+        const bytes = new Uint8Array(init.body as Uint8Array);
+        fake.calls.push({ path, query: "", body: null });
+        fake.submitted.push(bytes);
+        if (fake.rejectSubmit) return new Response(fake.rejectSubmit, { status: 400 });
+        return Response.json(txIdOf(bytes), { status: 202 });
+      }
+      const body = init.body ? JSON.parse(String(init.body)) : null;
       fake.calls.push({ path, query: searchParams.toString(), body });
       if (fake.hold) await fake.hold;
       let rows: unknown[];
-      if (path === "credential_utxos") {
+      if (path === "epoch_params") {
+        rows = epochParams;
+      } else if (path === "tx_status") {
+        rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: fake.confirmations }));
+      } else if (path === "credential_utxos") {
         const all = [...koiosPreprod.contract_utxos, ...(owned ? ownedUtxos : [])];
         rows = body._payment_credentials.includes(koiosPreprod.wallet_contract) ? all : [];
       } else if (path === "account_addresses") {
@@ -111,16 +140,16 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
   return fake;
 }
 
-/** A wallet plus a balance service over the fake Koios. */
+/** A wallet plus the balance and move-in services over the fake Koios. */
 export function testBalances(options?: { owned?: boolean }) {
   const t = testWallet();
   const koios = fakeKoios(options);
-  const balances = new BalanceService({
+  const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
     session: t.session,
     koios: () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined),
     now: () => t.clock.now,
-  });
-  return { ...t, koios, balances };
+  };
+  return { ...t, koios, balances: new BalanceService(deps), moveIn: new MoveInService(deps) };
 }

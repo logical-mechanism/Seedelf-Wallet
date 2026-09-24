@@ -86,7 +86,7 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
 2. **Leave collateral alone.**
    - Lace's collateral is just a pure-ADA UTxO of exactly 5 ADA, which Lace marks as reserved in its own local storage; nothing on-chain says so.
    - The web wallet never needs it: move-in runs no script, and Seedelf spends use giveme.my.
-   - Like the CLI (`seedelf-core::utxos::collect_address_utxos`), coin selection skips those UTxOs unless the user explicitly chooses "move everything".
+   - Like the CLI (`seedelf-core::utxos::collect_address_utxos`), move-in never spends those UTxOs, not even with Max. They have to be moved with the other wallet.
 3. **Tokens and NFTs are shown.** Move-in moves ADA by default, and tokens only when the user picks them. Each Seedelf UTxO can only hold so many tokens (see the root README's *Wallet Limitations*).
 4. **Staking is untouched.**
    - Delegation, rewards and governance stay with the user's main wallet.

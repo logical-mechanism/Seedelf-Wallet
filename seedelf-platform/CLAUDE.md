@@ -44,7 +44,11 @@ Formatting is governed by [rustfmt.toml](rustfmt.toml). No project-level lint sc
 
 - Two global flags live on the root `Cli` and are threaded through every command: `--preprod` (network selector) and `--variant <u64>` (contract variant, defaults to `seedelf_core::constants::VARIANT`). When adding commands, plumb both — `seedelf-core::constants::get_config(variant, !preprod)` returns the right script hashes and reference UTxOs.
 - Every subcommand `run` is `async` and returns `Result<_, _>`; `main.rs` matches and `eprintln!`s the error. Keep that pattern when adding commands.
-- Each transaction-building command (`create`, `fund`, `remove`, `sweep`, `transfer`) does all its work inside `run` — no separate builder function or `*Output` struct. (An earlier `pub build_*_seedelf(...) -> *SeedelfOutput` factoring existed only for the now-removed GUI; do not reintroduce it.)
+- **Transaction building is moving into network-free builders in [seedelf-core/src/build.rs](seedelf-core/src/build.rs)**, shared with the web wallet (which calls them through WebAssembly). A builder takes chain data the caller already fetched (protocol parameters, Koios `UtxoResponse`s) and returns an unsigned transaction; `run` keeps the network calls (Koios, the collateral service, submit) and the signing.
+  - Done: `external sweep` (`build::external_sweep`) and the web wallet's move-in (`build::move_in`). The fee helpers (`fake_signer`, `linear_fee`, `settle_fee`) live there too.
+  - Still inside `run`: `create`, `fund`, `remove`, `sweep`, `transfer`, `util mint`. They move as the web wallet needs them (roadmap chunks 8–10), with their offline tests kept green.
+  - This reverses the old "no `build_*` functions" rule, which existed only because the removed GUI was the other consumer.
+- `ProtocolParameters::from_koios` parses one Koios `epoch_params` row; `epoch_params()` fetches and calls it. `seedelf-koios`'s HTTP timeouts are gated off on `wasm32` (reqwest's browser client has none), which is what lets `seedelf-core` compile to WebAssembly.
 - Before dispatching, `main.rs` calls `setup::check_and_prepare_seedelf()`, which creates `$HOME/.seedelf` and prompts for wallet creation if empty. The encrypted secret key file lives there (Argon2 + AES-256-GCM, see [setup.rs](seedelf-cli/src/setup.rs)).
 - CIP30 signing is bridged via a local static site served at `127.0.0.1:44203` by [web_server.rs](seedelf-cli/src/web_server.rs). The HTML/JS is embedded with `rust-embed` / `include_dir`; rebuild after editing those assets.
 

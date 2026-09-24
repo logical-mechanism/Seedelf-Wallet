@@ -71,32 +71,30 @@ flowchart LR
 - **One implementation.** The CLI already builds every Seedelf transaction with Pallas: registers, reference-script spends, the fee and ex-unit loop, and the collateral-service witness. Offline integration tests cover it. Reusing it gives the same single implementation as the crypto.
 - **The rejected option was a TypeScript library.** Lace's `TransactionBuilder` has no reference inputs, so we would have had to port the Seedelf logic by hand.
 
-**What a probe found:**
+**Status (chunk 7):** the extraction has started, and move-in is built on it.
 
-- **It compiles.** `seedelf-core`, `pallas-txbuilder`, `seedelf-crypto` and `seedelf-koios` all compile to `wasm32-unknown-unknown`, at about 912 KB before `wasm-opt`.
-- **One line blocked it.** `seedelf-koios` sets `connect_timeout` on its HTTP client, and `reqwest`'s browser build doesn't have that setting. Gate the line with `#[cfg(not(target_arch = "wasm32"))]`.
+- **`seedelf-core` compiles to WebAssembly.** The one blocker was `seedelf-koios` setting `connect_timeout` (and `timeout`) on its HTTP client; `reqwest`'s browser build has neither, so both are gated with `#[cfg(not(target_arch = "wasm32"))]`.
+- **The WebAssembly module is now about 1.6 MB** (470 KB gzipped) with the Pallas transaction builder and serde, up from 624 KB. It's loaded from the extension itself, so this only costs a moment on the worker's first start. `wasm-opt` is chunk 11.
+- **Network-free builders** live in [`seedelf-core/src/build.rs`](../../seedelf-core/src/build.rs). A builder takes chain data the caller already has (protocol parameters, UTxOs as Koios returns them, deserialized into the same `seedelf-koios` types) and returns an unsigned transaction.
+  - `external_sweep`: the CLI's `external sweep`, now a thin `run()` around it. Its offline tests pass unchanged.
+  - `move_in`: the web wallet's move-in (see [flows.md](flows.md#move-in-cardano-account--seedelf)).
+  - Shared pieces: `deposit_outputs` (contract outputs under fresh re-randomizations, tokens 20 to an output), and `settle_fee`, which signs each draft with one throwaway key per signer and reprices until the fee covers the signed size.
+- **Protocol parameters** are parsed by `ProtocolParameters::from_koios`, so the extension passes Koios's `epoch_params` row through WebAssembly unchanged.
+- **Signing stays in WebAssembly.** `buildMoveIn(account, key, requestJson)` checks that every UTxO sits at the address its `role/index` derives, builds with `move_in`, and signs once per distinct payment key. The keys never reach JavaScript.
 
-**Plan: separate building from network calls.** Each CLI command's `run` mixes pure building with a few network calls:
+**What's left of the plan:** the rest of each CLI command's `run` still mixes building with network calls:
 
 - **At the start:** protocol parameters, UTxOs, recipient registers.
 - **In the middle:** `evaluate_transaction`, to get ex-units.
 - **At the end:** the giveme.my collateral witness, then submit.
 
-The building moves into network-free functions in `seedelf-core`: a draft step, plus a finalize step after evaluation for script spends. Both callers then use the same functions:
+Script spends will need a draft step plus a finalize step after evaluation. The remaining commands move as the web wallet needs them:
 
-- **The CLI** calls them with Koios data, as it does today.
-- **The extension** fetches the same Koios JSON in TypeScript and passes it through WebAssembly. It deserializes into the same `seedelf-koios` types.
+- `util mint` (create a seedelf, chunk 8)
+- `transfer` (chunk 9)
+- `sweep` and `remove` (chunk 10)
 
-**Notes on the refactor:**
-
-- **Scope:** only the commands the web wallet needs, about 2.1k lines:
-  - `external sweep` (move in)
-  - `util mint` (create)
-  - `transfer`
-  - `sweep`
-  - `remove`
-- **Tests guard it.** The CLI's offline integration tests (`seedelf-cli/tests/cli/`) already check value conservation, min-UTxO and valid change registers for each of these commands.
-- **CLAUDE.md rule:** this reverses the "don't reintroduce `build_*` functions" rule in [seedelf-platform/CLAUDE.md](../../CLAUDE.md). That rule existed because the removed GUI was the only other consumer. Update it when the refactor lands.
+**Tests guard it.** The CLI's offline integration tests (`seedelf-cli/tests/cli/`) check value conservation, min-UTxO and valid change registers for each command, and `seedelf-core/tests/build_test.rs` checks the builders directly.
 
 ## Networks
 

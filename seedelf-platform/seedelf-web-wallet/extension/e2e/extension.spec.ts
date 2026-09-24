@@ -1,9 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
+
+import { txIdOf } from "../tests/fixtures/cbor";
 
 const dist = fileURLToPath(new URL("../dist", import.meta.url));
 
@@ -30,11 +32,18 @@ function launch(userDataDir: string): Promise<BrowserContext> {
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../tests/fixtures/${name}`, import.meta.url), "utf8"));
 const koiosPreprod = fixture("koios-preprod.json");
 const ownedUtxos = fixture("owned-utxos.json").owned_utxos;
+const epochParams = JSON.parse(
+  readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
+);
 
 interface KoiosFake {
   calls: string[];
   /** When set, every request fails with this status. */
   failWith?: number;
+  /** Transactions submitted, by id. */
+  submitted: string[];
+  /** What tx_status reports. */
+  confirmations: number | null;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
@@ -43,7 +52,19 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const path = new URL(request.url()).pathname.split("/").pop()!;
     koios.calls.push(path);
     if (koios.failWith) return route.fulfill({ status: koios.failWith, body: "" });
+    if (path === "submittx") {
+      const id = txIdOf(new Uint8Array(request.postDataBuffer()!));
+      koios.submitted.push(id);
+      return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(id) });
+    }
+    if (path === "epoch_params") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(epochParams) });
+    }
     const body = request.postDataJSON();
+    if (path === "tx_status") {
+      const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: koios.confirmations }));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
     const rows =
       path === "credential_utxos"
@@ -67,7 +88,7 @@ const test = base.extend<{ userDataDir: string; koios: KoiosFake; context: Brows
     rmSync(dir, { recursive: true, force: true });
   },
   koios: async ({}, use) => {
-    await use({ calls: [] });
+    await use({ calls: [], submitted: [], confirmations: null });
   },
   context: async ({ userDataDir, koios }, use) => {
     const context = await launch(userDataDir);
@@ -327,11 +348,124 @@ test("home says so when Koios can't be read", async ({ context, koios }) => {
   koios.failWith = 400;
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
-  await expect(page.getByRole("alert")).toContainText("Koios answered 400");
+  await expect(page.getByRole("alert")).toContainText("Koios refused the request (400");
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("— ₳");
 
   koios.failWith = undefined;
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("move in: amount and a token, review, send, then watch it confirm", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await page.getByRole("button", { name: "Move in" }).click();
+
+  // ADA has 6 decimal places: extra digits are dropped, with a note; letters are refused.
+  await page.getByLabel("Amount").fill("10.1234567890");
+  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await expect(page.getByTestId("move-in-amount-note")).toContainText("at most 6 decimal places");
+  await page.getByLabel("Amount").pressSequentially("9");
+  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await page.getByLabel("Amount").fill("abc");
+  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await expect(page.getByTestId("move-in-amount-note")).toContainText("Enter an amount in ADA");
+
+  // No more than all the ADA there is; no more than the account holds.
+  await page.getByLabel("Amount").fill("99999999999999999999999999999999999999999");
+  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await expect(page.getByTestId("move-in-amount-note")).toContainText("45 billion");
+  await page.getByLabel("Amount").fill("20000");
+  await expect(page.getByTestId("move-in-too-much")).toContainText("That's more than the 10,350.538725 ₳");
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+
+  // A non-round amount gets the privacy nudge; a round one doesn't.
+  await page.getByLabel("Amount").fill("25.5");
+  await expect(page.getByTestId("move-in-amount-note")).toHaveCount(0);
+  await expect(page.locator(".callout--warn")).toContainText("Round amounts");
+  await page.getByLabel("Amount").fill("25");
+  await expect(page.locator(".callout--warn")).toHaveCount(0);
+  await page.getByRole("checkbox", { name: /tUSDM/ }).check();
+  await page.screenshot({ path: "test-results/move-in-form.png", fullPage: true });
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const review = page.getByTestId("move-in-review");
+  await expect(review).toContainText("Into Seedelf25 ₳");
+  await expect(review).toContainText("3,000,000,000 tUSDM");
+  await expect(review).toContainText("Network fee");
+  await page.screenshot({ path: "test-results/move-in-review.png", fullPage: true });
+  expect(koios.submitted).toHaveLength(0);
+  await page.getByRole("button", { name: "Send" }).click();
+
+  // Home shows the sent transaction, linked to the explorer.
+  const banner = page.getByTestId("pending-tx");
+  await expect(banner).toContainText("Move-in sent. Waiting for the network");
+  expect(koios.submitted).toHaveLength(1);
+  const [txId] = koios.submitted;
+  await expect(banner.getByRole("link")).toHaveAttribute("href", `https://preprod.cardanoscan.io/transaction/${txId}`);
+  await expect(page.getByRole("button", { name: "Move in" })).toBeDisabled();
+  await page.screenshot({ path: "test-results/move-in-sent.png", fullPage: true });
+
+  // Reopening the wallet resumes the watch; once confirmed, balances are read again.
+  koios.confirmations = 2;
+  const readsBefore = koios.calls.filter((c) => c === "credential_utxos").length;
+  const popup = await openApp(context, "popup");
+  await expect(popup.getByTestId("pending-tx")).toContainText("Move-in confirmed");
+  await expect.poll(() => koios.calls.filter((c) => c === "credential_utxos").length).toBeGreaterThan(readsBefore);
+  await popup.getByRole("button", { name: "Dismiss" }).click();
+  await expect(popup.getByTestId("pending-tx")).toHaveCount(0);
+});
+
+test("move in: Max, and an amount that's too big", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await page.getByRole("button", { name: "Move in" }).click();
+
+  // Just under the balance: the UI allows it, but the fee doesn't fit, and the builder says so.
+  await page.getByLabel("Amount").fill("10350.5");
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByRole("alert")).toContainText("Not enough ADA");
+
+  await page.getByRole("button", { name: "Max" }).click();
+  await expect(page.getByText("UTxOs of exactly 5 ₳ stay put")).toBeVisible();
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByTestId("move-in-review")).toContainText("Back to your Cardano account");
+  await page.getByRole("button", { name: "← Back" }).click();
+  await page.getByRole("button", { name: "← Back" }).click();
+  await expect(page.getByTestId("seedelf-lovelace")).toBeVisible();
+  expect(koios.submitted).toHaveLength(0);
+});
+
+test("a worker that lost its WASM file explains itself and recovers", async ({ userDataDir }) => {
+  // A rebuild under a running extension: the old worker asks for a deleted file.
+  const copy = mkdtempSync(join(tmpdir(), "seedelf-dist-"));
+  cpSync(dist, copy, { recursive: true });
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    args: [`--disable-extensions-except=${copy}`, `--load-extension=${copy}`],
+  });
+  try {
+    context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+    const assets = join(copy, "assets");
+    const wasm = readdirSync(assets).find((f) => f.endsWith(".wasm"))!;
+    renameSync(join(assets, wasm), join(assets, "moved.wasm"));
+
+    const page = await openApp(context);
+    await expect(page.getByRole("heading", { name: "The wallet couldn't start" })).toBeVisible();
+    await expect(page.getByTestId("startup-error")).toContainText("The wallet's core didn't load");
+    await expect(page.getByTestId("startup-error")).toContainText("reload it");
+    await expect(page.getByRole("button", { name: "Reload the extension" })).toBeVisible();
+    await page.screenshot({ path: "test-results/startup-error.png", fullPage: true });
+
+    // The failed load isn't cached: once the file is back, Try again works.
+    renameSync(join(assets, "moved.wasm"), join(assets, wasm));
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByRole("button", { name: "Create new wallet" })).toBeVisible();
+  } finally {
+    await context.close();
+    rmSync(copy, { recursive: true, force: true });
+  }
 });

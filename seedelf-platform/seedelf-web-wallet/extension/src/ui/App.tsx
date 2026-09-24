@@ -20,7 +20,13 @@ export function App() {
   const [start, setStart] = useState(startFromHash);
 
   const refresh = useCallback(() => {
-    call("status", {}).then(setStatus, (e: Error) => setError(e.message));
+    call("status", {}).then(
+      (s) => {
+        setStatus(s);
+        setError(undefined);
+      },
+      (e: Error) => setError(e.message),
+    );
   }, []);
 
   useEffect(() => {
@@ -48,11 +54,7 @@ export function App() {
 
   let screen;
   if (error) {
-    screen = (
-      <p className="error" role="alert">
-        {error}
-      </p>
-    );
+    screen = <StartupError message={error} onRetry={refresh} />;
   } else if (!status) {
     screen = null;
   } else if (status.state === "no-wallet") {
@@ -104,5 +106,28 @@ export function App() {
         Seedelf Wallet {status?.version ?? ""} · {network?.label ?? "…"}
       </footer>
     </div>
+  );
+}
+
+/** The wallet's background service failed: say what happened and offer a way out. */
+function StartupError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <section className="card stack" role="alert" aria-labelledby="startup-error">
+      <h1 id="startup-error">The wallet couldn't start</h1>
+      <p className="note" data-testid="startup-error">
+        {message}
+      </p>
+      <div className="actions">
+        <button className="primary" onClick={onRetry}>
+          Try again
+        </button>
+        <button className="secondary" onClick={() => chrome.runtime.reload()}>
+          Reload the extension
+        </button>
+      </div>
+      <p className="note">
+        Reloading closes the wallet's windows. Your wallet is kept; you unlock it again with your password.
+      </p>
+    </section>
   );
 }

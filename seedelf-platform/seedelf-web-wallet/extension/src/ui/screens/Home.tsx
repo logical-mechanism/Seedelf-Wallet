@@ -1,18 +1,22 @@
 // Home: the Seedelf balance and seedelfs, the Cardano account, and the
 // Seedelf identity. Balances come from the worker's last reading; it reads
-// the chain again when that is over a minute old, or on Refresh.
+// the chain again when that is over a minute old, or on Refresh. A sent
+// move-in shows as a banner until the network confirms it.
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { Account, Balances } from "../../shared/rpc";
+import type { Account, Balances, PendingTx } from "../../shared/rpc";
 import { call } from "../background";
 import { CopyField } from "../components/CopyField";
 import { QrCode } from "../components/QrCode";
 import { TokenList } from "../components/TokenList";
-import { formatAda, shortHex, timeAgo } from "../format";
+import { explorerUrl, formatAda, shortHex, timeAgo } from "../format";
+import { MoveIn } from "./MoveIn";
 
 /** Read again on open when the last reading is older than this. */
 const STALE_MS = 60_000;
+/** How often to ask about a sent transaction. */
+const WATCH_EVERY_MS = 15_000;
 
 export function Home() {
   const [account, setAccount] = useState<Account>();
@@ -21,6 +25,8 @@ export function Home() {
   const [error, setError] = useState<string>();
   const [showQr, setShowQr] = useState(false);
   const [now, setNow] = useState(Date.now);
+  const [screen, setScreen] = useState<"home" | "move-in">("home");
+  const [pending, setPending] = useState<PendingTx | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
@@ -38,17 +44,78 @@ export function Home() {
     }
   }, []);
 
+  // Ask about the sent transaction; once it's confirmed, read the balances again.
+  const watch = useCallback(async () => {
+    try {
+      const p = await call("pending-tx", {});
+      if (!p) return;
+      setPending(p);
+      if (p.confirmations !== null) void load(true);
+    } catch {
+      // Koios hiccup: try again on the next tick.
+    }
+  }, [load]);
+
   useEffect(() => {
     call("account", {}).then(setAccount, (e: Error) => setError(e.message));
     void load(false).then((b) => {
       if (b && Date.now() - b.updatedAt > STALE_MS) void load(true);
     });
+    void watch();
     const tick = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(tick);
-  }, [load]);
+  }, [load, watch]);
+
+  const watching = pending !== null && pending.confirmations === null && now - pending.submittedAt < 10 * 60_000;
+  useEffect(() => {
+    if (!watching) return;
+    const timer = setInterval(() => void watch(), WATCH_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [watching, watch]);
+
+  if (screen === "move-in" && balances) {
+    return (
+      <MoveIn
+        cardano={balances.cardano}
+        onCancel={() => setScreen("home")}
+        onSent={(p) => {
+          setPending(p);
+          setScreen("home");
+        }}
+      />
+    );
+  }
 
   return (
     <div className="stack">
+      {error && (
+        <section className="callout callout--warn stack-tight" role="alert">
+          <strong>Couldn't read your balances</strong>
+          <span>{error}</span>
+          <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
+            {reading ? "Trying…" : "Try again"}
+          </button>
+        </section>
+      )}
+      {pending && (
+        <section className="callout banner" role="status" data-testid="pending-tx">
+          <strong>
+            {pending.confirmations !== null
+              ? "Move-in confirmed"
+              : watching
+                ? "Move-in sent. Waiting for the network…"
+                : "Move-in not confirmed yet"}
+          </strong>
+          <a href={explorerUrl(pending.network, pending.txHash)} target="_blank" rel="noreferrer" className="banner__link">
+            {shortHex(pending.txHash, 10, 6)} on Cardanoscan
+          </a>
+          {!watching && (
+            <button type="button" className="link" onClick={() => setPending(null)}>
+              Dismiss
+            </button>
+          )}
+        </section>
+      )}
       <section className="card stack" aria-labelledby="seedelf-balance">
         <div className="card__head">
           <h1 id="seedelf-balance">Seedelf balance</h1>
@@ -97,7 +164,16 @@ export function Home() {
             <CopyField label="Stake address" value={account.stakeAddress} testId="stake-address" />
           </>
         )}
-        <p className="note">Anything that can pay a Cardano address can fund this wallet. Moving funds into Seedelf comes next.</p>
+        <p className="note">Anything that can pay a Cardano address can fund this wallet.</p>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => setScreen("move-in")}
+          disabled={!balances || balances.cardano.utxos === 0 || watching}
+          title={watching ? "Wait for the last move-in to confirm" : undefined}
+        >
+          Move in
+        </button>
       </section>
 
       {account && (
@@ -116,11 +192,6 @@ export function Home() {
         </section>
       )}
 
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
       <div className="refresh-row">
         <span className="note" data-testid="updated">
           {reading ? "Reading the chain…" : balances ? `Updated ${timeAgo(balances.updatedAt, now)}` : ""}

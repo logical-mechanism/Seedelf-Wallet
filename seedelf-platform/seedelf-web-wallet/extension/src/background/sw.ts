@@ -6,6 +6,7 @@ import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
 import { BalanceService } from "./balances";
 import { handle, type Context } from "./handlers";
 import { Koios } from "./koios";
+import { MoveInService } from "./move-in";
 import { chromeArea } from "./storage";
 import { Wallet } from "./wallet";
 import { loadWasm } from "./wasm";
@@ -25,7 +26,8 @@ const autoLock = {
 let context: Promise<Context> | undefined;
 
 function getContext(): Promise<Context> {
-  context ??= loadWasm().then((wasm) => {
+  if (context) return context;
+  context = loadWasm().then((wasm) => {
     const session = chromeArea(chrome.storage.session);
     const wallet = new Wallet({
       wasm,
@@ -36,22 +38,21 @@ function getContext(): Promise<Context> {
       // No page open means nobody is listening; that's fine.
       changed: () => void chrome.runtime.sendMessage(STATE_CHANGED).catch(() => undefined),
     });
-    const balances = new BalanceService({
-      wasm,
-      wallet,
-      session,
-      koios: (network) => new Koios(NETWORKS[network].koios),
-      now: Date.now,
-    });
+    const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
+    const balances = new BalanceService({ wasm, wallet, session, koios, now: Date.now });
+    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now });
     return {
       wasm,
       wallet,
       balances,
+      moveIn,
       version: __VERSION__,
       network: defaultNetwork(__MAINNET_ENABLED__),
       networks: enabledNetworks(__MAINNET_ENABLED__),
     };
   });
+  // Don't keep a failed start (the WASM didn't load): the next request tries again.
+  context.catch(() => (context = undefined));
   return context;
 }
 

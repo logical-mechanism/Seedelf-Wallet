@@ -5,15 +5,17 @@ use seedelf_crypto::register::Register;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{LazyLock, RwLock};
-use std::time::Duration;
 
 /// Shared HTTP client with sane timeouts. Reuses TCP connections across calls.
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .build()
-        .expect("Failed to build reqwest client")
+    let builder = Client::builder();
+    // reqwest's browser client (wasm32, used by the web wallet) has no
+    // connect or overall timeout; the browser applies its own.
+    #[cfg(not(target_arch = "wasm32"))]
+    let builder = builder
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30));
+    builder.build().expect("Failed to build reqwest client")
 });
 
 /// Optional base-URL overrides for the Koios REST host and the giveme.my
@@ -821,6 +823,41 @@ pub struct ProtocolParameters {
     pub cost_model_v3: Vec<i64>,
 }
 
+impl ProtocolParameters {
+    /// Reads the parameters from one row of Koios's `epoch_params` response.
+    /// Split from [`epoch_params`] so callers that fetch Koios JSON
+    /// themselves (the web wallet, through WebAssembly) parse it the same way.
+    pub fn from_koios(params: &Value) -> Result<Self> {
+        let coins_per_utxo_size: u64 = params["coins_per_utxo_size"]
+            .as_u64()
+            .or_else(|| {
+                params["coins_per_utxo_size"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+            })
+            .ok_or_else(|| anyhow!("Missing coins_per_utxo_size"))?;
+        let price_mem: f64 = params["price_mem"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("Missing price_mem"))?;
+        let price_step: f64 = params["price_step"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("Missing price_step"))?;
+        let cost_model_v3: Vec<i64> = params["cost_models"]["PlutusV3"]
+            .as_array()
+            .ok_or_else(|| anyhow!("Missing PlutusV3 cost model"))?
+            .iter()
+            .map(|v| v.as_i64().ok_or_else(|| anyhow!("Non-integer cost entry")))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(ProtocolParameters {
+            coins_per_utxo_size,
+            price_mem,
+            price_step,
+            cost_model_v3,
+        })
+    }
+}
+
 /// Fetch the current epoch's protocol parameters from Koios.
 pub async fn epoch_params(network_flag: bool) -> Result<ProtocolParameters> {
     let url: String = koios_url(network_flag, "epoch_params?limit=1");
@@ -840,31 +877,5 @@ pub async fn epoch_params(network_flag: bool) -> Result<ProtocolParameters> {
         .next()
         .ok_or_else(|| anyhow!("Empty Epoch Params Response"))?;
 
-    let coins_per_utxo_size: u64 = params["coins_per_utxo_size"]
-        .as_u64()
-        .or_else(|| {
-            params["coins_per_utxo_size"]
-                .as_str()
-                .and_then(|s| s.parse().ok())
-        })
-        .ok_or_else(|| anyhow!("Missing coins_per_utxo_size"))?;
-    let price_mem: f64 = params["price_mem"]
-        .as_f64()
-        .ok_or_else(|| anyhow!("Missing price_mem"))?;
-    let price_step: f64 = params["price_step"]
-        .as_f64()
-        .ok_or_else(|| anyhow!("Missing price_step"))?;
-    let cost_model_v3: Vec<i64> = params["cost_models"]["PlutusV3"]
-        .as_array()
-        .ok_or_else(|| anyhow!("Missing PlutusV3 cost model"))?
-        .iter()
-        .map(|v| v.as_i64().ok_or_else(|| anyhow!("Non-integer cost entry")))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(ProtocolParameters {
-        coins_per_utxo_size,
-        price_mem,
-        price_step,
-        cost_model_v3,
-    })
+    ProtocolParameters::from_koios(&params)
 }

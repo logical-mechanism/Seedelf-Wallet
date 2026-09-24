@@ -10,7 +10,7 @@
 
 import type * as Wasm from "@seedelf/wasm";
 
-import { NETWORKS, type NetworkName } from "../networks";
+import type { NetworkName } from "../networks";
 import { passwordProblem } from "../shared/password";
 import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
@@ -29,7 +29,6 @@ export const SESSION_ACTIVITY = "seedelf.lastActivity";
  * so it never goes to disk and it's wiped on lock.
  */
 export const SESSION_BALANCES_PREFIX = "seedelf.balances.";
-const SESSION_BALANCES = Object.keys(NETWORKS).map((n) => SESSION_BALANCES_PREFIX + n);
 /** chrome.storage.local: consecutive failed unlocks, kept across restarts. */
 export const UNLOCK_FAILURES = "seedelf.unlockFailures";
 
@@ -246,10 +245,14 @@ export class Wallet {
     }
   }
 
-  /** Lock: drop the keys and anything derived from them from memory and session storage, stop the alarm. */
+  /**
+   * Lock: drop the keys from memory and clear session storage, which only
+   * ever holds unlocked state (the entropy, balances, a built or pending
+   * transaction). Stop the alarm.
+   */
   private async wipe(): Promise<void> {
     this.free();
-    await this.deps.session.remove(SESSION_ENTROPY, SESSION_ACTIVITY, ...SESSION_BALANCES);
+    await this.deps.session.clear();
     await this.deps.autoLock.stop();
   }
 

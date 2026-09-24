@@ -49,3 +49,48 @@ export function timeAgo(then: number, now: number): string {
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   return `${Math.floor(s / 3600)} h ago`;
 }
+
+/** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */
+export function parseAda(text: string): string | undefined {
+  const clean = text.trim().replaceAll(",", "");
+  const match = /^(\d+)(?:\.(\d{0,6}))?$/.exec(clean);
+  if (!match) return undefined;
+  const lovelace = BigInt(match[1]!) * 1_000_000n + BigInt((match[2] ?? "").padEnd(6, "0") || "0");
+  return lovelace.toString();
+}
+
+/** A block explorer link for a transaction. */
+export function explorerUrl(network: "preprod" | "mainnet", txHash: string): string {
+  return `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/transaction/${txHash}`;
+}
+
+/** All the ADA there will ever be: 45 billion ₳, in lovelace. */
+export const MAX_SUPPLY_LOVELACE = 45_000_000_000_000_000n;
+
+/**
+ * Cleans what the user typed or pasted into an ADA amount field. ADA has 6
+ * decimal places (1 lovelace = 0.000001 ₳), so extra digits are dropped, not
+ * rounded: the amount never grows. Anything that isn't a number, or is more
+ * than all the ADA in existence, keeps the previous value. `note` says what
+ * was changed or refused.
+ */
+export function sanitizeAda(previous: string, typed: string): { value: string; note?: string } {
+  let text = typed.trim();
+  if (text === "") return { value: "" };
+  if (text.startsWith(".")) text = `0${text}`;
+  const match = /^([\d,]*)(?:\.(\d*))?$/.exec(text);
+  if (!match || !/\d/.test(match[1]!)) {
+    return { value: previous, note: "Enter an amount in ADA, like 25 or 12.5." };
+  }
+  const decimals = match[2];
+  let value = text;
+  let note: string | undefined;
+  if (decimals !== undefined && decimals.length > 6) {
+    value = `${match[1]}.${decimals.slice(0, 6)}`;
+    note = "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.";
+  }
+  if (BigInt(parseAda(value) ?? "0") > MAX_SUPPLY_LOVELACE) {
+    return { value: previous, note: "That's more than all the ADA there is: 45 billion ₳." };
+  }
+  return note ? { value, note } : { value };
+}

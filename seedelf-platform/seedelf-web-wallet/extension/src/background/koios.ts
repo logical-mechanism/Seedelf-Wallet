@@ -32,6 +32,22 @@ const TIMEOUT_MS = 20_000;
 
 export class KoiosError extends Error {}
 
+/** A request that never got an answer: offline, or blocked on the way. */
+function unreachable(e: unknown): string {
+  const cause = e instanceof Error ? e.message : String(e);
+  return (
+    `Couldn't reach Koios, the service the wallet reads Cardano from (${cause}). ` +
+    "Check your internet connection, and any VPN or ad blocker that might block koios.rest."
+  );
+}
+
+/** An answer that isn't data. */
+function koiosTrouble(status: number, path: string): string {
+  if (status === 429) return "Koios is limiting requests from your connection. Wait a minute and try again.";
+  if (status >= 500) return `Koios is having trouble right now (${status} for ${path}). Try again in a minute.`;
+  return `Koios refused the request (${status} for ${path}).`;
+}
+
 export class Koios {
   constructor(
     private readonly base: string,
@@ -58,6 +74,43 @@ export class Koios {
     return this.paged("account_utxos", { _stake_addresses: [stakeAddress], _extended: true });
   }
 
+  /** The current epoch's protocol parameters: one `epoch_params` row, passed to WebAssembly as is. */
+  async epochParams(): Promise<Record<string, unknown>> {
+    const [row] = await this.request<Record<string, unknown>>("GET", "epoch_params", undefined, "limit=1");
+    if (!row) throw new KoiosError("Koios returned no protocol parameters.");
+    return row;
+  }
+
+  /**
+   * Submits a signed transaction; returns its hash. Not retried: if an answer
+   * were lost, a second submit would fail with "inputs already spent" and hide
+   * the fact that the first one went through.
+   */
+  async submitTx(txCbor: Uint8Array<ArrayBuffer>): Promise<string> {
+    let response: Response;
+    try {
+      response = await this.fetchFn(`${this.base}/submittx`, {
+        method: "POST",
+        headers: { "content-type": "application/cbor" },
+        body: txCbor,
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+    } catch (e) {
+      throw new KoiosError(unreachable(e));
+    }
+    const text = await response.text();
+    if (!response.ok) throw new KoiosError(`The network rejected the transaction: ${text.slice(0, 500)}`);
+    return JSON.parse(text) as string;
+  }
+
+  /** Confirmations for each transaction; `null` until it's on chain. */
+  async txStatus(txHashes: string[]): Promise<Map<string, number | null>> {
+    const rows = await this.post<{ tx_hash: string; num_confirmations: number | null }>("tx_status", {
+      _tx_hashes: txHashes,
+    });
+    return new Map(rows.map((r) => [r.tx_hash, r.num_confirmations]));
+  }
+
   private async paged<T>(path: string, body: unknown): Promise<T[]> {
     const rows: T[] = [];
     for (let offset = 0; ; offset += PAGE_SIZE) {
@@ -67,22 +120,29 @@ export class Koios {
     }
   }
 
-  private async post<T>(path: string, body: unknown, query = ""): Promise<T[]> {
+  private post<T>(path: string, body: unknown, query = ""): Promise<T[]> {
+    return this.request<T>("POST", path, body, query);
+  }
+
+  private async request<T>(method: "GET" | "POST", path: string, body: unknown, query = ""): Promise<T[]> {
     const url = `${this.base}/${path}${query ? `?${query}` : ""}`;
     for (let attempt = 0; ; attempt++) {
       let response: Response | undefined;
       let failure: string;
       try {
         response = await this.fetchFn(url, {
-          method: "POST",
-          headers: { accept: "application/json", "content-type": "application/json" },
-          body: JSON.stringify(body),
+          method,
+          headers:
+            method === "POST"
+              ? { accept: "application/json", "content-type": "application/json" }
+              : { accept: "application/json" },
+          body: method === "POST" ? JSON.stringify(body) : undefined,
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
         if (response.ok) return (await response.json()) as T[];
-        failure = `Koios answered ${response.status} for ${path}.`;
+        failure = koiosTrouble(response.status, path);
       } catch (e) {
-        failure = `Couldn't reach Koios (${(e as Error).message}).`;
+        failure = unreachable(e);
       }
       const retryable = !response || response.status === 429 || response.status >= 500;
       const delay = RETRY_DELAYS_MS[attempt];

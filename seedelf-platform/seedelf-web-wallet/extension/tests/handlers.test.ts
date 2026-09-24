@@ -11,11 +11,12 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(): Context {
-  const { wallet, balances } = testBalances();
+  const { wallet, balances, moveIn } = testBalances();
   return {
     wasm: loadTestWasm(),
     wallet,
     balances,
+    moveIn,
     version: "0.1.0",
     network: "preprod",
     networks: ["preprod"],
