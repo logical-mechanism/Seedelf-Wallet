@@ -29,6 +29,11 @@ The WebAssembly bindings the web wallet uses for Seedelf cryptography. It is a t
 | `registerToDatum(register)` | Inline-datum bytes (PlutusData CBOR). |
 | `verifyProof(register, z, gR, vkh)` | Off-chain mirror of the validator's check. |
 | `buildMoveIn(account, key, requestJson)` | Builds and signs a move-in with `seedelf-core`'s `build::move_in`. The request carries Koios's `epoch_params` row and the account's UTxOs, each with its `role/index`, which is checked against the derived address. Returns JSON with the signed CBOR, its hash and a summary. Keys never reach JavaScript. |
+| `draftMint(key, requestJson)` | Creating a seedelf, step 1 (`build::mint`). The request carries `network`, the `epoch_params` row, the wallet's spendable contract UTxOs (each checked: owned, no seedelf) and the `label` (printable ASCII, 15 at most). Picks the UTxOs, proves them under a new one-time key, and returns `{ seed, draftCbor, inputs }` for Ogmios. |
+| `finishMint(key, requestJson)` | Step 2: the same request plus `seed` and Ogmios's `evaluation`. Returns the unsigned transaction with the measured budgets and fee: `{ txCbor, txHash, seed, tokenName, lovelace, fee: { size, compute, scriptReference, total }, changeLovelace, changeTokens, changeOutputs, inputs }`. An Ogmios error becomes a plain-words exception. |
+| `signScriptSpend(key, requestJson)` | At Send: `{ txCbor, seed, collateral }`, where `collateral` is giveme.my's answer. Checks giveme.my's signature against its public key over the transaction id, then adds it and the one-time key's. Returns `{ txCbor, txHash }`. |
+
+The one-time key of a script spend is HKDF-SHA-256 of the Seedelf scalar (salt `seedelf-one-time-key-v1`, info the 32-byte `seed`). The seed can wait in JavaScript between review and Send; the key is re-derived inside WebAssembly each time and never leaves it.
 
 ## Build
 
@@ -62,3 +67,4 @@ Both suites check the same pinned vectors as `seedelf-crypto`, so the WebAssembl
 - the Cardano account vectors in `seedelf-crypto/tests/vectors/cardano_account.json`, verified against `@cardano-sdk` (Lace's library)
 - entropy round trips on every one of those phrases (`tests/entropy.test.mjs`)
 - a move-in on the 12-word phrase's recorded preprod UTxOs (`tests/move-in.test.mjs`). The native tests also check that every witness verifies against the tx hash, and that the signers are exactly the inputs' payment keys.
+- a mint of the 12-word phrase's synthetic Seedelf UTxOs with a real preprod Ogmios evaluation (`tests/mint.test.mjs`, from the extension's `tests/fixtures/mint-preprod.json`). The native tests also sign one with a stand-in collateral key and check every witness, and check that giveme.my's real key refuses anything else.

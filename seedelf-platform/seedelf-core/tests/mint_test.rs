@@ -703,6 +703,29 @@ fn picks_pure_ada_first_and_as_few_inputs_as_it_can() {
 }
 
 #[test]
+fn drafts_whatever_it_can_finish() {
+    // Enough for the seedelf, the real fee and the change, with little to
+    // spare: the draft must not assume a larger fee than the estimate.
+    let w = world();
+    let seedelf = w.owner.clone().rerandomize().unwrap();
+    let minimum = seedelf_minimum_lovelace(&w.chain.params).unwrap()
+        + wallet_minimum_lovelace_with_assets(&w.chain.params, Default::default()).unwrap();
+    let available = [owned(&w, 0x05, 0, minimum + 300_000, &[])];
+    let minted = build::mint(&w.chain, &available, "", &seedelf, &w.owner, w.signer).unwrap();
+    let spend = proven(&w, minted);
+    let draft = decode(&spend.draft().unwrap());
+    assert!(
+        draft.fee < 300_000,
+        "the draft stages the estimated fee, {}",
+        draft.fee
+    );
+    let built = spend
+        .finalize(&Budgets::from_ogmios(&measured(1)).unwrap())
+        .unwrap();
+    assert_sound(&w, &available, &built);
+}
+
+#[test]
 fn explains_what_is_wrong() {
     let w = world();
     let seedelf = w.owner.clone().rerandomize().unwrap();

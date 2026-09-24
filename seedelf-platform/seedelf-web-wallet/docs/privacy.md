@@ -20,14 +20,16 @@ The protocol-level analysis lives in the root [README](../../../README.md#what-i
 
 These are not user settings:
 
-1. **A fresh random one-time signing key for every Seedelf spend.** The CLI does this in `transfer.rs` and `sweep.rs`.
+1. **A new one-time signing key for every Seedelf spend.**
+   - The CLI draws it at random (`transfer.rs`, `sweep.rs`, `util/mint.rs`).
+   - The web wallet derives it inside WebAssembly from the Seedelf key and a fresh random seed, so it survives a worker restart between review and Send without ever reaching JavaScript. A new seed gives a new key (see [architecture.md](architecture.md#transaction-building)).
 2. **Seedelf spends take their collateral from the shared giveme.my service,** never from a user UTxO. A user's own collateral would tag every private spend with their address.
 3. **Re-randomization scalars (`d`) are toxic waste.**
    - They are full-size and come from a secure random source.
    - They are never stored or logged.
    - They exist only inside `seedelf-crypto`.
 4. **Registers are only built by `seedelf-crypto`,** never assembled in TypeScript. This guarantees the same `d` is applied to both points and that the points are torsion-free. A mistake here locks funds permanently (see the root [CLAUDE.md](../../../CLAUDE.md), "Core protocol invariants").
-5. **Seedelfs are created by stealth mint** from the Seedelf balance, never paid for by the Cardano account (see [flows.md](flows.md#create-a-seedelf)).
+5. **Seedelfs are created by stealth mint** from the Seedelf balance, never paid for by the Cardano account (see [flows.md](flows.md#create-a-seedelf)). The mint service only passes Seedelf UTxOs to WebAssembly, and WebAssembly refuses any it doesn't own.
 6. **The Cardano account is never a one-time account.** Each one-time account is used for a single session. One-time accounts use a reserved account index (`24301'`), never a low index like `1'` that a restored Lace wallet may already use: sharing payment keys with a real account would link every one-time address back to the user.
 7. **No analytics or telemetry.** The wallet talks to Koios and giveme.my and nothing else.
 

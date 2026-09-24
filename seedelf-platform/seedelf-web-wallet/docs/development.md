@@ -66,8 +66,9 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 |---|---|---|
 | Rust | `seedelf-crypto`, `seedelf-core`, and the wasm crate | `cargo test`. The CLI's offline integration tests (`seedelf-cli/tests/cli/`) guard the builder extraction. |
 | Key derivation | The frozen v1 Seedelf key vectors, and the Cardano account vectors (verified against `@cardano-sdk`, Lace's library) | Checked in Rust, and again from JS through WebAssembly, so both sides agree |
-| TypeScript | The manifest, and the service-worker handlers against the real WASM (later: the vault and wallet state) | Vitest (`npm test`) |
+| TypeScript | The manifest, the vault and wallet state, the Koios and giveme.my clients, and the worker's services and handlers against the real WASM, over recorded preprod answers | Vitest (`npm test`) |
 | End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the popup and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. |
+| Live | Real preprod transactions from the built extension | `e2e/live/move-in.mjs`, then `e2e/live/mint.mjs`, on the test wallet in `extension/.preprod-test-wallet.txt` once it's funded |
 | Manual | A preprod checklist before each release | Onboarding, move in, create, transfer, withdraw, lock/unlock, restore |
 
 ## Sharing with testers before launch

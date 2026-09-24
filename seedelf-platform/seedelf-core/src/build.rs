@@ -566,9 +566,6 @@ const REFERENCE_SCRIPT_FEE_PER_BYTE: u64 = 15;
 /// The collateral giveme.my lends: one 5 ADA UTxO.
 pub const COLLATERAL_LOVELACE: u64 = 5_000_000;
 
-/// A fee to stage a draft with. The real one comes after evaluation.
-const DRAFT_FEE: u64 = 1_000_000;
-
 /// Rounds a fee up to an even number of lovelace, so the collateral's
 /// `3/2 × fee` is whole.
 pub fn even(fee: u64) -> u64 {
@@ -946,7 +943,10 @@ impl ScriptSpend {
     /// [`DRAFT_BUDGET`]. Needs [`Self::proven`] first, or the scripts fail.
     pub fn draft(&self) -> Result<BuiltTransaction> {
         let redeemers = self.proofs()?;
-        self.stage(DRAFT_FEE, None, redeemers)?
+        // Ogmios doesn't check the fee. Staging with the estimated one keeps
+        // the draft's change valid whenever the finished transaction's is.
+        let fee = self.estimate()?.fee.total;
+        self.stage(fee, None, redeemers)?
             .build_conway_raw()
             .context("Failed To Build The Draft Transaction")
     }

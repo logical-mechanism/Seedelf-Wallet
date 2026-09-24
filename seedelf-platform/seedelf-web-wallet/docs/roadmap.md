@@ -21,7 +21,7 @@ The wallet is built in **chunks**, each about one working session.
 | 5 | Vault and lock | ✅ | SecretBox vault, create/restore onboarding (restore has per-word BIP39 autocomplete, like Lace and Eternl), unlock, `chrome.storage.session`, auto-lock, unlock back-off. Plan: [plans/chunk-05-vault-and-lock.md](plans/chunk-05-vault-and-lock.md). |
 | 6 | Balance | ✅ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. QR code for the receive address. |
 | 7 | Builder extraction + move in | ✅ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
-| 8 | Create a seedelf | ⬜ | Stealth mint (`util mint`) with giveme.my collateral. **Full plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).** |
+| 8 | Create a seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
 | 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
 | 10 | Withdraw | ⬜ | `sweep` and `remove`. |
 | 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
@@ -35,6 +35,40 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).
+  - **Decided with the user:**
+    - The tag is optional, printable ASCII, at most 15 characters, with a live preview.
+    - giveme.my is asked at Send, not at Review.
+    - The seedelf gets the user's own re-randomized register, and the wallet picks the UTxOs.
+    - The live run is the user's own funded wallet, by hand. The test wallet is still unfunded, so chunk 7's `move-in.mjs` hasn't run.
+  - **Rust (`seedelf-core/src/build.rs`):**
+    - `ScriptSpend` is the shape every Seedelf spend shares. `draft()` carries placeholder budgets; `finalize(budgets)` puts in Ogmios's and settles an even fee. Transfer, sweep and remove should reuse it.
+    - Budgets are matched by purpose and index (`Budgets::from_ogmios`). Ogmios errors become plain words.
+    - `mint` and `mint_from`. The CLI's `util mint` `run()` is thin now; its test mocks Ogmios with real purposes (`mount_evaluate_mint`).
+    - Smaller changes:
+      - `seedelf_token_name` refuses an output index past 255 (the policy takes one byte).
+      - `seedelf-koios`'s `evaluate_transaction` passes Ogmios's 400 answer on.
+      - `add_witnesses`, `tx_id` and `required_signers` sign and read a transaction kept as CBOR.
+  - **WASM:**
+    - `draftMint`, `finishMint` and `signScriptSpend`.
+    - **Changed from the plan: no stateful builder object.** The one-time key is HKDF of the Seedelf scalar and a random seed, so the seed waits in session storage and Send re-derives the key, even in a worker Chrome restarted after 30 idle seconds.
+    - `signScriptSpend` checks giveme.my's signature before adding it.
+    - The module is 2.2 MB (545 KB gzipped). An all-era `MultiEraTx` decode cost about 540 KB more, so Conway-only decoding is used.
+  - **Extension:**
+    - `mint.ts`, `collateral.ts` (giveme.my) and `pending.ts`. The pending watch moved out of `move-in.ts`, and `PendingTx` has a `kind`.
+    - Koios has `evaluate`.
+    - UI: Create a seedelf (form, review, send), and the banner goes "Seedelf mint sent…" then "Seedelf created".
+  - **Checked on preprod without spending anything:**
+    - A draft for the 12-word phrase's synthetic UTxOs passes both real scripts under preprod Ogmios (the UTxOs go along as `additionalUtxo`).
+    - Measured: a spend is 76,043 memory and 338M steps; the mint is 72,836 memory and 21M steps. A one-input mint costs 0.256 ADA.
+    - Our transaction matches a real CLI mint on preprod field for field.
+    - giveme.my checks against the chain before it signs, so it refused the synthetic mint ("Transaction Fails Validation"). There's no real giveme.my signature in the tests.
+    - Recorders: `extension/tests/fixtures/record-mint.mjs` and `seedelf-core/tests/fixtures/ogmios/`.
+  - **Tests:** core `mint_test` 10 (value, minimums, registers, proofs bound to the one-time key, collateral, budgets on a shuffled answer, selection, a draft on a tight balance); `seedelf-wasm` native 10 and Node 23; Vitest 88 (+1 live); Playwright 14; the CLI's offline tests (11) are green.
+    - **Coverage gap:** Playwright stops at Send, checking a forged witness is refused and nothing is submitted, because only giveme.my's key signs. Vitest covers Send with a stubbed signer, and Rust signs with a stand-in key.
+  - **Not done:** a live mint. To finish, create a seedelf by hand from a funded wallet, or fund the test wallet and run `e2e/live/move-in.mjs` and then `e2e/live/mint.mjs`. Record the tx hash here.
+  - **Next:** chunk 9, transfer (seedelf → seedelf). Look up the recipient's register by token name, then build a `ScriptSpend` with a recipient output. Most of the plumbing is here.
 
 - **2026-09-23: chunk 7 done** (`web-wallet/move-in`). Plan: [plans/chunk-07-move-in.md](plans/chunk-07-move-in.md).
   - **Decided with the user:**
