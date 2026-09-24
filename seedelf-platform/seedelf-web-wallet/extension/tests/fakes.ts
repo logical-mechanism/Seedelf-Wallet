@@ -4,8 +4,11 @@ import { readFileSync } from "node:fs";
 import * as wasm from "@seedelf/wasm";
 
 import { BalanceService } from "../src/background/balances";
+import { Collateral } from "../src/background/collateral";
+import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
 import { Koios, type FetchLike, type KoiosUtxo } from "../src/background/koios";
+import { PendingService } from "../src/background/pending";
 import type { Area } from "../src/background/storage";
 import { txIdOf } from "./fixtures/cbor";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
@@ -79,6 +82,11 @@ export const koiosPreprod = fixture("koios-preprod.json") as {
 };
 /** Synthetic contract UTxOs owned by the 12-word vector phrase. */
 export const ownedUtxos = fixture("owned-utxos.json").owned_utxos as KoiosUtxo[];
+/** A real mint round trip on preprod (tests/fixtures/record-mint.mjs). */
+export const mintPreprod = fixture("mint-preprod.json") as {
+  evaluation: unknown;
+  collateral: { status: number; answer: unknown };
+};
 
 export interface FakeKoios {
   fetch: FetchLike;
@@ -91,6 +99,8 @@ export interface FakeKoios {
   rejectSubmit?: string;
   /** What `tx_status` reports for every transaction. */
   confirmations: number | null;
+  /** Ogmios's answer to every evaluation: the recorded preprod mint's, unless replaced. */
+  evaluation: unknown;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -104,6 +114,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     calls: [],
     submitted: [],
     confirmations: null,
+    evaluation: mintPreprod.evaluation,
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -118,6 +129,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
       fake.calls.push({ path, query: searchParams.toString(), body });
       if (fake.hold) await fake.hold;
       let rows: unknown[];
+      if (path === "ogmios") {
+        const failed = (fake.evaluation as { error?: unknown }).error !== undefined;
+        return Response.json(fake.evaluation, { status: failed ? 400 : 200 });
+      }
       if (path === "epoch_params") {
         rows = epochParams;
       } else if (path === "tx_status") {
@@ -140,10 +155,32 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
   return fake;
 }
 
-/** A wallet plus the balance and move-in services over the fake Koios. */
+export interface FakeCollateral {
+  fetch: FetchLike;
+  /** The transactions giveme.my was asked to witness (CBOR hex). */
+  asked: string[];
+  /** Its answer: status and JSON body. */
+  answer: { status: number; body: unknown };
+}
+
+/** giveme.my: by default it refuses, as it did the recorded mint (inputs it can't find). */
+export function fakeCollateral(): FakeCollateral {
+  const fake: FakeCollateral = {
+    asked: [],
+    answer: { status: mintPreprod.collateral.status, body: mintPreprod.collateral.answer },
+    fetch: async (_url, init) => {
+      fake.asked.push(JSON.parse(String(init.body)).tx);
+      return Response.json(fake.answer.body, { status: fake.answer.status });
+    },
+  };
+  return fake;
+}
+
+/** A wallet plus the balance, move-in, mint and pending services over the fake Koios and giveme.my. */
 export function testBalances(options?: { owned?: boolean }) {
   const t = testWallet();
   const koios = fakeKoios(options);
+  const collateral = fakeCollateral();
   const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
@@ -151,5 +188,16 @@ export function testBalances(options?: { owned?: boolean }) {
     koios: () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined),
     now: () => t.clock.now,
   };
-  return { ...t, koios, balances: new BalanceService(deps), moveIn: new MoveInService(deps) };
+  return {
+    ...t,
+    koios,
+    collateral,
+    balances: new BalanceService(deps),
+    moveIn: new MoveInService(deps),
+    mint: new MintService({
+      ...deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    }),
+    pending: new PendingService(deps),
+  };
 }

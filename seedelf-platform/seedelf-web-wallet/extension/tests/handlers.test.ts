@@ -11,12 +11,14 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(): Context {
-  const { wallet, balances, moveIn } = testBalances();
+  const { wallet, balances, moveIn, mint, pending } = testBalances();
   return {
     wasm: loadTestWasm(),
     wallet,
     balances,
     moveIn,
+    mint,
+    pending,
     version: "0.1.0",
     network: "preprod",
     networks: ["preprod"],
@@ -99,6 +101,8 @@ describe("handlers", () => {
 
   it("recognizes only known requests", () => {
     expect(isMessage({ type: "unlock", password: "x" })).toBe(true);
+    expect(isMessage({ type: "mint-build", label: "" })).toBe(true);
+    expect(isMessage({ type: "mint-submit", txHash: "ab" })).toBe(true);
     expect(isMessage({ type: "preview" })).toBe(false);
     expect(isMessage({ event: "state-changed" })).toBe(false);
     expect(isMessage(null)).toBe(false);

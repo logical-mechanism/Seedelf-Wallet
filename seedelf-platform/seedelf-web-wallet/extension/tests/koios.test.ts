@@ -107,6 +107,26 @@ describe("Koios client: transactions", () => {
     expect(tries).toBe(2); // never retried
   });
 
+  it("has Ogmios evaluate a draft, and passes on why the scripts refused", async () => {
+    const result = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
+    const error = { jsonrpc: "2.0", method: "evaluateTransaction", error: { code: 3010, message: "Some scripts…" } };
+    const { koios, calls, delays } = scripted([
+      Response.json(result),
+      new Response("", { status: 503 }),
+      Response.json(error, { status: 400 }),
+    ]);
+    expect(await koios.evaluate("84a4")).toEqual(result);
+    expect(calls[0]).toEqual({
+      url: `${BASE}/ogmios`,
+      body: { jsonrpc: "2.0", method: "evaluateTransaction", params: { transaction: { cbor: "84a4" } } },
+    });
+    // A server hiccup is retried; a 400 is Ogmios's answer, not a failure.
+    expect(await koios.evaluate("84a4")).toEqual(error);
+    expect(delays).toEqual([1000]);
+    const refused = scripted([new Response("", { status: 404 })]);
+    await expect(refused.koios.evaluate("84a4")).rejects.toThrow("Koios refused the request (404 for ogmios)");
+  });
+
   it("reads confirmations", async () => {
     const { koios, calls } = scripted([Response.json([{ tx_hash: "aa", num_confirmations: 3 }, { tx_hash: "bb", num_confirmations: null }])]);
     const status = await koios.txStatus(["aa", "bb"]);

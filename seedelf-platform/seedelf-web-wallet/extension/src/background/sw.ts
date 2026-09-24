@@ -4,9 +4,12 @@
 import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
 import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
 import { BalanceService } from "./balances";
+import { Collateral } from "./collateral";
 import { handle, type Context } from "./handlers";
 import { Koios } from "./koios";
+import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
+import { PendingService } from "./pending";
 import { chromeArea } from "./storage";
 import { Wallet } from "./wallet";
 import { loadWasm } from "./wasm";
@@ -41,11 +44,16 @@ function getContext(): Promise<Context> {
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
     const balances = new BalanceService({ wasm, wallet, session, koios, now: Date.now });
     const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now });
+    const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
+    const mint = new MintService({ wasm, wallet, session, koios, collateral, now: Date.now });
+    const pending = new PendingService({ wallet, session, koios, now: Date.now });
     return {
       wasm,
       wallet,
       balances,
       moveIn,
+      mint,
+      pending,
       version: __VERSION__,
       network: defaultNetwork(__MAINNET_ENABLED__),
       networks: enabledNetworks(__MAINNET_ENABLED__),

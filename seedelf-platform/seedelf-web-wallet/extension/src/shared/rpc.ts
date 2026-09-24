@@ -82,8 +82,28 @@ export interface MoveInSummary {
   inputs: number;
 }
 
+/** A finished seedelf mint, waiting for the user to send it. Amounts are lovelace strings. */
+export interface MintSummary {
+  network: NetworkName;
+  txHash: string;
+  /** The personal tag, as sent ("" for none). */
+  label: string;
+  /** The new seedelf's token name, hex: prefix, tag, and the smallest input spent. */
+  tokenName: string;
+  /** Locked with the seedelf; only removing it gets this back. */
+  lovelace: string;
+  fee: { size: string; compute: string; scriptReference: string; total: string };
+  /** Back into the Seedelf balance. */
+  changeLovelace: string;
+  changeTokens: number;
+  changeOutputs: number;
+  /** How many Seedelf UTxOs pay for it. */
+  inputs: number;
+}
+
 /** A submitted transaction the wallet is watching. */
 export interface PendingTx {
+  kind: "move-in" | "mint";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -112,6 +132,10 @@ export interface Requests {
   "move-in-build": { payload: { lovelace: string | null; tokens: TokenRef[] }; result: MoveInSummary };
   /** Submits the move-in built last, if its hash matches. */
   "move-in-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Builds a seedelf mint (Ogmios measures its scripts) without sending it. */
+  "mint-build": { payload: { label: string }; result: MintSummary };
+  /** Has giveme.my witness the mint built last, signs it, and submits it, if its hash matches. */
+  "mint-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };
   "reset-wallet": { payload: None; result: Status };
@@ -141,6 +165,8 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "wordlist",
   "move-in-build",
   "move-in-submit",
+  "mint-build",
+  "mint-submit",
   "pending-tx",
   "reset-wallet",
 ]);

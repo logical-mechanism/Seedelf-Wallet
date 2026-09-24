@@ -1,7 +1,7 @@
 // Home: the Seedelf balance and seedelfs, the Cardano account, and the
 // Seedelf identity. Balances come from the worker's last reading; it reads
 // the chain again when that is over a minute old, or on Refresh. A sent
-// move-in shows as a banner until the network confirms it.
+// move-in or seedelf mint shows as a banner until the network confirms it.
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -11,6 +11,7 @@ import { CopyField } from "../components/CopyField";
 import { QrCode } from "../components/QrCode";
 import { TokenList } from "../components/TokenList";
 import { explorerUrl, formatAda, shortHex, timeAgo } from "../format";
+import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
 
 /** Read again on open when the last reading is older than this. */
@@ -25,7 +26,7 @@ export function Home() {
   const [error, setError] = useState<string>();
   const [showQr, setShowQr] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const [screen, setScreen] = useState<"home" | "move-in">("home");
+  const [screen, setScreen] = useState<"home" | "move-in" | "create">("home");
   const [pending, setPending] = useState<PendingTx | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
@@ -73,18 +74,17 @@ export function Home() {
     return () => clearInterval(timer);
   }, [watching, watch]);
 
+  const sent = (p: PendingTx) => {
+    setPending(p);
+    setScreen("home");
+  };
   if (screen === "move-in" && balances) {
-    return (
-      <MoveIn
-        cardano={balances.cardano}
-        onCancel={() => setScreen("home")}
-        onSent={(p) => {
-          setPending(p);
-          setScreen("home");
-        }}
-      />
-    );
+    return <MoveIn cardano={balances.cardano} onCancel={() => setScreen("home")} onSent={sent} />;
   }
+  if (screen === "create" && balances) {
+    return <CreateSeedelf seedelf={balances.seedelf} onCancel={() => setScreen("home")} onSent={sent} />;
+  }
+  const what = pending?.kind === "mint" ? "Seedelf mint" : "Move-in";
 
   return (
     <div className="stack">
@@ -101,10 +101,12 @@ export function Home() {
         <section className="callout banner" role="status" data-testid="pending-tx">
           <strong>
             {pending.confirmations !== null
-              ? "Move-in confirmed"
+              ? pending.kind === "mint"
+                ? "Seedelf created"
+                : "Move-in confirmed"
               : watching
-                ? "Move-in sent. Waiting for the network…"
-                : "Move-in not confirmed yet"}
+                ? `${what} sent. Waiting for the network…`
+                : `${what} not confirmed yet`}
           </strong>
           <a href={explorerUrl(pending.network, pending.txHash)} target="_blank" rel="noreferrer" className="banner__link">
             {shortHex(pending.txHash, 10, 6)} on Cardanoscan
@@ -125,9 +127,7 @@ export function Home() {
         {balances && <TokenList tokens={balances.seedelf.tokens} testId="seedelf-tokens" />}
         <div className="subsection">
           <h2>Your seedelfs</h2>
-          {balances && balances.seedelf.seedelfs.length === 0 && (
-            <p className="note">No seedelfs yet. Creating one arrives in a later update.</p>
-          )}
+          {balances && balances.seedelf.seedelfs.length === 0 && <p className="note">No seedelfs yet.</p>}
           {balances && balances.seedelf.seedelfs.length > 0 && (
             <ul className="seedelfs" data-testid="seedelfs">
               {balances.seedelf.seedelfs.map((s) => (
@@ -139,6 +139,21 @@ export function Home() {
               ))}
             </ul>
           )}
+          <button
+            type="button"
+            className="secondary align-start"
+            onClick={() => setScreen("create")}
+            disabled={!balances || balances.seedelf.utxos === 0 || watching}
+            title={
+              watching
+                ? "Wait for the last transaction to confirm"
+                : balances?.seedelf.utxos === 0
+                  ? "Move some ADA in first: a seedelf is paid from your Seedelf balance"
+                  : undefined
+            }
+          >
+            Create a seedelf
+          </button>
         </div>
       </section>
 
@@ -170,7 +185,7 @@ export function Home() {
           className="primary"
           onClick={() => setScreen("move-in")}
           disabled={!balances || balances.cardano.utxos === 0 || watching}
-          title={watching ? "Wait for the last move-in to confirm" : undefined}
+          title={watching ? "Wait for the last transaction to confirm" : undefined}
         >
           Move in
         </button>
