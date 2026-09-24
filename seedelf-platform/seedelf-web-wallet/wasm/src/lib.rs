@@ -20,7 +20,7 @@ use wasm_bindgen::prelude::*;
 pub mod api {
     use std::collections::HashMap;
 
-    use anyhow::{Context, Result, anyhow, bail};
+    use anyhow::{Result, anyhow, bail};
     use blstrs::Scalar;
     use ff::Field;
     use seedelf_core::address::wallet_contract;
@@ -115,6 +115,9 @@ pub mod api {
         pub inputs: usize,
     }
 
+    /// All the ADA there will ever be, in lovelace: 45 billion ADA.
+    pub const MAX_SUPPLY_LOVELACE: u64 = 45_000_000_000_000_000;
+
     fn role_of(role: u32) -> Result<Role> {
         match role {
             0 => Ok(Role::Receive),
@@ -161,7 +164,13 @@ pub mod api {
 
         let amount = match &request.lovelace {
             Some(l) => {
-                MoveInAmount::Lovelace(l.parse().context("lovelace must be a whole number")?)
+                let lovelace: u64 = l.parse().map_err(|_| {
+                    anyhow!("the amount must be a whole number of lovelace, got {l:?}")
+                })?;
+                if lovelace > MAX_SUPPLY_LOVELACE {
+                    bail!("the amount is more than all the ADA there is (45 billion)");
+                }
+                MoveInAmount::Lovelace(lovelace)
             }
             None => MoveInAmount::Max,
         };

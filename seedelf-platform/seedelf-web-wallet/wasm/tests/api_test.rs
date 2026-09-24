@@ -206,6 +206,23 @@ mod move_in {
             "{err}"
         );
 
+        for (amount, reason) in [
+            ("45000000000000001", "more than all the ADA there is"),
+            (
+                "99999999999999999999999999999999999999999",
+                "whole number of lovelace",
+            ),
+            ("12.5", "whole number of lovelace"),
+        ] {
+            let err = api::move_in(
+                &account,
+                random_scalar(),
+                request(account_utxos(&account), Some(amount), vec![]),
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains(reason), "{amount}: {err}");
+        }
+
         let mut staking = account_utxos(&account);
         staking[0].role = 2;
         let err =

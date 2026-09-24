@@ -29,7 +29,9 @@ export function MoveIn({
 
   const lovelace = max ? null : parseAda(amount);
   const round = typeof lovelace === "string" && BigInt(lovelace) % 1_000_000n === 0n;
-  const ready = max || (typeof lovelace === "string" && lovelace !== "0");
+  // The builder decides exactly (fee, change, collateral UTxOs); this catches the obvious case early.
+  const tooMuch = typeof lovelace === "string" && BigInt(lovelace) > BigInt(cardano.lovelace);
+  const ready = max || (typeof lovelace === "string" && lovelace !== "0" && !tooMuch);
   const tokens: TokenRef[] = cardano.tokens.filter((t) => picked.has(key(t)));
 
   async function review(e: FormEvent) {
@@ -114,6 +116,11 @@ export function MoveIn({
           Max
         </button>
       </AdaInput>
+      {tooMuch && (
+        <p className="field-note" data-testid="move-in-too-much">
+          That's more than the {formatAda(cardano.lovelace)} ₳ in your Cardano account.
+        </p>
+      )}
       {max ? (
         <p className="note">Everything except the fee and what the tokens you keep need. UTxOs of exactly 5 ₳ stay put: another wallet may use them as collateral.</p>
       ) : (

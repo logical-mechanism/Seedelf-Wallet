@@ -373,6 +373,14 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
   await expect(page.getByTestId("move-in-amount-note")).toContainText("Enter an amount in ADA");
 
+  // No more than all the ADA there is; no more than the account holds.
+  await page.getByLabel("Amount").fill("99999999999999999999999999999999999999999");
+  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await expect(page.getByTestId("move-in-amount-note")).toContainText("45 billion");
+  await page.getByLabel("Amount").fill("20000");
+  await expect(page.getByTestId("move-in-too-much")).toContainText("That's more than the 10,350.538725 ₳");
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+
   // A non-round amount gets the privacy nudge; a round one doesn't.
   await page.getByLabel("Amount").fill("25.5");
   await expect(page.getByTestId("move-in-amount-note")).toHaveCount(0);
@@ -416,7 +424,8 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await page.getByRole("button", { name: "Move in" }).click();
 
-  await page.getByLabel("Amount").fill("99999999");
+  // Just under the balance: the UI allows it, but the fee doesn't fit, and the builder says so.
+  await page.getByLabel("Amount").fill("10350.5");
   await page.getByRole("button", { name: "Review" }).click();
   await expect(page.getByRole("alert")).toContainText("Not enough ADA");
 

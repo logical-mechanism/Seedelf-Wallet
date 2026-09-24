@@ -73,3 +73,16 @@ describe("sanitizeAda", () => {
     }
   });
 });
+
+describe("sanitizeAda: supply", () => {
+  it("refuses more than the 45 billion ADA that exist", async () => {
+    const { sanitizeAda, MAX_SUPPLY_LOVELACE } = await import("../src/ui/format");
+    expect(MAX_SUPPLY_LOVELACE).toBe(45_000_000_000n * 1_000_000n);
+    const refused = { value: "12", note: "That's more than all the ADA there is: 45 billion ₳." };
+    expect(sanitizeAda("12", "99999999999999999999999999999999999999999")).toEqual(refused);
+    expect(sanitizeAda("12", "45000000000.000001")).toEqual(refused);
+    expect(sanitizeAda("12", "45,000,000,001")).toEqual(refused);
+    expect(sanitizeAda("12", "45000000000")).toEqual({ value: "45000000000" });
+    expect(sanitizeAda("12", "44999999999.9999999")).toMatchObject({ value: "44999999999.999999" });
+  });
+});

@@ -64,11 +64,15 @@ export function explorerUrl(network: "preprod" | "mainnet", txHash: string): str
   return `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/transaction/${txHash}`;
 }
 
+/** All the ADA there will ever be: 45 billion ₳, in lovelace. */
+export const MAX_SUPPLY_LOVELACE = 45_000_000_000_000_000n;
+
 /**
  * Cleans what the user typed or pasted into an ADA amount field. ADA has 6
  * decimal places (1 lovelace = 0.000001 ₳), so extra digits are dropped, not
- * rounded: the amount never grows. Anything that isn't a number keeps the
- * previous value. `note` says what was changed or refused.
+ * rounded: the amount never grows. Anything that isn't a number, or is more
+ * than all the ADA in existence, keeps the previous value. `note` says what
+ * was changed or refused.
  */
 export function sanitizeAda(previous: string, typed: string): { value: string; note?: string } {
   let text = typed.trim();
@@ -79,11 +83,14 @@ export function sanitizeAda(previous: string, typed: string): { value: string; n
     return { value: previous, note: "Enter an amount in ADA, like 25 or 12.5." };
   }
   const decimals = match[2];
+  let value = text;
+  let note: string | undefined;
   if (decimals !== undefined && decimals.length > 6) {
-    return {
-      value: `${match[1]}.${decimals.slice(0, 6)}`,
-      note: "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.",
-    };
+    value = `${match[1]}.${decimals.slice(0, 6)}`;
+    note = "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.";
   }
-  return { value: text };
+  if (BigInt(parseAda(value) ?? "0") > MAX_SUPPLY_LOVELACE) {
+    return { value: previous, note: "That's more than all the ADA there is: 45 billion ₳." };
+  }
+  return note ? { value, note } : { value };
 }
