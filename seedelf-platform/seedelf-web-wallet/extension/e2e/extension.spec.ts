@@ -255,7 +255,7 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await expect(page.getByText("4 addresses used")).toBeVisible();
   await expect(page.getByTestId("cardano-tokens")).toContainText("LINK");
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
-  expect(koios.calls.sort()).toEqual(["account_addresses", "account_utxos", "credential_utxos"]);
+  expect(koios.calls.sort()).toEqual(["account_addresses", "credential_utxos", "credential_utxos"]);
 
   await snap(page, "home-cardano");
 
@@ -732,7 +732,7 @@ test("send from the Cardano account: a token with only the ADA it needs, review,
   expect(koios.collateralAsked).toBe(0);
   await expect(page.getByRole("button", { name: "Send from the Cardano account" })).toBeDisabled();
   // Reading $bob once as typed; each review read it again, and the account; then the submit.
-  const review1 = ["asset_nft_address", "account_addresses", "account_utxos", "epoch_params"];
+  const review1 = ["asset_nft_address", "account_addresses", "credential_utxos", "epoch_params"];
   const sent = koios.calls.slice(reads, koios.calls.indexOf("submittx") + 1);
   expect(sent.sort()).toEqual(["asset_nft_address", ...review1, ...review1, "submittx"].sort());
 

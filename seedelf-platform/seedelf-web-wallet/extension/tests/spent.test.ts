@@ -34,7 +34,11 @@ describe("spent UTxOs", () => {
     const spent = txInputs(t.koios.submitted[0]!);
     return { t, before, spent };
   }
-  const reads = (t: ReturnType<typeof testBalances>) => t.koios.calls.filter((c) => c.path === "account_utxos").length;
+  /** Reads of the account's UTxOs (by its payment keys, not the contract's). */
+  const reads = (t: ReturnType<typeof testBalances>) =>
+    t.koios.calls.filter(
+      (c) => c.path === "credential_utxos" && !c.body._payment_credentials.includes(koiosPreprod.wallet_contract),
+    ).length;
   const accountUtxos = koiosPreprod.accounts[v.preprod.stake]!.account_utxos;
   const valueOf = (outpoints: string[]) =>
     accountUtxos.filter((u) => outpoints.includes(`${u.tx_hash}#${u.tx_index}`)).reduce((n, u) => n + BigInt(u.value), 0n);

@@ -60,6 +60,7 @@ mod move_in {
     use pallas_traverse::MultiEraTx;
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::schnorr::random_scalar;
+    use seedelf_koios::koios::UtxoResponse;
     use seedelf_wasm::api::{self, MoveInRequest, PathedUtxo, SendRequest, TokenAmount};
     use serde_json::Value;
 
@@ -206,7 +207,8 @@ mod move_in {
         )
         .unwrap_err();
         assert!(
-            err.to_string().contains("is not at the account's address"),
+            err.to_string()
+                .contains("is not under the account's payment key"),
             "{err}"
         );
 
@@ -233,6 +235,97 @@ mod move_in {
             api::move_in(&account, random_scalar(), request(staking, None, vec![])).unwrap_err();
         assert!(
             err.to_string().contains("receive (0) or change (1)"),
+            "{err}"
+        );
+    }
+
+    /// A UTxO under the account's receive key 0, with `delegation` as its
+    /// staking part: an enterprise address (none), or someone else's stake key.
+    fn stray(
+        account: &CardanoAccount,
+        n: u8,
+        payment: pallas_addresses::ShelleyPaymentPart,
+        delegation: pallas_addresses::ShelleyDelegationPart,
+        lovelace: u64,
+    ) -> PathedUtxo {
+        let address = pallas_addresses::ShelleyAddress::new(
+            pallas_addresses::Network::Testnet,
+            payment,
+            delegation,
+        );
+        PathedUtxo {
+            utxo: UtxoResponse {
+                tx_hash: hex::encode([n; 32]),
+                tx_index: 0,
+                address: pallas_addresses::Address::Shelley(address)
+                    .to_bech32()
+                    .unwrap(),
+                value: lovelace.to_string(),
+                payment_cred: hex::encode(account.key_hash(Role::Receive, 0).unwrap()),
+                asset_list: Some(vec![]),
+                ..Default::default()
+            },
+            role: 0,
+            index: 0,
+        }
+    }
+
+    #[test]
+    fn spends_the_payment_keys_money_whatever_its_staking_part() {
+        use pallas_addresses::{ShelleyDelegationPart, ShelleyPaymentPart};
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let key = account.key_hash(Role::Receive, 0).unwrap();
+        let theirs = CardanoAccount::from_phrase(PHRASE, 1)
+            .unwrap()
+            .key_hash(Role::Staking, 0)
+            .unwrap();
+        let enterprise = stray(
+            &account,
+            0xe1,
+            ShelleyPaymentPart::Key(key),
+            ShelleyDelegationPart::Null,
+            40_000_000,
+        );
+        let franken = stray(
+            &account,
+            0xf1,
+            ShelleyPaymentPart::Key(key),
+            ShelleyDelegationPart::Key(theirs),
+            30_000_000,
+        );
+
+        // Both are ours: Max spends them, signed by receive key 0 alone.
+        let result = api::move_in(
+            &account,
+            random_scalar(),
+            request(vec![enterprise, franken], None, vec![]),
+        )
+        .unwrap();
+        assert_eq!(result.inputs, 2);
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        let witnesses = tx.vkey_witnesses();
+        assert_eq!(witnesses.len(), 1);
+        let vkey: [u8; 32] = witnesses[0].vkey.to_vec().try_into().unwrap();
+        assert_eq!(pallas_crypto::hash::Hasher::<224>::hash(&vkey), key);
+
+        // A script whose hash happens to be our key's is not ours to sign for.
+        let script = stray(
+            &account,
+            0x5c,
+            ShelleyPaymentPart::Script(key),
+            ShelleyDelegationPart::Null,
+            40_000_000,
+        );
+        let err = api::move_in(
+            &account,
+            random_scalar(),
+            request(vec![script], None, vec![]),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("is not under the account's payment key"),
             "{err}"
         );
     }
@@ -467,7 +560,8 @@ mod move_in {
         let e = api::account_send(&account, send(moved, &theirs(), Some("2000000"), vec![]))
             .unwrap_err();
         assert!(
-            e.to_string().contains("is not at the account's address"),
+            e.to_string()
+                .contains("is not under the account's payment key"),
             "{e}"
         );
         let e = api::account_send(
@@ -907,7 +1001,7 @@ mod account_mint {
                 sk,
                 request(moved, "", None)
             ))
-            .contains("is not at the account's address")
+            .contains("is not under the account's payment key")
         );
         assert!(
             err(api::draft_account_mint(

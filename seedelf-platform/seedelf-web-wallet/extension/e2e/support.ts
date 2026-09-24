@@ -141,14 +141,19 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
     // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
     const after = Number(/gt\.(\d+)/.exec(new URL(request.url()).searchParams.get("block_height") ?? "")?.[1] ?? -1);
+    // credential_utxos: the wallet contract's, or the accounts' by payment key.
+    const credentials: string[] = body?._payment_credentials ?? [];
+    const byKey = Object.values(koiosPreprod.accounts as Record<string, { account_utxos: Array<{ payment_cred: string }> }>)
+      .flatMap((a) => a.account_utxos)
+      .filter((u) => credentials.includes(u.payment_cred));
     const rows =
       path === "credential_utxos"
-        ? [...koiosPreprod.contract_utxos, ...ownedUtxos].filter((u) => (u.block_height ?? 0) > after)
+        ? credentials.includes(koiosPreprod.wallet_contract)
+          ? [...koiosPreprod.contract_utxos, ...ownedUtxos].filter((u) => (u.block_height ?? 0) > after)
+          : byKey
         : path === "account_addresses"
           ? (account?.account_addresses ?? [])
-          : path === "account_utxos"
-            ? (account?.account_utxos ?? [])
-            : null;
+          : null;
     if (!rows) return route.fulfill({ status: 404, body: "" });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
   });

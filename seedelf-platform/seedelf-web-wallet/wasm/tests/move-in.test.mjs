@@ -95,7 +95,7 @@ test("explains a bad request", () => {
   );
   assert.throws(
     () => buildMoveIn(account, key, JSON.stringify({ network: "mainnet", params, utxos, lovelace: "5000000", tokens: [] })),
-    /not at the account's address/,
+    /not under the account's payment key/,
   );
   account.free();
   key.free();

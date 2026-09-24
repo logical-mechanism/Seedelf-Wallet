@@ -57,6 +57,12 @@ const PAGE_SIZE = 1000;
 const RETRY_DELAYS_MS = [1000, 3000];
 const TIMEOUT_MS = 20_000;
 
+/**
+ * Payment credentials in one `credential_utxos` request. Koios's public tier
+ * refuses bodies over 5,120 bytes; 75 hex key hashes are about 4.5 KB.
+ */
+export const CREDENTIALS_PER_REQUEST = 75;
+
 export class KoiosError extends Error {}
 
 /** The network refused a transaction because an input it spends is already spent. */
@@ -87,11 +93,17 @@ export class Koios {
 
   /**
    * Every UTxO whose payment credential is one of `credentials` (key or
-   * script hashes, hex); with `after`, only those in blocks after it.
+   * script hashes, hex); with `after`, only those in blocks after it. At most
+   * `CREDENTIALS_PER_REQUEST` go in a request.
    */
-  credentialUtxos(credentials: string[], after?: number): Promise<KoiosUtxo[]> {
-    const body = { _payment_credentials: credentials, _extended: true };
-    return this.paged("credential_utxos", body, after === undefined ? "" : `block_height=gt.${after}`);
+  async credentialUtxos(credentials: string[], after?: number): Promise<KoiosUtxo[]> {
+    const filter = after === undefined ? "" : `block_height=gt.${after}`;
+    const rows: KoiosUtxo[] = [];
+    for (let i = 0; i < credentials.length; i += CREDENTIALS_PER_REQUEST) {
+      const body = { _payment_credentials: credentials.slice(i, i + CREDENTIALS_PER_REQUEST), _extended: true };
+      rows.push(...(await this.paged<KoiosUtxo>("credential_utxos", body, filter)));
+    }
+    return rows;
   }
 
   /** Every address that has used this stake key, including ones now empty. */
@@ -101,11 +113,6 @@ export class Koios {
       _empty: true,
     });
     return rows[0]?.addresses ?? [];
-  }
-
-  /** Every UTxO at an address with this stake key. Anyone can build such an address, so filter by payment key. */
-  accountUtxos(stakeAddress: string): Promise<KoiosUtxo[]> {
-    return this.paged("account_utxos", { _stake_addresses: [stakeAddress], _extended: true });
   }
 
   /**

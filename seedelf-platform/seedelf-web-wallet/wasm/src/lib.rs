@@ -25,7 +25,9 @@ pub mod api {
     use cryptoxide::hkdf::{hkdf_expand, hkdf_extract};
     use cryptoxide::sha2::Sha256;
     use ff::Field;
-    use pallas_addresses::{Address, ShelleyDelegationPart};
+    use pallas_addresses::{
+        Address, Network as AddressNetwork, ShelleyDelegationPart, ShelleyPaymentPart,
+    };
     use pallas_crypto::hash::{Hash, Hasher};
     use pallas_crypto::key::ed25519::{PublicKey, SecretKey, Signature};
     use pallas_txbuilder::BuiltTransaction;
@@ -214,9 +216,29 @@ pub mod api {
         Ok((AccountAmount::Lovelace(asked.max(minimum)), Some(minimum)))
     }
 
-    /// Where each of the account's UTxOs sits: its key's path. Every UTxO
-    /// must be at the address its `role/index` derives.
+    /// Which key signs for each of the account's UTxOs: its path. Every UTxO
+    /// must be under the payment key its `role/index` derives, on this
+    /// network, whatever its staking part: a base address, an enterprise
+    /// address (none), or our key with someone else's stake key. It's our
+    /// money either way.
     type Paths = HashMap<(String, u64), (Role, u32)>;
+
+    /// The payment key hash of a Shelley address on this network; `None`
+    /// for a script, a Byron address, or the other network.
+    fn payment_key_of(address: &str, network_flag: bool) -> Option<pallas_crypto::hash::Hash<28>> {
+        let Ok(Address::Shelley(shelley)) = Address::from_bech32(address) else {
+            return None;
+        };
+        let network = if network_flag {
+            AddressNetwork::Testnet
+        } else {
+            AddressNetwork::Mainnet
+        };
+        match shelley.payment() {
+            ShelleyPaymentPart::Key(hash) if shelley.network() == network => Some(*hash),
+            _ => None,
+        }
+    }
 
     fn check_paths(
         account: &CardanoAccount,
@@ -226,13 +248,10 @@ pub mod api {
         let mut paths = Paths::new();
         for p in utxos {
             let role = role_of(p.role)?;
-            let expected = account
-                .base_address(network_flag, role, p.index)?
-                .to_bech32()
-                .map_err(|e| anyhow!("failed to encode an address: {e}"))?;
-            if p.utxo.address != expected {
+            let expected = account.key_hash(role, p.index)?;
+            if payment_key_of(&p.utxo.address, network_flag) != Some(expected) {
                 bail!(
-                    "UTxO {}#{} is not at the account's address {}/{}",
+                    "UTxO {}#{} is not under the account's payment key {}/{}",
                     p.utxo.tx_hash,
                     p.utxo.tx_index,
                     p.role,
@@ -1488,6 +1507,26 @@ impl WasmCardanoAccount {
     #[wasm_bindgen(js_name = isOwnAddress)]
     pub fn is_own_address(&self, address: &str) -> Result<bool, JsError> {
         api::is_own_address(&self.inner, address).map_err(js_error)
+    }
+
+    /// The payment key hash at `role/index` (0 receive, 1 change), hex: the
+    /// payment credential of every address made from that key, whatever its
+    /// staking part. Koios is asked for the UTxOs under these.
+    #[wasm_bindgen(js_name = paymentKeyHash)]
+    pub fn payment_key_hash(&self, role: u32, index: u32) -> Result<String, JsError> {
+        let role = match role {
+            0 => cardano::Role::Receive,
+            1 => cardano::Role::Change,
+            _ => {
+                return Err(JsError::new(
+                    "a payment key is on the receive (0) or change (1) chain",
+                ));
+            }
+        };
+        self.inner
+            .key_hash(role, index)
+            .map(hex::encode)
+            .map_err(js_error)
     }
 
     /// The account's reward (stake) address.

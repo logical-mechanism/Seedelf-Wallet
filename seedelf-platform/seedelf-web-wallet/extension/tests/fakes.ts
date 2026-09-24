@@ -136,6 +136,8 @@ export interface FakeKoios {
   spent: Set<string>;
   /** More wallet-contract UTxOs, as if added on chain since the fixtures were recorded. */
   added: KoiosUtxo[];
+  /** More UTxOs under account payment keys: at an enterprise address, say. */
+  addedToAccounts: KoiosUtxo[];
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -153,6 +155,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     nfts: new Map(),
     spent: new Set(),
     added: [],
+    addedToAccounts: [],
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -179,8 +182,13 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
       } else if (path === "tx_status") {
         rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: fake.confirmations }));
       } else if (path === "credential_utxos") {
-        const all = [...koiosPreprod.contract_utxos, ...(owned ? ownedUtxos : []), ...fake.added];
-        rows = body._payment_credentials.includes(koiosPreprod.wallet_contract) ? all : [];
+        // The wallet contract's, or the accounts' by payment key, whatever their staking part.
+        const credentials: string[] = body._payment_credentials;
+        const contract = [...koiosPreprod.contract_utxos, ...(owned ? ownedUtxos : []), ...fake.added];
+        const accounts = [...Object.values(koiosPreprod.accounts).flatMap((a) => a.account_utxos), ...fake.addedToAccounts];
+        rows = credentials.includes(koiosPreprod.wallet_contract)
+          ? contract
+          : accounts.filter((u) => u.payment_cred && credentials.includes(u.payment_cred));
         // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
         const after = /^gt\.(\d+)$/.exec(searchParams.get("block_height") ?? "");
         if (after) rows = (rows as KoiosUtxo[]).filter((u) => (u.block_height ?? 0) > Number(after[1]));

@@ -21,7 +21,7 @@ async function unlocked() {
 /** The block filter of each contract read: null for a full one. */
 const reads = (t: Awaited<ReturnType<typeof unlocked>>) =>
   t.koios.calls
-    .filter((c) => c.path === "credential_utxos")
+    .filter((c) => c.path === "credential_utxos" && c.body._payment_credentials.includes(koiosPreprod.wallet_contract))
     .map((c) => new URLSearchParams(c.query).get("block_height"));
 
 describe("the contract scan", () => {
