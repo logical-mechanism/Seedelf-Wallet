@@ -62,8 +62,10 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The fee is 273,922 for two inputs, and 233,912 for one input with ADA only.
     - giveme.my refused, as for the synthetic mint.
   - **Tests:** core `mint_test` 20 (5 new: a fresh copy of the recipient's register, budgets on a shuffled answer, part of a token from the UTxOs holding it, several recipients including yourself, and the refusals, among them a real torsion point and the identity); the CLI's offline tests 11; `seedelf-wasm` native 15 and Node 26; Vitest 100 (+1 live); Playwright 16. The transfer e2e test stops at Send, as the stealth mint's does.
-  - **Not done:** a live transfer. From a funded Seedelf balance, send to another seedelf by hand, then record the tx hash here.
-    - The public 12-word phrase's Seedelf balance still holds chunk 8's mint change: 22.994294 ₳, checked live today. It can pay "This is a test." (`5eed0e1f5468…8e0d63`, someone else's). `TAK1` and `TAK2` are that phrase's own seedelfs, so paying either is the flagged pay-yourself case.
+  - **Live on preprod (2026-09-24, by the user):** the transfer [`22585835…fc8d9c`](https://preprod.cardanoscan.io/transaction/225858355a5bd56f55bb437330ebf312683dd912f961b211e7b5b23f92fc8d9c), from the public 12-word phrase to one of its own seedelfs (the flagged pay-yourself case). "Everything worked."
+    - It spent the phrase's one Seedelf UTxO, chunk 8's 22,994,294 change: 7,654,321 paid, and 15,106,061 back as change.
+    - Fee 233,912 for 916 bytes, exactly the one-input figure measured under Ogmios. The collateral return is 4,649,132 (5 ₳ − 3/2 × fee).
+    - Checked live afterwards: both new outputs are owned by the phrase, under valid, freshly re-randomized registers.
   - **Next:** chunk 10, withdraw (`sweep` and `remove`). Both are `ScriptSpend`s with other outputs: `sweep` pays an address, and `remove` burns a seedelf (`ScriptSpend::mint` with −1). Write `docs/plans/chunk-10-*.md` first.
 
 - **2026-09-24: chunk 8b done** (`web-wallet/mint-first`).
