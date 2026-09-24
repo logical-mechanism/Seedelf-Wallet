@@ -37,6 +37,7 @@ pub mod api {
     use seedelf_core::assets::{Asset, Assets};
     use seedelf_core::build::{self, AccountAmount, Budgets, Chain, Payee, Payment, ScriptSpend};
     use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
+    use seedelf_core::staking::{self, StakeAction, StakeKey, StakeState, Staking};
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::derivation;
     use seedelf_crypto::register::Register;
@@ -88,6 +89,9 @@ pub mod api {
         pub lovelace: Option<String>,
         /// Tokens to bring along, each with how much of it moves in.
         pub tokens: Vec<TokenAmount>,
+        /// The staking rewards to withdraw along with it: see [`withdrawing`].
+        #[serde(default)]
+        pub withdrawal: Option<String>,
     }
 
     #[derive(Deserialize, Clone)]
@@ -120,6 +124,8 @@ pub mod api {
         pub minimum: Option<String>,
         pub tokens: Vec<TokenAmount>,
         pub deposit_outputs: usize,
+        /// Staking rewards withdrawn to pay for it ("0" for none).
+        pub withdrawal: String,
         /// Back to the Cardano account's receive address `0/0`.
         pub change_lovelace: String,
         pub change_tokens: usize,
@@ -290,6 +296,47 @@ pub mod api {
         Ok(signed)
     }
 
+    /// The staking rewards withdrawn alongside an account payment: `rewards`
+    /// is the whole reward balance as a decimal string, which the extension
+    /// passes, fresh from Koios's `account_info`, only when the user spends
+    /// rewards and the account's vote is delegated (Conway refuses a
+    /// withdrawal otherwise). The ledger refuses any other amount.
+    fn withdrawing(
+        account: &CardanoAccount,
+        network_flag: bool,
+        rewards: Option<&str>,
+    ) -> Result<Staking> {
+        let Some(rewards) = rewards else {
+            return Ok(Staking::none());
+        };
+        let state = StakeState {
+            registered: true,
+            rewards: lovelace_of(rewards)?,
+            votes: true,
+            deposit: 0,
+        };
+        Staking::withdraw(&stake_key(account, network_flag)?, &state)
+    }
+
+    fn stake_key(account: &CardanoAccount, network_flag: bool) -> Result<StakeKey> {
+        StakeKey::new(&account.stake_address(network_flag)?)
+    }
+
+    /// Signs with the stake key (`2/0`) when `staking` does anything, inside
+    /// this module.
+    fn sign_staking(
+        tx: BuiltTransaction,
+        account: &CardanoAccount,
+        staking: &Staking,
+    ) -> Result<BuiltTransaction> {
+        if staking.is_empty() {
+            return Ok(tx);
+        }
+        let key = account.private_key(Role::Staking, 0)?;
+        tx.sign(key.to_ed25519_private_key())
+            .map_err(|e| anyhow!("failed to sign with the stake key: {e:?}"))
+    }
+
     /// Builds and signs a move-in: the Cardano account pays into the wallet
     /// contract under fresh re-randomizations of `sk`'s base register.
     /// Every UTxO must sit at the address its path derives; each spent one is
@@ -313,14 +360,16 @@ pub mod api {
         };
         let (amount, minimum) = account_amount(&params, payee, &request.lovelace, &request.tokens)?;
         let change = account.base_address(network_flag, Role::Receive, 0)?;
+        let rewards = withdrawing(account, network_flag, request.withdrawal.as_deref())?;
         let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
 
         let built = build::move_in(
-            &params, &available, amount, &picked, &owner, &wallet, &change,
+            &params, &available, amount, &picked, &owner, &wallet, &change, &rewards,
         )?;
 
         let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
         let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
+        let signed = sign_staking(signed, account, &rewards)?;
 
         Ok(MoveInResult {
             tx_cbor: hex::encode(&signed.tx_bytes.0),
@@ -330,6 +379,7 @@ pub mod api {
             minimum: minimum.map(|m| m.to_string()),
             tokens: built.tokens.items.iter().map(token_amount).collect(),
             deposit_outputs: built.outputs,
+            withdrawal: rewards.withdrawn().to_string(),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             inputs: built.inputs.len(),
@@ -352,6 +402,9 @@ pub mod api {
         pub lovelace: Option<String>,
         /// Tokens to send, each with how much of it goes.
         pub tokens: Vec<TokenAmount>,
+        /// The staking rewards to withdraw along with it: see [`withdrawing`].
+        #[serde(default)]
+        pub withdrawal: Option<String>,
     }
 
     /// A signed payment from the Cardano account, ready to submit, and what
@@ -370,6 +423,8 @@ pub mod api {
         /// The least the payment could carry; `null` for Max.
         pub minimum: Option<String>,
         pub tokens: Vec<TokenAmount>,
+        /// Staking rewards withdrawn to pay for it ("0" for none).
+        pub withdrawal: String,
         /// Back to the Cardano account's receive address `0/0`.
         pub change_lovelace: String,
         pub change_tokens: usize,
@@ -392,6 +447,7 @@ pub mod api {
             &request.tokens,
         )?;
         let change = account.base_address(network_flag, Role::Receive, 0)?;
+        let rewards = withdrawing(account, network_flag, request.withdrawal.as_deref())?;
         let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
 
         let built = build::account_send(
@@ -402,10 +458,12 @@ pub mod api {
             &to,
             network_flag,
             &change,
+            &rewards,
         )?;
 
         let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
         let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
+        let signed = sign_staking(signed, account, &rewards)?;
 
         Ok(SendResult {
             tx_cbor: hex::encode(&signed.tx_bytes.0),
@@ -416,6 +474,149 @@ pub mod api {
             lovelace: built.lovelace.to_string(),
             minimum: minimum.map(|m| m.to_string()),
             tokens: built.tokens.items.iter().map(token_amount).collect(),
+            withdrawal: rewards.withdrawn().to_string(),
+            change_lovelace: built.change_lovelace.to_string(),
+            change_tokens: built.change_tokens.items.len(),
+            inputs: built.inputs.len(),
+        })
+    }
+
+    /// A staking transaction from the Cardano account, as JSON from the
+    /// extension: the account's UTxOs (as for a move-in), what to do, and
+    /// where the stake key stands.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct StakingRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`: its `key_deposit` is what
+        /// registering pays.
+        pub params: serde_json::Value,
+        pub utxos: Vec<PathedUtxo>,
+        pub action: StakingAction,
+        /// Fresh from Koios's `account_info`.
+        pub state: StakeStateIn,
+    }
+
+    /// What to do with the stake key.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "kind", rename_all = "kebab-case")]
+    pub enum StakingAction {
+        /// Delegate to a pool (its ID, bech32 or hex), registering first when needed.
+        Delegate { pool: String },
+        /// Delegate the vote: a DRep's ID, `drep_always_abstain` or
+        /// `drep_always_no_confidence`; registering first when needed.
+        Vote { drep: String },
+        /// Withdraw the rewards.
+        Withdraw,
+        /// Withdraw the rewards, unregister, and get the deposit back.
+        Stop,
+    }
+
+    /// The stake key's standing as Koios's `account_info` gives it.
+    #[derive(Deserialize, Clone, Debug, Default)]
+    #[serde(rename_all = "camelCase")]
+    pub struct StakeStateIn {
+        pub registered: bool,
+        /// The deposit paid, in lovelace (a decimal string).
+        pub deposit: String,
+        /// The reward balance, in lovelace (a decimal string).
+        pub rewards: String,
+        /// The vote delegation (`delegated_drep`), or `null` for none.
+        pub drep: Option<String>,
+    }
+
+    /// A signed staking transaction, ready to submit, and what it does.
+    /// Amounts in lovelace.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct StakingResult {
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub action: StakingAction,
+        /// The pool delegated to, as `pool1…`; the vote, as Koios names it.
+        pub pool: Option<String>,
+        pub drep: Option<String>,
+        pub fee: String,
+        /// Locked by registering the key.
+        pub deposit: String,
+        /// Returned by unregistering it.
+        pub refund: String,
+        /// Rewards withdrawn.
+        pub withdrawal: String,
+        /// Back to the Cardano account's receive address `0/0`.
+        pub change_lovelace: String,
+        pub change_tokens: usize,
+        pub inputs: usize,
+    }
+
+    /// A stake pool's ID as `pool1…`, from bech32 or hex. Throws the reason
+    /// to show the user.
+    pub fn pool_id(id: &str) -> Result<String> {
+        Ok(staking::pool_id(&staking::parse_pool_id(id)?))
+    }
+
+    /// A vote delegation as Koios names it (CIP-129 for a DRep), from any
+    /// form [`staking::parse_drep`] reads. Throws the reason to show the user.
+    pub fn drep_id(id: &str) -> Result<String> {
+        Ok(staking::drep_id(&staking::parse_drep(id)?))
+    }
+
+    /// Builds and signs a staking transaction: `request.action`'s
+    /// certificates and withdrawal, paid for by the account's UTxOs, with
+    /// everything else back to `0/0`. Signed with the spent UTxOs' payment
+    /// keys and the stake key, inside this module.
+    pub fn stake(account: &CardanoAccount, request: StakingRequest) -> Result<StakingResult> {
+        let network_flag = network_flag(&request.network)?;
+        let params = ProtocolParameters::from_koios(&request.params)?;
+        let paths = check_paths(account, network_flag, &request.utxos)?;
+        let state = StakeState {
+            registered: request.state.registered,
+            deposit: lovelace_of(&request.state.deposit)?,
+            rewards: lovelace_of(&request.state.rewards)?,
+            votes: request.state.drep.is_some(),
+        };
+        let (action, pool, drep) = match &request.action {
+            StakingAction::Delegate { pool } => {
+                let hash = staking::parse_pool_id(pool)?;
+                (
+                    StakeAction::Delegate(hash),
+                    Some(staking::pool_id(&hash)),
+                    None,
+                )
+            }
+            StakingAction::Vote { drep } => {
+                let parsed = staking::parse_drep(drep)?;
+                let id = staking::drep_id(&parsed);
+                (StakeAction::Vote(parsed), None, Some(id))
+            }
+            StakingAction::Withdraw => (StakeAction::Withdraw, None, None),
+            StakingAction::Stop => (StakeAction::Stop, None, None),
+        };
+        let staking = Staking::of(
+            &stake_key(account, network_flag)?,
+            &action,
+            &state,
+            params.key_deposit,
+        )?;
+        let change = account.base_address(network_flag, Role::Receive, 0)?;
+        let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
+
+        let built = build::account_staking(&params, &available, &staking, &change)?;
+
+        let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
+        let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
+        let signed = sign_staking(signed, account, &staking)?;
+
+        Ok(StakingResult {
+            tx_cbor: hex::encode(&signed.tx_bytes.0),
+            tx_hash: hex::encode(signed.tx_hash.0),
+            action: request.action,
+            pool,
+            drep,
+            fee: built.fee.to_string(),
+            deposit: staking.deposit().to_string(),
+            refund: staking.refund().to_string(),
+            withdrawal: staking.withdrawn().to_string(),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             inputs: built.inputs.len(),
@@ -701,6 +902,9 @@ pub mod api {
         pub collateral: Option<PathedUtxo>,
         /// The personal tag; see [`check_label`].
         pub label: String,
+        /// The staking rewards to withdraw along with it: see [`withdrawing`].
+        #[serde(default)]
+        pub withdrawal: Option<String>,
         /// Ogmios's answer to evaluating the draft.
         pub evaluation: Option<serde_json::Value>,
     }
@@ -725,6 +929,8 @@ pub mod api {
         /// Locked with the seedelf.
         pub lovelace: String,
         pub fee: FeeOut,
+        /// Staking rewards withdrawn to pay for it ("0" for none).
+        pub withdrawal: String,
         /// Back to the Cardano account's receive address `0/0`.
         pub change_lovelace: String,
         pub change_tokens: usize,
@@ -744,7 +950,7 @@ pub mod api {
         account: &CardanoAccount,
         sk: Scalar,
         request: &AccountMintRequest,
-    ) -> Result<(build::AccountMint, Paths)> {
+    ) -> Result<(build::AccountMint, Paths, Staking)> {
         let chain = chain_of(&request.network, &request.params)?;
         check_label(&request.label)?;
         let mut paths = check_paths(account, chain.network_flag, &request.utxos)?;
@@ -759,6 +965,7 @@ pub mod api {
         let collateral = request.collateral.as_ref().map(|c| &c.utxo);
         let seedelf = Register::create(sk)?.rerandomize()?;
         let change = account.base_address(chain.network_flag, Role::Receive, 0)?;
+        let rewards = withdrawing(account, chain.network_flag, request.withdrawal.as_deref())?;
         let mint = build::account_mint(
             &chain,
             &available,
@@ -766,8 +973,9 @@ pub mod api {
             &request.label,
             &seedelf,
             &change,
+            &rewards,
         )?;
-        Ok((mint, paths))
+        Ok((mint, paths, rewards))
     }
 
     /// Creating a seedelf paid by the Cardano account, step 1: picks the
@@ -777,7 +985,7 @@ pub mod api {
         sk: Scalar,
         request: AccountMintRequest,
     ) -> Result<AccountMintDraft> {
-        let (mint, _) = account_mint_plan(account, sk, &request)?;
+        let (mint, _, _) = account_mint_plan(account, sk, &request)?;
         Ok(AccountMintDraft {
             draft_cbor: hex::encode(&mint.draft()?.tx_bytes.0),
             inputs: mint.inputs().iter().map(out_ref).collect(),
@@ -798,7 +1006,7 @@ pub mod api {
             .as_ref()
             .ok_or_else(|| anyhow!("finishing a mint needs Ogmios's evaluation"))?;
         let budgets = Budgets::from_ogmios(evaluation)?;
-        let (mint, paths) = account_mint_plan(account, sk, &request)?;
+        let (mint, paths, rewards) = account_mint_plan(account, sk, &request)?;
         let built = mint.finalize(&budgets)?;
         let spent: Vec<&UtxoResponse> = mint
             .inputs()
@@ -806,12 +1014,14 @@ pub mod api {
             .chain(std::iter::once(mint.collateral()))
             .collect();
         let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
+        let signed = sign_staking(signed, account, &rewards)?;
         Ok(AccountMintResult {
             tx_cbor: hex::encode(&signed.tx_bytes.0),
             tx_hash: hex::encode(signed.tx_hash.0),
             token_name: hex::encode(&mint.token_name),
             lovelace: mint.lovelace.to_string(),
             fee: fee_out(&built.fee),
+            withdrawal: rewards.withdrawn().to_string(),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
@@ -1637,6 +1847,34 @@ pub fn build_account_send(account: &WasmCardanoAccount, request: &str) -> Result
         .map_err(|e| JsError::new(&format!("bad send request: {e}")))?;
     let result = api::account_send(&account.inner, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Builds and signs a staking transaction from the Cardano account: delegate
+/// to a pool, delegate the vote, withdraw the rewards, or stop staking.
+/// `request` is JSON (see `api::StakingRequest`); the result is JSON
+/// (`api::StakingResult`). The payment keys and the stake key never leave
+/// WebAssembly.
+#[wasm_bindgen(js_name = buildStaking)]
+pub fn build_staking(account: &WasmCardanoAccount, request: &str) -> Result<String, JsError> {
+    let request: api::StakingRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad staking request: {e}")))?;
+    let result = api::stake(&account.inner, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A stake pool's ID as `pool1…`, from bech32 or hex. Throws the reason to
+/// show the user.
+#[wasm_bindgen(js_name = poolId)]
+pub fn pool_id(id: &str) -> Result<String, JsError> {
+    api::pool_id(id).map_err(js_error)
+}
+
+/// A vote delegation as Koios names it: a DRep's ID in CIP-129 form (from
+/// CIP-129 or CIP-105), `drep_always_abstain` or `drep_always_no_confidence`.
+/// Throws the reason to show the user.
+#[wasm_bindgen(js_name = drepId)]
+pub fn drep_id(id: &str) -> Result<String, JsError> {
+    api::drep_id(id).map_err(js_error)
 }
 
 /// Creating a seedelf, step 1: picks the Seedelf UTxOs that pay, proves them

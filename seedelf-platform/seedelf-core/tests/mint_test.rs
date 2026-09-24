@@ -18,6 +18,7 @@ use rand_core::OsRng;
 use seedelf_core::address::{collateral_address, wallet_contract};
 use seedelf_core::build::{self, Budget, Budgets, Chain, DRAFT_BUDGET, SeedelfMint, fake_signer};
 use seedelf_core::constants::{COLLATERAL_HASH, PREPROD_COLLATERAL_UTXO, get_config};
+use seedelf_core::staking::Staking;
 use seedelf_core::transaction::{
     computation_fee, seedelf_minimum_lovelace, wallet_minimum_lovelace_with_assets,
 };
@@ -1089,6 +1090,7 @@ mod account {
             "account-mint",
             &p.seedelf,
             &p.change,
+            &Staking::none(),
         )
         .unwrap();
         // The largest pure-ADA UTxO pays; the 5 ADA one isn't needed, so it's put up.
@@ -1122,6 +1124,7 @@ mod account {
                 "account-mint",
                 &p.seedelf,
                 &p.change,
+                &Staking::none(),
             )
             .unwrap();
             assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
@@ -1152,6 +1155,7 @@ mod account {
             "account-mint",
             &p.seedelf,
             &p.change,
+            &Staking::none(),
         )
         .unwrap();
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
@@ -1180,6 +1184,7 @@ mod account {
             "account-mint",
             &p.seedelf,
             &p.change,
+            &Staking::none(),
         )
         .unwrap();
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..2]));
@@ -1195,6 +1200,7 @@ mod account {
             "account-mint",
             &p.seedelf,
             &p.change,
+            &Staking::none(),
         )
         .unwrap();
         assert_eq!(mint.collateral().tx_hash, single[0].tx_hash);
@@ -1206,10 +1212,18 @@ mod account {
     fn explains_what_is_wrong() {
         let p = payer();
         let err = |available: &[UtxoResponse]| {
-            build::account_mint(&p.chain, available, None, "", &p.seedelf, &p.change)
-                .err()
-                .expect("an error")
-                .to_string()
+            build::account_mint(
+                &p.chain,
+                available,
+                None,
+                "",
+                &p.seedelf,
+                &p.change,
+                &Staking::none(),
+            )
+            .err()
+            .expect("an error")
+            .to_string()
         };
         assert!(
             err(&[at(&p, 0x70, 0, 1_500_000, &[])])
@@ -1225,6 +1239,7 @@ mod account {
             "",
             &p.seedelf,
             &p.change,
+            &Staking::none(),
         )
         .err()
         .unwrap();
@@ -1240,7 +1255,8 @@ mod account {
                 None,
                 "",
                 &bad,
-                &p.change
+                &p.change,
+                &Staking::none()
             )
             .err()
             .unwrap()
@@ -1254,6 +1270,7 @@ mod account {
             "",
             &p.seedelf,
             &p.change,
+            &Staking::none(),
         )
         .unwrap();
         let no_mint = json!({"result": [{"validator": {"index": 0, "purpose": "spend"}, "budget": {"memory": 1, "cpu": 1}}]});

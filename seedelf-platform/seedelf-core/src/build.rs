@@ -27,6 +27,7 @@ use crate::address::{collateral_address, is_not_a_script, is_on_correct_network,
 use crate::assets::{Asset, Assets};
 use crate::constants::{COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO};
 use crate::data_structures::{create_mint_redeemer, create_spend_redeemer};
+use crate::staking::Staking;
 use crate::transaction::{
     address_minimum_lovelace_with_assets, checked_lovelace, collateral_input, computation_fee,
     decode_tx_hash, reference_utxo, seedelf_minimum_lovelace, seedelf_token_name,
@@ -57,20 +58,27 @@ pub fn settle_fee(
     signers: usize,
     build: impl FnMut(u64) -> Result<StagingTransaction>,
 ) -> Result<(u64, StagingTransaction)> {
-    settle(signers, |size| linear_fee(params, size), build)
+    settle(
+        signers,
+        &Staking::none(),
+        |size| linear_fee(params, size),
+        build,
+    )
 }
 
 /// [`settle_fee`] with any pricing: `price(size)` is the fee a transaction of
-/// `size` signed bytes needs.
+/// `size` signed bytes needs. `staking` is patched into each draft before
+/// it's priced (see [`Staking::patch`]); `signers` doesn't count its stake key.
 fn settle(
     signers: usize,
+    staking: &Staking,
     price: impl Fn(u64) -> u64,
     mut build: impl FnMut(u64) -> Result<StagingTransaction>,
 ) -> Result<(u64, StagingTransaction)> {
     let mut fee: u64 = 200_000;
     for _ in 0..5 {
         let staged = build(fee)?;
-        let needed = price(signed_size(&staged, signers)?);
+        let needed = price(signed_size(&staged, signers, staking)?);
         if needed <= fee && fee - needed < 1_000 {
             return Ok((fee, staged));
         }
@@ -80,17 +88,23 @@ fn settle(
     bail!("The transaction fee did not settle")
 }
 
-fn signed_size(staged: &StagingTransaction, signers: usize) -> Result<u64> {
-    let mut built = staged
-        .clone()
-        .build_conway_raw()
-        .context("Failed To Build The Draft Transaction")?;
-    for _ in 0..signers.max(1) {
+fn signed_size(staged: &StagingTransaction, signers: usize, staking: &Staking) -> Result<u64> {
+    let mut built = built_with(staged.clone(), staking)?;
+    for _ in 0..signers.max(1) + staking.signers() {
         built = built
             .sign(fake_signer())
             .context("Failed To Sign The Draft Transaction")?;
     }
     Ok(built.tx_bytes.0.len() as u64)
+}
+
+/// Builds a staged transaction, then patches `staking` into it.
+fn built_with(staged: StagingTransaction, staking: &Staking) -> Result<BuiltTransaction> {
+    staking.patch(
+        staged
+            .build_conway_raw()
+            .context("Failed To Build The Transaction")?,
+    )
 }
 
 /// The transaction input for a Koios UTxO.
@@ -244,6 +258,10 @@ const MOVE_IN_SHORT: NotEnough =
 const SEND_SHORT: NotEnough =
     NotEnough("Not enough ADA in the Cardano account for this payment, its fee and the change");
 
+/// A staking transaction's inputs can't pay for it.
+const STAKE_SHORT: NotEnough =
+    NotEnough("Not enough ADA in the Cardano account for this, its fee and the change");
+
 /// An account-paid mint's inputs can't pay for it.
 const ACCOUNT_MINT_SHORT: NotEnough =
     NotEnough("Not enough ADA in the Cardano account for the seedelf, its fee and the change");
@@ -334,6 +352,9 @@ pub enum Payee<'a> {
     },
     /// A key address, in one output.
     Address(&'a Address),
+    /// No one: the transaction only does something with the stake key
+    /// (certificates, a withdrawal), and everything comes back as change.
+    Nobody,
 }
 
 impl Payee<'_> {
@@ -342,6 +363,7 @@ impl Payee<'_> {
         match self {
             Payee::Seedelf { .. } => minimum_deposit(params, tokens),
             Payee::Address(to) => minimum_address_payment(params, to, tokens),
+            Payee::Nobody => Ok(0),
         }
     }
 
@@ -356,13 +378,17 @@ impl Payee<'_> {
                 deposit_outputs(params, wallet_addr, owner, lovelace, tokens)
             }
             Payee::Address(to) => Ok(vec![pay_address(params, to, lovelace, tokens)?]),
+            Payee::Nobody if lovelace == 0 && tokens.items.is_empty() => Ok(Vec::new()),
+            Payee::Nobody => bail!("A transaction that pays no one pays nothing"),
         }
     }
 }
 
-/// A built payment from the Cardano account (a move-in or a send): the
-/// unsigned transaction and what it does.
+/// A built payment from the Cardano account (a move-in, a send, or a staking
+/// transaction): the unsigned transaction and what it does.
 pub struct AccountPayment {
+    /// With its staking patched in: needs the stake key's signature too when
+    /// there was any.
     pub tx: BuiltTransaction,
     /// The spent UTxOs, in input order; each needs its payment key's signature.
     pub inputs: Vec<UtxoResponse>,
@@ -390,6 +416,9 @@ pub struct AccountPayment {
 ///   token UTxOs, until the amount, the fee and valid change are covered.
 ///   Tokens that aren't picked go back with the change.
 /// - Change goes to `change_addr`. There is no change output when nothing is left.
+/// - `staking` rides along: a reward withdrawal adds to what pays
+///   ([`Staking::withdraw`]), and it's patched into the transaction.
+#[allow(clippy::too_many_arguments)]
 pub fn move_in(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
@@ -398,6 +427,7 @@ pub fn move_in(
     owner: &Register,
     wallet_addr: &Address,
     change_addr: &Address,
+    staking: &Staking,
 ) -> Result<AccountPayment> {
     let payee = Payee::Seedelf { owner, wallet_addr };
     account_payment(
@@ -406,6 +436,7 @@ pub fn move_in(
         amount,
         picked,
         payee,
+        staking,
         change_addr,
         MOVE_IN_SHORT,
     )
@@ -413,7 +444,8 @@ pub fn move_in(
 
 /// Send: the Cardano account pays `to`, a key address on this network
 /// (`network_flag`: `true` is preprod), in one output. The UTxOs are chosen,
-/// and the change made, as for [`move_in`].
+/// the change made, and `staking` carried, as for [`move_in`].
+#[allow(clippy::too_many_arguments)]
 pub fn account_send(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
@@ -422,6 +454,7 @@ pub fn account_send(
     to: &Address,
     network_flag: bool,
     change_addr: &Address,
+    staking: &Staking,
 ) -> Result<AccountPayment> {
     check_payable(to, network_flag)?;
     let payee = Payee::Address(to);
@@ -431,17 +464,46 @@ pub fn account_send(
         amount,
         picked,
         payee,
+        staking,
         change_addr,
         SEND_SHORT,
     )
 }
 
+/// A staking transaction from the Cardano account: `staking`'s certificates
+/// and withdrawal, and nothing paid to anyone. The inputs pay the fee and any
+/// deposit, and everything else comes back to `change_addr`; UTxOs are
+/// chosen as for [`move_in`], as few as pay. A withdrawal or a refund counts
+/// towards the fee, but a transaction always spends at least one UTxO.
+pub fn account_staking(
+    params: &ProtocolParameters,
+    available: &[UtxoResponse],
+    staking: &Staking,
+    change_addr: &Address,
+) -> Result<AccountPayment> {
+    if staking.is_empty() {
+        bail!("A staking transaction needs a certificate or a withdrawal");
+    }
+    account_payment(
+        params,
+        available,
+        AccountAmount::Lovelace(0),
+        &[],
+        Payee::Nobody,
+        staking,
+        change_addr,
+        STAKE_SHORT,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn account_payment(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
     amount: AccountAmount,
     picked: &[(String, String, u64)],
     payee: Payee,
+    staking: &Staking,
     change_addr: &Address,
     short: NotEnough,
 ) -> Result<AccountPayment> {
@@ -483,7 +545,16 @@ fn account_payment(
     });
 
     let attempt = |selected: &[UtxoResponse]| {
-        build_account_payment(params, selected, amount, picked, payee, change_addr, short)
+        build_account_payment(
+            params,
+            selected,
+            amount,
+            picked,
+            payee,
+            staking,
+            change_addr,
+            short,
+        )
     };
 
     if amount == AccountAmount::Max {
@@ -513,16 +584,20 @@ fn account_payment(
     Err(last_error.unwrap_or_else(|| short.into()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_account_payment(
     params: &ProtocolParameters,
     selected: &[UtxoResponse],
     amount: AccountAmount,
     picked: &[(String, String, u64)],
     payee: Payee,
+    staking: &Staking,
     change_addr: &Address,
     short: NotEnough,
 ) -> Result<AccountPayment> {
-    let (total, all_tokens) = assets_of(selected.to_vec())?;
+    let (inputs_total, all_tokens) = assets_of(selected.to_vec())?;
+    // What pays: the inputs, plus rewards and a refund, less a deposit.
+    let total = staking.net(inputs_total).ok_or(short)?;
     // How much of each held token is paid (0 for tokens not picked).
     let asked = |a: &Asset| {
         let policy = hex::encode(a.policy_id);
@@ -565,7 +640,8 @@ fn build_account_payment(
     let mut paid = 0;
     let mut change = 0;
     let mut outputs = 0;
-    let (fee, staged) = settle_fee(params, signers, |fee| {
+    let price = |size| linear_fee(params, size);
+    let (fee, staged) = settle(signers, staking, price, |fee| {
         (paid, change) = match amount {
             AccountAmount::Lovelace(lovelace) => {
                 let change = total
@@ -598,9 +674,7 @@ fn build_account_payment(
     })?;
 
     Ok(AccountPayment {
-        tx: staged
-            .build_conway_raw()
-            .context("Failed To Build The Transaction")?,
+        tx: built_with(staged, staking)?,
         inputs: selected.to_vec(),
         fee,
         lovelace: paid,
@@ -1136,6 +1210,7 @@ impl ScriptSpend {
         // Two signatures: the one-time key and giveme.my's collateral key.
         let (fee, staged) = settle(
             2,
+            &Staking::none(),
             |size| even(linear_fee(&self.chain.params, size) + compute + script_reference),
             |fee| self.stage(fee, Some(budgets), redeemers),
         )?;
@@ -1761,6 +1836,8 @@ pub struct AccountMint {
     seedelf: Output,
     redeemer: Vec<u8>,
     change_addr: Address,
+    /// A reward withdrawal riding along, patched into every draft.
+    staking: Staking,
     /// The new token's name: prefix, label, and the smallest input.
     pub token_name: Vec<u8>,
     /// Locked with the token; only removing the seedelf gets it back.
@@ -1769,7 +1846,8 @@ pub struct AccountMint {
 
 /// A finished account-paid mint: the unsigned transaction and what it does.
 pub struct FinalAccountMint {
-    /// Needs a signature from each input's key and the collateral's.
+    /// Needs a signature from each input's key and the collateral's, and the
+    /// stake key's when a withdrawal rides along.
     pub tx: BuiltTransaction,
     pub fee: ScriptFee,
     /// Back to the Cardano account.
@@ -1794,9 +1872,7 @@ impl AccountMint {
     /// [`DRAFT_BUDGET`], and the fee is the estimate.
     pub fn draft(&self) -> Result<BuiltTransaction> {
         let fee = self.estimate()?.fee.total;
-        self.stage(fee, None)?
-            .build_conway_raw()
-            .context("Failed To Build The Draft Transaction")
+        built_with(self.stage(fee, None)?, &self.staking)
     }
 
     /// The unsigned transaction, with the policy's measured budget and the
@@ -1810,8 +1886,8 @@ impl AccountMint {
         self.settle(&Budgets::guess(0, 1))
     }
 
-    /// How many keys sign: each distinct payment key among the inputs and
-    /// the collateral.
+    /// How many payment keys sign: each distinct one among the inputs and
+    /// the collateral. (A withdrawal's stake key is counted by `settle`.)
     fn signers(&self) -> usize {
         self.inputs
             .iter()
@@ -1830,15 +1906,14 @@ impl AccountMint {
             self.chain.config.contract.seedelf_contract_size * REFERENCE_SCRIPT_FEE_PER_BYTE;
         let (fee, staged) = settle(
             self.signers(),
+            &self.staking,
             |size| even(linear_fee(&self.chain.params, size) + compute + script_reference),
             |fee| self.stage(fee, Some(budgets)),
         )?;
         let (change_lovelace, change_tokens) = self.change(fee)?;
         let change_outputs = staged.outputs.as_ref().map_or(0, Vec::len) - 1;
         Ok(FinalAccountMint {
-            tx: staged
-                .build_conway_raw()
-                .context("Failed To Build The Transaction")?,
+            tx: built_with(staged, &self.staking)?,
             fee: ScriptFee {
                 size: fee - compute - script_reference,
                 compute,
@@ -1851,11 +1926,14 @@ impl AccountMint {
         })
     }
 
-    /// Everything the inputs hold, less the seedelf's ADA and the fee.
+    /// Everything the inputs hold, and any rewards withdrawn, less the
+    /// seedelf's ADA and the fee.
     fn change(&self, fee: u64) -> Result<(u64, Assets)> {
-        let (total, tokens) = assets_of(self.inputs.clone())?;
-        let lovelace = total
-            .checked_sub(self.lovelace)
+        let (inputs, tokens) = assets_of(self.inputs.clone())?;
+        let lovelace = self
+            .staking
+            .net(inputs)
+            .and_then(|total| total.checked_sub(self.lovelace))
             .and_then(|rest| rest.checked_sub(fee))
             .ok_or(ACCOUNT_MINT_SHORT)?;
         Ok((lovelace, tokens))
@@ -1937,6 +2015,7 @@ impl AccountMint {
 ///   bytes; it sits in the contract under `seedelf`, used as given (pass a
 ///   fresh re-randomization). Tokens in the inputs go back with the change,
 ///   to `change_addr`.
+/// - `staking` rides along, as for [`move_in`]: a withdrawal of the rewards.
 pub fn account_mint(
     chain: &Chain,
     available: &[UtxoResponse],
@@ -1944,6 +2023,7 @@ pub fn account_mint(
     label: &str,
     seedelf: &Register,
     change_addr: &Address,
+    staking: &Staking,
 ) -> Result<AccountMint> {
     if !is_payable(seedelf) {
         bail!("The seedelf's register isn't made of valid points");
@@ -2000,6 +2080,7 @@ pub fn account_mint(
             seedelf: seedelf_output,
             redeemer: redeemer.clone(),
             change_addr: change_addr.clone(),
+            staking: staking.clone(),
             token_name,
             lovelace,
         };

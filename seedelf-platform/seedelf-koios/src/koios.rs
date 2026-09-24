@@ -826,6 +826,8 @@ pub struct ProtocolParameters {
     pub min_fee_a: u64,
     pub min_fee_b: u64,
     pub coins_per_utxo_size: u64,
+    /// What registering a stake key locks up, returned when it's unregistered.
+    pub key_deposit: u64,
     pub price_mem: f64,
     pub price_step: f64,
     pub cost_model_v3: Vec<i64>,
@@ -846,6 +848,7 @@ impl ProtocolParameters {
         let min_fee_a: u64 = lovelace("min_fee_a")?;
         let min_fee_b: u64 = lovelace("min_fee_b")?;
         let coins_per_utxo_size: u64 = lovelace("coins_per_utxo_size")?;
+        let key_deposit: u64 = lovelace("key_deposit")?;
         let price_mem: f64 = params["price_mem"]
             .as_f64()
             .ok_or_else(|| anyhow!("Missing price_mem"))?;
@@ -863,6 +866,7 @@ impl ProtocolParameters {
             min_fee_a,
             min_fee_b,
             coins_per_utxo_size,
+            key_deposit,
             price_mem,
             price_step,
             cost_model_v3,

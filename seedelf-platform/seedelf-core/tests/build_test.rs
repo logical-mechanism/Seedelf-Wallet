@@ -14,6 +14,7 @@ use seedelf_core::address::wallet_contract;
 use seedelf_core::assets::Assets;
 use seedelf_core::build::{self, AccountAmount, fake_signer, minimum_deposit};
 use seedelf_core::constants::get_config;
+use seedelf_core::staking::Staking;
 use seedelf_core::transaction::calculate_min_required_utxo;
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
@@ -281,6 +282,7 @@ fn moves_an_amount_from_pure_ada_first() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -312,6 +314,7 @@ fn adds_inputs_until_the_change_is_valid() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -342,6 +345,7 @@ fn picked_tokens_move_in_full_and_the_rest_come_back() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -397,6 +401,7 @@ fn part_of_a_token_moves_in_and_the_rest_comes_back() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -430,6 +435,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -468,6 +474,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_sound(&w, &pure, &all);
@@ -496,6 +503,7 @@ fn many_tokens_split_twenty_to_an_output() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -512,7 +520,14 @@ fn explains_what_is_wrong() {
     ];
     let err = |amount, picked: &[(String, String, u64)]| {
         build::move_in(
-            &w.params, &available, amount, picked, &w.owner, &w.wallet, &w.change,
+            &w.params,
+            &available,
+            amount,
+            picked,
+            &w.owner,
+            &w.wallet,
+            &w.change,
+            &Staking::none(),
         )
         .err()
         .map(|e| e.to_string())
@@ -555,6 +570,7 @@ fn explains_what_is_wrong() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .err()
     .unwrap();
@@ -602,6 +618,7 @@ fn sends_an_amount_and_part_of_a_token_to_an_address() {
         &to,
         true,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -641,6 +658,7 @@ fn send_max_pays_everything_but_the_fee_and_the_change_floor() {
         &to,
         true,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -670,6 +688,7 @@ fn send_refuses_what_would_lose_money() {
             to,
             true,
             &w.change,
+            &Staking::none(),
         )
         .err()
         .map(|e| e.to_string())
@@ -728,6 +747,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         &to,
         true,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &sent, Some(&to));
@@ -740,6 +760,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         &to,
         true,
         &w.change,
+        &Staking::none(),
     );
     assert!(short.is_err(), "a lovelace less is refused");
 
@@ -758,6 +779,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         &w.owner,
         &w.wallet,
         &w.change,
+        &Staking::none(),
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &moved);
