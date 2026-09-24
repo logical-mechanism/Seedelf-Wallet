@@ -1,68 +1,93 @@
-// The service-worker handlers with the real WebAssembly module, checked
-// against the same vectors as seedelf-crypto (Lace-verified Cardano
-// addresses, frozen Seedelf keys).
-import { readFileSync } from "node:fs";
-
-import * as wasm from "@seedelf/wasm";
-import { beforeAll, describe, expect, it } from "vitest";
+// The service-worker handlers with the real WebAssembly module and the
+// wallet over in-memory storage, checked against the same vectors as
+// seedelf-crypto (Lace-verified Cardano addresses, frozen Seedelf keys).
+import { describe, expect, it } from "vitest";
 
 import { handle, type Context } from "../src/background/handlers";
-import type { Preview, Status } from "../src/shared/rpc";
+import type { Account, Status, UnlockResult } from "../src/shared/rpc";
+import { isMessage } from "../src/shared/rpc";
+import { loadTestWasm, testWallet, vectors } from "./fakes";
 
-const vectors = (name: string) =>
-  JSON.parse(
-    readFileSync(new URL(`../../../seedelf-crypto/tests/vectors/${name}`, import.meta.url), "utf8"),
-  ).vectors as Array<Record<string, any>>;
+const PASSWORD = "correct horse battery";
 
-const context = (network: Context["network"] = "preprod"): Context => ({
-  wasm,
-  version: "0.1.0",
-  network,
-  networks: ["preprod"],
-});
-
-beforeAll(() => {
-  wasm.initSync({
-    module: readFileSync(new URL("../../wasm/pkg/seedelf_wasm_bg.wasm", import.meta.url)),
-  });
-});
+function context(): Context {
+  return {
+    wasm: loadTestWasm(),
+    wallet: testWallet().wallet,
+    version: "0.1.0",
+    network: "preprod",
+    networks: ["preprod"],
+  };
+}
 
 describe("handlers", () => {
   it("reports status", async () => {
-    const status = (await handle({ type: "status" }, context())) as Status;
-    expect(status).toEqual({ version: "0.1.0", network: "preprod", networks: ["preprod"] });
+    expect(await handle({ type: "status" }, context())).toEqual({
+      state: "no-wallet",
+      version: "0.1.0",
+      network: "preprod",
+      networks: ["preprod"],
+      retryAfterMs: 0,
+    } satisfies Status);
   });
 
-  it("derives Lace-matching addresses for a typed phrase", async () => {
-    for (const v of vectors("cardano_account.json").filter((v) => v.account === 0)) {
-      for (const network of ["preprod", "mainnet"] as const) {
-        const p = (await handle({ type: "preview", phrase: `  ${v.phrase}  ` }, context(network))) as Preview;
-        expect(p.generated).toBe(false);
-        expect(p.phrase).toBe(v.phrase);
-        expect(p.receiveAddress).toBe(v[network].receive_0);
-        expect(p.changeAddress).toBe(v[network].change_0);
-        expect(p.stakeAddress).toBe(v[network].stake);
-      }
-    }
+  it("generates 24-word phrases and serves the word list", async () => {
+    const ctx = context();
+    const { phrase } = (await handle({ type: "generate-phrase" }, ctx)) as { phrase: string };
+    expect(phrase.split(" ")).toHaveLength(24);
+    const words = (await handle({ type: "wordlist" }, ctx)) as string[];
+    expect(words).toHaveLength(2048);
+    expect(phrase.split(" ").every((w) => words.includes(w))).toBe(true);
   });
 
-  it("derives the frozen Seedelf key", async () => {
-    for (const v of vectors("seedelf_key_v1.json").filter((v) => v.account === 0)) {
-      const p = (await handle({ type: "preview", phrase: v.phrase }, context())) as Preview;
-      expect(p.seedelfPublicValue).toBe(v.public_value);
-    }
+  it("restores, locks and unlocks through the RPC", async () => {
+    const ctx = context();
+    const v = vectors("cardano_account.json").find((v) => v.account === 0)!;
+    const key = vectors("seedelf_key_v1.json").find((k) => k.phrase === v.phrase && k.account === 0)!;
+
+    const restored = (await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx)) as Status;
+    expect(restored.state).toBe("unlocked");
+    expect(await handle({ type: "account" }, ctx)).toEqual({
+      receiveAddress: v.preprod.receive_0,
+      stakeAddress: v.preprod.stake,
+      seedelfPublicValue: key.public_value,
+    } satisfies Account);
+    expect(await handle({ type: "activity" }, ctx)).toBeNull();
+
+    expect(((await handle({ type: "lock" }, ctx)) as Status).state).toBe("locked");
+    await expect(handle({ type: "account" }, ctx)).rejects.toThrow("locked");
+
+    const wrong = (await handle({ type: "unlock", password: "not the password" }, ctx)) as UnlockResult;
+    expect(wrong).toEqual({ unlocked: false, wrongPassword: true, retryAfterMs: 1000 });
+    const status = (await handle({ type: "status" }, ctx)) as Status;
+    expect(status.state).toBe("locked");
+    expect(status.retryAfterMs).toBeGreaterThan(0);
   });
 
-  it("generates a 24-word phrase when none is given", async () => {
-    const p = (await handle({ type: "preview" }, context())) as Preview;
-    expect(p.generated).toBe(true);
-    expect(p.phrase.split(" ")).toHaveLength(24);
-    expect(p.receiveAddress).toMatch(/^addr_test1q/);
-  });
-
-  it("rejects a bad phrase with a reason", async () => {
-    await expect(handle({ type: "preview", phrase: "abandon abandon" }, context())).rejects.toThrow(
-      /12, 15 or 24 words/,
+  it("creates a wallet and resets it", async () => {
+    const ctx = context();
+    const { phrase } = (await handle({ type: "generate-phrase" }, ctx)) as { phrase: string };
+    expect(((await handle({ type: "create-wallet", phrase, password: PASSWORD }, ctx)) as Status).state).toBe(
+      "unlocked",
     );
+    expect(((await handle({ type: "reset-wallet" }, ctx)) as Status).state).toBe("no-wallet");
+  });
+
+  it("validates typed phrases with the Rust core's reason", async () => {
+    const ctx = context();
+    const v = vectors("cardano_account.json")[0]!;
+    expect(await handle({ type: "validate-phrase", phrase: ` ${v.phrase.toUpperCase()} ` }, ctx)).toBeNull();
+    await expect(handle({ type: "validate-phrase", phrase: "abandon abandon" }, ctx)).rejects.toThrow(
+      "12, 15 or 24 words, got 2",
+    );
+    const swapped = v.phrase.split(" ").reverse().join(" ");
+    await expect(handle({ type: "validate-phrase", phrase: swapped }, ctx)).rejects.toThrow("checksum");
+  });
+
+  it("recognizes only known requests", () => {
+    expect(isMessage({ type: "unlock", password: "x" })).toBe(true);
+    expect(isMessage({ type: "preview" })).toBe(false);
+    expect(isMessage({ event: "state-changed" })).toBe(false);
+    expect(isMessage(null)).toBe(false);
   });
 });

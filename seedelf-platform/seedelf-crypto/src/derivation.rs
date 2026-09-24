@@ -71,6 +71,33 @@ pub fn parse_phrase(phrase: &str) -> Result<Mnemonic> {
     })
 }
 
+/// The BIP39 entropy of a recovery phrase: 16, 20 or 32 bytes for 12, 15 or
+/// 24 words. The phrase is checked and normalized as in [`parse_phrase`].
+/// The web wallet's vault stores this rather than the words.
+pub fn phrase_to_entropy(phrase: &str) -> Result<Vec<u8>> {
+    Ok(parse_phrase(phrase)?.to_entropy())
+}
+
+/// The recovery phrase for BIP39 entropy, the inverse of
+/// [`phrase_to_entropy`]. Only the entropy of a 12-, 15- or 24-word phrase
+/// (16, 20 or 32 bytes) is accepted.
+pub fn entropy_to_phrase(entropy: &[u8]) -> Result<String> {
+    // Every 4 bytes of entropy is 3 words.
+    let words = entropy.len() / 4 * 3;
+    if !entropy.len().is_multiple_of(4) || !RESTORE_PHRASE_WORDS.contains(&words) {
+        bail!(
+            "recovery phrase entropy is 16, 20 or 32 bytes, got {}",
+            entropy.len()
+        );
+    }
+    Ok(Mnemonic::from_entropy_in(Language::English, entropy)?.to_string())
+}
+
+/// The BIP39 English word list, for autocomplete while typing a phrase.
+pub fn wordlist() -> &'static [&'static str; 2048] {
+    Language::English.word_list()
+}
+
 /// The BIP39 seed of a mnemonic with an empty passphrase.
 pub fn bip39_seed(mnemonic: &Mnemonic) -> [u8; 64] {
     mnemonic.to_seed_normalized("")

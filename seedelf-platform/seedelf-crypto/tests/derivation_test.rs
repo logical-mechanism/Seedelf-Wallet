@@ -126,3 +126,73 @@ fn zero_okm_is_rejected_and_r_reduces_to_zero() {
         format!("{:064x}", 1)
     );
 }
+
+#[test]
+fn entropy_round_trips_on_every_vector() {
+    for v in vectors() {
+        let phrase = v["phrase"].as_str().unwrap();
+        let entropy = phrase_to_entropy(phrase).unwrap();
+        let words = phrase.split(' ').count();
+        assert_eq!(entropy.len(), words / 3 * 4, "{phrase}");
+        assert_eq!(entropy_to_phrase(&entropy).unwrap(), phrase);
+    }
+}
+
+#[test]
+fn entropy_matches_the_bip39_reference() {
+    // Trezor vector: 24 words from 0x7f repeated 32 times
+    let entropy = phrase_to_entropy(
+        "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+    )
+    .unwrap();
+    assert_eq!(entropy, vec![0x7f; 32]);
+    assert_eq!(
+        entropy_to_phrase(&[0u8; 32]).unwrap(),
+        ABANDON_ART,
+        "all-zero entropy is the abandon…art phrase"
+    );
+}
+
+#[test]
+fn entropy_is_taken_from_the_normalized_phrase() {
+    let messy = format!("  {}  ", ABANDON_ART.to_uppercase().replace(' ', "   \n"));
+    assert_eq!(phrase_to_entropy(&messy).unwrap(), vec![0u8; 32]);
+    assert!(
+        phrase_to_entropy("abandon abandon")
+            .unwrap_err()
+            .to_string()
+            .contains("12, 15 or 24 words")
+    );
+}
+
+#[test]
+fn entropy_lengths_follow_the_restore_policy() {
+    for len in [16, 20, 32] {
+        let phrase = entropy_to_phrase(&vec![0xa5; len]).unwrap();
+        assert_eq!(phrase.split(' ').count(), len / 4 * 3);
+        assert_eq!(phrase_to_entropy(&phrase).unwrap(), vec![0xa5; len]);
+    }
+    // 18 and 21 words are valid BIP39 but not accepted on restore
+    for len in [0, 15, 17, 24, 28, 33, 64] {
+        assert!(
+            entropy_to_phrase(&vec![0u8; len])
+                .unwrap_err()
+                .to_string()
+                .contains("16, 20 or 32 bytes"),
+            "{len} bytes"
+        );
+    }
+}
+
+#[test]
+fn wordlist_is_bip39_english() {
+    let list = wordlist();
+    assert_eq!(list.len(), 2048);
+    assert_eq!(list[0], "abandon");
+    assert_eq!(list[2047], "zoo");
+    assert!(list.windows(2).all(|w| w[0] < w[1]), "sorted");
+    // every word is unique in its first four letters, which autocomplete relies on
+    let prefixes: std::collections::BTreeSet<String> =
+        list.iter().map(|w| w.chars().take(4).collect()).collect();
+    assert_eq!(prefixes.len(), 2048);
+}

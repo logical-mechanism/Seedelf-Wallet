@@ -74,6 +74,7 @@ Every Lace path in these docs is relative to that checkout.
 - **Networks:** preprod first. Mainnet is a build flag. See [architecture.md](docs/architecture.md#networks).
 - **Seedelf key derivation:** domain-tagged HKDF over the BIP39 seed. It is permanent once shipped. See [keys-and-accounts.md](docs/keys-and-accounts.md#seedelf-key-derivation).
 - **UI:** a popup, plus a full-tab view of the same app, like Eternl. No side panel. See [architecture.md](docs/architecture.md#ui).
+- **Look:** the Seedelf logo set lives in [brand/](brand/). The UI's colours come from it.
 - **Staying unlocked:** Chrome stops the extension's background worker after about 30 seconds idle, which clears its memory.
   - The unlocked key is kept in `chrome.storage.session` (memory-only, cleared when the browser closes).
   - So the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every restart.

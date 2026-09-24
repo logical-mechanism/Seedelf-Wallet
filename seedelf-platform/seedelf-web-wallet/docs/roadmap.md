@@ -18,13 +18,13 @@ The wallet is built in **chunks**, each about one working session.
 | 2 | Seedelf key derivation | ✅ | Implement the v1 HKDF spec ([keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation)) in `seedelf-crypto` with frozen test vectors. Expose it through WASM and check the vectors from TS. |
 | 3 | Cardano keys | ✅ | Phrase → CIP-1852 Cardano account (account `0'`): receive, change and stake addresses, in Rust (`pallas-wallet`). Checked against Lace's library (`@cardano-sdk`). |
 | 4 | Extension scaffold | ✅ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
-| 5 | Vault and lock | ⬜ | SecretBox vault, create/restore onboarding, unlock, `chrome.storage.session`, auto-lock, unlock back-off. |
-| 6 | Balance | ⬜ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. |
+| 5 | Vault and lock | ✅ | SecretBox vault, create/restore onboarding (restore has per-word BIP39 autocomplete, like Lace and Eternl), unlock, `chrome.storage.session`, auto-lock, unlock back-off. Plan: [plans/chunk-05-vault-and-lock.md](plans/chunk-05-vault-and-lock.md). |
+| 6 | Balance | ⬜ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. Maybe a QR code for the receive address. |
 | 7 | Builder extraction + move in | ⬜ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ⬜ | Stealth mint (`util mint`) with giveme.my collateral. |
 | 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
 | 10 | Withdraw | ⬜ | `sweep` and `remove`. |
-| 11 | Polish and testers | ⬜ | UI style pass, Playwright end-to-end tests on preprod, unlisted Web Store listing. |
+| 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
 
 ## After v1
 
@@ -35,6 +35,35 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-23: chunk 5 done** (`web-wallet/vault-lock`).
+  - **Decided with the user:** auto-lock after 15 minutes; passwords of at least 12 characters with a strength hint and no composition rules; the receive-address QR code waits for chunk 6 or 11. It's for someone paying from a phone wallet who scans the desktop screen.
+  - **Rust / WASM:** `phrase_to_entropy`, `entropy_to_phrase` and `wordlist` in `seedelf-crypto::derivation`. The frozen v1 derivation is untouched.
+    - Exported as `phraseToEntropy`, `entropyToPhrase` and `bip39Wordlist`.
+    - Added beyond the plan: `SeedelfKey.fromEntropy` and `CardanoAccount.fromEntropy`, so unlock never turns the phrase into a JS string.
+  - **Vault:** Lace's SecretBox is in `extension/src/background/secret-box/` (Apache-2.0, license and change list in that folder, no EMIP-003). The entropy is sealed under `seedelf.vault`.
+    - Checked against vectors made independently in Python (`argon2-cffi`, `cryptography`): `extension/tests/vectors/secret_box_sbv1.json`.
+    - Unlock takes about 190 ms in the service worker, so pure-JS Argon2id stays.
+  - **State:** `extension/src/background/wallet.ts`, with the states `no-wallet`, `locked` and `unlocked`.
+    - Keys stay in worker memory, and the entropy sits in `chrome.storage.session`.
+    - Auto-lock uses `chrome.alarms` plus UI activity pings. The back-off is enforced in the worker and kept in `chrome.storage.local`.
+    - Operations run one at a time, so concurrent unlocks can't race the back-off.
+    - The worker broadcasts `state-changed`, so every open page follows a lock.
+  - **RPC:** the plan's table, plus `validate-phrase`, so restore can show the Rust core's reason before asking for a password. `status` also carries `retryAfterMs`.
+  - **UI:** Welcome, Create (reveal → confirm 3 words → password), Restore (per-word boxes, autocomplete, paste fills all), Unlock (countdown, forgot → reset → restore), and a Home placeholder.
+    - From the popup, onboarding opens in a full tab.
+    - The chunk-4 Wallet core check is gone.
+  - **Brand:** the user added the Seedelf logo set; the originals are in `brand/`.
+    - The emblem is the extension icon at 16, 32, 48 and 128 px. The wordmark is on Welcome, with a dark-mode variant whose navy lettering is lifted to near-white.
+    - The design tokens now use the logo's navy and teal, and the dark theme follows Lace's structure. The full Lace-style pass is still chunk 11.
+  - **Tests:**
+    - Rust: 5 new derivation tests and 1 new `seedelf-wasm` test. Node: `wasm/tests/entropy.test.mjs`.
+    - Vitest (37): SecretBox, the wallet state machine (including restart, browser restart, auto-lock and the back-off), the handlers, and the password rule.
+    - Playwright (8): create, restore by paste and by autocomplete, lock and unlock across pages, the back-off, reset, and a browser restart that comes back locked. It also times unlock.
+  - **Gotchas:**
+    - `chrome.runtime.sendMessage` from one page also reaches other open extension pages. The UI's listener ignores anything that isn't `state-changed` and never replies.
+    - A hash-only `page.goto` doesn't remount the app, so open a new page to test `#create` or `#restore`.
+  - **Next:** chunk 6, balances. The Koios client and contract scan go in the worker, using the unlocked `SeedelfKey` in `wallet.ts`. The Home screen is the placeholder to replace.
 
 - **2026-09-23: chunk 4 done** (`web-wallet/extension-scaffold`).
   - **What landed:** `extension/`, built with Vite 8 (Rolldown), React 19, TypeScript 7 and an MV3 manifest.

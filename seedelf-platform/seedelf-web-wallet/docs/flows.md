@@ -18,29 +18,42 @@ flowchart LR
 
 ## Onboarding
 
+Onboarding runs in a full tab. From the popup, **Create** and **Restore** open one, because a popup closes as soon as the user clicks elsewhere.
+
 - **Create:**
-  1. Generate a 24-word phrase.
-  2. Show it once.
-  3. Confirm a few of the words.
-  4. Set a password.
+  1. The worker generates a 24-word phrase.
+  2. The UI shows it once, blurred until the user presses **Reveal**, with the warnings below. There's no copy button.
+  3. The user types 3 randomly chosen words to confirm them.
+  4. The user sets a password, typed twice. Only now does the worker write the vault, so abandoning the flow leaves nothing behind.
 - **Restore:**
-  1. Enter the phrase (12, 15 or 24 words) and set a password.
-  2. Scan the wallet contract for owned registers.
-  3. Scan the Cardano account (account `0'`, receive and change addresses, gap limit 20).
-  4. Scan one-time accounts up to a gap limit.
-- **Phrase warning, shown during create:** "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
+  1. Choose 12, 15 or 24 words (24 by default), then enter the phrase: one box per word, with BIP39 autocomplete.
+     - Typing a prefix suggests matching words: arrow keys, Enter, Tab or a click take one, and focus moves to the next box. Space accepts a complete or unique word.
+     - A word that isn't on the list is flagged when its box loses focus.
+     - Pasting a whole phrase into any box fills all of them (and switches the word count if needed), then clears the clipboard.
+     - **Continue** asks the worker to validate the phrase, and shows the Rust core's reason if it's wrong, for example a bad checksum.
+  2. Set a password.
+  3. *(Chunk 6)* Scan the wallet contract for owned registers.
+  4. *(Chunk 6)* Scan the Cardano account (account `0'`, receive and change addresses, gap limit 20).
+  5. *(Later)* Scan one-time accounts up to a gap limit.
+- **Password:** at least 12 characters, no composition rules, with a strength hint.
+- **Phrase warnings, shown during create:**
+  - "Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website."
+  - "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
+- **Home** (a placeholder until chunk 6) shows the Cardano receive address and stake address, each with a copy button, and the Seedelf identity: the base register's public value, shortened.
 
 ## Lock and unlock
 
 - **Unlock:** opening the vault with the password derives every key.
-- **Lock** (manual, or after inactivity): wipe all secrets from memory.
-- **Failed unlocks:** exponential back-off.
+- **Lock:** the lock button in the top bar, or automatically after 15 minutes without activity (key presses and clicks in the wallet). Locking wipes all secrets from memory and session storage, and every open wallet page switches to the unlock screen.
+- **Closing the browser locks the wallet;** closing the popup doesn't.
+- **Failed unlocks:** exponential back-off (1 s, 2 s, 4 s … capped at 60 s), enforced by the worker. The unlock screen shows the countdown.
+- **Forgot password:** "Restore from your phrase" deletes the wallet from this browser after a typed confirmation (`delete wallet`), then goes straight to restore.
 
 See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 
 ## Receive (Cardano account)
 
-Show the receive address `0/0` and a QR code. Anything that can pay a Cardano address can fund the wallet. For a restored wallet, the funds already in the account show up here too.
+Show the receive address `0/0`, with a copy button (built in chunk 5). A QR code, so someone paying from a phone wallet can scan it, comes later (chunk 6 or 11). Anything that can pay a Cardano address can fund the wallet. For a restored wallet, the funds already in the account show up here too.
 
 ## Move in (Cardano account → Seedelf)
 
