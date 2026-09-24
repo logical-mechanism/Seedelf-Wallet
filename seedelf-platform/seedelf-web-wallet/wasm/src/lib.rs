@@ -83,7 +83,8 @@ pub mod api {
         pub utxos: Vec<PathedUtxo>,
         /// Lovelace as a decimal string; `null` moves the most possible.
         pub lovelace: Option<String>,
-        pub tokens: Vec<TokenRef>,
+        /// Tokens to bring along, each with how much of it moves in.
+        pub tokens: Vec<TokenAmount>,
     }
 
     #[derive(Deserialize)]
@@ -92,13 +93,6 @@ pub mod api {
         /// 0 = receive chain, 1 = change chain.
         pub role: u32,
         pub index: u32,
-    }
-
-    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
-    #[serde(rename_all = "camelCase")]
-    pub struct TokenRef {
-        pub policy_id: String,
-        pub asset_name: String,
     }
 
     /// A token and an amount: the raw quantity as a decimal string.
@@ -251,11 +245,17 @@ pub mod api {
             Some(l) => MoveInAmount::Lovelace(lovelace_of(l)?),
             None => MoveInAmount::Max,
         };
-        let picked: Vec<(String, String)> = request
+        let picked: Vec<(String, String, u64)> = request
             .tokens
             .iter()
-            .map(|t| (t.policy_id.clone(), t.asset_name.clone()))
-            .collect();
+            .map(|t| {
+                Ok((
+                    t.policy_id.clone(),
+                    t.asset_name.clone(),
+                    t.quantity.parse()?,
+                ))
+            })
+            .collect::<Result<_>>()?;
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
         let change = account.base_address(network_flag, Role::Receive, 0)?;

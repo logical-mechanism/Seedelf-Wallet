@@ -12,6 +12,7 @@ import { ExpandIcon, LockIcon } from "./components/Icons";
 import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
 import { Reset, Unlock } from "./screens/Unlock";
+import { NetworkContext } from "./network";
 import { openInTab, startFromHash, view } from "./view";
 
 export function App() {
@@ -101,7 +102,9 @@ export function App() {
         )}
       </header>
 
-      <main>{screen}</main>
+      <main>
+        <NetworkContext.Provider value={status?.network ?? "preprod"}>{screen}</NetworkContext.Provider>
+      </main>
 
       <footer className="footer">
         Seedelf Wallet {status?.version ?? ""} · {network?.label ?? "…"}

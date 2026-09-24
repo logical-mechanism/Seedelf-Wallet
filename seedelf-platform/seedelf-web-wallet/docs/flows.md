@@ -49,8 +49,8 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
   - **Cardano account:** its ADA, how many addresses it has used, **Receive** and **Move in**, and its tokens (as on the Seedelf tab). Until a seedelf exists, a note says to create one before moving money in.
   - **While the first reading loads** (after an unlock, a restore or a create), a splash covers Home instead of empty balances: the emblem on navy with a teal arc circling it. It fades out into the wallet when the balances arrive. A cached reading shows Home at once, and the splash gives up after about 8 s, so a slow Koios can't hide Refresh or an error.
   - **Tokens** (from **View all**): one balance's tokens in two tabs, **Tokens** and **NFTs**, with a search (name, ticker, policy ID, fingerprint) and a sort (name or amount), 50 rows at a time.
-    - **A token's details** rise in a sheet: the amount, the policy ID, the asset name and the fingerprint, each with Copy.
-    - A token on the wallet's list shows its ticker and logo, and says it's on the list. Any other token goes by its own name, with its fingerprint under it and two letters for a logo, and the sheet says its name is only what it calls itself.
+    - **A token's details** open in a modal, centred and never taller than the window: the amount, the policy ID, the asset name and the fingerprint, each with Copy.
+    - A token on the wallet's list shows its ticker and logo, and says it's on the list. Any other token goes by its own name, with its fingerprint under it and two letters for a logo, and the modal says its name is only what it calls itself.
     - NFTs are told apart without asking anyone: CIP-68 label 222 is an NFT, 333 and 444 are fungible, and otherwise a single unit with no decimals is an NFT.
   - **Get started:** until the wallet has both a seedelf and a Seedelf balance, the Seedelf tab lists three steps, in the order that keeps them apart (see [Create a seedelf](#create-a-seedelf)):
     1. fund the Cardano account;
@@ -86,17 +86,17 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
 - **What it does:** the Cardano account pays into the wallet contract. Each contract output gets a freshly re-randomized copy of the user's own base register.
 - **What the user chooses:**
   - An **ADA amount, or Max**.
-  - **Tokens to bring along**, from a checklist. A picked token moves in full.
+  - **Tokens to bring along:** any amount of each, or all of it with its Max. The rest of a token stays in the account.
   - The form nudges towards round amounts, which are harder to match to a later withdrawal.
 - **Which UTxOs are spent:**
-  - Every UTxO holding a picked token.
+  - Every UTxO holding a token being brought along.
   - Then pure-ADA UTxOs, largest first.
   - Then other token UTxOs, until the amount, the fee and valid change are covered.
   - **Never** a pure-ADA UTxO of exactly 5 ADA: it's probably another wallet's collateral. Those have to be moved with that wallet.
-  - **Max** spends every other UTxO and keeps only the minimum ADA that the unpicked tokens need.
+  - **Max** spends every other UTxO and keeps only the minimum ADA that the tokens staying behind need.
 - **Outputs:**
   - The contract deposits, tokens 20 to an output.
-  - Change (leftover ADA and unpicked tokens) back to the receive address `0/0`, as in Lace's single-address mode.
+  - Change (leftover ADA, and every token or part of one that stays) back to the receive address `0/0`, as in Lace's single-address mode.
 - **Review, then send:**
   - The worker builds and signs the transaction, and the user reviews what moves, the fee and the change.
   - Nothing is sent until **Send**, and then exactly the reviewed transaction is submitted. A built move-in expires after 10 minutes.

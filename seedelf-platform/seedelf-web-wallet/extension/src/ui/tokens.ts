@@ -28,6 +28,11 @@ export function tokenInfo(network: NetworkName, t: { policyId: string; assetName
   return REGISTRY[network][tokenKey(t)];
 }
 
+/** A token's name in forms and reviews: its ticker when it's on the wallet's list. */
+export function tokenLabel(network: NetworkName, t: { policyId: string; assetName: string }): string {
+  return tokenInfo(network, t)?.ticker ?? tokenName(t.assetName);
+}
+
 /** A token as the lists show it. */
 export interface TokenView {
   token: TokenAmount;

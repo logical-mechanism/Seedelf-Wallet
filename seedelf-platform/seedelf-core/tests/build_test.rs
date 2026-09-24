@@ -326,7 +326,7 @@ fn picked_tokens_move_in_full_and_the_rest_come_back() {
         utxo(&w, 2, 1, 1_500_000, vec![token("tUSDM", 300)]),
         utxo(&w, 3, 2, 30_000_000, vec![]),
     ];
-    let picked = vec![(POLICY.to_string(), hex::encode("tUSDM"))];
+    let picked = vec![(POLICY.to_string(), hex::encode("tUSDM"), 1000)];
     let built = build::move_in(
         &w.params,
         &available,
@@ -371,6 +371,40 @@ fn picked_tokens_move_in_full_and_the_rest_come_back() {
     );
     assert_eq!(built.tokens.items.len(), 1);
     assert_eq!(built.change_tokens.items.len(), 1);
+}
+
+#[test]
+fn part_of_a_token_moves_in_and_the_rest_comes_back() {
+    let w = world();
+    let available = vec![
+        utxo(&w, 1, 0, 2_000_000, vec![token("tUSDM", 700)]),
+        utxo(&w, 2, 1, 1_500_000, vec![token("tUSDM", 300)]),
+        utxo(&w, 3, 2, 30_000_000, vec![]),
+    ];
+    let picked = vec![(POLICY.to_string(), hex::encode("tUSDM"), 250)];
+    let built = build::move_in(
+        &w.params,
+        &available,
+        MoveInAmount::Lovelace(5_000_000),
+        &picked,
+        &w.owner,
+        &w.wallet,
+        &w.change,
+    )
+    .unwrap();
+    let tx = assert_sound(&w, &available, &built);
+    let key = (POLICY.to_string(), hex::encode("tUSDM"));
+    let held_at = |addr: &Address| -> u64 {
+        tx.outputs
+            .iter()
+            .filter(|o| o.address == *addr)
+            .filter_map(|o| o.assets.get(&key))
+            .sum()
+    };
+    assert_eq!(held_at(&w.wallet), 250);
+    assert_eq!(held_at(&w.change), 750);
+    assert_eq!(built.tokens.items[0].amount, 250);
+    assert_eq!(built.change_tokens.items[0].amount, 750);
 }
 
 #[test]
@@ -435,9 +469,9 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
 fn many_tokens_split_twenty_to_an_output() {
     let w = world();
     let tokens: Vec<Asset> = (0..25).map(|i| token(&format!("t{i:02}"), 1)).collect();
-    let picked: Vec<(String, String)> = tokens
+    let picked: Vec<(String, String, u64)> = tokens
         .iter()
-        .map(|t| (t.policy_id.clone(), t.asset_name.clone()))
+        .map(|t| (t.policy_id.clone(), t.asset_name.clone(), 1))
         .collect();
     let available = vec![
         utxo(&w, 1, 0, 3_000_000, tokens),
@@ -465,7 +499,7 @@ fn explains_what_is_wrong() {
         utxo(&w, 1, 0, 5_000_000, vec![]),
         utxo(&w, 2, 0, 10_000_000, vec![token("nft", 1)]),
     ];
-    let err = |amount, picked: &[(String, String)]| {
+    let err = |amount, picked: &[(String, String, u64)]| {
         build::move_in(
             &w.params, &available, amount, picked, &w.owner, &w.wallet, &w.change,
         )
@@ -484,9 +518,23 @@ fn explains_what_is_wrong() {
     assert!(
         err(
             MoveInAmount::Lovelace(2_000_000),
-            &[(POLICY.to_string(), hex::encode("absent"))]
+            &[(POLICY.to_string(), hex::encode("absent"), 1)]
         )
         .contains("doesn't hold")
+    );
+    assert!(
+        err(
+            MoveInAmount::Lovelace(2_000_000),
+            &[(POLICY.to_string(), hex::encode("nft"), 2)]
+        )
+        .contains("holds only 1")
+    );
+    assert!(
+        err(
+            MoveInAmount::Lovelace(2_000_000),
+            &[(POLICY.to_string(), hex::encode("nft"), 0)]
+        )
+        .contains("more than none")
     );
     let only_collateral = vec![utxo(&w, 3, 0, 5_000_000, vec![])];
     let e = build::move_in(

@@ -14,7 +14,9 @@ import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, parseAda, shortHex, tokenKey as key, tokenName } from "../format";
+import { adaWithTokens, formatAda, formatQuantity, parseAda, shortHex, tokenKey as key } from "../format";
+import { useNetwork } from "../network";
+import { tokenLabel } from "../tokens";
 
 type Found = { state: "idle" } | { state: "looking" } | { state: "found"; seedelf: SeedelfLookup } | { state: "error"; message: string };
 
@@ -27,6 +29,7 @@ export function Transfer({
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const network = useNetwork();
   const [to, setTo] = useState("");
   const [found, setFound] = useState<Found>({ state: "idle" });
   const [amount, setAmount] = useState("");
@@ -111,7 +114,11 @@ export function Transfer({
           {summary.tokens.map((t) => {
             const held = seedelf.tokens.find((h) => key(h) === key(t));
             return (
-              <Row key={key(t)} label="" value={`${formatQuantity(t.quantity, held?.decimals ?? 0)} ${tokenName(t.assetName)}`} />
+              <Row
+                key={key(t)}
+                label=""
+                value={`${formatQuantity(t.quantity, held?.decimals ?? 0)} ${tokenLabel(network, t)}`}
+              />
             );
           })}
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />

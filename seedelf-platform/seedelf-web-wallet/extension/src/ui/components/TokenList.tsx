@@ -4,13 +4,13 @@
 
 import { useMemo, useState } from "react";
 
-import type { NetworkName } from "../../networks";
 import type { TokenAmount } from "../../shared/rpc";
 import { tokenKey } from "../format";
+import { useNetwork } from "../network";
 import { initials, sortTokens, tint, type TokenView, viewToken } from "../tokens";
 import { CopyField } from "./CopyField";
 import { CheckIcon, ChevronRightIcon } from "./Icons";
-import { Sheet } from "./Sheet";
+import { Modal } from "./Modal";
 
 /** How many tokens Home shows before "View all". */
 const PREVIEW = 5;
@@ -46,16 +46,15 @@ export function TokenRow({ view, onOpen }: { view: TokenView; onOpen: (view: Tok
 
 /** Home's tokens: fungible ones first, by name, then NFTs; the first five, and View all. */
 export function TokenList({
-  network,
   tokens,
   testId,
   onViewAll,
 }: {
-  network: NetworkName;
   tokens: TokenAmount[];
   testId: string;
   onViewAll: () => void;
 }) {
+  const network = useNetwork();
   const [open, setOpen] = useState<TokenView>();
   const views = useMemo(() => {
     const sorted = sortTokens(
@@ -83,11 +82,11 @@ export function TokenList({
   );
 }
 
-/** A token's details: what it is, how much, and the ids that identify it, each with Copy. */
+/** A token's details, in a modal: what it is, how much, and the ids that identify it, each with Copy. */
 export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () => void }) {
   const t = view.token;
   return (
-    <Sheet title={view.label} titleId="token-details-title" onClose={onClose}>
+    <Modal title={view.label} titleId="token-details-title" onClose={onClose}>
       <div className="token-details" data-testid="token-details">
         <div className="token-details__top">
           <TokenAvatar view={view} large />
@@ -119,6 +118,6 @@ export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () =
           {view.nft ? "NFT" : "Fungible token"} · {view.decimals} decimal places
         </p>
       </div>
-    </Sheet>
+    </Modal>
   );
 }

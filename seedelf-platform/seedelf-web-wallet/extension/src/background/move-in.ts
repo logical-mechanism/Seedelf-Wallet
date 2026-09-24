@@ -11,7 +11,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { MoveInSummary, PendingTx, TokenRef } from "../shared/rpc";
+import type { MoveInSummary, PendingTx, TokenQuantity } from "../shared/rpc";
 import { pathedUtxos } from "./balances";
 import type { Koios } from "./koios";
 import { SESSION_PENDING } from "./pending";
@@ -43,7 +43,8 @@ export interface MoveInDeps {
 export class MoveInService {
   constructor(private readonly deps: MoveInDeps) {}
 
-  async build(network: NetworkName, lovelace: string | null, tokens: TokenRef[]): Promise<MoveInSummary> {
+  /** `tokens` come along in the quantities given; the rest of each stays in the account. */
+  async build(network: NetworkName, lovelace: string | null, tokens: TokenQuantity[]): Promise<MoveInSummary> {
     const { wasm, wallet, session, now } = this.deps;
     const koios = this.deps.koios(network);
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;

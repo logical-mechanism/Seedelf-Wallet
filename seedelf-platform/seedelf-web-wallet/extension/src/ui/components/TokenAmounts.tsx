@@ -1,8 +1,11 @@
-// Optional token amounts to send along, one box per token held, with each
-// amount checked against the token's decimals and what's held.
+// Optional token amounts to bring along, one box per token held, with each
+// amount checked against the token's decimals and what's held. Max fills in
+// all of it.
 
 import type { TokenAmount, TokenQuantity } from "../../shared/rpc";
-import { formatQuantity, parseQuantity, tokenKey as key, tokenName } from "../format";
+import { formatQuantity, parseQuantity, tokenKey as key } from "../format";
+import { useNetwork } from "../network";
+import { tokenLabel } from "../tokens";
 
 /** The token amounts typed so far: those to send, and what's wrong with any of them. */
 export function tokenChoices(
@@ -32,22 +35,27 @@ export function TokenAmounts({
   held,
   typed,
   onChange,
+  legend = "Send tokens too (optional)",
 }: {
   held: TokenAmount[];
   typed: Record<string, string>;
   onChange: (typed: Record<string, string>) => void;
+  legend?: string;
 }) {
+  const network = useNetwork();
   if (held.length === 0) return null;
   const { problems } = tokenChoices(held, typed);
   return (
     <fieldset className="token-picker">
-      <legend>Send tokens too (optional)</legend>
+      <legend>{legend}</legend>
       {held.map((t) => {
         const problem = problems[key(t)];
+        const label = tokenLabel(network, t);
+        const all = formatQuantity(t.quantity, t.decimals);
         return (
           <div key={key(t)} className="token-amount">
             <label className="token-amount__row">
-              <span className="list__name">{tokenName(t.assetName)}</span>
+              <span className="list__name">{label}</span>
               <input
                 inputMode="decimal"
                 autoComplete="off"
@@ -55,10 +63,20 @@ export function TokenAmounts({
                 value={typed[key(t)] ?? ""}
                 onChange={(e) => onChange({ ...typed, [key(t)]: e.target.value })}
                 aria-invalid={problem ? true : undefined}
-                aria-label={`Amount of ${tokenName(t.assetName)}`}
+                aria-label={`Amount of ${label}`}
               />
             </label>
-            <span className="note">of {formatQuantity(t.quantity, t.decimals)}</span>
+            <div className="token-amount__foot">
+              <span className="note">of {all}</span>
+              <button
+                type="button"
+                className="chip"
+                aria-label={`All of ${label}`}
+                onClick={() => onChange({ ...typed, [key(t)]: all })}
+              >
+                Max
+              </button>
+            </div>
             {problem && <p className="field-note">{problem}</p>}
           </div>
         );

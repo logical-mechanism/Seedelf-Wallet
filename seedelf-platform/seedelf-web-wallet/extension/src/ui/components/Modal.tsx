@@ -1,12 +1,12 @@
-// A sheet that rises from the bottom over the page, after Lace's bottom sheets:
-// a modal <dialog>, so focus stays inside, Escape closes it, and so does a
-// click on the dimmed page around it.
+// A modal, centred over the dimmed page: a <dialog>, so focus stays inside,
+// Escape closes it, and so does a click around it. It's never taller than the
+// window; its body scrolls instead, so nothing is cut off in the popup.
 
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { CloseIcon } from "./Icons";
 
-export function Sheet({
+export function Modal({
   title,
   titleId,
   onClose,
@@ -26,16 +26,16 @@ export function Sheet({
   return (
     <dialog
       ref={ref}
-      className="sheet"
+      className="modal"
       aria-labelledby={titleId}
       onClose={onClose}
       onClick={(e) => {
         if (e.target === ref.current) onClose();
       }}
     >
-      <div className="sheet__panel">
-        <header className="sheet__head">
-          <h2 id={titleId} className="sheet__title">
+      <div className="modal__panel">
+        <header className="modal__head">
+          <h2 id={titleId} className="modal__title">
             {title}
           </h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close" title="Close">

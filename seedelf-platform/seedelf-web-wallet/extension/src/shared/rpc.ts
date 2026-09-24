@@ -60,7 +60,7 @@ export interface Balances {
   cardano: { lovelace: string; tokens: TokenAmount[]; utxos: number; addressesUsed: number };
 }
 
-/** A token to bring along on a move-in; it moves in full. */
+/** A token, by its policy and hex name. */
 export interface TokenRef {
   policyId: string;
   assetName: string;
@@ -212,7 +212,7 @@ export interface Requests {
   balances: { payload: { refresh?: boolean }; result: Balances };
   wordlist: { payload: None; result: string[] };
   /** Builds and signs a move-in without submitting it. `lovelace` null moves the most possible. */
-  "move-in-build": { payload: { lovelace: string | null; tokens: TokenRef[] }; result: MoveInSummary };
+  "move-in-build": { payload: { lovelace: string | null; tokens: TokenQuantity[] }; result: MoveInSummary };
   /** Submits the move-in built last, if its hash matches. */
   "move-in-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds a seedelf mint (Ogmios measures its scripts) without sending it. */

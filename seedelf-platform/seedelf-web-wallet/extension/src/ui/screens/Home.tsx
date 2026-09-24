@@ -141,7 +141,7 @@ export function Home() {
   }
   if (tokensOf && balances) {
     const back = () => setTokensOf(undefined);
-    return <Tokens network={balances.network} tokens={balances[tokensOf].tokens} of={tokensOf} onBack={back} />;
+    return <Tokens tokens={balances[tokensOf].tokens} of={tokensOf} onBack={back} />;
   }
 
   const seedelfs = balances?.seedelf.seedelfs ?? [];
@@ -176,7 +176,7 @@ export function Home() {
           label="Balances"
           tabs={[
             { value: "seedelf", label: "Seedelf" },
-            { value: "cardano", label: "Cardano account" },
+            { value: "cardano", label: "Cardano" },
           ]}
           value={tab}
           onChange={setTab}
@@ -236,7 +236,6 @@ export function Home() {
               <section className="section" aria-labelledby="seedelf-tokens-title">
                 <h2 id="seedelf-tokens-title">Tokens</h2>
                 <TokenList
-                  network={balances.network}
                   tokens={balances.seedelf.tokens}
                   testId="seedelf-tokens"
                   onViewAll={() => setTokensOf("seedelf")}
@@ -311,7 +310,6 @@ export function Home() {
               <section className="section" aria-labelledby="cardano-tokens-title">
                 <h2 id="cardano-tokens-title">Tokens</h2>
                 <TokenList
-                  network={balances.network}
                   tokens={balances.cardano.tokens}
                   testId="cardano-tokens"
                   onViewAll={() => setTokensOf("cardano")}

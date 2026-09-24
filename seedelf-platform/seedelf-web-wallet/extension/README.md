@@ -14,9 +14,9 @@ It can create or restore a wallet, lock it with a password, and show what the wa
 | Unlock | Locked | Password, the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
 | Home | Unlocked | Two tabs. **Seedelf:** the balance with round **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf); the first five tokens and **View all**; your seedelfs with Copy and Remove on each. **Cardano account:** the balance with **Receive** and **Move in**, and tokens. Until the first reading arrives, a splash covers it. A new wallet gets *Get started* (fund, create, move in). Refresh sits under the tabs, and a sent transaction shows as a banner until it confirms. The lock button is in the top bar. |
-| Tokens | From **View all** | One balance's tokens and NFTs in two tabs, with a search and a sort. A token opens a sheet with its amount, policy ID, asset name and fingerprint, each with Copy. Tickers and logos come from the wallet's own token list. |
+| Tokens | From **View all** | One balance's tokens and NFTs in two tabs, with a search and a sort. A token opens a modal with its amount, policy ID, asset name and fingerprint, each with Copy. Tickers and logos come from the wallet's own token list. |
 | Receive | From the Cardano account tab | The receive address as a QR code and text, with copy, and the stake address |
-| Move in | From Home | An ADA amount or Max, and tokens to bring along; then a review of what moves, the fee and the change; then Send |
+| Move in | From Home | An ADA amount or Max, and any amount of each token (or its Max) to bring along; then a review of what moves, the fee and the change; then Send |
 | Send to a seedelf | From Home | Paste the recipient's full seedelf name: it's looked up in the wallet contract and shown ("Found: tag · 5eed0e1f…"), with a warning if it's your own. An ADA amount, and optionally part of any token. Then a review of the recipient, what's sent, the fee and the change, then Send, when giveme.my is asked for the collateral. |
 | Withdraw | From Home | An address or `$handle`, read as it's typed, with a warning if it's your own Cardano account. An ADA amount and optional tokens, or Max (up to 20 UTxOs, every token). Then a review of where it goes, what's sent, the fee and the change, then Send, when giveme.my is asked for the collateral. |
 | Remove a seedelf | From a seedelf's row | Where its freed ADA goes: the Cardano account (the default) or the Seedelf balance, each with a note on what it links. Then a review of what comes back and the fee, then Send. |
@@ -91,7 +91,7 @@ src/
     App.tsx             shell: top bar, picks the screen from the worker's status
     screens/            Onboarding, Create, Restore, Unlock (and reset), Home, Tokens, Receive, MoveIn,
                         CreateSeedelf, Transfer, Withdraw, RemoveSeedelf
-    components/         Screen (every flow's layout), Splash, Tabs, Sheet, TokenList, ReviewRows, Callout,
+    components/         Screen (every flow's layout), Splash, Tabs, Modal, TokenList, ReviewRows, Callout,
                         ActionButton, Choice, PhraseInput
                         (per-word autocomplete), SetPassword, AdaInput, TokenAmounts, TokenList, CopyField,
                         CopyButton, QrCode, Icons (Lucide)

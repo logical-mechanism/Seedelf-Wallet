@@ -215,7 +215,7 @@ export async function snap(page: Page, name: string) {
 
 /** Home's Cardano account tab. */
 export async function cardanoTab(page: Page) {
-  await page.getByRole("tab", { name: "Cardano account" }).click();
+  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
 }
 
 /** Home → Cardano account → Receive: the receive and stake addresses. */

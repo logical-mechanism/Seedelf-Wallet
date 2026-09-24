@@ -1193,42 +1193,50 @@ main {
   padding: var(--s5) 0;
 }
 
-/* A sheet (components/Sheet.tsx), rising from the bottom over a dimmed page. */
+/* A modal (components/Modal.tsx), centred over a dimmed page. It never grows
+   past the window: its body scrolls, so nothing is cut off in the popup. */
 
-.sheet {
-  width: 100%;
+.modal {
+  width: calc(100% - 2 * var(--s4));
   max-width: 440px;
-  max-height: 88vh;
-  margin: auto auto 0;
+  max-height: calc(100dvh - 2 * var(--s4));
+  margin: auto;
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-bottom: 0;
-  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  border-radius: var(--r-lg);
   background: #171c25;
   color: var(--text);
   box-shadow: var(--shadow-pop);
-  animation: sheet-up 200ms ease-out;
+  overflow: hidden;
+  animation: modal-in 160ms ease-out;
 }
 
-.sheet::backdrop {
-  background: rgb(0 0 0 / 0.55);
+.modal[open] {
+  display: flex;
+  flex-direction: column;
 }
 
-.sheet__panel {
+.modal::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+
+.modal__panel {
   display: flex;
   flex-direction: column;
   gap: var(--s3);
   padding: var(--s4);
+  overflow-y: auto;
+  min-height: 0;
 }
 
-.sheet__head {
+.modal__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
 }
 
-.sheet__title {
+.modal__title {
   font-size: var(--text-lg);
   color: var(--text);
   overflow: hidden;
@@ -1236,15 +1244,15 @@ main {
   white-space: nowrap;
 }
 
-@keyframes sheet-up {
+@keyframes modal-in {
   from {
-    transform: translateY(24px);
+    transform: scale(0.97);
     opacity: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sheet {
+  .modal {
     animation: none;
   }
 }
@@ -1269,6 +1277,15 @@ main {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   word-break: break-all;
+}
+
+/* In a token's details, the ids read as plain rows rather than boxes. */
+.token-details .copy-field__value {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--muted);
 }
 
 .token-details__listed {
@@ -1562,36 +1579,6 @@ main {
   margin-bottom: 6px;
 }
 
-.token-picker__row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  font-weight: 400;
-  font-size: var(--text-md);
-  color: var(--text);
-  cursor: pointer;
-}
-
-.token-picker__row:has(input:checked) {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-}
-
-.token-picker__row input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.token-picker__row .list__name {
-  flex: 1;
-}
-
 .token-amount {
   display: flex;
   flex-direction: column;
@@ -1610,6 +1597,13 @@ main {
   font-weight: 400;
   font-size: var(--text-md);
   color: var(--text);
+}
+
+.token-amount__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
 }
 
 .token-amount__row input {

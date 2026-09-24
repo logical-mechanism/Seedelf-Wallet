@@ -60,7 +60,7 @@ mod move_in {
     use pallas_traverse::MultiEraTx;
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::schnorr::random_scalar;
-    use seedelf_wasm::api::{self, MoveInRequest, PathedUtxo, TokenRef};
+    use seedelf_wasm::api::{self, MoveInRequest, PathedUtxo, TokenAmount};
     use serde_json::Value;
 
     const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -113,7 +113,7 @@ mod move_in {
     fn request(
         utxos: Vec<PathedUtxo>,
         lovelace: Option<&str>,
-        tokens: Vec<TokenRef>,
+        tokens: Vec<TokenAmount>,
     ) -> MoveInRequest {
         MoveInRequest {
             network: "preprod".into(),
@@ -144,9 +144,11 @@ mod move_in {
             .collect();
 
         let sk = random_scalar();
-        let tusdm = TokenRef {
+        // Part of the account's 3,000,000,000 tUSDM; the rest stays with the change.
+        let tusdm = TokenAmount {
             policy_id: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9".into(),
             asset_name: "0014df10745553444d".into(),
+            quantity: "1000000000".into(),
         };
         let result = api::move_in(
             &account,
@@ -157,7 +159,9 @@ mod move_in {
         assert_eq!(result.lovelace, "25000000");
         assert_eq!(result.tokens.len(), 1);
         assert_eq!(result.tokens[0].policy_id, tusdm.policy_id);
-        assert_eq!(result.tokens[0].quantity, "3000000000");
+        assert_eq!(result.tokens[0].quantity, "1000000000");
+        // The change: the rest of the tUSDM, and the token that shares its UTxO.
+        assert_eq!(result.change_tokens, 2);
 
         let bytes = hex::decode(&result.tx_cbor).unwrap();
         let tx = MultiEraTx::decode(&bytes).unwrap();

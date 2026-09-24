@@ -37,6 +37,13 @@ test("builds and signs a move-in inside WebAssembly", () => {
   assert.equal(result.depositOutputs, 1);
   assert.equal(result.tokens.length, 0);
 
+  // Part of a token: 1 of the account's 3,000,000,000 tUSDM.
+  const tusdm = { policyId: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9", assetName: "0014df10745553444d" };
+  const some = JSON.parse(
+    buildMoveIn(account, key, JSON.stringify({ network: "preprod", params, utxos, lovelace: "10000000", tokens: [{ ...tusdm, quantity: "1" }] })),
+  );
+  assert.deepEqual(some.tokens, [{ ...tusdm, quantity: "1" }]);
+
   const max = JSON.parse(buildMoveIn(account, key, JSON.stringify({ network: "preprod", params, utxos, lovelace: null, tokens: [] })));
   assert.equal(max.inputs, utxos.length);
   account.free();

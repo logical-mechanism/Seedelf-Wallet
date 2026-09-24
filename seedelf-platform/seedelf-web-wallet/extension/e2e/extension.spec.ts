@@ -381,36 +381,43 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await page.getByRole("button", { name: "Move in" }).click();
 
   // ADA has 6 decimal places: extra digits are dropped, with a note; letters are refused.
-  await page.getByLabel("Amount").fill("10.1234567890");
-  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await page.getByLabel("Amount", { exact: true }).fill("10.1234567890");
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("10.123456");
   await expect(page.getByTestId("move-in-amount-note")).toContainText("at most 6 decimal places");
-  await page.getByLabel("Amount").pressSequentially("9");
-  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
-  await page.getByLabel("Amount").fill("abc");
-  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await page.getByLabel("Amount", { exact: true }).pressSequentially("9");
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("10.123456");
+  await page.getByLabel("Amount", { exact: true }).fill("abc");
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("10.123456");
   await expect(page.getByTestId("move-in-amount-note")).toContainText("Enter an amount in ADA");
 
   // No more than all the ADA there is; no more than the account holds.
-  await page.getByLabel("Amount").fill("99999999999999999999999999999999999999999");
-  await expect(page.getByLabel("Amount")).toHaveValue("10.123456");
+  await page.getByLabel("Amount", { exact: true }).fill("99999999999999999999999999999999999999999");
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("10.123456");
   await expect(page.getByTestId("move-in-amount-note")).toContainText("45 billion");
-  await page.getByLabel("Amount").fill("20000");
+  await page.getByLabel("Amount", { exact: true }).fill("20000");
   await expect(page.getByTestId("move-in-too-much")).toContainText("That's more than the 10,350.538725 ₳");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
 
   // A non-round amount gets the privacy nudge; a round one doesn't.
-  await page.getByLabel("Amount").fill("25.5");
+  await page.getByLabel("Amount", { exact: true }).fill("25.5");
   await expect(page.getByTestId("move-in-amount-note")).toHaveCount(0);
   await expect(page.getByTestId("round-warning")).toContainText("Round amounts");
-  await page.getByLabel("Amount").fill("25");
+  await page.getByLabel("Amount", { exact: true }).fill("25");
   await expect(page.getByTestId("round-warning")).toHaveCount(0);
-  await page.getByRole("checkbox", { name: /tUSDM/ }).check();
+  // Any amount of a token: Max fills in all of it; more than that is refused.
+  const tusdm = page.getByLabel("Amount of tUSDM");
+  await page.getByRole("button", { name: "All of tUSDM" }).click();
+  await expect(tusdm).toHaveValue("3,000,000,000");
+  await tusdm.fill("3000000001");
+  await expect(page.getByText("That's more than the 3,000,000,000 you hold.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  await tusdm.fill("1250000000");
   await snap(page, "move-in-form");
   await page.getByRole("button", { name: "Review" }).click();
 
   const review = page.getByTestId("move-in-review");
   await expect(review).toContainText("Into Seedelf25 ₳");
-  await expect(review).toContainText("3,000,000,000 tUSDM");
+  await expect(review).toContainText("1,250,000,000 tUSDM");
   await expect(review).toContainText("Network fee");
   await snap(page, "move-in-review");
   expect(koios.submitted).toHaveLength(0);
@@ -443,7 +450,7 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   await page.getByRole("button", { name: "Move in" }).click();
 
   // Just under the balance: the UI allows it, but the fee doesn't fit, and the builder says so.
-  await page.getByLabel("Amount").fill("10350.5");
+  await page.getByLabel("Amount", { exact: true }).fill("10350.5");
   await page.getByRole("button", { name: "Review" }).click();
   await expect(page.getByRole("alert")).toContainText("Not enough ADA");
 
@@ -711,8 +718,8 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
   await shot("receive");
   await back();
   await popup.getByRole("button", { name: "Move in" }).click();
-  await popup.getByLabel("Amount").fill("25.5");
-  await popup.getByRole("checkbox", { name: /tUSDM/ }).check();
+  await popup.getByLabel("Amount", { exact: true }).fill("25.5");
+  await popup.getByLabel("Amount of tUSDM").fill("1000");
   await shot("move-in");
   await popup.getByRole("button", { name: "Review" }).click();
   await expect(popup.getByTestId("move-in-review")).toBeVisible();

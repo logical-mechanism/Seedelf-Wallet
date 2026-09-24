@@ -22,7 +22,7 @@ async function unlocked() {
 describe("move-in", () => {
   it("builds and signs a move-in without sending it", async () => {
     const t = await unlocked();
-    const summary = await t.moveIn.build("preprod", "25000000", [TUSDM]);
+    const summary = await t.moveIn.build("preprod", "25000000", [{ ...TUSDM, quantity: "3000000000" }]);
     expect(summary).toMatchObject({
       network: "preprod",
       lovelace: "25000000",
@@ -37,6 +37,17 @@ describe("move-in", () => {
     const built = await t.session.get<{ txCbor: string; txHash: string }>(SESSION_BUILT);
     expect(built!.txHash).toBe(summary.txHash);
     expect(txIdOf(Uint8Array.from(Buffer.from(built!.txCbor, "hex")))).toBe(summary.txHash);
+  });
+
+  it("moves part of a token, and the rest stays in the account", async () => {
+    const t = await unlocked();
+    const summary = await t.moveIn.build("preprod", "25000000", [{ ...TUSDM, quantity: "1250000000" }]);
+    expect(summary.tokens).toEqual([{ ...TUSDM, quantity: "1250000000" }]);
+    const whole = await t.moveIn.build("preprod", "25000000", [{ ...TUSDM, quantity: "3000000000" }]);
+    expect(summary.changeTokens).toBe(whole.changeTokens + 1);
+    await expect(t.moveIn.build("preprod", "25000000", [{ ...TUSDM, quantity: "3000000001" }])).rejects.toThrow(
+      "holds only 3000000000",
+    );
   });
 
   it("moves the most possible with Max", async () => {

@@ -62,7 +62,7 @@ export async function balances(page) {
     .getByTestId("seedelfs")
     .innerText({ timeout: 1000 })
     .catch(() => "(none)");
-  await page.getByRole("tab", { name: "Cardano account" }).click();
+  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
   const cardano = await page.getByTestId("cardano-lovelace").textContent();
   await page.getByRole("tab", { name: "Seedelf" }).click();
   return `Seedelf ${seedelf} | Cardano ${cardano} | seedelfs: ${seedelfs.replace(/\n/g, " ")}`;

@@ -340,7 +340,9 @@ pub struct MoveIn {
 /// - `available` is the account's UTxOs (key addresses the caller can sign
 ///   for). A pure-ADA UTxO of exactly 5 ADA is never spent: it's probably
 ///   another wallet's collateral, as in the CLI.
-/// - `picked` tokens move in full; every UTxO holding one is spent.
+/// - `picked` tokens move in the quantities asked, as `(policy, name,
+///   quantity)` in hex. Every UTxO holding one is spent, and what's left of
+///   it goes back with the change.
 /// - Otherwise pure-ADA UTxOs are spent first, largest first, then other
 ///   token UTxOs, until the amount, the fee and valid change are covered.
 ///   Tokens that aren't picked go back with the change.
@@ -349,7 +351,7 @@ pub fn move_in(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
     amount: MoveInAmount,
-    picked: &[(String, String)],
+    picked: &[(String, String, u64)],
     owner: &Register,
     wallet_addr: &Address,
     change_addr: &Address,
@@ -360,20 +362,25 @@ pub fn move_in(
             assets.iter().any(|a| {
                 picked
                     .iter()
-                    .any(|(p, n)| *p == a.policy_id && *n == a.asset_name)
+                    .any(|(p, n, _)| *p == a.policy_id && *n == a.asset_name)
             })
         })
     };
-    for (policy, name) in picked {
-        let held = eligible.iter().any(|u| {
-            u.asset_list.as_ref().is_some_and(|assets| {
-                assets
-                    .iter()
-                    .any(|a| a.policy_id == *policy && a.asset_name == *name)
-            })
-        });
-        if !held {
+    for (policy, name, quantity) in picked {
+        let held: u64 = eligible
+            .iter()
+            .flat_map(|u| u.asset_list.iter().flatten())
+            .filter(|a| a.policy_id == *policy && a.asset_name == *name)
+            .map(|a| a.quantity.parse::<u64>().unwrap_or(0))
+            .sum();
+        if held == 0 {
             bail!("The Cardano account doesn't hold the token {policy}.{name}");
+        }
+        if *quantity == 0 {
+            bail!("Move more than none of the token {policy}.{name}, or leave it out");
+        }
+        if *quantity > held {
+            bail!("The Cardano account holds only {held} of the token {policy}.{name}");
         }
     }
 
@@ -429,31 +436,41 @@ fn build_move_in(
     params: &ProtocolParameters,
     selected: &[UtxoResponse],
     amount: MoveInAmount,
-    picked: &[(String, String)],
+    picked: &[(String, String, u64)],
     owner: &Register,
     wallet_addr: &Address,
     change_addr: &Address,
 ) -> Result<MoveIn> {
     let (total, all_tokens) = assets_of(selected.to_vec())?;
-    let is_picked = |a: &Asset| {
+    // How much of each held token moves in (0 for tokens not picked).
+    let asked = |a: &Asset| {
         let policy = hex::encode(a.policy_id);
         let name = hex::encode(&a.token_name);
-        picked.iter().any(|(p, n)| *p == policy && *n == name)
+        picked
+            .iter()
+            .find(|(p, n, _)| *p == policy && *n == name)
+            .map_or(0, |(_, _, q)| (*q).min(a.amount))
     };
     let moving = Assets {
         items: all_tokens
             .items
             .iter()
-            .filter(|a| is_picked(a))
-            .cloned()
+            .filter(|a| asked(a) > 0)
+            .map(|a| Asset {
+                amount: asked(a),
+                ..a.clone()
+            })
             .collect(),
     };
     let staying = Assets {
         items: all_tokens
             .items
             .iter()
-            .filter(|a| !is_picked(a))
-            .cloned()
+            .filter(|a| a.amount > asked(a))
+            .map(|a| Asset {
+                amount: a.amount - asked(a),
+                ..a.clone()
+            })
             .collect(),
     };
     let inputs: Vec<Input> = selected.iter().map(input_of).collect::<Result<_>>()?;

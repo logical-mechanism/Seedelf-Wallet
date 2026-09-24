@@ -4,13 +4,13 @@
 
 import { useMemo, useState } from "react";
 
-import type { NetworkName } from "../../networks";
 import type { TokenAmount } from "../../shared/rpc";
 import { SearchIcon } from "../components/Icons";
 import { Screen } from "../components/Screen";
 import { Tabs } from "../components/Tabs";
 import { TokenDetails, TokenRow } from "../components/TokenList";
 import { plural, tokenKey } from "../format";
+import { useNetwork } from "../network";
 import { searchTokens, sortTokens, type TokenSort, type TokenView, viewToken } from "../tokens";
 
 /** Rows shown at a time; "Show more" adds as many again. */
@@ -19,17 +19,16 @@ const PAGE = 50;
 type Kind = "tokens" | "nfts";
 
 export function Tokens({
-  network,
   tokens,
   of,
   onBack,
 }: {
-  network: NetworkName;
   tokens: TokenAmount[];
   /** Whose tokens: the title says. */
   of: "seedelf" | "cardano";
   onBack: () => void;
 }) {
+  const network = useNetwork();
   const views = useMemo(() => tokens.map((t) => viewToken(network, t)), [network, tokens]);
   const fungible = views.filter((v) => !v.nft);
   const nfts = views.filter((v) => v.nft);
