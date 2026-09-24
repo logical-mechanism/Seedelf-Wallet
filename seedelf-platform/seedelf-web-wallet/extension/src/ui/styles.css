@@ -121,7 +121,8 @@ button.icon-button:hover {
   color: var(--text);
 }
 
-input {
+input,
+textarea {
   font: inherit;
   color: var(--text);
   background: var(--surface-2);
@@ -131,11 +132,13 @@ input {
   width: 100%;
 }
 
-input[aria-invalid="true"] {
+input[aria-invalid="true"],
+textarea[aria-invalid="true"] {
   border-color: var(--error);
 }
 
 input:focus,
+textarea:focus,
 button:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
@@ -752,4 +755,37 @@ h2 {
   margin: -4px 0 0;
   font-size: 12.5px;
   color: var(--warn-text);
+}
+
+/* Send to a seedelf */
+
+.seedelf-name {
+  font: 13px var(--mono);
+  resize: none;
+  word-break: break-all;
+}
+
+.token-amount {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.token-amount__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 400;
+  font-size: 14px;
+}
+
+.token-amount__row input {
+  width: 9em;
+  padding: 6px 8px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }

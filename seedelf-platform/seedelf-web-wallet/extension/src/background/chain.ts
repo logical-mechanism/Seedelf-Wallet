@@ -2,13 +2,13 @@
 // the Cardano account's addresses, and adding up value. No network, no keys.
 
 import type { TokenAmount } from "../shared/rpc";
+import { SEEDELF_PREFIX } from "../shared/seedelf-name";
 import type { KoiosUtxo } from "./koios";
 
 /** The standard BIP44 gap limit: stop after this many unused addresses in a row. */
 export const GAP_LIMIT = 20;
 
-/** The seedelf token-name prefix (lib/token_name.ak). */
-export const SEEDELF_PREFIX = "5eed0e1f";
+export { SEEDELF_PREFIX };
 
 const POINT_HEX = /^[0-9a-f]{96}$/;
 

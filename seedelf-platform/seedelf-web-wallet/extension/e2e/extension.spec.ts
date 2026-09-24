@@ -34,6 +34,7 @@ const koiosPreprod = fixture("koios-preprod.json");
 const ownedUtxos = fixture("owned-utxos.json").owned_utxos;
 const mintPreprod = fixture("mint-preprod.json");
 const accountMintPreprod = fixture("account-mint-preprod.json");
+const transferPreprod = fixture("transfer-preprod.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -548,6 +549,62 @@ test("create a seedelf from the Seedelf balance: tag rules, review, and nothing 
   await page.getByRole("button", { name: "← Back" }).click();
   await page.getByRole("button", { name: "← Back" }).click();
   await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
+});
+
+test("send to a seedelf: paste its name, see it found, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
+  koios.evaluation = transferPreprod.evaluation;
+  const theirs: string = transferPreprod.to;
+  const mine: string = ownedUtxos[2].asset_list[0].asset_name;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Send to a seedelf" }).click();
+
+  // Only a whole name is looked up; pasted in capitals with spaces, it still is one.
+  const name = page.getByLabel("Seedelf name");
+  const note = page.getByTestId("transfer-to-note");
+  await name.fill(theirs.slice(0, 40));
+  await expect(note).toContainText("64 hex characters starting 5eed0e1f");
+  await name.fill(`5eed0e1f${"00".repeat(28)}`);
+  await expect(note).toContainText("No seedelf with that name on preprod.");
+  await name.fill(mine);
+  await expect(note).toContainText("Found: web-wallet");
+  await expect(page.getByTestId("transfer-own")).toContainText("This seedelf is yours");
+  await name.fill(` ${theirs.slice(0, 32).toUpperCase()} ${theirs.slice(32)} `);
+  await expect(note).toContainText("Found: This is a test.");
+  await expect(page.getByTestId("transfer-own")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+
+  // 5 ₳ and 1 tUSDM, of the 1,234.56 held.
+  await page.getByLabel("Amount", { exact: true }).fill("5");
+  const tusdm = page.getByLabel("Amount of tUSDM");
+  await tusdm.fill("2000");
+  await expect(page.getByText("That's more than the 1,234.56 you hold.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  await tusdm.fill("1");
+  await page.screenshot({ path: "test-results/transfer-form.png", fullPage: true });
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const review = page.getByTestId("transfer-review");
+  await expect(review).toContainText("ToThis is a test.");
+  await expect(review).toContainText("Amount5 ₳");
+  await expect(review).toContainText("1 tUSDM");
+  await expect(review).toContainText("Network fee0.273922 ₳");
+  await expect(review).toContainText("Back to your Seedelf balance22.726078 ₳ and 1 token");
+  await expect(review).toContainText("Seedelf UTxOs spent2");
+  expect(koios.calls).toContain("ogmios");
+  expect(koios.collateralAsked).toBe(0);
+  // Koios was only ever asked about the whole contract, never the recipient's token.
+  expect(koios.calls.filter((c) => c.startsWith("asset"))).toEqual([]);
+  await page.screenshot({ path: "test-results/transfer-review.png", fullPage: true });
+
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction: Transaction Fails Validation");
+  koios.collateral = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("alert")).toContainText("doesn't match this transaction, so it wasn't sent");
+  expect(koios.collateralAsked).toBe(2);
+  expect(koios.submitted).toHaveLength(0);
 });
 
 test("a worker that lost its WASM file explains itself and recovers", async ({ userDataDir }) => {

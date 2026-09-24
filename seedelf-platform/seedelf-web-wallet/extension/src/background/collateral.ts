@@ -45,7 +45,7 @@ export class Collateral {
       const why = typeof detail === "string" ? `: ${detail}` : ` (${response.status})`;
       throw new CollateralError(
         `giveme.my, which lends the collateral, refused this transaction${why}. ` +
-          "Its UTxOs may have been spent since the review: refresh, then create it again.",
+          "Its UTxOs may have been spent since the review: refresh, then review it again.",
       );
     }
     if (answer === undefined) throw new CollateralError("giveme.my answered with something that isn't JSON.");

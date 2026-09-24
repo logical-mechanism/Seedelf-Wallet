@@ -11,6 +11,7 @@ export function AdaInput({
   onChange,
   disabled,
   shown,
+  autoFocus = true,
   children,
 }: {
   id: string;
@@ -19,6 +20,7 @@ export function AdaInput({
   disabled?: boolean;
   /** Shown instead of the value while disabled, e.g. "Max". */
   shown?: string;
+  autoFocus?: boolean;
   /** Extra controls after the unit, e.g. a Max button. */
   children?: ReactNode;
 }) {
@@ -39,7 +41,7 @@ export function AdaInput({
             setNote(cleaned.note);
             onChange(cleaned.value);
           }}
-          autoFocus
+          autoFocus={autoFocus}
         />
         <span className="amount-row__unit">₳</span>
         {children}

@@ -52,11 +52,20 @@ export function timeAgo(then: number, now: number): string {
 
 /** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */
 export function parseAda(text: string): string | undefined {
+  return parseQuantity(text, 6);
+}
+
+/**
+ * A typed amount of something with `decimals` places as its raw integer
+ * string, or undefined if it isn't one: "1,234.5" with 6 decimals is
+ * "1234500000". More decimal places than it has isn't an amount.
+ */
+export function parseQuantity(text: string, decimals: number): string | undefined {
   const clean = text.trim().replaceAll(",", "");
-  const match = /^(\d+)(?:\.(\d{0,6}))?$/.exec(clean);
-  if (!match) return undefined;
-  const lovelace = BigInt(match[1]!) * 1_000_000n + BigInt((match[2] ?? "").padEnd(6, "0") || "0");
-  return lovelace.toString();
+  const match = /^(\d+)(?:\.(\d*))?$/.exec(clean);
+  if (!match || (match[2] ?? "").length > decimals) return undefined;
+  const scale = 10n ** BigInt(decimals);
+  return (BigInt(match[1]!) * scale + BigInt((match[2] ?? "").padEnd(decimals, "0") || "0")).toString();
 }
 
 /** A block explorer link for a transaction. */

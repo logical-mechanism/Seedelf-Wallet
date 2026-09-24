@@ -105,9 +105,42 @@ export interface MintSummary {
   inputs: number;
 }
 
+/** A token and an amount to send. `quantity` is the raw integer, as a decimal string. */
+export type TokenQuantity = TokenRef & { quantity: string };
+
+/** A seedelf found on chain, for the transfer form. */
+export interface SeedelfLookup {
+  /** The full token name, hex. */
+  name: string;
+  /** Its personal tag, when it reads as text. */
+  label?: string;
+  /** One of this wallet's own seedelfs: paying it moves money in a circle. */
+  own: boolean;
+}
+
+/** A finished transfer, waiting for the user to send it. Amounts are lovelace strings. */
+export interface TransferSummary {
+  network: NetworkName;
+  txHash: string;
+  /** The seedelf paid: its full token name, and its tag when it reads as text. */
+  to: string;
+  label?: string;
+  /** Paying one of your own seedelfs: the payment comes back to your Seedelf balance. */
+  toSelf: boolean;
+  lovelace: string;
+  tokens: TokenQuantity[];
+  fee: { size: string; compute: string; scriptReference: string; total: string };
+  /** Back into the Seedelf balance. */
+  changeLovelace: string;
+  changeTokens: number;
+  changeOutputs: number;
+  /** How many Seedelf UTxOs pay for it. */
+  inputs: number;
+}
+
 /** A submitted transaction the wallet is watching. */
 export interface PendingTx {
-  kind: "move-in" | "mint";
+  kind: "move-in" | "mint" | "transfer";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -140,6 +173,12 @@ export interface Requests {
   "mint-build": { payload: { label: string; from: MintSource }; result: MintSummary };
   /** Submits the mint built last, if its hash matches: an account-paid one as signed, a stealth one once giveme.my has witnessed it. */
   "mint-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Finds a seedelf by its full name in the wallet contract, as read from Koios. */
+  "transfer-lookup": { payload: { to: string }; result: SeedelfLookup };
+  /** Builds a transfer to a seedelf (Ogmios measures its spends) without sending it. */
+  "transfer-build": { payload: { to: string; lovelace: string; tokens: TokenQuantity[] }; result: TransferSummary };
+  /** Submits the transfer built last, if its hash matches, once giveme.my has witnessed it. */
+  "transfer-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };
   "reset-wallet": { payload: None; result: Status };
@@ -171,6 +210,9 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "move-in-submit",
   "mint-build",
   "mint-submit",
+  "transfer-lookup",
+  "transfer-build",
+  "transfer-submit",
   "pending-tx",
   "reset-wallet",
 ]);
