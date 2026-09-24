@@ -26,7 +26,7 @@ The wallet is built in **chunks**, each about one working session.
 | 9 | Transfer | ✅ | Seedelf → seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md). |
 | 10 | Withdraw | ✅ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md). |
 | 11a | Style and flow pass | ✅ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Dark only, Inter, Lucide icons, and Home as a Seedelf / Cardano account switch with round actions. **Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).** |
-| 11b | Size and live runs | ⬜ | A smaller WebAssembly module (a size-tuned cargo profile, then `wasm-opt` if it pays). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
+| 11b | Size and live runs | ✅ | A smaller WebAssembly module: a size-tuned cargo profile (`wasm-opt` measured and left out). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
 | 11c | Testers | ⬜ | The unlisted Chrome Web Store listing (`VITE_STORE_BUILD=true`): the store build, the listing text, the privacy policy, the screenshots and a release checklist, ready for the user to submit. Same plan. |
 
 ## After v1
@@ -38,6 +38,49 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 11b done** (`web-wallet/size-and-live`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
+  - **Decided with the user:**
+    - The `wasm-release` profile with `opt-level = "z"`, and no `wasm-opt`.
+    - The live runs run from here, on the private test wallet.
+    - The withdrawal goes to that wallet's own account.
+  - **Size** (`wasm/bench.mjs`; a proof is about 1.8 ms and a transfer draft about 53 ms in every build):
+
+    | Build | Raw | gzip |
+    |---|---|---|
+    | `release` (before) | 2,330 KB | 582 KB |
+    | LTO, one codegen unit, stripped, `opt-level` 3 | 1,687 KB | 516 KB |
+    | … `opt-level = "s"` | 1,276 KB | 442 KB |
+    | … `opt-level = "z"` (**used**) | 1,223 KB | 424 KB |
+    | … plus `wasm-opt -Oz` | 1,113 KB | 448 KB |
+
+    - `wasm-opt` shrinks the raw file but grows the compressed one, and the Web Store's download is a zip. The zipped `dist/` went from 1,032 KB to 873 KB.
+    - CI's WebAssembly build takes about 20 s longer (LTO).
+  - **Live on preprod** (the private test wallet, `node e2e/live/run.mjs`):
+
+    | Flow | Transaction | Fee (₳) |
+    |---|---|---|
+    | Create `live-1`, paid by the account | [`c0f3449d…cfcb48`](https://preprod.cardanoscan.io/transaction/c0f3449d674718cc92071ac3d5e703c13134b1f372aecdf298952ce4d5cfcb48) | 0.200988 |
+    | Move in 25.5 ₳ | [`180277c5…9d7519`](https://preprod.cardanoscan.io/transaction/180277c5c63cf45b06cccdb03575c1eeafff68a325a13a5e875af71ee19d7519) | 0.172145 |
+    | Stealth mint `live-2` (giveme.my) | [`081a621d…286816`](https://preprod.cardanoscan.io/transaction/081a621d813e8ed6aba2b2dd5139ad8dfaef1b3cac9d3e9e23c6b4b572286816) | 0.255934 |
+    | Send 3.3 ₳ to `live-1` (own, flagged) | [`86eb9cb9…99d184c`](https://preprod.cardanoscan.io/transaction/86eb9cb920649f29a277e7c3797d3fd1098390551794779402597cc9899d184c) | 0.233912 |
+    | Withdraw 5.5 ₳ to its own account (flagged) | [`f7276736…c8ae240`](https://preprod.cardanoscan.io/transaction/f7276736e4bc32da699923fdbf05a6112eaf8ad46571b839b3ee18c53c8ae240) | 0.23026 |
+    | Remove `live-2` into Seedelf | [`8f00e464…aad7115`](https://preprod.cardanoscan.io/transaction/8f00e4641a641de62160d9e7de41e3f90f8b5a7774d70063b203e98e4aad7115) | 0.245746 |
+
+    - All six are confirmed (blocks 5,214,814 to 5,214,858). The extension contacted only `preprod.koios.rest` and `www.giveme.my`.
+    - The test wallet now holds `live-1` (1.74986 ₳), 19.034148 ₳ in Seedelf and 9,977.877007 ₳ in the account.
+  - **Found live, and fixed:**
+    - **A Koios backend that's behind.** After the mint confirmed, `account_utxos` still listed the UTxO it spent. After the move-in, a backend answered with the account as it was before the mint, 20 minutes earlier. `account_utxos` is a live db-sync query (koios-artifacts), so it's a backend lagging, not a cache.
+      - Fix: `spent.ts`. The worker remembers what it submits, reads again (up to 3 × 3 s) while an answer lists a spent UTxO, and never counts or builds on one.
+      - Tests: `tests/spent.test.ts`, with the fake Koios's new `spent` set.
+    - **Koios's node was down** (`TxSubmitConnectionError`) twice. That answer means nothing was sent, so `submittx` retries it (after 1 s and 3 s), and says so plainly if it keeps failing. `BadInputsUTxO` now explains itself too.
+  - **Loose ends:**
+    - **ADA Handles:** resolved against real preprod handles, `$buzzkill` (plain) and `$-2` (CIP-68), in the opt-in live test. No withdrawal to a handle has run live.
+    - **The public 12-word phrase's balance** is untouched: the private wallet covered every flow.
+    - development.md has the testing layers and a **preprod checklist before a release**.
+  - **The live scripts:** `e2e/live/{lib,flows,run}.mjs` replace `move-in.mjs` and `mint.mjs`. They run in one browser session, as a user would. A fresh session knows nothing of what earlier sessions spent, so it's more exposed to a lagging backend.
+  - **Tests:** Vitest 117 (+2 live), Playwright 19, WASM Node 29.
+  - **Next:** 11c, the unlisted Web Store listing, on `web-wallet/store` once this merges.
 
 - **2026-09-24: chunk 11a done** (`web-wallet/polish`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
   - **Decided with the user:**
