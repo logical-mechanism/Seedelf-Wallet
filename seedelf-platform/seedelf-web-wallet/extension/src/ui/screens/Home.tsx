@@ -1,6 +1,6 @@
-// Home, in two tabs. Seedelf: the Seedelf balance, its tokens, your seedelfs
-// and the Seedelf identity. Cardano account: the account's balance and
-// tokens, Receive and Move in. Until the wallet has a seedelf and a Seedelf
+// Home, in two tabs. Seedelf: the Seedelf balance, its tokens and your
+// seedelfs. Cardano account: the account's balance and tokens, Receive and
+// Move in. Until the wallet has a seedelf and a Seedelf
 // balance, a checklist shows the order that keeps them apart: fund the
 // account, create the seedelf, then move in (privacy.md, mint first).
 // Balances come from the worker's last reading; it reads the chain again
@@ -15,7 +15,7 @@ import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
-import { CopyField } from "../components/CopyField";
+import { Splash, useSplash } from "../components/Splash";
 import {
   DoneIcon,
   ExternalIcon,
@@ -29,12 +29,14 @@ import {
   TrashIcon,
   WithdrawIcon,
 } from "../components/Icons";
+import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
 import { explorerUrl, formatAda, plural, shortHex, timeAgo } from "../format";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
 import { Receive } from "./Receive";
 import { RemoveSeedelf } from "./RemoveSeedelf";
+import { Tokens } from "./Tokens";
 import { Transfer } from "./Transfer";
 import { Withdraw } from "./Withdraw";
 
@@ -72,6 +74,7 @@ export function Home() {
   const [tab, setTab] = useState<Tab>("seedelf");
   const [screen, setScreen] = useState<"home" | "receive" | "move-in" | "create" | "transfer" | "withdraw">("home");
   const [removing, setRemoving] = useState<SeedelfInfo>();
+  const [tokensOf, setTokensOf] = useState<Tab>();
   const [pending, setPending] = useState<PendingTx | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
@@ -112,6 +115,9 @@ export function Home() {
     return () => clearInterval(tick);
   }, [load, watch]);
 
+  // Until the first reading (or its error), a splash covers the empty balances.
+  const splash = useSplash(balances !== undefined || error !== undefined);
+
   const watching = pending !== null && pending.confirmations === null && now - pending.submittedAt < 10 * 60_000;
   useEffect(() => {
     if (!watching) return;
@@ -133,6 +139,10 @@ export function Home() {
   if (removing) {
     return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
   }
+  if (tokensOf && balances) {
+    const back = () => setTokensOf(undefined);
+    return <Tokens network={balances.network} tokens={balances[tokensOf].tokens} of={tokensOf} onBack={back} />;
+  }
 
   const seedelfs = balances?.seedelf.seedelfs ?? [];
   const canSpend = !!balances && balances.seedelf.utxos > 0 && !watching;
@@ -146,216 +156,190 @@ export function Home() {
   const canMoveIn = !!balances && balances.cardano.utxos > 0 && !watching;
 
   return (
-    <div className="home">
-      {error && (
-        <Callout tone="warn" role="alert">
-          <div className="stack-tight">
-            <strong>Couldn't read your balances</strong>
-            <span>{error}</span>
-            <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
-              {reading ? "Trying…" : "Try again"}
-            </button>
-          </div>
-        </Callout>
-      )}
-      {pending && <Pending pending={pending} watching={watching} onDismiss={() => setPending(null)} />}
-
-      <Tabs tab={tab} onChange={setTab} />
-
-      {/* Each panel has its own key, so its buttons are new, not restyled Seedelf ones. */}
-      {tab === "seedelf" ? (
-        <section key="seedelf" className="stack" role="tabpanel" id="panel-seedelf" aria-labelledby="tab-seedelf">
-          <div className="hero">
-            <h1 id="seedelf-balance" className="hero__label">
-              Seedelf balance
-            </h1>
-            <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
-            <span className="hero__meta">{balances ? plural(balances.seedelf.utxos, "UTxO") : "\u00a0"}</span>
-            <div className="hero__actions">
-              <ActionButton
-                primary
-                icon={<SendIcon />}
-                label="Send"
-                name="Send to a seedelf"
-                onClick={() => setScreen("transfer")}
-                disabled={!canSpend}
-                title={spendTitle}
-              />
-              <ActionButton
-                icon={<WithdrawIcon />}
-                label="Withdraw"
-                onClick={() => setScreen("withdraw")}
-                disabled={!canSpend}
-                title={spendTitle}
-              />
-              <ActionButton
-                icon={<SproutIcon />}
-                label="Create"
-                name="Create a seedelf"
-                onClick={() => setScreen("create")}
-                disabled={!canCreate}
-                title={createTitle}
-              />
+    <>
+      <Splash phase={splash} />
+      <div className={splash === "wait" || splash === "show" ? "home home--hidden" : "home"}>
+        {error && (
+          <Callout tone="warn" role="alert">
+            <div className="stack-tight">
+              <strong>Couldn't read your balances</strong>
+              <span>{error}</span>
+              <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
+                {reading ? "Trying…" : "Try again"}
+              </button>
             </div>
-          </div>
+          </Callout>
+        )}
+        {pending && <Pending pending={pending} watching={watching} onDismiss={() => setPending(null)} />}
 
-          {balances && (seedelfs.length === 0 || balances.seedelf.utxos === 0) && (
-            <GettingStarted
-              balances={balances}
-              watching={watching}
-              onReceive={() => {
-                setTab("cardano");
-                setScreen("receive");
-              }}
-              onCreate={() => setScreen("create")}
-              onMoveIn={() => setScreen("move-in")}
-            />
-          )}
+        <Tabs
+          label="Balances"
+          tabs={[
+            { value: "seedelf", label: "Seedelf" },
+            { value: "cardano", label: "Cardano account" },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
 
-          {balances && balances.seedelf.tokens.length > 0 && (
-            <section className="section" aria-labelledby="seedelf-tokens-title">
-              <h2 id="seedelf-tokens-title">Tokens</h2>
-              <TokenList tokens={balances.seedelf.tokens} testId="seedelf-tokens" />
-            </section>
-          )}
-
-          {seedelfs.length > 0 && (
-            <section className="section" aria-labelledby="your-seedelfs">
-              <h2 id="your-seedelfs">Your seedelfs</h2>
-              <ul className="list" data-testid="seedelfs">
-                {seedelfs.map((s) => (
-                  <li key={s.assetName} className="list__row" title={s.assetName}>
-                    <span className="list__name">{s.label ?? "Unnamed"}</span>
-                    <span className="list__value">{formatAda(s.lovelace)} ₳</span>
-                    <code className="list__sub">{shortHex(s.assetName, 12, 6)}</code>
-                    <span className="list__actions">
-                      <CopyButton value={s.assetName} label={`Copy the name of ${s.label ?? "this seedelf"}`} />
-                      <button
-                        type="button"
-                        className="icon-button icon-button--small"
-                        aria-label={`Remove ${s.label ?? "this seedelf"}`}
-                        onClick={() => setRemoving(s)}
-                        disabled={watching}
-                        title={watching ? BUSY : "Remove this seedelf"}
-                      >
-                        <TrashIcon size={14} />
-                      </button>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <p className="note">Copy a seedelf's full name to give to anyone who wants to pay you.</p>
-            </section>
-          )}
-
-          {account && (
-            <section className="section" aria-labelledby="seedelf-identity">
-              <h2 id="seedelf-identity">Seedelf identity</h2>
-              <p className="note">
-                Your Seedelf key's public value. Payments to your seedelfs use re-randomized copies of it, so they can't
-                be linked back here.
-              </p>
-              <CopyField
-                label="Public value"
-                value={account.seedelfPublicValue}
-                display={shortHex(account.seedelfPublicValue, 10, 10)}
-                testId="seedelf-public-value"
-              />
-            </section>
-          )}
-        </section>
-      ) : (
-        <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
-          <div className="hero">
-            <h1 id="cardano-account" className="hero__label">
-              Cardano account
-            </h1>
-            <Amount lovelace={balances?.cardano.lovelace} testId="cardano-lovelace" />
-            <span className="hero__meta">
-              {balances ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used` : "\u00a0"}
-            </span>
-            <div className="hero__actions">
-              <ActionButton icon={<ReceiveIcon />} label="Receive" onClick={() => setScreen("receive")} disabled={!account} />
-              <ActionButton
-                primary
-                icon={<MoveInIcon />}
-                label="Move in"
-                onClick={() => setScreen("move-in")}
-                disabled={!canMoveIn}
-                title={watching ? BUSY : undefined}
-              />
+        {/* Each panel has its own key, so its buttons are new, not restyled Seedelf ones. */}
+        {tab === "seedelf" ? (
+          <section key="seedelf" className="stack" role="tabpanel" id="panel-seedelf" aria-labelledby="tab-seedelf">
+            <div className="hero">
+              <h1 id="seedelf-balance" className="hero__label">
+                Seedelf balance
+              </h1>
+              <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
+              <span className="hero__meta">{balances ? plural(balances.seedelf.utxos, "UTxO") : "\u00a0"}</span>
+              <div className="hero__actions">
+                <ActionButton
+                  primary
+                  icon={<SendIcon />}
+                  label="Send"
+                  name="Send to a seedelf"
+                  onClick={() => setScreen("transfer")}
+                  disabled={!canSpend}
+                  title={spendTitle}
+                />
+                <ActionButton
+                  icon={<WithdrawIcon />}
+                  label="Withdraw"
+                  onClick={() => setScreen("withdraw")}
+                  disabled={!canSpend}
+                  title={spendTitle}
+                />
+                <ActionButton
+                  icon={<SproutIcon />}
+                  label="Create"
+                  name="Create a seedelf"
+                  onClick={() => setScreen("create")}
+                  disabled={!canCreate}
+                  title={createTitle}
+                />
+              </div>
             </div>
-          </div>
 
-          {balances && seedelfs.length === 0 && (
-            <Callout tone="privacy" testId="mint-first">
-              Create your seedelf before moving money in: then what you move in isn't tied to it.
-            </Callout>
-          )}
+            {balances && (seedelfs.length === 0 || balances.seedelf.utxos === 0) && (
+              <GettingStarted
+                balances={balances}
+                watching={watching}
+                onReceive={() => {
+                  setTab("cardano");
+                  setScreen("receive");
+                }}
+                onCreate={() => setScreen("create")}
+                onMoveIn={() => setScreen("move-in")}
+              />
+            )}
 
-          {balances && balances.cardano.tokens.length > 0 && (
-            <section className="section" aria-labelledby="cardano-tokens-title">
-              <h2 id="cardano-tokens-title">Tokens</h2>
-              <TokenList tokens={balances.cardano.tokens} testId="cardano-tokens" />
-            </section>
-          )}
-        </section>
-      )}
+            {balances && balances.seedelf.tokens.length > 0 && (
+              <section className="section" aria-labelledby="seedelf-tokens-title">
+                <h2 id="seedelf-tokens-title">Tokens</h2>
+                <TokenList
+                  network={balances.network}
+                  tokens={balances.seedelf.tokens}
+                  testId="seedelf-tokens"
+                  onViewAll={() => setTokensOf("seedelf")}
+                />
+              </section>
+            )}
 
-      <div className="refresh-row">
-        <span className="note" data-testid="updated">
-          {reading ? "Reading the chain…" : balances ? `Updated ${timeAgo(balances.updatedAt, now)}` : ""}
-        </span>
-        <button
-          type="button"
-          className="icon-button"
-          onClick={() => void load(true)}
-          disabled={reading}
-          aria-label="Refresh"
-          title="Read the chain again"
-        >
-          <span className={reading ? "spin" : "icon"}>
-            <RefreshIcon size={15} />
+            {seedelfs.length > 0 && (
+              <section className="section" aria-labelledby="your-seedelfs">
+                <h2 id="your-seedelfs">Your seedelfs</h2>
+                <ul className="list" data-testid="seedelfs">
+                  {seedelfs.map((s) => (
+                    <li key={s.assetName} className="list__row" title={s.assetName}>
+                      <span className="list__name">{s.label ?? "Unnamed"}</span>
+                      <span className="list__value">{formatAda(s.lovelace)} ₳</span>
+                      <code className="list__sub">{shortHex(s.assetName, 12, 6)}</code>
+                      <span className="list__actions">
+                        <CopyButton value={s.assetName} label={`Copy the name of ${s.label ?? "this seedelf"}`} />
+                        <button
+                          type="button"
+                          className="icon-button icon-button--small"
+                          aria-label={`Remove ${s.label ?? "this seedelf"}`}
+                          onClick={() => setRemoving(s)}
+                          disabled={watching}
+                          title={watching ? BUSY : "Remove this seedelf"}
+                        >
+                          <TrashIcon size={14} />
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="note">Copy a seedelf's full name to give to anyone who wants to pay you.</p>
+              </section>
+            )}
+          </section>
+        ) : (
+          <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
+            <div className="hero">
+              <h1 id="cardano-account" className="hero__label">
+                Cardano account
+              </h1>
+              <Amount lovelace={balances?.cardano.lovelace} testId="cardano-lovelace" />
+              <span className="hero__meta">
+                {balances ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used` : "\u00a0"}
+              </span>
+              <div className="hero__actions">
+                <ActionButton
+                  icon={<ReceiveIcon />}
+                  label="Receive"
+                  onClick={() => setScreen("receive")}
+                  disabled={!account}
+                />
+                <ActionButton
+                  primary
+                  icon={<MoveInIcon />}
+                  label="Move in"
+                  onClick={() => setScreen("move-in")}
+                  disabled={!canMoveIn}
+                  title={watching ? BUSY : undefined}
+                />
+              </div>
+            </div>
+
+            {balances && seedelfs.length === 0 && (
+              <Callout tone="privacy" testId="mint-first">
+                Create your seedelf before moving money in: then what you move in isn't tied to it.
+              </Callout>
+            )}
+
+            {balances && balances.cardano.tokens.length > 0 && (
+              <section className="section" aria-labelledby="cardano-tokens-title">
+                <h2 id="cardano-tokens-title">Tokens</h2>
+                <TokenList
+                  network={balances.network}
+                  tokens={balances.cardano.tokens}
+                  testId="cardano-tokens"
+                  onViewAll={() => setTokensOf("cardano")}
+                />
+              </section>
+            )}
+          </section>
+        )}
+
+        <div className="refresh-row">
+          <span className="note" data-testid="updated">
+            {reading ? "Reading the chain…" : balances ? `Updated ${timeAgo(balances.updatedAt, now)}` : ""}
           </span>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** Seedelf or Cardano account; the arrow keys move between them. */
-function Tabs({ tab, onChange }: { tab: Tab; onChange: (tab: Tab) => void }) {
-  const tabs: Array<[Tab, string]> = [
-    ["seedelf", "Seedelf"],
-    ["cardano", "Cardano account"],
-  ];
-  return (
-    <div className="segmented" role="tablist" aria-label="Balances">
-      {tabs.map(([value, label]) => {
-        const on = tab === value;
-        return (
           <button
-            key={value}
             type="button"
-            role="tab"
-            id={`tab-${value}`}
-            aria-selected={on}
-            aria-controls={on ? `panel-${value}` : undefined}
-            tabIndex={on ? 0 : -1}
-            className={on ? "segmented__item segmented__item--on" : "segmented__item"}
-            onClick={() => onChange(value)}
-            onKeyDown={(e) => {
-              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-              const next = value === "seedelf" ? "cardano" : "seedelf";
-              onChange(next);
-              document.getElementById(`tab-${next}`)?.focus();
-            }}
+            className="icon-button"
+            onClick={() => void load(true)}
+            disabled={reading}
+            aria-label="Refresh"
+            title="Read the chain again"
           >
-            {label}
+            <span className={reading ? "spin" : "icon"}>
+              <RefreshIcon size={15} />
+            </span>
           </button>
-        );
-      })}
-    </div>
+        </div>
+      </div>
+    </>
   );
 }
 

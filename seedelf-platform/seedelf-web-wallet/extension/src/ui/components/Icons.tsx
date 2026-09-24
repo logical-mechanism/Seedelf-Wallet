@@ -1,7 +1,7 @@
 // Inline icons, copied from Lucide (lucide-static 1.48.0): only the ones the
 // wallet uses, each under its Lucide name. Lucide is ISC, and some icons
-// (arrow-down-left, check, chevron-left, external-link, info, lock, log-in,
-// log-out, trash-2, x) come from Feather, MIT. Both notices ship in the
+// (arrow-down-left, check, chevron-left, chevron-right, external-link, info,
+// lock, log-in, log-out, search, trash-2, x) come from Feather, MIT. Both notices ship in the
 // extension as licenses/lucide-ISC.txt.
 
 import type { ReactNode } from "react";
@@ -183,3 +183,15 @@ export const CloseIcon = icon(
     <path d="m6 6 12 12" />
   </>,
 );
+
+/** search */
+export const SearchIcon = icon(
+  <>
+    <path d="m21 21-4.34-4.34" />
+    <circle cx="11" cy="11" r="8" />
+  </>,
+);
+
+/** chevron-right */
+export const ChevronRightIcon = icon(<path d="m9 18 6-6-6-6" />);
+

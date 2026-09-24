@@ -42,10 +42,16 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 - **Home** has two tabs, and under them when the chain was last read, and **Refresh**.
   - **Seedelf:**
     - the **Seedelf balance**: ADA in the contract UTxOs this wallet owns, with round **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf) actions;
-    - its tokens;
-    - **your seedelfs**, with their tags, the ADA locked with each, a **Copy** button for each full name (to give to anyone who wants to pay you, or to paste into Send to a seedelf) and **Remove**;
-    - the **Seedelf identity**: the base register's public value, shortened.
-  - **Cardano account:** its ADA, how many addresses it has used, **Receive** and **Move in**, and its tokens. Until a seedelf exists, a note says to create one before moving money in.
+    - its tokens: the first five (fungible first, by name, then NFTs) and **View all**. Tapping a token opens its details;
+    - **your seedelfs**, with their tags, the ADA locked with each, a **Copy** button for each full name (to give to anyone who wants to pay you, or to paste into Send to a seedelf) and **Remove**.
+
+    The base register's public value isn't shown: a seedelf's name is what people pay, and nothing else takes the public value.
+  - **Cardano account:** its ADA, how many addresses it has used, **Receive** and **Move in**, and its tokens (as on the Seedelf tab). Until a seedelf exists, a note says to create one before moving money in.
+  - **While the first reading loads** (after an unlock, a restore or a create), a splash covers Home instead of empty balances: the emblem on navy with a teal arc circling it. It fades out into the wallet when the balances arrive. A cached reading shows Home at once, and the splash gives up after about 8 s, so a slow Koios can't hide Refresh or an error.
+  - **Tokens** (from **View all**): one balance's tokens in two tabs, **Tokens** and **NFTs**, with a search (name, ticker, policy ID, fingerprint) and a sort (name or amount), 50 rows at a time.
+    - **A token's details** rise in a sheet: the amount, the policy ID, the asset name and the fingerprint, each with Copy.
+    - A token on the wallet's list shows its ticker and logo, and says it's on the list. Any other token goes by its own name, with its fingerprint under it and two letters for a logo, and the sheet says its name is only what it calls itself.
+    - NFTs are told apart without asking anyone: CIP-68 label 222 is an NFT, 333 and 444 are fungible, and otherwise a single unit with no decimals is an NFT.
   - **Get started:** until the wallet has both a seedelf and a Seedelf balance, the Seedelf tab lists three steps, in the order that keeps them apart (see [Create a seedelf](#create-a-seedelf)):
     1. fund the Cardano account;
     2. create the seedelf, paid by the account;

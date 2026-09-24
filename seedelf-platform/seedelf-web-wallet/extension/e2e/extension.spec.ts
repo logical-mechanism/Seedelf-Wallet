@@ -85,9 +85,6 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
   await page.getByRole("button", { name: "Create wallet" }).click();
 
   // Home opens on the Seedelf tab, with the first steps in the order that keeps them apart.
-  const publicValue = page.getByTestId("seedelf-public-value");
-  await expect(publicValue).toHaveText(/^[0-9a-f]{10}…[0-9a-f]{10}$/);
-  const identity = await publicValue.textContent();
   await expect(page.getByTestId("getting-started")).toContainText("Fund your Cardano account");
   await snap(page, "home");
 
@@ -97,9 +94,9 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
   await expect(page.getByTestId("stake-address")).toHaveText(/^stake_test1u/);
   const address = await page.getByTestId("receive-address").textContent();
 
-  // Reopening the app keeps it unlocked.
+  // Reopening the app keeps it unlocked, on the same wallet.
   const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("seedelf-public-value")).toHaveText(identity!);
+  await expect(popup.getByTestId("getting-started")).toContainText("Fund your Cardano account");
   await snap(popup, "home-popup");
   await openReceive(popup);
   await expect(popup.getByTestId("receive-address")).toHaveText(address!);
@@ -111,8 +108,10 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
 
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Unlock" }).click();
-  await expect(page.getByTestId("seedelf-public-value")).toHaveText(identity!);
-  await expect(popup.getByTestId("seedelf-public-value")).toHaveText(identity!);
+  await expect(page.getByTestId("getting-started")).toBeVisible();
+  await expect(popup.getByTestId("getting-started")).toBeVisible();
+  await openReceive(popup);
+  await expect(popup.getByTestId("receive-address")).toHaveText(address!);
 });
 
 test("restore: a pasted vector phrase gives its Lace-matching address", async ({ context }) => {
@@ -281,6 +280,97 @@ test("home says so when Koios can't be read", async ({ context, koios }) => {
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("the first reading shows the splash, which fades into the wallet; a kept reading doesn't", async ({ context, koios }) => {
+  koios.delayMs = 1500;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("splash")).toBeVisible();
+  await expect(page.getByRole("status", { name: "Loading your wallet" })).toBeVisible();
+  const popup = await openApp(context, "popup");
+  await expect(popup.getByTestId("splash")).toBeVisible();
+  await page.screenshot({ path: "test-results/splash.png" });
+  await popup.screenshot({ path: "test-results/popup-splash.png" });
+
+  await expect(page.getByTestId("splash")).toHaveCount(0);
+  await expect(page.getByTestId("seedelf-lovelace")).toBeVisible();
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await expect(popup.getByTestId("splash")).toHaveCount(0);
+
+  // The worker keeps the reading, so a popup opened now goes straight to it.
+  koios.delayMs = undefined;
+  const again = await openApp(context, "popup");
+  await expect(again.getByTestId("seedelf-lovelace")).toBeVisible();
+  await expect(again.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await expect(again.getByTestId("splash")).toHaveCount(0);
+});
+
+test("a splash left waiting on a slow Koios gives way to the wallet", async ({ context, koios }) => {
+  koios.delayMs = 15_000;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("splash")).toBeVisible();
+  await expect(page.getByTestId("splash")).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByTestId("updated")).toHaveText("Reading the chain…");
+  await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+});
+
+test("tokens: Home shows five, View all has tokens and NFTs, a search, a sort and each token's details", async ({ context }) => {
+  // The 24-word phrase's real preprod account: 8 fungible tokens and 5 NFTs, none in the wallet's list.
+  // (A sixth NFT sits at a script address with this stake key: not the account's to spend.)
+  const page = await openApp(context);
+  await restore(page, vector(24).phrase);
+  await cardanoTab(page);
+  await expect(page.getByTestId("cardano-tokens").getByRole("listitem")).toHaveCount(5);
+  await page.getByRole("button", { name: "View all 13 tokens" }).click();
+
+  await expect(page.getByRole("heading", { name: "Cardano account tokens" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Tokens (8)" })).toHaveAttribute("aria-selected", "true");
+  const rows = page.getByTestId("token-results").getByRole("listitem");
+  await expect(rows).toHaveCount(8);
+  await snap(page, "tokens");
+
+  // Search: a name, a policy ID, then nothing.
+  const search = page.getByLabel("Search tokens");
+  await search.fill("alp");
+  await expect(rows).toHaveCount(2);
+  await search.fill("22691D3D");
+  await expect(rows).toHaveCount(2);
+  await search.fill("zzz");
+  await expect(page.getByText("No tokens match “zzz”.")).toBeVisible();
+  await search.fill("");
+
+  // Largest first: the two aLP holdings.
+  await page.getByRole("button", { name: "Amount" }).click();
+  await expect(rows.first()).toContainText("aLP");
+  await expect(rows.first()).toContainText("10,178,074");
+
+  // NFTs: CIP-68 label 222, or a single unit.
+  await page.getByRole("tab", { name: "NFTs (5)" }).click();
+  await expect(rows).toHaveCount(5);
+  await search.fill("hanoi");
+  await expect(rows).toHaveCount(4);
+  await search.fill("");
+
+  // Details: every id, with Copy; this one isn't in the wallet's list.
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("tab", { name: "Tokens (8)" }).click();
+  await page.getByRole("button", { name: "MyLittleToken, 10" }).click();
+  const sheet = page.getByRole("dialog", { name: "MyLittleToken" });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByTestId("token-amount")).toHaveText("10");
+  await expect(sheet).toContainText("Not in the wallet's token list");
+  const policy = await sheet.getByTestId("token-policy").getAttribute("data-value");
+  expect(policy).toMatch(/^6024bbf2/);
+  await sheet.getByRole("button", { name: "Copy the policy id" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(policy);
+  await snap(page, "token-details");
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("cardano-tokens")).toBeVisible();
 });
 
 test("move in: amount and a token, review, send, then watch it confirm", async ({ context, koios }) => {
@@ -608,6 +698,14 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
   await cardanoTab(popup);
   await expect(popup.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await shot("home-cardano");
+  await popup.getByRole("button", { name: "View all 6 tokens" }).click();
+  await expect(popup.getByRole("heading", { name: "Cardano account tokens" })).toBeVisible();
+  await shot("tokens");
+  await popup.getByRole("button", { name: "LINK, 550,999,000" }).click();
+  await expect(popup.getByRole("dialog", { name: "LINK" })).toBeVisible();
+  await popup.screenshot({ path: "test-results/popup-token-details.png", animations: "disabled" });
+  await popup.getByRole("button", { name: "Close" }).click();
+  await back();
   await popup.getByRole("button", { name: "Receive" }).click();
   await expect(popup.getByRole("img", { name: "QR code of the receive address" })).toBeVisible();
   await shot("receive");

@@ -234,8 +234,13 @@ Non-secret settings and cached chain data join `chrome.storage.local` in later c
   - `Screen` is every flow's layout: Back and the title, a line under it (the step, what's available, "Nothing is sent until you press Send"), the body, then the error and the primary action. That foot stays in view while the body scrolls.
   - `ReviewRows` and `Row` hold a review's details, like Lace's detail rows.
   - `Callout` is a privacy note (a shield), a warning or plain information. **The privacy notes carry [privacy.md](privacy.md)'s decisions:** a restyle can move or shorten one, but never drop it.
-  - `ActionButton` is Home's round action. `Choice` is a segmented switch of pressed buttons.
-  - The rest: `AdaInput` (with `RoundNote`), `TokenAmounts`, `TokenList`, `CopyButton`, `CopyField`, `QrCode`, `PhraseInput` and `SetPassword`.
+  - `ActionButton` is Home's round action. `Choice` is a segmented switch of pressed buttons, and `Tabs` a segmented switch of tabs (Home's two, the Tokens screen's two).
+  - `Splash` covers Home while its first reading loads (`useSplash`: shown only after 150 ms without data, at least 600 ms once shown, a 320 ms fade out, and never more than 8 s).
+  - `Sheet` is a modal `<dialog>` rising from the bottom; `TokenList` holds `TokenRow`, `TokenAvatar` and `TokenDetails` (a sheet).
+  - The rest: `AdaInput` (with `RoundNote`), `TokenAmounts`, `CopyButton`, `CopyField`, `QrCode`, `PhraseInput` and `SetPassword`.
+- **The wallet's token list** (chunk 12): tickers, names, decimals and logos for a hand-kept list of fungible tokens per network, bundled in the extension, so a balance never asks anyone about the tokens it holds.
+  - `extension/src/tokens/list.json` pins each token's unit and the ticker the Cardano token registry must give it. `npm run tokens` (`scripts/tokens.mjs`) reads the registry through Koios `asset_info`, fails on a ticker that doesn't match, reports other registry entries claiming the same ticker, shrinks each logo to a 96 px WebP, and writes `src/tokens/registry.<network>.json`. It runs at each release.
+  - `src/ui/tokens.ts` names, sorts and searches tokens. A token off the list never gets a listed token's ticker or logo, however it's named. Only a mainnet build carries the mainnet list.
   - Buttons are classes on a plain `<button>`: `primary`, `secondary`, `danger`, `link`, `icon-button` and `chip`.
 - **Lace's flows and visual language inspire ours:** spacing, corner radius, the dark theme, screen-to-screen flow.
 - **We don't take Lace's name, logo, brand colours or brand assets,** and we don't take its commercial fonts (Brandon Grotesque and Proxima Nova are in its repo but not licensed to us).

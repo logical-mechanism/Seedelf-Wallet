@@ -13,7 +13,8 @@ It can create or restore a wallet, lock it with a password, and show what the wa
 | Restore | Onboarding | 12, 15 or 24 words, one box each with BIP39 autocomplete; pasting a phrase fills every box. Then a password. |
 | Unlock | Locked | Password, the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
-| Home | Unlocked | Two tabs. **Seedelf:** the balance with round **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf); tokens; your seedelfs with Copy and Remove on each; the Seedelf identity. **Cardano account:** the balance with **Receive** and **Move in**, and tokens. A new wallet gets *Get started* (fund, create, move in). Refresh sits under the tabs, and a sent transaction shows as a banner until it confirms. The lock button is in the top bar. |
+| Home | Unlocked | Two tabs. **Seedelf:** the balance with round **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf); the first five tokens and **View all**; your seedelfs with Copy and Remove on each. **Cardano account:** the balance with **Receive** and **Move in**, and tokens. Until the first reading arrives, a splash covers it. A new wallet gets *Get started* (fund, create, move in). Refresh sits under the tabs, and a sent transaction shows as a banner until it confirms. The lock button is in the top bar. |
+| Tokens | From **View all** | One balance's tokens and NFTs in two tabs, with a search and a sort. A token opens a sheet with its amount, policy ID, asset name and fingerprint, each with Copy. Tickers and logos come from the wallet's own token list. |
 | Receive | From the Cardano account tab | The receive address as a QR code and text, with copy, and the stake address |
 | Move in | From Home | An ADA amount or Max, and tokens to bring along; then a review of what moves, the fee and the change; then Send |
 | Send to a seedelf | From Home | Paste the recipient's full seedelf name: it's looked up in the wallet contract and shown ("Found: tag · 5eed0e1f…"), with a warning if it's your own. An ADA amount, and optionally part of any token. Then a review of the recipient, what's sent, the fee and the change, then Send, when giveme.my is asked for the collateral. |
@@ -50,6 +51,7 @@ After a rebuild, press the reload arrow on the extension's card.
 |---|---|
 | `npm run build` | WASM plus the extension (`build:wasm`, then `build:ext`) |
 | `npm run build:store` | The same with `VITE_STORE_BUILD=true`: no dev key, so Chrome or the store picks the ID |
+| `npm run tokens` | Rebuilds the wallet's token list (`src/tokens/registry.<network>.json`) from `src/tokens/list.json` and the Cardano token registry, through Koios. Run at each release. |
 | `npm run package` | A store build, plus `licenses/THIRD-PARTY.txt`, zipped reproducibly into `release/seedelf-wallet-<version>.zip` for the Web Store (`scripts/package.mjs`, `scripts/third-party.mjs`) |
 | `npm run dev` | Rebuilds the extension into `dist/` on change (development mode, with source maps) |
 | `npm run typecheck` | `tsc --noEmit` |
@@ -87,13 +89,16 @@ src/
     storage.ts, wasm.ts chrome.storage wrapper, lazy WASM init
   ui/
     App.tsx             shell: top bar, picks the screen from the worker's status
-    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, Receive, MoveIn, CreateSeedelf,
-                        Transfer, Withdraw, RemoveSeedelf
-    components/         Screen (every flow's layout), ReviewRows, Callout, ActionButton, Choice, PhraseInput
+    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, Tokens, Receive, MoveIn,
+                        CreateSeedelf, Transfer, Withdraw, RemoveSeedelf
+    components/         Screen (every flow's layout), Splash, Tabs, Sheet, TokenList, ReviewRows, Callout,
+                        ActionButton, Choice, PhraseInput
                         (per-word autocomplete), SetPassword, AdaInput, TokenAmounts, TokenList, CopyField,
                         CopyButton, QrCode, Icons (Lucide)
     styles.css          the design tokens, then every style
     format.ts           ADA and token amounts, token names
+    tokens.ts           tokens as the lists show them: the token list's ticker and logo, NFT or not, sort, search
+  tokens/               list.json (the tokens the wallet knows by name) and registry.<network>.json (npm run tokens)
 public/                 icons and logos resized from ../brand; fonts/ (Inter); licenses/ (Inter's OFL, Lucide's ISC)
 tests/                  Vitest (vectors/: independent SecretBox vectors; fixtures/: recorded preprod Koios responses
                         and synthetic owned UTxOs, remade by fixtures/record-koios.mjs; a stealth mint's real preprod
@@ -103,7 +108,7 @@ tests/                  Vitest (vectors/: independent SecretBox vectors; fixture
                         and a removal's real preprod evaluations, remade by fixtures/record-withdraw.mjs)
 e2e/                    Playwright: support.ts (launch, the fake Koios, shared steps), extension.spec.ts,
                         store-images.spec.ts; live/ holds the live preprod runs
-scripts/                package.mjs (the store zip) and third-party.mjs (the licence notices)
+scripts/                package.mjs (the store zip), third-party.mjs (the licence notices), tokens.mjs (the token list)
 release/                the store zip (gitignored)
 ```
 

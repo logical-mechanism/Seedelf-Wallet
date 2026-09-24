@@ -77,6 +77,8 @@ export interface KoiosFake {
   calls: string[];
   /** When set, every request fails with this status. */
   failWith?: number;
+  /** When set, every answer waits this long (ms), as a slow Koios would. */
+  delayMs?: number;
   /** Transactions submitted, by id. */
   submitted: string[];
   /** What tx_status reports. */
@@ -96,6 +98,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").pop()!;
     koios.calls.push(path);
+    if (koios.delayMs) await new Promise((resolve) => setTimeout(resolve, koios.delayMs));
     if (koios.failWith) return route.fulfill({ status: koios.failWith, body: "" });
     if (path === "submittx") {
       const id = txIdOf(new Uint8Array(request.postDataBuffer()!));
