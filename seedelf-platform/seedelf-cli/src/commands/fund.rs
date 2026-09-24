@@ -214,7 +214,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
         .try_into()
         .unwrap();
     // floor division means its safer to just add 1 lovelace
-    let tx_fee: u64 = fee::linear_fee(tx_size) + 1;
+    let tx_fee: u64 = fee::linear_fee(&params, tx_size) + 1;
 
     // a max tokens per change output here
     let change_token_per_utxo: Vec<Assets> = change_tokens

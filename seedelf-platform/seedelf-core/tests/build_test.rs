@@ -12,7 +12,7 @@ use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::Output;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::assets::Assets;
-use seedelf_core::build::{self, MoveInAmount, fake_signer, linear_fee, minimum_deposit};
+use seedelf_core::build::{self, MoveInAmount, fake_signer, minimum_deposit};
 use seedelf_core::constants::get_config;
 use seedelf_core::transaction::calculate_min_required_utxo;
 use seedelf_crypto::cardano::{CardanoAccount, Role};
@@ -201,18 +201,18 @@ fn assert_sound(w: &World, available: &[UtxoResponse], built: &build::MoveIn) ->
     }
     assert_eq!(in_assets, out_assets, "tokens conserved");
 
-    // The fee covers the transaction once every input's key has signed.
+    // The fee covers the transaction once every input's key has signed, by
+    // the ledger's own formula: 44 lovelace a byte plus 155,381 (the
+    // fixture's min_fee_a and min_fee_b).
     assert_eq!(tx.fee, built.fee);
+    assert_eq!((w.params.min_fee_a, w.params.min_fee_b), (44, 155_381));
+    let ledger_minimum = 44 * tx.size_signed + 155_381;
     assert!(
-        tx.fee >= linear_fee(tx.size_signed),
-        "fee {} < {}",
-        tx.fee,
-        linear_fee(tx.size_signed)
+        tx.fee >= ledger_minimum,
+        "fee {} < {ledger_minimum}",
+        tx.fee
     );
-    assert!(
-        tx.fee < linear_fee(tx.size_signed) + 1_000,
-        "fee isn't wildly high"
-    );
+    assert!(tx.fee < ledger_minimum + 1_000, "fee isn't wildly high");
 
     for o in &tx.outputs {
         let minimum = calculate_min_required_utxo(o.raw.clone(), &w.params).unwrap();

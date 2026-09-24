@@ -241,7 +241,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
         .len()
         .try_into()
         .unwrap();
-    let tx_fee: u64 = fee::linear_fee(tx_size);
+    let tx_fee: u64 = fee::linear_fee(&params, tx_size);
     let compute_fee: u64 = transaction::computation_fee(&params, mint_mem_units, mint_cpu_units)
         + transaction::computation_fee(&params, spend_mem_units, spend_cpu_units);
     let script_reference_fee: u64 =

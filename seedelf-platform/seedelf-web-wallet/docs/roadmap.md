@@ -67,7 +67,12 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - Recorders: `extension/tests/fixtures/record-mint.mjs` and `seedelf-core/tests/fixtures/ogmios/`.
   - **Tests:** core `mint_test` 10 (value, minimums, registers, proofs bound to the one-time key, collateral, budgets on a shuffled answer, selection, a draft on a tight balance); `seedelf-wasm` native 10 and Node 23; Vitest 88 (+1 live); Playwright 14; the CLI's offline tests (11) are green.
     - **Coverage gap:** Playwright stops at Send, checking a forged witness is refused and nothing is submitted, because only giveme.my's key signs. Vitest covers Send with a stubbed signer, and Rust signs with a stand-in key.
-  - **Not done:** a live mint. To finish, create a seedelf by hand from a funded wallet, or fund the test wallet and run `e2e/live/move-in.mjs` and then `e2e/live/mint.mjs`. Record the tx hash here.
+  - **Fixed after the user's first live mint:** the node refused it with `FeeTooSmallUTxO` (255,788 supplied, 255,801 expected).
+    - The cause: `linear_fee` used Pallas's `PolicyParams::default()`, which is Byron's 43.946 lovelace a byte, not the protocol's 44.
+    - It now reads `min_fee_a` and `min_fee_b` from the protocol parameters (`ProtocolParameters` gained both).
+    - Move-in had the same bug through `settle_fee`.
+    - The core tests now check every fee against the ledger's formula written out, and they fail on the old one.
+  - **Not done:** a live mint that lands. To finish, create a seedelf by hand from a funded wallet, or fund the test wallet and run `e2e/live/move-in.mjs` and then `e2e/live/mint.mjs`. Record the tx hash here.
   - **Next:** chunk 9, transfer (seedelf → seedelf). Look up the recipient's register by token name, then build a `ScriptSpend` with a recipient output. Most of the plumbing is here.
 
 - **2026-09-23: chunk 7 done** (`web-wallet/move-in`). Plan: [plans/chunk-07-move-in.md](plans/chunk-07-move-in.md).

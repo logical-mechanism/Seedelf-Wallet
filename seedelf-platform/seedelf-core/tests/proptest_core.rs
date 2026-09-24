@@ -14,6 +14,8 @@ const PID: &str = "11111111111111111111111111111111111111111111111111111111";
 
 fn fixture_params() -> ProtocolParameters {
     ProtocolParameters {
+        min_fee_a: 44,
+        min_fee_b: 155_381,
         coins_per_utxo_size: 4_310,
         price_mem: 0.0577,
         price_step: 0.0000721,

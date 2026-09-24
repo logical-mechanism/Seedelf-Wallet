@@ -210,7 +210,7 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
         .try_into()
         .unwrap();
 
-    let tx_fee: u64 = fee::linear_fee(tx_size);
+    let tx_fee: u64 = fee::linear_fee(&params, tx_size);
     let compute_fee: u64 = transaction::computation_fee(&params, mem_units, cpu_units);
     let script_reference_fee: u64 = config.contract.seedelf_contract_size * 15;
 

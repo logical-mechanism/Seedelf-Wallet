@@ -16,9 +16,7 @@ use pallas_traverse::MultiEraTx;
 use pallas_wallet::PrivateKey;
 use rand_core::OsRng;
 use seedelf_core::address::{collateral_address, wallet_contract};
-use seedelf_core::build::{
-    self, Budget, Budgets, Chain, DRAFT_BUDGET, SeedelfMint, fake_signer, linear_fee,
-};
+use seedelf_core::build::{self, Budget, Budgets, Chain, DRAFT_BUDGET, SeedelfMint, fake_signer};
 use seedelf_core::constants::{COLLATERAL_HASH, PREPROD_COLLATERAL_UTXO, get_config};
 use seedelf_core::transaction::{
     computation_fee, seedelf_minimum_lovelace, wallet_minimum_lovelace_with_assets,
@@ -248,6 +246,24 @@ fn decode(tx: &pallas_txbuilder::BuiltTransaction) -> Decoded {
     }
 }
 
+/// The Conway ledger's minimum fee, written out independently of the
+/// builder: `min_fee_a × size + min_fee_b`, plus the execution units at the
+/// protocol's prices as exact rationals (ceiling of the total), plus 15
+/// lovelace per reference-script byte. The prices are the fixture's, 577/10⁴
+/// per memory unit and 721/10⁷ per step.
+fn ledger_minimum_fee(
+    params: &ProtocolParameters,
+    size: u64,
+    mem: u64,
+    steps: u64,
+    script_bytes: u64,
+) -> u64 {
+    assert_eq!((params.min_fee_a, params.min_fee_b), (44, 155_381));
+    assert_eq!((params.price_mem, params.price_step), (0.0577, 0.0000721));
+    let units = (577 * mem as u128 * 1_000 + 721 * steps as u128).div_ceil(10_000_000) as u64;
+    44 * size + 155_381 + units + 15 * script_bytes
+}
+
 fn register_from(datum: DatumOption) -> Option<Register> {
     let DatumOption::Data(data) = datum else {
         return None;
@@ -399,8 +415,7 @@ fn assert_sound(w: &World, spent: &[UtxoResponse], built: &build::FinalSpend) ->
         );
     }
 
-    // The fee: even, and it covers the signed size, the scripts' budgets at
-    // the protocol's prices, and the reference scripts, with little to spare.
+    // The fee: even, and at least the ledger's minimum, with little to spare.
     let compute: u64 = tx
         .redeemers
         .iter()
@@ -409,7 +424,11 @@ fn assert_sound(w: &World, spent: &[UtxoResponse], built: &build::FinalSpend) ->
     let scripts = (chain.config.contract.wallet_contract_size
         + chain.config.contract.seedelf_contract_size)
         * 15;
-    let needed = linear_fee(tx.size_signed) + compute + scripts;
+    let (mem, steps) = tx
+        .redeemers
+        .iter()
+        .fold((0, 0), |(m, s), r| (m + r.budget.mem, s + r.budget.steps));
+    let needed = ledger_minimum_fee(&chain.params, tx.size_signed, mem, steps, scripts / 15);
     assert_eq!(tx.fee % 2, 0, "the fee is even");
     assert!(tx.fee >= needed, "fee {} covers {needed}", tx.fee);
     assert!(
@@ -821,6 +840,18 @@ fn reads_real_ogmios_answers() {
     );
     assert!(Budgets::from_ogmios(&json!({"result": [{"validator": {}}]})).is_err());
     assert!(Budgets::from_ogmios(&json!({"jsonrpc": "2.0"})).is_err());
+}
+
+#[test]
+fn prices_bytes_as_the_ledger_does() {
+    // Pallas's `fees::PolicyParams::default()` is Byron's 43.946 lovelace a
+    // byte; on a real preprod mint that came to 255,788 against the 255,801
+    // the ledger wanted (FeeTooSmallUTxO).
+    let params = chain().params;
+    assert_eq!(build::linear_fee(&params, 1_114), 44 * 1_114 + 155_381);
+    let rows: Value = serde_json::from_str(include_str!("fixtures/epoch_params.json")).unwrap();
+    assert_eq!(rows[0]["min_fee_a"], 44);
+    assert_eq!(rows[0]["min_fee_b"], 155_381);
 }
 
 #[test]

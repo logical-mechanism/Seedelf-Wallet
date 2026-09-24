@@ -14,7 +14,6 @@ use pallas_codec::minicbor;
 use pallas_crypto::hash::{Hash, Hasher};
 use pallas_crypto::key::ed25519::{PublicKey, SecretKey, Signature};
 use pallas_primitives::{Fragment, NonEmptySet, conway};
-use pallas_traverse::fees;
 use pallas_txbuilder::{
     BuildConway, BuiltTransaction, ExUnits, Input, Output, ScriptKind, StagingTransaction,
 };
@@ -41,9 +40,12 @@ pub fn fake_signer() -> PrivateKey {
     PrivateKey::from(SecretKey::new(OsRng))
 }
 
-/// The linear (size-based) fee for a transaction of `tx_size` bytes.
-pub fn linear_fee(tx_size: u64) -> u64 {
-    fees::compute_linear_fee_policy(tx_size, &fees::PolicyParams::default())
+/// The linear (size-based) fee for a transaction of `tx_size` bytes:
+/// `min_fee_a × size + min_fee_b`, as the ledger charges it. (Pallas's
+/// `fees::PolicyParams::default()` is Byron's policy, 43.946 lovelace a byte,
+/// which falls a few dozen lovelace short on a Seedelf spend.)
+pub fn linear_fee(params: &ProtocolParameters, tx_size: u64) -> u64 {
+    params.min_fee_a * tx_size + params.min_fee_b
 }
 
 /// Settles the size fee of a key-signed transaction. `build(fee)` stages the
@@ -51,10 +53,11 @@ pub fn linear_fee(tx_size: u64) -> u64 {
 /// keys and priced, until the fee covers the transaction it produces.
 /// Returns the fee and the transaction staged with it.
 pub fn settle_fee(
+    params: &ProtocolParameters,
     signers: usize,
     build: impl FnMut(u64) -> Result<StagingTransaction>,
 ) -> Result<(u64, StagingTransaction)> {
-    settle(signers, linear_fee, build)
+    settle(signers, |size| linear_fee(params, size), build)
 }
 
 /// [`settle_fee`] with any pricing: `price(size)` is the fee a transaction of
@@ -284,7 +287,7 @@ pub fn external_sweep(
     }
     let (total, tokens) = assets_of(utxos.to_vec())?;
     let inputs: Vec<Input> = utxos.iter().map(input_of).collect::<Result<_>>()?;
-    let (fee, staged) = settle_fee(1, |fee| {
+    let (fee, staged) = settle_fee(params, 1, |fee| {
         let lovelace = checked_lovelace(total, &[fee])?;
         let mut tx = StagingTransaction::new();
         for input in &inputs {
@@ -459,7 +462,7 @@ fn build_move_in(
     let mut deposit = 0;
     let mut change = 0;
     let mut outputs = 0;
-    let (fee, staged) = settle_fee(signers, |fee| {
+    let (fee, staged) = settle_fee(params, signers, |fee| {
         (deposit, change) = match amount {
             MoveInAmount::Lovelace(lovelace) => {
                 let change = total
@@ -1019,7 +1022,7 @@ impl ScriptSpend {
         // Two signatures: the one-time key and giveme.my's collateral key.
         let (fee, staged) = settle(
             2,
-            |size| even(linear_fee(size) + compute + script_reference),
+            |size| even(linear_fee(&self.chain.params, size) + compute + script_reference),
             |fee| self.stage(fee, Some(budgets), redeemers),
         )?;
         let (change_lovelace, change_tokens) = self.remainder(fee)?;
