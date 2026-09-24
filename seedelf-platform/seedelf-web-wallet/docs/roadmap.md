@@ -28,6 +28,8 @@ The wallet is built in **chunks**, each about one working session.
 | 11a | Style and flow pass | ✅ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Dark only, Inter, Lucide icons, and Home as a Seedelf / Cardano account switch with round actions. **Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).** |
 | 11b | Size and live runs | ✅ | A smaller WebAssembly module: a size-tuned cargo profile (`wasm-opt` measured and left out). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
 | 11c | Testers | ✅ | The unlisted, preprod-only Chrome Web Store listing, ready for the user to submit: `npm run package` (the store build, third-party notices, a reproducible zip), the listing text and privacy policy in [store/](store/README.md), the images from `npm run store:images`, and a release checklist. Same plan. |
+| 12 | Style and flow | ✅ | The user tested the built wallet and sent findings; 20 items, each decided with the user. Among them: a loading splash, a Tokens screen and a bundled token list, a token picker with any amount of each, Settings, Activity, Contacts, an incremental contract scan, Send from the Cardano account, the minimum ADA worked out, Receive on the Seedelf tab, and spending everything under the account's payment keys. **Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).** |
+| 13 | Staking and voting | ⬜ | The wallet becomes a full Cardano wallet with Seedelf built in: a Staking page (one pool, rewards spent automatically or by hand), and voting delegation (Always abstain, No confidence, or a DRep). Certificates patched into Pallas's transactions. **Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md).** |
 
 ## After v1
 
@@ -38,6 +40,16 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 12 done** (`web-wallet/style-flow`). Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).
+  - **What landed:** the user's 20 findings, each with its decision in the plan's list. The store images are regenerated (Home changed); the listing text isn't, until chunk 13's new positioning.
+  - **Decided for what's next:** the wallet is a full Cardano wallet with private payments built in, not a sidecar. Chunk 13 adds staking and voting delegation; the decisions are in [plans/chunk-13-staking.md](plans/chunk-13-staking.md).
+  - **Surprises:**
+    - `pallas-txbuilder` (0.33, and 1.4.0 too) can't build certificates or withdrawals; chunk 13 patches them into the built body.
+    - Koios's public tier refuses request bodies over 5,120 bytes: `credential_utxos` now asks about 75 keys a request.
+    - The account was read by stake key and kept only its own base addresses, so an enterprise address, or our key with someone else's stake key, went unseen. It's read by payment key now (item 20).
+    - The minimum ADA stays a hard rule in `seedelf-core`'s builders, so the CLI still refuses less; the web wallet raises a short amount in WebAssembly and says so on the review.
+  - **Next:** merge this PR, then chunk 13 from its plan's *Start here*.
 
 - **2026-09-24: chunk 11c done** (`web-wallet/store`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
   - **Decided with the user:**

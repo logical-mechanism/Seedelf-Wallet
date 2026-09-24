@@ -34,7 +34,9 @@ Money comes in, moves privately, and goes out. It isn't meant to sit here.
 2. Use a dApp with that account.
 3. Whatever comes back is swept into a seedelf automatically.
 
-**Not planned:** staking, governance, swaps, hardware wallets, other chains, mobile. We add features only if there's demand.
+**Next: staking and voting delegation** (chunk 13). The wallet becomes a full Cardano wallet with private payments built in: stake the Cardano account with one pool, spend its rewards, and delegate its vote (Always abstain, No confidence, or a DRep). See [plans/chunk-13-staking.md](docs/plans/chunk-13-staking.md).
+
+**Not planned:** voting on proposals or registering as a DRep, swaps, hardware wallets, other chains, mobile. We add features only if there's demand.
 
 ## Relationship to the CLI
 
