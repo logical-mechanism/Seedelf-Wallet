@@ -23,8 +23,8 @@ The wallet is built in **chunks**, each about one working session.
 | 7 | Builder extraction + move in | ✅ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
 | 8b | Mint first | ✅ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
-| 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
-| 10 | Withdraw | ⬜ | `sweep` and `remove`. |
+| 9 | Transfer | ✅ | Seedelf → seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md). |
+| 10 | Withdraw | ⬜ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Start with a plan file. |
 | 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
 
 ## After v1
@@ -36,6 +36,37 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 9 done** (`web-wallet/transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md).
+  - **Decided with the user:** the plan's table, except that **paying your own seedelf is allowed, with a warning**. The plan suggested refusing it.
+  - **Rust (`seedelf-core/src/build.rs`):**
+    - `transfer` and `transfer_from` take `Payment { register, lovelace, tokens }`s. Each output is `deposit_output`, a fresh re-randomization of the register found on chain, checked against its minimum.
+    - **Found this chunk: `Register::is_valid` accepts the identity point.** An identity public value is `g^0`, so anyone could take a payment to it. The new `is_payable` also refuses the identity; `transfer` and both mints use it.
+    - `select_script_inputs` takes the tokens being sent. The UTxOs holding them come first, with the biggest holdings of each token first, then pure ADA as before.
+    - **Changed from the plan:** the "UTxOs don't hold the tokens" error didn't need to count as `NotEnough`. The token UTxOs are picked up front, so only `transfer_from` with given UTxOs can hit that error, and it stays a hard error there.
+    - The CLI's `transfer` `run()` is thin. Its offline tests pass unchanged.
+  - **WASM:**
+    - `draftTransfer` and `finishTransfer`. The recipient checks run here: a whole name, a wallet-contract UTxO holding that seedelf, and a register datum. `toSelf` flags your own seedelf.
+    - Mint and transfer share the owned-input check, the seed, the proofs and the draft and finish plumbing. `MintDraft` is now `SpendDraft`, and `TokenOut` is now `TokenAmount`.
+    - The module is 2.3 MB (582 KB gzipped).
+  - **Extension:**
+    - `script-spend.ts` holds the shared flow (read, draft → Ogmios → finish, keep, then giveme.my → sign → submit → pending). `mint.ts` now uses it too, and chunk 10 plugs in.
+    - `transfer.ts`, plus the RPCs `transfer-lookup`, `transfer-build` and `transfer-submit`. `PendingTx.kind` gains `"transfer"`.
+    - **Added beyond the plan:** `transfer-lookup`, so the form shows "Found: *tag*" (or "No seedelf with that name") as soon as a whole name is pasted, before Review.
+    - The lookup is the same whole-contract `credential_utxos` query a balance reading makes. Koios never hears the recipient's token.
+    - UI: **Send to a seedelf** on the Seedelf card, then the form, review and Send. The banner says "Transfer sent…", then "Transfer confirmed".
+    - **Found in review (the user):** there was no way to copy a seedelf's full name, to give out or paste. Each row in **Your seedelfs** now has a Copy button (`CopyButton`, split out of `CopyField`), and the e2e test copies a name there and pastes it into the form.
+    - giveme.my's refusal now says "refresh, then review it again", not "create it again".
+  - **Checked on preprod without spending anything:** `extension/tests/fixtures/record-transfer.mjs` drafted 5 ₳ and 1 tUSDM to the live seedelf "This is a test." from the 12-word phrase's synthetic UTxOs. It passes the real wallet script under Ogmios.
+    - Each spend is 76,043 memory and 337,845,799 steps.
+    - The fee is 273,922 for two inputs, and 233,912 for one input with ADA only.
+    - giveme.my refused, as for the synthetic mint.
+  - **Tests:** core `mint_test` 20 (5 new: a fresh copy of the recipient's register, budgets on a shuffled answer, part of a token from the UTxOs holding it, several recipients including yourself, and the refusals, among them a real torsion point and the identity); the CLI's offline tests 11; `seedelf-wasm` native 15 and Node 26; Vitest 100 (+1 live); Playwright 16. The transfer e2e test stops at Send, as the stealth mint's does.
+  - **Live on preprod (2026-09-24, by the user):** the transfer [`22585835…fc8d9c`](https://preprod.cardanoscan.io/transaction/225858355a5bd56f55bb437330ebf312683dd912f961b211e7b5b23f92fc8d9c), from the public 12-word phrase to one of its own seedelfs (the flagged pay-yourself case). "Everything worked."
+    - It spent the phrase's one Seedelf UTxO, chunk 8's 22,994,294 change: 7,654,321 paid, and 15,106,061 back as change.
+    - Fee 233,912 for 916 bytes, exactly the one-input figure measured under Ogmios. The collateral return is 4,649,132 (5 ₳ − 3/2 × fee).
+    - Checked live afterwards: both new outputs are owned by the phrase, under valid, freshly re-randomized registers.
+  - **Next:** chunk 10, withdraw (`sweep` and `remove`). Both are `ScriptSpend`s with other outputs: `sweep` pays an address, and `remove` burns a seedelf (`ScriptSpend::mint` with −1). Write `docs/plans/chunk-10-*.md` first.
 
 - **2026-09-24: chunk 8b done** (`web-wallet/mint-first`).
   - **Why:** the user pointed out that a mint links the seedelf to whatever pays for it. See chunk 8's note, and privacy rule 5.
@@ -59,8 +90,10 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - `extension/tests/fixtures/record-account-mint.mjs` records it.
     - The fixture keeps no CBOR: a signed transaction over public-phrase UTxOs shouldn't sit in the repo.
   - **Tests:** core `mint_test` 15 (4 new: collateral choice, token collateral, overlap, errors, and fees against the ledger's formula); `seedelf-wasm` native 12 and Node 24; Vitest 91; Playwright 15. The account path runs through Send to "Seedelf created", since no giveme.my signature is needed.
-  - **Not done:** a live account-paid mint. From a funded account with no seedelf yet, create one by hand, then record the tx hash here.
-  - **Next:** chunk 9, transfer.
+  - **Live on preprod (2026-09-24, by the user):** the account-paid mint [`ca0fac00…ade137`](https://preprod.cardanoscan.io/transaction/ca0fac004c2b59a28cc7065b10225db8acfb2f5ef0c808a09d5ffbcba4ade137), the seedelf `TAK2` (`5eed0e1f54414b32019dda2589…`) with 1.74986 ₳.
+    - Fee 212,516 for 990 bytes. One account input; the change, with its tokens, went back to the account.
+    - **The collateral held tokens:** a 3 ₳ UTxO with four. The collateral return is 2,681,226 (3 ₳ − 3/2 × fee) with all four tokens, so that path works live.
+  - **Next:** chunk 9, transfer. **Its plan is ready: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md),** committed on the `web-wallet/transfer` branch. Start there.
 
 - **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).
   - **Decided with the user:**

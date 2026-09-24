@@ -267,10 +267,9 @@ impl fmt::Display for TooLittle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "A {} deposit of these tokens needs at least {}.{:06} ADA",
+            "A {} deposit of these tokens needs at least {} ADA",
             self.what,
-            self.needed / 1_000_000,
-            self.needed % 1_000_000
+            ada(self.needed)
         )
     }
 }
@@ -527,8 +526,8 @@ fn build_move_in(
 //     .draft()             placeholder budgets, for Ogmios to evaluate
 //     .finalize(budgets)   the real budgets and fee: the unsigned transaction
 //
-// The caller signs it with the one-time key and giveme.my's witness. Mint is
-// built on it here; transfer, sweep and remove follow.
+// The caller signs it with the one-time key and giveme.my's witness. Mint and
+// transfer are built on it here; sweep and remove follow.
 // ---------------------------------------------------------------------------
 
 /// What one script may use: memory units and CPU steps.
@@ -1161,28 +1160,88 @@ fn policy_hash(config: &Config) -> Result<Hash<28>> {
     Ok(Hash::new(bytes))
 }
 
-/// Picks as few of `available` as it can: pure-ADA UTxOs first, largest
-/// first, then token UTxOs, adding one at a time until `attempt` succeeds.
-/// Only "not enough" failures move on to more inputs.
+/// Picks as few of `available` as it can. First the UTxOs holding the tokens
+/// in `needed` (see [`holding`]), then pure-ADA UTxOs, largest first, then
+/// other token UTxOs, adding one at a time until `attempt` succeeds. Only
+/// "not enough" failures move on to more inputs.
 fn select_script_inputs<T>(
     available: &[UtxoResponse],
+    needed: &Assets,
     mut attempt: impl FnMut(&[UtxoResponse]) -> Result<T>,
 ) -> Result<T> {
-    let mut sorted: Vec<UtxoResponse> = available.to_vec();
-    sorted.sort_by_key(|u| {
+    let mandatory = holding(available, needed)?;
+    let mut rest: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| !mandatory.iter().any(|m| same_utxo(m, u)))
+        .cloned()
+        .collect();
+    rest.sort_by_key(|u| {
         let tokens = u.asset_list.as_ref().is_some_and(|a| !a.is_empty());
         let lovelace = u.value.parse::<u64>().unwrap_or(0);
         (tokens, std::cmp::Reverse(lovelace))
     });
     let mut last_error = None;
-    for k in 1..=sorted.len() {
-        match attempt(&sorted[..k]) {
+    for k in 0..=rest.len() {
+        let selected: Vec<UtxoResponse> = mandatory.iter().chain(&rest[..k]).cloned().collect();
+        if selected.is_empty() {
+            continue;
+        }
+        match attempt(&selected) {
             Ok(built) => return Ok(built),
             Err(e) if e.downcast_ref::<NotEnough>().is_some() => last_error = Some(e),
             Err(e) => return Err(e),
         }
     }
     Err(last_error.unwrap_or_else(|| SEEDELF_SHORT.into()))
+}
+
+fn same_utxo(a: &UtxoResponse, b: &UtxoResponse) -> bool {
+    a.tx_hash == b.tx_hash && a.tx_index == b.tx_index
+}
+
+/// How much of a token a UTxO holds.
+fn quantity_in(utxo: &UtxoResponse, policy: &str, name: &str) -> u64 {
+    utxo.asset_list
+        .iter()
+        .flatten()
+        .filter(|a| a.policy_id == policy && a.asset_name == name)
+        .map(|a| a.quantity.parse::<u64>().unwrap_or(0))
+        .sum()
+}
+
+/// As few of `available` as together hold `needed`: for each token in turn,
+/// the UTxOs holding the most of it, until there's enough. Errors naming the
+/// token when `available` doesn't hold enough of it.
+fn holding(available: &[UtxoResponse], needed: &Assets) -> Result<Vec<UtxoResponse>> {
+    let mut picked: Vec<UtxoResponse> = Vec::new();
+    for want in &needed.items {
+        let policy = hex::encode(want.policy_id);
+        let name = hex::encode(&want.token_name);
+        let mut have: u64 = picked.iter().map(|u| quantity_in(u, &policy, &name)).sum();
+        let mut candidates: Vec<&UtxoResponse> = available
+            .iter()
+            .filter(|u| quantity_in(u, &policy, &name) > 0)
+            .filter(|u| !picked.iter().any(|p| same_utxo(p, u)))
+            .collect();
+        candidates.sort_by_key(|u| std::cmp::Reverse(quantity_in(u, &policy, &name)));
+        for utxo in candidates {
+            if have >= want.amount {
+                break;
+            }
+            have = have.saturating_add(quantity_in(utxo, &policy, &name));
+            picked.push(utxo.clone());
+        }
+        if have < want.amount {
+            if have == 0 {
+                bail!("The Seedelf balance doesn't hold the token {policy}.{name}");
+            }
+            bail!(
+                "The Seedelf balance holds only {have} of the token {policy}.{name}, not {}",
+                want.amount
+            );
+        }
+    }
+    Ok(picked)
 }
 
 /// A seedelf mint, ready to prove, draft and finalize.
@@ -1204,7 +1263,7 @@ pub fn mint(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<SeedelfMint> {
-    select_script_inputs(available, |inputs| {
+    select_script_inputs(available, &Assets::new(), |inputs| {
         let built = mint_from(chain, inputs, label, seedelf, change_owner, signer)?;
         built.spend.estimate()?;
         Ok(built)
@@ -1227,9 +1286,9 @@ pub fn mint_from(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<SeedelfMint> {
-    // Points that don't decode, or aren't in the prime-order subgroup, would
-    // lock the seedelf and anything sent to it for good.
-    if !seedelf.is_valid().unwrap_or(false) {
+    // Points that don't decode, aren't in the prime-order subgroup, or are the
+    // identity would lose the seedelf and anything sent to it.
+    if !is_payable(seedelf) {
         bail!("The seedelf's register isn't made of valid points");
     }
     let spend = ScriptSpend::new(chain, inputs, change_owner, signer)?;
@@ -1262,6 +1321,126 @@ pub fn mint_from(
         token_name,
         lovelace,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Transfer: paying seedelfs from the Seedelf balance
+//
+// Each payment goes into the contract under a fresh re-randomization of the
+// recipient's register, as found on chain with their seedelf. The register
+// itself is never written back: re-randomizing is what keeps payments to the
+// same seedelf unlinkable, and it refuses points outside the prime-order
+// subgroup. The rest goes back under fresh re-randomizations of the payer's.
+// ---------------------------------------------------------------------------
+
+/// A payment to a seedelf.
+#[derive(Debug, Clone)]
+pub struct Payment {
+    /// The recipient's register: the datum of the UTxO holding their seedelf.
+    pub register: Register,
+    pub lovelace: u64,
+    pub tokens: Assets,
+}
+
+/// Whether anything paid to `register` is safe: both points decode, lie in
+/// the prime-order subgroup, and neither is the identity. An identity public
+/// value is `g^0`, so anyone could prove the key and take the payment; an
+/// identity generator locks it for good, as does a torsion point.
+pub fn is_payable(register: &Register) -> bool {
+    let identity = |point: &str| {
+        hex::decode(point)
+            .is_ok_and(|b| b.len() == 48 && b[0] == 0xc0 && b[1..].iter().all(|&x| x == 0))
+    };
+    register.is_valid().unwrap_or(false)
+        && !identity(&register.generator)
+        && !identity(&register.public_value)
+}
+
+/// `transfer`: pays each of `payments` from owned wallet-contract UTxOs.
+/// Picks as few of `available` as can pay: the UTxOs holding the tokens
+/// being sent first, then as in [`mint`].
+pub fn transfer(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    payments: &[Payment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    let outputs = payment_outputs(chain, payments)?;
+    let needed = payments
+        .iter()
+        .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
+    select_script_inputs(available, &needed, |inputs| {
+        let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
+        spend.estimate()?;
+        Ok(spend)
+    })
+}
+
+/// A transfer spending exactly `inputs`. They must hold the tokens being
+/// sent.
+pub fn transfer_from(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    payments: &[Payment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    let outputs = payment_outputs(chain, payments)?;
+    paying(chain, inputs, &outputs, change_owner, signer)
+}
+
+fn paying(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    outputs: &[(Output, Assets)],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    outputs.iter().try_fold(
+        ScriptSpend::new(chain, inputs, change_owner, signer)?,
+        |spend, (output, tokens)| spend.output(output.clone(), tokens),
+    )
+}
+
+/// One output per payment, each under a fresh re-randomization of the
+/// recipient's register and above its minimum.
+fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, Assets)>> {
+    if payments.is_empty() {
+        bail!("A transfer pays at least one seedelf");
+    }
+    let wallet_addr = wallet_contract(
+        chain.network_flag,
+        chain.config.contract.wallet_contract_hash,
+    );
+    payments
+        .iter()
+        .map(|payment| {
+            if !is_payable(&payment.register) {
+                bail!(
+                    "That seedelf's register isn't valid: a payment to it could be locked for good, or taken by anyone"
+                );
+            }
+            if payment.tokens.items.iter().any(|a| a.amount == 0) {
+                bail!("A payment can't send none of a token");
+            }
+            let minimum = wallet_minimum_lovelace_with_assets(&chain.params, payment.tokens.clone())?;
+            if payment.lovelace < minimum {
+                bail!(
+                    "A payment to a seedelf{} needs at least {} ADA",
+                    if payment.tokens.is_empty() { "" } else { " with these tokens" },
+                    ada(minimum)
+                );
+            }
+            let output = deposit_output(&wallet_addr, &payment.register, payment.lovelace, &payment.tokens)?;
+            Ok((output, payment.tokens.clone()))
+        })
+        .collect()
+}
+
+/// Lovelace as ADA, with all six decimals.
+fn ada(lovelace: u64) -> String {
+    format!("{}.{:06}", lovelace / 1_000_000, lovelace % 1_000_000)
 }
 
 // ---------------------------------------------------------------------------
@@ -1475,7 +1654,7 @@ pub fn account_mint(
     seedelf: &Register,
     change_addr: &Address,
 ) -> Result<AccountMint> {
-    if !seedelf.is_valid().unwrap_or(false) {
+    if !is_payable(seedelf) {
         bail!("The seedelf's register isn't made of valid points");
     }
     if available.is_empty() {

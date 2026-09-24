@@ -31,7 +31,8 @@ pub mod api {
     use pallas_wallet::PrivateKey;
     use rand_core::{OsRng, RngCore};
     use seedelf_core::address::wallet_contract;
-    use seedelf_core::build::{self, Budgets, Chain, MoveInAmount};
+    use seedelf_core::assets::{Asset, Assets};
+    use seedelf_core::build::{self, Budgets, Chain, MoveInAmount, Payment, ScriptSpend};
     use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::derivation;
@@ -99,9 +100,10 @@ pub mod api {
         pub asset_name: String,
     }
 
-    #[derive(Serialize, Debug, PartialEq)]
+    /// A token and an amount: the raw quantity as a decimal string.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
     #[serde(rename_all = "camelCase")]
-    pub struct TokenOut {
+    pub struct TokenAmount {
         pub policy_id: String,
         pub asset_name: String,
         pub quantity: String,
@@ -116,7 +118,7 @@ pub mod api {
         pub fee: String,
         /// Into the wallet contract.
         pub lovelace: String,
-        pub tokens: Vec<TokenOut>,
+        pub tokens: Vec<TokenAmount>,
         pub deposit_outputs: usize,
         /// Back to the Cardano account's receive address `0/0`.
         pub change_lovelace: String,
@@ -126,6 +128,26 @@ pub mod api {
 
     /// All the ADA there will ever be, in lovelace: 45 billion ADA.
     pub const MAX_SUPPLY_LOVELACE: u64 = 45_000_000_000_000_000;
+
+    /// An amount of lovelace from the extension: a whole number, no more
+    /// than all the ADA there is.
+    fn lovelace_of(l: &str) -> Result<u64> {
+        let lovelace: u64 = l
+            .parse()
+            .map_err(|_| anyhow!("the amount must be a whole number of lovelace, got {l:?}"))?;
+        if lovelace > MAX_SUPPLY_LOVELACE {
+            bail!("the amount is more than all the ADA there is (45 billion)");
+        }
+        Ok(lovelace)
+    }
+
+    fn token_amount(a: &Asset) -> TokenAmount {
+        TokenAmount {
+            policy_id: hex::encode(a.policy_id),
+            asset_name: hex::encode(&a.token_name),
+            quantity: a.amount.to_string(),
+        }
+    }
 
     fn role_of(role: u32) -> Result<Role> {
         match role {
@@ -206,15 +228,7 @@ pub mod api {
         let paths = check_paths(account, network_flag, &request.utxos)?;
 
         let amount = match &request.lovelace {
-            Some(l) => {
-                let lovelace: u64 = l.parse().map_err(|_| {
-                    anyhow!("the amount must be a whole number of lovelace, got {l:?}")
-                })?;
-                if lovelace > MAX_SUPPLY_LOVELACE {
-                    bail!("the amount is more than all the ADA there is (45 billion)");
-                }
-                MoveInAmount::Lovelace(lovelace)
-            }
+            Some(l) => MoveInAmount::Lovelace(lovelace_of(l)?),
             None => MoveInAmount::Max,
         };
         let picked: Vec<(String, String)> = request
@@ -245,16 +259,7 @@ pub mod api {
             tx_hash: hex::encode(signed.tx_hash.0),
             fee: built.fee.to_string(),
             lovelace: built.lovelace.to_string(),
-            tokens: built
-                .tokens
-                .items
-                .iter()
-                .map(|a| TokenOut {
-                    policy_id: hex::encode(a.policy_id),
-                    asset_name: hex::encode(&a.token_name),
-                    quantity: a.amount.to_string(),
-                })
-                .collect(),
+            tokens: built.tokens.items.iter().map(token_amount).collect(),
             deposit_outputs: built.deposit_outputs,
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
@@ -340,10 +345,10 @@ pub mod api {
         pub tx_index: u64,
     }
 
-    /// The draft for Ogmios, and the seed to finish it with.
+    /// A Seedelf spend's draft for Ogmios, and the seed to finish it with.
     #[derive(Serialize, Debug)]
     #[serde(rename_all = "camelCase")]
-    pub struct MintDraft {
+    pub struct SpendDraft {
         pub seed: String,
         pub draft_cbor: String,
         pub inputs: Vec<OutRef>,
@@ -377,20 +382,24 @@ pub mod api {
         pub inputs: Vec<OutRef>,
     }
 
-    fn mint_spend(
-        sk: Scalar,
-        request: &MintRequest,
-        seed: &[u8; 32],
-    ) -> Result<(build::ScriptSpend, build::SeedelfMint)> {
-        let network_flag = network_flag(&request.network)?;
-        let chain = Chain {
-            params: ProtocolParameters::from_koios(&request.params)?,
+    // Every Seedelf spend (a stealth mint, a transfer) shares these steps:
+    // the UTxOs it pays with must be this wallet's and hold no seedelf, the
+    // one-time key comes from the draft's seed, and the proofs are made here.
+
+    fn chain_of(network: &str, params: &serde_json::Value) -> Result<Chain> {
+        let network_flag = network_flag(network)?;
+        Ok(Chain {
+            params: ProtocolParameters::from_koios(params)?,
             network_flag,
             config: get_config(VARIANT, network_flag)?,
-        };
-        check_label(&request.label)?;
+        })
+    }
+
+    /// Checks the UTxOs a Seedelf spend may pay with: every one is this
+    /// wallet's, and none holds a seedelf (it would go with the change).
+    fn check_spendable(sk: Scalar, chain: &Chain, utxos: &[UtxoResponse]) -> Result<()> {
         let policy = &chain.config.contract.seedelf_policy_id;
-        for utxo in &request.utxos {
+        for utxo in utxos {
             let owned = extract_bytes_with_logging(&utxo.inline_datum)
                 .map(|register| register.is_owned(sk).unwrap_or(false))
                 .unwrap_or(false);
@@ -403,12 +412,66 @@ pub mod api {
             }
             if contains_policy_id(&utxo.asset_list, policy) {
                 bail!(
-                    "UTxO {}#{} holds a seedelf; creating one never spends another",
+                    "UTxO {}#{} holds a seedelf; a Seedelf spend never pays with one",
                     utxo.tx_hash,
                     utxo.tx_index
                 );
             }
         }
+        Ok(())
+    }
+
+    /// Proves every input of `spend` with `sk`, bound to its one-time key.
+    fn prove_with(sk: Scalar, spend: ScriptSpend) -> Result<ScriptSpend> {
+        spend.proven(|register, vkh| schnorr::create_proof(register.clone(), sk, vkh.to_string()))
+    }
+
+    fn draft_of(spend: &ScriptSpend, seed: &[u8; 32]) -> Result<SpendDraft> {
+        Ok(SpendDraft {
+            seed: hex::encode(seed),
+            draft_cbor: hex::encode(&spend.draft()?.tx_bytes.0),
+            inputs: out_refs(spend),
+        })
+    }
+
+    /// A new one-time key's seed, for a draft.
+    fn new_seed() -> [u8; 32] {
+        let mut seed = [0u8; 32];
+        OsRng.fill_bytes(&mut seed);
+        seed
+    }
+
+    /// What finishing a draft needs: its seed and Ogmios's measurements.
+    fn finishing(
+        what: &str,
+        seed: Option<&str>,
+        evaluation: Option<&serde_json::Value>,
+    ) -> Result<([u8; 32], Budgets)> {
+        let seed = seed_from_hex(
+            seed.ok_or_else(|| anyhow!("finishing a {what} needs the draft's seed"))?,
+        )?;
+        let evaluation =
+            evaluation.ok_or_else(|| anyhow!("finishing a {what} needs Ogmios's evaluation"))?;
+        Ok((seed, Budgets::from_ogmios(evaluation)?))
+    }
+
+    fn fee_out(fee: &build::ScriptFee) -> FeeOut {
+        FeeOut {
+            size: fee.size.to_string(),
+            compute: fee.compute.to_string(),
+            script_reference: fee.script_reference.to_string(),
+            total: fee.total.to_string(),
+        }
+    }
+
+    fn mint_spend(
+        sk: Scalar,
+        request: &MintRequest,
+        seed: &[u8; 32],
+    ) -> Result<(ScriptSpend, build::SeedelfMint)> {
+        let chain = chain_of(&request.network, &request.params)?;
+        check_label(&request.label)?;
+        check_spendable(sk, &chain, &request.utxos)?;
         let owner = Register::create(sk)?;
         let seedelf = owner.clone().rerandomize()?;
         let signer = key_hash(&one_time_key(&sk, seed));
@@ -420,15 +483,12 @@ pub mod api {
             &owner,
             signer,
         )?;
-        let spend = minted
-            .spend
-            .clone()
-            .proven(|register, vkh| schnorr::create_proof(register.clone(), sk, vkh.to_string()))?;
+        let spend = prove_with(sk, minted.spend.clone())?;
         minted.spend = spend.clone();
         Ok((spend, minted))
     }
 
-    fn out_refs(spend: &build::ScriptSpend) -> Vec<OutRef> {
+    fn out_refs(spend: &ScriptSpend) -> Vec<OutRef> {
         spend
             .inputs()
             .into_iter()
@@ -441,31 +501,17 @@ pub mod api {
 
     /// Step 1 of creating a seedelf: picks the UTxOs, proves them, and drafts
     /// the transaction for Ogmios to evaluate, under a new one-time key.
-    pub fn draft_mint(sk: Scalar, request: MintRequest) -> Result<MintDraft> {
-        let mut seed = [0u8; 32];
-        OsRng.fill_bytes(&mut seed);
+    pub fn draft_mint(sk: Scalar, request: MintRequest) -> Result<SpendDraft> {
+        let seed = new_seed();
         let (spend, _) = mint_spend(sk, &request, &seed)?;
-        Ok(MintDraft {
-            seed: hex::encode(seed),
-            draft_cbor: hex::encode(&spend.draft()?.tx_bytes.0),
-            inputs: out_refs(&spend),
-        })
+        draft_of(&spend, &seed)
     }
 
     /// Step 2: the same mint, finished with the budgets Ogmios measured on the
     /// draft. `request` is the draft's, plus its `seed` and the `evaluation`.
     pub fn finish_mint(sk: Scalar, request: MintRequest) -> Result<MintResult> {
-        let seed = seed_from_hex(
-            request
-                .seed
-                .as_deref()
-                .ok_or_else(|| anyhow!("finishing a mint needs the draft's seed"))?,
-        )?;
-        let evaluation = request
-            .evaluation
-            .as_ref()
-            .ok_or_else(|| anyhow!("finishing a mint needs Ogmios's evaluation"))?;
-        let budgets = Budgets::from_ogmios(evaluation)?;
+        let (seed, budgets) =
+            finishing("mint", request.seed.as_deref(), request.evaluation.as_ref())?;
         let (spend, minted) = mint_spend(sk, &request, &seed)?;
         let built = spend.finalize(&budgets)?;
         Ok(MintResult {
@@ -474,12 +520,7 @@ pub mod api {
             seed: hex::encode(seed),
             token_name: hex::encode(&minted.token_name),
             lovelace: minted.lovelace.to_string(),
-            fee: FeeOut {
-                size: built.fee.size.to_string(),
-                compute: built.fee.compute.to_string(),
-                script_reference: built.fee.script_reference.to_string(),
-                total: built.fee.total.to_string(),
-            },
+            fee: fee_out(&built.fee),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
@@ -543,17 +584,12 @@ pub mod api {
         sk: Scalar,
         request: &AccountMintRequest,
     ) -> Result<(build::AccountMint, Paths)> {
-        let network_flag = network_flag(&request.network)?;
-        let chain = Chain {
-            params: ProtocolParameters::from_koios(&request.params)?,
-            network_flag,
-            config: get_config(VARIANT, network_flag)?,
-        };
+        let chain = chain_of(&request.network, &request.params)?;
         check_label(&request.label)?;
-        let paths = check_paths(account, network_flag, &request.utxos)?;
+        let paths = check_paths(account, chain.network_flag, &request.utxos)?;
         let available: Vec<UtxoResponse> = request.utxos.iter().map(|p| p.utxo.clone()).collect();
         let seedelf = Register::create(sk)?.rerandomize()?;
-        let change = account.base_address(network_flag, Role::Receive, 0)?;
+        let change = account.base_address(chain.network_flag, Role::Receive, 0)?;
         let mint = build::account_mint(&chain, &available, &request.label, &seedelf, &change)?;
         Ok((mint, paths))
     }
@@ -599,17 +635,169 @@ pub mod api {
             tx_hash: hex::encode(signed.tx_hash.0),
             token_name: hex::encode(&mint.token_name),
             lovelace: mint.lovelace.to_string(),
-            fee: FeeOut {
-                size: built.fee.size.to_string(),
-                compute: built.fee.compute.to_string(),
-                script_reference: built.fee.script_reference.to_string(),
-                total: built.fee.total.to_string(),
-            },
+            fee: fee_out(&built.fee),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
             inputs: mint.inputs().iter().map(out_ref).collect(),
             collateral: out_ref(mint.collateral()),
+        })
+    }
+
+    /// Paying someone's seedelf from the Seedelf balance, as JSON from the
+    /// extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TransferRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        /// The wallet's spendable contract UTxOs (owned, no seedelf), as Koios
+        /// returns them. Each is checked here.
+        pub utxos: Vec<UtxoResponse>,
+        /// The seedelf being paid: its full token name, lowercase hex.
+        pub to: String,
+        /// The contract UTxO holding that seedelf, as Koios returns it. Its
+        /// register is the recipient's; see [`recipient_register`].
+        pub recipient: UtxoResponse,
+        /// Lovelace to send, as a decimal string.
+        pub lovelace: String,
+        pub tokens: Vec<TokenAmount>,
+        /// The one-time key's seed from the draft (hex). The draft draws it.
+        pub seed: Option<String>,
+        /// Ogmios's answer to evaluating the draft.
+        pub evaluation: Option<serde_json::Value>,
+    }
+
+    /// A finished, unsigned transfer and what it does. Amounts in lovelace.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TransferResult {
+        /// Unsigned: `signScriptSpend` adds giveme.my's and the one-time key's signatures.
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub seed: String,
+        /// The seedelf paid.
+        pub to: String,
+        /// Whether that seedelf is this wallet's own: the payment comes back.
+        pub to_self: bool,
+        pub lovelace: String,
+        pub tokens: Vec<TokenAmount>,
+        pub fee: FeeOut,
+        /// Back into the Seedelf balance.
+        pub change_lovelace: String,
+        pub change_tokens: usize,
+        pub change_outputs: usize,
+        pub inputs: Vec<OutRef>,
+    }
+
+    /// Whether `name` is a whole seedelf token name: 32 bytes of lowercase
+    /// hex starting `5eed0e1f`.
+    pub fn is_seedelf_name(name: &str) -> bool {
+        name.len() == 64
+            && name.starts_with("5eed0e1f")
+            && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    }
+
+    /// The register a payment to the seedelf `to` goes under: the datum of
+    /// `utxo`, which must be a wallet-contract UTxO holding that seedelf.
+    /// Whether the register is safe to pay is `build::transfer`'s check.
+    pub fn recipient_register(chain: &Chain, to: &str, utxo: &UtxoResponse) -> Result<Register> {
+        if !is_seedelf_name(to) {
+            bail!("A seedelf's name is 64 hex characters starting 5eed0e1f");
+        }
+        if utxo.payment_cred != hex::encode(chain.config.contract.wallet_contract_hash) {
+            bail!("That seedelf isn't in the Seedelf wallet contract, so it can't be paid");
+        }
+        let policy = &chain.config.contract.seedelf_policy_id;
+        let holds = utxo
+            .asset_list
+            .iter()
+            .flatten()
+            .any(|a| &a.policy_id == policy && a.asset_name == to);
+        if !holds {
+            bail!(
+                "UTxO {}#{} doesn't hold the seedelf {to}",
+                utxo.tx_hash,
+                utxo.tx_index
+            );
+        }
+        extract_bytes_with_logging(&utxo.inline_datum)
+            .ok_or_else(|| anyhow!("That seedelf sits under no register, so it can't be paid"))
+    }
+
+    fn transfer_spend(
+        sk: Scalar,
+        request: &TransferRequest,
+        seed: &[u8; 32],
+    ) -> Result<(ScriptSpend, Payment, bool)> {
+        let chain = chain_of(&request.network, &request.params)?;
+        check_spendable(sk, &chain, &request.utxos)?;
+        let register = recipient_register(&chain, &request.to, &request.recipient)?;
+        let to_self = register.is_owned(sk).unwrap_or(false);
+        let mut tokens = Assets::new();
+        for t in &request.tokens {
+            let quantity: u64 = t.quantity.parse().ok().filter(|q| *q > 0).ok_or_else(|| {
+                anyhow!(
+                    "a token amount must be a whole number above zero, got {:?}",
+                    t.quantity
+                )
+            })?;
+            tokens = tokens.add(Asset::new(
+                t.policy_id.clone(),
+                t.asset_name.clone(),
+                quantity,
+            )?)?;
+        }
+        let payment = Payment {
+            register,
+            lovelace: lovelace_of(&request.lovelace)?,
+            tokens,
+        };
+        let signer = key_hash(&one_time_key(&sk, seed));
+        let spend = build::transfer(
+            &chain,
+            &request.utxos,
+            std::slice::from_ref(&payment),
+            &Register::create(sk)?,
+            signer,
+        )?;
+        Ok((prove_with(sk, spend)?, payment, to_self))
+    }
+
+    /// Step 1 of paying a seedelf: checks the recipient, picks the UTxOs,
+    /// proves them, and drafts the transaction for Ogmios, under a new
+    /// one-time key.
+    pub fn draft_transfer(sk: Scalar, request: TransferRequest) -> Result<SpendDraft> {
+        let seed = new_seed();
+        let (spend, _, _) = transfer_spend(sk, &request, &seed)?;
+        draft_of(&spend, &seed)
+    }
+
+    /// Step 2: the same transfer, finished with the budgets Ogmios measured
+    /// on the draft. `request` is the draft's, plus its `seed` and the
+    /// `evaluation`.
+    pub fn finish_transfer(sk: Scalar, request: TransferRequest) -> Result<TransferResult> {
+        let (seed, budgets) = finishing(
+            "transfer",
+            request.seed.as_deref(),
+            request.evaluation.as_ref(),
+        )?;
+        let (spend, payment, to_self) = transfer_spend(sk, &request, &seed)?;
+        let built = spend.finalize(&budgets)?;
+        Ok(TransferResult {
+            tx_cbor: hex::encode(&built.tx.tx_bytes.0),
+            tx_hash: hex::encode(built.tx.tx_hash.0),
+            seed: hex::encode(seed),
+            to: request.to.clone(),
+            to_self,
+            lovelace: payment.lovelace.to_string(),
+            tokens: payment.tokens.items.iter().map(token_amount).collect(),
+            fee: fee_out(&built.fee),
+            change_lovelace: built.change_lovelace.to_string(),
+            change_tokens: built.change_tokens.items.len(),
+            change_outputs: built.change_outputs,
+            inputs: out_refs(&spend),
         })
     }
 
@@ -971,7 +1159,7 @@ pub fn build_move_in(
 
 /// Creating a seedelf, step 1: picks the Seedelf UTxOs that pay, proves them
 /// under a new one-time key, and drafts the transaction. `request` is JSON
-/// (`api::MintRequest`); the result is JSON (`api::MintDraft`): the draft for
+/// (`api::MintRequest`); the result is JSON (`api::SpendDraft`): the draft for
 /// Ogmios to evaluate, and the seed that `finishMint` and `signScriptSpend`
 /// re-derive the one-time key from.
 #[wasm_bindgen(js_name = draftMint)]
@@ -990,6 +1178,29 @@ pub fn finish_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::MintRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
     let result = api::finish_mint(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Paying a seedelf, step 1: checks the recipient's seedelf UTxO, picks the
+/// Seedelf UTxOs that pay, proves them under a new one-time key, and drafts
+/// the transaction. `request` is JSON (`api::TransferRequest`); the result is
+/// JSON (`api::SpendDraft`): the draft for Ogmios, and the one-time key's seed.
+#[wasm_bindgen(js_name = draftTransfer)]
+pub fn draft_transfer(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::TransferRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad transfer request: {e}")))?;
+    let result = api::draft_transfer(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Paying a seedelf, step 2: the draft's request plus its `seed` and Ogmios's
+/// `evaluation`. Returns JSON (`api::TransferResult`): the unsigned
+/// transaction with its real budgets and fee, and what it does.
+#[wasm_bindgen(js_name = finishTransfer)]
+pub fn finish_transfer(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::TransferRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad transfer request: {e}")))?;
+    let result = api::finish_transfer(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 

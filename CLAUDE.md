@@ -59,7 +59,7 @@ Dependency direction: `cli` → `core` → `crypto` + `koios` + `display`. Crypt
 These constraints are load-bearing for correctness *and* safety — a mistake here can create permanently locked UTxOs (see [README.md](README.md) §Wallet Limitations):
 
 - A re-randomized register must apply the *same* scalar `d` to both `generator` and `public_value`. `(g^d, u^d)` spendable; `(g^d, u^d')` is a dead UTxO.
-- Points pushed into a `Register` must be torsion-free (in the BLS12-381 prime-order subgroup). The validator rejects non-prime-order points, which also yields a dead UTxO. The CLI enforces this; callers constructing registers directly must call `is_torsion_free()` or multiply by the cofactor first.
+- Points pushed into a `Register` must be torsion-free (in the BLS12-381 prime-order subgroup). The validator rejects non-prime-order points, which also yields a dead UTxO. The CLI enforces this; callers constructing registers directly must call `is_torsion_free()` or multiply by the cofactor first. Neither point may be the identity either: an identity public value lets anyone spend the UTxO. `seedelf_core::build::is_payable` checks all of this.
 - Proof `z = r + c·x`; `c` comes from Fiat-Shamir including the one-time signing key hash `vkh` — omitting `vkh` reintroduces the rollback-replay vector.
 
 ## Release & versioning

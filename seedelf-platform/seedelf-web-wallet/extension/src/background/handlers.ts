@@ -9,6 +9,7 @@ import type { BalanceService } from "./balances";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
+import type { TransferService } from "./transfer";
 import type { Wallet } from "./wallet";
 
 export interface Context {
@@ -17,6 +18,7 @@ export interface Context {
   balances: BalanceService;
   moveIn: MoveInService;
   mint: MintService;
+  transfer: TransferService;
   pending: PendingService;
   version: string;
   network: NetworkName;
@@ -59,6 +61,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.mint.build(ctx.network, message.label, message.from);
     case "mint-submit":
       return ctx.mint.submit(ctx.network, message.txHash);
+    case "transfer-lookup":
+      return ctx.transfer.lookup(ctx.network, message.to);
+    case "transfer-build":
+      return ctx.transfer.build(ctx.network, message.to, message.lovelace, message.tokens);
+    case "transfer-submit":
+      return ctx.transfer.submit(ctx.network, message.txHash);
     case "pending-tx":
       return ctx.pending.pending();
     case "reset-wallet":

@@ -9,6 +9,7 @@ import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
 import { Koios, type FetchLike, type KoiosUtxo } from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
+import { TransferService } from "../src/background/transfer";
 import type { Area } from "../src/background/storage";
 import { txIdOf } from "./fixtures/cbor";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
@@ -84,6 +85,14 @@ export const koiosPreprod = fixture("koios-preprod.json") as {
 export const ownedUtxos = fixture("owned-utxos.json").owned_utxos as KoiosUtxo[];
 /** A real account-paid mint evaluated on preprod (tests/fixtures/record-account-mint.mjs). */
 export const accountMintPreprod = fixture("account-mint-preprod.json") as { evaluation: unknown };
+/** A real transfer on preprod: its request and Ogmios's evaluation (tests/fixtures/record-transfer.mjs). */
+export const transferPreprod = fixture("transfer-preprod.json") as {
+  to: string;
+  lovelace: string;
+  tokens: Array<{ policyId: string; assetName: string; quantity: string }>;
+  evaluation: unknown;
+  final: { fee: { total: string } };
+};
 /** A real mint round trip on preprod (tests/fixtures/record-mint.mjs). */
 export const mintPreprod = fixture("mint-preprod.json") as {
   evaluation: unknown;
@@ -178,7 +187,7 @@ export function fakeCollateral(): FakeCollateral {
   return fake;
 }
 
-/** A wallet plus the balance, move-in, mint and pending services over the fake Koios and giveme.my. */
+/** A wallet plus the balance, move-in, mint, transfer and pending services over the fake Koios and giveme.my. */
 export function testBalances(options?: { owned?: boolean }) {
   const t = testWallet();
   const koios = fakeKoios(options);
@@ -197,6 +206,10 @@ export function testBalances(options?: { owned?: boolean }) {
     balances: new BalanceService(deps),
     moveIn: new MoveInService(deps),
     mint: new MintService({
+      ...deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    }),
+    transfer: new TransferService({
       ...deps,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),

@@ -1,18 +1,29 @@
 // Home: the Seedelf balance and seedelfs, the Cardano account, and the
 // Seedelf identity. Balances come from the worker's last reading; it reads
 // the chain again when that is over a minute old, or on Refresh. A sent
-// move-in or seedelf mint shows as a banner until the network confirms it.
+// move-in, seedelf mint or transfer shows as a banner until the network
+// confirms it.
 
 import { useCallback, useEffect, useState } from "react";
 
 import type { Account, Balances, PendingTx } from "../../shared/rpc";
 import { call } from "../background";
+import { CopyButton } from "../components/CopyButton";
 import { CopyField } from "../components/CopyField";
 import { QrCode } from "../components/QrCode";
 import { TokenList } from "../components/TokenList";
 import { explorerUrl, formatAda, shortHex, timeAgo } from "../format";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
+import { Transfer } from "./Transfer";
+
+/** How the banner names a sent transaction, and says it's confirmed. */
+const SENT: Record<PendingTx["kind"], string> = { "move-in": "Move-in", mint: "Seedelf mint", transfer: "Transfer" };
+const CONFIRMED: Record<PendingTx["kind"], string> = {
+  "move-in": "Move-in confirmed",
+  mint: "Seedelf created",
+  transfer: "Transfer confirmed",
+};
 
 /** Read again on open when the last reading is older than this. */
 const STALE_MS = 60_000;
@@ -26,7 +37,7 @@ export function Home() {
   const [error, setError] = useState<string>();
   const [showQr, setShowQr] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const [screen, setScreen] = useState<"home" | "move-in" | "create">("home");
+  const [screen, setScreen] = useState<"home" | "move-in" | "create" | "transfer">("home");
   const [pending, setPending] = useState<PendingTx | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
@@ -84,7 +95,10 @@ export function Home() {
   if (screen === "create" && balances) {
     return <CreateSeedelf balances={balances} onCancel={() => setScreen("home")} onSent={sent} />;
   }
-  const what = pending?.kind === "mint" ? "Seedelf mint" : "Move-in";
+  if (screen === "transfer" && balances) {
+    return <Transfer seedelf={balances.seedelf} onCancel={() => setScreen("home")} onSent={sent} />;
+  }
+  const what = pending ? SENT[pending.kind] : "";
 
   return (
     <div className="stack">
@@ -101,9 +115,7 @@ export function Home() {
         <section className="callout banner" role="status" data-testid="pending-tx">
           <strong>
             {pending.confirmations !== null
-              ? pending.kind === "mint"
-                ? "Seedelf created"
-                : "Move-in confirmed"
+              ? CONFIRMED[pending.kind]
               : watching
                 ? `${what} sent. Waiting for the network…`
                 : `${what} not confirmed yet`}
@@ -125,19 +137,38 @@ export function Home() {
         </div>
         <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
         {balances && <TokenList tokens={balances.seedelf.tokens} testId="seedelf-tokens" />}
+        <button
+          type="button"
+          className="primary"
+          onClick={() => setScreen("transfer")}
+          disabled={!balances || balances.seedelf.utxos === 0 || watching}
+          title={
+            watching
+              ? "Wait for the last transaction to confirm"
+              : balances && balances.seedelf.utxos === 0
+                ? "Move some ADA in first: transfers are paid from your Seedelf balance"
+                : undefined
+          }
+        >
+          Send to a seedelf
+        </button>
         <div className="subsection">
           <h2>Your seedelfs</h2>
           {balances && balances.seedelf.seedelfs.length === 0 && <p className="note">No seedelfs yet.</p>}
           {balances && balances.seedelf.seedelfs.length > 0 && (
-            <ul className="seedelfs" data-testid="seedelfs">
-              {balances.seedelf.seedelfs.map((s) => (
-                <li key={s.assetName} className="seedelfs__row" title={s.assetName}>
-                  <span className="seedelfs__label">{s.label ?? "Unnamed"}</span>
-                  <code className="seedelfs__id">{shortHex(s.assetName, 12, 6)}</code>
-                  <span className="seedelfs__ada">{formatAda(s.lovelace)} ₳</span>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="seedelfs" data-testid="seedelfs">
+                {balances.seedelf.seedelfs.map((s) => (
+                  <li key={s.assetName} className="seedelfs__row" title={s.assetName}>
+                    <span className="seedelfs__label">{s.label ?? "Unnamed"}</span>
+                    <code className="seedelfs__id">{shortHex(s.assetName, 12, 6)}</code>
+                    <span className="seedelfs__ada">{formatAda(s.lovelace)} ₳</span>
+                    <CopyButton value={s.assetName} label={`Copy the name of ${s.label ?? "this seedelf"}`} />
+                  </li>
+                ))}
+              </ul>
+              <p className="note">Copy a seedelf's full name to give to anyone who wants to pay you.</p>
+            </>
           )}
           <button
             type="button"

@@ -40,7 +40,7 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
   - "Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website."
   - "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
 - **Home** shows:
-  - the **Seedelf balance**: ADA and tokens in the contract UTxOs this wallet owns, and **your seedelfs** with their tags and the ADA locked with each;
+  - the **Seedelf balance**: ADA and tokens in the contract UTxOs this wallet owns, and **your seedelfs** with their tags, the ADA locked with each, and a **Copy** button for each full name, to give to anyone who wants to pay you (or to paste into Send to a seedelf);
   - the **Cardano account**: its ADA and tokens, how many addresses it has used, the receive address (copy, QR) and the stake address;
   - the **Seedelf identity**: the base register's public value, shortened;
   - when the chain was last read, and **Refresh**.
@@ -123,14 +123,28 @@ Details:
 
 ## Transfer (Seedelf → any seedelf)
 
-This is the equivalent of the CLI's `transfer`:
+This is the equivalent of the CLI's `transfer`, built by the same core code (`seedelf-core::build::transfer`). Built in chunk 9.
 
-1. Look up the recipient seedelf's register.
-2. Re-randomize it for the payment output.
-3. Re-randomize our own base register for change.
-4. Spend the chosen owned UTxOs. Each gets its own proof, bound to a new one-time key, as in [Create a seedelf](#create-a-seedelf).
+1. **Send to a seedelf** on the Seedelf card. It's disabled while the Seedelf balance is empty or a transaction is still confirming.
+2. **The recipient: paste the seedelf's full name**, 64 hex characters starting `5eed0e1f`. Tags aren't unique (anyone can mint "alice"), so the name is what counts. Spaces and capitals are tidied away.
+   - The wallet looks the name up in the whole wallet contract, the query a balance reading already makes, and shows "Found: *tag* · 5eed0e1f…", or "No seedelf with that name on preprod."
+   - Koios is never asked about the recipient's token (see [privacy.md](privacy.md#known-links)).
+   - **Your own seedelf** is allowed, with a warning: the payment comes back to your Seedelf balance, less the fee.
+3. **What's sent:** an ADA amount (the move-in rules: 6 decimals, the supply cap, "more than you have"), and optionally part of any token in the Seedelf balance, each with its own amount.
+   - One recipient per transfer, and no Max: withdraw (chunk 10) is for sending everything.
+   - The form nudges towards round amounts, and says that sending right after moving in is easy to match by timing.
+4. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
+   - WebAssembly checks the recipient's UTxO: it's in the wallet contract, holds that seedelf, and has a register as its datum. It refuses a register that a payment would be lost under: points that don't decode, points outside the prime-order subgroup, or the identity (anyone could spend a payment to that).
+   - The payment goes under a fresh re-randomization of the recipient's register, never the register as found. The change goes under fresh copies of your own.
+   - It picks the Seedelf UTxOs that pay: first the ones holding the tokens being sent (the biggest holdings first), then pure ADA, largest first, as few as it can.
+   - The inputs are proven under a new one-time key, and Ogmios, through Koios, measures the spends. Only the wallet script runs. The fee is about 0.23 ₳ for one input, and 0.27 ₳ for two.
+   - The review shows the recipient (tag and short name, full name on hover), the amount and tokens, the fee, the change back to the Seedelf balance, and how many UTxOs pay.
+5. **Send.** As for a stealth mint: only now does giveme.my see the transaction. WebAssembly checks its signature and adds it with the one-time key's, and exactly the reviewed transaction is submitted. A banner follows it to "Transfer confirmed".
 
-Collateral comes from giveme.my, and the fee is paid from the inputs.
+Details:
+
+- If the recipient removes their seedelf between review and Send, the payment still reaches their register, so it's still theirs to spend; only the name is gone. The wallet doesn't look again at Send.
+- `build::transfer` pays several seedelfs at once (the CLI's repeated `--seedelfs`); the UI offers one.
 
 ## Withdraw (Seedelf → any address)
 

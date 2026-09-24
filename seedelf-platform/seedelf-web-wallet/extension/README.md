@@ -13,8 +13,9 @@ It can create or restore a wallet, lock it with a password, show what the wallet
 | Restore | Onboarding | 12, 15 or 24 words, one box each with BIP39 autocomplete; pasting a phrase fills every box. Then a password. |
 | Unlock | Locked | Password, the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
-| Home | Unlocked | The Seedelf balance (ADA, tokens, your seedelfs, **Create a seedelf**), the Cardano account (ADA, tokens, receive address with copy and QR, stake address, **Move in**), the Seedelf identity, and Refresh. A sent move-in or mint shows as a banner until it confirms. The lock button is in the top bar. |
+| Home | Unlocked | The Seedelf balance (ADA, tokens, **Send to a seedelf**, your seedelfs with a Copy button for each full name, **Create a seedelf**), the Cardano account (ADA, tokens, receive address with copy and QR, stake address, **Move in**), the Seedelf identity, and Refresh. A sent move-in, mint or transfer shows as a banner until it confirms. The lock button is in the top bar. |
 | Move in | From Home | An ADA amount or Max, and tokens to bring along; then a review of what moves, the fee and the change; then Send |
+| Send to a seedelf | From Home | Paste the recipient's full seedelf name: it's looked up in the wallet contract and shown ("Found: tag · 5eed0e1f…"), with a warning if it's your own. An ADA amount, and optionally part of any token. Then a review of the recipient, what's sent, the fee and the change, then Send, when giveme.my is asked for the collateral. |
 | Create a seedelf | From Home | An optional tag (printable ASCII, 15 at most) with a live preview, and what pays: the Cardano account (the default: mint first, then move in) or the Seedelf balance (a stealth mint). Then a review of the token name, the ADA locked with it, the fee and the change, then Send. The account's keys sign at review; for a stealth mint, Send is when giveme.my is asked for the collateral. |
 
 The flows are described in [../docs/flows.md](../docs/flows.md#onboarding).
@@ -47,9 +48,9 @@ After a rebuild, press the reload arrow on the extension's card.
 | `npm run build` | WASM plus the extension (`build:wasm`, then `build:ext`) |
 | `npm run dev` | Rebuilds the extension into `dist/` on change (development mode, with source maps) |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios and giveme.my clients, the balance scan over recorded preprod responses, move-in and mint (on a real preprod Ogmios evaluation), the handlers (all with the real WASM and the shared vectors), and formatting |
+| `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios and giveme.my clients, the balance scan over recorded preprod responses, move-in, mint and transfer (on real preprod Ogmios evaluations), the handlers (all with the real WASM and the shared vectors), and formatting |
 | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts` | Optional: the balance scan against the real preprod Koios. Skipped otherwise, so CI stays offline. |
-| `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, balances, move-in, and creating a seedelf. Koios, Ogmios and giveme.my answer from the recorded fixtures and every other host is blocked. Since only giveme.my's real key can sign, the mint test stops at Send: it checks that a forged witness is refused and nothing is submitted. Screenshots land in `test-results/`. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
+| `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, balances, move-in, creating a seedelf, and sending to one. Koios, Ogmios and giveme.my answer from the recorded fixtures and every other host is blocked. Since only giveme.my's real key can sign, the stealth mint and transfer tests stop at Send: it checks that a forged witness is refused and nothing is submitted. Screenshots land in `test-results/`. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
 | `node e2e/live/move-in.mjs [ada]`, `node e2e/live/mint.mjs [tag]` | Live preprod runs of the built extension with nothing intercepted: they submit real transactions from the test wallet in `.preprod-test-wallet.txt` (gitignored). Move in first; the mint is paid from Seedelf. |
 
 ## Layout
@@ -61,12 +62,15 @@ src/
   shared/rpc.ts         typed request/response messages between the UI and the worker
   shared/password.ts    the password rule and strength hint (UI and worker)
   shared/label.ts       the seedelf tag rule and token-name preview (the worker's WASM enforces it too)
+  shared/seedelf-name.ts  what a whole seedelf name is (UI and worker)
   background/
     sw.ts               service worker entry: listeners, the auto-lock alarm
     wallet.ts           wallet state, lock, auto-lock and unlock back-off
     balances.ts         the balance reading: contract scan, account discovery, session cache
     move-in.ts          build (in WASM), hold and submit a move-in
+    script-spend.ts     the flow every Seedelf spend shares: draft → Ogmios → finish, keep until Send, giveme.my, sign, submit
     mint.ts             create a seedelf, paid by the account (signed at review) or stealth (giveme.my and sign at Send)
+    transfer.ts         find a seedelf by its full name, then build and send a payment to it
     pending.ts          the submitted transaction being watched, until it confirms
     collateral.ts       the giveme.my client
     koios.ts, chain.ts  the Koios client; pure helpers (registers, gap limit, sums, seedelf tags)
@@ -76,14 +80,15 @@ src/
     storage.ts, wasm.ts chrome.storage wrapper, lazy WASM init
   ui/
     App.tsx             shell: top bar, picks the screen from the worker's status
-    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, MoveIn, CreateSeedelf
+    screens/            Onboarding, Create, Restore, Unlock (and reset), Home, MoveIn, CreateSeedelf, Transfer
     components/         PhraseInput (per-word autocomplete), SetPassword, CopyField, QrCode, TokenList, icons
     format.ts           ADA and token amounts, token names
 public/                 icons and logos, resized from ../brand
 tests/                  Vitest (vectors/: independent SecretBox vectors; fixtures/: recorded preprod Koios responses
                         and synthetic owned UTxOs, remade by fixtures/record-koios.mjs; a stealth mint's real preprod
                         evaluation and giveme.my answer, remade by fixtures/record-mint.mjs; an account-paid mint's
-                        real preprod evaluation, remade by fixtures/record-account-mint.mjs)
+                        real preprod evaluation, remade by fixtures/record-account-mint.mjs; a transfer's real
+                        preprod evaluation and giveme.my answer, remade by fixtures/record-transfer.mjs)
 e2e/                    Playwright; live/ holds the live preprod runs
 ```
 

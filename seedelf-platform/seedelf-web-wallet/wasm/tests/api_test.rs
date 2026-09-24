@@ -461,7 +461,7 @@ mod mint {
     #[test]
     fn refuses_what_it_must_not_spend_or_write() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
-        let err = |r: anyhow::Result<api::MintDraft>| r.unwrap_err().to_string();
+        let err = |r: anyhow::Result<api::SpendDraft>| r.unwrap_err().to_string();
 
         // The UTxO holding a seedelf.
         assert!(err(api::draft_mint(sk, request(owned(), ""))).contains("holds a seedelf"));
@@ -686,5 +686,286 @@ mod account_mint {
         )
         .unwrap_err();
         assert!(e.to_string().contains("refused this transaction"));
+    }
+}
+
+mod transfer {
+    use pallas_crypto::hash::Hasher;
+    use pallas_primitives::alonzo::{Constr, MaybeIndefArray, PlutusData};
+    use pallas_primitives::conway::DatumOption;
+    use pallas_traverse::MultiEraTx;
+    use seedelf_core::build;
+    use seedelf_core::constants::COLLATERAL_HASH;
+    use seedelf_crypto::derivation::seedelf_key_v1;
+    use seedelf_crypto::register::Register;
+    use seedelf_crypto::schnorr::random_scalar;
+    use seedelf_koios::koios::{InlineDatum, UtxoResponse};
+    use seedelf_wasm::api::{self, TokenAmount, TransferRequest};
+    use serde_json::{Value, json};
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    fn fixture(path: &str) -> Value {
+        let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn params() -> Value {
+        fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone()
+    }
+
+    /// The 12-word phrase's synthetic contract UTxOs: 25 ADA, 3 ADA with
+    /// 1,234.56 tUSDM, and one holding its own seedelf.
+    fn owned() -> Vec<UtxoResponse> {
+        serde_json::from_value(
+            fixture("../extension/tests/fixtures/owned-utxos.json")["owned_utxos"].clone(),
+        )
+        .unwrap()
+    }
+
+    fn spendable() -> Vec<UtxoResponse> {
+        owned().into_iter().take(2).collect()
+    }
+
+    /// A real preprod transfer, recorded by record-transfer.mjs.
+    fn recorded() -> Value {
+        fixture("../extension/tests/fixtures/transfer-preprod.json")
+    }
+
+    /// The recorded request: 5 ADA and 1 tUSDM to a live preprod seedelf.
+    fn request() -> TransferRequest {
+        let r = recorded();
+        TransferRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos: spendable(),
+            to: r["to"].as_str().unwrap().into(),
+            recipient: serde_json::from_value(r["recipient"].clone()).unwrap(),
+            lovelace: r["lovelace"].as_str().unwrap().into(),
+            tokens: serde_json::from_value(r["tokens"].clone()).unwrap(),
+            seed: None,
+            evaluation: None,
+        }
+    }
+
+    /// The recorded recipient's UTxO, but under `register`.
+    fn under(register: &Register) -> UtxoResponse {
+        let mut utxo = request().recipient;
+        utxo.inline_datum = Some(InlineDatum {
+            bytes: hex::encode(register.to_vec().unwrap()),
+            value: json!({"constructor": 0, "fields": [
+                {"bytes": register.generator}, {"bytes": register.public_value}]}),
+        });
+        utxo
+    }
+
+    fn finish(sk: blstrs::Scalar, mut r: TransferRequest) -> api::TransferResult {
+        r.seed = Some("42".repeat(32));
+        r.evaluation = Some(recorded()["evaluation"].clone());
+        api::finish_transfer(sk, r).unwrap()
+    }
+
+    fn register_from(datum: DatumOption) -> Register {
+        let DatumOption::Data(data) = datum else {
+            panic!("an inline datum")
+        };
+        let PlutusData::Constr(Constr { fields, .. }) = &data.0 else {
+            panic!("a register is a constructor")
+        };
+        let fields = match fields {
+            MaybeIndefArray::Def(v) | MaybeIndefArray::Indef(v) => v,
+        };
+        let bytes = |d: &PlutusData| match d {
+            PlutusData::BoundedBytes(b) => hex::encode(b.as_slice()),
+            _ => panic!("a point is bytes"),
+        };
+        Register::new(bytes(&fields[0]), bytes(&fields[1]))
+    }
+
+    /// Each output's register, lovelace and token count.
+    fn outputs(tx_cbor: &str) -> Vec<(Register, u64, usize)> {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        tx.outputs()
+            .iter()
+            .map(|o| {
+                let tokens = o.value().assets().iter().map(|p| p.assets().len()).sum();
+                (
+                    register_from(o.datum().unwrap().into()),
+                    o.value().coin(),
+                    tokens,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn drafts_and_finishes_a_transfer_to_a_real_seedelf() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let draft = api::draft_transfer(sk, request()).unwrap();
+        // The tUSDM UTxO first, then the 25 ADA one, as recorded.
+        assert_eq!(
+            serde_json::to_value(&draft.inputs).unwrap(),
+            recorded()["draft"]["inputs"]
+        );
+        let seed: [u8; 32] = hex::decode(&draft.seed).unwrap().try_into().unwrap();
+        let one_time = Hasher::<224>::hash(api::one_time_key(&sk, &seed).public_key().as_ref());
+        let signers: Vec<_> = build::required_signers(&hex::decode(&draft.draft_cbor).unwrap())
+            .unwrap()
+            .into_iter()
+            .map(hex::encode)
+            .collect();
+        assert_eq!(
+            signers,
+            vec![hex::encode(one_time), hex::encode(COLLATERAL_HASH)]
+        );
+
+        let result = finish(sk, request());
+        let final_ = &recorded()["final"];
+        assert!(!result.to_self);
+        assert_eq!(result.to, final_["to"].as_str().unwrap());
+        assert_eq!(result.lovelace, "5000000");
+        assert_eq!(
+            result.tokens,
+            vec![TokenAmount {
+                policy_id: "c0".repeat(28),
+                asset_name: hex::encode("tUSDM"),
+                quantity: "1000000".into(),
+            }]
+        );
+        // The same size and budgets as the recorded transaction: the same fee.
+        assert_eq!(result.fee.total, final_["fee"]["total"].as_str().unwrap());
+        let fee: u64 = result.fee.total.parse().unwrap();
+        assert_eq!(
+            result.change_lovelace.parse::<u64>().unwrap(),
+            28_000_000 - 5_000_000 - fee
+        );
+        assert_eq!((result.change_tokens, result.change_outputs), (1, 1));
+
+        // The payment is a new copy of the recipient's register, never the one found.
+        let found = register_from_utxo(&request().recipient);
+        let outs = outputs(&result.tx_cbor);
+        assert_eq!(outs.len(), 2);
+        let (paid, lovelace, tokens) = &outs[0];
+        assert!(build::is_payable(paid));
+        assert_ne!(paid, &found);
+        assert_ne!(paid.generator, found.generator);
+        assert!(!paid.is_owned(sk).unwrap());
+        assert_eq!((*lovelace, *tokens), (5_000_000, 1));
+        assert!(outs[1].0.is_owned(sk).unwrap(), "the change is ours");
+        assert!(!result.tx_cbor.contains(&found.public_value));
+    }
+
+    fn register_from_utxo(utxo: &UtxoResponse) -> Register {
+        let fields = &utxo.inline_datum.as_ref().unwrap().value["fields"];
+        Register::new(
+            fields[0]["bytes"].as_str().unwrap().into(),
+            fields[1]["bytes"].as_str().unwrap().into(),
+        )
+    }
+
+    #[test]
+    fn pays_whoever_owns_the_register_and_flags_your_own() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+
+        // Someone whose key we know: the payment is theirs, not ours.
+        let bob = random_scalar();
+        let mut r = request();
+        r.recipient = under(&Register::create(bob).unwrap().rerandomize().unwrap());
+        let result = finish(sk, r);
+        assert!(!result.to_self);
+        let paid = &outputs(&result.tx_cbor)[0].0;
+        assert!(paid.is_owned(bob).unwrap());
+        assert!(!paid.is_owned(sk).unwrap());
+
+        // Your own seedelf: allowed, flagged, and the payment comes back.
+        let mine = owned().pop().unwrap();
+        let mut r = request();
+        r.to = mine.asset_list.as_ref().unwrap()[0].asset_name.clone();
+        r.recipient = mine;
+        let result = finish(sk, r);
+        assert!(result.to_self);
+        assert!(outputs(&result.tx_cbor)[0].0.is_owned(sk).unwrap());
+    }
+
+    #[test]
+    fn refuses_what_would_lose_or_misdirect_money() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let err = |r: TransferRequest| api::draft_transfer(sk, r).unwrap_err().to_string();
+
+        // Names: 64 lowercase hex characters starting 5eed0e1f.
+        for bad in [
+            "5eed0e1f",
+            &request().to.to_uppercase(),
+            &format!("00{}", &request().to[2..]),
+            &format!("{}zz", &request().to[..62]),
+        ] {
+            let mut r = request();
+            r.to = bad.to_string();
+            assert!(err(r).contains("64 hex characters"), "{bad}");
+        }
+        assert!(api::is_seedelf_name(&request().to));
+
+        // The recipient's UTxO must hold that seedelf, in the contract, under a register.
+        let mut r = request();
+        r.to = format!("{}00", &request().to[..62]);
+        assert!(err(r).contains("doesn't hold the seedelf"));
+        let mut r = request();
+        r.recipient.payment_cred = "00".repeat(28);
+        assert!(err(r).contains("isn't in the Seedelf wallet contract"));
+        let mut r = request();
+        r.recipient.inline_datum = None;
+        assert!(err(r).contains("no register"));
+        let mut r = request();
+        r.recipient = under(&Register::new("00".repeat(48), "00".repeat(48)));
+        assert!(err(r).contains("register isn't valid"));
+        let identity = format!("c0{}", "00".repeat(47));
+        let mut r = request();
+        r.recipient = under(&Register::new(
+            Register::create(random_scalar()).unwrap().generator,
+            identity,
+        ));
+        assert!(err(r).contains("register isn't valid"));
+
+        // What pays: only this wallet's UTxOs, never one holding a seedelf.
+        let mut r = request();
+        r.utxos = owned();
+        assert!(err(r).contains("holds a seedelf"));
+        assert!(
+            api::draft_transfer(random_scalar(), request())
+                .unwrap_err()
+                .to_string()
+                .contains("isn't this wallet's")
+        );
+
+        // Amounts.
+        let mut r = request();
+        r.tokens[0].quantity = "0".into();
+        assert!(err(r).contains("above zero"));
+        let mut r = request();
+        r.lovelace = "45000000000000001".into();
+        assert!(err(r).contains("45 billion"));
+        let mut r = request();
+        r.lovelace = "1000000".into();
+        assert!(err(r).contains("needs at least"));
+        let mut r = request();
+        r.tokens[0].quantity = "1234560001".into();
+        assert!(err(r).contains("holds only 1234560000"));
+        let mut r = request();
+        r.lovelace = "30000000".into();
+        assert!(err(r).contains("Not enough ADA"));
+
+        // Finishing needs the draft's seed and Ogmios's answer.
+        let mut r = request();
+        r.evaluation = Some(recorded()["evaluation"].clone());
+        let e = api::finish_transfer(sk, r).unwrap_err().to_string();
+        assert!(
+            e.contains("finishing a transfer needs the draft's seed"),
+            "{e}"
+        );
+        let mut r = request();
+        r.seed = Some("ab".repeat(32));
+        let e = api::finish_transfer(sk, r).unwrap_err().to_string();
+        assert!(e.contains("evaluation"), "{e}");
     }
 }

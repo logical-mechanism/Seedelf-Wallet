@@ -51,6 +51,18 @@ describe("parseAda", () => {
   });
 });
 
+describe("parseQuantity", () => {
+  it("reads token amounts with the token's decimals", async () => {
+    const { parseQuantity } = await import("../src/ui/format");
+    expect(parseQuantity("1", 6)).toBe("1000000");
+    expect(parseQuantity("1,234.56", 6)).toBe("1234560000");
+    expect(parseQuantity("42", 0)).toBe("42");
+    expect(parseQuantity("42.", 0)).toBe("42");
+    for (const bad of ["", "1.5", "-3", "x"]) expect(parseQuantity(bad, 0)).toBeUndefined();
+    expect(parseQuantity("0.1234567", 6)).toBeUndefined();
+  });
+});
+
 describe("sanitizeAda", () => {
   it("keeps at most 6 decimals, dropping the rest rather than rounding", async () => {
     const { sanitizeAda } = await import("../src/ui/format");
