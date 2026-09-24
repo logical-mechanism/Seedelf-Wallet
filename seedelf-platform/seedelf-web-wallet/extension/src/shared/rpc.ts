@@ -28,6 +28,38 @@ export interface Account {
   seedelfPublicValue: string;
 }
 
+/** A native token amount. `quantity` is the raw integer, as a decimal string. */
+export interface TokenAmount {
+  policyId: string;
+  /** Hex. */
+  assetName: string;
+  quantity: string;
+  /** From the token registry via Koios; 0 when unknown. */
+  decimals: number;
+  fingerprint: string;
+}
+
+/** One of the user's seedelfs: a named token in a UTxO the wallet owns. */
+export interface SeedelfInfo {
+  /** The full token name, hex. */
+  assetName: string;
+  /** The personal tag, when it reads as text. */
+  label?: string;
+  /** ADA locked with the token (lovelace string); only `remove` gets it back. */
+  lovelace: string;
+}
+
+/** What the wallet holds on one network. Lovelace amounts are decimal strings. */
+export interface Balances {
+  network: NetworkName;
+  /** When the chain was read (ms since the epoch). */
+  updatedAt: number;
+  /** UTxOs in the wallet contract this wallet owns, except those holding a seedelf (as in the CLI's `balance`). */
+  seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[] };
+  /** The Cardano account (CIP-1852 account 0). */
+  cardano: { lovelace: string; tokens: TokenAmount[]; utxos: number; addressesUsed: number };
+}
+
 type None = Record<never, never>;
 
 /** Every request the service worker answers: its payload and its result. */
@@ -42,6 +74,8 @@ export interface Requests {
   lock: { payload: None; result: Status };
   activity: { payload: None; result: null };
   account: { payload: None; result: Account };
+  /** The last reading, or a new one if there is none or `refresh` is set. */
+  balances: { payload: { refresh?: boolean }; result: Balances };
   wordlist: { payload: None; result: string[] };
   "reset-wallet": { payload: None; result: Status };
 }
@@ -66,6 +100,7 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "lock",
   "activity",
   "account",
+  "balances",
   "wordlist",
   "reset-wallet",
 ]);

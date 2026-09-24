@@ -4,16 +4,18 @@
 import { describe, expect, it } from "vitest";
 
 import { handle, type Context } from "../src/background/handlers";
-import type { Account, Status, UnlockResult } from "../src/shared/rpc";
+import type { Account, Balances, Status, UnlockResult } from "../src/shared/rpc";
 import { isMessage } from "../src/shared/rpc";
-import { loadTestWasm, testWallet, vectors } from "./fakes";
+import { loadTestWasm, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 
 function context(): Context {
+  const { wallet, balances } = testBalances();
   return {
     wasm: loadTestWasm(),
-    wallet: testWallet().wallet,
+    wallet,
+    balances,
     version: "0.1.0",
     network: "preprod",
     networks: ["preprod"],
@@ -82,6 +84,16 @@ describe("handlers", () => {
     );
     const swapped = v.phrase.split(" ").reverse().join(" ");
     await expect(handle({ type: "validate-phrase", phrase: swapped }, ctx)).rejects.toThrow("checksum");
+  });
+
+  it("reads balances once unlocked", async () => {
+    const ctx = context();
+    await expect(handle({ type: "balances" }, ctx)).rejects.toThrow("locked");
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    const b = (await handle({ type: "balances", refresh: true }, ctx)) as Balances;
+    expect(b.network).toBe("preprod");
+    expect(b.seedelf.seedelfs.map((s) => s.label)).toEqual(["web-wallet"]);
   });
 
   it("recognizes only known requests", () => {

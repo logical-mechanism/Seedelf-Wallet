@@ -39,7 +39,11 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 - **Phrase warnings, shown during create:**
   - "Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website."
   - "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
-- **Home** (a placeholder until chunk 6) shows the Cardano receive address and stake address, each with a copy button, and the Seedelf identity: the base register's public value, shortened.
+- **Home** shows:
+  - the **Seedelf balance**: ADA and tokens in the contract UTxOs this wallet owns, and **your seedelfs** with their tags and the ADA locked with each;
+  - the **Cardano account**: its ADA and tokens, how many addresses it has used, the receive address (copy, QR) and the stake address;
+  - the **Seedelf identity**: the base register's public value, shortened;
+  - when the chain was last read, and **Refresh**.
 
 ## Lock and unlock
 
@@ -53,7 +57,7 @@ See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 
 ## Receive (Cardano account)
 
-Show the receive address `0/0`, with a copy button (built in chunk 5). A QR code, so someone paying from a phone wallet can scan it, comes later (chunk 6 or 11). Anything that can pay a Cardano address can fund the wallet. For a restored wallet, the funds already in the account show up here too.
+Show the receive address `0/0`, with a copy button and a QR code, so someone paying from a phone wallet can scan it. The QR is shown on request, drawn dark on white with the standard quiet zone. Anything that can pay a Cardano address can fund the wallet. For a restored wallet, the funds already in the account show up here too.
 
 ## Move in (Cardano account → Seedelf)
 

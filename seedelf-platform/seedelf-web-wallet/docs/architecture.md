@@ -133,14 +133,29 @@ The building moves into network-free functions in `seedelf-core`: a draft step, 
 
 ## Chain data
 
-- **Koios, same as the CLI.**
-  - Wallet contract UTxOs via `credential_utxos`.
-  - `address_utxos` for the Cardano account (receive and change chains, gap limit 20) and one-time accounts.
-  - Protocol parameters, tip, `evaluate_transaction`, `submit_tx`.
-  - Seedelf token lookups for recipients' registers.
-- **Collateral for Seedelf spends comes from the giveme.my service**, exactly as in the CLI (`seedelf-koios`). See [privacy.md](privacy.md).
-- **Finding owned UTxOs:** fetch every UTxO at the wallet contract and keep the ones where the register satisfies `generator^x == public_value`. This is `is_owned`, the same method the CLI's `balance` uses.
+**Koios, same as the CLI.** Balances were built in chunk 6: `extension/src/background/koios.ts` (the client), `chain.ts` (pure helpers) and `balances.ts` (the service).
+
+**What one balance reading asks Koios** (three requests, in parallel):
+
+| Request | For |
+|---|---|
+| `credential_utxos` with the wallet contract's script hash | Every UTxO in the contract, to find the owned ones |
+| `account_addresses` with the Cardano account's stake address (`_empty: true`) | Every address that has used the stake key, including empty ones, for discovery |
+| `account_utxos` with the same stake address | The account's UTxOs |
+
+- **Paging:** 1000 rows a page, in a fixed order (`order=tx_hash.asc,tx_index.asc`), until a short page.
+- **Retries:** a rate limit (429), a server error (5xx) or a network failure is retried twice, after 1 s and 3 s. Anything else fails at once with Koios's status.
+- **Finding owned UTxOs:** keep the contract UTxOs whose inline datum is a register (constructor 0, two 48-byte fields) with `generator^x == public_value`. This is `is_owned`, the same method the CLI's `balance` uses, run in WebAssembly. Points that don't decode or aren't torsion-free count as not owned.
+  - As in the CLI, a UTxO holding a seedelf isn't counted in the balance. It's listed as a seedelf, with the ADA locked with it.
+  - The query goes by payment credential, so it finds contract UTxOs with and without a staking part. Older outputs on preprod carry the shared Seedelf stake key; the current CLI writes none.
   - The cost grows with the size of the contract's UTxO set. That's fine today; revisit if it gets large.
+- **Discovering the Cardano account:** walk the receive chain (`0/i`) and the change chain (`1/i`) from index 0 until 20 addresses in a row are unused. "Used" means Koios lists the address under the account's stake key.
+  - The account's UTxOs count only when they sit at an address the wallet derived. Anyone can build an address from their own payment key or script plus someone else's stake key. The well-known `abandon … art` test phrase has exactly such a script UTxO on preprod.
+  - Addresses from our payment keys with no staking part, or with someone else's, aren't found. Standard wallets don't make them.
+- **Tokens** show the name as text when it decodes as UTF-8 (after dropping a CIP-68 label such as `0014df10`), otherwise as hex, with the decimals Koios reports. No token images are fetched: they would reveal holdings to more servers, and the page CSP allows only the extension's own images.
+- **When it reads the chain:** when Home opens, if the last reading is over a minute old, and on **Refresh**. There's no background polling. The reading is cached per network in `chrome.storage.session` (it says which contract UTxOs are the user's, so it never goes to disk) and wiped on lock.
+- **Still to come:** protocol parameters, tip, `evaluate_transaction` and `submit_tx` (chunk 7), and seedelf token lookups for recipients' registers (chunk 9).
+- **Collateral for Seedelf spends comes from the giveme.my service**, exactly as in the CLI (`seedelf-koios`). See [privacy.md](privacy.md).
 - **All requests come from the user's IP.** The IP-tracking caveats in the root [README](../../../README.md#de-anonymizing-via-ip-tracking) apply. The extension adds no analytics or telemetry.
 
 ## Storage
@@ -153,6 +168,7 @@ The building moves into network-free functions in `seedelf-core`: a draft step, 
 | `chrome.storage.local` | `seedelf.unlockFailures` | `{ count, lastFailureAt }` for the unlock back-off |
 | `chrome.storage.session` | `seedelf.entropy` | The vault entropy, only while unlocked |
 | `chrome.storage.session` | `seedelf.lastActivity` | When the user last did something, for auto-lock |
+| `chrome.storage.session` | `seedelf.balances.<network>` | The last balance reading, only while unlocked |
 
 Non-secret settings and cached chain data join `chrome.storage.local` in later chunks.
 

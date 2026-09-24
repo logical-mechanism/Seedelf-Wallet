@@ -5,11 +5,13 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { Message, Requests, Status } from "../shared/rpc";
+import type { BalanceService } from "./balances";
 import type { Wallet } from "./wallet";
 
 export interface Context {
   wasm: typeof Wasm;
   wallet: Wallet;
+  balances: BalanceService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -39,6 +41,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return null;
     case "account":
       return wallet.account(ctx.network);
+    case "balances":
+      return ctx.balances.get(ctx.network, message.refresh ?? false);
     case "wordlist":
       return wasm.bip39Wordlist();
     case "reset-wallet":

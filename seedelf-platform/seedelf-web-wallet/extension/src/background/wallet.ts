@@ -10,7 +10,7 @@
 
 import type * as Wasm from "@seedelf/wasm";
 
-import type { NetworkName } from "../networks";
+import { NETWORKS, type NetworkName } from "../networks";
 import { passwordProblem } from "../shared/password";
 import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
@@ -23,6 +23,13 @@ export const AUTO_LOCK_MS = 15 * 60_000;
 export const SESSION_ENTROPY = "seedelf.entropy";
 /** chrome.storage.session: when the user last did something (ms since the epoch). */
 export const SESSION_ACTIVITY = "seedelf.lastActivity";
+/**
+ * chrome.storage.session: the last balance reading per network, e.g.
+ * `seedelf.balances.preprod`. It says which contract UTxOs are the user's,
+ * so it never goes to disk and it's wiped on lock.
+ */
+export const SESSION_BALANCES_PREFIX = "seedelf.balances.";
+const SESSION_BALANCES = Object.keys(NETWORKS).map((n) => SESSION_BALANCES_PREFIX + n);
 /** chrome.storage.local: consecutive failed unlocks, kept across restarts. */
 export const UNLOCK_FAILURES = "seedelf.unlockFailures";
 
@@ -53,7 +60,7 @@ export interface WalletDeps {
   changed: () => void;
 }
 
-interface Keys {
+export interface Keys {
   seedelf: Wasm.SeedelfKey;
   cardano: Wasm.CardanoAccount;
 }
@@ -157,9 +164,7 @@ export class Wallet {
 
   /** The unlocked wallet's public identifiers. */
   account(network: NetworkName): Promise<Account> {
-    return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
-      const { seedelf, cardano } = this.keys!;
+    return this.withKeys(({ seedelf, cardano }) => {
       const net = network === "mainnet" ? this.deps.wasm.Network.Mainnet : this.deps.wasm.Network.Preprod;
       const base = seedelf.baseRegister();
       try {
@@ -171,6 +176,18 @@ export class Wallet {
       } finally {
         base.free();
       }
+    });
+  }
+
+  /**
+   * Runs `task` with the unlocked keys, in turn with every other wallet
+   * operation, so a lock can't happen halfway through. Throws if locked.
+   * Keep tasks short and never await the network inside one.
+   */
+  withKeys<T>(task: (keys: Keys) => T | Promise<T>): Promise<T> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      return task(this.keys!);
     });
   }
 
@@ -229,10 +246,10 @@ export class Wallet {
     }
   }
 
-  /** Lock: drop the keys from memory and session storage, stop the alarm. */
+  /** Lock: drop the keys and anything derived from them from memory and session storage, stop the alarm. */
   private async wipe(): Promise<void> {
     this.free();
-    await this.deps.session.remove(SESSION_ENTROPY, SESSION_ACTIVITY);
+    await this.deps.session.remove(SESSION_ENTROPY, SESSION_ACTIVITY, ...SESSION_BALANCES);
     await this.deps.autoLock.stop();
   }
 

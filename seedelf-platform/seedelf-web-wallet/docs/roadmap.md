@@ -19,7 +19,7 @@ The wallet is built in **chunks**, each about one working session.
 | 3 | Cardano keys | ✅ | Phrase → CIP-1852 Cardano account (account `0'`): receive, change and stake addresses, in Rust (`pallas-wallet`). Checked against Lace's library (`@cardano-sdk`). |
 | 4 | Extension scaffold | ✅ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
 | 5 | Vault and lock | ✅ | SecretBox vault, create/restore onboarding (restore has per-word BIP39 autocomplete, like Lace and Eternl), unlock, `chrome.storage.session`, auto-lock, unlock back-off. Plan: [plans/chunk-05-vault-and-lock.md](plans/chunk-05-vault-and-lock.md). |
-| 6 | Balance | ⬜ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. Maybe a QR code for the receive address. |
+| 6 | Balance | ✅ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. QR code for the receive address. |
 | 7 | Builder extraction + move in | ⬜ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ⬜ | Stealth mint (`util mint`) with giveme.my collateral. |
 | 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
@@ -35,6 +35,21 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-23: chunk 6 done** (`web-wallet/balances`).
+  - **Decided with the user:** the receive-address QR code is in (`uqr`, MIT, a port of Nayuki's generator). Balances are read when Home opens, if the last reading is over a minute old, and on Refresh; there's no background polling.
+  - **What landed:** `extension/src/background/koios.ts`, `chain.ts` and `balances.ts`, plus the new Home. See [architecture.md](architecture.md#chain-data).
+    - One reading is three Koios requests: `credential_utxos` for the contract, and `account_addresses` plus `account_utxos` for the Cardano account's stake key.
+    - Ownership runs in WebAssembly inside `wallet.withKeys`, which also writes the session cache, so a lock can't interleave. A reading that finishes after a lock is dropped.
+    - The seedelf tag is the leading printable run of the 15-byte window after `5eed0e1f`, slightly stricter than the CLI's filter.
+  - **Checked against the real chain:** the recorded preprod fixtures (`extension/tests/fixtures/`) match what `LIVE_KOIOS=1` reads today. The built extension, run against live preprod with no interception, shows the 12-word test phrase's account (10,350.538725 ₳, 4 addresses used) and contacts only `preprod.koios.rest`. The receive QR decodes back to the exact address with `zxing-cpp` and OpenCV.
+  - **Tests:** Vitest 64, plus 1 opt-in live test (Koios paging and retries, datum parsing on all 25 real contract UTxOs, the gap limit, bigint sums, seedelf tags, the balance service with the cache and the lock, formatting). Playwright 10: all e2e tests now get Koios from the fixtures with every other host blocked, and 2 are new, for balances and a Koios failure.
+  - **Surprises:**
+    - The `abandon … art` phrase's stake key has a foreign script UTxO on preprod. Anyone can pair a stake key with their own payment part, so the account's UTxOs count only at derived addresses.
+    - Older preprod contract UTxOs carry the shared Seedelf stake key; the current CLI writes none. Querying by payment credential finds both.
+    - Real token names carry CIP-68 labels (`0014df10…`), which the UI drops.
+    - No phrase wallet owns contract UTxOs yet, so owned-UTxO coverage uses synthetic fixtures (re-randomized registers of the 12-word vector). Chunk 7's move-in makes real ones.
+  - **Next:** chunk 7, builder extraction and move-in. It's the biggest chunk, so start by writing `docs/plans/chunk-07-*.md` with a "Start here" list, and merge `main` first.
 
 - **2026-09-23: chunk 5 done** (`web-wallet/vault-lock`).
   - **Decided with the user:** auto-lock after 15 minutes; passwords of at least 12 characters with a strength hint and no composition rules; the receive-address QR code waits for chunk 6 or 11. It's for someone paying from a phone wallet who scans the desktop screen.

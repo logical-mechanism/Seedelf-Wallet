@@ -81,7 +81,7 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
 **Rules:**
 
 1. **Account `0'` only in v1, but all of it.**
-   - Discovery scans both the receive (`0/i`) and change (`1/i`) chains with the standard gap limit of 20, so a restored wallet shows its full balance (roadmap chunk 6).
+   - Discovery scans both the receive (`0/i`) and change (`1/i`) chains with the standard gap limit of 20, so a restored wallet shows its full balance. Built in chunk 6; see [architecture.md](architecture.md#chain-data).
    - Every function takes the account index, so more accounts can come later. A picker would discover accounts in order (0, 1, 2, … stopping at the first one never used), the way BIP44 does.
 2. **Leave collateral alone.**
    - Lace's collateral is just a pure-ADA UTxO of exactly 5 ADA, which Lace marks as reserved in its own local storage; nothing on-chain says so.
