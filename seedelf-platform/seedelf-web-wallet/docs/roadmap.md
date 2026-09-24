@@ -22,6 +22,7 @@ The wallet is built in **chunks**, each about one working session.
 | 6 | Balance | ✅ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of seedelfs. QR code for the receive address. |
 | 7 | Builder extraction + move in | ✅ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
 | 8 | Create a seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
+| 8b | Mint first | ⬜ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, giveme.my collateral), before any move-in. The stealth mint stays for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
 | 9 | Transfer | ⬜ | Seedelf → seedelf (`transfer`). |
 | 10 | Withdraw | ⬜ | `sweep` and `remove`. |
 | 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
@@ -79,7 +80,12 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
       - This is the first transaction with a real giveme.my signature.
     - The live balance scan (`LIVE_KOIOS=1`) finds both. That phrase is public, so anyone can spend them; the live test now checks their shape, not their count.
     - `e2e/live/*.mjs` on the private test wallet still haven't run (it's unfunded).
-  - **Next:** chunk 9, transfer (seedelf → seedelf). Look up the recipient's register by token name, then build a `ScriptSpend` with a recipient output. Most of the plumbing is here.
+  - **Privacy correction (the user):** a stealth mint paid by money you moved in yourself links the Cardano account to the seedelf. The live mint spent exactly its move-in's UTxO.
+    - The docs, privacy rule 5 and the Create screen's text now say so.
+    - The fix is to mint first, then move in: chunk 8b.
+    - **The user's rule:** stealth minting only helps when Seedelf money you received pays for the seedelf ("hidden money paying for the hidden seedelf").
+    - **An idea for 8b:** the wallet can tell received UTxOs from moved-in ones by the transaction that created them. A received one came from a tx spending contract inputs; a moved-in one came from key inputs.
+  - **Next:** chunk 8b, mint first: the account-paid mint, then the Create screen's default, before chunk 9 (transfer).
 
 - **2026-09-23: chunk 7 done** (`web-wallet/move-in`). Plan: [plans/chunk-07-move-in.md](plans/chunk-07-move-in.md).
   - **Decided with the user:**

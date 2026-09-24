@@ -1,6 +1,8 @@
 // Create a seedelf: the stealth mint (the CLI's `util mint`), paid from the
-// Seedelf balance and never the Cardano account (privacy rule 5). Built by
-// seedelf-core `build::mint` through WebAssembly.
+// Seedelf balance. It only hides the payer when that balance came from other
+// people's Seedelf payments; money the user moved in links back to the
+// Cardano account (privacy.md, Known links). Built by seedelf-core
+// `build::mint` through WebAssembly.
 //
 // build   reads the contract and the protocol parameters. WebAssembly picks
 //         the UTxOs that pay, proves them under a new one-time key and drafts

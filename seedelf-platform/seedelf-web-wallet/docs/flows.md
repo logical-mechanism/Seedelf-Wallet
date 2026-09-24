@@ -111,7 +111,9 @@ Details:
 - The token is named after the smallest input spent (`5eed0e1f` ‖ tag ‖ its output index ‖ its tx id, cut to 32 bytes), because that's what the policy checks. So the name is only known once the UTxOs are picked.
 - Only removing the seedelf (chunk 10) gives back the ADA locked with it.
 
-The new seedelf is never linked to the Cardano account.
+**This links the seedelf to the Cardano account when your own move-in paid for it** (see [privacy.md](privacy.md#known-links)). Your first live mint on preprod spent exactly the UTxO its move-in had just created. A stealth mint only hides the payer when the Seedelf balance came from other people's Seedelf payments: hidden money paying for a hidden seedelf.
+
+**Next (chunk 8b): mint first, then move in.** The first seedelf is paid by the Cardano account (the CLI's `create`), which links the account to the name openly but to nothing else. Later move-ins then look exactly like paying someone else's seedelf, so the Seedelf balance isn't tied to the name. The stealth mint stays for a Seedelf balance that holds received money.
 
 The CLI's `create` is different: an outside wallet pays for the mint, which links that wallet to the seedelf. See the root [README](../../../README.md#implicit-tracking-methods) (first implicit tracking method). The web wallet doesn't need that path.
 

@@ -29,7 +29,9 @@ These are not user settings:
    - They are never stored or logged.
    - They exist only inside `seedelf-crypto`.
 4. **Registers are only built by `seedelf-crypto`,** never assembled in TypeScript. This guarantees the same `d` is applied to both points and that the points are torsion-free. A mistake here locks funds permanently (see the root [CLAUDE.md](../../../CLAUDE.md), "Core protocol invariants").
-5. **Seedelfs are created by stealth mint** from the Seedelf balance, never paid for by the Cardano account (see [flows.md](flows.md#create-a-seedelf)). The mint service only passes Seedelf UTxOs to WebAssembly, and WebAssembly refuses any it doesn't own.
+5. **A seedelf is linked to whatever pays for it, so the first one is minted before any move-in** (chunk 8b; see [flows.md](flows.md#create-a-seedelf)).
+   - This rule used to say "stealth mint from the Seedelf balance, never paid by the Cardano account". That only holds when the balance came from other people's Seedelf payments. When your own move-in funded it, the mint spends that deposit and ties the account, the name and the mint's change together.
+   - Chunk 8 built only the stealth mint. The mint service passes it only Seedelf UTxOs, and WebAssembly refuses any it doesn't own.
 6. **The Cardano account is never a one-time account.** Each one-time account is used for a single session. One-time accounts use a reserved account index (`24301'`), never a low index like `1'` that a restored Lace wallet may already use: sharing payment keys with a real account would link every one-time address back to the user.
 7. **No analytics or telemetry.** The wallet talks to Koios and giveme.my and nothing else.
 
@@ -37,7 +39,12 @@ These are not user settings:
 
 The wallet can't prevent these, so it should make them visible to the user instead of hiding them.
 
-- **Entry:** move-in links the Cardano account, and whoever funded it, to the register UTxOs it created. It does not link to seedelf names. For a restored Lace or Yoroi phrase, the Cardano account is the user's public identity.
+- **Entry:** move-in links the Cardano account, and whoever funded it, to the register UTxOs it created. For a restored Lace or Yoroi phrase, the Cardano account is the user's public identity.
+  - A move-in on its own doesn't link to a seedelf name: from outside it looks the same as paying someone else's seedelf.
+- **Minting:** a seedelf is linked to whatever pays for it.
+  - **Stealth mint from moved-in money:** the mint spends the deposit and returns the change in the same transaction. That links the account, the name and the remaining balance.
+  - **Mint paid by the account, then move in:** only the account and the name are linked. The balance stays ambiguous. This is chunk 8b's default.
+  - **Stealth mint from received money:** hides the payer. That's the case the stealth mint is for.
 - **Exit:** withdrawing to where the money came from re-links the chain. This is the second implicit tracking method in the root README. Withdraw somewhere else, or keep the funds in Seedelf.
 - **Unique amounts and timing:** depositing 1,234.567 ADA and withdrawing roughly 1,234.4 ADA an hour later is an easy match. The UI should nudge users towards round amounts and not rushing.
 - **Co-spending:** spending several UTxOs in one transaction suggests they share an owner.

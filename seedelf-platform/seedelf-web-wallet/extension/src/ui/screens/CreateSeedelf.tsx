@@ -129,7 +129,10 @@ export function CreateSeedelf({
         About 1.75 ₳ stays locked with the seedelf, and the network fee is about 0.3 ₳. The review shows the exact
         amounts.
       </p>
-      <div className="callout">It's paid from your Seedelf balance, so it's never linked to your Cardano account.</div>
+      <div className="callout">
+        It's paid from your Seedelf balance. If you moved that money in from your Cardano account, the seedelf can be traced
+        back to the account. It only stays hidden when the balance came from other people's Seedelf payments.
+      </div>
       {error && (
         <p className="error" role="alert">
           {error}
