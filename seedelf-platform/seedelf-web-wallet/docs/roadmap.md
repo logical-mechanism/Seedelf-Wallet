@@ -25,7 +25,9 @@ The wallet is built in **chunks**, each about one working session.
 | 8b | Mint first | ✅ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
 | 9 | Transfer | ✅ | Seedelf → seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md). |
 | 10 | Withdraw | ✅ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md). |
-| 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
+| 11a | Style and flow pass | ⬜ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Starts with the user's list of CSS and UX fixes. **Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).** |
+| 11b | Size and live runs | ⬜ | A smaller WebAssembly module (a size-tuned cargo profile, then `wasm-opt` if it pays). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
+| 11c | Testers | ⬜ | The unlisted Chrome Web Store listing (`VITE_STORE_BUILD=true`): the store build, the listing text, the privacy policy, the screenshots and a release checklist, ready for the user to submit. Same plan. |
 
 ## After v1
 
@@ -36,6 +38,10 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 11 planned** (after #255 merged; CI green).
+  - It's split into three sessions, 11a, 11b and 11c, each with a "Start here": [plans/chunk-11-polish.md](plans/chunk-11-polish.md). The plan is committed on the pushed branch `web-wallet/polish`, which 11a builds on.
+  - **Next:** 11a, the style and flow pass. First ask the user for their list of CSS and UX fixes, then confirm 11a's decisions (theme, palette, font, icons, Home's structure).
 
 - **2026-09-24: chunk 10 done** (`web-wallet/withdraw`). Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md).
   - **Decided with the user:**
@@ -62,7 +68,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The public 12-word phrase's Seedelf balance, read live today after chunk 9, is 17.4 ₳ and 4.82028 ₳ (UTxOs from `9f564d0f…`). It also holds `TAK1` and `TAK2`.
     - Withdraw some to another wallet's address, then remove `TAK1` to the Cardano account, and record both tx hashes here.
     - An ADA Handle lookup against a real preprod handle is still untested.
-  - **Next:** chunk 11, polish and testers: the Lace-style pass, `wasm-opt`, preprod end-to-end tests, and the unlisted Web Store listing.
+  - **Next:** chunk 11, polish and testers. See the chunk 11 entry above.
 
 - **2026-09-24: chunk 9 done** (`web-wallet/transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md).
   - **Decided with the user:** the plan's table, except that **paying your own seedelf is allowed, with a warning**. The plan suggested refusing it.
