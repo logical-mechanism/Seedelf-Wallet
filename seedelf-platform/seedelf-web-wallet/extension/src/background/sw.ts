@@ -11,6 +11,7 @@ import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
 import { TransferService } from "./transfer";
+import { WithdrawService } from "./withdraw";
 import { chromeArea } from "./storage";
 import { Wallet } from "./wallet";
 import { loadWasm } from "./wasm";
@@ -48,6 +49,7 @@ function getContext(): Promise<Context> {
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
     const mint = new MintService({ wasm, wallet, session, koios, collateral, now: Date.now });
     const transfer = new TransferService({ wasm, wallet, session, koios, collateral, now: Date.now });
+    const withdraw = new WithdrawService({ wasm, wallet, session, koios, collateral, now: Date.now });
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
     return {
       wasm,
@@ -56,6 +58,7 @@ function getContext(): Promise<Context> {
       moveIn,
       mint,
       transfer,
+      withdraw,
       pending,
       version: __VERSION__,
       network: defaultNetwork(__MAINNET_ENABLED__),

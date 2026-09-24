@@ -24,7 +24,7 @@ The wallet is built in **chunks**, each about one working session.
 | 8 | Create a seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
 | 8b | Mint first | ✅ | The first seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
 | 9 | Transfer | ✅ | Seedelf → seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md). |
-| 10 | Withdraw | ⬜ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Start with a plan file. |
+| 10 | Withdraw | ✅ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md). |
 | 11 | Polish and testers | ⬜ | UI style pass: align much more with Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`), taking the look but not the brand. `wasm-opt` to shrink the module. Playwright end-to-end tests on preprod. Unlisted Web Store listing (`VITE_STORE_BUILD=true`). |
 
 ## After v1
@@ -36,6 +36,33 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-24: chunk 10 done** (`web-wallet/withdraw`). Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md).
+  - **Decided with the user:**
+    - A removed seedelf's ADA goes to the Cardano account by default, or to the Seedelf balance.
+    - Withdrawals go to any key address or ADA Handle, with a warning when it's your own account.
+    - Max takes up to 20 UTxOs.
+  - **Rust (`seedelf-core/src/build.rs`):**
+    - `ScriptSpend::change_to(addr)` sends the change to a key address instead of the contract.
+    - `sweep`, `sweep_from` and `sweep_all` pay an address; `sweep` picks the token UTxOs first, as transfer does. `remove` burns the one seedelf in a UTxO. `is_payable_address` is the CLI's rule: Shelley, this network, no script part.
+    - The CLI's `sweep` and `remove` are thin now. **Every CLI script spend ends in `commands/spend.rs`**, which also shortened `util mint` and `transfer`. Only `create` and `fund` still build inline.
+    - `remove`'s offline test now mocks Ogmios with real purposes (`mount_evaluate_mint(1)`); its assertions are unchanged.
+  - **WASM:**
+    - `draftWithdraw`/`finishWithdraw` (Max takes the 20 largest UTxOs, and `left` says how many stayed) and `draftRemove`/`finishRemove`.
+    - `checkWithdrawAddress`, and `CardanoAccount.isOwnAddress`, which checks for the account's staking key in an address.
+  - **Extension:**
+    - `withdraw.ts` covers resolve, withdraw and remove, on `script-spend.ts`. The Koios client gains `assetNftAddress` for handles (plain, then CIP-68).
+    - UI: **Withdraw** next to **Send to a seedelf**, and **Remove** on each seedelf row, whose row is now two lines. `TokenAmounts` is shared with Transfer.
+  - **Checked on preprod without spending anything:** `extension/tests/fixtures/record-withdraw.mjs`.
+    - All three shapes pass the real scripts under Ogmios. The removal ran both scripts, and the policy accepted the burn of the synthetic seedelf.
+    - Fees: 270,270 for an amount with a token (two inputs); 261,734 for Max (two inputs); 242,394 for a removal.
+  - **Found in testing:** the fixture's synthetic seedelf holds 1.5 ₳. After the fee, that's below a contract output's minimum, so "back into the Seedelf balance" is refused for it with "Not enough ADA". A real seedelf's 1.74986 ₳ works, and a test checks both.
+  - **Tests:** core `mint_test` 24 (4 new); the CLI's offline tests 11; `seedelf-wasm` native 20 and Node 29; Vitest 109 (+1 live); Playwright 18. The withdraw and remove e2e tests stop at Send, as the other Seedelf spends' do.
+  - **Not done:** live runs, by hand.
+    - The public 12-word phrase's Seedelf balance, read live today after chunk 9, is 17.4 ₳ and 4.82028 ₳ (UTxOs from `9f564d0f…`). It also holds `TAK1` and `TAK2`.
+    - Withdraw some to another wallet's address, then remove `TAK1` to the Cardano account, and record both tx hashes here.
+    - An ADA Handle lookup against a real preprod handle is still untested.
+  - **Next:** chunk 11, polish and testers: the Lace-style pass, `wasm-opt`, preprod end-to-end tests, and the unlisted Web Store listing.
 
 - **2026-09-24: chunk 9 done** (`web-wallet/transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md).
   - **Decided with the user:** the plan's table, except that **paying your own seedelf is allowed, with a warning**. The plan suggested refusing it.

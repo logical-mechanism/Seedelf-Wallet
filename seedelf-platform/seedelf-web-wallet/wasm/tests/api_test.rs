@@ -969,3 +969,339 @@ mod transfer {
         assert!(e.contains("evaluation"), "{e}");
     }
 }
+
+mod withdraw {
+    use pallas_traverse::MultiEraTx;
+    use seedelf_crypto::cardano::CardanoAccount;
+    use seedelf_crypto::derivation::seedelf_key_v1;
+    use seedelf_crypto::schnorr::random_scalar;
+    use seedelf_koios::koios::UtxoResponse;
+    use seedelf_wasm::api::{self, RemoveRequest, WithdrawRequest};
+    use serde_json::{Value, json};
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    fn fixture(path: &str) -> Value {
+        let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn params() -> Value {
+        fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone()
+    }
+
+    /// Real preprod evaluations, recorded by record-withdraw.mjs.
+    fn recorded() -> Value {
+        fixture("../extension/tests/fixtures/withdraw-preprod.json")
+    }
+
+    fn owned() -> Vec<UtxoResponse> {
+        serde_json::from_value(
+            fixture("../extension/tests/fixtures/owned-utxos.json")["owned_utxos"].clone(),
+        )
+        .unwrap()
+    }
+
+    /// The 15-word vector phrase's receive address: someone else's.
+    fn theirs() -> String {
+        fixture("../../seedelf-crypto/tests/vectors/cardano_account.json")["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["account"] == 0 && v["phrase"].as_str().unwrap().split(' ').count() == 15)
+            .unwrap()["preprod"]["receive_0"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// A recorded request; the recording leaves out the protocol parameters.
+    fn request(which: &str) -> WithdrawRequest {
+        let mut r = recorded()[which]["request"].clone();
+        r["params"] = params();
+        serde_json::from_value(r).unwrap()
+    }
+
+    fn removal(to: Option<String>) -> RemoveRequest {
+        RemoveRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxo: owned().pop().unwrap(),
+            to,
+            seed: None,
+            evaluation: None,
+        }
+    }
+
+    fn with_evaluation<T>(mut r: T, set: impl FnOnce(&mut T)) -> T {
+        set(&mut r);
+        r
+    }
+
+    /// The wallet contract's own address: a script.
+    fn contract() -> String {
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        seedelf_core::address::wallet_contract(true, config.contract.wallet_contract_hash)
+            .to_bech32()
+            .unwrap()
+    }
+
+    /// The 12-word phrase's mainnet receive address: the wrong network.
+    fn mainnet() -> String {
+        fixture("../../seedelf-crypto/tests/vectors/cardano_account.json")["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["account"] == 0 && v["phrase"].as_str().unwrap().split(' ').count() == 12)
+            .unwrap()["mainnet"]["receive_0"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// Output addresses and lovelace.
+    fn outputs(tx_cbor: &str) -> Vec<(String, u64)> {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        tx.outputs()
+            .iter()
+            .map(|o| (o.address().unwrap().to_bech32().unwrap(), o.value().coin()))
+            .collect()
+    }
+
+    #[test]
+    fn withdraws_an_amount_or_everything() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let rec = recorded();
+
+        // An amount: exactly that to the address, the rest back to Seedelf.
+        let draft = api::draft_withdraw(sk, request("amount")).unwrap();
+        assert_eq!(
+            serde_json::to_value(&draft.inputs).unwrap(),
+            rec["amount"]["draft"]["inputs"]
+        );
+        let result = api::finish_withdraw(
+            sk,
+            with_evaluation(request("amount"), |r| {
+                r.seed = Some("42".repeat(32));
+                r.evaluation = Some(rec["amount"]["evaluation"].clone());
+            }),
+        )
+        .unwrap();
+        assert!(!result.max);
+        assert_eq!(result.fee.total, rec["amount"]["final"]["fee"]["total"]);
+        assert_eq!(
+            (result.lovelace.as_str(), result.tokens.len()),
+            ("5000000", 1)
+        );
+        assert_eq!(
+            (result.change_outputs, result.change_tokens, result.left),
+            (1, 1, 0)
+        );
+        let outs = outputs(&result.tx_cbor);
+        assert_eq!(outs[0], (theirs(), 5_000_000));
+
+        // Max: every UTxO and token to the address, nothing back.
+        let result = api::finish_withdraw(
+            sk,
+            with_evaluation(request("max"), |r| {
+                r.seed = Some("42".repeat(32));
+                r.evaluation = Some(rec["max"]["evaluation"].clone());
+            }),
+        )
+        .unwrap();
+        assert!(result.max);
+        let fee: u64 = result.fee.total.parse().unwrap();
+        assert_eq!(result.lovelace, (28_000_000 - fee).to_string());
+        assert_eq!(result.tokens.len(), 1);
+        assert_eq!(
+            (result.change_lovelace.as_str(), result.change_outputs),
+            ("0", 0)
+        );
+        let outs = outputs(&result.tx_cbor);
+        assert!(outs.iter().all(|(a, _)| *a == theirs()));
+    }
+
+    #[test]
+    fn max_takes_the_twenty_largest_and_says_what_is_left() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let base = owned().into_iter().next().unwrap();
+        let utxos: Vec<UtxoResponse> = (0..25u64)
+            .map(|i| UtxoResponse {
+                tx_hash: format!("{:064x}", i + 1),
+                value: (2_000_000 + i * 100_000).to_string(),
+                ..base.clone()
+            })
+            .collect();
+        let spends: Vec<Value> = (0..20)
+            .map(|i| json!({"validator": {"index": i, "purpose": "spend"}, "budget": {"memory": 76_043, "cpu": 337_845_799}}))
+            .collect();
+        let mut r = request("max");
+        r.utxos = utxos;
+        r.seed = Some("42".repeat(32));
+        r.evaluation = Some(json!({"result": spends}));
+        let result = api::finish_withdraw(sk, r).unwrap();
+        assert_eq!((result.inputs.len(), result.left), (20, 5));
+        // The largest 20: every value from 2.5 ADA up.
+        let smallest = (0..5u64)
+            .map(|i| format!("{:064x}", i + 1))
+            .collect::<Vec<_>>();
+        assert!(result.inputs.iter().all(|i| !smallest.contains(&i.tx_hash)));
+    }
+
+    #[test]
+    fn removes_its_own_seedelf_to_an_address_or_back_to_seedelf() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let rec = recorded();
+        let finish = |to: Option<String>| {
+            let mut r = removal(to);
+            r.seed = Some("42".repeat(32));
+            r.evaluation = Some(rec["remove"]["evaluation"].clone());
+            api::finish_remove(sk, r).unwrap()
+        };
+
+        let result = finish(Some(theirs()));
+        assert_eq!(result.fee.total, rec["remove"]["final"]["fee"]["total"]);
+        assert!(
+            result
+                .name
+                .starts_with(&format!("5eed0e1f{}", hex::encode("web-wallet")))
+        );
+        let fee: u64 = result.fee.total.parse().unwrap();
+        assert_eq!(result.lovelace, (1_500_000 - fee).to_string());
+        assert_eq!(outputs(&result.tx_cbor), vec![(theirs(), 1_500_000 - fee)]);
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        let burned: Vec<i64> = tx
+            .mints()
+            .iter()
+            .flat_map(|p| p.assets().into_iter().map(|a| a.mint_coin().unwrap()))
+            .collect();
+        assert_eq!(burned, vec![-1]);
+
+        // Back into the Seedelf balance: one contract output, under a fresh
+        // register. That needs a real seedelf's 1.74986 ADA: the synthetic
+        // one's 1.5 less the fee is below a contract output's minimum.
+        let e = api::finish_remove(
+            sk,
+            with_evaluation(removal(None), |r| {
+                r.seed = Some("42".repeat(32));
+                r.evaluation = Some(rec["remove"]["evaluation"].clone());
+            }),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("Not enough ADA"), "{e}");
+        let finish = |to: Option<String>| {
+            let mut r = removal(to);
+            r.utxo.value = "1749860".into();
+            r.seed = Some("42".repeat(32));
+            r.evaluation = Some(rec["remove"]["evaluation"].clone());
+            api::finish_remove(sk, r).unwrap()
+        };
+        let result = finish(None);
+        assert_eq!(result.to, None);
+        let outs = outputs(&result.tx_cbor);
+        assert_eq!(outs.len(), 1);
+        assert!(outs[0].0.starts_with("addr_test1w"), "{}", outs[0].0);
+    }
+
+    #[test]
+    fn refuses_what_would_lose_or_misdirect_money() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let err = |r: WithdrawRequest| api::draft_withdraw(sk, r).unwrap_err().to_string();
+        let to = |to: &str| {
+            let mut r = request("amount");
+            r.to = to.into();
+            r
+        };
+
+        // Only a normal preprod key address.
+        assert!(err(to("nope")).contains("isn't a Cardano address"));
+        let stake = "stake_test1urj40zgr2gy4788kl54h6x3gu0pukq5lfr8nflufpg5dzas324ywz";
+        for bad in [contract(), mainnet(), stake.to_string()] {
+            let e = err(to(&bad));
+            assert!(e.contains("normal preprod address"), "{bad}: {e}");
+        }
+
+        // Max takes no token amounts; spends only this wallet's UTxOs, never a seedelf's.
+        assert!(err(request("amount").tap_max()).contains("takes no token amounts"));
+        let mut r = request("amount");
+        r.utxos = owned();
+        assert!(err(r).contains("holds a seedelf"));
+        assert!(
+            api::draft_withdraw(random_scalar(), request("amount"))
+                .unwrap_err()
+                .to_string()
+                .contains("isn't this wallet's")
+        );
+        let mut r = request("amount");
+        r.lovelace = Some("500000".into());
+        assert!(err(r).contains("needs at least"));
+
+        // Removing: only this wallet's seedelf, from a UTxO holding one.
+        let theirs: Vec<UtxoResponse> = serde_json::from_value(
+            fixture("../extension/tests/fixtures/koios-preprod.json")["contract_utxos"].clone(),
+        )
+        .unwrap();
+        let mut r = removal(None);
+        r.utxo = theirs[0].clone();
+        assert!(
+            api::draft_remove(sk, r)
+                .unwrap_err()
+                .to_string()
+                .contains("isn't this wallet's")
+        );
+        let mut r = removal(None);
+        r.utxo = owned().remove(0);
+        assert!(
+            api::draft_remove(sk, r)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly one seedelf")
+        );
+        let r = removal(Some(contract()));
+        assert!(
+            api::draft_remove(sk, r)
+                .unwrap_err()
+                .to_string()
+                .contains("normal preprod address")
+        );
+        let e = api::finish_remove(sk, removal(None))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("finishing a removal needs the draft's seed"),
+            "{e}"
+        );
+    }
+
+    trait TapMax {
+        fn tap_max(self) -> Self;
+    }
+
+    impl TapMax for WithdrawRequest {
+        /// Max, but with the amount's tokens left in.
+        fn tap_max(mut self) -> Self {
+            self.lovelace = None;
+            self
+        }
+    }
+
+    #[test]
+    fn knows_the_accounts_own_addresses() {
+        let vectors = fixture("../../seedelf-crypto/tests/vectors/cardano_account.json");
+        let v12 = vectors["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["account"] == 0 && v["phrase"].as_str().unwrap().split(' ').count() == 12)
+            .unwrap();
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let own = |a: &str| api::is_own_address(&account, a).unwrap();
+        assert!(own(v12["preprod"]["receive_0"].as_str().unwrap()));
+        assert!(own(v12["mainnet"]["receive_0"].as_str().unwrap()));
+        assert!(!own(&theirs()));
+        assert!(!own(&contract()));
+        assert!(!own("nope"));
+    }
+}

@@ -148,10 +148,36 @@ Details:
 
 ## Withdraw (Seedelf → any address)
 
-- **Send:** the equivalent of the CLI's `sweep`. Send an amount, or everything, to any address, or to an ADA Handle.
-- **Remove a seedelf:** the equivalent of the CLI's `remove`.
-  - It burns the token.
-  - The burn policy only checks the policy ID and the `5eed0e1f` prefix, so the leftover ADA can go to an address or straight back into the Seedelf balance.
+Built in chunk 10, by the same core code as the CLI's `sweep` and `remove` (`seedelf-core::build`). Both are Seedelf script spends: proofs under a new one-time key, giveme.my's collateral at Send, and Ogmios measuring the scripts at review.
+
+### Send to an address
+
+1. **Withdraw** on the Seedelf card. It's disabled while the Seedelf balance is empty or a transaction is still confirming.
+2. **To:** a Cardano address, or an ADA Handle like `$name`. What's typed is read after a short pause, and shown: "Sends to addr_test1…", or "$name is addr_test1…".
+   - A handle is looked up through Koios (`asset_nft_address`), the plain name first, then the CIP-68 one. Koios sees which handle is asked about.
+   - Only a normal address on this network is accepted: not a script (its output would carry no datum), not a stake address, not the other network. The same goes for the address a handle resolves to.
+   - **Your own Cardano account gets a warning:** withdrawing there links the money back to it, and to whoever paid it into Seedelf. The wallet recognizes any address carrying the account's staking key, as every address a normal wallet shows for the account does.
+3. **What's sent:**
+   - An **amount** (the move-in rules: 6 decimals, the supply cap, "more than you have"), plus optional token amounts, as for a transfer. The change goes back into the Seedelf balance under fresh copies of your register.
+   - Or **Max:** everything, up to 20 UTxOs at once (a transaction fits about that many script spends), with every token, less the fee. The largest go first, and the review says how many are left for another withdrawal. The form notes that spending them together ties them to each other.
+   - The form nudges towards round amounts, and says that withdrawing to where the money came from links it back.
+4. **Review:** where it goes (the handle and its address, full on hover), the amount or "Everything", the tokens, the fee, the change, and how many UTxOs pay. The fee is about 0.27 ₳ for two inputs.
+5. **Send**, as for a transfer. A banner follows it to "Withdrawal confirmed".
+
+### Remove a seedelf
+
+1. **Remove** on a row of *Your seedelfs*.
+2. **Send what's freed to:**
+   - **Cardano account** (the default), its receive address `0/0`. A seedelf the account paid for (the default since chunk 8b) is linked to it anyway, so this links nothing new.
+   - **Seedelf balance**, under a fresh copy of your register. This is for a seedelf you minted from the Seedelf balance. For one the account paid for, it ties the seedelf's name to that new UTxO, and to whatever it's later spent with.
+3. **Review:** the seedelf, what comes back (the ADA locked with it, about 1.75 ₳, less a fee of about 0.24 ₳), and the fee. Both scripts run: the wallet's spend and the policy's burn.
+4. **Send.** The token is burned, and the banner follows it to "Seedelf removed".
+
+Details:
+
+- Payments already sent to a removed seedelf stay yours: they sit under copies of your register, not with the name. After the removal, nobody can pay the name.
+- The burn policy only checks the policy ID and the `5eed0e1f` prefix. The CLI's `remove` still pays any address (`--address`); the web wallet offers the account or the Seedelf balance.
+- The CLI's `sweep --all` takes the first 20 owned UTxOs, and the web wallet's Max takes the 20 largest.
 
 ## Contract round trip
 

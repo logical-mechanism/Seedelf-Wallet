@@ -23,7 +23,7 @@ use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse, extract_bytes_with_logging};
 use serde_json::Value;
 
-use crate::address::{collateral_address, wallet_contract};
+use crate::address::{collateral_address, is_not_a_script, is_on_correct_network, wallet_contract};
 use crate::assets::{Asset, Assets};
 use crate::constants::{COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO};
 use crate::data_structures::{create_mint_redeemer, create_spend_redeemer};
@@ -526,8 +526,8 @@ fn build_move_in(
 //     .draft()             placeholder budgets, for Ogmios to evaluate
 //     .finalize(budgets)   the real budgets and fee: the unsigned transaction
 //
-// The caller signs it with the one-time key and giveme.my's witness. Mint and
-// transfer are built on it here; sweep and remove follow.
+// The caller signs it with the one-time key and giveme.my's witness. Mint,
+// transfer, sweep and remove are built on it here.
 // ---------------------------------------------------------------------------
 
 /// What one script may use: memory units and CPU steps.
@@ -854,6 +854,8 @@ pub struct ScriptSpend {
     paid_tokens: Assets,
     mint: Option<PolicyMint>,
     change_owner: Register,
+    /// Where the change goes instead of the contract, if anywhere.
+    change_addr: Option<Address>,
     signer: Hash<28>,
 }
 
@@ -895,8 +897,17 @@ impl ScriptSpend {
             paid_tokens: Assets::new(),
             mint: None,
             change_owner: change_owner.clone(),
+            change_addr: None,
             signer,
         })
+    }
+
+    /// Sends what's left after the outputs and the fee to `addr`, a key
+    /// address, instead of back into the contract: everything, for sending
+    /// the lot, or a removed seedelf's ADA. Tokens go 20 to an output.
+    pub fn change_to(mut self, addr: &Address) -> Self {
+        self.change_addr = Some(addr.clone());
+        self
     }
 
     /// Adds an output. `tokens` must be what the output holds.
@@ -1090,6 +1101,8 @@ impl ScriptSpend {
         let wallet_addr = wallet_contract(*network_flag, config.contract.wallet_contract_hash);
         let change = if change_lovelace == 0 && change_tokens.is_empty() {
             Vec::new()
+        } else if let Some(addr) = &self.change_addr {
+            change_outputs(params, addr, change_lovelace, &change_tokens, SEEDELF_SHORT)?
         } else {
             if change_lovelace < minimum_deposit(params, &change_tokens)? {
                 bail!(SEEDELF_SHORT);
@@ -1441,6 +1454,158 @@ fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, A
 /// Lovelace as ADA, with all six decimals.
 fn ada(lovelace: u64) -> String {
     format!("{}.{:06}", lovelace / 1_000_000, lovelace % 1_000_000)
+}
+
+// ---------------------------------------------------------------------------
+// Withdraw: paying an address from the Seedelf balance, or removing a seedelf
+//
+// `sweep` pays an address a fixed amount, and the change goes back into the
+// contract; `sweep_all` sends everything the inputs hold, less the fee.
+// `remove` burns a seedelf, and what its UTxO held goes back into the
+// contract, or to an address with `ScriptSpend::change_to`.
+// ---------------------------------------------------------------------------
+
+/// Whether a withdrawal can pay `addr`: a Shelley address on this network
+/// with no script in it. A script output would carry no datum, which locks
+/// it at most scripts.
+pub fn is_payable_address(addr: &Address, network_flag: bool) -> bool {
+    matches!(addr, Address::Shelley(_))
+        && is_not_a_script(addr.clone())
+        && is_on_correct_network(addr.clone(), network_flag)
+}
+
+fn check_address(chain: &Chain, addr: &Address) -> Result<()> {
+    if !is_payable_address(addr, chain.network_flag) {
+        let network = if chain.network_flag {
+            "preprod"
+        } else {
+            "mainnet"
+        };
+        bail!(
+            "Withdrawals go to a normal {network} address: not a script, stake or other network's address"
+        );
+    }
+    Ok(())
+}
+
+/// The output paying `to` exactly `lovelace` and `tokens`, above its minimum.
+fn address_output(chain: &Chain, to: &Address, lovelace: u64, tokens: &Assets) -> Result<Output> {
+    check_address(chain, to)?;
+    if tokens.items.iter().any(|a| a.amount == 0) {
+        bail!("A payment can't send none of a token");
+    }
+    let bech32 = to
+        .to_bech32()
+        .map_err(|e| anyhow::anyhow!("Failed to encode the address: {e}"))?;
+    let minimum = address_minimum_lovelace_with_assets(&chain.params, &bech32, tokens.clone())?;
+    if lovelace < minimum {
+        bail!(
+            "A payment to that address{} needs at least {} ADA",
+            if tokens.is_empty() {
+                ""
+            } else {
+                " with these tokens"
+            },
+            ada(minimum)
+        );
+    }
+    let mut output = Output::new(to.clone(), lovelace);
+    for asset in &tokens.items {
+        output = output
+            .add_asset(asset.policy_id, asset.token_name.clone(), asset.amount)
+            .context("Failed To Add An Asset")?;
+    }
+    Ok(output)
+}
+
+/// `sweep`: pays `to` exactly `lovelace` and `tokens` from owned
+/// wallet-contract UTxOs, as few as can pay (the ones holding the tokens
+/// first, as for a transfer). The change goes back into the contract under
+/// fresh re-randomizations of `change_owner`.
+pub fn sweep(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    to: &Address,
+    lovelace: u64,
+    tokens: &Assets,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    let output = address_output(chain, to, lovelace, tokens)?;
+    select_script_inputs(available, tokens, |inputs| {
+        let spend = ScriptSpend::new(chain, inputs, change_owner, signer)?
+            .output(output.clone(), tokens)?;
+        spend.estimate()?;
+        Ok(spend)
+    })
+}
+
+/// A sweep spending exactly `inputs`. They must hold the tokens being sent.
+pub fn sweep_from(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    to: &Address,
+    lovelace: u64,
+    tokens: &Assets,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    let output = address_output(chain, to, lovelace, tokens)?;
+    ScriptSpend::new(chain, inputs, change_owner, signer)?.output(output, tokens)
+}
+
+/// `sweep --all`: everything `inputs` hold, less the fee, to `to`. Tokens go
+/// 20 to an output.
+pub fn sweep_all(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    to: &Address,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    check_address(chain, to)?;
+    Ok(ScriptSpend::new(chain, inputs, change_owner, signer)?.change_to(to))
+}
+
+/// The seedelf token in `utxo`, by name: it must hold exactly one.
+pub fn seedelf_in(chain: &Chain, utxo: &UtxoResponse) -> Result<Vec<u8>> {
+    let policy = &chain.config.contract.seedelf_policy_id;
+    let held: Vec<&seedelf_koios::koios::Asset> = utxo
+        .asset_list
+        .iter()
+        .flatten()
+        .filter(|a| &a.policy_id == policy)
+        .collect();
+    match held.as_slice() {
+        [one] if one.quantity == "1" => {
+            hex::decode(&one.asset_name).context("The seedelf's name isn't hex")
+        }
+        _ => bail!(
+            "UTxO {}#{} doesn't hold exactly one seedelf",
+            utxo.tx_hash,
+            utxo.tx_index
+        ),
+    }
+}
+
+/// `remove`: spends the UTxO holding a seedelf and burns the token. What
+/// it held, less the fee, goes back into the contract under a fresh
+/// re-randomization of `change_owner`, or to an address with
+/// [`ScriptSpend::change_to`].
+pub fn remove(
+    chain: &Chain,
+    seedelf_utxo: &UtxoResponse,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    let token_name = seedelf_in(chain, seedelf_utxo)?;
+    ScriptSpend::new(
+        chain,
+        std::slice::from_ref(seedelf_utxo),
+        change_owner,
+        signer,
+    )?
+    .mint(token_name, -1, create_mint_redeemer(String::new())?)
 }
 
 // ---------------------------------------------------------------------------

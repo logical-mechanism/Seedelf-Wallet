@@ -82,6 +82,17 @@ export class Koios {
   }
 
   /**
+   * Who holds an NFT: the payment address of the one UTxO holding
+   * `policyId.assetName`, or undefined if Koios knows of none. Used to find an
+   * ADA Handle's address; Koios sees which handle is asked about.
+   */
+  async assetNftAddress(policyId: string, assetName: string): Promise<string | undefined> {
+    const query = `_asset_policy=${encodeURIComponent(policyId)}&_asset_name=${encodeURIComponent(assetName)}`;
+    const [row] = await this.request<{ payment_address?: string }>("GET", "asset_nft_address", undefined, query);
+    return row?.payment_address ?? undefined;
+  }
+
+  /**
    * Submits a signed transaction; returns its hash. Not retried: if an answer
    * were lost, a second submit would fail with "inputs already spent" and hide
    * the fact that the first one went through.

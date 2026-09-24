@@ -138,9 +138,55 @@ export interface TransferSummary {
   inputs: number;
 }
 
+/** Where a withdrawal goes, as the wallet read it. */
+export interface WithdrawDestination {
+  /** The bech32 address paid. */
+  address: string;
+  /** The ADA Handle it was found by, without the "$". */
+  handle?: string;
+  /** It carries this wallet's Cardano account's staking key: paying it re-links the money. */
+  own: boolean;
+}
+
+/** A finished withdrawal, waiting for the user to send it. Amounts are lovelace strings. */
+export interface WithdrawSummary extends WithdrawDestination {
+  network: NetworkName;
+  txHash: string;
+  /** Everything (Max), rather than an amount. */
+  max: boolean;
+  /** What the address receives. */
+  lovelace: string;
+  tokens: TokenQuantity[];
+  fee: { size: string; compute: string; scriptReference: string; total: string };
+  /** Back into the Seedelf balance: nothing, for Max. */
+  changeLovelace: string;
+  changeTokens: number;
+  changeOutputs: number;
+  /** How many Seedelf UTxOs pay for it. */
+  inputs: number;
+  /** Seedelf UTxOs Max left for another withdrawal (it takes 20 at most). */
+  left: number;
+}
+
+/** Where a removed seedelf's ADA goes: the Cardano account's `0/0`, or back into the Seedelf balance. */
+export type RemoveTo = "account" | "seedelf";
+
+/** A finished seedelf removal, waiting for the user to send it. Amounts are lovelace strings. */
+export interface RemoveSummary {
+  network: NetworkName;
+  txHash: string;
+  /** The seedelf burned: its full token name, and its tag when it reads as text. */
+  name: string;
+  label?: string;
+  to: RemoveTo;
+  /** What comes back: the ADA locked with it, less the fee. */
+  lovelace: string;
+  fee: { size: string; compute: string; scriptReference: string; total: string };
+}
+
 /** A submitted transaction the wallet is watching. */
 export interface PendingTx {
-  kind: "move-in" | "mint" | "transfer";
+  kind: "move-in" | "mint" | "transfer" | "withdraw" | "remove";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -179,6 +225,19 @@ export interface Requests {
   "transfer-build": { payload: { to: string; lovelace: string; tokens: TokenQuantity[] }; result: TransferSummary };
   /** Submits the transfer built last, if its hash matches, once giveme.my has witnessed it. */
   "transfer-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Reads a withdrawal's destination: an address, or `$handle` looked up through Koios. */
+  "withdraw-resolve": { payload: { to: string }; result: WithdrawDestination };
+  /** Builds a withdrawal (`lovelace` null sends everything) without sending it. */
+  "withdraw-build": {
+    payload: { to: string; lovelace: string | null; tokens: TokenQuantity[] };
+    result: WithdrawSummary;
+  };
+  /** Submits the withdrawal built last, if its hash matches, once giveme.my has witnessed it. */
+  "withdraw-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Builds the removal of one of this wallet's seedelfs without sending it. */
+  "remove-build": { payload: { name: string; to: RemoveTo }; result: RemoveSummary };
+  /** Submits the removal built last, if its hash matches, once giveme.my has witnessed it. */
+  "remove-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };
   "reset-wallet": { payload: None; result: Status };
@@ -213,6 +272,11 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "transfer-lookup",
   "transfer-build",
   "transfer-submit",
+  "withdraw-resolve",
+  "withdraw-build",
+  "withdraw-submit",
+  "remove-build",
+  "remove-submit",
   "pending-tx",
   "reset-wallet",
 ]);
