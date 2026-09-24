@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { Account, Balances, PendingTx } from "../../shared/rpc";
 import { call } from "../background";
+import { CopyButton } from "../components/CopyButton";
 import { CopyField } from "../components/CopyField";
 import { QrCode } from "../components/QrCode";
 import { TokenList } from "../components/TokenList";
@@ -155,15 +156,19 @@ export function Home() {
           <h2>Your seedelfs</h2>
           {balances && balances.seedelf.seedelfs.length === 0 && <p className="note">No seedelfs yet.</p>}
           {balances && balances.seedelf.seedelfs.length > 0 && (
-            <ul className="seedelfs" data-testid="seedelfs">
-              {balances.seedelf.seedelfs.map((s) => (
-                <li key={s.assetName} className="seedelfs__row" title={s.assetName}>
-                  <span className="seedelfs__label">{s.label ?? "Unnamed"}</span>
-                  <code className="seedelfs__id">{shortHex(s.assetName, 12, 6)}</code>
-                  <span className="seedelfs__ada">{formatAda(s.lovelace)} ₳</span>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="seedelfs" data-testid="seedelfs">
+                {balances.seedelf.seedelfs.map((s) => (
+                  <li key={s.assetName} className="seedelfs__row" title={s.assetName}>
+                    <span className="seedelfs__label">{s.label ?? "Unnamed"}</span>
+                    <code className="seedelfs__id">{shortHex(s.assetName, 12, 6)}</code>
+                    <span className="seedelfs__ada">{formatAda(s.lovelace)} ₳</span>
+                    <CopyButton value={s.assetName} label={`Copy the name of ${s.label ?? "this seedelf"}`} />
+                  </li>
+                ))}
+              </ul>
+              <p className="note">Copy a seedelf's full name to give to anyone who wants to pay you.</p>
+            </>
           )}
           <button
             type="button"

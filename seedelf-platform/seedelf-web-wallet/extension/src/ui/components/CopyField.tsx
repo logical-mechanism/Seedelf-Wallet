@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { CopyButton } from "./CopyButton";
 
 /** A labelled value with a copy button. `display` can shorten what's shown. */
 export function CopyField({
@@ -12,23 +12,11 @@ export function CopyField({
   display?: string;
   testId: string;
 }) {
-  const [copied, setCopied] = useState(false);
   return (
     <div className="copy-field">
       <div className="field-row">
         <span className="copy-field__label">{label}</span>
-        <button
-          type="button"
-          className="link"
-          onClick={() => {
-            void navigator.clipboard.writeText(value).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1200);
-            });
-          }}
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
+        <CopyButton value={value} />
       </div>
       <code className="copy-field__value" data-testid={testId} data-value={value} title={value}>
         {display ?? value}

@@ -55,6 +55,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **Added beyond the plan:** `transfer-lookup`, so the form shows "Found: *tag*" (or "No seedelf with that name") as soon as a whole name is pasted, before Review.
     - The lookup is the same whole-contract `credential_utxos` query a balance reading makes. Koios never hears the recipient's token.
     - UI: **Send to a seedelf** on the Seedelf card, then the form, review and Send. The banner says "Transfer sent…", then "Transfer confirmed".
+    - **Found in review (the user):** there was no way to copy a seedelf's full name, to give out or paste. Each row in **Your seedelfs** now has a Copy button (`CopyButton`, split out of `CopyField`), and the e2e test copies a name there and pastes it into the form.
     - giveme.my's refusal now says "refresh, then review it again", not "create it again".
   - **Checked on preprod without spending anything:** `extension/tests/fixtures/record-transfer.mjs` drafted 5 ₳ and 1 tUSDM to the live seedelf "This is a test." from the 12-word phrase's synthetic UTxOs. It passes the real wallet script under Ogmios.
     - Each spend is 76,043 memory and 337,845,799 steps.

@@ -607,6 +607,8 @@ h2 {
 
 .tokens__name,
 .seedelfs__label {
+  flex: none;
+  max-width: 55%;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -621,6 +623,8 @@ h2 {
 }
 
 .seedelfs__id {
+  flex: 1;
+  min-width: 0;
   font: 11.5px var(--mono);
   color: var(--muted);
   overflow: hidden;

@@ -40,7 +40,7 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
   - "Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website."
   - "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
 - **Home** shows:
-  - the **Seedelf balance**: ADA and tokens in the contract UTxOs this wallet owns, and **your seedelfs** with their tags and the ADA locked with each;
+  - the **Seedelf balance**: ADA and tokens in the contract UTxOs this wallet owns, and **your seedelfs** with their tags, the ADA locked with each, and a **Copy** button for each full name, to give to anyone who wants to pay you (or to paste into Send to a seedelf);
   - the **Cardano account**: its ADA and tokens, how many addresses it has used, the receive address (copy, QR) and the stake address;
   - the **Seedelf identity**: the base register's public value, shortened;
   - when the chain was last read, and **Refresh**.

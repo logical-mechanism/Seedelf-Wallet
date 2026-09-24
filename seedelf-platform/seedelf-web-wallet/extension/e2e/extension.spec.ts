@@ -558,6 +558,14 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+
+  // Each of your seedelfs has its full name one click away, to give out or paste.
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const copy = page.getByRole("button", { name: "Copy the name of web-wallet" });
+  await copy.click();
+  await expect(copy).toHaveText("Copied");
+  const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+  expect(await clipboard()).toBe(mine);
   await page.getByRole("button", { name: "Send to a seedelf" }).click();
 
   // Only a whole name is looked up; pasted in capitals with spaces, it still is one.
@@ -567,7 +575,7 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   await expect(note).toContainText("64 hex characters starting 5eed0e1f");
   await name.fill(`5eed0e1f${"00".repeat(28)}`);
   await expect(note).toContainText("No seedelf with that name on preprod.");
-  await name.fill(mine);
+  await name.fill(await clipboard());
   await expect(note).toContainText("Found: web-wallet");
   await expect(page.getByTestId("transfer-own")).toContainText("This seedelf is yours");
   await name.fill(` ${theirs.slice(0, 32).toUpperCase()} ${theirs.slice(32)} `);
