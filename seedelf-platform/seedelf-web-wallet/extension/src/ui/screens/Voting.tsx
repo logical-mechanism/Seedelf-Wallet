@@ -1,20 +1,28 @@
 // Where the Cardano account's voting power goes, after Lace's governance tab:
-// Always abstain and Always no confidence pinned, or a DRep by its ID. A DRep
-// is looked up first (its status, voting power, and name from its metadata:
-// two requests), since the ledger refuses one that isn't registered. There's
-// no list of DReps: that's a follow-up (docs/plans/chunk-13-staking.md).
-// Conway pays out no rewards from an account whose vote isn't delegated, so
-// the Staking page and Home send the user here when rewards are locked.
+// Always abstain and Always no confidence pinned, or a DRep, searched by name
+// or ID in the wallet's own list (ui/dreps.ts: no requests), or pasted by ID.
+// The DRep picked is looked up live (its status, voting power, and name from
+// its metadata: two requests), since the ledger refuses one that isn't
+// registered. Conway pays out no rewards from an account whose vote isn't
+// delegated, so the Staking page and Home send the user here when rewards
+// are locked.
 
 import { useState, type FormEvent } from "react";
 
 import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
-import { CheckIcon, LandmarkIcon } from "../components/Icons";
+import { CheckIcon, LandmarkIcon, SearchIcon } from "../components/Icons";
+import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { formatAda, voteLabel } from "../format";
+import { drepList, isDrepId, searchDreps, type DrepEntry } from "../dreps";
+import { formatAda, plural, shortHex, voteLabel } from "../format";
+import { useNetwork } from "../network";
+import { initials, tint } from "../tokens";
+
+/** DReps shown at a time; "Show more" adds as many again. */
+const PAGE = 20;
 
 type Pick = "abstain" | "no-confidence" | "drep";
 
@@ -32,7 +40,7 @@ const OPTIONS: Array<{ value: Pick; title: string; text: string }> = [
   {
     value: "drep",
     title: "A DRep",
-    text: "Someone who votes for you, by their DRep ID.",
+    text: "Someone who votes for you: search by name, or paste their DRep ID.",
   },
 ];
 
@@ -60,7 +68,6 @@ export function Voting({
   onVote: (drep: string, name?: string) => void;
 }) {
   const [pick, setPick] = useState<Pick>(pickOf(current));
-  const [id, setId] = useState(pickOf(current) === "drep" ? (current ?? "") : "");
   const [drep, setDrep] = useState<DrepDetails>();
   const [looking, setLooking] = useState(false);
   const [lookError, setLookError] = useState<string>();
@@ -71,14 +78,13 @@ export function Voting({
   const retired = pick === "drep" && drep?.status === "retired";
   const why = blocked ?? (same ? "Your voting power already goes there" : retired ? "That DRep has retired" : undefined);
 
-  async function lookUp(e: FormEvent) {
-    e.preventDefault();
-    if (!id.trim() || looking) return;
+  async function lookUp(id: string) {
+    if (!id || looking) return;
     setLooking(true);
     setLookError(undefined);
     setDrep(undefined);
     try {
-      setDrep(await call("drep", { id: id.trim() }));
+      setDrep(await call("drep", { id }));
     } catch (err) {
       setLookError((err as Error).message);
     } finally {
@@ -134,52 +140,106 @@ export function Voting({
         })}
       </ul>
 
-      {pick === "drep" && (
-        <div className="stack-tight">
-          {/* A form of its own: Enter looks the DRep up. */}
-          <form className="stack-tight" onSubmit={lookUp}>
-            <div className="field">
-              <label htmlFor="drep-id">DRep ID</label>
-              <textarea
-                id="drep-id"
-                className="seedelf-name"
-                rows={2}
-                value={id}
-                onChange={(e) => {
-                  setId(e.target.value);
-                  setDrep(undefined);
-                  setLookError(undefined);
-                }}
-                onKeyDown={(e) => {
-                  // Enter looks it up, as in a one-line box.
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    e.currentTarget.form?.requestSubmit();
-                  }
-                }}
-                placeholder="drep1…"
-                spellCheck={false}
-                autoComplete="off"
-              />
-            </div>
-            <button type="submit" className="secondary" disabled={!id.trim() || looking}>
-              {looking ? "Looking…" : "Look up"}
+      {pick === "drep" &&
+        (drep ? (
+          <div className="stack-tight">
+            <DrepCard drep={drep} />
+            <button type="button" className="link align-start" onClick={() => setDrep(undefined)} disabled={busy}>
+              Choose another DRep
             </button>
-          </form>
-          {lookError && (
-            <p className="field-note" role="alert">
-              {lookError}
-            </p>
-          )}
-          {drep && <DrepCard drep={drep} />}
-        </div>
-      )}
+          </div>
+        ) : (
+          <DrepSearch looking={looking} error={lookError} onPick={(id) => void lookUp(id)} />
+        ))}
 
       {!registered && (
         <p className="note">Your account isn't registered to stake yet: this registers it, with a 2 ₳ deposit that comes back when you stop.</p>
       )}
       <Callout tone="privacy">Where your voting power goes is public, and it names your Cardano account.</Callout>
     </Screen>
+  );
+}
+
+/** The wallet's list of named DReps, searched on the device, or an ID pasted in. */
+function DrepSearch({ looking, error, onPick }: { looking: boolean; error?: string; onPick: (id: string) => void }) {
+  const { recorded, dreps } = drepList(useNetwork());
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(PAGE);
+  const found = searchDreps(dreps, query);
+  // A whole ID the list doesn't have (a DRep registered since, or CIP-105's form): looked up as pasted.
+  const pasted = isDrepId(query) && !found.length ? query.trim() : undefined;
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (pasted) onPick(pasted);
+    else if (found.length === 1) onPick(found[0]!.id);
+  }
+
+  return (
+    // A form of its own: Enter looks up a pasted ID, or the one DRep found.
+    <form className="stack-tight" onSubmit={submit}>
+      <label className="search">
+        <SearchIcon size={16} />
+        <input
+          type="search"
+          aria-label="Search DReps"
+          placeholder="Name or DRep ID"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setLimit(PAGE);
+          }}
+          spellCheck={false}
+          autoComplete="off"
+        />
+      </label>
+      {error && (
+        <p className="field-note" role="alert">
+          {error}
+        </p>
+      )}
+      {pasted ? (
+        <button type="submit" className="secondary" disabled={looking}>
+          {looking ? "Looking…" : "Look up this ID"}
+        </button>
+      ) : found.length ? (
+        <ul className="list" data-testid="drep-results">
+          {found.slice(0, limit).map((d) => (
+            <DrepRow key={d.id} drep={d} disabled={looking} onPick={onPick} />
+          ))}
+        </ul>
+      ) : (
+        <p className="note center">No DRep on the wallet's list matches “{query.trim()}”. Paste its whole ID instead.</p>
+      )}
+      {!pasted && found.length > limit && (
+        <button type="button" className="secondary" onClick={() => setLimit(limit + PAGE)}>
+          Show {Math.min(PAGE, found.length - limit)} more
+        </button>
+      )}
+      <p className="note" data-testid="drep-list-note">
+        {plural(dreps.length, "DRep")} with a name, from the wallet's list of {dateOf(recorded)}: searching it asks no one. For
+        one who registered since, paste the whole ID.
+      </p>
+    </form>
+  );
+}
+
+/** "24 Sep 2026" for the list's "2026-09-24". */
+const dateOf = (day: string) =>
+  day ? new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "no date";
+
+function DrepRow({ drep, disabled, onPick }: { drep: DrepEntry; disabled: boolean; onPick: (id: string) => void }) {
+  return (
+    <li>
+      <button type="button" className="token-row" onClick={() => onPick(drep.id)} disabled={disabled} aria-label={drep.name}>
+        <span className={`avatar avatar--tint-${tint(drep.id)}`} aria-hidden="true">
+          {initials(drep.name)}
+        </span>
+        <span className="token-row__label">{drep.name}</span>
+        <span />
+        <span className="token-row__sub">{shortHex(drep.id, 12, 6)}</span>
+      </button>
+    </li>
   );
 }
 
@@ -198,6 +258,7 @@ function DrepCard({ drep }: { drep: DrepDetails }) {
         <Row label="Voting power" value={`${formatAda(drep.votingPower)} ₳`} />
         <Row label="Delegators" value={drep.delegators.toLocaleString("en-US")} />
       </ReviewRows>
+      <MiddleEllipsis text={drep.id} />
       {drep.status !== "retired" && !drep.active && (
         <Callout tone="warn">
           This DRep hasn't voted lately, so its votes don't count until it does. Your rewards unlock either way.

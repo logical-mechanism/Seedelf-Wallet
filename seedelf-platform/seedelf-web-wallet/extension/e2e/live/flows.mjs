@@ -101,7 +101,7 @@ export const FLOWS = {
     return confirmed(page, "Now staking");
   },
 
-  /** `vote [abstain|no-confidence|drep1…]`: delegate the voting power; a DRep is looked up first. */
+  /** `vote [abstain|no-confidence|drep1…|name]`: delegate the voting power; a DRep is found by its ID or name, then looked up. */
   async vote({ page }, to = "abstain") {
     await staking(page);
     await page.getByRole("button", { name: /^(Change|Delegate)$/ }).click();
@@ -109,8 +109,10 @@ export const FLOWS = {
     else if (to === "no-confidence") await page.getByRole("radio", { name: /^Always no confidence/ }).click();
     else {
       await page.getByRole("radio", { name: /^A DRep/ }).click();
-      await page.getByLabel("DRep ID").fill(to);
-      await page.getByRole("button", { name: "Look up" }).click();
+      await page.getByLabel("Search DReps").fill(to);
+      const pasted = page.getByRole("button", { name: "Look up this ID" });
+      if (await pasted.count()) await pasted.click();
+      else await page.getByTestId("drep-results").getByRole("button").first().click();
       await page.getByTestId("drep-facts").waitFor({ timeout: 60_000 });
       log("DRep:", (await page.getByTestId("drep-facts").innerText()).replace(/\n/g, " | "));
     }

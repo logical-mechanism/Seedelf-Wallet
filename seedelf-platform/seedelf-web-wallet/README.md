@@ -28,7 +28,7 @@ So money that sits stays staked in the Cardano account, and moves through Seedel
 - **Move in:** move funds from the Cardano account into your Seedelf balance.
 - **Send:** pay any address from the Cardano account, in the open, as any Cardano wallet does.
 - **Staking** (chunk 13): stake the Cardano account with one pool, from a browser of every live pool. Rewards are spent along with anything the account pays, or withdrawn by hand. Stop staking returns the 2 ₳ deposit.
-- **Voting delegation** (chunk 13): Always abstain, Always no confidence, or a DRep by its ID. Conway pays out no rewards until the vote is delegated, and the wallet says so.
+- **Voting delegation** (chunk 13): Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Conway pays out no rewards until the vote is delegated, and the wallet says so.
 - **Create a seedelf:** mint your named seedelf so others can pay you. Minting links the seedelf to whatever paid for it, so by default the Cardano account pays for it, before any money is moved in (see [privacy.md](docs/privacy.md#known-links)).
 - **Transfer:** send funds privately from your Seedelf balance to any seedelf, by its full name.
 - **Withdraw:** send funds from your seedelfs to any Cardano address, or remove a seedelf.
@@ -39,7 +39,7 @@ So money that sits stays staked in the Cardano account, and moves through Seedel
 2. Use a dApp with that account.
 3. Whatever comes back is swept into a seedelf automatically.
 
-**Next, maybe:** a browsable list of DReps, and the Cardano account's staking changes and withdrawals in its Activity. See [plans/chunk-13-staking.md](docs/plans/chunk-13-staking.md#follow-ups-not-this-chunk).
+**Next, maybe:** the Cardano account's staking changes and withdrawals in its Activity. See [plans/chunk-13-staking.md](docs/plans/chunk-13-staking.md#follow-ups-not-this-chunk).
 
 **Not planned:** voting on proposals or registering as a DRep, several pools per account, swaps, hardware wallets, other chains, mobile. We add features only if there's demand.
 

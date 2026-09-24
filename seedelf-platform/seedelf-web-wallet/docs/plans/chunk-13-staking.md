@@ -16,6 +16,7 @@
 - **The ticker on Home** comes from what the session read, the pool list on the device, or one `pool_info` a session (in session storage: it says which pool is the user's).
 - **Home's Cardano balance counts the rewards,** as Lace's does; `Balances.cardano.lovelace` stays the UTxOs', and the forms add the rewards only while they ride along.
 - **A DRep's name only:** `drep_metadata` with `select=drep_id,meta_json->body->givenName`. Its image is never fetched.
+- **DReps are searched by name, not only pasted by ID** (the user asked, after the PR opened): the wallet ships its own list of named DReps (`npm run dreps`, `src/dreps/`), as it does its token list. The follow-up below is done.
 - **The pinned choices in a list,** as radio rows with a line each, not a segmented switch: "Always no confidence" needs saying what it does.
 
 **Checked on preprod without spending anything** ([`tests/fixtures/probe-staking.mjs`](../../extension/tests/fixtures/probe-staking.mjs)): every kind of staking transaction for the public 12-word account decodes on the node's Conway decoder (Ogmios `evaluateTransaction` answers `[]`), and an account-paid mint with its 57.475311 ₳ of rewards riding along passes the real seedelf policy (72,835 memory, 21,396,008 steps, the same as without).
@@ -102,5 +103,5 @@ README, privacy.md and flows.md (a Staking section); architecture.md (certificat
 
 ## Follow-ups, not this chunk
 
-- **A browsable DRep list with names.** `drep_list` is 2 requests on mainnet (1,050 registered), but names come from `drep_metadata`, and Koios's public tier refuses request bodies over 5,120 bytes: about 80 IDs a call, so 13 calls and about 4 MB a day. Better: ship a name list with each release, as the token list does (`npm run tokens`), and read live status only for the DRep picked.
+- ~~A browsable DRep list with names.~~ **Done in this chunk, at the user's request (2026-09-24):** `npm run dreps` bundles every registered DRep with a name (preprod 61 of 290, mainnet 452 of 1,050: 5 and 37 KB), and the vote page searches it by name or ID with no requests. Only the DRep picked is read live. A DRep registered since the release is found by pasting its ID. Koios has no bulk list of names: `drep_list` has none, and `drep_metadata` answers only for the IDs given (75 a request under the 5,120-byte body limit), so a live list would cost 14 requests a day on mainnet.
 - Rewards history, and the Cardano Activity's certificates and withdrawals (`tx_info` with `_certs` and `_withdrawals`).

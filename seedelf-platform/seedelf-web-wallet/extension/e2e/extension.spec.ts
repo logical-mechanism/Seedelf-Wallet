@@ -1241,24 +1241,38 @@ test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async (
   await cardanoTab(page);
   await page.getByTestId("staking-row").click();
 
-  // A DRep is looked up first: two requests, its name from its metadata.
+  // DReps are searched by name in the wallet's own list, asking no one.
   await page.getByRole("button", { name: "Change", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Voting power" })).toBeVisible();
   await expect(page.getByRole("radio", { name: /^Always abstain/ })).toHaveAttribute("aria-checked", "true");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
-  await page.getByRole("radio", { name: /^A DRep/ }).click();
-  await page.getByLabel("DRep ID").fill("pool1rccstu3l9ty3k0a5cd06fl3szsss9r34dcg5j38fqgq9kvng0tg");
-  await page.getByRole("button", { name: "Look up" }).click();
-  await expect(page.getByRole("alert")).toContainText("DRep ID");
   const reads = koios.calls.length;
-  await page.getByLabel("DRep ID").fill(LOGIC_DREP);
-  await page.getByRole("button", { name: "Look up" }).click();
+  await page.getByRole("radio", { name: /^A DRep/ }).click();
+  const results = page.getByTestId("drep-results");
+  await expect(results.getByRole("listitem")).toHaveCount(20);
+  await expect(page.getByTestId("drep-list-note")).toContainText("61 DReps with a name");
+  await page.getByLabel("Search DReps").fill("nobody by this name");
+  await expect(page.getByText("No DRep on the wallet's list matches")).toBeVisible();
+  await page.getByLabel("Search DReps").fill("logical");
+  await expect(results.getByRole("listitem")).toHaveCount(2);
+  await snap(page, "voting-search");
+  expect(koios.calls.slice(reads)).toEqual([]);
+
+  // A pasted ID the list doesn't have is looked up as it is: Koios doesn't know this one.
+  await page.getByLabel("Search DReps").fill("drep1yvquefnvtx57az5ajreyww993qvymgdcdgg4pw9uhg7uxmqcys6t5");
+  await page.getByRole("button", { name: "Look up this ID" }).click();
+  await expect(page.getByRole("alert")).toContainText("doesn't know that DRep");
+
+  // The one picked is looked up live: two requests, its name from its metadata.
+  await page.getByLabel("Search DReps").fill("logical");
+  const lookups = koios.calls.length;
+  await results.getByRole("button").filter({ hasText: "drep1ydmraa6…" }).click();
   const facts = page.getByTestId("drep-facts");
   await expect(facts).toContainText("NameLogical Mechanism dRep");
   await expect(facts).toContainText("StatusInactive since epoch 189");
   await expect(facts).toContainText("Voting power5,914,902.920642 ₳");
   await expect(page.getByTestId("drep-details")).toContainText("hasn't voted lately");
-  expect(koios.calls.slice(reads).sort()).toEqual(["drep_info", "drep_metadata"]);
+  expect(koios.calls.slice(lookups).sort()).toEqual(["drep_info", "drep_metadata"]);
   await snap(page, "voting");
   await page.getByRole("button", { name: "Review" }).click();
   await expect(page.getByTestId("staking-review")).toContainText("Voting power toLogical Mechanism dRep");
@@ -1401,8 +1415,10 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
   await back();
   await popup.getByRole("button", { name: "Change", exact: true }).click();
   await popup.getByRole("radio", { name: /^A DRep/ }).click();
-  await popup.getByLabel("DRep ID").fill(LOGIC_DREP);
-  await popup.getByRole("button", { name: "Look up" }).click();
+  await expect(popup.getByTestId("drep-results")).toBeVisible();
+  await shot("voting-search");
+  await popup.getByLabel("Search DReps").fill(LOGIC_DREP);
+  await popup.getByTestId("drep-results").getByRole("button").click();
   await expect(popup.getByTestId("drep-details")).toBeVisible();
   await shot("voting");
   await back();

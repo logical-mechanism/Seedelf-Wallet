@@ -48,6 +48,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **Worker:** `account_info` in every balance reading (`Balances.cardano.staking`), `staking.ts` (the pool list kept a day in `chrome.storage.local`, a pool's and a DRep's details, builds), `preferences.ts` (`spendRewards`, on by default), and staking refusals in plain words at submit.
     - **UI:** Home's staking row and locked-rewards warning, the Cardano total with the rewards, Staking, the pool browser, the vote, the rewards in Send / Move in / Create reviews, and Settings' switch.
     - **Docs:** the new positioning in the README, privacy.md, the store listing and the manifest's summary ("A Cardano wallet with private payments built in…"), for the user to resubmit. Store images regenerated; screenshot 5 is now "A full Cardano wallet".
+    - **DRep search** (the user asked after the PR opened): `npm run dreps` bundles every registered DRep with a name (`src/dreps/`: 61 on preprod, 452 on mainnet), and the vote page searches it by name or ID with no requests; a pasted ID still works for one registered since the release. Run it at each release, like `npm run tokens`.
   - **Checked on preprod without spending:** `tests/fixtures/probe-staking.mjs`. Every staking transaction decodes on the node (Ogmios answers `[]`), and an account-paid mint with the rewards passes the real policy at the same budget.
   - **Not done:** the live run. It needs the user's go-ahead: `node e2e/live/run.mjs staking` on the private test wallet (stake with TPREP, always abstain, then LOGIC), and later `withdraw-rewards` and `unstake`, once rewards arrive 15 to 20 days on.
   - **Surprises:**
@@ -57,7 +58,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The recorded 12-word account's rewards (57.475311 ₳) now ride along in the e2e and Vitest flows by default. Tests about something else keep their meaning: bigger amounts, or rewards spending switched off (`spent.test.ts`).
     - The WebAssembly module grew from 424 to 439 KB gzipped (bech32 and the certificates); the store zip from 900 KB to 952 KB.
   - **Tests:** cargo 241 (core 123, of which 12 are staking; WASM native 34), WASM Node 33, Vitest 191 (+2 live), Playwright 34.
-  - **Next:** the user's review of the staking screens, and the live run. The follow-ups (a DRep list, staking in the Cardano Activity) are in the plan. Then the after-v1 items.
+  - **Next:** the user's review of the staking screens, and the live run. The follow-up left (staking in the Cardano Activity) is in the plan. Then the after-v1 items.
 
 - **2026-09-24: chunk 12 done** (`web-wallet/style-flow`). Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).
   - **What landed:** the user's 29 findings, each with its decision in the plan's list. Items 21–29 came after the PR opened: UTxOs on each Home tab, locks on both sides (from each row too), the collateral in Settings, Refresh on UTxOs and Activity, no "Unnamed" stand-in for an untagged seedelf, and a centred transaction banner. The store images are regenerated (Home changed); the listing text isn't, until chunk 13's new positioning.

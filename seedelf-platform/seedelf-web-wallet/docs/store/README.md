@@ -44,7 +44,7 @@ What you can do:
 • Create a wallet, or restore one from a 12, 15 or 24-word recovery phrase, and lock it with a password.
 • Use its Cardano account: a normal account that any wallet or faucet can pay, and that pays any address or ADA Handle. A phrase from Lace or Eternl opens that wallet's first account.
 • Stake the Cardano account with a pool, from a list of every live pool, and spend or withdraw the rewards.
-• Delegate its voting power: always abstain, always no confidence, or a DRep by its ID.
+• Delegate its voting power: always abstain, always no confidence, or a DRep you find by name.
 • Create a seedelf: a name you give out so that anyone can pay you.
 • Move ADA and tokens from the Cardano account into your Seedelf balance.
 • Send to any seedelf by its name.

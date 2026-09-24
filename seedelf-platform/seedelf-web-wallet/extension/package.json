@@ -15,6 +15,7 @@
     "build:store": "VITE_STORE_BUILD=true npm run build",
     "package": "npm run build:store && node scripts/package.mjs",
     "tokens": "node scripts/tokens.mjs",
+    "dreps": "node scripts/dreps.mjs",
     "dev": "vite build --watch --mode development",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
