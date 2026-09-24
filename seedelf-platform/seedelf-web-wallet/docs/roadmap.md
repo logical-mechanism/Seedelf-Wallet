@@ -69,7 +69,10 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The live runs weren't repeated. They weren't approved for 11c, and the extension's code didn't change: only its manifest `description` did.
     - Submitting. The user submits after this merges, so the policy URL resolves. Then the first message to testers.
   - **Tests:** cargo 209, WASM Node 29, Vitest 118 (+2 live), and Playwright 19 on the dev build and 19 on the store build.
-  - **Next:** v1 is done once the listing is live. After v1: the contract round trip, the mainnet flag, and merging into `main`.
+  - **Next: a major style and flow iteration.** The user found 11a "kind of looks like Lace but also totally does not", and has a list of improvements. Ask for it; don't guess.
+    - Treat 11a's tokens and components as a starting point, not a settled design. Correctness UX and every privacy note stay.
+    - When the look changes, regenerate the listing's images (`npm run store:images`) and upload them with the next version.
+    - After that come the after-v1 items: the contract round trip, the mainnet flag, and merging into `main`.
 
 - **2026-09-24: chunk 11b done** (`web-wallet/size-and-live`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
   - **Decided with the user:**
