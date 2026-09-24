@@ -84,6 +84,11 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "reset-wallet":
       await wallet.reset();
       return status(ctx);
+    case "reveal-phrase":
+      return { words: await wallet.revealPhrase(message.password) };
+    case "change-password":
+      await wallet.changePassword(message.current, message.next);
+      return null;
   }
 }
 

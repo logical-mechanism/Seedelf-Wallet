@@ -152,6 +152,37 @@ export class Wallet {
     });
   }
 
+  /**
+   * The recovery phrase, for Settings: only with the password, even while
+   * unlocked, and a wrong one counts towards the unlock back-off.
+   */
+  revealPhrase(password: string): Promise<string[]> {
+    return this.serial(async () => {
+      const entropy = await this.openWithPassword(password);
+      try {
+        return this.deps.wasm.entropyToPhrase(entropy).split(" ");
+      } finally {
+        entropy.fill(0);
+      }
+    });
+  }
+
+  /** Seals the vault under a new password; the current one proves who's asking. */
+  changePassword(current: string, next: string): Promise<void> {
+    return this.serial(async () => {
+      const problem = passwordProblem(next);
+      if (problem) throw new Error(problem);
+      const entropy = await this.openWithPassword(current);
+      try {
+        const record = (await this.deps.local.get<VaultRecord>(VAULT_KEY))!;
+        const sealed = await sealVault(entropy, next, record.createdAt);
+        await this.deps.local.set(VAULT_KEY, sealed);
+      } finally {
+        entropy.fill(0);
+      }
+    });
+  }
+
   /** Deletes the vault. The UI asks for a typed confirmation first. */
   reset(): Promise<void> {
     return this.serial(async () => {
@@ -261,6 +292,27 @@ export class Wallet {
     this.keys?.seedelf.free();
     this.keys?.cardano.free();
     this.keys = undefined;
+  }
+
+  /**
+   * The vault's entropy, for an unlocked wallet that asks for its password
+   * again. The caller zeroes it. Wrong passwords count, and wait, like unlock's.
+   */
+  private async openWithPassword(password: string): Promise<Uint8Array> {
+    if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+    const wait = await this.remainingBackoff();
+    if (wait > 0) throw new Error(`Too many wrong passwords. Try again in ${Math.ceil(wait / 1000)} s.`);
+    const record = (await this.deps.local.get<VaultRecord>(VAULT_KEY))!;
+    try {
+      const entropy = await openVault(record, password);
+      await this.deps.local.remove(UNLOCK_FAILURES);
+      return entropy;
+    } catch (e) {
+      if (!(e instanceof WrongPasswordError)) throw e;
+      const failures = await this.failures();
+      await this.deps.local.set(UNLOCK_FAILURES, { count: failures.count + 1, lastFailureAt: this.deps.now() });
+      throw e;
+    }
   }
 
   private async failures(): Promise<UnlockFailures> {

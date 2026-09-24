@@ -104,7 +104,7 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
   - Every key is re-derived on unlock, so no derived key is stored.
   - It lives in `chrome.storage.local` under `seedelf.vault`, as `{ version: 1, blob: <base64>, createdAt }`.
   - The entropy ↔ phrase conversion is in Rust (`seedelf_crypto::derivation::{phrase_to_entropy, entropy_to_phrase}`), with the same rules as `parse_phrase`.
-  - Unlock goes straight from entropy to keys inside WebAssembly (`SeedelfKey.fromEntropy`, `CardanoAccount.fromEntropy`), so the phrase never becomes a JavaScript string after onboarding.
+  - Unlock goes straight from entropy to keys inside WebAssembly (`SeedelfKey.fromEntropy`, `CardanoAccount.fromEntropy`), so the phrase never becomes a JavaScript string after onboarding, unless the user asks to see it (Settings, below).
 - **SecretBox `SBV1`**, adapted from Lace (`packages/lib/core/src/secret-box/`) into [`secret-box/`](../extension/src/background/secret-box/). Those files stay under Apache-2.0, with Lace's notice and our changes listed in that folder's README.
   - **Key derivation:** Argon2id with m = 19456 KiB, t = 2, p = 1, giving a 32-byte key (`@noble/hashes`).
   - **Cipher:** ChaCha20-Poly1305 (`@noble/ciphers`).
@@ -113,6 +113,10 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
   - Lace's legacy EMIP-003 path is left out; this wallet only ever writes `SBV1`.
   - **Checked independently:** `extension/tests/vectors/secret_box_sbv1.json` was made with Python's `argon2-cffi` (the reference Argon2) and `cryptography`'s ChaCha20Poly1305. The TypeScript code reproduces its keys and blobs byte for byte.
 - **Password check:** opening the vault proves the password, because the authentication tag fails otherwise. We have one blob, so Lace's separate "sentinel" value isn't needed.
+- **Settings (chunk 12):**
+  - **Show recovery phrase** opens the vault with the password again, even while unlocked, and shows the words. A wrong password counts towards the unlock back-off and waits like one.
+  - **Change password** opens the vault with the current password and seals the same entropy under the new one, keeping `createdAt`. The same back-off applies.
+  - **Remove wallet** deletes the vault after the typed confirmation (`delete wallet`), as Forgot password does.
 - **Password rule:** at least 12 characters, with no composition rules. The UI shows a rough strength hint, and the worker enforces the length. (The CLI asks for 14 characters with character classes; the two are separate products.)
 - **Performance:** unlock takes about 190 ms in the service worker, measured end to end in Playwright (Argon2id in pure JS, plus both key derivations in WebAssembly). That's well under the 1.5 s budget, so no faster Argon2id is needed. Lace's `setArgon2idImplementation` hook is kept in case that changes.
 - **Lock and wipe:**

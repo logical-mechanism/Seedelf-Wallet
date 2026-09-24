@@ -9,6 +9,8 @@ interface SetPasswordProps {
   submitLabel: string;
   busy: boolean;
   onSubmit: (password: string) => void;
+  /** The first box's label: "New password" when there's an old one. */
+  label?: string;
 }
 
 const HINTS = {
@@ -18,7 +20,7 @@ const HINTS = {
   strong: "Strong.",
 } as const;
 
-export function SetPassword({ submitLabel, busy, onSubmit }: SetPasswordProps) {
+export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }: SetPasswordProps) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
@@ -42,7 +44,7 @@ export function SetPassword({ submitLabel, busy, onSubmit }: SetPasswordProps) {
       </p>
       <div className="field">
         <div className="field-row">
-          <label htmlFor="new-password">Password</label>
+          <label htmlFor="new-password">{label}</label>
           <button type="button" className="link" onClick={() => setShow(!show)}>
             {show ? "Hide" : "Show"}
           </button>

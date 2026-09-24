@@ -241,6 +241,10 @@ export interface Requests {
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };
   "reset-wallet": { payload: None; result: Status };
+  /** The recovery phrase's words, for Settings; the password again, even while unlocked. */
+  "reveal-phrase": { payload: { password: string }; result: { words: string[] } };
+  /** Seals the vault under a new password. */
+  "change-password": { payload: { current: string; next: string }; result: None };
 }
 
 export type RequestName = keyof Requests;
@@ -279,6 +283,8 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "remove-submit",
   "pending-tx",
   "reset-wallet",
+  "reveal-phrase",
+  "change-password",
 ]);
 
 export function isMessage(value: unknown): value is Message {

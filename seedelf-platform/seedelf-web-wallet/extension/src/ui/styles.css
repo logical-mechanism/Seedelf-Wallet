@@ -1193,6 +1193,57 @@ main {
   padding: var(--s5) 0;
 }
 
+/* Settings (screens/Settings.tsx): rows that open a page, and outside links. */
+
+.menu-row {
+  width: calc(100% + 2 * var(--s2));
+  margin: 0 calc(-1 * var(--s2));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+  padding: 11px var(--s2);
+  border-radius: var(--r-sm);
+  text-align: left;
+  font-weight: 500;
+  color: var(--text);
+  transition: background-color 120ms;
+}
+
+.menu-row:hover {
+  background: var(--surface-2);
+}
+
+.menu-row__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.menu-row--danger,
+.menu-row--danger .menu-row__icon {
+  color: var(--danger-text);
+}
+
+.menu-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.menu-link:hover {
+  text-decoration: underline;
+}
+
 /* A modal (components/Modal.tsx), centred over a dimmed page. It never grows
    past the window: its body scrolls, so nothing is cut off in the popup. */
 

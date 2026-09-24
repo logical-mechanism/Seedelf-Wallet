@@ -373,6 +373,54 @@ test("tokens: Home shows five, View all has tokens and NFTs, a search, a sort an
   await expect(page.getByTestId("cardano-tokens")).toBeVisible();
 });
 
+test("settings: the phrase behind the password, a new password, and removing the wallet", async ({ context, koios }) => {
+  const v = vector(24);
+  const page = await openApp(context);
+  await restore(page, v.phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByTestId("about")).toContainText("Version0.1.0");
+  await expect(page.getByTestId("about")).toContainText("NetworkPreprod");
+  await snap(page, "settings");
+
+  // The phrase, only after the password.
+  await page.getByRole("button", { name: "Show recovery phrase" }).click();
+  await expect(page.getByTestId("recovery-phrase")).toHaveCount(0);
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Show phrase" }).click();
+  await expect(page.getByTestId("recovery-phrase").locator(".word__text")).toHaveCount(24);
+  const words = await page.getByTestId("recovery-phrase").locator(".word__text").allTextContents();
+  expect(words.join(" ")).toBe(v.phrase);
+  await snap(page, "settings-phrase");
+  await page.getByRole("button", { name: "Done" }).click();
+
+  // A new password: the old one no longer unlocks.
+  const NEW = "a brand new passphrase";
+  await page.getByRole("button", { name: "Change password" }).click();
+  await page.getByLabel("Current password").fill(PASSWORD);
+  await page.getByLabel("New password").fill(NEW);
+  await page.getByLabel("Confirm password").fill(NEW);
+  await page.getByRole("button", { name: "Change password" }).click();
+  await expect(page.getByTestId("password-changed")).toBeVisible();
+  await page.getByRole("button", { name: "Done" }).click();
+  expect(koios.calls).toHaveLength(reads); // Settings asks Koios nothing.
+
+  await page.getByRole("button", { name: "Lock" }).click();
+  await page.getByLabel("Password").fill(NEW);
+  await page.getByRole("button", { name: "Unlock" }).click();
+  await expect(page.getByTestId("seedelf-lovelace")).toBeVisible();
+
+  // Removing it needs the typed confirmation, then onboarding starts again.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Remove wallet" }).click();
+  await expect(page.getByRole("button", { name: "Remove wallet" })).toBeDisabled();
+  await page.getByLabel("Type delete wallet to confirm").fill("delete wallet");
+  await page.getByRole("button", { name: "Remove wallet" }).click();
+  await expect(page.getByRole("button", { name: "Create new wallet" })).toBeVisible();
+});
+
 test("move in: amount and a token, review, send, then watch it confirm", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
@@ -740,6 +788,11 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
     await back();
   }
   expect(koios.submitted).toHaveLength(0);
+
+  await popup.getByRole("button", { name: "Settings" }).click();
+  await expect(popup.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await shot("settings");
+  await popup.getByRole("button", { name: "Settings" }).click();
 
   await popup.getByRole("button", { name: "Lock" }).click();
   await expect(popup.getByRole("heading", { name: "Welcome back" })).toBeVisible();

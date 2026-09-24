@@ -67,6 +67,8 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 - **Failed unlocks:** exponential back-off (1 s, 2 s, 4 s … capped at 60 s), enforced by the worker. The unlock screen shows the countdown.
 - **Forgot password:** "Restore from your phrase" deletes the wallet from this browser after a typed confirmation (`delete wallet`), then goes straight to restore.
 
+**Settings** (the gear in the top bar, while unlocked): **Show recovery phrase** (the password again first), **Change password**, **Remove wallet** (typed confirmation), and About (the version, the network, the source code and the privacy policy). Settings asks Koios nothing.
+
 See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 
 ## Receive (Cardano account)
