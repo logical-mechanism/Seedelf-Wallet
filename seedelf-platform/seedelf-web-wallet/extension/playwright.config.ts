@@ -9,4 +9,10 @@ export default defineConfig({
   retries: 0,
   reporter: "list",
   use: { trace: "retain-on-failure" },
+  projects: [
+    // npm run e2e
+    { name: "extension", testMatch: "extension.spec.ts" },
+    // npm run store:images: the Web Store's screenshots, promo tile and icon (docs/store/images/)
+    { name: "store", testMatch: "store-images.spec.ts", timeout: 90_000 },
+  ],
 });

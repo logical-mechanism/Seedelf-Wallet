@@ -43,6 +43,27 @@ describe("manifest", () => {
     expect(buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: true })).not.toHaveProperty("key");
   });
 
+  it("a store build: no key, the preprod hosts only, and the strict page CSP", () => {
+    const m = buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: true });
+    expect(m).not.toHaveProperty("key");
+    expect(m.name).toBe("Seedelf Wallet (preprod)");
+    expect(m.permissions).toEqual(["storage", "alarms"]);
+    expect(m.host_permissions).toEqual(["https://preprod.koios.rest/*", "https://www.giveme.my/*"]);
+    expect(m.content_security_policy.extension_pages).toBe(
+      [
+        "default-src 'self'",
+        "script-src 'self' 'wasm-unsafe-eval'",
+        "object-src 'none'",
+        "connect-src 'self' https://preprod.koios.rest https://www.giveme.my",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+      ].join("; "),
+    );
+    // The description is the store's summary line.
+    expect(m.description.length).toBeLessThanOrEqual(132);
+  });
+
   it("dev key maps to the documented extension ID", async () => {
     const { createHash } = await import("node:crypto");
     const hex = createHash("sha256").update(Buffer.from(DEV_KEY, "base64")).digest("hex").slice(0, 32);

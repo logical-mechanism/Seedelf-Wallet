@@ -26,7 +26,8 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
     manifest_version: 3,
     name: mainnetEnabled ? "Seedelf Wallet" : "Seedelf Wallet (preprod)",
     short_name: "Seedelf",
-    description: "A Cardano stealth wallet.",
+    // Also the Web Store's summary line: at most 132 characters.
+    description: "A Cardano stealth wallet. Pay and get paid through Seedelf, where no UTxO says who owns it.",
     version,
     icons: ICONS,
     action: {
