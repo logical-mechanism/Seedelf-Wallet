@@ -1,18 +1,185 @@
-// Small inline icons, drawn for this project.
+// Inline icons, copied from Lucide (lucide-static 1.48.0): only the ones the
+// wallet uses, each under its Lucide name. Lucide is ISC, and some icons
+// (arrow-down-left, check, chevron-left, external-link, info, lock, log-in,
+// log-out, trash-2, x) come from Feather, MIT. Both notices ship in the
+// extension as licenses/lucide-ISC.txt.
 
-export function ExpandIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9.5 2.5h4v4M13.5 2.5 8.5 7.5M6.5 13.5h-4v-4M2.5 13.5l5-5" />
-    </svg>
-  );
+import type { ReactNode } from "react";
+
+function icon(paths: ReactNode) {
+  return function Icon({ size = 18 }: { size?: number }) {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        width={size}
+        height={size}
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {paths}
+      </svg>
+    );
+  };
 }
 
-export function LockIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="7" width="10" height="7" rx="1.5" />
-      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
-    </svg>
-  );
-}
+/** lock */
+export const LockIcon = icon(
+  <>
+    <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+  </>,
+);
+
+/** maximize-2 */
+export const ExpandIcon = icon(
+  <>
+    <path d="M15 3h6v6" />
+    <path d="m21 3-7 7" />
+    <path d="m3 21 7-7" />
+    <path d="M9 21H3v-6" />
+  </>,
+);
+
+/** copy */
+export const CopyIcon = icon(
+  <>
+    <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+  </>,
+);
+
+/** check */
+export const CheckIcon = icon(<path d="M20 6 9 17l-5-5" />);
+
+/** trash-2 */
+export const TrashIcon = icon(
+  <>
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+    <path d="M3 6h18" />
+    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+  </>,
+);
+
+/** send: pay a seedelf. */
+export const SendIcon = icon(
+  <>
+    <path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
+    <path d="m21.854 2.147-10.94 10.939" />
+  </>,
+);
+
+/** log-in: move into Seedelf. */
+export const MoveInIcon = icon(
+  <>
+    <path d="m10 17 5-5-5-5" />
+    <path d="M15 12H3" />
+    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+  </>,
+);
+
+/** log-out: withdraw out of Seedelf. */
+export const WithdrawIcon = icon(
+  <>
+    <path d="m16 17 5-5-5-5" />
+    <path d="M21 12H9" />
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+  </>,
+);
+
+/** sprout: create a seedelf. */
+export const SproutIcon = icon(
+  <>
+    <path d="M14 9.536V7a4 4 0 0 1 4-4h1.5a.5.5 0 0 1 .5.5V5a4 4 0 0 1-4 4 4 4 0 0 0-4 4c0 2 1 3 1 5a5 5 0 0 1-1 3" />
+    <path d="M4 9a5 5 0 0 1 8 4 5 5 0 0 1-8-4" />
+    <path d="M5 21h14" />
+  </>,
+);
+
+/** arrow-down-left: receive. */
+export const ReceiveIcon = icon(
+  <>
+    <path d="M17 7 7 17" />
+    <path d="M17 17H7V7" />
+  </>,
+);
+
+/** refresh-cw */
+export const RefreshIcon = icon(
+  <>
+    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+    <path d="M21 3v5h-5" />
+    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+    <path d="M8 16H3v5" />
+  </>,
+);
+
+/** chevron-left */
+export const BackIcon = icon(<path d="m15 18-6-6 6-6" />);
+
+/** eye */
+export const EyeIcon = icon(
+  <>
+    <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+    <circle cx="12" cy="12" r="3" />
+  </>,
+);
+
+/** triangle-alert */
+export const WarnIcon = icon(
+  <>
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+    <path d="M12 9v4" />
+    <path d="M12 17h.01" />
+  </>,
+);
+
+/** info */
+export const InfoIcon = icon(
+  <>
+    <circle cx="12" cy="12" r="10" />
+    <path d="M12 16v-4" />
+    <path d="M12 8h.01" />
+  </>,
+);
+
+/** shield-check: a privacy note. */
+export const ShieldIcon = icon(
+  <>
+    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+    <path d="m9 12 2 2 4-4" />
+  </>,
+);
+
+/** circle-check: a step that's done. */
+export const DoneIcon = icon(
+  <>
+    <circle cx="12" cy="12" r="10" />
+    <path d="m16 9-5.5 5.5L8 12" />
+  </>,
+);
+
+/** external-link */
+export const ExternalIcon = icon(
+  <>
+    <path d="M15 3h6v6" />
+    <path d="M10 14 21 3" />
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+  </>,
+);
+
+/** loader-circle: spun by CSS. */
+export const SpinnerIcon = icon(<path d="M21 12a9 9 0 1 1-6.219-8.56" />);
+
+/** x */
+export const CloseIcon = icon(
+  <>
+    <path d="M18 6 6 18" />
+    <path d="m6 6 12 12" />
+  </>,
+);

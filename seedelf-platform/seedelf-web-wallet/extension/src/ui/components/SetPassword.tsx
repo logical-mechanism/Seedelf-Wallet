@@ -40,43 +40,47 @@ export function SetPassword({ submitLabel, busy, onSubmit }: SetPasswordProps) {
         The password unlocks the wallet in this browser. It encrypts your recovery phrase here; it can't
         recover your funds anywhere else. Use at least {MIN_PASSWORD_LENGTH} characters.
       </p>
-      <div className="field-row">
-        <label htmlFor="new-password">Password</label>
-        <button type="button" className="link" onClick={() => setShow(!show)}>
-          {show ? "Hide" : "Show"}
-        </button>
-      </div>
-      <input
-        id="new-password"
-        type={show ? "text" : "password"}
-        autoComplete="new-password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        autoFocus
-      />
-      {password && (
-        <div className="strength" data-strength={problem ? "weak" : strength}>
-          <div className="strength__bar" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
-          <p className="note" data-testid="password-hint">
-            {problem ?? HINTS[strength]}
-          </p>
+      <div className="field">
+        <div className="field-row">
+          <label htmlFor="new-password">Password</label>
+          <button type="button" className="link" onClick={() => setShow(!show)}>
+            {show ? "Hide" : "Show"}
+          </button>
         </div>
-      )}
-      <label htmlFor="confirm-password">Confirm password</label>
-      <input
-        id="confirm-password"
-        type={show ? "text" : "password"}
-        autoComplete="new-password"
-        value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
-        aria-invalid={mismatch || undefined}
-      />
-      {mismatch && <p className="error">The passwords don't match.</p>}
+        <input
+          id="new-password"
+          type={show ? "text" : "password"}
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoFocus
+        />
+        {password && (
+          <div className="strength" data-strength={problem ? "weak" : strength}>
+            <div className="strength__bar" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+            <p className="note" data-testid="password-hint">
+              {problem ?? HINTS[strength]}
+            </p>
+          </div>
+        )}
+      </div>
+      <div className="field">
+        <label htmlFor="confirm-password">Confirm password</label>
+        <input
+          id="confirm-password"
+          type={show ? "text" : "password"}
+          autoComplete="new-password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          aria-invalid={mismatch || undefined}
+        />
+        {mismatch && <p className="error">The passwords don't match.</p>}
+      </div>
       <button type="submit" className="primary" disabled={!ready || busy}>
         {busy ? "Encrypting…" : submitLabel}
       </button>

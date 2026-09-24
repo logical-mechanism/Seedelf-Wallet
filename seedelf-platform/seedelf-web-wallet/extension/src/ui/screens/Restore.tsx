@@ -7,6 +7,7 @@ import { useState } from "react";
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
+import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
 
 const blank = (n: number) => Array<string>(n).fill("");
@@ -50,55 +51,48 @@ export function Restore({ onBack, onDone }: { onBack: () => void; onDone: (s: St
     }
   }
 
+  if (step === "password") {
+    return (
+      <Screen title="Set a password" titleId="restore-title" onBack={() => setStep("phrase")} aside="Step 2 of 2" error={error}>
+        <SetPassword submitLabel="Restore wallet" busy={busy} onSubmit={restore} />
+      </Screen>
+    );
+  }
+
   return (
-    <section className="card stack">
-      <div className="step-header">
-        <button type="button" className="link" onClick={step === "phrase" ? onBack : () => setStep("phrase")}>
-          ← Back
+    <Screen
+      title="Restore a wallet"
+      titleId="restore-title"
+      onBack={onBack}
+      aside="Step 1 of 2"
+      error={error}
+      foot={
+        <button className="primary" disabled={busy || words.some((w) => !w)} onClick={checkPhrase}>
+          Continue
         </button>
-        <span className="note">Step {step === "phrase" ? 1 : 2} of 2</span>
-      </div>
-
-      {step === "phrase" ? (
-        <>
-          <h1>Restore a wallet</h1>
-          <p className="note">
-            Enter your recovery phrase. A phrase from Lace, Eternl or Yoroi also works: its first account becomes
-            this wallet's Cardano account.
-          </p>
-          <div className="segmented" role="radiogroup" aria-label="Number of words">
-            {WORD_COUNTS.map((n) => (
-              <button
-                key={n}
-                type="button"
-                role="radio"
-                aria-checked={n === count}
-                className={n === count ? "segmented__item segmented__item--on" : "segmented__item"}
-                onClick={() => changeCount(n)}
-              >
-                {n} words
-              </button>
-            ))}
-          </div>
-          <PhraseInput words={words} onChange={setWords} onCountChange={changeCount} />
-          <p className="note">Tip: paste the whole phrase into any box.</p>
-          <button className="primary" disabled={busy || words.some((w) => !w)} onClick={checkPhrase}>
-            Continue
+      }
+    >
+      <p className="note">
+        Enter your recovery phrase. A phrase from Lace, Eternl or Yoroi also works: its first account becomes this
+        wallet's Cardano account.
+      </p>
+      <div className="segmented" role="radiogroup" aria-label="Number of words">
+        {WORD_COUNTS.map((n) => (
+          <button
+            key={n}
+            type="button"
+            role="radio"
+            aria-checked={n === count}
+            className={n === count ? "segmented__item segmented__item--on" : "segmented__item"}
+            onClick={() => changeCount(n)}
+          >
+            {n} words
           </button>
-        </>
-      ) : (
-        <>
-          <h1>Set a password</h1>
-          <SetPassword submitLabel="Restore wallet" busy={busy} onSubmit={restore} />
-        </>
-      )}
-
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-    </section>
+        ))}
+      </div>
+      <PhraseInput words={words} onChange={setWords} onCountChange={changeCount} />
+      <p className="note">Tip: paste the whole phrase into any box.</p>
+    </Screen>
   );
 }
 

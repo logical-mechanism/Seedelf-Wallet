@@ -103,3 +103,16 @@ export function sanitizeAda(previous: string, typed: string): { value: string; n
   }
   return note ? { value, note } : { value };
 }
+
+/** "1 UTxO", "3 UTxOs"; `many` for irregular plurals. */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** An ADA amount, and how many tokens come with it: "22.7 ₳ and 1 token". */
+export function adaWithTokens(lovelace: string, tokens: number): string {
+  return tokens ? `${formatAda(lovelace)} ₳ and ${plural(tokens, "token")}` : `${formatAda(lovelace)} ₳`;
+}
+
+/** A token's key in maps and React lists: `policy.name`. */
+export const tokenKey = (t: { policyId: string; assetName: string }) => `${t.policyId}.${t.assetName}`;

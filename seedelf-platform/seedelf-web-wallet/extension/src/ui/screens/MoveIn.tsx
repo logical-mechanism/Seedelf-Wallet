@@ -6,10 +6,11 @@ import { useState, type FormEvent } from "react";
 
 import type { Balances, MoveInSummary, PendingTx, TokenAmount, TokenRef } from "../../shared/rpc";
 import { call } from "../background";
-import { AdaInput } from "../components/AdaInput";
-import { formatAda, formatQuantity, parseAda, tokenName } from "../format";
-
-const key = (t: TokenRef) => `${t.policyId}.${t.assetName}`;
+import { AdaInput, RoundNote } from "../components/AdaInput";
+import { Callout } from "../components/Callout";
+import { ReviewRows, Row } from "../components/ReviewRows";
+import { Screen } from "../components/Screen";
+import { adaWithTokens, formatAda, formatQuantity, parseAda, tokenKey as key, tokenName } from "../format";
 
 export function MoveIn({
   cardano,
@@ -62,71 +63,70 @@ export function MoveIn({
 
   if (summary) {
     return (
-      <section className="card stack" aria-labelledby="move-in-review">
-        <div className="step-header">
-          <button type="button" className="link" onClick={() => setSummary(undefined)} disabled={busy}>
-            ← Back
+      <Screen
+        title="Review the move"
+        titleId="move-in-review"
+        onBack={() => setSummary(undefined)}
+        backDisabled={busy}
+        aside="Nothing is sent until you press Send"
+        error={error}
+        foot={
+          <button type="button" className="primary" onClick={send} disabled={busy}>
+            {busy ? "Sending…" : "Send"}
           </button>
-          <span className="note">Nothing is sent until you press Send</span>
-        </div>
-        <h1 id="move-in-review">Review the move</h1>
-        <dl className="review" data-testid="move-in-review">
+        }
+      >
+        <ReviewRows testId="move-in-review">
           <Row label="Into Seedelf" value={`${formatAda(summary.lovelace)} ₳`} strong />
           {summary.tokens.map((t) => {
             const known = cardano.tokens.find((c) => key(c) === key(t));
             return <Row key={key(t)} label="" value={`${formatQuantity(t.quantity, known?.decimals ?? 0)} ${tokenName(t.assetName)}`} />;
           })}
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
-          <Row
-            label="Back to your Cardano account"
-            value={`${formatAda(summary.changeLovelace)} ₳${summary.changeTokens ? ` and ${plural(summary.changeTokens, "token")}` : ""}`}
-          />
+          <Row label="Back to your Cardano account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="New Seedelf UTxOs" value={String(summary.depositOutputs)} />
-        </dl>
+        </ReviewRows>
         <p className="note">
           The new UTxOs are locked to fresh copies of your Seedelf key's register. It takes about a minute for the network
           to confirm them.
         </p>
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <button type="button" className="primary" onClick={send} disabled={busy}>
-          {busy ? "Sending…" : "Send"}
-        </button>
-      </section>
+      </Screen>
     );
   }
 
   return (
-    <form className="card stack" onSubmit={review} aria-labelledby="move-in-title">
-      <div className="step-header">
-        <button type="button" className="link" onClick={onCancel}>
-          ← Back
+    <Screen
+      onSubmit={review}
+      title="Move in"
+      titleId="move-in-title"
+      onBack={onCancel}
+      aside={`${formatAda(cardano.lovelace)} ₳ available`}
+      error={error}
+      foot={
+        <button type="submit" className="primary" disabled={!ready || busy}>
+          {busy ? "Building…" : "Review"}
         </button>
-        <span className="note">{formatAda(cardano.lovelace)} ₳ available</span>
-      </div>
-      <h1 id="move-in-title">Move in</h1>
+      }
+    >
       <p className="note">Move ADA, and any tokens you pick, from your Cardano account into your Seedelf balance.</p>
 
-      <label htmlFor="move-in-amount">Amount</label>
-      <AdaInput id="move-in-amount" value={amount} onChange={setAmount} disabled={max} shown="Max">
-        <button type="button" className={max ? "segmented__item segmented__item--on" : "segmented__item"} aria-pressed={max} onClick={() => setMax(!max)}>
-          Max
-        </button>
-      </AdaInput>
-      {tooMuch && (
-        <p className="field-note" data-testid="move-in-too-much">
-          That's more than the {formatAda(cardano.lovelace)} ₳ in your Cardano account.
-        </p>
-      )}
+      <div className="field">
+        <label htmlFor="move-in-amount">Amount</label>
+        <AdaInput id="move-in-amount" value={amount} onChange={setAmount} disabled={max} shown="Max">
+          <button type="button" className="chip" aria-pressed={max} onClick={() => setMax(!max)}>
+            Max
+          </button>
+        </AdaInput>
+        {tooMuch && (
+          <p className="field-note" data-testid="move-in-too-much">
+            That's more than the {formatAda(cardano.lovelace)} ₳ in your Cardano account.
+          </p>
+        )}
+      </div>
       {max ? (
         <p className="note">Everything except the fee and what the tokens you keep need. UTxOs of exactly 5 ₳ stay put: another wallet may use them as collateral.</p>
       ) : (
-        <p className={lovelace && !round ? "callout callout--warn" : "note"}>
-          Round amounts, like 100 ₳, are harder to match to a later withdrawal.
-        </p>
+        <RoundNote warn={!!lovelace && !round}>Round amounts, like 100 ₳, are harder to match to a later withdrawal.</RoundNote>
       )}
 
       {cardano.tokens.length > 0 && (
@@ -144,37 +144,14 @@ export function MoveIn({
                   setPicked(next);
                 }}
               />
-              <span className="tokens__name">{tokenName(t.assetName)}</span>
-              <span className="tokens__amount">{formatQuantity(t.quantity, t.decimals)}</span>
+              <span className="list__name">{tokenName(t.assetName)}</span>
+              <span className="list__value">{formatQuantity(t.quantity, t.decimals)}</span>
             </label>
           ))}
         </fieldset>
       )}
 
-      <div className="callout">
-        Moving in links your Cardano account to the new Seedelf UTxOs, but not to any seedelf name.
-      </div>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <button type="submit" className="primary" disabled={!ready || busy}>
-        {busy ? "Building…" : "Review"}
-      </button>
-    </form>
+      <Callout tone="privacy">Moving in links your Cardano account to the new Seedelf UTxOs, but not to any seedelf name.</Callout>
+    </Screen>
   );
-}
-
-function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
-  return (
-    <div className={strong ? "review__row review__row--strong" : "review__row"}>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
-  );
-}
-
-function plural(n: number, one: string): string {
-  return `${n} ${one}${n === 1 ? "" : "s"}`;
 }

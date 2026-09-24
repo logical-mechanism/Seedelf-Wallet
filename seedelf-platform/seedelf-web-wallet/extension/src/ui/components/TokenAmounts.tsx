@@ -2,9 +2,7 @@
 // amount checked against the token's decimals and what's held.
 
 import type { TokenAmount, TokenQuantity } from "../../shared/rpc";
-import { formatQuantity, parseQuantity, tokenName } from "../format";
-
-const key = (t: { policyId: string; assetName: string }) => `${t.policyId}.${t.assetName}`;
+import { formatQuantity, parseQuantity, tokenKey as key, tokenName } from "../format";
 
 /** The token amounts typed so far: those to send, and what's wrong with any of them. */
 export function tokenChoices(
@@ -49,7 +47,7 @@ export function TokenAmounts({
         return (
           <div key={key(t)} className="token-amount">
             <label className="token-amount__row">
-              <span className="tokens__name">{tokenName(t.assetName)}</span>
+              <span className="list__name">{tokenName(t.assetName)}</span>
               <input
                 inputMode="decimal"
                 autoComplete="off"

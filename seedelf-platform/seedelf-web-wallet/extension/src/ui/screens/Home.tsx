@@ -1,20 +1,39 @@
-// Home: the Seedelf balance and seedelfs, the Cardano account, and the
-// Seedelf identity. Balances come from the worker's last reading; it reads
-// the chain again when that is over a minute old, or on Refresh. A sent
-// move-in, seedelf mint, transfer, withdrawal or removal shows as a banner
-// until the network confirms it.
+// Home, in two tabs. Seedelf: the Seedelf balance, its tokens, your seedelfs
+// and the Seedelf identity. Cardano account: the account's balance and
+// tokens, Receive and Move in. Until the wallet has a seedelf and a Seedelf
+// balance, a checklist shows the order that keeps them apart: fund the
+// account, create the seedelf, then move in (privacy.md, mint first).
+// Balances come from the worker's last reading; it reads the chain again
+// when that is over a minute old, or on Refresh. A sent move-in, seedelf
+// mint, transfer, withdrawal or removal shows as a banner until the network
+// confirms it.
 
 import { useCallback, useEffect, useState } from "react";
 
 import type { Account, Balances, PendingTx, SeedelfInfo } from "../../shared/rpc";
 import { call } from "../background";
+import { ActionButton } from "../components/ActionButton";
+import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
 import { CopyField } from "../components/CopyField";
-import { QrCode } from "../components/QrCode";
+import {
+  DoneIcon,
+  ExternalIcon,
+  InfoIcon,
+  MoveInIcon,
+  ReceiveIcon,
+  RefreshIcon,
+  SendIcon,
+  SpinnerIcon,
+  SproutIcon,
+  TrashIcon,
+  WithdrawIcon,
+} from "../components/Icons";
 import { TokenList } from "../components/TokenList";
-import { explorerUrl, formatAda, shortHex, timeAgo } from "../format";
+import { explorerUrl, formatAda, plural, shortHex, timeAgo } from "../format";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { MoveIn } from "./MoveIn";
+import { Receive } from "./Receive";
 import { RemoveSeedelf } from "./RemoveSeedelf";
 import { Transfer } from "./Transfer";
 import { Withdraw } from "./Withdraw";
@@ -40,14 +59,18 @@ const STALE_MS = 60_000;
 /** How often to ask about a sent transaction. */
 const WATCH_EVERY_MS = 15_000;
 
+type Tab = "seedelf" | "cardano";
+
+const BUSY = "Wait for the last transaction to confirm";
+
 export function Home() {
   const [account, setAccount] = useState<Account>();
   const [balances, setBalances] = useState<Balances>();
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string>();
-  const [showQr, setShowQr] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const [screen, setScreen] = useState<"home" | "move-in" | "create" | "transfer" | "withdraw">("home");
+  const [tab, setTab] = useState<Tab>("seedelf");
+  const [screen, setScreen] = useState<"home" | "receive" | "move-in" | "create" | "transfer" | "withdraw">("home");
   const [removing, setRemoving] = useState<SeedelfInfo>();
   const [pending, setPending] = useState<PendingTx | null>(null);
 
@@ -101,185 +124,181 @@ export function Home() {
     setScreen("home");
     setRemoving(undefined);
   };
-  if (screen === "move-in" && balances) {
-    return <MoveIn cardano={balances.cardano} onCancel={() => setScreen("home")} onSent={sent} />;
-  }
-  if (screen === "create" && balances) {
-    return <CreateSeedelf balances={balances} onCancel={() => setScreen("home")} onSent={sent} />;
-  }
-  if (screen === "transfer" && balances) {
-    return <Transfer seedelf={balances.seedelf} onCancel={() => setScreen("home")} onSent={sent} />;
-  }
-  if (screen === "withdraw" && balances) {
-    return <Withdraw seedelf={balances.seedelf} onCancel={() => setScreen("home")} onSent={sent} />;
-  }
+  const home = () => setScreen("home");
+  if (screen === "receive" && account) return <Receive account={account} onBack={home} />;
+  if (screen === "move-in" && balances) return <MoveIn cardano={balances.cardano} onCancel={home} onSent={sent} />;
+  if (screen === "create" && balances) return <CreateSeedelf balances={balances} onCancel={home} onSent={sent} />;
+  if (screen === "transfer" && balances) return <Transfer seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
+  if (screen === "withdraw" && balances) return <Withdraw seedelf={balances.seedelf} onCancel={home} onSent={sent} />;
   if (removing) {
     return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
   }
-  const what = pending ? SENT[pending.kind] : "";
+
+  const seedelfs = balances?.seedelf.seedelfs ?? [];
+  const canSpend = !!balances && balances.seedelf.utxos > 0 && !watching;
   const spendTitle = watching
-    ? "Wait for the last transaction to confirm"
+    ? BUSY
     : balances && balances.seedelf.utxos === 0
       ? "Move some ADA in first: these are paid from your Seedelf balance"
       : undefined;
+  const canCreate = !!balances && (balances.cardano.utxos > 0 || balances.seedelf.utxos > 0) && !watching;
+  const createTitle = watching ? BUSY : balances && !canCreate ? "Fund your Cardano account first: it pays for the seedelf" : undefined;
+  const canMoveIn = !!balances && balances.cardano.utxos > 0 && !watching;
 
   return (
-    <div className="stack">
+    <div className="home">
       {error && (
-        <section className="callout callout--warn stack-tight" role="alert">
-          <strong>Couldn't read your balances</strong>
-          <span>{error}</span>
-          <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
-            {reading ? "Trying…" : "Try again"}
-          </button>
-        </section>
-      )}
-      {pending && (
-        <section className="callout banner" role="status" data-testid="pending-tx">
-          <strong>
-            {pending.confirmations !== null
-              ? CONFIRMED[pending.kind]
-              : watching
-                ? `${what} sent. Waiting for the network…`
-                : `${what} not confirmed yet`}
-          </strong>
-          <a href={explorerUrl(pending.network, pending.txHash)} target="_blank" rel="noreferrer" className="banner__link">
-            {shortHex(pending.txHash, 10, 6)} on Cardanoscan
-          </a>
-          {!watching && (
-            <button type="button" className="link" onClick={() => setPending(null)}>
-              Dismiss
+        <Callout tone="warn" role="alert">
+          <div className="stack-tight">
+            <strong>Couldn't read your balances</strong>
+            <span>{error}</span>
+            <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
+              {reading ? "Trying…" : "Try again"}
             </button>
-          )}
-        </section>
+          </div>
+        </Callout>
       )}
-      <section className="card stack" aria-labelledby="seedelf-balance">
-        <div className="card__head">
-          <h1 id="seedelf-balance">Seedelf balance</h1>
-          {balances && <span className="note">{plural(balances.seedelf.utxos, "UTxO")}</span>}
-        </div>
-        <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
-        {balances && <TokenList tokens={balances.seedelf.tokens} testId="seedelf-tokens" />}
-        <div className="actions">
-          <button
-            type="button"
-            className="primary"
-            onClick={() => setScreen("transfer")}
-            disabled={!balances || balances.seedelf.utxos === 0 || watching}
-            title={spendTitle}
-          >
-            Send to a seedelf
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => setScreen("withdraw")}
-            disabled={!balances || balances.seedelf.utxos === 0 || watching}
-            title={spendTitle}
-          >
-            Withdraw
-          </button>
-        </div>
-        <div className="subsection">
-          <h2>Your seedelfs</h2>
-          {balances && balances.seedelf.seedelfs.length === 0 && <p className="note">No seedelfs yet.</p>}
-          {balances && balances.seedelf.seedelfs.length > 0 && (
-            <>
-              <ul className="seedelfs" data-testid="seedelfs">
-                {balances.seedelf.seedelfs.map((s) => (
-                  <li key={s.assetName} className="seedelfs__row" title={s.assetName}>
-                    <span className="seedelfs__label">{s.label ?? "Unnamed"}</span>
-                    <span className="seedelfs__ada">{formatAda(s.lovelace)} ₳</span>
-                    <code className="seedelfs__id">{shortHex(s.assetName, 12, 6)}</code>
-                    <span className="seedelfs__actions">
+      {pending && <Pending pending={pending} watching={watching} onDismiss={() => setPending(null)} />}
+
+      <Tabs tab={tab} onChange={setTab} />
+
+      {/* Each panel has its own key, so its buttons are new, not restyled Seedelf ones. */}
+      {tab === "seedelf" ? (
+        <section key="seedelf" className="stack" role="tabpanel" id="panel-seedelf" aria-labelledby="tab-seedelf">
+          <div className="hero">
+            <h1 id="seedelf-balance" className="hero__label">
+              Seedelf balance
+            </h1>
+            <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
+            <span className="hero__meta">{balances ? plural(balances.seedelf.utxos, "UTxO") : "\u00a0"}</span>
+            <div className="hero__actions">
+              <ActionButton
+                primary
+                icon={<SendIcon />}
+                label="Send"
+                name="Send to a seedelf"
+                onClick={() => setScreen("transfer")}
+                disabled={!canSpend}
+                title={spendTitle}
+              />
+              <ActionButton
+                icon={<WithdrawIcon />}
+                label="Withdraw"
+                onClick={() => setScreen("withdraw")}
+                disabled={!canSpend}
+                title={spendTitle}
+              />
+              <ActionButton
+                icon={<SproutIcon />}
+                label="Create"
+                name="Create a seedelf"
+                onClick={() => setScreen("create")}
+                disabled={!canCreate}
+                title={createTitle}
+              />
+            </div>
+          </div>
+
+          {balances && (seedelfs.length === 0 || balances.seedelf.utxos === 0) && (
+            <GettingStarted
+              balances={balances}
+              watching={watching}
+              onReceive={() => {
+                setTab("cardano");
+                setScreen("receive");
+              }}
+              onCreate={() => setScreen("create")}
+              onMoveIn={() => setScreen("move-in")}
+            />
+          )}
+
+          {balances && balances.seedelf.tokens.length > 0 && (
+            <section className="section" aria-labelledby="seedelf-tokens-title">
+              <h2 id="seedelf-tokens-title">Tokens</h2>
+              <TokenList tokens={balances.seedelf.tokens} testId="seedelf-tokens" />
+            </section>
+          )}
+
+          {seedelfs.length > 0 && (
+            <section className="section" aria-labelledby="your-seedelfs">
+              <h2 id="your-seedelfs">Your seedelfs</h2>
+              <ul className="list" data-testid="seedelfs">
+                {seedelfs.map((s) => (
+                  <li key={s.assetName} className="list__row" title={s.assetName}>
+                    <span className="list__name">{s.label ?? "Unnamed"}</span>
+                    <span className="list__value">{formatAda(s.lovelace)} ₳</span>
+                    <code className="list__sub">{shortHex(s.assetName, 12, 6)}</code>
+                    <span className="list__actions">
                       <CopyButton value={s.assetName} label={`Copy the name of ${s.label ?? "this seedelf"}`} />
                       <button
                         type="button"
-                        className="link"
+                        className="icon-button icon-button--small"
                         aria-label={`Remove ${s.label ?? "this seedelf"}`}
                         onClick={() => setRemoving(s)}
                         disabled={watching}
-                        title={watching ? "Wait for the last transaction to confirm" : undefined}
+                        title={watching ? BUSY : "Remove this seedelf"}
                       >
-                        Remove
+                        <TrashIcon size={14} />
                       </button>
                     </span>
                   </li>
                 ))}
               </ul>
               <p className="note">Copy a seedelf's full name to give to anyone who wants to pay you.</p>
-            </>
+            </section>
           )}
-          <button
-            type="button"
-            className="secondary align-start"
-            onClick={() => setScreen("create")}
-            disabled={!balances || (balances.cardano.utxos === 0 && balances.seedelf.utxos === 0) || watching}
-            title={
-              watching
-                ? "Wait for the last transaction to confirm"
-                : balances && balances.cardano.utxos === 0 && balances.seedelf.utxos === 0
-                  ? "Fund your Cardano account first: it pays for the seedelf"
-                  : undefined
-            }
-          >
-            Create a seedelf
-          </button>
-        </div>
-      </section>
 
-      <section className="card stack" aria-labelledby="cardano-account">
-        <div className="card__head">
-          <h1 id="cardano-account">Cardano account</h1>
-          {balances && <span className="note">{plural(balances.cardano.addressesUsed, "address", "addresses")} used</span>}
-        </div>
-        <Amount lovelace={balances?.cardano.lovelace} testId="cardano-lovelace" />
-        {balances && <TokenList tokens={balances.cardano.tokens} testId="cardano-tokens" />}
-        {account && (
-          <>
-            <CopyField label="Receive address" value={account.receiveAddress} testId="receive-address" />
-            <button type="button" className="link align-start" onClick={() => setShowQr(!showQr)}>
-              {showQr ? "Hide QR code" : "Show QR code"}
-            </button>
-            {showQr && (
-              <div className="qr-wrap">
-                <QrCode text={account.receiveAddress} label="QR code of the receive address" />
-                <p className="note">Scan this from a phone wallet to pay this account.</p>
-              </div>
-            )}
-            <CopyField label="Stake address" value={account.stakeAddress} testId="stake-address" />
-          </>
-        )}
-        <p className="note">Anything that can pay a Cardano address can fund this wallet.</p>
-        {balances && balances.seedelf.seedelfs.length === 0 && (
-          <p className="note" data-testid="mint-first">
-            Create your seedelf before moving money in: then what you move in isn't tied to it.
-          </p>
-        )}
-        <button
-          type="button"
-          className="primary"
-          onClick={() => setScreen("move-in")}
-          disabled={!balances || balances.cardano.utxos === 0 || watching}
-          title={watching ? "Wait for the last transaction to confirm" : undefined}
-        >
-          Move in
-        </button>
-      </section>
+          {account && (
+            <section className="section" aria-labelledby="seedelf-identity">
+              <h2 id="seedelf-identity">Seedelf identity</h2>
+              <p className="note">
+                Your Seedelf key's public value. Payments to your seedelfs use re-randomized copies of it, so they can't
+                be linked back here.
+              </p>
+              <CopyField
+                label="Public value"
+                value={account.seedelfPublicValue}
+                display={shortHex(account.seedelfPublicValue, 10, 10)}
+                testId="seedelf-public-value"
+              />
+            </section>
+          )}
+        </section>
+      ) : (
+        <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
+          <div className="hero">
+            <h1 id="cardano-account" className="hero__label">
+              Cardano account
+            </h1>
+            <Amount lovelace={balances?.cardano.lovelace} testId="cardano-lovelace" />
+            <span className="hero__meta">
+              {balances ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used` : "\u00a0"}
+            </span>
+            <div className="hero__actions">
+              <ActionButton icon={<ReceiveIcon />} label="Receive" onClick={() => setScreen("receive")} disabled={!account} />
+              <ActionButton
+                primary
+                icon={<MoveInIcon />}
+                label="Move in"
+                onClick={() => setScreen("move-in")}
+                disabled={!canMoveIn}
+                title={watching ? BUSY : undefined}
+              />
+            </div>
+          </div>
 
-      {account && (
-        <section className="card stack" aria-labelledby="seedelf-identity">
-          <h1 id="seedelf-identity">Seedelf identity</h1>
-          <p className="note">
-            Your Seedelf key's public value. Payments to your seedelfs use re-randomized copies of it, so they can't be
-            linked back here.
-          </p>
-          <CopyField
-            label="Public value"
-            value={account.seedelfPublicValue}
-            display={shortHex(account.seedelfPublicValue, 10, 10)}
-            testId="seedelf-public-value"
-          />
+          {balances && seedelfs.length === 0 && (
+            <Callout tone="privacy" testId="mint-first">
+              Create your seedelf before moving money in: then what you move in isn't tied to it.
+            </Callout>
+          )}
+
+          {balances && balances.cardano.tokens.length > 0 && (
+            <section className="section" aria-labelledby="cardano-tokens-title">
+              <h2 id="cardano-tokens-title">Tokens</h2>
+              <TokenList tokens={balances.cardano.tokens} testId="cardano-tokens" />
+            </section>
+          )}
         </section>
       )}
 
@@ -287,11 +306,172 @@ export function Home() {
         <span className="note" data-testid="updated">
           {reading ? "Reading the chain…" : balances ? `Updated ${timeAgo(balances.updatedAt, now)}` : ""}
         </span>
-        <button type="button" className="link" onClick={() => void load(true)} disabled={reading}>
-          Refresh
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => void load(true)}
+          disabled={reading}
+          aria-label="Refresh"
+          title="Read the chain again"
+        >
+          <span className={reading ? "spin" : "icon"}>
+            <RefreshIcon size={15} />
+          </span>
         </button>
       </div>
     </div>
+  );
+}
+
+/** Seedelf or Cardano account; the arrow keys move between them. */
+function Tabs({ tab, onChange }: { tab: Tab; onChange: (tab: Tab) => void }) {
+  const tabs: Array<[Tab, string]> = [
+    ["seedelf", "Seedelf"],
+    ["cardano", "Cardano account"],
+  ];
+  return (
+    <div className="segmented" role="tablist" aria-label="Balances">
+      {tabs.map(([value, label]) => {
+        const on = tab === value;
+        return (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            id={`tab-${value}`}
+            aria-selected={on}
+            aria-controls={on ? `panel-${value}` : undefined}
+            tabIndex={on ? 0 : -1}
+            className={on ? "segmented__item segmented__item--on" : "segmented__item"}
+            onClick={() => onChange(value)}
+            onKeyDown={(e) => {
+              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+              const next = value === "seedelf" ? "cardano" : "seedelf";
+              onChange(next);
+              document.getElementById(`tab-${next}`)?.focus();
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The order that keeps a new wallet's seedelf apart from what it moves in. */
+function GettingStarted({
+  balances,
+  watching,
+  onReceive,
+  onCreate,
+  onMoveIn,
+}: {
+  balances: Balances;
+  watching: boolean;
+  onReceive: () => void;
+  onCreate: () => void;
+  onMoveIn: () => void;
+}) {
+  const created = balances.seedelf.seedelfs.length > 0;
+  const movedIn = balances.seedelf.utxos > 0;
+  const funded = balances.cardano.utxos > 0 || created || movedIn;
+  const steps = [
+    {
+      done: funded,
+      title: "Fund your Cardano account",
+      text: "Pay it from an exchange or another wallet.",
+      action: "Receive",
+      onClick: onReceive,
+      disabled: false,
+    },
+    {
+      done: created,
+      title: "Create your seedelf",
+      text: "Your Cardano account pays for it, before any money moves in.",
+      action: "Create",
+      onClick: onCreate,
+      disabled: watching || !funded,
+    },
+    {
+      done: movedIn,
+      title: "Move ADA in",
+      text: "What you move in afterwards isn't tied to your seedelf.",
+      action: "Move in",
+      onClick: onMoveIn,
+      disabled: watching || balances.cardano.utxos === 0,
+    },
+  ];
+  const current = steps.findIndex((s) => !s.done);
+  return (
+    <section className="section" aria-labelledby="getting-started">
+      <h2 id="getting-started">Get started</h2>
+      <ol className="steps" data-testid="getting-started">
+        {steps.map((s, i) => (
+          <li key={s.title} className={s.done ? "step step--done" : "step"}>
+            <span className="step__icon">
+              {s.done ? <DoneIcon size={20} /> : <span className="step__n">{i + 1}</span>}
+            </span>
+            <span className="step__title">
+              {s.title}
+              {s.done && <span className="sr-only"> (done)</span>}
+            </span>
+            {i === current ? (
+              <button
+                type="button"
+                className="chip"
+                onClick={s.onClick}
+                disabled={s.disabled}
+                title={watching && s.disabled ? BUSY : undefined}
+              >
+                {s.action}
+              </button>
+            ) : (
+              <span />
+            )}
+            <p className="step__text">{s.text}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function Pending({ pending, watching, onDismiss }: { pending: PendingTx; watching: boolean; onDismiss: () => void }) {
+  const confirmed = pending.confirmations !== null;
+  const what = SENT[pending.kind];
+  return (
+    <section className={confirmed ? "callout callout--done" : "callout"} role="status" data-testid="pending-tx">
+      <span className="callout__icon">
+        {confirmed ? (
+          <DoneIcon size={16} />
+        ) : watching ? (
+          <span className="spin">
+            <SpinnerIcon size={16} />
+          </span>
+        ) : (
+          <InfoIcon size={16} />
+        )}
+      </span>
+      <div className="callout__body banner">
+        <strong>
+          {confirmed
+            ? CONFIRMED[pending.kind]
+            : watching
+              ? `${what} sent. Waiting for the network…`
+              : `${what} not confirmed yet`}
+        </strong>
+        <a href={explorerUrl(pending.network, pending.txHash)} target="_blank" rel="noreferrer" className="banner__link">
+          {shortHex(pending.txHash, 10, 6)} on Cardanoscan
+          <ExternalIcon size={12} />
+        </a>
+        {!watching && (
+          <button type="button" className="link align-start" onClick={onDismiss}>
+            Dismiss
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -302,8 +482,4 @@ function Amount({ lovelace, testId }: { lovelace?: string; testId: string }) {
       <span className="amount__unit"> ₳</span>
     </p>
   );
-}
-
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
 }

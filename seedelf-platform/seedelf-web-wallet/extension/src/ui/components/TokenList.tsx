@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import type { TokenAmount } from "../../shared/rpc";
-import { formatQuantity, tokenName } from "../format";
+import { formatQuantity, tokenKey, tokenName } from "../format";
 
 const SHOWN = 5;
 
@@ -11,17 +11,17 @@ export function TokenList({ tokens, testId }: { tokens: TokenAmount[]; testId: s
   if (!tokens.length) return null;
   const shown = all ? tokens : tokens.slice(0, SHOWN);
   return (
-    <div className="tokens" data-testid={testId}>
-      <ul className="tokens__list">
+    <div className="stack-tight" data-testid={testId}>
+      <ul className="list">
         {shown.map((t) => (
-          <li key={`${t.policyId}.${t.assetName}`} className="tokens__row" title={`${t.policyId}.${t.assetName}\n${t.fingerprint}`}>
-            <span className="tokens__name">{tokenName(t.assetName)}</span>
-            <span className="tokens__amount">{formatQuantity(t.quantity, t.decimals)}</span>
+          <li key={tokenKey(t)} className="list__row" title={`${tokenKey(t)}\n${t.fingerprint}`}>
+            <span className="list__name">{tokenName(t.assetName)}</span>
+            <span className="list__value">{formatQuantity(t.quantity, t.decimals)}</span>
           </li>
         ))}
       </ul>
       {tokens.length > SHOWN && (
-        <button type="button" className="link" onClick={() => setAll(!all)}>
+        <button type="button" className="link show-more" onClick={() => setAll(!all)}>
           {all ? "Show fewer" : `Show all ${tokens.length} tokens`}
         </button>
       )}

@@ -5,6 +5,8 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
+import { Callout } from "../components/Callout";
+import { Screen } from "../components/Screen";
 
 export function Unlock({
   retryAfterMs,
@@ -56,18 +58,20 @@ export function Unlock({
 
   return (
     <section className="unlock">
-      <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={96} height={96} />
+      <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={88} height={88} />
       <h1>Welcome back</h1>
       <form className="stack unlock__form" onSubmit={submit}>
-        <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoFocus
-        />
+        <div className="field">
+          <label htmlFor="password">Password</label>
+          <input
+            id="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoFocus
+          />
+        </div>
         {error && (
           <p className="error" role="alert">
             {error}
@@ -107,40 +111,44 @@ export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s
     }
   }
 
+  const confirmed = typed.trim().toLowerCase() === CONFIRM_TEXT;
   return (
-    <section className="card stack">
-      <h1>Restore from your phrase</h1>
+    <Screen
+      title="Restore from your phrase"
+      titleId="reset-title"
+      onBack={onCancel}
+      backDisabled={busy}
+      error={error}
+      foot={
+        <div className="actions">
+          <button className="secondary" onClick={onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button className="danger" onClick={reset} disabled={busy || !confirmed}>
+            Delete and restore
+          </button>
+        </div>
+      }
+    >
       <p className="note">
-        Without the password, the only way back in is your recovery phrase. This deletes the wallet from this
-        browser, then you restore it from the phrase and choose a new password.
+        Without the password, the only way back in is your recovery phrase. This deletes the wallet from this browser,
+        then you restore it from the phrase and choose a new password.
       </p>
-      <div className="callout callout--warn">
-        If you don't have your recovery phrase, stop here. Deleting the wallet without it loses your funds for
-        good.
+      <Callout tone="warn">
+        If you don't have your recovery phrase, stop here. Deleting the wallet without it loses your funds for good.
+      </Callout>
+      <div className="field">
+        <label htmlFor="confirm-reset">
+          Type <strong>{CONFIRM_TEXT}</strong> to confirm
+        </label>
+        <input
+          id="confirm-reset"
+          autoComplete="off"
+          spellCheck={false}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+        />
       </div>
-      <label htmlFor="confirm-reset">
-        Type <strong>{CONFIRM_TEXT}</strong> to confirm
-      </label>
-      <input
-        id="confirm-reset"
-        autoComplete="off"
-        spellCheck={false}
-        value={typed}
-        onChange={(e) => setTyped(e.target.value)}
-      />
-      <div className="actions">
-        <button className="secondary" onClick={onCancel} disabled={busy}>
-          Cancel
-        </button>
-        <button className="danger" onClick={reset} disabled={busy || typed.trim().toLowerCase() !== CONFIRM_TEXT}>
-          Delete and restore
-        </button>
-      </div>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-    </section>
+    </Screen>
   );
 }
