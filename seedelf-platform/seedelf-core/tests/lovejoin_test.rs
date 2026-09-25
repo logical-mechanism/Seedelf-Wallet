@@ -93,6 +93,14 @@ fn coin(seed: u8, lovelace: u64) -> Coin {
     }
 }
 
+fn funding(coins: &[Coin]) -> lovejoin::Funding {
+    lovejoin::Funding {
+        coins: coins.to_vec(),
+        collateral: coin(0x22, 5_000_000),
+        address: key_address(0x33),
+    }
+}
+
 fn payer(fee: u64) -> Payer {
     Payer {
         fee: coin(0x11, fee),
@@ -337,4 +345,99 @@ fn the_box_datum_is_canonical_and_reads_back() {
 #[test]
 fn lovejoin_is_not_on_mainnet() {
     assert!(Protocol::of(false).is_err());
+}
+
+/// Every box the recorded Lovejoin transactions spent, once each.
+fn all_pool_boxes(protocol: &Protocol) -> Vec<PoolBox> {
+    let mut boxes: Vec<PoolBox> = Vec::new();
+    for name in [
+        "lovejoin withdraw",
+        "lovejoin mix N=4",
+        "lovejoin mix N=3 wallet",
+        "lovejoin mix N=3 shard",
+    ] {
+        for r in resolved(&case(name)) {
+            if let Some(b) = PoolBox::from_resolved(r, protocol)
+                && !boxes.iter().any(|x| x.utxo == b.utxo)
+            {
+                boxes.push(b);
+            }
+        }
+    }
+    boxes
+}
+
+#[test]
+fn a_chain_fans_each_box_out_and_keeps_track_of_ours() {
+    let protocol = Protocol::of(true).unwrap();
+    let params = params();
+    let sk = Scalar::from(42u64);
+    let base = Register::create(sk).unwrap();
+    let pool = all_pool_boxes(&protocol);
+    assert!(pool.len() >= 8, "{} recorded boxes", pool.len());
+
+    // One box, two waves deep: 1 + 3 mixes, 8 fresh boxes.
+    let owners = vec![base.clone().rerandomize().unwrap()];
+    let coins = [coin(0x44, 20_000_000)];
+    let chain = lovejoin::chain(&params, &protocol, &funding(&coins), &owners, 2, &pool).unwrap();
+    assert_eq!(chain.txs.len(), 1 + lovejoin::mixes_per_box(2));
+    assert_eq!(chain.txs[0].kind, "deposit");
+    assert!(chain.txs[1..].iter().all(|t| t.kind == "mix"));
+    assert_eq!(chain.leaves.len(), 1);
+    assert!(chain.leaves[0].is_owned(&sk));
+    let fees: u64 = chain.txs.iter().map(|t| t.fee).sum();
+    assert_eq!(chain.change.lovelace, 20_000_000 - 10_000_000 - fees);
+    // Each transaction spends the one before's change: nothing waits on chain.
+    for pair in chain.txs.windows(2) {
+        let before = MultiEraTx::decode(&pair[0].tx.tx_bytes.0).unwrap().hash();
+        let after = MultiEraTx::decode(&pair[1].tx.tx_bytes.0).unwrap();
+        assert!(
+            after.inputs().iter().any(|i| *i.hash() == before),
+            "chained on its parent"
+        );
+    }
+
+    // Two boxes, one wave: two mixes, and both leaves are ours.
+    let owners = vec![
+        base.clone().rerandomize().unwrap(),
+        base.rerandomize().unwrap(),
+    ];
+    let coins = [coin(0x44, 30_000_000)];
+    let chain = lovejoin::chain(&params, &protocol, &funding(&coins), &owners, 1, &pool).unwrap();
+    assert_eq!(chain.txs.len(), 3);
+    assert_eq!(chain.leaves.len(), 2);
+    assert!(chain.leaves.iter().all(|b| b.is_owned(&sk)));
+}
+
+#[test]
+fn a_chain_needs_enough_pool_boxes() {
+    let protocol = Protocol::of(true).unwrap();
+    let owners = vec![
+        Register::create(Scalar::from(7u64))
+            .unwrap()
+            .rerandomize()
+            .unwrap(),
+    ];
+    let pool = all_pool_boxes(&protocol)[..3].to_vec();
+    let err = lovejoin::chain(
+        &params(),
+        &protocol,
+        &funding(&[coin(0x44, 20_000_000)]),
+        &owners,
+        2,
+        &pool,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("pool has 3 boxes"), "{err}");
+}
+
+#[test]
+fn boxes_are_planned_on_what_the_session_can_pay() {
+    // Depth 2: a box and four mixes, about 13.8 ₳.
+    assert_eq!(lovejoin::boxes_affordable(9_000_000, 2, 10_000_000), 0);
+    assert_eq!(lovejoin::boxes_affordable(16_000_000, 2, 10_000_000), 1);
+    assert_eq!(lovejoin::boxes_affordable(50_000_000, 2, 10_000_000), 3);
+    assert_eq!(lovejoin::mixes_per_box(1), 1);
+    assert_eq!(lovejoin::mixes_per_box(2), 4);
+    assert_eq!(lovejoin::mixes_per_box(3), 13);
 }

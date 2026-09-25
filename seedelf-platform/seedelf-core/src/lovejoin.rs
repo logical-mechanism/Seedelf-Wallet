@@ -422,13 +422,10 @@ fn nonzero_scalar() -> Scalar {
     }
 }
 
-/// A uniformly random permutation of `0..n` (Fisher–Yates).
+/// A uniformly random permutation of `0..n`.
 fn permutation(n: usize) -> Vec<usize> {
     let mut p: Vec<usize> = (0..n).collect();
-    for i in (1..n).rev() {
-        let j = (OsRng.next_u64() % (i as u64 + 1)) as usize;
-        p.swap(i, j);
-    }
+    shuffle(&mut p);
     p
 }
 
@@ -827,4 +824,139 @@ pub fn withdraw(
         }
     }
     bail!("The withdraw's fee did not settle")
+}
+
+/// Mixes one box goes through, fanned out `depth` waves deep, three wide:
+/// every output of a wave is mixed again in the next, so which leaf is ours
+/// stays one of `3^depth` (Lovejoin's `strategy/fanout.ts`).
+pub fn mixes_per_box(depth: u32) -> usize {
+    (3usize.pow(depth) - 1) / 2
+}
+
+/// What the wallet plans on for a 3-box mix before measuring one: preprod's
+/// cost 0.877 ₳, rounded up.
+pub const MIX_FEE_ESTIMATE: u64 = 950_000;
+
+/// What a deposit and the change it leaves are planned on.
+const DEPOSIT_RESERVE: u64 = 1_500_000;
+
+/// How many boxes `spare` lovelace pays for, with every mix of a `depth`-deep
+/// fan-out and the deposit: none if it can't pay for one.
+pub fn boxes_affordable(spare: u64, depth: u32, denom: u64) -> usize {
+    let per_box = denom + mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE;
+    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box) as usize
+}
+
+/// What pays for a chain: the key account's ADA-only `coins`, its
+/// `collateral` (never spent by the chain), and its `address` for change.
+#[derive(Debug, Clone)]
+pub struct Funding {
+    pub coins: Vec<Coin>,
+    pub collateral: Coin,
+    pub address: Address,
+}
+
+/// A transaction of a chain, in the order it's sent.
+#[derive(Debug, Clone)]
+pub struct ChainTx {
+    /// `deposit` or `mix`.
+    pub kind: &'static str,
+    pub tx: BuiltTransaction,
+    pub fee: u64,
+}
+
+/// A chain through Lovejoin: its transactions in order, our boxes at the
+/// end of it, and the payer's last change.
+#[derive(Debug, Clone)]
+pub struct Chain {
+    pub txs: Vec<ChainTx>,
+    pub leaves: Vec<PoolBox>,
+    pub change: Coin,
+}
+
+/// Builds a whole chain before any of it is sent: a deposit of one box per
+/// register in `owners` from `coins`, then each box fanned out `depth` waves
+/// deep with fresh boxes drawn at random from `pool` (never one twice). Each
+/// wave's mixes go in a random order, so the order doesn't point at our
+/// branch. Every transaction pays from the one before's change; the
+/// collateral is never spent. Each is measured against the scripts.
+pub fn chain(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    funding: &Funding,
+    owners: &[Register],
+    depth: u32,
+    pool: &[PoolBox],
+) -> Result<Chain> {
+    let Funding {
+        coins,
+        collateral,
+        address,
+    } = funding;
+    if !(1..=3).contains(&depth) {
+        bail!("The fan-out is 1 to 3 waves deep");
+    }
+    let needed = owners.len() * mixes_per_box(depth) * 2;
+    if pool.len() < needed {
+        bail!(
+            "Lovejoin's pool has {} boxes to mix with, and this needs {needed}",
+            pool.len()
+        );
+    }
+    let mut fresh: Vec<PoolBox> = pool.to_vec();
+    shuffle(&mut fresh);
+
+    let deposit = deposit(params, protocol, coins, owners, address)?;
+    let mut txs = vec![ChainTx {
+        kind: "deposit",
+        tx: deposit.tx.clone(),
+        fee: deposit.fee,
+    }];
+    let mut change = deposit.change.clone();
+    let mut ours: Vec<PoolBox> = deposit.boxes.clone();
+    // Every box of every tree in this wave; ours are among them.
+    let mut wave: Vec<PoolBox> = deposit.boxes;
+    for _ in 0..depth {
+        shuffle(&mut wave);
+        let mut next = Vec::with_capacity(wave.len() * 3);
+        let mut ours_next = Vec::new();
+        for boxed in &wave {
+            let others = [
+                fresh.pop().expect("counted above"),
+                fresh.pop().expect("counted above"),
+            ];
+            let inputs = vec![boxed.clone(), others[0].clone(), others[1].clone()];
+            let payer = Payer {
+                fee: change.clone(),
+                collateral: collateral.clone(),
+                address: address.clone(),
+            };
+            let mixed = mix(params, protocol, &inputs, &payer)?;
+            if ours.contains(boxed) {
+                ours_next.push(mixed.outputs[mixed.moved_to[0]].clone());
+            }
+            change = mixed.change.clone();
+            next.extend(mixed.outputs.iter().cloned());
+            txs.push(ChainTx {
+                kind: "mix",
+                tx: mixed.tx,
+                fee: mixed.fee,
+            });
+        }
+        ours = ours_next;
+        wave = next;
+    }
+    Ok(Chain {
+        txs,
+        leaves: ours,
+        change,
+    })
+}
+
+/// Shuffles in place, uniformly (Fisher–Yates).
+fn shuffle<T>(items: &mut [T]) {
+    for i in (1..items.len()).rev() {
+        let j = (OsRng.next_u64() % (i as u64 + 1)) as usize;
+        items.swap(i, j);
+    }
 }

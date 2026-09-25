@@ -17,6 +17,7 @@ use seedelf_crypto::{cardano, derivation, register, schnorr};
 use wasm_bindgen::prelude::*;
 
 pub mod cip30;
+pub mod lovejoin;
 
 /// Plain-Rust implementations behind the exports, testable off-wasm.
 pub mod api {
@@ -2141,6 +2142,47 @@ pub fn build_session_return(
 ) -> Result<String, JsError> {
     let request: api::SessionReturnRequest = from_json(request)?;
     to_json(&api::session_return(&accounts.inner, key.sk, request).map_err(js_error)?)
+}
+
+/// How many Lovejoin boxes a session's spare ADA pays for at `depth`, before
+/// anything is built (`lovejoin::PlanRequest` → `lovejoin::PlanResult`).
+#[wasm_bindgen(js_name = planLovejoin)]
+pub fn plan_lovejoin(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::plan(&accounts.inner, from_json(request)?).map_err(js_error)?)
+}
+
+/// A session's whole chain through Lovejoin, built, measured against the
+/// scripts and signed with its key: the deposit, the mixes, then the return
+/// (`lovejoin::ChainRequest` → `lovejoin::ChainResult`). The worker sends
+/// them in order.
+#[wasm_bindgen(js_name = buildLovejoinChain)]
+pub fn build_lovejoin_chain(
+    accounts: &WasmOneTimeAccounts,
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<String, JsError> {
+    to_json(&lovejoin::chain(&accounts.inner, key.sk, from_json(request)?).map_err(js_error)?)
+}
+
+/// The wallet's boxes among the pool's rows (`lovejoin::OwnedRequest` →
+/// `lovejoin::OwnedResult`).
+#[wasm_bindgen(js_name = lovejoinOwned)]
+pub fn lovejoin_owned(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::owned(key.sk, from_json(request)?).map_err(js_error)?)
+}
+
+/// One of the wallet's boxes into a fresh register, unsigned, for giveme.my
+/// (`lovejoin::WithdrawRequest` → `lovejoin::WithdrawResult`).
+#[wasm_bindgen(js_name = buildLovejoinWithdraw)]
+pub fn build_lovejoin_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::withdraw(key.sk, from_json(request)?).map_err(js_error)?)
+}
+
+/// A withdraw with giveme.my's checked signature, ready to submit
+/// (`lovejoin::FinishRequest` → `lovejoin::FinishResult`).
+#[wasm_bindgen(js_name = finishLovejoinWithdraw)]
+pub fn finish_lovejoin_withdraw(request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::finish_withdraw(from_json(request)?).map_err(js_error)?)
 }
 
 /// What a transaction built for a session (a swap, a cancel) does to its
