@@ -1,7 +1,7 @@
 // Settings, from the gear in the top bar: contacts, the Cardano account's
 // collateral, where the wallet opens (a full tab or the side panel), ADA's
-// value in a currency, whether sites can connect to the public account (the
-// dApp connector) and which have, whether payments spend the staking rewards, how long
+// value in a currency, whether sites can connect (the dApp connector: each
+// to the public account or a private session) and which have, whether payments spend the staking rewards, how long
 // it stays unlocked, the recovery phrase (the password again first, even
 // while unlocked) and a check of a written copy, a new password, removing the
 // wallet from this browser, and what this is. Nothing here asks Koios
@@ -275,10 +275,10 @@ function DappConnector({ onSites }: { onSites: () => void }) {
       <h2 id="dapp-settings-title">Sites</h2>
       <div className="setting-row">
         <span className="stack-tight">
-          <span id="dapp-connector-label">Let sites connect to your public account</span>
+          <span id="dapp-connector-label">Let sites connect to Seedelf Wallet</span>
           <span className="note" id="dapp-connector-note" data-testid="dapp-connector-note">
             {on
-              ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. Each sees your public account, or a private session if you choose one, and nothing is signed without you."
+              ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. When one asks, you choose what it sees: your public account, or a private session. Nothing is signed without you."
               : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. That's all it adds."}
           </span>
         </span>

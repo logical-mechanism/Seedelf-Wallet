@@ -23,8 +23,9 @@ export interface Preferences {
   /** What ADA's value is shown in, on mainnet. */
   currency: Currency;
   /**
-   * The dApp connector (CIP-30), with the public account: off until the
-   * user turns it on, which asks Chrome for access to sites first.
+   * The dApp connector (CIP-30): each site gets the public account or a
+   * private session, chosen when it connects. Off until the user turns it
+   * on, which asks Chrome for access to sites first.
    */
   dappConnector: boolean;
   /**

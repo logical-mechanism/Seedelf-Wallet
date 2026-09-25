@@ -2103,11 +2103,11 @@ test.describe("the dApp connector", () => {
     const page = await openApp(context);
     await restore(page, vector(12).phrase);
     await page.getByRole("button", { name: "Settings" }).click();
-    const toggle = page.getByRole("switch", { name: "Let sites connect to your public account" });
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByTestId("dapp-connector-note")).toContainText("Each sees your public account, or a private session if you choose one");
+    await expect(page.getByTestId("dapp-connector-note")).toContainText("you choose what it sees: your public account, or a private session");
     // A site's signature needs the password too, until the user says otherwise.
     await expect(page.getByRole("switch", { name: "Ask for your password to sign for a site" })).toHaveAttribute("aria-checked", "true");
 
@@ -2226,7 +2226,7 @@ test.describe("the dApp connector", () => {
     await restore(page, vector(12).phrase);
     await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
     await page.getByRole("button", { name: "Settings" }).click();
-    const toggle = page.getByRole("switch", { name: "Let sites connect to your public account" });
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "true");
     const dapp = await openDapp(context);
@@ -2282,7 +2282,7 @@ test.describe("the dApp connector", () => {
     const page = await openApp(context);
     await restore(page, vector(12).phrase);
     await page.getByRole("button", { name: "Settings" }).click();
-    const toggle = page.getByRole("switch", { name: "Let sites connect to your public account" });
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "true");
     const dapp = await openDapp(context);

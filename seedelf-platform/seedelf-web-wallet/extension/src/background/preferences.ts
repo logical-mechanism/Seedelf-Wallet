@@ -11,9 +11,10 @@
 // lockAfterMinutes  Auto-lock, after this long without activity.
 // currency          What ADA's value is shown in, on mainnet (prices.ts);
 //                   "off" asks no one.
-// dappConnector     Sites can connect to the public account (CIP-30,
-//                   dapp.ts). Off by default; turning it on registers the
-//                   content scripts, which needs Chrome's access to sites.
+// dappConnector     Sites can connect (CIP-30, dapp.ts), each to the public
+//                   account or a private session, chosen when it asks. Off
+//                   by default; turning it on registers the content
+//                   scripts, which needs Chrome's access to sites.
 // dappPassword      A site's signature needs the password, typed in the
 //                   connector's window, even while unlocked (dapp.ts). On by
 //                   default.

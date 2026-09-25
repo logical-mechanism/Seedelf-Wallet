@@ -106,7 +106,9 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **What landed:** WebAssembly's `stakeIndex` and session data signing, site sessions in `sessions.ts`, every connector path resolving the site's account, the connect window's private path, and `screens/SiteSessions.tsx`.
     - **Tests:** Rust 2, Vitest 5, Playwright 1.
     - **Also fixed:** Settings said the wallet talks only to Koios and giveme.my, leaving out Minswap since chunk 15.
-    - **For the user:** connect a real preprod site to a private session (fund, use, bring back, disconnect). The store listing text is updated for it.
+    - **The user's first live try (2026-09-25):** a real preprod site connected to a private session and traded through it.
+      - The switch's old name, *Let sites connect to your public account*, read as the public account only. It's now **Let sites connect to Seedelf Wallet**, with the store listing, privacy policy and docs to match.
+    - **For the user:** bring that session back and disconnect it. The store listing text is updated for the connector's new name and private sessions.
     - **Next:** the restore scan, then the chunk 15 PR's merge.
 
 - **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md), whose *Status* says where the build departed from it.

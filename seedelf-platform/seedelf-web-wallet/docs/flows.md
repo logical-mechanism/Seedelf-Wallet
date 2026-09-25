@@ -314,7 +314,7 @@ Details:
 
 CIP-30 for the public account, as Lace offers it (chunk 15). The design is in [architecture.md](architecture.md#dapp-connector); the plan, with the private steps after it, in [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md).
 
-1. **Turn it on:** Settings → *Sites* → **Let sites connect to your public account**. Chrome asks to let the wallet onto https sites; only then are its two scripts added to pages. Off (the default), sites can't see the wallet.
+1. **Turn it on:** Settings → *Sites* → **Let sites connect to Seedelf Wallet**. Each site then gets the public account or a private session, chosen in the connect window (see *Any site* below). Chrome asks to let the wallet onto https sites; only then are its two scripts added to pages. Off (the default), sites can't see the wallet.
 2. **Connect:** a site's **Connect wallet** lists Seedelf Wallet (when the site lists every CIP-30 wallet). Its `enable()` opens the connector's window: the site's address as Chrome reports it, what it will see (the public account's addresses, balance and UTxOs), and that it never sees the private balance. **Connect** or **Cancel**.
 3. **Use it:** reads need no window. A transaction or a message to sign opens the window:
    - **A transaction:** what it does to the public account (it sends or it gets, each token that moves), the fee, who it pays (a contract, Seedelf Wallet's contract with or without a register, an address), the collateral at risk, any staking change, minting, a note, whether it runs contracts, and which keys sign. **Sign** or **Decline**.

@@ -72,7 +72,8 @@ Step 4 of [chunk 15](chunk-15-dapp-connector.md#the-steps): a site connects to a
   - top-up and disconnect.
 
   Playwright 1: the connect window's private path up to giveme.my's recorded refusal, and the unfunded session under *Sites*, then disconnected.
-- **Not tried live yet:** a real site on preprod connected to a private session. The e2e stops at giveme.my, whose real signature the fakes can't give.
+- **Live (the user, 2026-09-25):** a real preprod site connected to a private session, and a trade went through it. Bringing it back and disconnecting come next. The e2e stops at giveme.my, whose real signature the fakes can't give.
+- **After that first try:** the Settings switch was renamed from *Let sites connect to your public account* to **Let sites connect to Seedelf Wallet**. The old name read as turning on the public account only, when it turns on connecting at all. Each site's account is chosen in the connect window.
 
 ## Out of scope here
 
