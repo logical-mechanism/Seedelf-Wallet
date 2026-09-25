@@ -26,7 +26,7 @@ import type {
 import { checkRecipients } from "../shared/recipients";
 import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
-import { resolveDestination } from "./destination";
+import { destinationResolver, resolveDestination } from "./destination";
 import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the withdrawal built last, until it's sent or replaced. */
@@ -61,8 +61,9 @@ export class WithdrawService {
   async build(network: NetworkName, payments: PaymentAsk[]): Promise<WithdrawSummary> {
     const { wasm } = this.deps;
     checkRecipients(payments.length);
+    const resolve = destinationResolver(this.deps, network);
     const destinations: WithdrawDestination[] = [];
-    for (const p of payments) destinations.push(await this.resolve(network, p.to));
+    for (const p of payments) destinations.push(await resolve(p.to));
     const { view, utxos, params } = await readContract(this.deps, network);
     const request = {
       network,

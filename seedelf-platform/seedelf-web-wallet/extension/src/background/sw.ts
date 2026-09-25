@@ -2,7 +2,7 @@
 // await, so the event that woke the worker is never lost.
 
 import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
-import { applyOpenIn, readOpenIn, TAB_PAGE } from "../shared/open-in";
+import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
 import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
@@ -99,17 +99,7 @@ function getContext(): Promise<Context> {
 
 // The toolbar button, when the wallet opens in a tab (a side panel opens
 // without the worker): bring back the wallet's tab if one is open, or open one.
-chrome.action.onClicked.addListener(() => void openWalletTab());
-
-async function openWalletTab(): Promise<void> {
-  const [open] = await chrome.runtime.getContexts({ contextTypes: ["TAB"] });
-  if (open) {
-    await chrome.tabs.update(open.tabId, { active: true });
-    await chrome.windows.update(open.windowId, { focused: true });
-    return;
-  }
-  await chrome.tabs.create({ url: chrome.runtime.getURL(TAB_PAGE) });
-}
+chrome.action.onClicked.addListener(() => void showWalletTab());
 
 // Chrome keeps what the button does, but it's set again whenever the
 // extension starts, in case it didn't (an update, a profile copied over).

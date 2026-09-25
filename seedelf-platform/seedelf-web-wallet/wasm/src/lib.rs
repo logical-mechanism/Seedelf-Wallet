@@ -584,7 +584,7 @@ pub mod api {
             max: matches!(request.payments.as_slice(), [only] if only.lovelace.is_none()),
             fee: built.fee.to_string(),
             withdrawal: rewards.withdrawn().to_string(),
-            note: note.map(|n| n.text()),
+            note: note.map(|n| n.text().to_string()),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             inputs: built.inputs.len(),

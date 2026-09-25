@@ -33,3 +33,19 @@ export async function writeOpenIn(mode: OpenIn): Promise<void> {
   await chrome.storage.local.set({ [OPEN_IN]: mode });
   await applyOpenIn(mode);
 }
+
+/**
+ * Brings back the wallet's tab if one is open, or opens one: the toolbar
+ * button in a tab (from the worker), and the side panel's switch to one.
+ * Only a full-tab page counts, not the side panel's page.
+ */
+export async function showWalletTab(): Promise<void> {
+  const contexts = await chrome.runtime.getContexts({ contextTypes: ["TAB"] });
+  const open = contexts.find((c) => new URL(c.documentUrl ?? "", location.href).searchParams.get("view") === "tab");
+  if (open) {
+    await chrome.tabs.update(open.tabId, { active: true });
+    await chrome.windows.update(open.windowId, { focused: true });
+    return;
+  }
+  await chrome.tabs.create({ url: chrome.runtime.getURL(TAB_PAGE) });
+}

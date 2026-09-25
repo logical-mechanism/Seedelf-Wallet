@@ -137,6 +137,11 @@ fn a_note_over_64_bytes_is_split_into_lines_that_fit() {
     let note = Note::new(&dense).unwrap().unwrap();
     let half = "é".repeat(32);
     assert_eq!(note.lines(), [half.as_str(), half.as_str()]);
+    assert_eq!(
+        note.text(),
+        dense,
+        "as typed, with no space where it was cut"
+    );
 }
 
 #[test]

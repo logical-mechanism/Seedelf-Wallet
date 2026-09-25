@@ -259,8 +259,8 @@ export function CardanoSend({
         <input
           id="send-note"
           value={note}
-          onChange={(e) => setNote(e.target.value)}
-          maxLength={NOTE_MAX}
+          // Characters, as core counts them: an input's maxLength counts UTF-16 units, so an emoji would count twice.
+          onChange={(e) => setNote([...e.target.value].slice(0, NOTE_MAX).join(""))}
           autoComplete="off"
           placeholder="What it's for"
           aria-describedby="send-note-hint"

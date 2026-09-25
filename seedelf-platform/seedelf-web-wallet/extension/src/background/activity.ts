@@ -230,10 +230,13 @@ export class ActivityService {
   /** Staking entries' pool tickers, from what's on the device only. */
   private async tickers(network: NetworkName, entries: ActivityEntry[]): Promise<ActivityEntry[]> {
     const { wallet, session, local } = this.deps;
+    // Each pool is looked up once: the pool list on the device is long, and a page often names the same pool.
+    const tickers = new Map<string, string | undefined>();
     for (const e of entries) {
       const pool = e.staking?.pool;
       if (!pool) continue;
-      const ticker = (await knownPool({ wallet, session, local }, network, pool))?.ticker;
+      if (!tickers.has(pool)) tickers.set(pool, (await knownPool({ wallet, session, local }, network, pool))?.ticker);
+      const ticker = tickers.get(pool);
       if (ticker) e.staking = { ...e.staking, ticker };
     }
     return entries;

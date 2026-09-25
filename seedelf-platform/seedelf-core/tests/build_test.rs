@@ -793,7 +793,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
 }
 
 // ---------------------------------------------------------------------------
-// Fund: the Cardano account pays someone's seedelf
+// The Cardano account pays someone's seedelf
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -811,17 +811,22 @@ fn funds_a_seedelf_under_a_fresh_copy_of_its_register() {
         utxo(&w, 1, 0, 3_000_000, tokens),
         utxo(&w, 2, 1, 40_000_000, vec![]),
     ];
-    let built = build::account_fund(
-        &w.params,
-        &available,
-        AccountAmount::Lovelace(10_000_000),
-        &picked,
-        &found,
-        &w.wallet,
-        &w.change,
-        &Staking::none(),
-    )
-    .unwrap();
+    let seedelf = Payee::Seedelf {
+        owner: &found,
+        wallet_addr: &w.wallet,
+    };
+    let fund = |amount, picked: &[(String, String, u64)]| {
+        build::account_send_many(
+            &w.params,
+            &available,
+            &[AccountPay::new(seedelf, amount, picked)],
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+    };
+    let built = fund(AccountAmount::Lovelace(10_000_000), &picked).unwrap();
     // Every contract output is the owner's, valid, and re-randomized.
     let tx = assert_sound(&w, &available, &built);
     assert_eq!(deposits(&w, &tx), (10_000_000, 2), "20 tokens to an output");
@@ -836,36 +841,33 @@ fn funds_a_seedelf_under_a_fresh_copy_of_its_register() {
     assert!(built.change_tokens.items.iter().all(|a| a.amount == 1));
 
     // Max pays everything the account holds, less the fee and the change floor.
-    let max = build::account_fund(
-        &w.params,
-        &available,
-        AccountAmount::Max,
-        &[],
-        &found,
-        &w.wallet,
-        &w.change,
-        &Staking::none(),
-    )
-    .unwrap();
+    let max = fund(AccountAmount::Max, &[]).unwrap();
     let tx = assert_sound(&w, &available, &max);
     assert_eq!(tx.inputs.len(), 2);
     assert_eq!(deposits(&w, &tx).0, max.lovelace);
 }
 
 #[test]
-fn fund_refuses_a_register_that_would_lose_the_money() {
+fn paying_a_seedelf_refuses_a_register_that_would_lose_the_money() {
     let w = world();
     let available = vec![utxo(&w, 1, 0, 20_000_000, vec![])];
     let err = |recipient: &Register, lovelace| {
-        build::account_fund(
+        let seedelf = Payee::Seedelf {
+            owner: recipient,
+            wallet_addr: &w.wallet,
+        };
+        build::account_send_many(
             &w.params,
             &available,
-            AccountAmount::Lovelace(lovelace),
-            &[],
-            recipient,
-            &w.wallet,
+            &[AccountPay::new(
+                seedelf,
+                AccountAmount::Lovelace(lovelace),
+                &[],
+            )],
+            true,
             &w.change,
             &Staking::none(),
+            None,
         )
         .err()
         .map(|e| e.to_string())

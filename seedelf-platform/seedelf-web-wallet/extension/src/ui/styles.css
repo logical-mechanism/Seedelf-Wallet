@@ -40,6 +40,8 @@
   --surface: rgb(255 255 255 / 0.05);
   --surface-2: rgb(255 255 255 / 0.08);
   --surface-hover: rgb(255 255 255 / 0.12);
+  /* Opaque: menus the page shows over other content (suggestions, a select's options) */
+  --menu: #1c222d;
   --border: rgb(255 255 255 / 0.08);
   --border-strong: rgb(255 255 255 / 0.18);
 
@@ -338,6 +340,15 @@ select:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The open list is drawn by the browser: it takes the select's background,
+   and a see-through one lands on white, under white text. The options get
+   the suggestion menu's opaque dark. */
+option,
+optgroup {
+  background: var(--menu);
+  color: var(--text);
 }
 
 input:disabled {
@@ -921,7 +932,7 @@ main {
   list-style: none;
   margin: 0;
   padding: 4px;
-  background: #1c222d;
+  background: var(--menu);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-pop);

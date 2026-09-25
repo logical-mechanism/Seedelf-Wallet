@@ -66,7 +66,9 @@ export const HIDDEN = "••••";
 
 /** Amounts as the overview screens show them: masked while balances are hidden. */
 export function useAmounts() {
-  const hidden = usePreferences().prefs.hideBalances;
+  const { prefs, loaded } = usePreferences();
+  // Masked until the settings are read: a screen can have its balances first, and must not show them if they're hidden.
+  const hidden = !loaded || prefs.hideBalances;
   return useMemo(
     () => ({
       hidden,

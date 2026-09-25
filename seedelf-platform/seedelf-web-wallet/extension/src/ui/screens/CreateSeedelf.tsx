@@ -105,7 +105,7 @@ export function CreateSeedelf({
       title="Create a Seedelf"
       titleId="mint-title"
       onBack={onCancel}
-      aside={`${formatAda(from === "account" ? balances.cardano.lovelace : balances.seedelf.lovelace)} ₳ in your ${SOURCES[from]}`}
+      aside={`${formatAda(from === "account" ? balances.cardano.lovelace : balances.seedelf.lovelace)} ₳ in your ${SOURCES[from].toLowerCase()}`}
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!!problem || busy}>

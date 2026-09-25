@@ -29,6 +29,7 @@ const MAX_LINE_BYTES: usize = 64;
 /// A note: one line of text, at most [`MAX_NOTE_CHARS`] characters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Note {
+    text: String,
     lines: Vec<String>,
 }
 
@@ -48,7 +49,10 @@ impl Note {
         if chars > MAX_NOTE_CHARS {
             bail!("A note is at most {MAX_NOTE_CHARS} characters, not {chars}");
         }
-        Ok(Some(Note { lines: split(text) }))
+        Ok(Some(Note {
+            text: text.to_string(),
+            lines: split(text),
+        }))
     }
 
     /// CIP-20's lines, in order: one, unless the text is over 64 bytes.
@@ -56,9 +60,11 @@ impl Note {
         &self.lines
     }
 
-    /// The text, as wallets show it: the lines joined by spaces.
-    pub fn text(&self) -> String {
-        self.lines.join(" ")
+    /// The text as given, trimmed: what the review shows. Wallets reading it
+    /// from the chain join the lines with spaces, so a line cut between
+    /// characters (no space to cut at) reads there with one.
+    pub fn text(&self) -> &str {
+        &self.text
     }
 
     /// `{674: {"msg": [lines]}}`, as a plain metadata map.

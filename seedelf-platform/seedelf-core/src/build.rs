@@ -383,9 +383,10 @@ pub enum AccountAmount {
 #[derive(Clone, Copy)]
 pub enum Payee<'a> {
     /// Into the wallet contract, under fresh re-randomizations of `owner`:
-    /// the user's base register (a move-in), or the register of someone's
-    /// seedelf ([`account_fund`]). Tokens go `MAXIMUM_TOKENS_PER_UTXO` to an
-    /// output.
+    /// the user's base register (a move-in), or the register of the contract
+    /// UTxO holding someone's seedelf, which must be [`is_payable`]: only its
+    /// owner can spend the payment, and nothing on chain ties it to their
+    /// seedelf. Tokens go `MAXIMUM_TOKENS_PER_UTXO` to an output.
     Seedelf {
         owner: &'a Register,
         wallet_addr: &'a Address,
@@ -529,7 +530,7 @@ pub fn account_send(
 
 /// Send to several: the Cardano account pays each of `recipients`, in the
 /// order given, then the change. Each is a key address on this network or a
-/// Seedelf (see [`account_fund`]), with its own amount and tokens. Max pays a
+/// Seedelf (see [`Payee::Seedelf`]), with its own amount and tokens. Max pays a
 /// single recipient. The UTxOs are chosen, the change made, and `staking`
 /// carried, as for [`move_in`]. A `note` goes on the transaction as CIP-20's
 /// message, which anyone can read; the fee pays for its bytes.
@@ -571,39 +572,6 @@ fn check_register(register: &Register) -> Result<()> {
         );
     }
     Ok(())
-}
-
-/// Fund: the Cardano account pays someone's seedelf, as the CLI's `fund`
-/// does from an address. `recipient` is the register of the contract UTxO
-/// holding that seedelf; the payment goes into the wallet contract under
-/// fresh re-randomizations of it, as a move-in's does under the user's own,
-/// so only its owner can spend it and nothing on chain ties it to their
-/// seedelf. It must be [`is_payable`]. The UTxOs are chosen, the change made,
-/// and `staking` carried, as for [`move_in`].
-#[allow(clippy::too_many_arguments)]
-pub fn account_fund(
-    params: &ProtocolParameters,
-    available: &[UtxoResponse],
-    amount: AccountAmount,
-    picked: &[(String, String, u64)],
-    recipient: &Register,
-    wallet_addr: &Address,
-    change_addr: &Address,
-    staking: &Staking,
-) -> Result<AccountPayment> {
-    check_register(recipient)?;
-    let payee = Payee::Seedelf {
-        owner: recipient,
-        wallet_addr,
-    };
-    account_payment(
-        params,
-        available,
-        &[AccountPay::new(payee, amount, picked)],
-        Patches::staking(staking),
-        change_addr,
-        SEND_SHORT,
-    )
 }
 
 /// A staking transaction from the Cardano account: `staking`'s certificates

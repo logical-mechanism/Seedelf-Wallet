@@ -1534,11 +1534,18 @@ test("settings: the wallet opens in a tab until the side panel is chosen, and Ch
   expect(await kept()).toEqual({ "seedelf.openIn": "panel" });
   await snap(panel, "settings-open-in");
 
-  // Back to a tab, from the side panel: the wallet opens in one at once.
-  const [tab] = await Promise.all([context.waitForEvent("page"), choice.getByRole("button", { name: "A full tab" }).click()]);
-  await expect(tab).toHaveURL(`${await appUrl(context)}?view=tab`);
+  // Back to a tab, from the side panel: the wallet's tab already open comes
+  // back, as the toolbar button brings it, and no second one opens.
+  await Promise.all([panel.waitForEvent("close"), choice.getByRole("button", { name: "A full tab" }).click()]);
   await expect.poll(behavior).toMatchObject({ openPanelOnActionClick: false });
   expect(await kept()).toEqual({ "seedelf.openIn": "tab" });
+  expect(context.pages().filter((p) => p.url().includes("view=tab"))).toEqual([page]);
+
+  // With none open, it opens one.
+  const again = await openApp(context, "panel");
+  await page.close();
+  const [tab] = await Promise.all([context.waitForEvent("page"), again.getByRole("button", { name: "Open in tab" }).click()]);
+  await expect(tab).toHaveURL(`${await appUrl(context)}?view=tab`);
 
   // ADA's value: mainnet only, so a preprod wallet asks no one.
   await tab.getByRole("button", { name: "Settings" }).click();
@@ -1593,6 +1600,13 @@ test("settings: how long it stays unlocked, and a check of the written phrase", 
 
   const lockAfter = page.getByLabel("Lock after");
   await expect(lockAfter).toHaveValue("15");
+  // The open list is readable: an opaque dark behind the white text, not the
+  // select's see-through surface, which the browser lays on white.
+  await expect(lockAfter.locator("option").first()).toHaveCSS("background-color", "rgb(28, 34, 45)");
+  await expect(page.getByLabel("Show ADA's value in").locator("option").first()).toHaveCSS(
+    "background-color",
+    "rgb(28, 34, 45)",
+  );
   await lockAfter.selectOption("5");
   await expect
     .poll(() => page.evaluate(() => chrome.storage.local.get("seedelf.preferences")))

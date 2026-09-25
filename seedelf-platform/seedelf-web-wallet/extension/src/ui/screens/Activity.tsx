@@ -217,7 +217,7 @@ export function Activity({
           <ReviewRows testId="activity-details">
             <Row label="Amount" value={amount(open, amounts.ada)} strong />
             {open.assets?.map((t) => (
-              <Row key={`${t.policyId}.${t.assetName}`} label="" value={amounts.hidden ? "••••" : tokenMoved(network, t)} />
+              <Row key={`${t.policyId}.${t.assetName}`} label="" value={amounts.text(tokenMoved(network, t))} />
             ))}
             {open.fee && <Row label="Network fee" value={`${formatAda(open.fee)} ₳`} />}
             {open.detail && <Row label={open.kind === "withdraw" || open.kind === "transfer" ? "To" : "Seedelf"} value={open.detail} />}

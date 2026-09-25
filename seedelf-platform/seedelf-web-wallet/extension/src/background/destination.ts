@@ -53,3 +53,26 @@ export async function resolveDestination(
   const own = await wallet.withKeys((keys) => keys.cardano.isOwnAddress(address));
   return handle ? { address, handle, own } : { address, own };
 }
+
+/**
+ * `resolveDestination` for one payment's recipients: each looked up once,
+ * however many times it's paid (a handle is a Koios request). They're asked
+ * one after another, which Koios's public tier prefers to a burst.
+ */
+export function destinationResolver(
+  deps: DestinationDeps,
+  network: NetworkName,
+): (to: string) => Promise<WithdrawDestination> {
+  const found = new Map<string, Promise<WithdrawDestination>>();
+  return (to) => {
+    const text = to.trim();
+    // A handle's case doesn't matter; an address's does.
+    const key = text.startsWith("$") ? text.toLowerCase() : text;
+    let destination = found.get(key);
+    if (!destination) {
+      destination = resolveDestination(deps, network, text);
+      found.set(key, destination);
+    }
+    return destination;
+  };
+}

@@ -28,7 +28,7 @@ import { nothingInAccount, readAccount } from "./account";
 import { seedelfLabel } from "./chain";
 import { COLLATERAL_LOVELACE } from "./coin-control";
 import { readContractView, type ContractView } from "./contract-scan";
-import { resolveDestination } from "./destination";
+import { destinationResolver } from "./destination";
 import type { KoiosUtxo } from "./koios";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
 import { holdsOwn, seedelfUtxo } from "./transfer";
@@ -59,10 +59,11 @@ export class SendService {
     const names = payments.map((p) => seedelfName(p.to));
     // Every seedelf among them is found in one reading of the contract.
     const view = names.some(Boolean) ? await readContractView(this.deps, network) : undefined;
+    const resolve = destinationResolver(this.deps, network);
     const destinations: Destination[] = [];
     for (const [i, p] of payments.entries()) {
       const name = names[i];
-      destinations.push(name ? seedelf(view!, network, name) : await resolveDestination(this.deps, network, p.to));
+      destinations.push(name ? seedelf(view!, network, name) : await resolve(p.to));
     }
     return this.pay(network, destinations, payments, SESSION_SEND, note);
   }

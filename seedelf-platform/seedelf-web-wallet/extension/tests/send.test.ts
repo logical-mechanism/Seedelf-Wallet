@@ -136,15 +136,17 @@ describe("send", () => {
       { to: THEIRS, lovelace: "3000000", tokens: [{ ...TUSDM, quantity: "1000" }] },
       { to: "$bob", lovelace: "0", tokens: [{ ...TUSDM, quantity: "2000" }] },
       { to: SEEDELF, lovelace: "4000000", tokens: [] },
+      { to: " $Bob", lovelace: "2000000", tokens: [] },
     ]);
     expect(summary.max).toBe(false);
     expect(summary.payments).toMatchObject([
       { address: THEIRS, lovelace: "3000000", tokens: [{ ...TUSDM, quantity: "1000" }] },
       { address: THEIRS, handle: "bob", tokens: [{ ...TUSDM, quantity: "2000" }] },
       { seedelf: { name: SEEDELF, label: "This is a test." }, lovelace: "4000000", tokens: [] },
+      { address: THEIRS, handle: "bob", lovelace: "2000000", tokens: [] },
     ]);
     expect(summary.payments[1]!.lovelace).toBe(summary.payments[1]!.minimum);
-    // One reading of the account, one of the contract, and the handle.
+    // One reading of the account, one of the contract, and the handle, once though it's paid twice.
     expect(t.koios.calls.map((c) => c.path).sort()).toEqual([
       "account_addresses",
       "account_info",
