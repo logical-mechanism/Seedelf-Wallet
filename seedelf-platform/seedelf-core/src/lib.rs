@@ -4,6 +4,7 @@ pub mod build;
 pub mod constants;
 pub mod data_structures;
 pub mod eval;
+pub mod lovejoin;
 pub mod note;
 pub mod references;
 pub mod staking;

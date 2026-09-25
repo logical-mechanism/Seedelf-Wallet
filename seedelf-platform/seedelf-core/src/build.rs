@@ -1020,6 +1020,44 @@ impl Budgets {
     pub fn withdraw(&self, index: u64) -> Option<Budget> {
         self.withdraw.get(&index).copied()
     }
+
+    /// Every budget raised by `percent`, rounded up: what to declare when the
+    /// transaction measured will change a little before it's sent (a proof
+    /// bound to the fee costs a hair more or less each time it's made).
+    pub fn with_margin(&self, percent: u64) -> Self {
+        let raise = |m: &BTreeMap<u64, Budget>| {
+            m.iter()
+                .map(|(i, b)| {
+                    let up = |x: u64| x + (x * percent).div_ceil(100);
+                    (
+                        *i,
+                        Budget {
+                            mem: up(b.mem),
+                            steps: up(b.steps),
+                        },
+                    )
+                })
+                .collect()
+        };
+        Budgets {
+            spend: raise(&self.spend),
+            mint: raise(&self.mint),
+            withdraw: raise(&self.withdraw),
+        }
+    }
+
+    /// Whether every budget here is at least `used`'s, redeemer by redeemer.
+    pub fn covers(&self, used: &Budgets) -> bool {
+        let within = |ours: &BTreeMap<u64, Budget>, theirs: &BTreeMap<u64, Budget>| {
+            theirs.iter().all(|(i, b)| {
+                ours.get(i)
+                    .is_some_and(|o| o.mem >= b.mem && o.steps >= b.steps)
+            })
+        };
+        within(&self.spend, &used.spend)
+            && within(&self.mint, &used.mint)
+            && within(&self.withdraw, &used.withdraw)
+    }
 }
 
 /// Ogmios's `error` object in plain words. Script failures name the script
