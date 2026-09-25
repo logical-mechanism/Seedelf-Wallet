@@ -360,6 +360,11 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 - **A chain that fails partway still isn't rebuilt from where it stopped.** Once a deposit is recorded, the session's next return comes back directly rather than deposit again.
 - **The tile's count is capped at 10 boxes,** and the pool must hold `2 × mixes` other boxes for each.
 
+**Found in the user's first run on preprod (2026-09-25):**
+
+- A 3-box mix from the private balance went through, return included.
+- **Bring one back now failed with `InsufficientCollateral (DeltaCoin 434416) (Coin 434417)`.** The withdraw's fee was odd (289,611), and giveme.my's collateral return, 5 ₳ − 3/2 × fee rounded down, left half a lovelace less than the ledger's 150%, which it rounds up. The withdraw's fee is now rounded up to even, as every Seedelf spend's is. `lovejoin_test` checks the ledger's rule on a mix and on seven withdraws; on the old code it fails with those exact numbers. Mixes were never affected: their collateral return adds 1.
+
 **Not done yet:**
 
 1. **A live preprod run** (on the user's go-ahead):

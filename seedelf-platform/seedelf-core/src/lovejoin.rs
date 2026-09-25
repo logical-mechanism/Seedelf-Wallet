@@ -22,7 +22,7 @@
 
 use crate::address::{collateral_address, wallet_contract};
 use crate::build::{
-    Budget, Budgets, DRAFT_BUDGET, MAX_TX_BUDGET, collateral_output, fake_signer, linear_fee,
+    Budget, Budgets, DRAFT_BUDGET, MAX_TX_BUDGET, collateral_output, even, fake_signer, linear_fee,
     settle_fee,
 };
 use crate::constants::{COLLATERAL_HASH, VARIANT, get_config};
@@ -836,7 +836,10 @@ pub fn withdraw(
                         register: destination,
                     });
                 }
-                fee = needed;
+                // Even, so giveme.my's collateral return (5 ₳ − 3/2 × fee) is
+                // whole: an odd fee left it half a lovelace short of what the
+                // ledger asks, which it rounds up (InsufficientCollateral).
+                fee = even(needed);
             }
             _ => declared = Some(measured.with_margin(1)),
         }

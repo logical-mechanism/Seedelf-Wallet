@@ -112,6 +112,20 @@ fn payer(fee: u64) -> Payer {
     }
 }
 
+/// The ledger's collateral rule: what the collateral puts up (its `lovelace`
+/// less the collateral return) is at least 150% of the fee, rounded up.
+fn collateral_is_enough(tx_cbor: &[u8], lovelace: u64) {
+    let tx = MultiEraTx::decode(tx_cbor).unwrap();
+    let fee = tx.fee().unwrap();
+    let back = tx.collateral_return().unwrap().value().coin();
+    assert!(
+        lovelace - back >= (fee * 3).div_ceil(2),
+        "fee {fee}: {} put up, {} needed",
+        lovelace - back,
+        (fee * 3).div_ceil(2)
+    );
+}
+
 #[test]
 fn the_owner_context_is_the_ledgers() {
     // The recorded withdraw's own proofs verify against the context read from
@@ -276,6 +290,7 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
         signers: 1,
     };
     let mix = lovejoin::mix(&params, &protocol, &boxes, &payer).unwrap();
+    collateral_is_enough(&mix.tx.tx_bytes.0, 5_000_000);
     let ours: Vec<&PoolBox> = mix.outputs.iter().filter(|b| b.is_owned(&sk)).collect();
     assert_eq!(ours.len(), 1, "exactly one output is still ours");
     assert_eq!(mix.outputs[mix.moved_to[2]], *ours[0]);
@@ -297,10 +312,29 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
         .find(|b| b.is_owned(&sk))
         .unwrap()
         .clone();
-    let destination = owner.rerandomize().unwrap();
+    let destination = owner.clone().rerandomize().unwrap();
     let withdraw =
         lovejoin::withdraw(&params, &protocol, &[ours], &sk, destination.clone()).unwrap();
     assert_eq!(withdraw.lovelace, protocol.denom - withdraw.fee);
+    // giveme.my's 5 ₳ covers it as the ledger counts, and every one of several draws does.
+    collateral_is_enough(&withdraw.tx.tx_bytes.0, 5_000_000);
+    for _ in 0..6 {
+        let again = lovejoin::withdraw(
+            &params,
+            &protocol,
+            &[second
+                .outputs
+                .iter()
+                .find(|b| b.is_owned(&sk))
+                .unwrap()
+                .clone()],
+            &sk,
+            owner.clone().rerandomize().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(again.fee % 2, 0, "an even fee, so 3/2 of it is whole");
+        collateral_is_enough(&again.tx.tx_bytes.0, 5_000_000);
+    }
     assert!(
         (200_000..600_000).contains(&withdraw.fee),
         "fee {}",
