@@ -144,7 +144,7 @@ describe("transfer", () => {
     expect(t.koios.calls.map((c) => c.path)).not.toContain("ogmios");
 
     const empty = await unlocked({ owned: false });
-    await expect(empty.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow("Your Seedelf balance is empty");
+    await expect(empty.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow("Your private balance is empty");
     expect(empty.koios.calls.map((c) => c.path)).not.toContain("ogmios");
 
     await t.wallet.lock();
@@ -186,7 +186,7 @@ describe("transfer", () => {
 
   it("refuses to send anything but the reviewed transaction", async () => {
     const t = await unlocked();
-    await expect(t.transfer.submit("preprod", "00".repeat(32))).rejects.toThrow("That transfer isn't ready to send");
+    await expect(t.transfer.submit("preprod", "00".repeat(32))).rejects.toThrow("That payment isn't ready to send");
     const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
     await expect(t.transfer.submit("preprod", "11".repeat(32))).rejects.toThrow("isn't ready to send");
     await expect(t.transfer.submit("mainnet", summary.txHash)).rejects.toThrow("isn't ready to send");

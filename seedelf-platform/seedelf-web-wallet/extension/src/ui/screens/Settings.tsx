@@ -107,7 +107,7 @@ function SpendRewards() {
           <span className="note" id="spend-rewards-note">
             {prefs?.spendRewards === false
               ? "Rewards wait until you withdraw them on the Staking page."
-              : "A send, a move-in or a Seedelf paid by your Cardano account withdraws the rewards too."}
+              : "Anything your public account pays (a send, making money private, a Seedelf) withdraws the rewards too."}
           </span>
         </span>
         <button

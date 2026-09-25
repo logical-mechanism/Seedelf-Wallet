@@ -226,7 +226,7 @@ export class StakingService {
     const { wasm, wallet } = this.deps;
     const { params, utxos, held, stake } = await readAccount(this.deps, network, { stake: true });
     if (utxos.length === 0) {
-      throw nothingInAccount(held, "Your Cardano account is empty. Staking needs ADA for the fee, and a 2 ₳ deposit the first time.");
+      throw nothingInAccount(held, "Your public account is empty. Staking needs ADA for the fee, and a 2 ₳ deposit the first time.");
     }
     const state = stakeInfoOf(stake, null);
     if (action.kind === "delegate" && state.registered && stake?.delegated_pool === wasm.poolId(action.pool)) {

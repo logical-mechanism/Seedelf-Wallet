@@ -18,7 +18,7 @@ import { Screen } from "../components/Screen";
 import { adaWithTokens, formatAda, shortHex } from "../format";
 import { WithdrawalRow } from "./CardanoSend";
 
-const SOURCES: Record<MintSource, string> = { account: "Cardano account", seedelf: "Seedelf balance" };
+const SOURCES: Record<MintSource, string> = { account: "Public account", seedelf: "Private balance" };
 
 export function CreateSeedelf({
   balances,
@@ -86,7 +86,7 @@ export function CreateSeedelf({
           <Row label="Locked with it" value={`${formatAda(summary.lovelace)} ₳`} />
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
           <WithdrawalRow withdrawal={summary.withdrawal} />
-          <Row label={`Back to your ${SOURCES[summary.from]}`} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          <Row label={`Back to your ${SOURCES[summary.from].toLowerCase()}`} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
         </ReviewRows>
         <p className="note">
           {summary.from === "seedelf"
@@ -162,8 +162,8 @@ export function CreateSeedelf({
       />
       <Callout tone="privacy" testId="mint-from-note">
         {from === "account"
-          ? "The Seedelf is linked to your Cardano account openly. Money you move in afterwards isn't tied to it: a move-in looks the same as paying anyone's Seedelf. So create your Seedelf before moving money in."
-          : "A stealth mint. It only keeps the Seedelf apart from your Cardano account when your Seedelf balance came from other people's Seedelf payments. Money you moved in yourself can be traced back to the account."}
+          ? "The Seedelf is linked to your public account openly. Money you make private afterwards isn't tied to it: making money private looks the same as paying anyone's Seedelf. So create your Seedelf before making money private."
+          : "A stealth mint. It only keeps the Seedelf apart from your public account when your private balance came from other people's Seedelf payments. Money you made private yourself can be traced back to the account."}
       </Callout>
       <p className="note">
         About 1.75 ₳ stays locked with the Seedelf, and the network fee is about 0.25 ₳. The review shows the exact

@@ -28,21 +28,21 @@ import { useNetwork } from "../network";
 
 type Of = "seedelf" | "cardano";
 
-/** What an entry is called, on this balance's side. */
-function title(e: ActivityEntry, of: Of): string {
+/** What an entry is called. */
+function title(e: ActivityEntry): string {
   switch (e.kind) {
     case "received":
       return "Received";
     case "sent":
       return "Sent";
     case "move-in":
-      return of === "seedelf" ? "Moved in" : "Moved into Seedelf";
+      return "Made private";
     case "mint":
       return "Created a Seedelf";
     case "transfer":
       return "Sent to a Seedelf";
     case "withdraw":
-      return of === "seedelf" ? "Withdrew" : "Withdrawn from Seedelf";
+      return "Made public";
     case "remove":
       return "Removed a Seedelf";
     case "send":
@@ -149,7 +149,7 @@ export function Activity({
 
   return (
     <Screen
-      title={of === "seedelf" ? "Seedelf activity" : "Cardano account activity"}
+      title={of === "seedelf" ? "Private activity" : "Public activity"}
       titleId="activity-title"
       onBack={onBack}
       error={error}
@@ -176,7 +176,7 @@ export function Activity({
                   <li key={e.txHash}>
                     <button type="button" className="token-row" onClick={() => setOpen(e)}>
                       <span className={`avatar activity__icon activity__icon--${e.direction}`}>{icon(e)}</span>
-                      <span className="token-row__label">{title(e, of)}</span>
+                      <span className="token-row__label">{title(e)}</span>
                       <span className={`token-row__amount activity__amount--${e.direction}`}>{amount(e)}</span>
                       <span className="token-row__sub">
                         {e.txHash === pendingHash ? "Pending · " : ""}
@@ -196,7 +196,7 @@ export function Activity({
         </button>
       )}
       {open && (
-        <Modal title={title(open, of)} titleId="activity-details-title" onClose={() => setOpen(undefined)}>
+        <Modal title={title(open)} titleId="activity-details-title" onClose={() => setOpen(undefined)}>
           <ReviewRows testId="activity-details">
             <Row label="Amount" value={amount(open)} strong />
             {open.fee && <Row label="Network fee" value={`${formatAda(open.fee)} ₳`} />}

@@ -199,7 +199,7 @@ export function ContactsPage({ contacts, onChange }: { contacts: Contact[] | und
         </section>
       ) : (
         <Callout tone="info">
-          No contacts yet. Save a Seedelf or an address you pay often, then pick it in Send or Withdraw.
+          No contacts yet. Save a Seedelf or an address you pay often, then pick it in Send or Make public.
         </Callout>
       )}
       <button type="button" className="secondary" onClick={() => setEditing("new")}>

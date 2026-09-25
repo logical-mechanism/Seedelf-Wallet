@@ -148,13 +148,13 @@ describe("withdraw", () => {
     await expect(t.withdraw.build("preprod", [{ to: "nope", lovelace: "5000000", tokens: [] }])).rejects.toThrow("isn't a Cardano address");
     expect(t.koios.calls.map((c) => c.path)).not.toContain("ogmios");
     const empty = await unlocked({ owned: false });
-    await expect(empty.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Your Seedelf balance is empty");
+    await expect(empty.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Your private balance is empty");
   });
 
   it("submits exactly the signed transaction, and refuses anything else", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.amount.evaluation;
-    await expect(t.withdraw.submit("preprod", "00".repeat(32))).rejects.toThrow("That withdrawal isn't ready to send");
+    await expect(t.withdraw.submit("preprod", "00".repeat(32))).rejects.toThrow("That payment isn't ready to send");
     const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: TUSDM }]);
     // giveme.my's recorded refusal: nothing is sent, and Send can be tried again.
     await expect(t.withdraw.submit("preprod", summary.txHash)).rejects.toThrow("Transaction Fails Validation");

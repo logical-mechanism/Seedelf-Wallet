@@ -2,6 +2,8 @@
 
 The protocol-level analysis lives in the root [README](../../../README.md#what-is-a-stealth-wallet): stealth addresses, re-randomization, and the known de-anonymizing attacks. This doc covers what the web wallet has to do on top of that.
 
+The screens call the Seedelf balance the **private balance** and the Cardano account the **public account**; *Make private* is a move-in and *Make public* a withdrawal ([flows.md](flows.md), *Names*). This doc keeps the older names.
+
 ## What is hidden and what isn't
 
 **Hidden:**

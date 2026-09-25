@@ -60,7 +60,7 @@ export class MoveInService {
   async build(network: NetworkName, lovelace: string | null, tokens: TokenQuantity[]): Promise<MoveInSummary> {
     const { wasm, wallet, session, now } = this.deps;
     const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
-    if (utxos.length === 0) throw nothingInAccount(held, "Your Cardano account is empty, so there's nothing to move in.");
+    if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to make private.");
 
     return wallet.withKeys(async (keys) => {
       const request = { network, params, utxos, lovelace, tokens, withdrawal };
@@ -76,10 +76,10 @@ export class MoveInService {
     const { wallet, session, now } = this.deps;
     const built = await wallet.withKeys(() => session.get<Built>(SESSION_BUILT));
     if (!built || built.txHash !== txHash || built.network !== network) {
-      throw new Error("That move-in isn't ready to send. Review it again.");
+      throw new Error("That payment isn't ready to send. Review it again.");
     }
     if (now() - built.builtAt > BUILT_TTL_MS) {
-      throw new Error("That move-in was built more than 10 minutes ago. Review it again.");
+      throw new Error("That payment was built more than 10 minutes ago. Review it again.");
     }
     const bytes = Uint8Array.from(built.txCbor.match(/../g)!, (h) => Number.parseInt(h, 16));
     const submitted = await this.deps.koios(network).submitTx(bytes);

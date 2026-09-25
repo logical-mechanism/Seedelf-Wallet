@@ -109,10 +109,10 @@ test("the Web Store listing's images", async ({ context }) => {
   shots.push([
     await shoot(),
     "Private money on Cardano",
-    "Your Seedelf balance sits in UTxOs that don't say who owns them.",
+    "Your private balance sits in UTxOs that don't say who owns them.",
   ]);
 
-  await popup.getByRole("button", { name: "Send to a Seedelf" }).click();
+  await popup.getByRole("button", { name: "Send privately" }).click();
   await popup.getByLabel("Seedelf name").fill(transferPreprod.to);
   await expect(popup.getByTestId("transfer-to-note")).toContainText("Found: This is a test.");
   await popup.getByLabel("Amount", { exact: true }).fill("5");
@@ -133,14 +133,14 @@ test("the Web Store listing's images", async ({ context }) => {
   ]);
   await back();
 
-  await popup.getByRole("button", { name: "Withdraw" }).click();
+  await popup.getByRole("button", { name: "Make public" }).click();
   await popup.getByLabel("To", { exact: true }).fill(vector(12).preprod.receive_0);
-  await expect(popup.getByTestId("withdraw-own")).toContainText("This is your own Cardano account");
+  await expect(popup.getByTestId("withdraw-own")).toContainText("This is your own public account");
   await popup.getByLabel("Amount", { exact: true }).fill("10");
   shots.push([
     await shoot(),
     "It says what links",
-    "Withdraw to any address or $handle. The wallet warns you before a move ties your accounts together.",
+    "Make money public to any address or $handle. The wallet warns you before a payment ties your accounts together.",
   ]);
   await back();
 

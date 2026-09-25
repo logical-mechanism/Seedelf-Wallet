@@ -1,4 +1,5 @@
-// Send to a seedelf: pay seedelfs from the Seedelf balance, up to 20 at once.
+// Send, on the private side: pay seedelfs from the private (Seedelf) balance,
+// up to 20 at once.
 // Each recipient is pasted by full name (tags aren't unique), looked up in the
 // wallet contract, and shown before anything is built. With tokens, an amount
 // may stay empty: only the ADA they need goes. The worker builds the
@@ -53,7 +54,7 @@ export function Transfer({
   // The builder decides exactly (fee, change); this catches the obvious case early.
   const tooMuch = amounts.total > BigInt(seedelf.lovelace);
   const ready = list.drafts.every((d) => foundOf(d.id).state === "found") && amounts.ok && !tooMuch;
-  const available = seedelf.locked.utxos ? "available" : "in your Seedelf balance";
+  const available = seedelf.locked.utxos ? "available" : "in your private balance";
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -111,7 +112,7 @@ export function Transfer({
     };
     return (
       <Screen
-        title="Review the transfer"
+        title="Review the payment"
         titleId="transfer-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
@@ -125,8 +126,8 @@ export function Transfer({
       >
         <ReviewRecipients testId="transfer-review" payments={summary.payments} rows={recipientRows}>
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-          <Row label="Back to your Seedelf balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
-          <Row label="Seedelf UTxOs spent" value={String(summary.inputs)} />
+          <Row label="Back to your private balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          <Row label="Private UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
         {summary.payments.map((p, i) => (
           <MinimumNote
@@ -141,7 +142,7 @@ export function Transfer({
         {summary.payments.some((p) => p.toSelf) && (
           <Callout tone="warn" testId="transfer-to-self">
             {several ? "One of these Seedelfs is yours: its payment comes" : "This Seedelf is yours: the payment comes"} back
-            to your Seedelf balance, less the fee.
+            to your private balance, less the fee.
           </Callout>
         )}
         <p className="note">
@@ -156,13 +157,13 @@ export function Transfer({
   return (
     <Screen
       onSubmit={review}
-      title="Send to a Seedelf"
+      title="Send"
       titleId="transfer-title"
       onBack={onCancel}
       aside={
         seedelf.locked.utxos
           ? `${formatAda(seedelf.lovelace)} ₳ available${lockedAside(seedelf)}`
-          : `${formatAda(seedelf.lovelace)} ₳ in your Seedelf balance`
+          : `${formatAda(seedelf.lovelace)} ₳ in your private balance`
       }
       error={error}
       foot={
@@ -210,13 +211,13 @@ export function Transfer({
               />
               {!list.several && tooMuch && (
                 <p className="field-note" data-testid="transfer-too-much">
-                  That's more than the {formatAda(seedelf.lovelace)} ₳ in your Seedelf balance.
+                  That's more than the {formatAda(seedelf.lovelace)} ₳ in your private balance.
                 </p>
               )}
             </div>
             {withTokens && <MinimumHint />}
             <RoundNote warn={!!lovelace && lovelace !== "0" && !round}>
-              Round amounts, like 100 ₳, are harder to match to the move-in that paid for them.
+              Round amounts, like 100 ₳, are harder to match to the payment that made them private.
             </RoundNote>
 
             <TokenAmounts
@@ -233,7 +234,7 @@ export function Transfer({
       )}
 
       <Callout tone="privacy">
-        Sending right after moving in is easy to match by timing: the move-in and the payment sit close together on chain.
+        Sending right after making money private is easy to match by timing: the two sit close together on chain.
       </Callout>
     </Screen>
   );

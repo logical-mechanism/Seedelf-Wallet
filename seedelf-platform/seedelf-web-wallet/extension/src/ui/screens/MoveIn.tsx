@@ -75,7 +75,7 @@ export function MoveIn({
   if (summary) {
     return (
       <Screen
-        title="Review the move"
+        title="Review making it private"
         titleId="move-in-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
@@ -88,7 +88,7 @@ export function MoveIn({
         }
       >
         <ReviewRows testId="move-in-review">
-          <Row label="Into Seedelf" value={`${formatAda(summary.lovelace)} ₳`} strong />
+          <Row label="Into your private balance" value={`${formatAda(summary.lovelace)} ₳`} strong />
           {summary.tokens.map((t) => {
             const known = cardano.tokens.find((c) => key(c) === key(t));
             return (
@@ -101,8 +101,8 @@ export function MoveIn({
           })}
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
           <WithdrawalRow withdrawal={summary.withdrawal} />
-          <Row label="Back to your Cardano account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
-          <Row label="New Seedelf UTxOs" value={String(summary.depositOutputs)} />
+          <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          <Row label="New private UTxOs" value={String(summary.depositOutputs)} />
         </ReviewRows>
         <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
         <p className="note">
@@ -116,7 +116,7 @@ export function MoveIn({
   return (
     <Screen
       onSubmit={review}
-      title="Move in"
+      title="Make private"
       titleId="move-in-title"
       onBack={onCancel}
       aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
@@ -127,7 +127,7 @@ export function MoveIn({
         </button>
       }
     >
-      <p className="note">Move ADA, and any amount of your tokens, from your Cardano account into your Seedelf balance.</p>
+      <p className="note">Move ADA, and any amount of your tokens, from your public account into your private balance.</p>
 
       <div className="field">
         <label htmlFor="move-in-amount">Amount</label>
@@ -145,7 +145,7 @@ export function MoveIn({
         </AdaInput>
         {tooMuch && (
           <p className="field-note" data-testid="move-in-too-much">
-            That's more than the {formatAda(cardano.lovelace)} ₳ available in your Cardano account.
+            That's more than the {formatAda(cardano.lovelace)} ₳ available in your public account.
           </p>
         )}
       </div>
@@ -158,7 +158,7 @@ export function MoveIn({
         <>
           {withTokens && <MinimumHint />}
           <RoundNote warn={!!lovelace && lovelace !== "0" && !round}>
-            Round amounts, like 100 ₳, are harder to match to a later withdrawal.
+            Round amounts, like 100 ₳, are harder to match to a later payment out.
           </RoundNote>
         </>
       )}
@@ -170,7 +170,9 @@ export function MoveIn({
         legend="Bring tokens along (optional)"
       />
 
-      <Callout tone="privacy">Moving in links your Cardano account to the new Seedelf UTxOs, but not to any Seedelf name.</Callout>
+      <Callout tone="privacy">
+        Making money private links your public account to the new private UTxOs, but not to any Seedelf name.
+      </Callout>
     </Screen>
   );
 }

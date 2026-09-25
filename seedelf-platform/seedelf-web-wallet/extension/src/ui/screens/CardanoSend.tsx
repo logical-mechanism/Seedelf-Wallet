@@ -130,7 +130,7 @@ export function CardanoSend({
         <ReviewRecipients testId="send-review" payments={summary.payments} rows={recipientRows}>
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
           <WithdrawalRow withdrawal={summary.withdrawal} />
-          <Row label="Back to your Cardano account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
         {summary.payments.map((p, i) => (
@@ -209,7 +209,7 @@ export function CardanoSend({
               </AdaInput>
               {!list.several && tooMuch && (
                 <p className="field-note" data-testid="send-too-much">
-                  That's more than the {formatAda(cardano.lovelace)} ₳ available in your Cardano account.
+                  That's more than the {formatAda(cardano.lovelace)} ₳ available in your public account.
                 </p>
               )}
             </div>
@@ -242,16 +242,15 @@ export function CardanoSend({
           total={amounts.total}
           available={cardano.lovelace}
           testId="send-too-much"
-          where="available in your Cardano account"
+          where="available in your public account"
         />
       )}
 
       <Callout tone="privacy">
         {toSeedelf
-          ? "This pays from your Cardano account in the open: anyone can see it came from you and went into Seedelf, though not whose Seedelf it is."
-          : "This pays from your Cardano account in the open: anyone can see it came from you."}
-        {list.several && " Paying several at once also shows they were paid together."} To pay without that link, move
-        the money into Seedelf and send it from there.
+          ? "This pays from your public account in the open: anyone can see it came from you and went to a private balance, though not whose."
+          : "This pays from your public account in the open: anyone can see it came from you."}
+        {list.several && " Paying several at once also shows they were paid together."} To pay without that link, make the money private and send it from there.
       </Callout>
     </Screen>
   );
@@ -287,7 +286,7 @@ export function WithdrawalRow({ withdrawal }: { withdrawal?: string }) {
 function OwnNote() {
   return (
     <Callout tone="warn" testId="send-own">
-      This is your own Cardano account: the payment comes back to it, less the fee.
+      This is your own public account: the payment comes back to it, less the fee.
     </Callout>
   );
 }

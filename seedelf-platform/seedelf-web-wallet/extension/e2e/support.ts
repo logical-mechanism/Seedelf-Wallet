@@ -263,12 +263,12 @@ export async function addTokens(page: Page, names?: string[], within: Page | Loc
   await expect(picker).toHaveCount(0);
 }
 
-/** Home's Cardano account tab. */
+/** Home's Public tab (the Cardano account). */
 export async function cardanoTab(page: Page) {
-  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
+  await page.getByRole("tab", { name: "Public", exact: true }).click();
 }
 
-/** Home → Cardano account → Receive: the receive and stake addresses. */
+/** Home → Public → Receive: the receive and stake addresses. */
 export async function openReceive(page: Page) {
   await cardanoTab(page);
   await page.getByRole("button", { name: "Receive" }).click();

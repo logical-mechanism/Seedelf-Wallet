@@ -73,8 +73,7 @@ export function Restore({ onBack, onDone }: { onBack: () => void; onDone: (s: St
       }
     >
       <p className="note">
-        Enter your recovery phrase. A phrase from Lace, Eternl or Yoroi also works: its first account becomes this
-        wallet's Cardano account.
+        Enter your recovery phrase. A phrase from Lace, Eternl or Yoroi also works: its first account becomes this wallet's public account.
       </p>
       <div className="segmented" role="radiogroup" aria-label="Number of words">
         {WORD_COUNTS.map((n) => (

@@ -57,7 +57,7 @@ export function Withdraw({
   // The builder decides exactly (fee, change); this catches the obvious case early.
   const tooMuch = !maxed && amounts.total > BigInt(seedelf.lovelace);
   const ready = list.drafts.every((d) => readOf(d).state === "read") && amounts.ok && !tooMuch;
-  const available = seedelf.locked.utxos ? "available" : "in your Seedelf balance";
+  const available = seedelf.locked.utxos ? "available" : "in your private balance";
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -110,7 +110,7 @@ export function Withdraw({
     };
     return (
       <Screen
-        title="Review the withdrawal"
+        title="Review the payment"
         titleId="withdraw-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
@@ -125,9 +125,9 @@ export function Withdraw({
         <ReviewRecipients testId="withdraw-review" payments={summary.payments} rows={recipientRows}>
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
           {!summary.max && (
-            <Row label="Back to your Seedelf balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+            <Row label="Back to your private balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           )}
-          <Row label="Seedelf UTxOs spent" value={String(summary.inputs)} />
+          <Row label="Private UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
         {summary.payments.map((p, i) => (
           <MinimumNote
@@ -141,7 +141,7 @@ export function Withdraw({
         ))}
         {summary.left > 0 && (
           <p className="note" data-testid="withdraw-left">
-            {plural(summary.left, "Seedelf UTxO")} stay for another withdrawal: a transaction fits 20 at most.
+            {plural(summary.left, "private UTxO")} stay for another payment: a transaction fits 20 at most.
           </p>
         )}
         {summary.payments.some((p) => p.own) && <OwnWarning />}
@@ -155,13 +155,13 @@ export function Withdraw({
   return (
     <Screen
       onSubmit={review}
-      title="Withdraw"
+      title="Make public"
       titleId="withdraw-title"
       onBack={onCancel}
       aside={
         seedelf.locked.utxos
           ? `${formatAda(seedelf.lovelace)} ₳ available${lockedAside(seedelf)}`
-          : `${formatAda(seedelf.lovelace)} ₳ in your Seedelf balance`
+          : `${formatAda(seedelf.lovelace)} ₳ in your private balance`
       }
       error={error}
       foot={
@@ -220,14 +220,14 @@ export function Withdraw({
             </div>
             {maxed ? (
               <p className="note" data-testid="withdraw-max-note">
-                Everything in your Seedelf balance, up to 20 UTxOs at once, with every token, less the fee. Spending them
+                Everything in your private balance, up to 20 UTxOs at once, with every token, less the fee. Spending them
                 together ties them to each other.{seedelf.locked.utxos ? " UTxOs you locked stay put." : ""}
               </p>
             ) : (
               <>
                 {withTokens && <MinimumHint />}
                 <RoundNote warn={!!lovelace && lovelace !== "0" && !round}>
-                  Round amounts, like 100 ₳, are harder to match to the move-in that paid for them.
+                  Round amounts, like 100 ₳, are harder to match to the payment that made them private.
                 </RoundNote>
                 <TokenAmounts
                   held={heldFor(seedelf.tokens, list.drafts, d)}
@@ -251,8 +251,8 @@ export function Withdraw({
       )}
 
       <Callout tone="privacy">
-        Withdrawing to where the money came from links it back. Send it somewhere else, or keep it in Seedelf.
-        {list.several && " Addresses paid in one withdrawal can be seen to be paid together."}
+        Making money public where it came from links it back. Send it somewhere else, or keep it private.
+        {list.several && " Addresses paid in one payment can be seen to be paid together."}
       </Callout>
     </Screen>
   );
@@ -261,8 +261,7 @@ export function Withdraw({
 function OwnWarning() {
   return (
     <Callout tone="warn" testId="withdraw-own">
-      This is your own Cardano account. Withdrawing here links the money back to it, and to whoever paid it into
-      Seedelf.
+      This is your own public account. Making money public here links it back to it, and to whoever made it private.
     </Callout>
   );
 }

@@ -70,7 +70,7 @@ export class TransferService {
       })),
     };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your Seedelf balance is empty. Move some ADA in first; transfers are paid from there.");
+      throw nothingToSpend(this.deps, view, "Your private balance is empty. Make some ADA private first: private payments are paid from there.");
     }
 
     const finished = await measure<TransferResult>(
@@ -95,7 +95,7 @@ export class TransferService {
   }
 
   submit(network: NetworkName, txHash: string): Promise<PendingTx> {
-    return send(this.deps, network, txHash, SESSION_TRANSFER, "transfer", "transfer");
+    return send(this.deps, network, txHash, SESSION_TRANSFER, "transfer", "payment");
   }
 
 }

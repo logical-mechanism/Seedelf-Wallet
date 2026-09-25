@@ -19,7 +19,7 @@ import { formatAda } from "../format";
 
 export function Receive({ account, onBack }: { account: Account; onBack: () => void }) {
   return (
-    <Screen title="Receive" titleId="receive-title" onBack={onBack} aside="Into your Cardano account">
+    <Screen title="Receive" titleId="receive-title" onBack={onBack} aside="Into your public account">
       <div className="qr-wrap">
         <QrCode text={account.receiveAddress} maxSize={200} label="QR code of the receive address" />
       </div>
@@ -60,7 +60,7 @@ export function ReceiveSeedelf({
         title="Receive"
         titleId="receive-seedelf-title"
         onBack={onBack}
-        aside="Into your Seedelf balance"
+        aside="Into your private balance"
         foot={
           <button type="button" className="primary" onClick={onCreate} disabled={!!createTitle} title={createTitle}>
             Create a Seedelf
@@ -68,14 +68,14 @@ export function ReceiveSeedelf({
         }
       >
         <p className="note" data-testid="receive-no-seedelf">
-          People pay a Seedelf's name, and you don't have a Seedelf yet. Create one first: your Cardano account pays for
+          People pay a Seedelf's name, and you don't have a Seedelf yet. Create one first: your public account pays for
           it.
         </p>
       </Screen>
     );
   }
   return (
-    <Screen title="Receive" titleId="receive-seedelf-title" onBack={onBack} aside="Into your Seedelf balance">
+    <Screen title="Receive" titleId="receive-seedelf-title" onBack={onBack} aside="Into your private balance">
       <p className="note">
         Give out a Seedelf's whole name: tags aren't unique. Anyone with Seedelf Wallet can pay it, and nobody can tell
         the payment is yours.

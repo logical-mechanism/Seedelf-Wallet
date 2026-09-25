@@ -97,7 +97,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
 
   return (
     <Screen
-      title={of === "seedelf" ? "Seedelf UTxOs" : "Cardano account UTxOs"}
+      title={of === "seedelf" ? "Private UTxOs" : "Public UTxOs"}
       titleId="utxos-title"
       onBack={onBack}
       aside={list ? `${plural(list.length, "UTxO")}${locked ? ` · ${locked} locked` : ""}` : " "}

@@ -20,6 +20,7 @@ Also in this folder but **not** a Cargo member:
   - Start with its [README](seedelf-web-wallet/README.md).
   - [docs/roadmap.md](seedelf-web-wallet/docs/roadmap.md) holds the current chunk and handoff notes.
   - **Branching:** web-wallet work branches from `seedelf-web-wallet` as `web-wallet/<topic>`, and PRs go back into `seedelf-web-wallet`, never `main`.
+  - **Private and Public:** the web wallet's screens call the Seedelf balance the *private balance* and the Cardano account the *public account*, with the flows *Make private* (move in), *Make public* (withdraw) and *Send* on each side. The code and the docs' internals keep the older names.
   - **Writing the name (the web wallet's style, not the CLI's):** always *Seedelf* (a Seedelf, Seedelfs), and *Seedelf Wallet* for the app, in anything the web wallet shows: its UI, its messages (core's too, since it shows them), its docs and the store listing. Lowercase only in code, and never in the frozen derivation strings. `extension/tests/words.test.ts` enforces it.
 - `_reference/` — gitignored third-party checkouts, such as Lace, for reading only.
 

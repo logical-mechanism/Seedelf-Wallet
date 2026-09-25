@@ -146,7 +146,7 @@ export function Staking({
         <section className="section" aria-labelledby="pool-title">
           <h2 id="pool-title">Not staking</h2>
           <p className="note">
-            Stake your Cardano account with a pool to earn rewards every epoch (5 days). Your ADA stays in your account,
+            Stake your public account with a pool to earn rewards every epoch (5 days). Your ADA stays in your account,
             free to spend.
           </p>
           {!staking.registered && (
@@ -167,7 +167,7 @@ export function Staking({
           </p>
           <p className="note">
             {spendRewards
-              ? "Spent along with anything your Cardano account pays, or withdrawn here. Settings can keep them here instead."
+              ? "Spent along with anything your public account pays, or withdrawn here. Settings can keep them here instead."
               : "They wait here until you withdraw them: Settings keeps them out of your payments."}
           </p>
           <button
@@ -220,8 +220,7 @@ export function Staking({
       )}
 
       <Callout tone="privacy">
-        Staking and voting are public: anyone can see which pool and DRep your Cardano account chose. Seedelf money
-        can't be staked: it has no staking part, so it earns nothing while it's in Seedelf.
+        Staking and voting are public: anyone can see which pool and DRep your public account chose. Private money can't be staked: it has no staking part, so it earns nothing while it's private.
       </Callout>
     </Screen>
   );
@@ -331,7 +330,7 @@ function StakingReview({
         {nonzero(summary.deposit) && <Row label="Deposit" value={`${formatAda(summary.deposit)} ₳`} />}
         {nonzero(summary.refund) && <Row label="Deposit back" value={`${formatAda(summary.refund)} ₳`} />}
         <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
-        <Row label="Back to your Cardano account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+        <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
       </ReviewRows>
       {nonzero(summary.deposit) && (
         <p className="note">Registering your account to stake takes the deposit. Stopping staking gives it back.</p>
@@ -345,7 +344,7 @@ function StakingReview({
       {action.kind === "stop" && (
         <p className="note">Your pool and your voting power's delegation end, and no more rewards come.</p>
       )}
-      <Callout tone="privacy">This is public: it names your Cardano account.</Callout>
+      <Callout tone="privacy">This is public: it names your public account.</Callout>
       <p className="note">It takes about a minute for the network to confirm.</p>
     </Screen>
   );

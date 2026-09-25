@@ -6,17 +6,17 @@ A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardan
 
 ## What it is
 
-Seedelf is where money moves privately on Cardano. The web wallet is for people who will never use a terminal. It has one recovery phrase and one password, and two sides:
+Seedelf is where money moves privately on Cardano. The web wallet is for people who will never use a terminal. It's one wallet on Cardano, with one recovery phrase and one password, and two sides, **Public** and **Private**:
 
-- **The Cardano account:** a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. For a restored Lace or Yoroi phrase, it's the same account. You don't need a second wallet.
-- **Seedelf:** the private side. Move money in, pay anyone's Seedelf, and withdraw anywhere, with no UTxO saying who owns it.
+- **The public account** (the Cardano account): a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. For a restored Lace or Yoroi phrase, it's the same account. You don't need a second wallet.
+- **The private balance** (Seedelf's): make money private, pay anyone's Seedelf, and make it public again to any address, with no UTxO saying who owns it.
 
-Seedelf money can't be staked, by design:
+Private money can't be staked, by design:
 
 - Seedelf funds sit at a script address with no staking part, so they earn no rewards and carry no voting weight.
 - A per-user staking key would link all of a user's Seedelfs together.
 
-So money that sits stays staked in the Cardano account, and moves through Seedelf when it should move privately.
+So money that sits stays staked in the public account, and is made private when it should move privately.
 
 ## Scope
 
@@ -24,14 +24,14 @@ So money that sits stays staked in the Cardano account, and moves through Seedel
 
 - Create or restore a wallet from a recovery phrase, then lock it with a password.
 - See your balance: your Seedelfs and the funds they hold.
-- **Cardano account:** the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
-- **Move in:** move funds from the Cardano account into your Seedelf balance.
-- **Send:** pay any address from the Cardano account, in the open, as any Cardano wallet does.
-- **Staking** (chunk 13): stake the Cardano account with one pool, from a browser of every live pool. Rewards are spent along with anything the account pays, or withdrawn by hand. Stop staking returns the 2 ₳ deposit.
+- **Public account** (the Cardano account): the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
+- **Make private** (a move-in): move funds from the public account into your private balance.
+- **Send** (public): pay any addresses or Seedelfs from the public account, in the open, as any Cardano wallet does.
+- **Staking** (chunk 13): stake the public account with one pool, from a browser of every live pool. Rewards are spent along with anything the account pays, or withdrawn by hand. Stop staking returns the 2 ₳ deposit.
 - **Voting delegation** (chunk 13): Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Conway pays out no rewards until the vote is delegated, and the wallet says so.
-- **Create a Seedelf:** mint your named Seedelf so others can pay you. Minting links the Seedelf to whatever paid for it, so by default the Cardano account pays for it, before any money is moved in (see [privacy.md](docs/privacy.md#known-links)).
-- **Transfer:** send funds privately from your Seedelf balance to any Seedelf, by its full name.
-- **Withdraw:** send funds from your Seedelfs to any Cardano address, or remove a Seedelf.
+- **Create a Seedelf:** mint your named Seedelf so others can pay you. Minting links the Seedelf to whatever paid for it, so by default the public account pays for it, before any money is made private (see [privacy.md](docs/privacy.md#known-links)).
+- **Send** (private, a transfer): send funds privately from your private balance to any Seedelfs, by their full names.
+- **Make public** (a withdrawal): send funds from your private balance to any Cardano addresses, or remove a Seedelf.
 
 **Next: the contract round trip**
 

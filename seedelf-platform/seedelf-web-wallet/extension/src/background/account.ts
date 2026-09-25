@@ -103,7 +103,7 @@ export async function readAccountUtxos(
 export function nothingInAccount(held: number, empty: string): Error {
   return new Error(
     held
-      ? "Everything in your Cardano account is locked or is its collateral. Unlock a UTxO on its UTxOs screen first."
+      ? "Everything in your public account is locked or is its collateral. Unlock a UTxO on its UTxOs screen first."
       : empty,
   );
 }

@@ -71,7 +71,7 @@ export class WithdrawService {
       payments: payments.map((p, i) => ({ to: destinations[i]!.address, lovelace: p.lovelace, tokens: p.tokens })),
     };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your Seedelf balance is empty, so there's nothing to withdraw.");
+      throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to make public.");
     }
     const finished = await measure<WithdrawResult>(
       this.deps,
@@ -92,7 +92,7 @@ export class WithdrawService {
   }
 
   submit(network: NetworkName, txHash: string): Promise<PendingTx> {
-    return send(this.deps, network, txHash, SESSION_WITHDRAW, "withdraw", "withdrawal");
+    return send(this.deps, network, txHash, SESSION_WITHDRAW, "withdraw", "payment");
   }
 
   /** Builds the removal of the seedelf `name`; its ADA goes `to` the account's 0/0 or the Seedelf balance. */

@@ -95,7 +95,7 @@ export class SendService {
   ): Promise<SendSummary> {
     const { wasm, wallet } = this.deps;
     const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
-    if (utxos.length === 0) throw nothingInAccount(held, "Your Cardano account is empty, so there's nothing to send.");
+    if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to send.");
 
     const payments = destinations.map((d, i) => ({
       to: d.seedelf?.name ?? d.address,

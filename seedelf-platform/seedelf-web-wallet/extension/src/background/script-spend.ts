@@ -83,7 +83,7 @@ export async function readContract(
 export function nothingToSpend(deps: Pick<ScriptSpendDeps, "contract">, view: ContractView, empty: string): Error {
   return new Error(
     spendable(deps, view).length
-      ? "Every UTxO in your Seedelf balance is locked. Unlock one on its UTxOs screen first."
+      ? "Every UTxO in your private balance is locked. Unlock one on its UTxOs screen first."
       : empty,
   );
 }

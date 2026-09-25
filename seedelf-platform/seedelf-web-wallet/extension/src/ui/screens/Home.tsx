@@ -1,9 +1,10 @@
-// Home, in two tabs. Seedelf: the Seedelf balance with Receive (your
-// seedelfs: their names, and Remove), Send, Withdraw and Create, and its
-// tokens. Cardano account: the account's balance (its staking rewards
-// included) and tokens, Receive, Send and Move in, and a staking row that
-// opens Staking, with a warning while rewards are locked for want of a vote
-// delegation. Each tab opens its Activity and its UTxOs, where UTxOs are
+// Home, in two tabs: one wallet on Cardano, with a private side and a public
+// side. Private: the private balance (Seedelf's) with Receive (your
+// seedelfs: their names, and Remove), Send, Make public (withdraw) and
+// Create, and its tokens. Public: the public account's balance (its staking
+// rewards included) and tokens, Receive, Send and Make private (move in),
+// and a staking row that opens Staking, with a warning while rewards are
+// locked for want of a vote delegation. Each tab opens its Activity and its UTxOs, where UTxOs are
 // locked; the forms get only what's unlocked. Until the wallet has a seedelf
 // and a Seedelf balance, a checklist shows the order that keeps them apart:
 // fund the account, create the seedelf, then move in (privacy.md, mint first).
@@ -50,10 +51,10 @@ import { Withdraw } from "./Withdraw";
 
 /** How the banner names a sent transaction, and says it's confirmed. */
 const SENT: Record<PendingTx["kind"], string> = {
-  "move-in": "Move-in",
+  "move-in": "Payment into your private balance",
   mint: "Seedelf mint",
-  transfer: "Transfer",
-  withdraw: "Withdrawal",
+  transfer: "Private payment",
+  withdraw: "Payment from your private balance",
   remove: "Seedelf removal",
   send: "Payment",
   collateral: "Collateral payment",
@@ -63,10 +64,10 @@ const SENT: Record<PendingTx["kind"], string> = {
   unstake: "Stop staking",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
-  "move-in": "Move-in confirmed",
+  "move-in": "Made private",
   mint: "Seedelf created",
-  transfer: "Transfer confirmed",
-  withdraw: "Withdrawal confirmed",
+  transfer: "Private payment confirmed",
+  withdraw: "Made public",
   remove: "Seedelf removed",
   send: "Payment confirmed",
   collateral: "Collateral set",
@@ -176,7 +177,7 @@ export function Home() {
   const spendTitle = watching
     ? BUSY
     : balances && balances.seedelf.utxos === 0
-      ? "Move some ADA in first: these are paid from your Seedelf balance"
+      ? "Make some ADA private first: these are paid from your private balance"
       : free && free.seedelf.utxos === 0
         ? ALL_LOCKED
         : undefined;
@@ -186,7 +187,7 @@ export function Home() {
     : balances && !canCreate
       ? balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
         ? ALL_LOCKED
-        : "Fund your Cardano account first: it pays for the Seedelf"
+        : "Fund your public account first: it pays for the Seedelf"
       : undefined;
   // Move in and Send both spend the account.
   const canMoveIn = !!free && free.cardano.utxos > 0 && !watching;
@@ -276,8 +277,8 @@ export function Home() {
         <Tabs
           label="Balances"
           tabs={[
-            { value: "seedelf", label: "Seedelf" },
-            { value: "cardano", label: "Cardano" },
+            { value: "seedelf", label: "Private" },
+            { value: "cardano", label: "Public" },
           ]}
           value={tab}
           onChange={setTab}
@@ -288,7 +289,7 @@ export function Home() {
           <section key="seedelf" className="stack" role="tabpanel" id="panel-seedelf" aria-labelledby="tab-seedelf">
             <div className="hero">
               <h1 id="seedelf-balance" className="hero__label">
-                Seedelf balance
+                Private balance
               </h1>
               <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
               <span className="hero__meta" data-testid="seedelf-meta">
@@ -298,7 +299,7 @@ export function Home() {
                 <ActionButton
                   icon={<ReceiveIcon />}
                   label="Receive"
-                  name="Receive into Seedelf"
+                  name="Receive privately"
                   onClick={() => setScreen("receive-seedelf")}
                   disabled={!balances}
                 />
@@ -306,14 +307,14 @@ export function Home() {
                   primary
                   icon={<SendIcon />}
                   label="Send"
-                  name="Send to a Seedelf"
+                  name="Send privately"
                   onClick={() => setScreen("transfer")}
                   disabled={!canSpend}
                   title={spendTitle}
                 />
                 <ActionButton
                   icon={<WithdrawIcon />}
-                  label="Withdraw"
+                  label="Make public"
                   onClick={() => setScreen("withdraw")}
                   disabled={!canSpend}
                   title={spendTitle}
@@ -359,7 +360,7 @@ export function Home() {
           <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
             <div className="hero">
               <h1 id="cardano-account" className="hero__label">
-                Cardano account
+                Public account
               </h1>
               <Amount lovelace={balances && accountTotal(balances.cardano)} testId="cardano-lovelace" />
               <span className="hero__meta" data-testid="cardano-meta">
@@ -371,13 +372,14 @@ export function Home() {
                 <ActionButton
                   icon={<ReceiveIcon />}
                   label="Receive"
+                  name="Receive publicly"
                   onClick={() => setScreen("receive")}
                   disabled={!account}
                 />
                 <ActionButton
                   icon={<SendIcon />}
                   label="Send"
-                  name="Send from the Cardano account"
+                  name="Send publicly"
                   onClick={() => setScreen("send")}
                   disabled={!canMoveIn}
                   title={moveInTitle}
@@ -385,7 +387,7 @@ export function Home() {
                 <ActionButton
                   primary
                   icon={<MoveInIcon />}
-                  label="Move in"
+                  label="Make private"
                   onClick={() => setScreen("move-in")}
                   disabled={!canMoveIn}
                   title={moveInTitle}
@@ -410,7 +412,7 @@ export function Home() {
 
             {balances && seedelfs.length === 0 && (
               <Callout tone="privacy" testId="mint-first">
-                Create your Seedelf before moving money in: then what you move in isn't tied to it.
+                Create your Seedelf before making money private: then what you make private isn't tied to it.
               </Callout>
             )}
 
@@ -518,7 +520,7 @@ function GettingStarted({
   const steps = [
     {
       done: funded,
-      title: "Fund your Cardano account",
+      title: "Fund your public account",
       text: "Pay it from an exchange or another wallet.",
       action: "Receive",
       onClick: onReceive,
@@ -527,16 +529,16 @@ function GettingStarted({
     {
       done: created,
       title: "Create your Seedelf",
-      text: "Your Cardano account pays for it, before any money moves in.",
+      text: "Your public account pays for it, before any money is made private.",
       action: "Create",
       onClick: onCreate,
       disabled: watching || !funded,
     },
     {
       done: movedIn,
-      title: "Move ADA in",
-      text: "What you move in afterwards isn't tied to your Seedelf.",
-      action: "Move in",
+      title: "Make ADA private",
+      text: "What you make private afterwards isn't tied to your Seedelf.",
+      action: "Make private",
       onClick: onMoveIn,
       disabled: watching || balances.cardano.utxos === 0,
     },

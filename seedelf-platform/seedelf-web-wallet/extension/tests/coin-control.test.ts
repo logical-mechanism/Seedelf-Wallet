@@ -153,7 +153,7 @@ describe("locked UTxOs", () => {
 
     const other = seedelf.find((u) => !u.seedelf && u !== big)!;
     await t.coins.setLocked("preprod", "seedelf", at(other), true);
-    await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Every UTxO in your Seedelf balance is locked");
+    await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Every UTxO in your private balance is locked");
   });
 
   it("refuse the collateral and UTxOs not in the last reading, and forget spent ones", async () => {
