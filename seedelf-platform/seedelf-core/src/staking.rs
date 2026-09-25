@@ -1,7 +1,7 @@
 //! Staking and voting delegation for a Cardano account: certificates and
 //! reward withdrawals, riding in an account transaction.
 //!
-//! Pallas's builder can stage neither (`pallas-txbuilder` 0.33 writes `None`
+//! Pallas's builder can stage neither (`pallas-txbuilder` 0.35 writes `None`
 //! for both, and 1.4 is the same), so an account transaction is staged and
 //! built as usual, then [`Staking::patch`] decodes the body, sets them, and
 //! encodes it again. That changes the body's hash: the patched transaction
