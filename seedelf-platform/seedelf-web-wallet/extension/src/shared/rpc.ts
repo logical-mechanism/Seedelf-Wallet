@@ -635,6 +635,28 @@ export interface SessionTx {
   confirmed?: boolean;
 }
 
+/** Why a swap that runs itself waits for the user. */
+export type SessionPause =
+  /** The fresh quote expects `amountOut`, less than the least the user approved: the order couldn't fill. */
+  | { at: number; why: "price"; amountOut: string }
+  /** What Minswap built failed a check (`detail` says which), so the wallet didn't sign it. */
+  | { at: number; why: "refused"; detail: string };
+
+/** A swap that runs itself, after one approval: where it's at, for its timeline. */
+export interface SessionAuto {
+  /** Each step waits for the one before: the funding, the order, its fill (or cancel), the return. */
+  step: "funding" | "ordering" | "filling" | "cancelling" | "returning" | "done";
+  paused?: SessionPause;
+  /** The last step failed (Koios or Minswap didn't answer): it's tried again at `at`. */
+  retry?: { at: number; error: string };
+  /** The user pressed Stop: any order is cancelled, then everything comes back. */
+  stopping: boolean;
+  /** The order was filled. */
+  filled: boolean;
+  /** The least the user approved receiving. */
+  approvedMinOut: string;
+}
+
 /**
  * A private session: a one-time account (account 24301', key 0/index) funded
  * from the private balance, used for a swap, and brought back into it.
@@ -651,6 +673,8 @@ export interface SessionView {
   swap?: SwapAsk & { amountOut: string; minAmountOut: string; display?: { in: SwapSide; out: SwapSide } };
   /** What its account holds, from Koios; null when it wasn't read. */
   holding: { lovelace: string; tokens: TokenQuantity[]; utxos: number } | null;
+  /** Set when the swap runs itself; a session from before (every step a button) has none. */
+  auto?: SessionAuto;
 }
 
 /** A funding payment into a new session, built and waiting for Send. */
@@ -823,6 +847,12 @@ export interface Requests {
   "session-back-submit": { payload: { txHash: string }; result: PendingTx };
   /** Forgets a session whose funding never reached the chain. */
   "session-forget": { payload: { index: number }; result: SessionView[] };
+  /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
+  "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
+  /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */
+  "session-stop": { payload: { index: number }; result: SessionView };
+  /** Goes on after a pause or a failure: the step is tried again now. */
+  "session-resume": { payload: { index: number }; result: SessionView };
 }
 
 export type RequestName = keyof Requests;
@@ -902,6 +932,9 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "session-back-build",
   "session-back-submit",
   "session-forget",
+  "session-advance",
+  "session-stop",
+  "session-resume",
 ]);
 
 export function isMessage(value: unknown): value is Message {

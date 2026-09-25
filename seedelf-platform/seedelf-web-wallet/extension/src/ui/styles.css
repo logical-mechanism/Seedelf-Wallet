@@ -2133,6 +2133,215 @@ output.swap-card__amount {
   color: var(--muted);
 }
 
+/* A swap that runs itself (Swaps.tsx Timeline): four steps down a line, and
+   what's happening now under them. Done, the whole card turns the success
+   colour, as the confirmed-transaction banner does. */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition:
+    background-color 300ms,
+    border-color 300ms;
+}
+
+.timeline--done {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.timeline__steps {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline__step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--s3);
+  row-gap: 1px;
+  padding: var(--s2) 0;
+}
+
+/* The line down to the next step. */
+.timeline__step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 36px;
+  bottom: -8px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+
+.timeline__step--done:not(:last-child)::after {
+  background: var(--accent-line);
+}
+
+.timeline__icon {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.timeline__step--done .timeline__icon {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.timeline__step--now .timeline__icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.timeline__step--paused .timeline__icon {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.timeline__title {
+  font-weight: 600;
+}
+
+.timeline__step--todo .timeline__title,
+.timeline__step--skipped .timeline__title {
+  color: var(--muted);
+}
+
+.timeline__step--skipped {
+  opacity: 0.6;
+}
+
+.timeline__sub {
+  grid-column: 2 / 4;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.timeline__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.timeline__link:hover {
+  text-decoration: underline;
+}
+
+.timeline__now {
+  margin: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.timeline--done .timeline__now {
+  border-color: var(--accent-line);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Links side by side, in a callout: Try again, Review it myself. */
+.row-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s4);
+}
+
+/* A swap that's paused and waits for the user, in a list. */
+.swap-needs-you {
+  color: var(--warn);
+}
+
+/* The dApp browser (screens/Dapps.tsx): a grid of tiles. */
+.dapp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--s3);
+}
+
+.dapp-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s1);
+  min-height: 132px;
+  padding: var(--s4);
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--r-md);
+  text-align: left;
+  transition:
+    background-color 120ms,
+    border-color 120ms;
+}
+
+button.dapp-tile:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.dapp-tile__logo {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--s2);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.dapp-tile__name {
+  font-weight: 600;
+}
+
+.dapp-tile__what {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.dapp-tile__badge {
+  margin-top: auto;
+  padding-top: var(--s2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* Not a dApp yet: where the next ones go. */
+.dapp-tile--soon {
+  justify-content: center;
+  border: 1px dashed var(--border-strong);
+  background: none;
+}
+
 /* The token picker's two lists: what's held, and what Minswap lists. */
 .swap-pick__heading {
   margin: var(--s2) 0 0;
@@ -2149,7 +2358,8 @@ output.swap-card__amount {
 
   .swap-flip,
   .swap-rate__icon,
-  .swap-chevron {
+  .swap-chevron,
+  .timeline {
     transition: none;
   }
 }

@@ -347,11 +347,12 @@ flowchart LR
 
 ## Private sessions
 
-Chunk 15, step 2: a swap through Minswap's aggregator, run from a one-time account funded from the private balance and brought back into it. The flow is in [flows.md](flows.md#contract-round-trip).
+Chunk 15, step 2: a swap through Minswap's aggregator, run from a one-time account funded from the private balance and brought back into it. Since chunk 15b it runs itself after one approval. It's reached from the dApp browser (`screens/Dapps.tsx`: Home's **dApps** row, a grid of tiles, Minswap's opening `screens/Swaps.tsx`). The flow is in [flows.md](flows.md#contract-round-trip).
 
 ```mermaid
 flowchart LR
-  UI["Swaps screen"] -- "sessions, swap-quote,<br/>session-out/swap/cancel/back" --> S["sessions.ts"]
+  UI["dApps → Minswap<br/>(Swaps.tsx)"] -- "sessions, swap-quote, session-out,<br/>session-advance/stop/resume" --> S["sessions.ts"]
+  A["chrome.alarms<br/>seedelf.sessions, unlock"] -- "runAll" --> S
   S -- "estimate, build-tx,<br/>pending-orders, cancel-tx" --> M["Minswap's aggregator"]
   S -- "credential_utxos, tx_status,<br/>utxo_info, submittx" --> K["Koios"]
   S -- "draftWithdraw/finishWithdraw (out),<br/>inspectSessionTx, signSessionTx,<br/>attachWitnesses, buildSessionReturn" --> X["WebAssembly"]
@@ -367,7 +368,14 @@ flowchart LR
   - A connector summary's `scripts` is now redeemers only: a script data hash alone covers witness-set datums, as an order's, and runs nothing.
 - **The cancel** is the same with Minswap's `cancel-tx`: its inputs are the orders (read from Koios `utxo_info`) and the account's collateral.
 - **Back** is `buildSessionReturn`: every UTxO at the account into the contract under fresh registers (`build::external_sweep`, the CLI's external sweep), signed by the session's key. The worker refuses it while Minswap lists an order of a session that placed one.
-- **What each costs:** reading the sessions is one Koios `credential_utxos` for every open session's key hash, and one `tx_status` for the transactions waiting, only when the Swaps screen reads. Opening a session that placed an order asks Minswap for its orders. The form asks Minswap's `estimate` once typing pauses (0.6 s) after each change of the amount, the pair or the slippage, never on every key, and its token search asks `tokens` the same way (0.4 s); a quote over a minute old is asked for once more before the funding. Placing the order costs two Minswap requests (`estimate`, `build-tx`) and one Koios read of the account.
+- **The runner** (chunk 15b). Sending the funding is the one approval: the record gains `auto` (the approved `minAmountOut` and `fund`). `SessionService.advance` takes whatever step is next from the record and the chain, so it's safe to call any number of times:
+  - **Who calls it:** the session's page every 20 s (and its Refresh, which skips the wait), the `seedelf.sessions` alarm every minute while a swap runs and the wallet is unlocked (`runAll`, which stops the alarm once nothing runs), and unlocking (the wallet's `changed`). Locked, it does nothing and the alarm stops until unlock. One promise queue in the service takes every step, the runner's and the user's, one at a time.
+  - **The steps:** wait for what was sent to confirm (`tx_status`); then place the order, wait for the fill, and bring it all back. A fill is something arriving from a transaction the session didn't make while Minswap lists no order; an empty list alone can be Minswap lagging behind.
+  - **What it signs by itself:** the session's UTxOs only, its key alone (`refuseOddities`), no more paid out, fee included, than was funded for the swap (`withinFunding`), and an order for at least the approved minimum: the order's minimum is the higher of the fresh quote's and the approved one. A fresh quote expecting less than that pauses (`paused.why: "price"`), and a failed check pauses (`"refused"`). A failure (Koios, Minswap's 429) waits a minute, doubling to ten, and tries again.
+  - **Every transaction is recorded before it's submitted** (`sending`, then `unsent` if Koios refused it). One Koios never took, and the chain hasn't got, is built again after 2 minutes; one the chain still hasn't seen, after 15. Its inputs are the session's, so the ledger lets only one land. A funding the chain never saw is marked failed after 20 minutes (2 when giveme.my or Koios refused it).
+  - **Stop** (the user's, never the runner's): an order that waits is cancelled (Minswap's `cancel-tx`, refused if it pays anyone but the session), then everything comes back. Before any order, it just comes back.
+  - **Home's banner** watches only the funding, a spend of the private balance. The swap, a cancel and the return are watched on the session's page; a confirmed return drops the kept balances so Home reads them fresh.
+- **What each costs:** reading the sessions is one Koios `credential_utxos` for every open session's key hash, and one `tx_status` for the transactions waiting, only when Minswap's screen reads. A running swap reads its chain at most every 15 s unless the user refreshes: one `tx_status` while something waits to confirm, else one `credential_utxos`, plus Minswap's `pending-orders` once its order is on chain. About 10–20 requests a swap, and nothing while none runs. The form asks Minswap's `estimate` once typing pauses (0.6 s) after each change of the amount, the pair or the slippage, never on every key, and its token search asks `tokens` the same way (0.4 s); a quote over a minute old is asked for once more before the funding. Placing the order costs two Minswap requests (`estimate`, `build-tx`) and one Koios read of the account.
 - **Minswap's aggregator** answers browsers with CORS headers, so the manifest only lists it in the pages' `connect-src` (`networks.ts` `corsOrigins`): no host permission, no new warning at install. If it ever stops, it'll need an optional host permission.
 
 ## What we borrow from Lace

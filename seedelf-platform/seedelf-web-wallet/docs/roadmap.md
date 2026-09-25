@@ -72,7 +72,14 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **For the user:** approve a live swap on preprod; resubmit the store listing (Minswap is a new service: the description, the privacy policy and the data disclosure are updated).
     - **Next:** the restore scan, a live cancel, then private CIP-30 (step 4).
   - **Then (2026-09-25): preprod MIN's decimals** (384ef7b). It isn't in the token registry, so `src/tokens/list.json` can now carry a hand-vetted test-network token as `unregistered`.
-  - **Next, in a new context on this branch: a swap that runs itself.** The plan is [plans/chunk-15b-swap-runner.md](plans/chunk-15b-swap-runner.md): one approval, a runner that takes the next step whenever it's called (the session's screen, a one-minute alarm, unlock and worker start), a timeline screen that turns the success colour when done, and resuming at any point. The user decided the polling, the pause and resume, and no notifications. Open: what an unfilled order does.
+  - **Then (2026-09-25): the swap form in Minswap's shape** (e43cec9): You pay over You receive, a live quote, a token picker, slippage settings.
+  - **Then (2026-09-25): chunk 15b, a swap that runs itself, and the dApp browser.** Plan: [plans/chunk-15b-swap-runner.md](plans/chunk-15b-swap-runner.md), whose *Built* lists what landed.
+    - **The user decided:** an unfilled order is never cancelled by the wallet; **Stop**, always there, cancels it and brings everything back. Home's Swaps row became **dApps**, a grid of tiles, with Minswap's opening its swaps.
+    - **What landed:** the runner in `sessions.ts` (one approval, then `advance` from the page, a one-minute alarm and unlock), a timeline page with Stop, pauses that say why, Home's running rows, and `screens/Dapps.tsx`.
+    - **Tests:** Vitest 9, Playwright 2.
+    - **Surprises:** the plan's pause rule (any fresh minimum under the approved one) would have paused about half of mainnet swaps, so the order asks for the approved minimum and pauses only when it couldn't fill. An empty Minswap order list isn't a fill: it can lag the chain.
+    - **For the user:** approve a live swap on preprod (fund, fill, back), and one Stop against a real order.
+    - **Next:** the restore scan, then private CIP-30 (step 4), then the PR for chunk 15.
 
 - **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md), whose *Status* says where the build departed from it.
   - **What landed:**

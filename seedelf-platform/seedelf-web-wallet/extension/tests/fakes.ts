@@ -168,6 +168,8 @@ export interface FakeKoios {
   rejectSubmit?: string;
   /** What `tx_status` reports for every transaction. */
   confirmations: number | null;
+  /** Transactions `tx_status` doesn't know, whatever `confirmations` says: never on chain. */
+  missing: Set<string>;
   /** Ogmios's answer to every evaluation: the recorded preprod mint's, unless replaced. */
   evaluation: unknown;
   /** Who holds each NFT, by `policy.name`, for `asset_nft_address`. */
@@ -195,6 +197,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     calls: [],
     submitted: [],
     confirmations: null,
+    missing: new Set(),
     evaluation: mintPreprod.evaluation,
     nfts: new Map(),
     spent: new Set(),
@@ -226,7 +229,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
       } else if (path === "epoch_params") {
         rows = epochParams;
       } else if (path === "tx_status") {
-        rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: fake.confirmations }));
+        rows = body._tx_hashes.map((tx_hash: string) => ({
+          tx_hash,
+          num_confirmations: fake.missing.has(tx_hash) ? null : fake.confirmations,
+        }));
       } else if (path === "credential_utxos") {
         // The wallet contract's, or the accounts' by payment key, whatever their staking part.
         const credentials: string[] = body._payment_credentials;

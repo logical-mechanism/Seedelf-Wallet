@@ -33,6 +33,8 @@ import { loadWasm } from "./wasm";
 
 const extensionOrigin = chrome.runtime.getURL("");
 const AUTO_LOCK_ALARM = "seedelf.auto-lock";
+/** Wakes a swap that runs itself (sessions.ts) every minute while one runs and the wallet is unlocked. */
+const SESSIONS_ALARM = "seedelf.sessions";
 
 // Worker timers don't survive restarts, so auto-lock runs off an alarm that
 // checks the last activity once a minute.
@@ -42,6 +44,26 @@ const autoLock = {
     await chrome.alarms.clear(AUTO_LOCK_ALARM);
   },
 };
+
+// Chrome 116's shortest period is a minute. Asking again doesn't restart the
+// clock: an alarm that's there is left alone.
+const sessionsAlarm = {
+  start: async () => {
+    if (!(await chrome.alarms.get(SESSIONS_ALARM))) await chrome.alarms.create(SESSIONS_ALARM, { periodInMinutes: 1 });
+  },
+  stop: async () => {
+    await chrome.alarms.clear(SESSIONS_ALARM);
+  },
+};
+
+/** The next step of every swap that runs itself, while the wallet is unlocked; locked, the alarm stops until unlock. */
+async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "network">): Promise<void> {
+  if ((await ctx.wallet.state()) !== "unlocked") {
+    await sessionsAlarm.stop();
+    return;
+  }
+  await ctx.sessions.runAll(ctx.network);
+}
 
 let context: Promise<Context> | undefined;
 
@@ -55,6 +77,7 @@ function getContext(): Promise<Context> {
     // No page open means nobody is listening; that's fine.
     const broadcast = (message: object) => void chrome.runtime.sendMessage(message).catch(() => undefined);
     let dapp: DappService | undefined;
+    let sessions: SessionService | undefined;
     const wallet = new Wallet({
       wasm,
       local,
@@ -64,8 +87,9 @@ function getContext(): Promise<Context> {
       lockAfterMs: () => preferences.lockAfterMs(),
       changed: () => {
         broadcast(STATE_CHANGED);
-        // Sites waiting for an unlock go on.
+        // Sites waiting for an unlock go on, and so does a swap that runs itself.
         void dapp?.stateChanged();
+        if (sessions) void runSessions({ wallet, sessions, network }).catch(() => undefined);
       },
     });
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
@@ -85,7 +109,7 @@ function getContext(): Promise<Context> {
     const staking = new StakingService({ ...spends, local });
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
     const minswap = (network: keyof typeof NETWORKS) => new Minswap(NETWORKS[network].swaps);
-    const sessions = new SessionService({ ...spends, store, minswap });
+    sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm });
     dapp = new DappService({
       ...spends,
       preferences,
@@ -214,6 +238,12 @@ chrome.windows.onRemoved.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === SESSIONS_ALARM) {
+    void getContext()
+      .then(runSessions)
+      .catch(() => undefined);
+    return;
+  }
   if (alarm.name !== AUTO_LOCK_ALARM) return;
   // Reading the state applies auto-lock once the user has been idle too long.
   // A worker that can't start says why on the next request, not here.

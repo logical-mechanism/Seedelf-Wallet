@@ -2,6 +2,22 @@
 
 **Why:** a private swap works today (chunk 15, step 2), but every step is a button: fund the session, place the order, bring it back. On 2026-09-25 the user asked for it to run on its own after one approval, and above all to be able to **pick up at any point and carry on**. That matters for more than a locked wallet: a closed browser, a restarted worker, a wallet opened again hours later. It's built on the same branch, `web-wallet/dapp-connector`, in the same PR as the rest of chunk 15.
 
+## Built (2026-09-25)
+
+A swap runs itself after one approval, from a dApp browser, as *The design* below says, with the decisions above.
+
+- **Worker:** `sessions.ts` gains the runner: `advance`, `stop`, `resume`, `runAll`, the `auto` record (the approval, a pause, a retry, Stop, the fill), recording before submitting, and `Refused` for failed checks. `sw.ts` runs it from the `seedelf.sessions` alarm and on unlock. Requests: `session-advance`, `session-stop`, `session-resume`.
+- **UI:** `screens/Dapps.tsx`, the dApp browser (Home's **dApps** row; Minswap's tile with how many run). `screens/Swaps.tsx` is Minswap's page: the list's step per session, Send going straight to the swap's page, and that page's timeline, Refresh, Stop (one confirmation), the paused callout (Try again, Review it myself) and the retry line. Home's Private tab shows each running swap. Sessions from before keep their buttons.
+- **Tests:** Vitest 9 in `tests/sessions.test.ts` (*a swap that runs itself*): the whole run; a price pause and the approved minimum; the funding limit; a restarted worker; locked then unlocked; a failure's wait, doubling; a transaction Koios never took, built again; Stop before an order; and never cancelling by itself, with Stop asking for the cancel. The fake Koios gained `missing` (transactions `tx_status` doesn't know). Playwright 2: the whole swap from the dApp browser to the success colour, through Home's running row; and a price pause, then Stop, with nothing ordered.
+- **Departed from the design:**
+  - The order's minimum and what counts as filled: *Decided in the build* above.
+  - No `step` stored: it's worked out from the transactions and the chain each time, as the stage was.
+  - Not on worker start: at a browser start the wallet is locked, so unlocking is what carries on; the alarm covers a worker restarted while unlocked.
+  - The page asks every 20 s, and the runner reads a session's chain at most every 15 s unless Refresh is pressed.
+- **Not done:**
+  - **A live run on preprod,** and a cancel against a real order (Stop's cancel is tested only up to Minswap's request: there's no recorded cancel). Both need the user's go-ahead.
+  - The restore scan (chunk 15's *Recovery*), and private CIP-30 (step 4).
+
 ## Start here
 
 1. `git fetch origin && git checkout web-wallet/dapp-connector`. The branch is at 384ef7b or later: the connector (fe8b774), the Koios CORS fix (9d96bcd), private swaps (b858d22), preprod MIN's decimals (384ef7b).
@@ -41,12 +57,16 @@
 - **No notifications.** No new permission. The screen shows success in the success colour, as the confirmed-transaction banner does; the user is either watching or checks later.
 - **A new context,** on this branch.
 
-## Open: ask the user before building it
+## Decided when 15b started (the user, 2026-09-25)
 
-- **An order that isn't filled.**
-  - After how long does the wallet say so?
-  - Does it ask, or cancel and bring the funds back on its own?
-  - Recommended: after 10 minutes, show *Still waiting* with **Cancel the order** and **Keep waiting**, and never cancel on its own.
+- **An order that isn't filled: Stop, always the user's.** A **Stop** button is there the whole time a swap runs. It cancels the order, as *Cancel the order* did, and brings everything back. The wallet never cancels on its own, and there's no timer. Automation is the happy path.
+- **A dApp browser, not Swaps.** Home's Swaps row becomes **dApps**: a grid of dApps. Minswap's tile opens its swaps (the Swaps screen). The next contract gets a tile of its own, and Swaps wouldn't make sense for it.
+
+## Decided in the build
+
+- **The order's minimum is the higher of the fresh quote's and the approved one.** The plan's rule, pausing whenever the fresh quote's minimum is under the approved one, would pause about half of all swaps on mainnet, since prices move both ways within a minute. So the order asks for at least what was approved, and the runner pauses only when the fresh quote expects less than that, and the order couldn't fill.
+- **Filled means something arrived from a transaction the session didn't make, and Minswap lists no order.** Minswap's order list can lag behind the chain, so an empty list alone isn't a fill.
+- **Stop asks once, then runs.** One confirmation, then the runner cancels (checked like a swap, and paying nothing out but the fee) and brings everything back.
 
 ## The design
 

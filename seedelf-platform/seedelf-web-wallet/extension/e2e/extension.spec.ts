@@ -1289,7 +1289,7 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   expect(koios.submitted).toHaveLength(0);
 });
 
-test("a private swap: Minswap's quote, a one-time account funded, the order placed with its key, and everything back", async ({
+test("a private swap: Minswap's quote, a one-time account funded, and then it runs itself: the order, the fill, everything back", async ({
   context,
   koios,
   swaps,
@@ -1299,7 +1299,10 @@ test("a private swap: Minswap's quote, a one-time account funded, the order plac
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
-  await page.getByRole("button", { name: "Swaps" }).click();
+  // The dApp browser: Minswap's tile opens its swaps.
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await snap(page, "dapps");
+  await page.getByTestId("dapps").getByRole("button", { name: /Minswap/ }).click();
   await expect(page.getByTestId("swaps-empty")).toBeVisible();
   await page.getByRole("button", { name: "New swap" }).click();
 
@@ -1362,11 +1365,12 @@ test("a private swap: Minswap's quote, a one-time account funded, the order plac
   await expect(fund).toContainText("Its collateral5 ₳");
   await snap(page, "swap-fund-review");
   // giveme.my refuses (its recorded answer): nothing is sent, but the session keeps its account.
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("refused this transaction");
   expect(koios.submitted).toHaveLength(0);
 
-  // Say the account holds it anyway: it's open.
+  // Say it reached the chain anyway, and the account holds it: from here the swap runs itself.
+  koios.confirmations = 1;
   koios.addedToAccounts.push({
     ...sessionSwap.utxo,
     payment_cred: sessionSwap.keyHash,
@@ -1382,25 +1386,30 @@ test("a private swap: Minswap's quote, a one-time account funded, the order plac
   });
   for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("swaps")).toContainText("10 ₳ → MIN");
-  await expect(page.getByTestId("swaps")).toContainText("Session 1 · Open");
   await page.getByTestId("swaps").getByRole("button").first().click();
-  await expect(page.getByTestId("session-rows")).toContainText("It holds145.790603 ₳");
-  await snap(page, "swap-session");
 
-  // The order: Minswap builds it for the account, the wallet reads it, the session's key signs it.
-  await page.getByRole("button", { name: "Place the order" }).click();
-  const order = page.getByTestId("session-tx-review");
-  await expect(order).toContainText("You get about906.5941 MIN");
-  await expect(order).toContainText("Into the order14 ₳");
-  await expect(order).toContainText("Network fee0.205189 ₳");
-  await snap(page, "swap-order-review");
-  expect(swaps.calls.find((c) => c.path === "build-tx")?.body).toMatchObject({ sender: sessionSwap.address });
-  await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByTestId("pending-tx")).toContainText("Swap order");
+  // Its page takes the next step: the order, from a fresh quote, for at least what was approved, signed by the session's key alone.
+  const timeline = page.getByTestId("session-timeline");
+  await expect(page.getByTestId("session-now")).toContainText("The order is on its way");
+  expect(swaps.calls.find((c) => c.path === "build-tx")?.body).toMatchObject({
+    sender: sessionSwap.address,
+    min_amount_out: "902083681",
+  });
   expect(koios.submitted).toHaveLength(1);
   const swapTx = koios.submitted[0]!;
+  await expect(timeline.locator('[data-state="done"]')).toHaveCount(1);
+  await snap(page, "swap-running");
 
-  // Filled: the change and the proceeds are at the account.
+  // The dApp browser and Home both show it running; Home's row opens its page.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("dapps")).toContainText("1 running");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("swaps-running")).toContainText("Swap in progress10 ₳ → MIN · Placing the order");
+  await page.getByTestId("swaps-running").getByRole("button").click();
+  await expect(timeline).toBeVisible();
+
+  // Filled: the change and the proceeds are at the account, and it all comes back by itself.
   const funded = koios.addedToAccounts[0]!;
   koios.addedToAccounts.splice(0, 1, { ...funded, tx_hash: swapTx, tx_index: 1, value: "131585414" }, {
     ...funded,
@@ -1417,28 +1426,92 @@ test("a private swap: Minswap's quote, a one-time account funded, the order plac
       },
     ],
   });
-  await page.getByRole("button", { name: "Swaps" }).click();
-  await page.getByTestId("swaps").getByRole("button").first().click();
-  await expect(page.getByTestId("session-next")).toContainText("Nothing is waiting");
-  await page.getByRole("button", { name: "Bring it back" }).click();
-  const back = page.getByTestId("session-back-review");
-  await expect(back).toContainText("906.5941 MIN");
-  await expect(back).toContainText("From2 UTxOs at session 1");
-  await snap(page, "swap-back-review");
-  await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByTestId("pending-tx")).toContainText("Return from a private session");
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("session-now")).toContainText("Coming back into your private balance");
+  await expect(timeline.locator('[data-state="done"]')).toHaveCount(3);
+  await expect(page.getByTestId("session-rows")).toContainText("906.5941 MIN");
   expect(koios.submitted).toHaveLength(2);
-  // One quote for 30 ₳, one for 10 ₳, one at 2% slippage, and a fresh one for the order.
-  expect(swaps.calls.map((c) => c.path)).toEqual([
-    "tokens",
-    "estimate",
-    "estimate",
-    "estimate",
-    "estimate",
-    "build-tx",
-    "pending-orders",
-    "pending-orders",
-  ]);
+
+  // The return lands and the account is empty: done, in the success colour.
+  koios.addedToAccounts.splice(0);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("session-now")).toHaveText("Done: the swap is in your private balance.");
+  await expect(timeline).toHaveClass(/timeline--done/);
+  await expect(timeline.locator('[data-state="done"]')).toHaveCount(4);
+  await snap(page, "swap-done");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page.getByTestId("swaps")).toContainText("Session 1 · Done");
+  // One quote for 30 ₳, one for 10 ₳, one at 2% slippage, then the order's fresh one; never a cancel.
+  const paths = swaps.calls.map((c) => c.path);
+  expect(paths.slice(0, 7)).toEqual(["tokens", "estimate", "estimate", "estimate", "estimate", "build-tx", "pending-orders"]);
+  expect(paths).not.toContain("cancel-tx");
+});
+
+test("a private swap paused by a price move, then stopped: everything comes back and nothing is ordered", async ({
+  context,
+  koios,
+  swaps,
+}) => {
+  koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Minswap/ }).click();
+  await page.getByRole("button", { name: "New swap" }).click();
+  await page.getByLabel("You pay", { exact: true }).fill("10");
+  await page.getByTestId("swap-to").click();
+  const picker = page.getByRole("dialog", { name: "You receive" });
+  await picker.getByLabel("Search tokens").fill("MIN");
+  await picker.getByTestId("swap-tokens").getByRole("button", { name: /MIN/ }).click();
+  await page.getByRole("button", { name: "Review swap" }).click();
+  // giveme.my refuses, as recorded: say the funding reached the chain anyway.
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction");
+  koios.confirmations = 1;
+  koios.addedToAccounts.push({
+    ...sessionSwap.utxo,
+    payment_cred: sessionSwap.keyHash,
+    stake_address: null,
+    epoch_no: 315,
+    block_height: 5_000_000,
+    block_time: 1_800_000_000,
+    datum_hash: null,
+    inline_datum: null,
+    reference_script: null,
+    asset_list: [],
+    is_spent: false,
+  });
+  // Meanwhile the price moved: Minswap now expects less than the least approved.
+  swaps.estimate = { ...(swaps.estimate as object), amount_out: "900000000", min_amount_out: "891000000" };
+  for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByTestId("swaps").getByRole("button").first().click();
+
+  // It pauses rather than place the order, and says why.
+  const paused = page.getByTestId("session-paused");
+  await expect(paused).toContainText("The price moved: the order would give about 900 MIN now, less than the 902.083681 MIN you approved at least");
+  await expect(paused.getByRole("button", { name: "Review it myself" })).toBeVisible();
+  await expect(page.getByTestId("session-timeline").locator('[data-state="paused"]')).toHaveCount(1);
+  await snap(page, "swap-paused");
+
+  // Stop, always there: one confirmation.
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "Stop this swap?" });
+  await expect(confirm).toContainText("No order is placed");
+  await snap(page, "swap-stop");
+  await confirm.getByRole("button", { name: "Stop the swap" }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.getByTestId("session-now")).toContainText("Coming back into your private balance");
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
+  expect(koios.submitted).toHaveLength(1);
+
+  // The return lands: stopped, everything back, and nothing was ever ordered.
+  koios.addedToAccounts.splice(0);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("session-now")).toHaveText("Stopped: everything is back in your private balance.");
+  await expect(page.getByTestId("session-timeline").locator('[data-state="skipped"]')).toHaveCount(2);
+  await snap(page, "swap-stopped");
+  expect(swaps.calls.map((c) => c.path)).not.toContain("build-tx");
 });
 
 test("remove a Seedelf: where its ADA goes, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {

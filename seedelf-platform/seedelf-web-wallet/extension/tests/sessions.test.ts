@@ -61,8 +61,22 @@ function atSession(tx_hash: string, tx_index: number, value: string, tokens: Arr
   } as KoiosUtxo;
 }
 
+/** The runner's alarm, as chrome.alarms would be. */
+function alarm() {
+  const a = {
+    on: false,
+    start: async () => {
+      a.on = true;
+    },
+    stop: async () => {
+      a.on = false;
+    },
+  };
+  return a;
+}
+
 /** The session service with giveme.my's witness and the one-time key's signature stood in for, as withdraw.test.ts does. */
-function signing(t: Awaited<ReturnType<typeof unlocked>>) {
+function signing(t: Awaited<ReturnType<typeof unlocked>>, runner = alarm()) {
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   return new SessionService({
@@ -77,6 +91,7 @@ function signing(t: Awaited<ReturnType<typeof unlocked>>) {
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
     minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+    alarm: runner,
   });
 }
 
@@ -182,7 +197,8 @@ describe("a private session", () => {
     expect(BigInt(back.lovelace) + BigInt(back.fee)).toBe(133585414n);
     const returned = await sessions.backSubmit("preprod", back.txHash);
     expect(returned).toMatchObject({ kind: "session-back", txHash: back.txHash });
-    expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "session-back" });
+    // Its page watches the return; Home's banner still has only the funding.
+    expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "session-out" });
     expect((await t.activity.seedelf("preprod"))[0]).toMatchObject({
       kind: "session-back",
       direction: "in",
@@ -272,5 +288,263 @@ describe("a private session", () => {
     const quiet = t.koios.calls.length;
     await sessions.list("preprod");
     expect(t.koios.calls.length).toBe(quiet);
+  });
+});
+
+/** An order of session 0's, as Minswap lists it. */
+const ORDER = {
+  owner_address: sessionSwap.address,
+  protocol: "Minswap",
+  token_in: {},
+  token_out: {},
+  amount_in: "10000000",
+  min_amount_out: "902083681",
+  created_at: 1,
+  tx_in: `${"cc".repeat(32)}#0`,
+  dex_fee: "2000000",
+  deposit: "2000000",
+};
+
+/** The recorded swap's id: signing it adds a witness, never changes its body. */
+const SWAP_TX = txIdOf(Uint8Array.from(Buffer.from(sessionSwap.swapCbor, "hex")));
+
+describe("a swap that runs itself", () => {
+  type T = Awaited<ReturnType<typeof unlocked>>;
+
+  /** Session 0's funding, sent: the one approval. */
+  async function started(sessions: SessionService, quote?: Awaited<ReturnType<SessionService["quote"]>>) {
+    const out = await sessions.outBuild("preprod", quote ?? (await sessions.quote("preprod", ASK)));
+    await sessions.outSubmit("preprod", out.txHash);
+    return out;
+  }
+
+  /** The funding lands: Koios confirms everything, and the account holds what the recorded swap spends. */
+  function funded(t: T) {
+    t.koios.confirmations = 1;
+    t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
+  }
+
+  it("places the order once the funding lands, brings everything back once it's filled, and is done once that lands", async () => {
+    const t = await unlocked();
+    const runner = alarm();
+    const sessions = signing(t, runner);
+    await started(sessions);
+    expect(runner.on).toBe(true);
+
+    // The funding isn't on chain yet: one tx_status, and nothing else.
+    let calls = t.koios.calls.length;
+    let view = await sessions.advance("preprod", 0);
+    expect(view.auto).toEqual({ step: "funding", stopping: false, filled: false, approvedMinOut: "902083681" });
+    expect(t.koios.calls.slice(calls).map((c) => c.path)).toEqual(["tx_status"]);
+
+    // It lands. Asked again within 15 s, the runner doesn't read.
+    funded(t);
+    calls = t.koios.calls.length;
+    await sessions.advance("preprod", 0);
+    expect(t.koios.calls.length).toBe(calls);
+
+    // 15 s on: the order, from a fresh quote, for at least what was approved.
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
+    expect(t.minswap.calls.map((c) => c.path)).toEqual(["estimate", "estimate", "build-tx"]);
+    expect(t.minswap.calls.at(-1)!.body).toMatchObject({ sender: sessionSwap.address, min_amount_out: "902083681" });
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(SWAP_TX);
+    expect(view.txs.map((x) => [x.kind, !!x.confirmed])).toEqual([
+      ["out", true],
+      ["swap", false],
+    ]);
+    expect(view.auto!.step).toBe("ordering");
+    // Its page watches the swap: Home's banner still has only the funding.
+    expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "session-out" });
+
+    // The order lands and waits for a batcher.
+    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
+    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"));
+    t.minswap.orders = [ORDER];
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "filling", filled: false });
+    expect(t.koios.submitted).toHaveLength(2);
+
+    // Minswap stops listing it before its proceeds show up: still waiting.
+    t.minswap.orders = [];
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "filling", filled: false });
+    expect(t.koios.submitted).toHaveLength(2);
+
+    // Filled: the proceeds arrive, and everything goes back into the private balance.
+    t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "returning", filled: true });
+    expect(view.holding).toMatchObject({ tokens: [{ assetName: "4d494e", quantity: "906594100" }], utxos: 2 });
+    expect(t.koios.submitted).toHaveLength(3);
+    expect((await t.activity.seedelf("preprod"))[0]).toMatchObject({ kind: "session-back", direction: "in" });
+
+    // The return lands and the account is empty: done, and the alarm stops.
+    t.koios.spent.add(`${SWAP_TX}#1`).add(`${"aa".repeat(32)}#0`);
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
+    expect(view).toMatchObject({ stage: "closed", auto: { step: "done" }, holding: { utxos: 0 } });
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    await sessions.runAll("preprod");
+    expect(runner.on).toBe(false);
+  });
+
+  it("pauses when the price moved past what was approved, and orders at least that when it's back within it", async () => {
+    const t = await unlocked();
+    const runner = alarm();
+    const sessions = signing(t, runner);
+    await started(sessions);
+    funded(t);
+    t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "900000000", min_amount_out: "895500000" };
+    let view = await sessions.advance("preprod", 0);
+    expect(view.auto!.paused).toEqual({ at: t.clock.now, why: "price", amountOut: "900000000" });
+    expect(t.minswap.calls.map((c) => c.path)).not.toContain("build-tx");
+    // Paused, it waits for the user: the runner leaves it, and the alarm stops.
+    t.clock.now += 60_000;
+    await sessions.runAll("preprod");
+    expect(t.minswap.calls.filter((c) => c.path === "estimate")).toHaveLength(2);
+    expect(runner.on).toBe(false);
+
+    // Expected above the approved minimum again, though its own minimum is under it: the order asks for the approved one.
+    t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "904000000", min_amount_out: "899960000" };
+    view = await sessions.resume("preprod", 0);
+    expect(view.auto!.paused).toBeUndefined();
+    expect(runner.on).toBe(true);
+    expect(t.minswap.calls.at(-1)).toMatchObject({ path: "build-tx", body: { min_amount_out: "902083681" } });
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+  });
+
+  it("pauses rather than sign a swap that pays out more than was funded for it", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const quote = await sessions.quote("preprod", ASK);
+    // 14 ₳ funded for the swap: the order's 14 ₳ and its fee are more.
+    await started(sessions, { ...quote, fund: { lovelace: "14000000", tokens: [] } });
+    funded(t);
+    const view = await sessions.advance("preprod", 0);
+    expect(view.auto!.paused).toMatchObject({ why: "refused", detail: "it pays out more ADA than was funded for the swap." });
+    expect(t.koios.submitted).toHaveLength(1);
+  });
+
+  it("carries on in a restarted worker, from what's stored and on chain", async () => {
+    const t = await unlocked();
+    await started(signing(t));
+    funded(t);
+    const view = await signing(t).advance("preprod", 0);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+  });
+
+  it("does nothing while the wallet is locked, and carries on once it's unlocked", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    await t.wallet.lock();
+    const before = t.minswap.calls.length;
+    await expect(sessions.runAll("preprod")).rejects.toThrow("locked");
+    expect(t.minswap.calls).toHaveLength(before);
+    await t.wallet.unlock(PASSWORD);
+    await sessions.runAll("preprod");
+    expect(t.minswap.calls.slice(before).map((c) => c.path)).toEqual(["estimate", "build-tx"]);
+  });
+
+  it("waits after a failure and tries again, longer each time", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    const real = t.minswap.fetch;
+    t.minswap.fetch = async (url, init) =>
+      url.endsWith("/estimate") ? new Response("Rate limit exceeded, retry in 50 seconds", { status: 429 }) : real(url, init);
+    let view = await sessions.advance("preprod", 0);
+    expect(view.auto!.retry).toEqual({ at: t.clock.now + 60_000, error: expect.stringContaining("limiting requests") });
+
+    // Not before the minute's up.
+    t.clock.now += 30_000;
+    const calls = t.koios.calls.length;
+    await sessions.advance("preprod", 0);
+    expect(t.koios.calls).toHaveLength(calls);
+
+    // Then again, and after a second failure, two minutes.
+    t.clock.now += 30_000;
+    view = await sessions.advance("preprod", 0);
+    expect(view.auto!.retry!.at).toBe(t.clock.now + 120_000);
+
+    // Try again, now: it goes on.
+    t.minswap.fetch = real;
+    view = await sessions.resume("preprod", 0);
+    expect(view.auto!.retry).toBeUndefined();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+  });
+
+  it("builds a step again when Koios never took its transaction and the chain doesn't have it", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    t.koios.rejectSubmit = "Koios is down";
+    let view = await sessions.advance("preprod", 0);
+    // Recorded before it was sent, and kept, but not shown: the swap isn't placed.
+    expect(view.txs.map((x) => x.kind)).toEqual(["out"]);
+    expect(view.auto).toMatchObject({ step: "ordering", retry: { error: expect.stringContaining("Koios is down") } });
+    // The funding, and the swap Koios refused.
+    expect(t.koios.submitted).toHaveLength(2);
+
+    // A minute on, Koios is back but the chain doesn't have it. It may still be on its way, so the runner waits.
+    t.koios.rejectSubmit = undefined;
+    t.koios.missing.add(SWAP_TX);
+    t.clock.now += 60_000;
+    await sessions.advance("preprod", 0);
+    expect(t.koios.submitted).toHaveLength(2);
+
+    // Two minutes on and still not there: it's built again and sent.
+    t.clock.now += 60_000;
+    view = await sessions.advance("preprod", 0);
+    expect(t.koios.submitted).toHaveLength(3);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(SWAP_TX);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(2);
+  });
+
+  it("stops before the order: it waits for the funding, then brings it all back without ordering", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    let view = await sessions.stop("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "funding", stopping: true });
+    funded(t);
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "returning", stopping: true, filled: false });
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "back"]);
+    // Only the quote was ever asked for.
+    expect(t.minswap.calls.map((c) => c.path)).toEqual(["estimate"]);
+  });
+
+  it("never cancels an order by itself; Stop asks Minswap to cancel it", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    await sessions.advance("preprod", 0);
+    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
+    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"));
+    t.minswap.orders = [ORDER];
+
+    // Ten minutes on, still not filled: the runner keeps waiting. (Past the 15 minutes auto-lock allows, it would wait for the unlock.)
+    t.clock.now += 10 * 60_000;
+    let view = await sessions.advance("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "filling", stopping: false });
+    expect(t.minswap.calls.map((c) => c.path)).not.toContain("cancel-tx");
+
+    view = await sessions.stop("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "cancelling", stopping: true });
+    expect(t.minswap.calls.at(-1)).toMatchObject({
+      path: "cancel-tx",
+      body: { sender: sessionSwap.address, orders: [{ tx_in: ORDER.tx_in, protocol: "Minswap" }] },
+    });
   });
 });

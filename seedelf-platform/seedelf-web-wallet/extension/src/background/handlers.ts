@@ -215,6 +215,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.sessions.backSubmit(ctx.network, message.txHash);
     case "session-forget":
       return ctx.sessions.forget(ctx.network, message.index);
+    case "session-advance":
+      return ctx.sessions.advance(ctx.network, message.index, message.now ?? false);
+    case "session-stop":
+      return ctx.sessions.stop(ctx.network, message.index);
+    case "session-resume":
+      return ctx.sessions.resume(ctx.network, message.index);
   }
 }
 

@@ -6,7 +6,8 @@
 // Swaps       the sessions, newest first, and New swap.
 // NewSwap     Minswap's shape: You pay over You receive, a live quote under
 //             them, then the swap and its funding payment to review.
-// Session     one session: where it's at, and the next step (swap, cancel, bring back).
+// Session     one session: a timeline of the swap as it runs itself, with Stop,
+//             or, for one from before, the next step as a button.
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 
@@ -18,6 +19,9 @@ import type {
   SessionBackSummary,
   SessionOrder,
   SessionOutSummary,
+  SessionAuto,
+  SessionPause,
+  SessionTx,
   SessionTxReview,
   SessionView,
   SwapAsk,
@@ -31,14 +35,17 @@ import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
 import {
   ArrowDownIcon,
+  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ExternalIcon,
   PlusIcon,
   RefreshIcon,
   SearchIcon,
   SlidersIcon,
   SpinnerIcon,
   WalletIcon,
+  WarnIcon,
 } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
@@ -47,6 +54,7 @@ import { Screen } from "../components/Screen";
 import {
   ADA_RULES,
   type AmountRules,
+  explorerUrl,
   formatAda,
   formatFiat,
   formatPercent,
@@ -94,23 +102,55 @@ const STAGE: Record<SessionView["stage"], string> = {
   failed: "Its funding didn't go through",
 };
 
+const STEP: Record<SessionAuto["step"], string> = {
+  funding: "Being funded",
+  ordering: "Placing the order",
+  filling: "Waiting for the fill",
+  cancelling: "Cancelling",
+  returning: "Coming back",
+  done: "Done",
+};
+
+/** Where a session is at, in a few words. */
+function statusOf(s: SessionView): string {
+  if (!s.auto || s.stage === "failed") return STAGE[s.stage];
+  if (s.auto.paused) return "Paused: it needs you";
+  if (s.auto.step === "done") return s.auto.filled ? "Done" : "Stopped";
+  return s.auto.stopping && s.auto.step !== "returning" ? "Stopping" : STEP[s.auto.step];
+}
+
+/** A swap that runs itself and isn't over: Home shows it. */
+export function isRunningSwap(s: SessionView): boolean {
+  return !!s.auto && s.stage !== "closed" && s.stage !== "failed";
+}
+
+/** A running swap in a line, for Home: "10 ₳ → MIN · Waiting for the fill". */
+export function swapLine(s: SessionView): string {
+  return `${pairOf(s)} · ${statusOf(s)}`;
+}
+
+/** Minswap's page in the dApp browser: its swaps, each from a one-time account, and New swap. */
 export function Swaps({
   seedelf,
   blocked,
+  start,
   onBack,
-  onSent,
+  onPending,
 }: {
   seedelf: Balances["seedelf"];
   /** Why a new swap can't start now: a transaction still waiting, say. */
   blocked?: string;
+  /** A session to open first. */
+  start?: number;
   onBack: () => void;
-  onSent: (pending: PendingTx) => void;
+  /** A funding payment was sent: Home's banner watches it. */
+  onPending: (pending: PendingTx) => void;
 }) {
   const [sessions, setSessions] = useState<SessionView[]>();
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string>();
-  const [open, setOpen] = useState<number>();
+  const [open, setOpen] = useState<number | undefined>(start);
   const [starting, setStarting] = useState(false);
 
   const load = useCallback(async (refresh: boolean) => {
@@ -136,7 +176,13 @@ export function Swaps({
       // A session may have started meanwhile, whether its funding went through or not.
       void load(true);
     };
-    return <NewSwap seedelf={seedelf} onCancel={done} onSent={onSent} />;
+    const started = (index: number, pending: PendingTx) => {
+      onPending(pending);
+      setStarting(false);
+      // Straight to the swap's own page, where it runs.
+      void load(false).then(() => setOpen(index));
+    };
+    return <NewSwap seedelf={seedelf} onCancel={done} onStarted={started} />;
   }
   const session = sessions?.find((s) => s.index === open);
   if (session) {
@@ -146,8 +192,10 @@ export function Swaps({
         updatedAt={updatedAt}
         reading={reading}
         onRefresh={() => void load(true)}
-        onBack={() => setOpen(undefined)}
-        onSent={onSent}
+        onBack={() => {
+          setOpen(undefined);
+          void load(false);
+        }}
         onChanged={setSessions}
       />
     );
@@ -156,10 +204,10 @@ export function Swaps({
   const noFunds = seedelf.utxos === 0 ? "Make some ADA private first: a swap is paid from your private balance" : undefined;
   return (
     <Screen
-      title="Swaps"
+      title="Minswap"
       titleId="swaps-title"
       onBack={onBack}
-      aside="Each from a one-time account"
+      aside="Swaps, each from a one-time account"
       error={error}
       foot={
         <button
@@ -191,8 +239,8 @@ export function Swaps({
               <button type="button" className="menu-row" onClick={() => setOpen(s.index)}>
                 <span className="stack-tight">
                   <span>{pairOf(s)}</span>
-                  <span className="note">
-                    Session {s.index + 1} · {STAGE[s.stage]} · {timeAgo(s.createdAt, Date.now())}
+                  <span className={s.auto?.paused ? "note swap-needs-you" : "note"}>
+                    Session {s.index + 1} · {statusOf(s)} · {timeAgo(s.createdAt, Date.now())}
                   </span>
                 </span>
                 <ChevronRightIcon size={16} />
@@ -330,11 +378,12 @@ function Detail({ label, value, tone }: { label: string; value: ReactNode; tone?
 function NewSwap({
   seedelf,
   onCancel,
-  onSent,
+  onStarted,
 }: {
   seedelf: Balances["seedelf"];
   onCancel: () => void;
-  onSent: (pending: PendingTx) => void;
+  /** The funding was sent: session `index` runs from here. */
+  onStarted: (index: number, pending: PendingTx) => void;
 }) {
   const network = useNetwork();
   const [pay, setPay] = useState<Pick>(ADA_PICK);
@@ -463,7 +512,7 @@ function NewSwap({
     setBusy(true);
     setError(undefined);
     try {
-      onSent(await call("session-out-submit", { txHash: out.summary.txHash }));
+      onStarted(out.summary.index, await call("session-out-submit", { txHash: out.summary.txHash }));
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -981,13 +1030,15 @@ function SlippageSettings({
 // One session
 // ---------------------------------------------------------------------------
 
+/** How often a running swap's page asks the runner for its next step. */
+const ADVANCE_EVERY_MS = 20_000;
+
 function Session({
-  session: s,
+  session,
   updatedAt,
   reading,
   onRefresh,
   onBack,
-  onSent,
   onChanged,
 }: {
   session: SessionView;
@@ -995,21 +1046,53 @@ function Session({
   reading: boolean;
   onRefresh: () => void;
   onBack: () => void;
-  onSent: (pending: PendingTx) => void;
   onChanged: (sessions: SessionView[]) => void;
 }) {
   const network = useNetwork();
+  const [s, setS] = useState(session);
   const [orders, setOrders] = useState<SessionOrder[]>();
   const [review, setReview] = useState<SessionTxReview>();
   const [back, setBack] = useState<SessionBackSummary>();
+  const [stopping, setStopping] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
+  // The list read it again: take its reading.
+  useEffect(() => setS(session), [session]);
+
+  // A swap that runs itself takes its next step now and then while its page is open
+  // (and once a minute without it, from the worker's alarm). Refresh takes it now.
+  const runs = !!s.auto && s.stage !== "closed" && s.stage !== "failed";
+  const [checkedAt, setCheckedAt] = useState<number>();
+  const [checking, setChecking] = useState(false);
+  const index = s.index;
+  const advance = useCallback(
+    async (now: boolean) => {
+      setChecking(true);
+      try {
+        setS(await call("session-advance", { index, now }));
+        setCheckedAt(Date.now());
+        setError(undefined);
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setChecking(false);
+      }
+    },
+    [index],
+  );
+  useEffect(() => {
+    if (!runs) return;
+    void advance(false);
+    const timer = setInterval(() => void advance(false), ADVANCE_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [runs, advance]);
+
   const swapped = s.txs.some((t) => t.kind === "swap");
   useEffect(() => {
-    if (s.stage !== "open" || !swapped) return;
+    if (s.auto || s.stage !== "open" || !swapped) return;
     call("session-orders", { index: s.index }).then(setOrders, (e: Error) => setError(e.message));
-  }, [s.index, s.stage, swapped, updatedAt]);
+  }, [s.auto, s.index, s.stage, swapped, updatedAt]);
 
   const d = s.swap?.display;
   const act = async (task: () => Promise<void>) => {
@@ -1023,6 +1106,13 @@ function Session({
     } finally {
       setBusy(false);
     }
+  };
+  /** After a step sent by hand: a swap that runs itself goes on from there; one from before is read again. */
+  const sent = async () => {
+    setReview(undefined);
+    setBack(undefined);
+    if (s.auto) setS(await call("session-advance", { index: s.index, now: true }));
+    else onRefresh();
   };
 
   if (review) {
@@ -1041,9 +1131,10 @@ function Session({
             className="primary"
             disabled={busy}
             onClick={() =>
-              void act(async () =>
-                onSent(await call(review.kind === "swap" ? "session-swap-submit" : "session-cancel-submit", { txHash: review.txHash })),
-              )
+              void act(async () => {
+                await call(review.kind === "swap" ? "session-swap-submit" : "session-cancel-submit", { txHash: review.txHash });
+                await sent();
+              })
             }
           >
             {busy ? "Sending…" : "Send"}
@@ -1075,7 +1166,9 @@ function Session({
         )}
         <p className="note">
           {review.kind === "swap"
-            ? "A DEX's batchers fill the order, usually within a few blocks, and pay the proceeds to this session. If the price moves past your slippage, it waits: cancel it here."
+            ? s.auto
+              ? "A DEX's batchers fill the order, usually within a few blocks, and pay the proceeds to this session. Then it all comes back by itself. If the price moves past your slippage, it waits: Stop cancels it."
+              : "A DEX's batchers fill the order, usually within a few blocks, and pay the proceeds to this session. If the price moves past your slippage, it waits: cancel it here."
             : "The order's funds come back to this session. Then bring the session back."}
         </p>
       </Screen>
@@ -1096,7 +1189,12 @@ function Session({
             type="button"
             className="primary"
             disabled={busy}
-            onClick={() => void act(async () => onSent(await call("session-back-submit", { txHash: back.txHash })))}
+            onClick={() =>
+              void act(async () => {
+                await call("session-back-submit", { txHash: back.txHash });
+                await sent();
+              })
+            }
           >
             {busy ? "Sending…" : "Send"}
           </button>
@@ -1105,11 +1203,7 @@ function Session({
         <ReviewRows testId="session-back-review">
           <Row label="Into your private balance" value={`${formatAda(back.lovelace)} ₳`} strong />
           {back.tokens.map((t) => (
-            <Row
-              key={tokenKey(t)}
-              label=""
-              value={`${formatQuantity(t.quantity, d && tokenKey(t) === tokenKeyOf(s.swap!.tokenOut) ? d.out.decimals : (tokenInfo(network, t)?.decimals ?? 0))} ${tokenLabel(network, t)}`}
-            />
+            <Row key={tokenKey(t)} label="" value={tokenText(t, s, network)} />
           ))}
           <Row label="Network fee" value={`${formatAda(back.fee)} ₳`} />
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at session ${s.index + 1}`} />
@@ -1122,6 +1216,127 @@ function Session({
   }
 
   const holding = s.holding;
+  const rows = (
+    <ReviewRows testId="session-rows">
+      {!s.auto && <Row label="Where it's at" value={STAGE[s.stage]} strong />}
+      <Row label="Account" value={shortHex(s.address, 16, 8)} title={s.address} />
+      {holding && <Row label="It holds" value={`${formatAda(holding.lovelace)} ₳`} />}
+      {holding?.tokens.map((t) => (
+        <Row key={tokenKey(t)} label="" value={tokenText(t, s, network)} />
+      ))}
+      {s.swap && d && <Row label="Quoted" value={`about ${amountOf(s.swap.amountOut, d.out)}`} />}
+    </ReviewRows>
+  );
+  const forget = () => void act(async () => onChanged(await call("session-forget", { index: s.index })));
+
+  if (s.auto) {
+    const auto = s.auto;
+    const done = s.stage === "closed";
+    const placed = s.txs.some((t) => t.kind === "swap");
+    return (
+      <Screen
+        title={pairOf(s)}
+        titleId="session-title"
+        onBack={onBack}
+        aside={`Private session ${s.index + 1}`}
+        error={error}
+        foot={
+          done ? (
+            <button type="button" className="primary" onClick={onBack}>
+              Done
+            </button>
+          ) : s.stage === "failed" ? (
+            <button type="button" className="secondary" onClick={forget} disabled={busy}>
+              Forget it
+            </button>
+          ) : auto.stopping ? null : (
+            <button type="button" className="secondary" onClick={() => setStopping(true)} disabled={busy}>
+              Stop
+            </button>
+          )
+        }
+      >
+        {runs && <RefreshRow reading={checking} updatedAt={checkedAt} onRefresh={() => void advance(true)} />}
+        <Timeline s={s} />
+        {auto.paused && (
+          <Callout tone="warn" testId="session-paused">
+            <div className="stack-tight">
+              <strong>Paused: it needs you</strong>
+              <span>{pauseText(auto.paused, auto.approvedMinOut, d?.out)}</span>
+              <span className="row-links">
+                <button
+                  type="button"
+                  className="link"
+                  disabled={busy}
+                  onClick={() => void act(async () => setS(await call("session-resume", { index: s.index })))}
+                >
+                  Try again
+                </button>
+                {!placed && !auto.stopping && (
+                  <button
+                    type="button"
+                    className="link"
+                    disabled={busy}
+                    onClick={() => void act(async () => setReview(await call("session-swap-build", { index: s.index })))}
+                  >
+                    Review it myself
+                  </button>
+                )}
+              </span>
+            </div>
+          </Callout>
+        )}
+        {auto.retry && !auto.paused && (
+          <p className="note" data-testid="session-retry">
+            {retryText(auto.retry.at)}: {auto.retry.error}{" "}
+            <button
+              type="button"
+              className="link"
+              disabled={busy}
+              onClick={() => void act(async () => setS(await call("session-resume", { index: s.index })))}
+            >
+              Try now
+            </button>
+          </p>
+        )}
+        {rows}
+        {stopping && (
+          <Modal
+            title="Stop this swap?"
+            titleId="session-stop-title"
+            onClose={() => setStopping(false)}
+            foot={
+              <>
+                <button type="button" className="secondary" onClick={() => setStopping(false)} disabled={busy}>
+                  Keep going
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(async () => {
+                      setS(await call("session-stop", { index: s.index }));
+                      setStopping(false);
+                    })
+                  }
+                >
+                  {busy ? "Stopping…" : "Stop the swap"}
+                </button>
+              </>
+            }
+          >
+            <p className="note">
+              {placed
+                ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance. The cancel and the return each cost a network fee."
+                : "No order is placed. Everything comes back into your private balance, less the return's network fee."}
+            </p>
+          </Modal>
+        )}
+      </Screen>
+    );
+  }
+
   const waiting = !!orders?.length;
   return (
     <Screen
@@ -1139,29 +1354,156 @@ function Session({
           onSwap={() => void act(async () => setReview(await call("session-swap-build", { index: s.index })))}
           onCancel={() => void act(async () => setReview(await call("session-cancel-build", { index: s.index })))}
           onBack={() => void act(async () => setBack(await call("session-back-build", { index: s.index })))}
-          onForget={() => void act(async () => onChanged(await call("session-forget", { index: s.index })))}
+          onForget={forget}
         />
       }
     >
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={onRefresh} />
-      <ReviewRows testId="session-rows">
-        <Row label="Where it's at" value={STAGE[s.stage]} strong />
-        <Row label="Account" value={shortHex(s.address, 16, 8)} title={s.address} />
-        {holding && <Row label="It holds" value={`${formatAda(holding.lovelace)} ₳`} />}
-        {holding?.tokens.map((t) => (
-          <Row
-            key={tokenKey(t)}
-            label=""
-            value={`${formatQuantity(t.quantity, d && tokenKeyOf(s.swap!.tokenOut) === tokenKey(t) ? d.out.decimals : (tokenInfo(network, t)?.decimals ?? 0))} ${tokenLabel(network, t)}`}
-          />
-        ))}
-        {s.swap && d && <Row label="Quoted" value={`about ${amountOf(s.swap.amountOut, d.out)}`} />}
-      </ReviewRows>
+      {rows}
       <p className="note" data-testid="session-next">
         {nextStep(s, swapped, waiting)}
       </p>
     </Screen>
   );
+}
+
+/** A token the session holds or brings back, with its decimals. */
+function tokenText(t: TokenQuantity, s: SessionView, network: NetworkName): string {
+  const d = s.swap?.display;
+  const decimals = d && tokenKey(t) === tokenKeyOf(s.swap!.tokenOut) ? d.out.decimals : (tokenInfo(network, t)?.decimals ?? 0);
+  return `${formatQuantity(t.quantity, decimals)} ${tokenLabel(network, t)}`;
+}
+
+/** Why a swap that runs itself waits for the user, in words. */
+function pauseText(p: SessionPause, approvedMinOut: string, out?: SwapSide): string {
+  if (p.why === "refused") return `The wallet won't sign what Minswap built: ${p.detail}`;
+  const amount = (q: string) => (out ? amountOf(q, out) : q);
+  return `The price moved: the order would give about ${amount(p.amountOut)} now, less than the ${amount(approvedMinOut)} you approved at least, so it wasn't placed. Try again later, or review the new price yourself.`;
+}
+
+/** When a failed step is tried again. */
+function retryText(at: number): string {
+  const ms = at - Date.now();
+  return ms <= 0 ? "Trying again now" : ms < 60_000 ? "Trying again in under a minute" : `Trying again in ${Math.ceil(ms / 60_000)} minutes`;
+}
+
+type StepState = "done" | "now" | "paused" | "todo" | "skipped";
+
+/**
+ * A swap that runs itself, as four steps: funded, the order placed, filled
+ * (or cancelled), and back in the private balance. Each is waiting, done
+ * (with its transaction), or paused; the whole card turns the success colour
+ * once it's over.
+ */
+function Timeline({ s }: { s: SessionView }) {
+  const network = useNetwork();
+  const auto = s.auto!;
+  const d = s.swap?.display;
+  const at = { funding: 0, ordering: 1, filling: 2, cancelling: 2, returning: 3, done: 4 }[auto.step];
+  const tx = (kind: SessionTx["kind"]) => s.txs.findLast((t) => t.kind === kind);
+  const failed = s.stage === "failed";
+  // Stopped before any order: the order and its fill never happen.
+  const unordered = auto.stopping && !tx("swap");
+  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled);
+  const state = (i: number): StepState => {
+    if ((i === 1 || i === 2) && unordered) return "skipped";
+    if (i < at) return "done";
+    if (i > at) return "todo";
+    return auto.paused || failed ? "paused" : "now";
+  };
+  const least = d ? amountOf(auto.approvedMinOut, d.out) : undefined;
+  const steps: Array<{ title: string; sub: string; tx?: SessionTx }> = [
+    {
+      title: "Funded",
+      sub: failed ? "It never reached the chain" : "A one-time account, from your private balance",
+      tx: tx("out"),
+    },
+    {
+      title: unordered ? "No order" : "Order placed",
+      sub: unordered ? "Stopped before one was placed" : least ? `For at least ${least}` : "Through Minswap",
+      tx: tx("swap"),
+    },
+    {
+      title: unordered ? "Nothing to fill" : cancelled ? "Cancelled" : "Filled",
+      sub: unordered
+        ? "Nothing was ordered"
+        : cancelled
+          ? "The order's funds back at the account"
+          : auto.filled
+            ? "The proceeds are at the account"
+            : "By a DEX's batcher, usually within a few blocks",
+      tx: tx("cancel"),
+    },
+    { title: "Back in your private balance", sub: "Everything at the account, under fresh registers", tx: tx("back") },
+  ];
+  const done = auto.step === "done";
+  return (
+    <div className={done ? "timeline timeline--done" : "timeline"} data-testid="session-timeline">
+      <ol className="timeline__steps">
+        {steps.map((step, i) => {
+          const st = state(i);
+          return (
+            <li key={step.title} className={`timeline__step timeline__step--${st}`} data-state={st}>
+              <span className="timeline__icon" aria-hidden="true">
+                {st === "done" ? (
+                  <CheckIcon size={14} />
+                ) : st === "now" ? (
+                  <span className="spin">
+                    <SpinnerIcon size={14} />
+                  </span>
+                ) : st === "paused" ? (
+                  <WarnIcon size={13} />
+                ) : st === "skipped" ? (
+                  "–"
+                ) : (
+                  i + 1
+                )}
+              </span>
+              <span className="timeline__title">{step.title}</span>
+              {step.tx && st === "done" && (
+                <a className="timeline__link" href={explorerUrl(network, step.tx.txHash)} target="_blank" rel="noreferrer">
+                  Cardanoscan
+                  <ExternalIcon size={12} />
+                </a>
+              )}
+              <p className="timeline__sub">{step.sub}</p>
+            </li>
+          );
+        })}
+      </ol>
+      <p className="timeline__now" data-testid="session-now" aria-live="polite">
+        {nowLine(s)}
+      </p>
+    </div>
+  );
+}
+
+/** What's happening now, in plain words. */
+function nowLine(s: SessionView): string {
+  const a = s.auto!;
+  if (s.stage === "failed") {
+    return "Its funding never reached the chain, so the account is empty. Forget it: its account isn't used again.";
+  }
+  if (a.paused) return "Paused until you choose what to do.";
+  switch (a.step) {
+    case "funding":
+      return a.stopping
+        ? "Stopping: once the funding is confirmed, it all comes back."
+        : "Waiting for the network to confirm the funding. It usually takes about a minute.";
+    case "ordering":
+      if (a.stopping) return "Stopping: bringing it all back.";
+      return s.txs.some((t) => t.kind === "swap")
+        ? "The order is on its way: waiting for the network to confirm it."
+        : "Asking Minswap for a fresh quote, then placing the order.";
+    case "filling":
+      return "The order waits for a DEX's batcher to fill it, usually within a few blocks. It all comes back by itself once it's filled; Stop cancels it.";
+    case "cancelling":
+      return "Cancelling the order. Once that's confirmed, it all comes back.";
+    case "returning":
+      return "Coming back into your private balance: waiting for the network to confirm it.";
+    case "done":
+      return a.filled ? "Done: the swap is in your private balance." : "Stopped: everything is back in your private balance.";
+  }
 }
 
 /** A Minswap token ID as a policy ID and an asset name. */
@@ -1174,6 +1516,7 @@ function tokenKeyOf(id: string): string {
   return tokenKey(tokenOf(id));
 }
 
+/** A session from before swaps ran themselves: what to do next, by hand. */
 function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
   switch (s.stage) {
     case "funding":
