@@ -950,11 +950,13 @@ pub fn required_signers(tx_cbor: &[u8]) -> Result<Vec<Hash<28>>> {
         .unwrap_or_default())
 }
 
-/// The execution budgets Ogmios measured, by redeemer.
+/// The execution budgets measured by redeemer, by Ogmios or in the wallet
+/// ([`crate::eval`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Budgets {
     spend: BTreeMap<u64, Budget>,
     mint: BTreeMap<u64, Budget>,
+    withdraw: BTreeMap<u64, Budget>,
 }
 
 impl Budgets {
@@ -985,6 +987,7 @@ impl Budgets {
             match purpose {
                 "spend" => budgets.spend.insert(index, budget),
                 "mint" => budgets.mint.insert(index, budget),
+                "withdraw" => budgets.withdraw.insert(index, budget),
                 other => {
                     bail!("Ogmios measured a {other} script, which this transaction doesn't have")
                 }
@@ -1001,6 +1004,7 @@ impl Budgets {
                 .map(|i| (i, SPEND_BUDGET_GUESS))
                 .collect(),
             mint: (0..mints as u64).map(|i| (i, MINT_BUDGET_GUESS)).collect(),
+            withdraw: BTreeMap::new(),
         }
     }
 
@@ -1010,6 +1014,11 @@ impl Budgets {
 
     pub fn mint(&self, index: u64) -> Option<Budget> {
         self.mint.get(&index).copied()
+    }
+
+    /// A script withdrawal's budget (a withdraw-zero, such as Lovejoin's).
+    pub fn withdraw(&self, index: u64) -> Option<Budget> {
+        self.withdraw.get(&index).copied()
     }
 }
 
@@ -1068,8 +1077,20 @@ fn ogmios_failure(error: &Value) -> String {
             })
         })
         .collect();
+    // Seedelf's scripts only spend and mint; a withdraw-zero is Lovejoin's.
+    let foreign = items.iter().any(|item| {
+        !matches!(
+            item.pointer("/validator/purpose").and_then(Value::as_str),
+            Some("spend" | "mint") | None
+        )
+    });
     if failures.is_empty() {
         format!("Ogmios couldn't evaluate the transaction: {message}")
+    } else if foreign {
+        format!(
+            "A script refused this transaction ({})",
+            failures.join("; ")
+        )
     } else {
         format!(
             "The Seedelf contract refused this transaction ({})",

@@ -23,6 +23,8 @@ pallas-wallet = "0.35.0"
 rand_core = { version = "0.6.0", features = ["std"] }
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
+# Plutus evaluation in the wallet (eval.rs); must be on the same Pallas.
+uplc = "=1.1.23"
 # seedelf stuff
 seedelf-crypto = { workspace = true }
 seedelf-koios = { workspace = true }
