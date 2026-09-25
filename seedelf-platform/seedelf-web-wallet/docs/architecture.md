@@ -344,6 +344,7 @@ flowchart LR
   - The Rust side decides ownership by payment key hash, and which keys sign: inputs, collateral, required signers, stake certificates and withdrawals.
   - It refuses the other network, a collateral return to someone else, and a transaction marked to fail its scripts.
 - **The window** (`dapp-window.ts`, `screens/DappApprovals.tsx`): a popup, one at a time. Closing it declines everything, and it closes itself once nothing's left.
+- **The password at Sign** (the `dappPassword` setting, on by default): a site's `signTx` or `signData` is signed only once the password typed in the window checks out (`Wallet.checkPassword`), even while unlocked and even right after an unlock. A wrong one leaves the request waiting, tells the site nothing, and counts towards the unlock back-off. Only the wallet's own pages can answer a request: the worker refuses messages from anywhere else.
 
 ## Private sessions
 

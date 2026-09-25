@@ -27,6 +27,7 @@
 
 - **The default stays private.** Sites can't see the wallet until the user turns on **Let sites connect to your public account** in Settings, under *Sites*. When it's on, CIP-30 uses the public account.
 - **Like Lace:** the usual CIP-30 calls, a window to approve connecting and signing, and a list of connected sites to disconnect.
+- **The password at Sign (the user, after trying it on Minswap's preprod site):** a site's transaction or message needs the password typed in the window, even while the wallet is unlocked, as Lace and Eternl ask. It's on by default, with a switch under *Sites* to turn it off. It asks even right after an unlock: sites call `enable()` first, so the unlock can't be tied to the signature that follows.
 
 ### Decided in the build
 

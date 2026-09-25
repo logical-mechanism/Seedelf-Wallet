@@ -170,7 +170,8 @@ describe("the dApp connector", () => {
     expect(approval.summary.signs.length).toBeGreaterThan(0);
     expect(approval.summary.signs).not.toContain("stake");
 
-    expect(await t.dapp.answer(approval.id, true)).toEqual({});
+    expect(approval.password).toBe(true);
+    expect(await t.dapp.answer(approval.id, true, PASSWORD)).toEqual({});
     const witnesses = (await signing) as string;
     // A witness set with only vkey witnesses: `{0: [...]}`.
     expect(witnesses.slice(0, 4)).toBe("a100");
@@ -209,7 +210,7 @@ describe("the dApp connector", () => {
     const before = (await t.dapp.call(s, "getUtxos", [])) as string[];
     const signing = t.dapp.call(s, "signTx", [tx, false]);
     await until(() => t.dapp.approvals().length === 1);
-    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true, PASSWORD);
     await signing;
     await t.balances.get("preprod");
 
@@ -231,7 +232,7 @@ describe("the dApp connector", () => {
     const signing = t.dapp.call(s, "signData", [wasm.cip30Address(OWN), hex("Sign in: nonce 42")]);
     await until(() => t.dapp.approvals().length === 1);
     expect(t.dapp.approvals()[0]).toMatchObject({ kind: "sign-data", address: OWN, key: "payment", text: "Sign in: nonce 42" });
-    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true, PASSWORD);
     const signed = (await signing) as { signature: string; key: string };
     expect(signed.signature.slice(0, 2)).toBe("84");
     expect(signed.key.slice(0, 2)).toBe("a4");
@@ -248,6 +249,58 @@ describe("the dApp connector", () => {
     expect(t.dapp.approvals()[0]).not.toHaveProperty("text");
     await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
     await expect(binary).rejects.toMatchObject({ failure: { code: DataSignError.UserDeclined } });
+  });
+
+  it("needs the password to sign, even while unlocked: without it the site keeps waiting, and a wrong one counts", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const { tx } = await built(t);
+    const signing = t.dapp.call(s, "signTx", [tx, false]);
+    let settled = false;
+    signing.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await until(() => t.dapp.approvals().length === 1);
+    const approval = t.dapp.approvals()[0]!;
+    expect(approval).toMatchObject({ kind: "sign-tx", password: true });
+
+    // None, or a wrong one: nothing is signed, the request stays, and the site hears nothing.
+    expect(await t.dapp.answer(approval.id, true)).toEqual({ error: "Type your password to sign." });
+    expect(await t.dapp.answer(approval.id, true, "not the password")).toEqual({ error: "Wrong password." });
+    expect(t.dapp.approvals().map((a) => a.id)).toEqual([approval.id]);
+    expect(settled).toBe(false);
+    // A wrong one counts towards the unlock back-off, as the phrase's does.
+    expect(await t.dapp.answer(approval.id, true, PASSWORD)).toEqual({ error: "Too many wrong passwords. Try again in 1 s." });
+    t.clock.now += 1_000;
+    expect(await t.dapp.answer(approval.id, true, PASSWORD)).toEqual({});
+    expect(((await signing) as string).slice(0, 4)).toBe("a100");
+  });
+
+  it("asks at Sign even right after an unlock for the request; with the setting off, Sign is enough", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const message = [t.deps.wasm.cip30Address(OWN), hex("Sign in")];
+
+    // Locked: the connector's window unlocks first, and Sign still asks: the unlock came before the message was shown.
+    await t.wallet.lock();
+    const unlocking = t.dapp.call(s, "signData", message);
+    await until(() => t.dappWindow.shown === 2);
+    await t.wallet.unlock(PASSWORD);
+    await t.dapp.stateChanged();
+    await until(() => t.dapp.approvals().length === 1);
+    expect(t.dapp.approvals()[0]).toMatchObject({ kind: "sign-data", password: true });
+    // Declining needs no password.
+    expect(await t.dapp.answer(t.dapp.approvals()[0]!.id, false)).toEqual({});
+    await expect(unlocking).rejects.toMatchObject({ failure: { code: DataSignError.UserDeclined } });
+
+    // Off: Sign is enough.
+    await t.preferences.set({ dappPassword: false });
+    const off = t.dapp.call(s, "signData", message);
+    await until(() => t.dapp.approvals().length === 1);
+    expect(t.dapp.approvals()[0]).toMatchObject({ password: false });
+    expect(await t.dapp.answer(t.dapp.approvals()[0]!.id, true)).toEqual({});
+    await off;
   });
 
   it("waits for an unlock in its window, and refuses for a while once it's closed instead", async () => {

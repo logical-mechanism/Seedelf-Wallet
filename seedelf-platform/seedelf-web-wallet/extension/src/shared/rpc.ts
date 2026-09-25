@@ -555,10 +555,10 @@ export interface DappTxSummary {
   complete: boolean;
 }
 
-/** What a site asks the user for. */
+/** What a site asks the user for. A signature's `password`: Sign needs the password typed too (the `dappPassword` setting). */
 export type DappAsk =
   | { kind: "connect" }
-  | { kind: "sign-tx"; partial: boolean; summary: DappTxSummary }
+  | { kind: "sign-tx"; partial: boolean; summary: DappTxSummary; password: boolean }
   | {
       kind: "sign-data";
       /** Bech32. */
@@ -567,6 +567,7 @@ export type DappAsk =
       payload: string;
       /** The payload as text, when it reads as UTF-8. */
       text?: string;
+      password: boolean;
     };
 
 /** Something a site asked for that waits for the user, in the connector's window. */
@@ -817,8 +818,11 @@ export interface Requests {
   price: { payload: None; result: AdaPrice | null };
   /** What sites are waiting for the user to answer, oldest first. */
   "dapp-approvals": { payload: None; result: DappApproval[] };
-  /** Answers one: `error` says why an approved one couldn't be done (the site hears it too). */
-  "dapp-answer": { payload: { id: string; approve: boolean }; result: { error?: string } };
+  /**
+   * Answers one: `error` says why an approved one couldn't be done (the site hears it too).
+   * A signature that needs the password takes it here; a wrong one leaves it waiting.
+   */
+  "dapp-answer": { payload: { id: string; approve: boolean; password?: string }; result: { error?: string } };
   /** The sites connected to the public account on this network. */
   "dapp-sites": { payload: None; result: DappSite[] };
   /** Disconnects a site; returns the rest. */

@@ -2108,6 +2108,8 @@ test.describe("the dApp connector", () => {
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "true");
     await expect(page.getByTestId("dapp-connector-note")).toContainText("only ever see your public account");
+    // A site's signature needs the password too, until the user says otherwise.
+    await expect(page.getByRole("switch", { name: "Ask for your password to sign for a site" })).toHaveAttribute("aria-checked", "true");
 
     await dapp.reload();
     expect(await dapp.evaluate(() => (window as any).cardano.seedelf.name)).toBe("Seedelf Wallet");
@@ -2154,6 +2156,16 @@ test.describe("the dApp connector", () => {
     await expect(sign.getByTestId("dapp-tx-net")).toContainText("your stake key");
     await expect(sign.getByTestId("dapp-staking")).toContainText("Withdraws your staking rewards: 57.475311 ₳");
     await snap(sign, "dapp-sign-tx");
+    // Sign waits for the password, even though the wallet is unlocked; a wrong one is refused and the request stays.
+    await expect(sign.getByRole("button", { name: "Sign", exact: true })).toBeDisabled();
+    await sign.getByLabel("Your password, to sign").fill("not the password");
+    await sign.getByRole("button", { name: "Sign", exact: true }).click();
+    await expect(sign.getByRole("alert")).toHaveText("Wrong password.");
+    await expect(sign.getByLabel("Your password, to sign")).toHaveValue("");
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    // The wrong one started the unlock back-off: a second later, the right one signs.
+    await sign.waitForTimeout(1_100);
+    await sign.getByLabel("Your password, to sign").fill(PASSWORD);
     // With nothing left to answer, the window closes itself.
     let done = sign.waitForEvent("close");
     await sign.getByRole("button", { name: "Sign", exact: true }).click();
@@ -2177,7 +2189,9 @@ test.describe("the dApp connector", () => {
     await expect(sign.getByTestId("dapp-data-message")).toHaveText("Sign in to dapp.example");
     await snap(sign, "dapp-sign-data");
     done = sign.waitForEvent("close");
-    await sign.getByRole("button", { name: "Sign", exact: true }).click();
+    // Enter in the password box signs.
+    await sign.getByLabel("Your password, to sign").fill(PASSWORD);
+    await sign.getByLabel("Your password, to sign").press("Enter");
     await done;
     const signed = (await message).value as { signature: string; key: string };
     expect(signed.signature).toMatch(/^84/);
@@ -2222,8 +2236,25 @@ test.describe("the dApp connector", () => {
     opened = connectorWindow(context);
     const reading = cip30(dapp, "getNetworkId");
     const unlock = await opened;
+    await expect(unlock.getByTestId("unlock-site")).toHaveText("A site is waiting for Seedelf Wallet. Unlock to see what it asks.");
+    const unlocked = unlock.waitForEvent("close");
     await unlock.getByLabel("Password").fill(PASSWORD);
     await unlock.getByRole("button", { name: "Unlock" }).click();
     expect(await reading).toEqual({ value: 0 });
+    await unlocked;
+
+    // A signature asked for while locked: unlocking comes first, and Sign still asks, once the message is shown.
+    const used = ((await cip30(dapp, "getUsedAddresses")).value as string[])[0]!;
+    await page.getByRole("button", { name: "Lock" }).click();
+    opened = connectorWindow(context);
+    const message = cip30(dapp, "signData", used, Buffer.from("Sign in to dapp.example").toString("hex"));
+    const window = await opened;
+    await window.getByLabel("Password").fill(PASSWORD);
+    await window.getByRole("button", { name: "Unlock" }).click();
+    await expect(window.getByRole("heading", { name: "Sign a message" })).toBeVisible();
+    await expect(window.getByRole("button", { name: "Sign", exact: true })).toBeDisabled();
+    await window.getByLabel("Your password, to sign").fill(PASSWORD);
+    await window.getByRole("button", { name: "Sign", exact: true }).click();
+    expect(((await message).value as { signature: string }).signature).toMatch(/^84/);
   });
 });

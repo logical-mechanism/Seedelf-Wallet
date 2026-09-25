@@ -179,7 +179,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "dapp-approvals":
       return ctx.dapp.approvals();
     case "dapp-answer":
-      return ctx.dapp.answer(message.id, message.approve);
+      return ctx.dapp.answer(message.id, message.approve, message.password);
     case "dapp-sites":
       return ctx.dapp.sites();
     case "dapp-forget":

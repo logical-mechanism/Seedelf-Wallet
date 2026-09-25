@@ -1,16 +1,18 @@
 // The dApp connector's window (`?view=dapp`): what sites wait for, oldest
 // first, one at a time. Connecting a site, signing its transaction (with
 // what it does to the public account, as WebAssembly read it), or signing
-// its data (CIP-8). Nothing is signed until the user presses Sign; closing
-// the window declines everything. It closes itself once nothing's left.
+// its data (CIP-8). Nothing is signed until the user presses Sign, with the
+// password typed too unless Settings says otherwise; closing the window
+// declines everything. It closes itself once nothing's left.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import type { DappApproval, DappToken, DappTxSummary } from "../../shared/rpc";
 import { call, onDappChanged } from "../background";
 import { Callout } from "../components/Callout";
 import { GlobeIcon } from "../components/Icons";
 import { MiddleEllipsis } from "../components/MiddleEllipsis";
+import { PasswordField } from "../components/PasswordField";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { formatAda, formatQuantity, plural, voteLabel } from "../format";
@@ -42,14 +44,26 @@ export function DappApprovals() {
   }, [approvals, error]);
 
   const current = approvals?.[0];
+  const needsPassword = !!current && current.kind !== "connect" && current.password;
+  const [password, setPassword] = useState("");
+  // Each request starts with an empty box.
+  const currentId = current?.id;
+  useEffect(() => setPassword(""), [currentId]);
 
   async function answer(approve: boolean) {
-    if (!current || busy) return;
+    if (!current || busy || (approve && needsPassword && !password)) return;
     setBusy(true);
     setError(undefined);
     try {
-      const result = await call("dapp-answer", { id: current.id, approve });
-      if (result.error) setError(result.error);
+      const result = await call("dapp-answer", {
+        id: current.id,
+        approve,
+        ...(approve && needsPassword ? { password } : {}),
+      });
+      if (result.error) {
+        setError(result.error);
+        setPassword("");
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -82,12 +96,26 @@ export function DappApprovals() {
       titleId="dapp-title"
       aside={`Nothing happens until you press ${action}${more}`}
       error={error}
+      // With the password, Enter in its box signs, as it unlocks elsewhere.
+      onSubmit={
+        needsPassword
+          ? (e: FormEvent) => {
+              e.preventDefault();
+              void answer(true);
+            }
+          : undefined
+      }
       foot={
         <div className="actions">
           <button type="button" className="secondary" onClick={() => answer(false)} disabled={busy}>
             {current.kind === "connect" ? "Cancel" : "Decline"}
           </button>
-          <button type="button" className="primary" onClick={() => answer(true)} disabled={busy}>
+          <button
+            type={needsPassword ? "submit" : "button"}
+            className="primary"
+            onClick={needsPassword ? undefined : () => answer(true)}
+            disabled={busy || (needsPassword && !password)}
+          >
             {busy ? "…" : action}
           </button>
         </div>
@@ -99,6 +127,10 @@ export function DappApprovals() {
         {current.kind === "sign-tx" && <SignTx summary={current.summary} partial={current.partial} />}
         {current.kind === "sign-data" && (
           <SignData address={current.address} signer={current.key} payload={current.payload} text={current.text} />
+        )}
+        {/* Under what it signs, and never focused first: the review is read before the password is typed. */}
+        {needsPassword && (
+          <PasswordField id="dapp-password" label="Your password, to sign" value={password} onChange={setPassword} />
         )}
       </div>
     </Screen>

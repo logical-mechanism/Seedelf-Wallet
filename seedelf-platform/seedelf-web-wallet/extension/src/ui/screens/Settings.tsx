@@ -234,7 +234,8 @@ function LockAfter() {
  * Whether sites can find the wallet (CIP-30) and connect to the public
  * account. Turning it on asks Chrome to let the wallet onto sites, from the
  * click itself (Chrome asks only then); off removes the scripts but keeps
- * Chrome's access (background/connector.ts says why).
+ * Chrome's access (background/connector.ts says why). Under it, whether a
+ * site's signature needs the password too (on by default).
  */
 function DappConnector({ onSites }: { onSites: () => void }) {
   const { prefs, loaded, set } = usePreferences();
@@ -290,6 +291,29 @@ function DappConnector({ onSites }: { onSites: () => void }) {
           aria-describedby="dapp-connector-note"
           onClick={toggle}
           disabled={!loaded || allowed === undefined}
+        />
+      </div>
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="dapp-password-label">Ask for your password to sign for a site</span>
+          <span className="note" id="dapp-password-note" data-testid="dapp-password-note">
+            {!loaded || prefs.dappPassword
+              ? "A site's transaction or message is signed only once you type your password, even while the wallet is unlocked."
+              : "Sign is enough while the wallet is unlocked, so anyone at your unlocked browser could sign for a site."}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={loaded && prefs.dappPassword}
+          aria-labelledby="dapp-password-label"
+          aria-describedby="dapp-password-note"
+          onClick={() => {
+            setError(undefined);
+            set({ dappPassword: !prefs.dappPassword }).catch((e: Error) => setError(e.message));
+          }}
+          disabled={!loaded}
         />
       </div>
       <ul className="list">

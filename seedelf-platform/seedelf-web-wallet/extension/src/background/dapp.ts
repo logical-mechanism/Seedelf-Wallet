@@ -17,10 +17,13 @@
 //             on chain yet, less what they spent.
 // Signing     `signTx` reads what the transaction does in WebAssembly
 //             (`inspectDappTx`) and shows it; only an approval signs, with
-//             the account's keys that it needs. The account's own outputs of
-//             every transaction it signs are kept (the last 32), so a dApp
-//             can build its next transaction on them before they're on
-//             chain. `signData` is CIP-8, with the address's key.
+//             the account's keys that it needs. With `dappPassword` on (the
+//             default), Sign needs the password too, even while unlocked
+//             and even right after an unlock: a wrong one leaves the request
+//             waiting and counts towards the unlock back-off. The account's
+//             own outputs of every transaction it signs are kept (the last
+//             32), so a dApp can build its next transaction on them before
+//             they're on chain. `signData` is CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts).
 //
@@ -184,9 +187,9 @@ export class DappService {
       case "getRewardAddresses":
         return [this.hexAddress((await this.view(network)).stake)];
       case "signTx":
-        return this.signTx(session, network, args[0], args[1] === true);
+        return this.signTx(session, network, args[0], args[1] === true, await this.needsPassword());
       case "signData":
-        return this.signData(session, network, args[0], args[1]);
+        return this.signData(session, network, args[0], args[1], await this.needsPassword());
       case "submitTx":
         return this.submitTx(network, args[0]);
     }
@@ -200,9 +203,24 @@ export class DappService {
     return this.waiting.map((w) => w.approval);
   }
 
-  /** The user's answer to one; an approved one that fails says why, to the site too. */
-  async answer(id: string, approve: boolean): Promise<{ error?: string }> {
-    const i = this.waiting.findIndex((w) => w.approval.id === id);
+  /**
+   * The user's answer to one; an approved one that fails says why, to the site
+   * too. A signature that needs the password is checked first: a wrong or
+   * missing one leaves it waiting, and the site hears nothing.
+   */
+  async answer(id: string, approve: boolean, password?: string): Promise<{ error?: string }> {
+    const asked = this.waiting.find((w) => w.approval.id === id);
+    if (!asked) return { error: "The site stopped waiting for this." };
+    if (approve && asked.approval.kind !== "connect" && asked.approval.password) {
+      if (!password) return { error: "Type your password to sign." };
+      try {
+        await this.deps.wallet.checkPassword(password);
+      } catch (e) {
+        return { error: (e as Error).message };
+      }
+    }
+    // The site may have gone while the password was checked.
+    const i = this.waiting.indexOf(asked);
     if (i < 0) return { error: "The site stopped waiting for this." };
     const [w] = this.waiting.splice(i, 1);
     this.deps.changed();
@@ -276,6 +294,11 @@ export class DappService {
       await this.deps.store.set("dapps", [...all, { origin, network: this.deps.network, connectedAt: this.deps.now() }]);
     }
     return true;
+  }
+
+  /** Whether a site's signature asks for the password: the setting. */
+  private async needsPassword(): Promise<boolean> {
+    return (await this.deps.preferences.get()).dappPassword;
   }
 
   /** Waits for the wallet to be unlocked, in the connector's window. */
@@ -471,7 +494,13 @@ export class DappService {
     return { view, rows: [...found, ...others] };
   }
 
-  private async signTx(session: DappSession, network: NetworkName, tx: unknown, partialSign: boolean): Promise<string> {
+  private async signTx(
+    session: DappSession,
+    network: NetworkName,
+    tx: unknown,
+    partialSign: boolean,
+    password: boolean,
+  ): Promise<string> {
     const bytes = hexOf(tx, "The transaction isn't hex.");
     let refs: string[];
     try {
@@ -502,7 +531,7 @@ export class DappService {
         info: "This transaction needs signatures the wallet can't give: it spends or is signed for by keys that aren't the public account's.",
       });
     }
-    return this.ask(session, { kind: "sign-tx", partial: partialSign, summary }, TxSignError.UserDeclined, async () => {
+    return this.ask(session, { kind: "sign-tx", partial: partialSign, summary, password }, TxSignError.UserDeclined, async () => {
       const signed = await wallet.withKeys(({ cardano }) => JSON.parse(wasm.signDappTx(cardano, request)) as SignedTx);
       await this.remember(network, signed.summary);
       return signed.witnessSet;
@@ -541,7 +570,13 @@ export class DappService {
     });
   }
 
-  private async signData(session: DappSession, network: NetworkName, address: unknown, payload: unknown): Promise<unknown> {
+  private async signData(
+    session: DappSession,
+    network: NetworkName,
+    address: unknown,
+    payload: unknown,
+    password: boolean,
+  ): Promise<unknown> {
     if (typeof address !== "string") throw invalid("The address to sign with isn't a string.");
     const hex = typeof payload === "string" ? payload.trim() : "";
     if (!/^([0-9a-fA-F]{2})*$/.test(hex)) throw invalid("The data to sign isn't hex.");
@@ -558,7 +593,14 @@ export class DappService {
     const text = readableText(hex);
     return this.ask(
       session,
-      { kind: "sign-data", address: signer.address, key: signer.key, payload: hex, ...(text === undefined ? {} : { text }) },
+      {
+        kind: "sign-data",
+        address: signer.address,
+        key: signer.key,
+        payload: hex,
+        ...(text === undefined ? {} : { text }),
+        password,
+      },
       DataSignError.UserDeclined,
       () => wallet.withKeys(({ cardano }) => JSON.parse(wasm.signDappData(cardano, request)) as unknown),
     );

@@ -14,6 +14,9 @@
 // dappConnector     Sites can connect to the public account (CIP-30,
 //                   dapp.ts). Off by default; turning it on registers the
 //                   content scripts, which needs Chrome's access to sites.
+// dappPassword      A site's signature needs the password, typed in the
+//                   connector's window, even while unlocked (dapp.ts). On by
+//                   default.
 //
 // Where the toolbar button opens the wallet isn't one of these: it's the
 // browser's, not the wallet's (shared/open-in.ts).
@@ -34,6 +37,7 @@ export class PreferencesService {
       lockAfterMinutes: isLockAfter(kept.lockAfterMinutes) ? kept.lockAfterMinutes : DEFAULT_PREFERENCES.lockAfterMinutes,
       currency: isCurrency(kept.currency) ? kept.currency : DEFAULT_PREFERENCES.currency,
       dappConnector: typeof kept.dappConnector === "boolean" ? kept.dappConnector : DEFAULT_PREFERENCES.dappConnector,
+      dappPassword: typeof kept.dappPassword === "boolean" ? kept.dappPassword : DEFAULT_PREFERENCES.dappPassword,
     };
   }
 
@@ -45,6 +49,7 @@ export class PreferencesService {
     if (isLockAfter(change.lockAfterMinutes)) next.lockAfterMinutes = change.lockAfterMinutes;
     if (isCurrency(change.currency)) next.currency = change.currency;
     if (typeof change.dappConnector === "boolean") next.dappConnector = change.dappConnector;
+    if (typeof change.dappPassword === "boolean") next.dappPassword = change.dappPassword;
     await this.local.set(LOCAL_PREFERENCES, next);
     return next;
   }

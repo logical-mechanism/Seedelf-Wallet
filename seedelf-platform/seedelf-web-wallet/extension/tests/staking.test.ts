@@ -267,6 +267,7 @@ describe("spending rewards", () => {
       lockAfterMinutes: 15,
       currency: "usd",
       dappConnector: false,
+      dappPassword: true,
     });
     await t.wallet.reset();
     expect(await t.preferences.get()).toMatchObject({ spendRewards: true });

@@ -20,6 +20,8 @@ describe("preferences", () => {
       currency: "usd",
       // Sites can't see the wallet until the user turns the connector on.
       dappConnector: false,
+      // A site's signature needs the password until the user says otherwise.
+      dappPassword: true,
     });
 
     expect(await prefs.set({ hideBalances: true, lockAfterMinutes: 60, currency: "eur" })).toEqual({
@@ -28,6 +30,7 @@ describe("preferences", () => {
       lockAfterMinutes: 60,
       currency: "eur",
       dappConnector: false,
+      dappPassword: true,
     });
     expect(await prefs.lockAfterMs()).toBe(60 * 60_000);
 
@@ -40,6 +43,10 @@ describe("preferences", () => {
     expect((await prefs.get()).dappConnector).toBe(false);
     await prefs.set({ dappConnector: true });
     expect((await prefs.get()).dappConnector).toBe(true);
+    await prefs.set({ dappPassword: "no" as never });
+    expect((await prefs.get()).dappPassword).toBe(true);
+    await prefs.set({ dappPassword: false });
+    expect((await prefs.get()).dappPassword).toBe(false);
   });
 
   it("read a kept value that's no longer allowed as the default", async () => {

@@ -1,5 +1,6 @@
 // Unlock with the password. The worker enforces the back-off after wrong
-// passwords; this screen only shows the countdown.
+// passwords; this screen only shows the countdown. In the connector's
+// window it says a site is waiting: what it asks comes after.
 
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -8,6 +9,7 @@ import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { PasswordField } from "../components/PasswordField";
 import { Screen } from "../components/Screen";
+import { connectorWindow } from "../view";
 
 export function Unlock({
   retryAfterMs,
@@ -61,6 +63,11 @@ export function Unlock({
     <section className="unlock">
       <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={88} height={88} />
       <h1>Welcome back</h1>
+      {connectorWindow && (
+        <p className="note center" data-testid="unlock-site">
+          A site is waiting for Seedelf Wallet. Unlock to see what it asks.
+        </p>
+      )}
       <form className="stack unlock__form" onSubmit={submit}>
         <PasswordField id="password" value={password} onChange={setPassword} autoFocus />
         {error && (

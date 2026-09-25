@@ -180,6 +180,17 @@ export class Wallet {
   }
 
   /**
+   * Checks an unlocked wallet's password, before a site's signature
+   * (dapp.ts). A wrong one counts towards the unlock back-off, as the
+   * phrase's does.
+   */
+  checkPassword(password: string): Promise<void> {
+    return this.serial(async () => {
+      (await this.openWithPassword(password)).fill(0);
+    });
+  }
+
+  /**
    * Whether `phrase` is this wallet's recovery phrase, for Settings' check of
    * a written copy. It says only yes or no, never which words differ, so it
    * tells nobody at an unlocked browser more than a whole phrase they
