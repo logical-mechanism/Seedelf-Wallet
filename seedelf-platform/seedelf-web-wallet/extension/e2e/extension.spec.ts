@@ -1417,7 +1417,8 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("dapps")).toContainText("1 running");
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(page.getByTestId("swaps-running")).toContainText("10 ₳ → MINRunningPlacing the order");
+  // Running; the dApps page read the chain on its way, so it may already know the order landed.
+  await expect(page.getByTestId("swaps-running")).toContainText("10 ₳ → MINRunning");
   await snap(page, "home-swaps-running");
   await page.getByTestId("swaps-running").getByRole("button").click();
   await expect(timeline).toBeVisible();

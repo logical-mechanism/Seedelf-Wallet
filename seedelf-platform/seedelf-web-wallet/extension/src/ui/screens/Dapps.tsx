@@ -5,7 +5,9 @@
 // contract gets a tile of its own.
 //
 // Under the tiles, Sites: each site connected to a private session (chunk
-// 15c, private CIP-30), which opens its page (SiteSessions.tsx).
+// 15c, private CIP-30), which opens its page (SiteSessions.tsx). Above them,
+// when sessions hold money and nothing of theirs is on its way, Bring
+// everything back (ClaimAll.tsx): each in its own transaction.
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
@@ -13,7 +15,10 @@ import type { Balances, PendingTx, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { SwapIcon } from "../components/Icons";
+import { RefreshRow } from "../components/RefreshRow";
 import { Screen } from "../components/Screen";
+import { formatAda, plural } from "../format";
+import { ClaimAll, isClaimable } from "./ClaimAll";
 import { isSiteSession, SiteRow, SiteSession } from "./SiteSessions";
 import { isRunningSwap, Swaps, SwapTag } from "./Swaps";
 
@@ -53,6 +58,7 @@ export function Dapps({
   const [session, setSession] = useState(start?.session);
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [site, setSite] = useState<number>();
+  const [claiming, setClaiming] = useState(false);
   const [reading, setReading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [error, setError] = useState<string>();
@@ -71,8 +77,9 @@ export function Dapps({
     }
   }, []);
 
+  // The device's record at once, then the sessions' accounts: what each holds decides what can come back.
   useEffect(() => {
-    if (!open) void load(false);
+    if (!open) void load(false).then(() => load(true));
   }, [open, load]);
 
   // A site's page reads what its account holds when it opens.
@@ -91,6 +98,20 @@ export function Dapps({
           setSession(undefined);
         }}
         onPending={onPending}
+      />
+    );
+  }
+
+  const claimable = sessions.filter(isClaimable);
+  if (claiming) {
+    return (
+      <ClaimAll
+        sessions={claimable}
+        onBack={() => setClaiming(false)}
+        onDone={() => {
+          setClaiming(false);
+          void load(true);
+        }}
       />
     );
   }
@@ -120,6 +141,10 @@ export function Dapps({
 
   return (
     <Screen title="dApps" titleId="dapps-title" onBack={onBack} aside="Used privately, from one-time accounts" error={error}>
+      {sessions.some((s) => s.stage !== "closed") && (
+        <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load(true)} />
+      )}
+      {claimable.length > 0 && <ClaimCard sessions={claimable} onOpen={() => setClaiming(true)} />}
       <div className="dapp-grid" data-testid="dapps">
         {DAPPS.map((d) => (
           <button key={d.id} type="button" className="dapp-tile" onClick={() => setOpen(d.id)}>
@@ -167,3 +192,24 @@ export function Dapps({
     </Screen>
   );
 }
+
+/** Money waiting in private sessions, and Bring everything back. */
+function ClaimCard({ sessions, onOpen }: { sessions: SessionView[]; onOpen: () => void }) {
+  const lovelace = sessions.reduce((sum, s) => sum + BigInt(s.holding?.lovelace ?? "0"), 0n);
+  const tokens = new Set(sessions.flatMap((s) => (s.holding?.tokens ?? []).map((t) => t.policyId + t.assetName))).size;
+  return (
+    <section className="section claim-card" aria-labelledby="claim-card-title" data-testid="claim-card">
+      <h2 id="claim-card-title">In private sessions</h2>
+      <p className="claim-card__amount">
+        {formatAda(lovelace.toString())} ₳{tokens ? ` and ${plural(tokens, "token")}` : ""}
+      </p>
+      <p className="note">
+        {plural(sessions.length, "session")} {sessions.length === 1 ? "holds" : "hold"} it, with nothing of theirs on its way.
+      </p>
+      <button type="button" className="secondary" onClick={onOpen}>
+        Bring everything back
+      </button>
+    </section>
+  );
+}
+

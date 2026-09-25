@@ -114,6 +114,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **What links, on chain:** the funding to the account, as for a swap; whatever the site does with the account, in the open; each top-up; and the return to new private UTxOs. The public account never appears.
   - **The site** sees the account's address, its reward address (its own stake key, never registered), its UTxOs and collateral, and what the user signs for it. It sees the same account on every visit until the session ends, like a pen name: its visits link to each other, but to nothing else.
   - **On this device:** which site has which session is part of the sealed list of connected sites.
+- **Bring everything back** returns each session in its own transaction, so no transaction ties two sessions together. They're sent one after another, though: returns into Seedelf that land within a block or two of each other hint that their one-time accounts are one person's. Spreading them out over time would weaken that; the user took sending them together, for now (2026-09-25).
 - **Save as CSV** (chunk 14) writes the listed Activity to a file on the device, unencrypted. For the private side that's the payments only this wallet can tell are yours, and the screen says so.
 
 ## Holding and staking

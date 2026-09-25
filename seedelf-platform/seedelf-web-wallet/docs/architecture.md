@@ -352,6 +352,10 @@ flowchart LR
     - The request is then marked `funding`, and the worker reads the account every 10 s until the money is there. Only then does `enable()` answer.
     - A window closed meanwhile doesn't decline it: the payment is sent.
   - **Managing:** the dApps page's *Sites*: Top up (`topUpBuild`/`topUpSubmit`), Bring it back (the session return), and Disconnect (`disconnectSession`: the account must be empty, and the site's record goes). A site's session doesn't close at its return, only at its disconnect: something still open at the site may pay the account later.
+- **Bring everything back** (`claimBuild`/`claimSubmit`, `screens/ClaimAll.tsx`): every session that holds something and isn't a swap that runs itself, with no order waiting, comes back in one go.
+  - Each session's return is its own transaction, signed by its own key, never one spending several sessions' UTxOs: that would show on chain that they share an owner.
+  - They're built up front, for a review where any can be left out, then sent one after another; one that fails doesn't stop the rest.
+  - The dApps page reads the sessions' accounts when it opens (one Koios request for all of them), so it knows what they hold.
 - **The password at Sign** (the `dappPassword` setting, on by default): a site's `signTx` or `signData` is signed only once the password typed in the window checks out (`Wallet.checkPassword`), even while unlocked and even right after an unlock. A wrong one leaves the request waiting, tells the site nothing, and counts towards the unlock back-off. Only the wallet's own pages can answer a request: the worker refuses messages from anywhere else.
 
 ## Private sessions

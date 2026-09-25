@@ -877,6 +877,19 @@ export interface Requests {
   "session-top-up-build": { payload: { index: number; lovelace: string; tokens: TokenQuantity[] }; result: SessionOutSummary };
   /** Sends the top-up built last. */
   "session-top-up-submit": { payload: { txHash: string }; result: PendingTx };
+  /**
+   * Bring everything back: a return for each of these sessions that holds
+   * something, each its own transaction; `skipped` says why a session wasn't.
+   */
+  "session-claim-build": {
+    payload: { indexes: number[] };
+    result: { returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> };
+  };
+  /** Sends the chosen returns Bring everything back built, one after another. */
+  "session-claim-submit": {
+    payload: { txHashes: string[] };
+    result: { sent: Array<{ index: number; txHash: string }>; failed: Array<{ index: number; error: string }> };
+  };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
   "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
   /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */
@@ -966,6 +979,8 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "session-forget",
   "session-top-up-build",
   "session-top-up-submit",
+  "session-claim-build",
+  "session-claim-submit",
   "session-advance",
   "session-stop",
   "session-resume",

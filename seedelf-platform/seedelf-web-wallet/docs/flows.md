@@ -360,3 +360,5 @@ The same session, offered to a site over CIP-30 instead of the public account. T
 3. **Use:** the site sees an ordinary wallet: that account, its reward address and its 5 ₳ collateral, and nothing else. Each transaction and message gets the window's prompt, signed with the session's keys.
 4. **Top up and Bring it back** from the dApps page's *Sites*. Bringing it back leaves the site connected, to an empty account, because something still open at the site (a listing, an order) may pay it later.
 5. **Disconnect** ends the session, once the account is empty. It is never used again, and the site's next connect asks again.
+
+**Bring everything back** (the dApps page, when sessions hold money): every site's session, and every older swap brought back by hand, with nothing on its way, back into the private balance in one go. Each comes back in its own transaction, sent one after another. The review lists them, with the total and the fees, and a tap leaves one out: a site still in use, say.

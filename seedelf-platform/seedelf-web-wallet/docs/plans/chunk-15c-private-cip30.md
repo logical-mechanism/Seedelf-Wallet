@@ -75,6 +75,18 @@ Step 4 of [chunk 15](chunk-15-dapp-connector.md#the-steps): a site connects to a
 - **Live (the user, 2026-09-25):** a real preprod site connected to a private session, and a trade went through it. Bringing it back and disconnecting come next. The e2e stops at giveme.my, whose real signature the fakes can't give.
 - **After that first try:** the Settings switch was renamed from *Let sites connect to your public account* to **Let sites connect to Seedelf Wallet**. The old name read as turning on the public account only, when it turns on connecting at all. Each site's account is chosen in the connect window.
 
+## Then: Bring everything back (the user, 2026-09-25)
+
+- **Why:** after the first live session, the user found the back-and-forth a little clunky with many sessions. A button that finds every session holding money and brings each back saves opening them one by one.
+- **Decided:**
+  - Each session comes back in its own transaction, never one combined: a transaction spending several one-time accounts would tie them together on chain.
+  - They're sent together. Spreading them out, which would weaken the timing link, can come later: "This is ok for now."
+- **Built:**
+  - `SessionService.claimBuild`/`claimSubmit` (`session-claim-build`/`-submit`), and `screens/ClaimAll.tsx`, from a card on the dApps page.
+  - It takes site sessions and older hand-run swaps that hold something, with no order waiting. Swaps that run themselves come back by themselves.
+  - The review leaves any out with a tap, and one that fails to send doesn't stop the rest.
+  - Vitest 1 (`sessions.test.ts`): two sessions come back in two transactions; an empty one and a swap that runs itself are left out, saying why.
+
 ## Out of scope here
 
 - **The restore scan**, which finds sessions on a new device.

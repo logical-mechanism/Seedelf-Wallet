@@ -78,6 +78,8 @@ export const SESSION_BACK = "seedelf.session.back";
 export const SESSION_SITE_OUT = "seedelf.session.site-out";
 /** chrome.storage.session: a top-up of a site's private session, built and waiting for Send. */
 export const SESSION_TOP_UP = "seedelf.session.top-up";
+/** chrome.storage.session: Bring everything back's returns, one per session, built and waiting for Send. */
+export const SESSION_CLAIM = "seedelf.session.claim";
 
 /** Each session's own collateral, as the public account's. */
 export const SESSION_COLLATERAL = 5_000_000n;
@@ -287,9 +289,14 @@ export class SessionService {
 
   constructor(private readonly deps: SessionDeps) {}
 
-  /** This network's sessions, newest first. `refresh` reads their accounts and what's waiting. */
+  /**
+   * This network's sessions, newest first. `refresh` reads their accounts and
+   * what's waiting, in turn with every other step. Without it, it only reads
+   * the record, so it doesn't wait behind a reading that waits for Koios to
+   * catch up (Home's running swaps, a page's first look).
+   */
   list(network: NetworkName, refresh = false): Promise<SessionView[]> {
-    return this.serial(() => this.listNow(network, refresh));
+    return refresh ? this.serial(() => this.listNow(network, true)) : this.listNow(network, false);
   }
 
   /** Forgets a session whose funding never reached the chain. Its index isn't used again. */
@@ -643,6 +650,68 @@ export class SessionService {
     });
   }
 
+  /**
+   * Bring everything back: a return for each of `indexes` that holds
+   * something and has nothing on its way, each its own transaction signed by
+   * its own key, never one spending several sessions' UTxOs together: that
+   * would show on chain that they share an owner. A swap that runs itself
+   * comes back by itself, so it's left out. Kept for Send.
+   */
+  async claimBuild(
+    network: NetworkName,
+    indexes: number[],
+  ): Promise<{ returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> }> {
+    const { wallet, session } = this.deps;
+    const params = await this.deps.koios(network).epochParams();
+    const returns: KeptBack[] = [];
+    const skipped: Array<{ index: number; reason: string }> = [];
+    for (const index of [...new Set(indexes)]) {
+      try {
+        const s = await this.live(network, index);
+        if (s.auto) throw new Error("A swap that runs itself comes back by itself.");
+        const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
+        if (s.txs.some((t) => t.kind === "swap") && (await this.deps.minswap(network).pendingOrders(address)).length) {
+          throw new Error("An order of this session is still waiting.");
+        }
+        const rows = await this.utxosOf(network, keyHash);
+        if (!rows.length) throw new Error("It holds nothing.");
+        returns.push(await this.buildBack(network, index, rows, params));
+      } catch (e) {
+        skipped.push({ index, reason: (e as Error).message });
+      }
+    }
+    await wallet.withKeys(() => session.set(SESSION_CLAIM, returns));
+    return { returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, ...summary }) => summary), skipped };
+  }
+
+  /** Sends the returns Bring everything back built, those chosen, one after another. One that fails doesn't stop the rest. */
+  claimSubmit(
+    network: NetworkName,
+    txHashes: string[],
+  ): Promise<{ sent: Array<{ index: number; txHash: string }>; failed: Array<{ index: number; error: string }> }> {
+    return this.serial(async () => {
+      const { wallet, session, now } = this.deps;
+      const kept = (await wallet.withKeys(() => session.get<KeptBack[]>(SESSION_CLAIM))) ?? [];
+      const chosen = txHashes.map((h) => kept.find((k) => k.txHash === h && k.network === network));
+      if (!chosen.length || chosen.some((c) => !c)) throw new Error("Those returns aren't ready to send. Review them again.");
+      if (chosen.some((c) => now() - c!.builtAt > BUILT_TTL_MS)) {
+        throw new Error("Those returns were built more than 10 minutes ago. Review them again.");
+      }
+      const sent: Array<{ index: number; txHash: string }> = [];
+      const failed: Array<{ index: number; error: string }> = [];
+      for (const built of chosen as KeptBack[]) {
+        try {
+          await this.sendBack(network, built, SESSION_CLAIM);
+          sent.push({ index: built.index, txHash: built.txHash });
+        } catch (e) {
+          failed.push({ index: built.index, error: (e as Error).message });
+        }
+      }
+      await wallet.withKeys(() => session.remove(SESSION_CLAIM));
+      return { sent, failed };
+    });
+  }
+
   // -------------------------------------------------------------------------
   // The runner
 
@@ -909,9 +978,9 @@ export class SessionService {
   }
 
   /** The return of everything at the session's account, built and signed by the session's key. */
-  private async buildBack(network: NetworkName, index: number, rows: KoiosUtxo[]): Promise<KeptBack> {
+  private async buildBack(network: NetworkName, index: number, rows: KoiosUtxo[], known?: unknown): Promise<KeptBack> {
     const { wasm, wallet, now } = this.deps;
-    const params = await this.deps.koios(network).epochParams();
+    const params = known ?? (await this.deps.koios(network).epochParams());
     const result = await wallet.withKeys(
       (keys) =>
         JSON.parse(
@@ -921,9 +990,9 @@ export class SessionService {
     return { ...result, network, index, builtAt: now() };
   }
 
-  /** Sends a return, and puts it in the private history. */
-  private async sendBack(network: NetworkName, built: KeptBack): Promise<PendingTx> {
-    const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), SESSION_BACK);
+  /** Sends a return, and puts it in the private history. `kept`: where it was kept for Send, cleared once it's sent. */
+  private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK): Promise<PendingTx> {
+    const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), kept);
     await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
     return pending;
   }

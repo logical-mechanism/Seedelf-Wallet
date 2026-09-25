@@ -597,3 +597,63 @@ describe("a swap that runs itself", () => {
     });
   });
 });
+
+describe("bring everything back", () => {
+  it("returns each session that holds something in its own transaction, and says why it left out the rest", async () => {
+    const t = await unlocked();
+    const { wasm } = t.deps;
+    const at = await t.wallet.withKeys((k) =>
+      [0, 1, 2, 3].map((i) => ({ address: k.oneTime.address(wasm.Network.Preprod, i), keyHash: k.oneTime.keyHash(i) })),
+    );
+    const now = t.clock.now;
+    const out = (n: number) => ({ kind: "out", txHash: String(n).repeat(64), at: now, confirmed: true });
+    await t.store.set("sessions.preprod", {
+      next: 4,
+      sessions: [
+        { index: 0, ownStake: true, createdAt: now, txs: [out(1)], site: { origin: "https://a.example" } },
+        { index: 1, ownStake: true, createdAt: now, txs: [out(2)], site: { origin: "https://b.example" } },
+        {
+          index: 2,
+          ownStake: true,
+          createdAt: now,
+          txs: [out(3)],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } } },
+        },
+        { index: 3, ownStake: true, createdAt: now, txs: [out(4)], site: { origin: "https://c.example" } },
+      ],
+    });
+    const held = (i: number, tx: string, value: string) => ({
+      ...atSession(tx, 0, value),
+      address: at[i]!.address,
+      payment_cred: at[i]!.keyHash,
+    });
+    t.koios.addedToAccounts.push(
+      held(0, "a0".repeat(32), "20000000"),
+      held(2, "a2".repeat(32), "9000000"),
+      held(3, "a3".repeat(32), "7000000"),
+    );
+
+    // Sessions 0 and 3 hold something; 1 holds nothing, and 2 is a swap that brings itself back.
+    const { returns, skipped } = await t.sessions.claimBuild("preprod", [0, 1, 2, 3]);
+    expect(returns.map((r) => [r.index, r.inputs])).toEqual([
+      [0, 1],
+      [3, 1],
+    ]);
+    expect(skipped).toEqual([
+      { index: 1, reason: "It holds nothing." },
+      { index: 2, reason: "A swap that runs itself comes back by itself." },
+    ]);
+
+    // Sent one after another, each its own transaction: never one spending several sessions together.
+    const { sent, failed } = await t.sessions.claimSubmit("preprod", returns.map((r) => r.txHash));
+    expect(failed).toEqual([]);
+    expect(sent.map((x) => x.index)).toEqual([0, 3]);
+    expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual(returns.map((r) => r.txHash));
+    const views = await t.sessions.list("preprod");
+    expect(views.find((v) => v.index === 0)!.txs.map((x) => x.kind)).toEqual(["out", "back"]);
+    expect(views.find((v) => v.index === 3)!.stage).toBe("returning");
+    // Sent once: asked again, there's nothing ready.
+    await expect(t.sessions.claimSubmit("preprod", returns.map((r) => r.txHash))).rejects.toThrow("aren't ready to send");
+  });
+});

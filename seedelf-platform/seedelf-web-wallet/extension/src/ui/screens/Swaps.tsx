@@ -93,7 +93,7 @@ function amountOf(quantity: string, side: SwapSide): string {
 const sideName = (side: SwapSide) => (side.label === "₳" ? "ADA" : side.label);
 
 /** A session's swap in a line: "10 ₳ → MIN", "906.5941 MIN → ADA". */
-function pairOf(s: SessionView): string {
+export function pairOf(s: SessionView): string {
   const d = s.swap?.display;
   if (!s.swap || !d) return "A swap";
   return `${amountOf(s.swap.amount, d.in)} → ${sideName(d.out)}`;

@@ -2439,6 +2439,36 @@ button.dapp-tile:hover {
   padding-top: var(--s2);
 }
 
+/* Bring everything back (ClaimAll.tsx): what private sessions hold, and
+   each session's return as a row to keep or leave out. */
+.claim-card__amount {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.claim-check {
+  grid-row: 1 / 3;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  color: var(--accent-text);
+}
+
+.claim-row--on .claim-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.claim-row:not(.claim-row--on) .token-row__label,
+.claim-row:not(.claim-row--on) .token-row__amount {
+  color: var(--muted);
+}
+
 /* Not a dApp yet: where the next ones go. */
 .dapp-tile--soon {
   justify-content: center;

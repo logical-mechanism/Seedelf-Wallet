@@ -224,6 +224,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.sessions.topUpBuild(ctx.network, message.index, message.lovelace, message.tokens);
     case "session-top-up-submit":
       return ctx.sessions.topUpSubmit(ctx.network, message.txHash);
+    case "session-claim-build":
+      return ctx.sessions.claimBuild(ctx.network, message.indexes);
+    case "session-claim-submit":
+      return ctx.sessions.claimSubmit(ctx.network, message.txHashes);
     case "session-advance":
       return ctx.sessions.advance(ctx.network, message.index, message.now ?? false);
     case "session-stop":
