@@ -40,6 +40,7 @@ These are not user settings:
    - This rule used to say "stealth mint from the Seedelf balance, never paid by the Cardano account". That was wrong whenever your own move-in funded the balance: the mint spends that deposit and ties the account, the name and the mint's change together.
 6. **The Cardano account is never a one-time account.** Each one-time account is used for a single session. One-time accounts use a reserved account index (`24301'`), never a low index like `1'` that a restored Lace wallet may already use: sharing payment keys with a real account would link every one-time address back to the user.
 7. **No analytics or telemetry.** The wallet talks to Koios and giveme.my, and on mainnet to CoinGecko for ADA's price unless the currency is set to nothing, and to nothing else.
+8. **Sites only ever see the public account** (the dApp connector, chunk 15). The private balance, the Seedelf key and the Seedelfs are never offered over CIP-30. The connector is off until the user turns it on, and until then nothing is added to any web page.
 
 ## Known links
 
@@ -96,6 +97,12 @@ The wallet can't prevent these, so it should make them visible to the user inste
 - **A note on a public send** (chunk 14) is CIP-20's message on the transaction: anyone can read it, for good. The form says so, and when a recipient is a Seedelf, that the note could say whose Seedelf is paid (the payment itself doesn't). There's no note on the private side's flows: it would be public words on a private payment. Notes from others show in the public Activity as text, and Save as CSV never lets one run as a spreadsheet formula.
 - **ADA's price** (chunk 14, mainnet only) comes from CoinGecko's public API: one request for every currency, when Home opens or is refreshed, at most every five minutes, none with the currency set to nothing. It says nothing about the wallet: CoinGecko learns only that someone at this IP address uses it. Only ADA is priced; asking about the tokens held would say what the wallet holds.
 - **An ADA Handle in the private balance** (chunk 14) isn't private and isn't safe: whoever pays `$name` from another wallet pays the address holding it, the Seedelf contract, with no register, and the contract lets such a UTxO go to anyone. The wallet warns before a handle goes into a Seedelf and while one sits in the private balance.
+- **Connecting a site** (chunk 15) shows it the public account: its addresses, its balance and its UTxOs, and everything the user signs for it. That's what any wallet's CIP-30 gives, and the connect screen says so, and that the private balance stays out of it.
+  - **The site learns nothing about Seedelf** from the connector: no Seedelf UTxO, register or key is offered, and a transaction it asks to sign is read against the public account only.
+  - **A payment into Seedelf Wallet's contract** in a site's transaction is shown: under a register (a Seedelf payment, whose owner stays hidden, from the account in the open), or without one (anyone can take it, and the window warns).
+  - **Which sites are connected** is a sealed private record, like Contacts. The site's origin comes from Chrome, not the page.
+  - **What Koios learns:** reading the account for a site is the same query as a balance reading (at most every 30 s). Signing a site's transaction that spends UTxOs the account doesn't hold asks Koios about those (`utxo_info`); they're the site's, and the transaction names them anyway.
+  - **Turning it on** asks Chrome to let the wallet onto every https site, which is what adds `window.cardano.seedelf`. The wallet doesn't read or change the pages beyond that one entry.
 - **Save as CSV** (chunk 14) writes the listed Activity to a file on the device, unencrypted. For the private side that's the payments only this wallet can tell are yours, and the screen says so.
 
 ## Holding and staking

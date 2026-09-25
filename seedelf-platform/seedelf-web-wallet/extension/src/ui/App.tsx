@@ -9,13 +9,14 @@ import type { Status } from "../shared/rpc";
 import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
 import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
+import { DappApprovals } from "./screens/DappApprovals";
 import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
 import { Settings } from "./screens/Settings";
 import { Reset, Unlock } from "./screens/Unlock";
 import { NetworkContext } from "./network";
 import { PreferencesProvider } from "./preferences";
-import { openInTab, startFromHash, view } from "./view";
+import { connectorWindow, openInTab, startFromHash, view } from "./view";
 
 export function App() {
   const [status, setStatus] = useState<Status>();
@@ -79,6 +80,8 @@ export function App() {
     );
   } else if (status.state === "locked") {
     screen = <Unlock retryAfterMs={status.retryAfterMs} onUnlocked={refresh} onForgot={() => setResetting(true)} />;
+  } else if (connectorWindow) {
+    screen = <DappApprovals />;
   } else if (settings) {
     screen = (
       <Settings
@@ -105,7 +108,7 @@ export function App() {
           </span>
         )}
         <span className="topbar__spacer" />
-        {unlocked && (
+        {unlocked && !connectorWindow && (
           <button
             className="icon-button"
             onClick={() => setSettings(!settings)}
@@ -116,12 +119,12 @@ export function App() {
             <SettingsIcon />
           </button>
         )}
-        {unlocked && (
+        {unlocked && !connectorWindow && (
           <button className="icon-button" onClick={lock} aria-label="Lock" title="Lock">
             <LockIcon />
           </button>
         )}
-        {view === "panel" && (
+        {view === "panel" && !connectorWindow && (
           <button className="icon-button" onClick={() => openInTab()} aria-label="Open in tab" title="Open in a full tab">
             <ExpandIcon />
           </button>

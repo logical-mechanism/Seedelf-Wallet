@@ -2,6 +2,8 @@ import { cpSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } fr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { BrowserContext, Page } from "@playwright/test";
+
 import {
   accountMintPreprod,
   addTokens,
@@ -13,6 +15,7 @@ import {
   koiosPreprod,
   launch,
   openApp,
+  openDapp,
   openReceive,
   ownedUtxos,
   PASSWORD,
@@ -1788,4 +1791,165 @@ test("a worker that lost its WASM file explains itself and recovers", async ({ u
     await context.close();
     rmSync(copy, { recursive: true, force: true });
   }
+});
+
+test.describe("the dApp connector", () => {
+  // Chrome's own dialog for the access to sites can't be answered here, so
+  // this build has it from install (support.ts `withSiteAccess`).
+  test.use({ siteAccess: true });
+
+  /** CIP-30 on the dApp's page: a call's answer, or its error's code and info. */
+  const cip30 = (dapp: Page, method: string, ...args: unknown[]) =>
+    dapp.evaluate(
+      async ([method, args]) => {
+        const api = await (window as any).cardano.seedelf.enable();
+        try {
+          return { value: await api[method as string](...(args as unknown[])) };
+        } catch (e) {
+          return { error: { code: (e as { code?: number }).code, info: (e as { info?: string }).info } };
+        }
+      },
+      [method, args] as const,
+    );
+
+  /** The connector's window, once a site's call opens it. */
+  const connectorWindow = async (context: BrowserContext) => {
+    const page = await context.waitForEvent("page", (p) => p.url().includes("view=dapp"));
+    await page.setViewportSize({ width: 400, height: 640 });
+    return page;
+  };
+
+  test("off, sites see nothing; on, a site connects, reads, and has things signed only by the user", async ({
+    context,
+    koios,
+  }) => {
+    const dapp = await openDapp(context);
+    expect(await dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("undefined");
+
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to your public account" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("dapp-connector-note")).toContainText("only ever see your public account");
+
+    await dapp.reload();
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.name)).toBe("Seedelf Wallet");
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(false);
+
+    // Connecting asks the user, in the connector's window.
+    const opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
+    const connect = await opened;
+    await expect(connect.getByRole("heading", { name: "Connect a site" })).toBeVisible();
+    await expect(connect.getByTestId("dapp-origin")).toContainText("dapp.example");
+    await expect(connect.getByTestId("dapp-connect-privacy")).toContainText("Your private balance stays out of it");
+    await snap(connect, "dapp-connect");
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe(true);
+    await closed;
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(true);
+
+    // Reads: the public account, in CIP-30's encodings.
+    expect(await cip30(dapp, "getNetworkId")).toEqual({ value: 0 });
+    const used = (await cip30(dapp, "getUsedAddresses")).value as string[];
+    expect(used[0]).toMatch(/^00[0-9a-f]{112}$/); // a preprod base address
+    expect(await cip30(dapp, "getChangeAddress")).toEqual({ value: used[0] });
+    expect(((await cip30(dapp, "getUtxos")).value as string[]).length).toBe(koiosPreprod.accounts[vector(12).preprod.stake].account_utxos.length);
+    expect((await cip30(dapp, "getBalance")).value).toMatch(/^82/); // ADA and tokens
+    // The recorded account has no pure 5 ₳ UTxO, so no collateral.
+    expect(await cip30(dapp, "getCollateral")).toEqual({ value: null });
+
+    // A transaction to sign: the wallet's own Send builds one to someone else.
+    const tx = await page.evaluate(async (to) => {
+      await chrome.runtime.sendMessage({ type: "send-build", payments: [{ to, lovelace: "3000000", tokens: [] }] });
+      const kept = await chrome.storage.session.get("seedelf.send.built");
+      return (kept["seedelf.send.built"] as { txCbor: string }).txCbor;
+    }, vector(15).preprod.receive_0);
+
+    let prompt = connectorWindow(context);
+    let signing = cip30(dapp, "signTx", tx);
+    let sign = await prompt;
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    await expect(sign.getByTestId("dapp-paid").locator("[data-value]")).toHaveAttribute("data-value", vector(15).preprod.receive_0);
+    // The account's rewards ride along (57.475311 ₳), so its UTxOs end up with more than they paid: the stake key signs too.
+    await expect(sign.getByTestId("dapp-tx-net")).toContainText("Your public account gets");
+    await expect(sign.getByTestId("dapp-tx-net")).toContainText("your stake key");
+    await expect(sign.getByTestId("dapp-staking")).toContainText("Withdraws your staking rewards: 57.475311 ₳");
+    await snap(sign, "dapp-sign-tx");
+    // With nothing left to answer, the window closes itself.
+    let done = sign.waitForEvent("close");
+    await sign.getByRole("button", { name: "Sign", exact: true }).click();
+    expect((await signing).value).toMatch(/^a100/);
+    await done;
+
+    // Declined.
+    prompt = connectorWindow(context);
+    signing = cip30(dapp, "signTx", tx);
+    sign = await prompt;
+    done = sign.waitForEvent("close");
+    await sign.getByRole("button", { name: "Decline" }).click();
+    expect(await signing).toEqual({ error: { code: 2, info: "The user declined." } });
+    await done;
+
+    // A message.
+    prompt = connectorWindow(context);
+    const message = cip30(dapp, "signData", used[0], Buffer.from("Sign in to dapp.example").toString("hex"));
+    sign = await prompt;
+    await expect(sign.getByRole("heading", { name: "Sign a message" })).toBeVisible();
+    await expect(sign.getByTestId("dapp-data-message")).toHaveText("Sign in to dapp.example");
+    await snap(sign, "dapp-sign-data");
+    done = sign.waitForEvent("close");
+    await sign.getByRole("button", { name: "Sign", exact: true }).click();
+    await done;
+    const signed = (await message).value as { signature: string; key: string };
+    expect(signed.signature).toMatch(/^84/);
+    expect(signed.key).toMatch(/^a4/);
+
+    // Sent through Koios.
+    const submitted = (await cip30(dapp, "submitTx", tx)).value as string;
+    expect(koios.submitted).toEqual([submitted]);
+
+    // Settings lists it, and disconnecting it means asking again.
+    await page.getByRole("button", { name: "Connected sites" }).click();
+    await expect(page.getByTestId("sites")).toContainText("dapp.example");
+    await page.getByRole("button", { name: "Disconnect" }).click();
+    await expect(page.getByTestId("sites-empty")).toBeVisible();
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(false);
+
+    // Off again: new pages get nothing.
+    await page.getByRole("button", { name: "Back" }).click();
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await dapp.reload();
+    expect(await dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("undefined");
+  });
+
+  test("a locked wallet asks for the password in the connector's window first", async ({ context }) => {
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to your public account" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const dapp = await openDapp(context);
+    let opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
+    const connect = await opened;
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe(true);
+    await closed;
+    await page.getByRole("button", { name: "Lock" }).click();
+
+    opened = connectorWindow(context);
+    const reading = cip30(dapp, "getNetworkId");
+    const unlock = await opened;
+    await unlock.getByLabel("Password").fill(PASSWORD);
+    await unlock.getByRole("button", { name: "Unlock" }).click();
+    expect(await reading).toEqual({ value: 0 });
+  });
 });

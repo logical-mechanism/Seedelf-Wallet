@@ -22,7 +22,10 @@ describe("manifest", () => {
     expect(m.content_security_policy.extension_pages).not.toContain("api.koios.rest");
     expect(m.content_security_policy.extension_pages).not.toContain("coingecko");
     expect(m.content_security_policy.extension_pages).toContain("font-src 'self'");
-    expect(m.permissions).toEqual(["storage", "alarms", "sidePanel"]);
+    expect(m.permissions).toEqual(["storage", "alarms", "sidePanel", "scripting"]);
+    // Sites only when the user turns the dApp connector on: optional, asked for then.
+    expect(m.optional_host_permissions).toEqual(["https://*/*", "http://localhost/*", "http://127.0.0.1/*"]);
+    expect(m).not.toHaveProperty("content_scripts");
     expect(m.icons).toEqual({
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -54,7 +57,7 @@ describe("manifest", () => {
     const m = buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: true });
     expect(m).not.toHaveProperty("key");
     expect(m.name).toBe("Seedelf Wallet (preprod)");
-    expect(m.permissions).toEqual(["storage", "alarms", "sidePanel"]);
+    expect(m.permissions).toEqual(["storage", "alarms", "sidePanel", "scripting"]);
     expect(m.host_permissions).toEqual(["https://preprod.koios.rest/*", "https://www.giveme.my/*"]);
     expect(m.content_security_policy.extension_pages).toBe(
       [

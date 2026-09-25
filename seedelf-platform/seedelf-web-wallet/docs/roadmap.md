@@ -30,17 +30,37 @@ The wallet is built in **chunks**, each about one working session.
 | 11c | Testers | ✅ | The unlisted, preprod-only Chrome Web Store listing, ready for the user to submit: `npm run package` (the store build, third-party notices, a reproducible zip), the listing text and privacy policy in [store/](store/README.md), the images from `npm run store:images`, and a release checklist. Same plan. |
 | 12 | Style and flow | ✅ | The user tested the built wallet and sent findings; 29 items, each decided with the user. Among them: a loading splash, a Tokens screen and a bundled token list, a token picker with any amount of each, Settings, Activity, Contacts, an incremental contract scan, Send from the Cardano account, the minimum ADA worked out, Receive on the Seedelf tab, spending everything under the account's payment keys, a UTxOs screen on both sides with locks, the Cardano account's collateral in Settings, and Refresh on UTxOs and Activity. **Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).** |
 | 13 | Staking and voting | ✅ | The wallet becomes a full Cardano wallet with Seedelf built in: a Staking page (one pool, rewards spent automatically or by hand), a pool browser, and voting delegation (Always abstain, No confidence, or a DRep). Certificates patched into Pallas's transactions. **Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md).** |
-| 14 | Style and flow, second pass | 🚧 | The user's second round of findings, each decided with the user, as in chunk 12. So far: Send from the Cardano account pays a Seedelf, one way to write the name (Seedelf, and Seedelf Wallet for the app), several recipients in one payment on both sides, and Private and Public in place of Seedelf and Cardano. Then what Lace and Eternl had that the wallet didn't: a full tab by default or the side panel (no popup), hide balances, a note on a public send, the lock time, your handles on Receive (and a warning for a handle in Seedelf), a check of the written phrase, Activity as CSV, staking in the public Activity, and ADA's value in a currency on mainnet. Readable dropdowns, and a code review's fixes before the PR. **Plan: [plans/chunk-14-style-flow-2.md](plans/chunk-14-style-flow-2.md).** |
+| 14 | Style and flow, second pass | ✅ | The user's second round of findings, each decided with the user, as in chunk 12. So far: Send from the Cardano account pays a Seedelf, one way to write the name (Seedelf, and Seedelf Wallet for the app), several recipients in one payment on both sides, and Private and Public in place of Seedelf and Cardano. Then what Lace and Eternl had that the wallet didn't: a full tab by default or the side panel (no popup), hide balances, a note on a public send, the lock time, your handles on Receive (and a warning for a handle in Seedelf), a check of the written phrase, Activity as CSV, staking in the public Activity, and ADA's value in a currency on mainnet. Readable dropdowns, and a code review's fixes before the PR. **Plan: [plans/chunk-14-style-flow-2.md](plans/chunk-14-style-flow-2.md).** |
+| 15 | dApps: the public connector | 🚧 | The first step towards using contracts privately. CIP-30 for the public account, as Lace has it, behind a Settings switch that's off by default: Chrome is asked for access to sites only when it's turned on, and nothing is added to any page until then. A window to connect, sign transactions (what they do to the account, read in WebAssembly) and sign messages (CIP-8), connected sites to disconnect, and chaining on the account's own unconfirmed outputs. Then private sessions, a dApp browser, and Minswap. **Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md).** |
 
 ## After v1
 
-- Contract round trip: one-time accounts, CIP-30, auto-return ([flows.md](flows.md#contract-round-trip)).
+- Contract round trip: one-time accounts, CIP-30, auto-return ([flows.md](flows.md#contract-round-trip)). Started in chunk 15: its plan has the steps, the user's two designs, and what Minswap allows.
 - Turn on the mainnet build flag ([architecture.md](architecture.md#networks)).
 - Merge `seedelf-web-wallet` into `main`.
 
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-25: chunk 15, the public dApp connector** (`web-wallet/dapp-connector`). Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md). Chunk 14 merged as PR #261.
+  - **What landed:**
+    - **Core, in WebAssembly** (`wasm/src/cip30.rs`): CIP-30's encodings, what a dApp's transaction does to the public account, signing it with the keys it needs, and CIP-8 data signatures. Exports: `cip30Utxos`, `cip30Value`, `cip30Address`, `cip30ReadValue`, `inspectDappTx`, `signDappTx`, `dataSigner`, `signDappData`.
+    - **Worker:** `dapp.ts` (the service), `connector.ts` (registering the content scripts), `dapp-window.ts` (the popup), the port listener in `sw.ts`, and Koios `utxo_info`.
+    - **Content scripts:** `src/content/page.ts` and `bridge.ts`, built as self-contained IIFEs by a plugin in `vite.config.ts`.
+    - **UI:** the connector's window (`screens/DappApprovals.tsx`), and Settings' *Sites* switch and *Connected sites*.
+    - **Manifest:** `scripting`, and the sites as optional host permissions.
+  - **Tests:** Rust 18 (`cip30_test.rs`), Vitest 10 (`dapp.test.ts`), Playwright 2. Totals: `seedelf-wasm` 57, Vitest 232 (+2 live).
+    - **Checked independently:** CIP-8 signatures verify with the Cardano Foundation's `cardano-verify-datasignature`.
+  - **Surprises:**
+    - **Chrome's dialog for optional permissions can't be answered from Playwright.** The connector's e2e tests load a copy of the build with the sites granted from install.
+    - **The connector's window reuses itself.** A request within 800 ms of the last answer goes to the open window, so the tests wait for it to close.
+    - **The WebAssembly module grew** from 439 to 474 KB gzipped: Pallas's Conway decoding of whole transactions.
+    - **Minswap lists a fixed set of wallets**, and inside a frame it offers only Eternl, through Eternl's iframe bridge. See the plan's *Minswap*.
+  - **For the user:**
+    - Resubmit the store listing: the new permissions, the privacy policy, and possibly *Web history* on the Privacy practices form.
+    - Choose how Minswap comes in: (a) in-wallet swaps through its aggregator, (b) framed as Eternl does it (needs Minswap), or (c) a tab with a private session.
+  - **Next:** private sessions (one-time accounts and the round trip), then the dApp browser.
 
 - **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md), whose *Status* says where the build departed from it.
   - **What landed:**

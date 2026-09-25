@@ -1,6 +1,7 @@
 // Settings, from the gear in the top bar: contacts, the Cardano account's
 // collateral, where the wallet opens (a full tab or the side panel), ADA's
-// value in a currency, whether payments spend the staking rewards, how long
+// value in a currency, whether sites can connect to the public account (the
+// dApp connector) and which have, whether payments spend the staking rewards, how long
 // it stays unlocked, the recovery phrase (the password again first, even
 // while unlocked) and a check of a written copy, a new password, removing the
 // wallet from this browser, and what this is. Nothing here asks Koios
@@ -9,9 +10,10 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { NETWORKS } from "../../networks";
+import { DAPP_ORIGINS } from "../../shared/dapp";
 import { readOpenIn, type OpenIn } from "../../shared/open-in";
 import { CURRENCIES, LOCK_AFTER_MINUTES, type Currency, type LockAfterMinutes } from "../../shared/preferences";
-import type { Status } from "../../shared/rpc";
+import type { DappSite, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -22,6 +24,7 @@ import {
   ExternalIcon,
   EyeIcon,
   LockIcon,
+  PlugIcon,
   TrashIcon,
   UsersIcon,
   VaultIcon,
@@ -40,7 +43,7 @@ const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/seedelf-web-wallet/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
-type Page = "menu" | "contacts" | "collateral" | "phrase" | "check-phrase" | "password" | "remove";
+type Page = "menu" | "contacts" | "collateral" | "sites" | "phrase" | "check-phrase" | "password" | "remove";
 
 /** The currencies ADA's value can be shown in, by name. */
 const CURRENCY_NAMES: Record<(typeof CURRENCIES)[number], string> = {
@@ -71,6 +74,7 @@ export function Settings({
   const menu = () => setPage("menu");
   if (page === "contacts") return <Contacts onBack={menu} />;
   if (page === "collateral") return <Collateral onBack={menu} />;
+  if (page === "sites") return <ConnectedSites onBack={menu} />;
   if (page === "phrase") return <ShowPhrase onBack={menu} />;
   if (page === "check-phrase") return <CheckPhrase onBack={menu} />;
   if (page === "password") return <ChangePassword onBack={menu} />;
@@ -86,6 +90,7 @@ export function Settings({
         </ul>
       </section>
       <PreferencesSection network={status.network} />
+      <DappConnector onSites={() => setPage("sites")} />
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
         <h2 id="security-title">Security</h2>
@@ -222,6 +227,122 @@ function LockAfter() {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Whether sites can find the wallet (CIP-30) and connect to the public
+ * account. Turning it on asks Chrome to let the wallet onto sites, from the
+ * click itself (Chrome asks only then); off gives that back.
+ */
+function DappConnector({ onSites }: { onSites: () => void }) {
+  const { prefs, loaded, set } = usePreferences();
+  const [allowed, setAllowed] = useState<boolean>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    chrome.permissions.contains({ origins: DAPP_ORIGINS }).then(setAllowed, () => setAllowed(false));
+  }, [prefs.dappConnector]);
+  const on = loaded && prefs.dappConnector && allowed === true;
+
+  function toggle() {
+    if (!loaded || allowed === undefined) return;
+    setError(undefined);
+    if (on) {
+      set({ dappConnector: false }).then(
+        () => setAllowed(false),
+        (e: Error) => setError(e.message),
+      );
+      return;
+    }
+    // Before anything is awaited: Chrome asks only straight from a click.
+    chrome.permissions.request({ origins: DAPP_ORIGINS }).then(
+      async (granted) => {
+        setAllowed(granted);
+        if (!granted) {
+          setError("Chrome wasn't allowed to let the wallet onto sites, so sites still can't connect.");
+          return;
+        }
+        await set({ dappConnector: true });
+      },
+      (e: Error) => setError(e.message),
+    );
+  }
+
+  return (
+    <section className="section" aria-labelledby="dapp-settings-title">
+      <h2 id="dapp-settings-title">Sites</h2>
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="dapp-connector-label">Let sites connect to your public account</span>
+          <span className="note" id="dapp-connector-note" data-testid="dapp-connector-note">
+            {on
+              ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. They only ever see your public account, and nothing is signed without you."
+              : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. That's all it adds."}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={on}
+          aria-labelledby="dapp-connector-label"
+          aria-describedby="dapp-connector-note"
+          onClick={toggle}
+          disabled={!loaded || allowed === undefined}
+        />
+      </div>
+      <ul className="list">
+        <MenuRow icon={<PlugIcon size={16} />} label="Connected sites" onClick={onSites} />
+      </ul>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The sites connected to the public account, each with Disconnect. The list is sealed on the device. */
+function ConnectedSites({ onBack }: { onBack: () => void }) {
+  const [sites, setSites] = useState<DappSite[]>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    call("dapp-sites", {}).then(setSites, (e: Error) => setError(e.message));
+  }, []);
+
+  async function forget(origin: string) {
+    try {
+      setSites(await call("dapp-forget", { origin }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <Screen title="Connected sites" titleId="sites-title" onBack={onBack} aside="Encrypted on this device" error={error}>
+      {sites?.length === 0 && (
+        <p className="note center" data-testid="sites-empty">
+          No site is connected. A site asks when it wants to, and you choose.
+        </p>
+      )}
+      {!!sites?.length && (
+        <ul className="list section" data-testid="sites">
+          {sites.map((s) => (
+            <li key={s.origin} className="list__row">
+              <span className="stack-tight">
+                <strong>{new URL(s.origin).host}</strong>
+                <span className="note">Since {new Date(s.connectedAt).toLocaleDateString()}</span>
+              </span>
+              <button type="button" className="chip" onClick={() => forget(s.origin)}>
+                Disconnect
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="note">A disconnected site has to ask again before it sees anything.</p>
+    </Screen>
   );
 }
 

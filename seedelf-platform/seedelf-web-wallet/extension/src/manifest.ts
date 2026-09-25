@@ -1,6 +1,7 @@
 // Builds manifest.json at build time (see vite.config.ts).
 
 import { enabledNetworks, networkOrigins } from "./networks.ts";
+import { DAPP_ORIGINS } from "./shared/dapp.ts";
 
 /**
  * Public half of a throwaway RSA key. It pins the extension ID of unpacked
@@ -45,11 +46,16 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
       type: "module",
     },
     // storage: the vault and the unlocked session; alarms: auto-lock;
-    // sidePanel: the wallet in Chrome's side panel, when the user chooses it.
-    permissions: ["storage", "alarms", "sidePanel"],
+    // sidePanel: the wallet in Chrome's side panel, when the user chooses it;
+    // scripting: the dApp connector's content scripts, registered only while
+    // the user has it on (shared/dapp.ts).
+    permissions: ["storage", "alarms", "sidePanel", "scripting"],
     // runtime.getContexts, which finds the wallet's open tab.
     minimum_chrome_version: "116",
     host_permissions: origins.map((o) => `${o}/*`),
+    // Asked for only when the user turns the dApp connector on, and given
+    // back when it's turned off: nothing is added to any page until then.
+    optional_host_permissions: DAPP_ORIGINS,
     // WebAssembly needs 'wasm-unsafe-eval'; connect-src limits network access
     // to the extension itself and the wallet's own services. Fonts and images
     // ship inside the extension.

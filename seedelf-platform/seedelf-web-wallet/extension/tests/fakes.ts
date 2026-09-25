@@ -8,6 +8,7 @@ import { BalanceService } from "../src/background/balances";
 import { CoinControlService } from "../src/background/coin-control";
 import { Collateral } from "../src/background/collateral";
 import { ContactsService } from "../src/background/contacts";
+import { DappService, type ApprovalWindow } from "../src/background/dapp";
 import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
 import {
@@ -233,6 +234,17 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         rows = activityPreprod.tx_info
           .filter((t) => body._tx_hashes.includes(t.tx_hash))
           .map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) }));
+      } else if (path === "utxo_info") {
+        // Any UTxO the fixtures know, spent or not, as Koios answers.
+        const refs: string[] = body._utxo_refs;
+        const every = [
+          ...koiosPreprod.contract_utxos,
+          ...ownedUtxos,
+          ...fake.added,
+          ...Object.values(koiosPreprod.accounts).flatMap((a) => a.account_utxos),
+          ...fake.addedToAccounts,
+        ];
+        rows = every.filter((u) => refs.includes(`${u.tx_hash}#${u.tx_index}`));
       } else if (path === "account_addresses") {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_addresses ?? [];
       } else if (path === "account_utxos") {
@@ -296,6 +308,8 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now });
   const preferences = new PreferencesService(t.local);
   const coingecko = fakeCoinGecko();
+  const dappWindow = fakeWindow();
+  let dappChanged = 0;
   const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
@@ -343,7 +357,32 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coingecko,
     prices: new PriceService({ local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
+    dappWindow,
+    dappChanged: () => dappChanged,
+    dapp: new DappService({
+      ...deps,
+      store,
+      network: "preprod",
+      window: dappWindow,
+      changed: () => void dappChanged++,
+    }),
   };
+}
+
+/** The connector's window: counts how often it's shown, and whether it's open. */
+export function fakeWindow(): ApprovalWindow & { shown: number; open: boolean } {
+  const fake = {
+    shown: 0,
+    open: false,
+    async show() {
+      fake.shown++;
+      fake.open = true;
+    },
+    async isOpen() {
+      return fake.open;
+    },
+  };
+  return fake;
 }
 
 /** CoinGecko's simple price, answering ADA in every currency asked; `fail` makes it refuse. */

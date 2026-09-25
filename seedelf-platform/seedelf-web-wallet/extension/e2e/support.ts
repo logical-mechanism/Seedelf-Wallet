@@ -2,13 +2,14 @@
 // with the built extension, a fake Koios and giveme.my over the recorded
 // preprod fixtures, and the steps most tests start with.
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { test as base, chromium, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
+import { DAPP_ORIGINS } from "../src/shared/dapp";
 import { txIdOf } from "../tests/fixtures/cbor";
 
 export { expect };
@@ -187,9 +188,31 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
   );
 }
 
-export const test = base.extend<{ scale: number; userDataDir: string; koios: KoiosFake; context: BrowserContext }>({
+/**
+ * A copy of the build that Chrome lets onto sites from install: the dApp
+ * connector's optional host permissions made required. Chrome asks the user
+ * for them in a dialog of its own, which automation can't answer, so the
+ * connector's tests start past it; everything after it is the real build.
+ */
+function withSiteAccess(extension: string, into: string): string {
+  cpSync(extension, into, { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(into, "manifest.json"), "utf8"));
+  manifest.host_permissions = [...manifest.host_permissions, ...DAPP_ORIGINS];
+  writeFileSync(join(into, "manifest.json"), JSON.stringify(manifest, null, 2));
+  return into;
+}
+
+export const test = base.extend<{
+  scale: number;
+  siteAccess: boolean;
+  userDataDir: string;
+  koios: KoiosFake;
+  context: BrowserContext;
+}>({
   /** The device scale factor: 2 for the store images. */
   scale: [1, { option: true }],
+  /** Chrome's access to sites granted from install, for the dApp connector's tests. */
+  siteAccess: [false, { option: true }],
   userDataDir: async ({}, use) => {
     const dir = mkdtempSync(join(tmpdir(), "seedelf-e2e-"));
     await use(dir);
@@ -208,13 +231,29 @@ export const test = base.extend<{ scale: number; userDataDir: string; koios: Koi
       stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
     });
   },
-  context: async ({ scale, userDataDir, koios }, use) => {
-    const context = await launch(userDataDir, { scale });
+  context: async ({ scale, siteAccess, userDataDir, koios }, use) => {
+    const extension = siteAccess ? withSiteAccess(dist, `${userDataDir}-extension`) : dist;
+    const context = await launch(userDataDir, { scale, extension });
     await fakeKoios(context, koios);
     await use(context);
     await context.close();
+    if (siteAccess) rmSync(extension, { recursive: true, force: true });
   },
 });
+
+/** A dApp's page, served at https://dapp.example/ (the only site the tests reach). */
+export async function openDapp(context: BrowserContext): Promise<Page> {
+  await context.route("https://dapp.example/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!doctype html><title>Test dApp</title><p>A dApp</p>",
+    }),
+  );
+  const page = await context.newPage();
+  await page.goto("https://dapp.example/");
+  return page;
+}
 
 /** The app in a full tab, or narrow as the side panel shows it (360 px, Chrome's default width). */
 export async function openApp(context: BrowserContext, view: "panel" | "tab" = "tab"): Promise<Page> {

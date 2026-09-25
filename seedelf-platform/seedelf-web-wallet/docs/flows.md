@@ -13,6 +13,7 @@ flowchart LR
   S -- "make public" --> Addr["Any address"]
   S -- "out" --> OT["One-time account"]
   OT -- "CIP-30" --> D["dApp"]
+  Dep -- "CIP-30 (chunk 15)" --> D
   D -. "proceeds" .-> OT
   OT -- "auto-return" --> S
 ```
@@ -309,9 +310,24 @@ Details:
 - The burn policy only checks the policy ID and the `5eed0e1f` prefix. The CLI's `remove` still pays any address (`--address`); the web wallet offers the account or the Seedelf balance.
 - The CLI's `sweep --all` takes the first 20 owned UTxOs, and the web wallet's Max takes the 20 largest.
 
+## Connect a site (public account)
+
+CIP-30 for the public account, as Lace offers it (chunk 15). The design is in [architecture.md](architecture.md#dapp-connector); the plan, with the private steps after it, in [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md).
+
+1. **Turn it on:** Settings → *Sites* → **Let sites connect to your public account**. Chrome asks to let the wallet onto https sites; only then are its two scripts added to pages. Off (the default), sites can't see the wallet.
+2. **Connect:** a site's **Connect wallet** lists Seedelf Wallet (when the site lists every CIP-30 wallet). Its `enable()` opens the connector's window: the site's address as Chrome reports it, what it will see (the public account's addresses, balance and UTxOs), and that it never sees the private balance. **Connect** or **Cancel**.
+3. **Use it:** reads need no window. A transaction or a message to sign opens the window:
+   - **A transaction:** what it does to the public account (it sends or it gets, each token that moves), the fee, who it pays (a contract, Seedelf Wallet's contract with or without a register, an address), the collateral at risk, any staking change, minting, a note, whether it runs contracts, and which keys sign. **Sign** or **Decline**.
+   - **A message** (CIP-8): the address, which key signs, and the message as text, or hex when it isn't text. Signing moves no money.
+   - A transaction that needs someone else's signature, when the site didn't ask for a partial one, or one that would hand the collateral to someone else, is refused before the window opens.
+4. **Locked:** the window asks for the password first. Closing it refuses the site, which then can't reopen it for a minute.
+5. **Disconnect:** Settings → *Connected sites* lists them, each with **Disconnect**. The list is sealed on the device.
+
+The account's own outputs of a transaction it signed are kept, so a site can build its next transaction on them before they're on chain. A site's `submitTx` goes through Koios, as the wallet's own sends do.
+
 ## Contract round trip
 
-This comes in the phase after v1. The idea: take money out of Seedelf to use a contract, then have what comes back returned automatically.
+This comes after the public connector: the private steps of [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md), which has the user's two designs (a round trip through a new account, or straight from Seedelf with giveme.my's collateral) and when each fits. The idea: take money out of Seedelf to use a contract, then have what comes back returned automatically.
 
 1. **Out:**
    - Make a Seedelf spend to a fresh one-time account.

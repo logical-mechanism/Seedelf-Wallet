@@ -261,7 +261,13 @@ describe("spending rewards", () => {
     const t = await unlocked();
     await t.preferences.set({ spendRewards: false });
     await t.preferences.set({ nonsense: 1 } as never);
-    expect(await t.preferences.get()).toEqual({ spendRewards: false, hideBalances: false, lockAfterMinutes: 15, currency: "usd" });
+    expect(await t.preferences.get()).toEqual({
+      spendRewards: false,
+      hideBalances: false,
+      lockAfterMinutes: 15,
+      currency: "usd",
+      dappConnector: false,
+    });
     await t.wallet.reset();
     expect(await t.preferences.get()).toMatchObject({ spendRewards: true });
   });

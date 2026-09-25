@@ -11,6 +11,9 @@
 // lockAfterMinutes  Auto-lock, after this long without activity.
 // currency          What ADA's value is shown in, on mainnet (prices.ts);
 //                   "off" asks no one.
+// dappConnector     Sites can connect to the public account (CIP-30,
+//                   dapp.ts). Off by default; turning it on registers the
+//                   content scripts, which needs Chrome's access to sites.
 //
 // Where the toolbar button opens the wallet isn't one of these: it's the
 // browser's, not the wallet's (shared/open-in.ts).
@@ -30,6 +33,7 @@ export class PreferencesService {
       hideBalances: typeof kept.hideBalances === "boolean" ? kept.hideBalances : DEFAULT_PREFERENCES.hideBalances,
       lockAfterMinutes: isLockAfter(kept.lockAfterMinutes) ? kept.lockAfterMinutes : DEFAULT_PREFERENCES.lockAfterMinutes,
       currency: isCurrency(kept.currency) ? kept.currency : DEFAULT_PREFERENCES.currency,
+      dappConnector: typeof kept.dappConnector === "boolean" ? kept.dappConnector : DEFAULT_PREFERENCES.dappConnector,
     };
   }
 
@@ -40,6 +44,7 @@ export class PreferencesService {
     if (typeof change.hideBalances === "boolean") next.hideBalances = change.hideBalances;
     if (isLockAfter(change.lockAfterMinutes)) next.lockAfterMinutes = change.lockAfterMinutes;
     if (isCurrency(change.currency)) next.currency = change.currency;
+    if (typeof change.dappConnector === "boolean") next.dappConnector = change.dappConnector;
     await this.local.set(LOCAL_PREFERENCES, next);
     return next;
   }

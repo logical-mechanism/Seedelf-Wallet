@@ -16,6 +16,8 @@ use ff::Field;
 use seedelf_crypto::{cardano, derivation, register, schnorr};
 use wasm_bindgen::prelude::*;
 
+pub mod cip30;
+
 /// Plain-Rust implementations behind the exports, testable off-wasm.
 pub mod api {
     use std::collections::HashMap;
@@ -2195,4 +2197,78 @@ pub fn verify_proof(
     vkh: &str,
 ) -> Result<bool, JsError> {
     api::verify_proof(&register.into(), z, g_r, vkh).map_err(js_error)
+}
+
+// ---------------------------------------------------------------------------
+// The dApp connector (CIP-30), for the public account: see [`cip30`].
+// ---------------------------------------------------------------------------
+
+fn from_json<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, JsError> {
+    serde_json::from_str(json).map_err(|e| JsError::new(&format!("bad request: {e}")))
+}
+
+fn to_json<T: serde::Serialize>(value: &T) -> Result<String, JsError> {
+    serde_json::to_string(value).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// UTxOs (Koios rows, JSON) as CIP-30's `TransactionUnspentOutput`s, hex.
+#[wasm_bindgen(js_name = cip30Utxos)]
+pub fn cip30_utxos(rows: &str) -> Result<Vec<String>, JsError> {
+    let rows: Vec<cip30::KoiosRow> = from_json(rows)?;
+    rows.iter()
+        .map(|r| cip30::utxo_cbor(r).map(hex::encode).map_err(js_error))
+        .collect()
+}
+
+/// A balance (lovelace, and tokens as JSON `[{ policyId, assetName, quantity }]`) as CIP-30's `Value`, hex.
+#[wasm_bindgen(js_name = cip30Value)]
+pub fn cip30_value(lovelace: &str, tokens: &str) -> Result<String, JsError> {
+    let tokens: Vec<cip30::Token> = from_json(tokens)?;
+    cip30::value_cbor(lovelace, &tokens)
+        .map(hex::encode)
+        .map_err(js_error)
+}
+
+/// A bech32 address as CIP-30 hands it over: its bytes, hex.
+#[wasm_bindgen(js_name = cip30Address)]
+pub fn cip30_address(bech32: &str) -> Result<String, JsError> {
+    cip30::address_hex(bech32).map_err(js_error)
+}
+
+/// A CIP-30 `Value` a dApp asks for, as JSON `{ lovelace, tokens }`.
+#[wasm_bindgen(js_name = cip30ReadValue)]
+pub fn cip30_read_value(value: &str) -> Result<String, JsError> {
+    let (lovelace, tokens) = cip30::read_value(value).map_err(js_error)?;
+    to_json(&serde_json::json!({ "lovelace": lovelace.to_string(), "tokens": tokens }))
+}
+
+/// What a dApp's transaction does to the public account, as JSON, for the
+/// signing prompt. Throws the reason for one the wallet won't sign.
+#[wasm_bindgen(js_name = inspectDappTx)]
+pub fn inspect_dapp_tx(account: &WasmCardanoAccount, request: &str) -> Result<String, JsError> {
+    let request: cip30::TxRequest = from_json(request)?;
+    to_json(&cip30::inspect_tx(&account.inner, &request).map_err(js_error)?)
+}
+
+/// Signs a dApp's transaction with the public account's keys it needs:
+/// JSON `{ witnessSet, summary }`, the witness set in hex.
+#[wasm_bindgen(js_name = signDappTx)]
+pub fn sign_dapp_tx(account: &WasmCardanoAccount, request: &str) -> Result<String, JsError> {
+    let request: cip30::TxRequest = from_json(request)?;
+    to_json(&cip30::sign_tx(&account.inner, &request).map_err(js_error)?)
+}
+
+/// Which of the public account's keys signs data for an address, as JSON,
+/// or `null` when the address isn't the account's.
+#[wasm_bindgen(js_name = dataSigner)]
+pub fn data_signer(account: &WasmCardanoAccount, request: &str) -> Result<String, JsError> {
+    let request: cip30::DataRequest = from_json(request)?;
+    to_json(&cip30::data_signer(&account.inner, &request).map_err(js_error)?)
+}
+
+/// Signs data for a dApp (CIP-8): JSON `{ signature, key }`, both hex.
+#[wasm_bindgen(js_name = signDappData)]
+pub fn sign_dapp_data(account: &WasmCardanoAccount, request: &str) -> Result<String, JsError> {
+    let request: cip30::DataRequest = from_json(request)?;
+    to_json(&cip30::sign_data(&account.inner, &request).map_err(js_error)?)
 }

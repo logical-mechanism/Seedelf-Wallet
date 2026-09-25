@@ -9,6 +9,7 @@ import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
 import type { CoinControlService } from "./coin-control";
 import type { ContactsService } from "./contacts";
+import type { DappService } from "./dapp";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
@@ -36,6 +37,9 @@ export interface Context {
   staking: StakingService;
   preferences: PreferencesService;
   prices: PriceService;
+  dapp: DappService;
+  /** Registers or removes the dApp connector's content scripts (connector.ts). */
+  connector: (on: boolean) => Promise<boolean>;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -101,6 +105,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.pending.pending();
     case "reset-wallet":
       await wallet.reset();
+      // The settings went with it: sites can't connect to a wallet that isn't there.
+      await ctx.connector(false).catch(() => false);
       return status(ctx);
     case "reveal-phrase":
       return { words: await wallet.revealPhrase(message.password) };
@@ -157,10 +163,24 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.preferences.get();
     case "preferences-set": {
       const { type: _type, ...change } = message;
-      return ctx.preferences.set(change);
+      const prefs = await ctx.preferences.set(change);
+      if (typeof change.dappConnector === "boolean") {
+        // Turned on without Chrome's access to sites (the switch asks first), it stays off.
+        const working = await ctx.connector(prefs.dappConnector);
+        if (prefs.dappConnector && !working) return ctx.preferences.set({ dappConnector: false });
+      }
+      return prefs;
     }
     case "price":
       return ctx.prices.get(ctx.network);
+    case "dapp-approvals":
+      return ctx.dapp.approvals();
+    case "dapp-answer":
+      return ctx.dapp.answer(message.id, message.approve);
+    case "dapp-sites":
+      return ctx.dapp.sites();
+    case "dapp-forget":
+      return ctx.dapp.forget(message.origin);
   }
 }
 

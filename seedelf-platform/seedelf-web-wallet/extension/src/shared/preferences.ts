@@ -22,6 +22,11 @@ export interface Preferences {
   lockAfterMinutes: LockAfterMinutes;
   /** What ADA's value is shown in, on mainnet. */
   currency: Currency;
+  /**
+   * The dApp connector (CIP-30), with the public account: off until the
+   * user turns it on, which asks Chrome for access to sites first.
+   */
+  dappConnector: boolean;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -29,6 +34,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   hideBalances: false,
   lockAfterMinutes: 15,
   currency: "usd",
+  dappConnector: false,
 };
 
 export const isLockAfter = (value: unknown): value is LockAfterMinutes =>

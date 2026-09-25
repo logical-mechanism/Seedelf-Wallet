@@ -1,13 +1,16 @@
 // One app, two layouts: a full tab (`?view=tab`), or the narrow one that
 // Chrome's side panel shows (`?view=panel`). The toolbar button opens either,
 // as the user chose in Settings (shared/open-in.ts). A page opened any other
-// way is narrow too.
+// way is narrow too, the dApp connector's window among them (`?view=dapp`).
 
 import { useEffect, useState } from "react";
 
 import { showWalletTab, TAB_PAGE, writeOpenIn, type OpenIn } from "../shared/open-in";
 
 export const view: "panel" | "tab" = new URLSearchParams(location.search).get("view") === "tab" ? "tab" : "panel";
+
+/** The dApp connector's window (`?view=dapp`, background/dapp-window.ts): narrow, and only what sites wait for. */
+export const connectorWindow = new URLSearchParams(location.search).get("view") === "dapp";
 
 /**
  * Shows the app in a full tab, then closes the side panel: the wallet's tab

@@ -23,6 +23,8 @@ export interface KoiosUtxo {
   /** Unix seconds of the block that made it. */
   block_time?: number;
   inline_datum: { bytes: string; value: unknown } | null;
+  /** A datum by hash (older outputs); only the dApp connector reads it. */
+  datum_hash?: string | null;
   asset_list: KoiosAsset[] | null;
 }
 
@@ -140,6 +142,9 @@ const TIMEOUT_MS = 20_000;
  */
 export const CREDENTIALS_PER_REQUEST = 75;
 
+/** Outpoints in one `utxo_info` request: each is about 70 bytes, under the same 5,120-byte cap. */
+export const REFS_PER_REQUEST = 60;
+
 export class KoiosError extends Error {}
 
 /** The network refused a transaction because an input it spends is already spent. */
@@ -203,6 +208,19 @@ export class Koios {
     for (let i = 0; i < credentials.length; i += CREDENTIALS_PER_REQUEST) {
       const body = { _payment_credentials: credentials.slice(i, i + CREDENTIALS_PER_REQUEST), _extended: true };
       rows.push(...(await this.paged<KoiosUtxo>("credential_utxos", body, filter)));
+    }
+    return rows;
+  }
+
+  /**
+   * The UTxOs asked for (`txhash#index`), spent or not, with their address
+   * and value: for the dApp connector, the inputs of a dApp's transaction
+   * that aren't the account's. At most `REFS_PER_REQUEST` go in a request.
+   */
+  async utxoInfo(refs: string[]): Promise<KoiosUtxo[]> {
+    const rows: KoiosUtxo[] = [];
+    for (let i = 0; i < refs.length; i += REFS_PER_REQUEST) {
+      rows.push(...(await this.post<KoiosUtxo>("utxo_info", { _utxo_refs: refs.slice(i, i + REFS_PER_REQUEST), _extended: true })));
     }
     return rows;
   }

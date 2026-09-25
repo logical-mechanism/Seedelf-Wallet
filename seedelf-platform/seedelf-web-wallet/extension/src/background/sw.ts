@@ -2,13 +2,17 @@
 // await, so the event that woke the worker is never lost.
 
 import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
+import { APIError, DAPP_ORIGINS, DAPP_PORT, isDappMethod, type DappAnswer, type DappCall } from "../shared/dapp";
 import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
-import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
+import { DAPP_CHANGED, isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
 import { CoinControlService } from "./coin-control";
 import { Collateral } from "./collateral";
+import { applyConnector } from "./connector";
 import { ContactsService } from "./contacts";
+import { DappError, DappService, type DappSession } from "./dapp";
+import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
 import { Koios } from "./koios";
 import { MintService } from "./mint";
@@ -45,6 +49,10 @@ function getContext(): Promise<Context> {
     const session = chromeArea(chrome.storage.session);
     const local = chromeArea(chrome.storage.local);
     const preferences = new PreferencesService(local);
+    const network = defaultNetwork(__MAINNET_ENABLED__);
+    // No page open means nobody is listening; that's fine.
+    const broadcast = (message: object) => void chrome.runtime.sendMessage(message).catch(() => undefined);
+    let dapp: DappService | undefined;
     const wallet = new Wallet({
       wasm,
       local,
@@ -52,8 +60,11 @@ function getContext(): Promise<Context> {
       now: Date.now,
       autoLock,
       lockAfterMs: () => preferences.lockAfterMs(),
-      // No page open means nobody is listening; that's fine.
-      changed: () => void chrome.runtime.sendMessage(STATE_CHANGED).catch(() => undefined),
+      changed: () => {
+        broadcast(STATE_CHANGED);
+        // Sites waiting for an unlock go on.
+        void dapp?.stateChanged();
+      },
     });
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
     const store = new PrivateStore({ wallet, local });
@@ -71,6 +82,14 @@ function getContext(): Promise<Context> {
     const send = new SendService(spends);
     const staking = new StakingService({ ...spends, local });
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
+    dapp = new DappService({
+      ...spends,
+      preferences,
+      store,
+      network,
+      window: approvalWindow,
+      changed: () => broadcast(DAPP_CHANGED),
+    });
     return {
       wasm,
       wallet,
@@ -87,8 +106,10 @@ function getContext(): Promise<Context> {
       staking,
       preferences,
       prices,
+      dapp,
+      connector: applyConnector,
       version: __VERSION__,
-      network: defaultNetwork(__MAINNET_ENABLED__),
+      network,
       networks: enabledNetworks(__MAINNET_ENABLED__),
     };
   });
@@ -101,11 +122,91 @@ function getContext(): Promise<Context> {
 // without the worker): bring back the wallet's tab if one is open, or open one.
 chrome.action.onClicked.addListener(() => void showWalletTab());
 
-// Chrome keeps what the button does, but it's set again whenever the
-// extension starts, in case it didn't (an update, a profile copied over).
-const applyKeptOpenIn = () => void readOpenIn().then(applyOpenIn).catch(() => undefined);
-chrome.runtime.onInstalled.addListener(applyKeptOpenIn);
-chrome.runtime.onStartup.addListener(applyKeptOpenIn);
+// Chrome keeps what the button does, and the dApp connector's scripts, but
+// both are set again whenever the extension starts, in case they weren't (an
+// update, a profile copied over). Neither needs the wallet unlocked.
+const preferences = () => new PreferencesService(chromeArea(chrome.storage.local)).get();
+const applyKept = () => {
+  void readOpenIn().then(applyOpenIn).catch(() => undefined);
+  void preferences()
+    .then((p) => applyConnector(p.dappConnector))
+    .catch(() => undefined);
+};
+chrome.runtime.onInstalled.addListener(applyKept);
+chrome.runtime.onStartup.addListener(applyKept);
+
+// The user took the wallet's access to sites away in Chrome's own settings:
+// the connector is off.
+chrome.permissions.onRemoved.addListener((removed) => {
+  if (!removed.origins?.some((o) => DAPP_ORIGINS.includes(o))) return;
+  void new PreferencesService(chromeArea(chrome.storage.local))
+    .set({ dappConnector: false })
+    .then(() => applyConnector(false))
+    .catch(() => undefined);
+});
+
+// A site's page (the connector's bridge, shared/dapp.ts). Its origin is
+// Chrome's word for it, never the page's: a top frame on https, or on
+// localhost for a dApp in development.
+function dappSession(sender: chrome.runtime.MessageSender | undefined): DappSession | undefined {
+  if (sender?.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0 || !sender.origin) return undefined;
+  const url = new URL(sender.origin);
+  const local = url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+  if (url.protocol !== "https:" && !local) return undefined;
+  return { id: crypto.randomUUID(), origin: sender.origin, title: sender.tab.title };
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== DAPP_PORT) return;
+  const session = dappSession(port.sender);
+  if (!session) {
+    port.disconnect();
+    return;
+  }
+  let open = true;
+  const answer = (a: DappAnswer) => {
+    if (!open) return;
+    try {
+      port.postMessage(a);
+    } catch {
+      // The page went away as it was answered.
+    }
+  };
+  port.onMessage.addListener((call: Partial<DappCall> & { ping?: boolean }) => {
+    // Pings only keep the worker running while a prompt waits.
+    if (call.ping || typeof call.id !== "string") return;
+    const id = call.id;
+    if (!isDappMethod(call.method) || !Array.isArray(call.args)) {
+      answer({ id, error: { code: APIError.InvalidRequest, info: "Seedelf Wallet doesn't know that method." } });
+      return;
+    }
+    const method = call.method;
+    const args = call.args;
+    getContext()
+      .then((ctx) => ctx.dapp.call(session, method, args))
+      .then(
+        (value) => answer({ id, value }),
+        (e: unknown) =>
+          answer({
+            id,
+            error:
+              e instanceof DappError
+                ? e.failure
+                : { code: APIError.InternalError, info: e instanceof Error ? e.message : String(e) },
+          }),
+      );
+  });
+  port.onDisconnect.addListener(() => {
+    open = false;
+    void context?.then((ctx) => ctx.dapp.gone(session)).catch(() => undefined);
+  });
+});
+
+// The connector's window closed: whatever sites were waiting for is
+// declined. Only a running worker has anything waiting.
+chrome.windows.onRemoved.addListener(() => {
+  void context?.then((ctx) => ctx.dapp.windowClosed()).catch(() => undefined);
+});
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== AUTO_LOCK_ALARM) return;

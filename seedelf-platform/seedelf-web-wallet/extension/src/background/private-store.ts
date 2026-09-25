@@ -1,5 +1,6 @@
 // Records this wallet keeps on the device that say something about its user
-// (contacts, the Seedelf history, which UTxOs are locked): sealed in chrome.storage.local with
+// (contacts, the Seedelf history, which UTxOs are locked, the sites
+// connected to the public account): sealed in chrome.storage.local with
 // XChaCha20-Poly1305 under a key derived from the recovery phrase's entropy
 // (Wallet.withStoreKey). They can't be read while the wallet is locked, or by
 // anyone without the phrase, and removing the wallet deletes them.
@@ -20,6 +21,7 @@ export const PRIVATE_RECORDS = [
   "history.mainnet",
   "coins.preprod",
   "coins.mainnet",
+  "dapps",
 ] as const;
 export type RecordName = (typeof PRIVATE_RECORDS)[number];
 

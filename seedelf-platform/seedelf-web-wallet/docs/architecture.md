@@ -15,16 +15,16 @@ flowchart LR
   end
   SW -- "fetch" --> Koios["Koios"]
   SW -- "fetch" --> Collat["giveme.my collateral"]
-  Page["dApp page"] -. "CIP-30 via content script<br/>(round-trip phase only)" .-> SW
+  Page["dApp page"] -. "CIP-30 via content scripts<br/>(only when the user turns it on)" .-> SW
 ```
 
 - **Service worker:** owns everything that matters.
   - While unlocked, it holds the decrypted secret. It is the only place secrets ever exist.
   - It also holds wallet state, builds and signs transactions, and makes all network calls.
 - **UI:** renders state and sends the user's actions to the service worker. It never holds keys. The only secret it ever sees is the recovery phrase, while the user writes it down or types it in during onboarding.
-- **Content scripts:** v1 has none. They arrive with the contract round trip, to offer CIP-30 on one-time accounts.
-  - This matters for security: v1 injects nothing into web pages.
-  - v1 only needs host permissions for Koios and giveme.my, not `<all_urls>`.
+- **Content scripts (chunk 15):** none until the user turns on the [dApp connector](#dapp-connector).
+  - This matters for security: until then, the wallet adds nothing to web pages.
+  - Its install-time host permissions are only Koios and giveme.my. The sites are an optional permission, asked for when the connector is turned on.
 
 ## Service worker
 
@@ -221,7 +221,7 @@ flowchart LR
 
 ## Storage
 
-**Permissions:** `storage` and `alarms`, plus the host permissions for the enabled network's Koios and giveme.my.
+**Permissions:** `storage`, `alarms`, `sidePanel` and `scripting`, plus the host permissions for the enabled network's Koios and giveme.my. The sites (`https://*/*`, `http://localhost/*`, `http://127.0.0.1/*`) are optional host permissions, granted only while the dApp connector is on.
 
 | Where | Key | What |
 |---|---|---|
@@ -233,10 +233,11 @@ flowchart LR
 | `chrome.storage.session` | `seedelf.contract.<network>` | This wallet's contract UTxOs, each Seedelf's UTxO and the last block seen (`contract-scan.ts`), only while unlocked |
 | `chrome.storage.session` | `seedelf.accountAddresses.<network>`, `seedelf.accountActivity.<network>` | The account's stake address and addresses (from the balance reading), and its Activity pages, only while unlocked |
 | `chrome.storage.session` | `seedelf.accountUtxos.<network>` | The account's UTxOs with their key paths, from the balance reading, for the UTxOs screen and what's locked; only while unlocked |
-| `chrome.storage.local` | `seedelf.preferences` | The user's settings: `spendRewards` (chunk 13). Not sealed: nothing in it is about money. Deleted with the wallet. |
+| `chrome.storage.local` | `seedelf.preferences` | The user's settings: `spendRewards` (chunk 13); `hideBalances`, `lockAfterMinutes` and `currency` (chunk 14); `dappConnector` (chunk 15). Not sealed: nothing in it is about money. Deleted with the wallet. |
 | `chrome.storage.local` | `seedelf.pools.<network>` | Every live pool, for a day (chunk 13). The same for everyone, so it says nothing about the user. |
 | `chrome.storage.session` | `seedelf.poolRefs.<network>`, `seedelf.stake.built` | The tickers of pools read this session (the user's among them), and the staking transaction built last; only while unlocked |
-| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts`, `history.<network>` (the Seedelf history), and `coins.<network>` (the locked UTxOs and the collateral). See below. |
+| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts`, `history.<network>` (the Seedelf history), `coins.<network>` (the locked UTxOs and the collateral), and `dapps` (the sites connected to the public account, per network, chunk 15). See below. |
+| `chrome.storage.session` | `seedelf.dapp.view.<network>`, `seedelf.dapp.signed.<network>` | The account as the dApp connector last read it (kept 30 s), and the account's outputs of the last 32 transactions it signed for sites, for chaining; only while unlocked |
 
 - **Private records** (`private-store.ts`, chunk 12) are what the wallet keeps on disk that says something about its user.
   - Each one is JSON sealed with XChaCha20-Poly1305 under a random 24-byte nonce, with the record's key as associated data.
@@ -304,6 +305,41 @@ flowchart LR
   - Onboarding (create or restore) runs in a full tab: from the side panel, Create and Restore open one.
   - It needs the `sidePanel` permission, and Chrome 116 (`runtime.getContexts`).
 
+## dApp connector
+
+**Built in chunk 15, for the public account only.** The plan is [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md). The private steps come after it.
+
+```mermaid
+flowchart LR
+  subgraph Tab["A site's page (top frame)"]
+    P["cip30-page.js<br/>window.cardano.seedelf"] -- "postMessage" --> B["cip30-bridge.js<br/>(isolated world)"]
+  end
+  B -- "port seedelf.cip30<br/>(origin from Chrome)" --> D["dapp.ts"]
+  D -- "approvals" --> W["The connector's window<br/>(?view=dapp)"]
+  D -- "inspectDappTx, signDappTx,<br/>signDappData" --> X["WebAssembly (cip30.rs)"]
+  D -- "reads, utxo_info, submittx" --> K["Koios"]
+```
+
+- **The switch** (`dappConnector` in the settings) is off by default.
+  - Settings asks Chrome for the sites from the switch's click, because Chrome only asks then. The worker then registers the two content scripts (`connector.ts`).
+  - Off, they're unregistered and the access is given back. Chrome's own settings taking it away turns the connector off too.
+  - The worker applies it again whenever the extension starts.
+- **Content scripts** (`src/content/`): each is one file with nothing imported at run time, built as an IIFE by a plugin in `vite.config.ts`, because Chrome runs content scripts as classic scripts.
+  - `cip30-page.js` defines only `window.cardano.seedelf`, and never replaces an existing entry.
+  - `cip30-bridge.js` takes the page's calls (only from the same window and origin), sends them on a port, and pings every 20 s while one waits.
+  - Both run on top frames only.
+- **The worker** (`dapp.ts`) checks each port: this extension, a tab, the top frame, and an https origin or localhost's. The origin is `sender.origin`, never the page's word.
+  - Connected sites are the sealed `dapps` record.
+  - What sites wait for is kept in memory: a restarted worker has lost the ports too.
+  - Locked: `isEnabled` answers false. Anything else waits for an unlock in the window.
+- **Reads** come from `readAccountUtxos` (two requests), kept 30 s.
+  - They leave out what's locked and the collateral, and add what sent transactions return that isn't on chain yet.
+  - `getCollateral` is the set-aside 5 ₳ UTxO, or null.
+- **Signing** is WebAssembly's: `inspectDappTx` for the prompt, `signDappTx` once approved. Both get the same request: the transaction, the account's key paths, and the UTxOs it spends as far as the worker could find them (the account, then its signed transactions' outputs, then Koios `utxo_info`).
+  - The Rust side decides ownership by payment key hash, and which keys sign: inputs, collateral, required signers, stake certificates and withdrawals.
+  - It refuses the other network, a collateral return to someone else, and a transaction marked to fail its scripts.
+- **The window** (`dapp-window.ts`, `screens/DappApprovals.tsx`): a popup, one at a time. Closing it declines everything, and it closes itself once nothing's left.
+
 ## What we borrow from Lace
 
 Paths are relative to a `lace-extension@2.4.0` checkout (see the [README](../README.md#reference-lace)).
@@ -317,7 +353,7 @@ Paths are relative to a `lace-extension@2.4.0` checkout (see the [README](../REA
 | Lock state machine and inactivity timer | `packages/contract/app-lock/src/store/` | Pattern |
 | Unlock back-off | `packages/contract/authentication-prompt/src/store/unlock-backoff.ts` | Pattern |
 | MV3 manifest and CSP | `apps/lace-extension/assets/manifest.json` | Pattern |
-| CIP-30 injection (round-trip phase) | `apps/lace-extension/src/content-scripts/`, `packages/lib/dapp-connector/`, `packages/module/dapp-connector-cardano/` | Pattern |
+| CIP-30 connector (chunk 15) | `apps/lace-extension/src/content-scripts/`, `packages/lib/dapp-connector/`, `packages/module/dapp-connector-cardano/` | Pattern: a page script and a bridge, the origin from Chrome, pings while a prompt waits, a popup window, the collateral rules, chaining. Not its manifest content scripts on every page: ours are registered only while the user has the connector on. |
 | Keeping existing vkey witnesses intact | `packages/module/blockchain-cardano/src/tx-executor-implementation/merge-pre-existing-vkeys.ts` | Reference |
 
 We don't take Lace's contracts, modules or feature-flag framework, its host/guest shell, its analytics (PostHog, Sentry), or anything for Bitcoin or Midnight.

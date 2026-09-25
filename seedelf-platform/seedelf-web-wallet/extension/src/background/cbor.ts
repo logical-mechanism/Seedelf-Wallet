@@ -1,6 +1,9 @@
 // Just enough CBOR to read a signed Cardano transaction: find where an item
-// ends, and list the inputs a transaction spends. Building and signing
-// happen in WebAssembly; this only reads what the worker is about to submit.
+// ends, list the inputs a transaction spends, and its id. Building and
+// signing happen in WebAssembly; this only reads what the worker is about to
+// submit, or what a dApp hands it.
+
+import { blake2b } from "@noble/hashes/blake2.js";
 
 interface Head {
   major: number;
@@ -91,4 +94,10 @@ function outpoints(b: Uint8Array, pos: number): string[] {
     p = index.p;
   }
   return found;
+}
+
+/** A transaction's id: the BLAKE2b-256 of its body, exactly as encoded. */
+export function txId(tx: Uint8Array): string {
+  if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
+  return hex(blake2b(tx.subarray(1, skip(tx, 1)), { dkLen: 32 }));
 }

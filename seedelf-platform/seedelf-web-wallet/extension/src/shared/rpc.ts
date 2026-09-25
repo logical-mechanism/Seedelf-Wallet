@@ -484,6 +484,96 @@ export interface PendingTx {
   confirmations: number | null;
 }
 
+/** A token in a dApp transaction's summary; `quantity` is signed where it's a change. */
+export interface DappToken {
+  policyId: string;
+  assetName: string;
+  quantity: string;
+}
+
+/** What a dApp's transaction does to the public account (WebAssembly's `inspectDappTx`). Lovelace amounts are decimal strings. */
+export interface DappTxSummary {
+  txHash: string;
+  fee: string;
+  /** The account's change in ADA (signed) and each token that moved. */
+  netLovelace: string;
+  netTokens: DappToken[];
+  spentLovelace: string;
+  returnedLovelace: string;
+  ownInputs: number;
+  /** Outputs to anyone else. */
+  paid: Array<{
+    address: string;
+    lovelace: string;
+    tokens: DappToken[];
+    datum: "hash" | "inline" | null;
+    /** A script's address: a contract holds what it's paid. */
+    script: boolean;
+    /** Into Seedelf Wallet's contract: under a register, or with none (anyone could take it). */
+    seedelf: "register" | "none" | null;
+  }>;
+  ownOutputs: Array<{
+    txIndex: number;
+    address: string;
+    role: number;
+    index: number;
+    lovelace: string;
+    tokens: DappToken[];
+    inlineDatum: string | null;
+    datumHash: string | null;
+  }>;
+  /** Minted (positive) or burned. */
+  mint: DappToken[];
+  certificates: Array<{
+    kind: string;
+    own: boolean;
+    pool: string | null;
+    drep: string | null;
+    deposit: string | null;
+    refund: string | null;
+  }>;
+  withdrawals: Array<{ address: string; lovelace: string; own: boolean }>;
+  collateral: { own: number; lovelace: string; total: string | null; returnedLovelace: string | null; atRisk: string } | null;
+  scripts: boolean;
+  referenceInputs: number;
+  votes: number;
+  proposals: number;
+  donation: string | null;
+  /** CIP-20's message lines. */
+  note: string[] | null;
+  metadata: boolean;
+  validFrom: number | null;
+  validUntil: number | null;
+  /** The account's keys that sign: `0/3`, `1/0`, `stake`. */
+  signs: string[];
+  unknownInputs: string[];
+  othersSign: number;
+  complete: boolean;
+}
+
+/** What a site asks the user for. */
+export type DappAsk =
+  | { kind: "connect" }
+  | { kind: "sign-tx"; partial: boolean; summary: DappTxSummary }
+  | {
+      kind: "sign-data";
+      /** Bech32. */
+      address: string;
+      key: "payment" | "stake";
+      payload: string;
+      /** The payload as text, when it reads as UTF-8. */
+      text?: string;
+    };
+
+/** Something a site asked for that waits for the user, in the connector's window. */
+export type DappApproval = { id: string; origin: string; title?: string } & DappAsk;
+
+/** A site connected to the public account. */
+export interface DappSite {
+  origin: string;
+  connectedAt: number;
+}
+
 type None = Record<never, never>;
 
 /** Every request the service worker answers: its payload and its result. */
@@ -581,6 +671,14 @@ export interface Requests {
   "preferences-set": { payload: Partial<Preferences>; result: Preferences };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
+  /** What sites are waiting for the user to answer, oldest first. */
+  "dapp-approvals": { payload: None; result: DappApproval[] };
+  /** Answers one: `error` says why an approved one couldn't be done (the site hears it too). */
+  "dapp-answer": { payload: { id: string; approve: boolean }; result: { error?: string } };
+  /** The sites connected to the public account on this network. */
+  "dapp-sites": { payload: None; result: DappSite[] };
+  /** Disconnects a site; returns the rest. */
+  "dapp-forget": { payload: { origin: string }; result: DappSite[] };
 }
 
 export type RequestName = keyof Requests;
@@ -643,6 +741,10 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "preferences",
   "preferences-set",
   "price",
+  "dapp-approvals",
+  "dapp-answer",
+  "dapp-sites",
+  "dapp-forget",
 ]);
 
 export function isMessage(value: unknown): value is Message {
@@ -655,4 +757,11 @@ export const STATE_CHANGED = { event: "state-changed" } as const;
 
 export function isStateChanged(value: unknown): boolean {
   return (value as { event?: unknown } | null)?.event === STATE_CHANGED.event;
+}
+
+/** Broadcast by the worker when what sites are waiting for changes. */
+export const DAPP_CHANGED = { event: "dapp-changed" } as const;
+
+export function isDappChanged(value: unknown): boolean {
+  return (value as { event?: unknown } | null)?.event === DAPP_CHANGED.event;
 }

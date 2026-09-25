@@ -1,7 +1,7 @@
 // The UI's side of the RPC: ask the service worker to do something, and hear
 // when the wallet's state changes (for example on auto-lock).
 
-import { isStateChanged, type Reply, type RequestName, type Requests } from "../shared/rpc";
+import { isDappChanged, isStateChanged, type Reply, type RequestName, type Requests } from "../shared/rpc";
 
 export async function call<K extends RequestName>(
   type: K,
@@ -18,6 +18,15 @@ export function onStateChanged(listener: () => void): () => void {
   // Other pages' requests also arrive here; ignore them and never reply.
   const handler = (message: unknown) => {
     if (isStateChanged(message)) listener();
+  };
+  chrome.runtime.onMessage.addListener(handler);
+  return () => chrome.runtime.onMessage.removeListener(handler);
+}
+
+/** Calls `listener` when what sites wait for changes (the connector's window). Returns an unsubscribe. */
+export function onDappChanged(listener: () => void): () => void {
+  const handler = (message: unknown) => {
+    if (isDappChanged(message)) listener();
   };
   chrome.runtime.onMessage.addListener(handler);
   return () => chrome.runtime.onMessage.removeListener(handler);
