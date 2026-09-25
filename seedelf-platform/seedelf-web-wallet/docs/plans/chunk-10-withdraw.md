@@ -2,7 +2,7 @@
 
 **Branch:** `web-wallet/withdraw`, taken from `seedelf-web-wallet` after #254 (chunk 9) merged. It ends with a PR back into `seedelf-web-wallet`.
 
-Withdraw takes money out of the Seedelf balance: to any address (the CLI's `sweep`), or by removing a seedelf and freeing the ADA locked with it (the CLI's `remove`). Both are Seedelf script spends, so the machinery is there:
+Withdraw takes money out of the Seedelf balance: to any address (the CLI's `sweep`), or by removing a Seedelf and freeing the ADA locked with it (the CLI's `remove`). Both are Seedelf script spends, so the machinery is there:
 
 - `ScriptSpend` in `seedelf-core` does the owned inputs, proofs, one-time key, giveme.my collateral, draft → Ogmios → finalize, and budgets by purpose and index. `ScriptSpend::mint` already takes a negative amount for a burn.
 - In the extension, `background/script-spend.ts` is the whole build and Send flow.
@@ -32,7 +32,7 @@ What's new: change that goes to an **address** instead of back into the contract
 
 | Decision | Decided | Notes |
 |---|---|---|
-| Where a removed seedelf's ADA goes | **The user picks: the Cardano account (`0/0`, the default) or the Seedelf balance**, each with a note on what it links | Returning it to whatever paid for the mint links nothing new. An account-paid seedelf's ADA put into the Seedelf balance ties the name to that new UTxO, and to whatever it's later spent with. The Seedelf balance is right for a stealth-minted seedelf. |
+| Where a removed Seedelf's ADA goes | **The user picks: the Cardano account (`0/0`, the default) or the Seedelf balance**, each with a note on what it links | Returning it to whatever paid for the mint links nothing new. An account-paid Seedelf's ADA put into the Seedelf balance ties the name to that new UTxO, and to whatever it's later spent with. The Seedelf balance is right for a stealth-minted Seedelf. |
 | Withdraw destinations | **Any key address on this network, or an ADA Handle.** Script addresses are refused, as in the CLI (the output carries no datum). **A warning when it's your own Cardano account** | Withdrawing to your own account re-links the money (privacy.md *Exit*). The handle is resolved through Koios, which then sees it. |
 | Max | **Max sends every Seedelf UTxO that fits one transaction, up to 20** (the CLI's `MAXIMUM_WALLET_UTXOS`), with all their tokens, and the review says what's left | The form notes that spending everything at once ties those UTxOs together (co-spending). |
 | What an amount sends | An ADA amount (the `AdaInput` rules) plus optional tokens, each with an amount, as in transfer | The destination output needs its address minimum, about 1 ₳, more with tokens. |
@@ -45,7 +45,7 @@ What's new: change that goes to an **address** instead of back into the contract
 - **`is_payable_address(addr, network_flag)`:** Shelley, on this network, and no script in the payment or the delegation part (the CLI's `is_not_a_script` and `is_on_correct_network`).
 - **`sweep(chain, available, to, lovelace, tokens, change_owner, signer)`**, with `sweep_from` for the CLI's `--utxo`. It pays `to` a fixed output, refused below the address minimum, and the change goes back into the contract. Selection is `transfer`'s: the UTxOs holding the tokens first.
 - **`sweep_all(chain, inputs, to, change_owner, signer)`:** spends exactly `inputs`, with no fixed output; everything less the fee goes to `to`.
-- **`remove(chain, seedelf_utxo, change_owner, signer)`:** spends the seedelf's UTxO and burns its token (`mint(name, -1, create_mint_redeemer(""))`). The rest goes back into the contract unless `.change_to(addr)`. It refuses a UTxO without exactly one seedelf token.
+- **`remove(chain, seedelf_utxo, change_owner, signer)`:** spends the Seedelf's UTxO and burns its token (`mint(name, -1, create_mint_redeemer(""))`). The rest goes back into the contract unless `.change_to(addr)`. It refuses a UTxO without exactly one Seedelf token.
 - **The CLI's `sweep` and `remove` `run()`s become thin.** They keep their argument checks and the ADA Handle lookup.
   - `tests/cli/remove.rs` mocks Ogmios with `mount_evaluate(2)` (two "spend" budgets). A `ScriptSpend` burn needs a spend budget and the policy's, so it switches to `mount_evaluate_mint(1)`. That is the same mock fix `util mint` needed. The assertions stay.
 - **Tests** (a `withdraw` module in `mint_test.rs`):
@@ -54,15 +54,15 @@ What's new: change that goes to an **address** instead of back into the contract
   - A removal to an address, and one back into the contract.
   - The fee against the ledger's formula: for remove, both scripts (629 + 519 bytes).
   - Budgets on a shuffled answer.
-  - Refusals: a script or wrong-network address, below the address minimum, a UTxO without a seedelf, and burning with no policy budget.
+  - Refusals: a script or wrong-network address, below the address minimum, a UTxO without a Seedelf, and burning with no policy budget.
 
 ### 2. WebAssembly
 
 - **`draftWithdraw` / `finishWithdraw`:** the request is `network`, `params`, the spendable `utxos`, `to` (a bech32 address), `lovelace` (`null` for Max), and `tokens`. The result is the transfer summary's shape, plus `to`, `max` and `left` (how many UTxOs Max couldn't take).
   - WASM checks the address, and the owned inputs as for a transfer.
   - Max takes the 20 largest spendable UTxOs.
-- **`draftRemove` / `finishRemove`:** the request is `network`, `params`, the seedelf's `utxo`, and `to` (a bech32 address, or `null` for the Seedelf balance).
-  - WASM checks that the UTxO is this wallet's and holds exactly one seedelf token.
+- **`draftRemove` / `finishRemove`:** the request is `network`, `params`, the Seedelf's `utxo`, and `to` (a bech32 address, or `null` for the Seedelf balance).
+  - WASM checks that the UTxO is this wallet's and holds exactly one Seedelf token.
 - **`CardanoAccount.isOwnAddress(address)`:** whether an address carries the account's stake key, as every address a normal wallet shows does. It drives the own-account warning.
 - `signScriptSpend` is reused unchanged.
 
@@ -89,16 +89,16 @@ What's new: change that goes to an **address** instead of back into the contract
   - An amount or Max (`AdaInput` with Max, as in move-in); optional token amounts, which are hidden under Max ("every token goes too").
   - The round-amount nudge, and the *Exit* callout.
 - **Withdraw review:** the destination (short, full on hover), the amount and tokens, the fee, the change back to the Seedelf balance, and the UTxOs spent. Under Max: "N UTxOs left for another withdrawal".
-- **Remove**, a link on each row of *Your seedelfs*:
-  - The seedelf, the ADA locked with it, and "Send what's freed to": Cardano account (the default) or Seedelf balance, each with its note.
+- **Remove**, a link on each row of *Your Seedelfs*:
+  - The Seedelf, the ADA locked with it, and "Send what's freed to": Cardano account (the default) or Seedelf balance, each with its note.
   - Then a review of the token burned, what comes back, and the fee, then Send.
-  - A line saying payments already sent to the seedelf stay yours; only the name goes.
+  - A line saying payments already sent to the Seedelf stay yours; only the name goes.
 - **Banners:** "Withdrawal sent…" then "Withdrawal confirmed"; "Seedelf removal sent…" then "Seedelf removed".
 
 ### 5. Tests
 
-- **Rust:** item 1's tests, the CLI's offline tests (`sweep`, `remove`), and `seedelf-wasm` native tests for the address and seedelf checks, Max's cap, and `isOwnAddress`.
-- **Recorded fixtures:** `record-withdraw.mjs` (an amount and Max to an address) and `record-remove.mjs` (the synthetic owned seedelf `web-wallet`). Both use the 12-word phrase's synthetic UTxOs as `additionalUtxo`, on real preprod Ogmios.
+- **Rust:** item 1's tests, the CLI's offline tests (`sweep`, `remove`), and `seedelf-wasm` native tests for the address and Seedelf checks, Max's cap, and `isOwnAddress`.
+- **Recorded fixtures:** `record-withdraw.mjs` (an amount and Max to an address) and `record-remove.mjs` (the synthetic owned Seedelf `web-wallet`). Both use the 12-word phrase's synthetic UTxOs as `additionalUtxo`, on real preprod Ogmios.
 - **Vitest:** the withdraw service over fakes: handle resolution, the own-account flag, refusals, and Send with a stubbed signer.
 - **Playwright:**
   - Withdraw: a handle or an address, an amount, review, and Send refused on a forged witness.

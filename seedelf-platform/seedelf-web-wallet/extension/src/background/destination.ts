@@ -7,16 +7,13 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
+import { ADA_HANDLE_POLICY, CIP68_USER_TOKEN, HANDLE } from "../shared/handles";
 import type { WithdrawDestination } from "../shared/rpc";
+import { SEEDELF_NOT_AN_ADDRESS, seedelfName } from "../shared/seedelf-name";
 import type { Koios } from "./koios";
 import type { Wallet } from "./wallet";
 
-/** The ADA Handle policy, the same on preprod and mainnet. */
-export const ADA_HANDLE_POLICY = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a";
-/** CIP-68's user-token label, which newer handles carry. */
-const CIP68_USER_TOKEN = "000de140";
-/** An ADA Handle's name, after the $. */
-export const HANDLE = /^[a-z0-9._@-]{1,28}$/;
+export { ADA_HANDLE_POLICY, HANDLE };
 
 const hex = (text: string) => Array.from(new TextEncoder().encode(text), (b) => b.toString(16).padStart(2, "0")).join("");
 
@@ -35,6 +32,8 @@ export async function resolveDestination(
   const { wasm, wallet } = deps;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const text = to.trim();
+  // Send pays a seedelf before it gets here; Withdraw can't.
+  if (seedelfName(text)) throw new Error(SEEDELF_NOT_AN_ADDRESS);
   let address = text;
   let handle: string | undefined;
   if (text.startsWith("$")) {
@@ -53,4 +52,27 @@ export async function resolveDestination(
   wasm.checkPayableAddress(address, net);
   const own = await wallet.withKeys((keys) => keys.cardano.isOwnAddress(address));
   return handle ? { address, handle, own } : { address, own };
+}
+
+/**
+ * `resolveDestination` for one payment's recipients: each looked up once,
+ * however many times it's paid (a handle is a Koios request). They're asked
+ * one after another, which Koios's public tier prefers to a burst.
+ */
+export function destinationResolver(
+  deps: DestinationDeps,
+  network: NetworkName,
+): (to: string) => Promise<WithdrawDestination> {
+  const found = new Map<string, Promise<WithdrawDestination>>();
+  return (to) => {
+    const text = to.trim();
+    // A handle's case doesn't matter; an address's does.
+    const key = text.startsWith("$") ? text.toLowerCase() : text;
+    let destination = found.get(key);
+    if (!destination) {
+      destination = resolveDestination(deps, network, text);
+      found.set(key, destination);
+    }
+    return destination;
+  };
 }

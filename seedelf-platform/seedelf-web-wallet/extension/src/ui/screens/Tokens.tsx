@@ -43,7 +43,7 @@ export function Tokens({
 
   return (
     <Screen
-      title={of === "seedelf" ? "Seedelf tokens" : "Cardano account tokens"}
+      title={of === "seedelf" ? "Private tokens" : "Public tokens"}
       titleId="tokens-title"
       onBack={onBack}
       aside={`${plural(fungible.length, "token")} · ${plural(nfts.length, "NFT")}`}

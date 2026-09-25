@@ -10,15 +10,19 @@ describe("manifest", () => {
     expect(m.manifest_version).toBe(3);
     expect(m.name).toBe("Seedelf Wallet (preprod)");
     expect(m.background).toEqual({ service_worker: "sw.js", type: "module" });
-    expect(m.action.default_popup).toBe("index.html");
+    // No popup: a click opens a tab, or the side panel the user chose.
+    expect(m.action).not.toHaveProperty("default_popup");
+    expect(m.side_panel).toEqual({ default_path: "index.html?view=panel" });
+    expect(m.minimum_chrome_version).toBe("116");
     expect(m.host_permissions).toEqual(["https://preprod.koios.rest/*", "https://www.giveme.my/*"]);
     expect(m.content_security_policy.extension_pages).toContain("script-src 'self' 'wasm-unsafe-eval'");
     expect(m.content_security_policy.extension_pages).toContain(
       "connect-src 'self' https://preprod.koios.rest https://www.giveme.my",
     );
     expect(m.content_security_policy.extension_pages).not.toContain("api.koios.rest");
+    expect(m.content_security_policy.extension_pages).not.toContain("coingecko");
     expect(m.content_security_policy.extension_pages).toContain("font-src 'self'");
-    expect(m.permissions).toEqual(["storage", "alarms"]);
+    expect(m.permissions).toEqual(["storage", "alarms", "sidePanel"]);
     expect(m.icons).toEqual({
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -31,11 +35,14 @@ describe("manifest", () => {
   it("adds mainnet hosts only behind the flag", () => {
     const m = buildManifest({ version: "0.1.0", mainnetEnabled: true, storeBuild: false });
     expect(m.name).toBe("Seedelf Wallet");
+    // CoinGecko for ADA's price: mainnet only.
     expect(m.host_permissions).toEqual([
       "https://api.koios.rest/*",
       "https://www.giveme.my/*",
+      "https://api.coingecko.com/*",
       "https://preprod.koios.rest/*",
     ]);
+    expect(m.content_security_policy.extension_pages).toContain("https://api.coingecko.com");
   });
 
   it("pins the dev extension ID unless building for the Web Store", () => {
@@ -47,7 +54,7 @@ describe("manifest", () => {
     const m = buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: true });
     expect(m).not.toHaveProperty("key");
     expect(m.name).toBe("Seedelf Wallet (preprod)");
-    expect(m.permissions).toEqual(["storage", "alarms"]);
+    expect(m.permissions).toEqual(["storage", "alarms", "sidePanel"]);
     expect(m.host_permissions).toEqual(["https://preprod.koios.rest/*", "https://www.giveme.my/*"]);
     expect(m.content_security_policy.extension_pages).toBe(
       [

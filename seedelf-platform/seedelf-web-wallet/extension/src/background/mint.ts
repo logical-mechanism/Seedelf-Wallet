@@ -44,7 +44,7 @@ export class MintService {
     const { params, utxos, collateral, held, withdrawal } = await readAccount(this.deps, network);
     const request = { network, params, label, utxos, collateral, withdrawal };
     if (request.utxos.length === 0) {
-      throw nothingInAccount(held, "Your Cardano account is empty. Fund it first; the seedelf is paid from there.");
+      throw nothingInAccount(held, "Your public account is empty. Fund it first; the Seedelf is paid from there.");
     }
 
     const finished = await measure<MintResult>(
@@ -62,7 +62,7 @@ export class MintService {
     const { view, utxos, params } = await readContract(this.deps, network);
     const request = { network, params, label, utxos };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your Seedelf balance is empty. Move some ADA in first; the seedelf is paid from there.");
+      throw nothingToSpend(this.deps, view, "Your private balance is empty. Make some ADA private first; the Seedelf is paid from there.");
     }
 
     const finished = await measure<MintResult>(
@@ -84,6 +84,6 @@ export class MintService {
 
   /** For a stealth mint, giveme.my first witnesses the collateral; an account-paid one was signed at review. */
   submit(network: NetworkName, txHash: string): Promise<PendingTx> {
-    return send(this.deps, network, txHash, SESSION_MINT, "mint", "seedelf");
+    return send(this.deps, network, txHash, SESSION_MINT, "mint", "Seedelf");
   }
 }

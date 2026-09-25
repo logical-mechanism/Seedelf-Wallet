@@ -1,6 +1,7 @@
 // Contacts in the UI: the list in Settings, a modal to add or change one, a
-// picker for Send (seedelfs) and Withdraw (addresses and $handles), and a
-// "Save to contacts" link for a destination that isn't saved yet. The worker
+// picker for Send to a seedelf (seedelfs), Withdraw (addresses and $handles)
+// and Send from the Cardano account (either), and a "Save to contacts" link
+// for a destination that isn't saved yet. The worker
 // keeps them sealed on the device (contacts.ts); nothing here asks Koios.
 
 import { useCallback, useEffect, useState } from "react";
@@ -42,7 +43,7 @@ function ContactRow({ contact, onClick, label }: { contact: Contact; onClick: ()
   );
 }
 
-/** Picks a contact of `kind` for a form's destination. */
+/** Picks a contact of `kind` (any, without one) for a form's destination. */
 export function ContactPicker({
   contacts,
   kind,
@@ -50,14 +51,14 @@ export function ContactPicker({
   onClose,
 }: {
   contacts: Contact[];
-  kind: Contact["kind"];
+  kind?: Contact["kind"];
   onPick: (value: string) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const found = contacts.filter(
-    (c) => c.kind === kind && (!q || c.name.toLowerCase().includes(q) || c.value.toLowerCase().includes(q)),
+    (c) => (!kind || c.kind === kind) && (!q || c.name.toLowerCase().includes(q) || c.value.toLowerCase().includes(q)),
   );
   return (
     <Modal title="Contacts" titleId="contact-picker-title" onClose={onClose}>
@@ -198,7 +199,7 @@ export function ContactsPage({ contacts, onChange }: { contacts: Contact[] | und
         </section>
       ) : (
         <Callout tone="info">
-          No contacts yet. Save a seedelf or an address you pay often, then pick it in Send or Withdraw.
+          No contacts yet. Save a Seedelf or an address you pay often, then pick it in Send or Make public.
         </Callout>
       )}
       <button type="button" className="secondary" onClick={() => setEditing("new")}>

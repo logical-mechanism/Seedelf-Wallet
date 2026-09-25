@@ -15,7 +15,7 @@ export function Onboarding({ start, onDone }: { start?: "create" | "restore"; on
   const [step, setStep] = useState<Step>(view === "tab" && start ? start : "welcome");
 
   function go(next: "create" | "restore") {
-    if (view === "popup") openInTab(next);
+    if (view === "panel") openInTab(next);
     else setStep(next);
   }
 
@@ -27,7 +27,7 @@ export function Onboarding({ start, onDone }: { start?: "create" | "restore"; on
       <img className="welcome__logo" src="/brand/wordmark-on-dark.png" alt="Seedelf Wallet" width={360} height={118} />
       <p className="welcome__lead">A private wallet for Cardano.</p>
       <p className="note welcome__text">
-        Payments to your seedelfs can't be linked to you, and spending them doesn't reveal who you are.
+        Payments to your Seedelfs can't be linked to you, and spending them doesn't reveal who you are.
       </p>
       <div className="stack welcome__actions">
         <button className="primary" onClick={() => go("create")}>

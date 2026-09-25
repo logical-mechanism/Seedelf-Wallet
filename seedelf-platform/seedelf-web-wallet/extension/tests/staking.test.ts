@@ -237,13 +237,13 @@ describe("staking transactions", () => {
 describe("spending rewards", () => {
   it("rides along with a send when on, and waits when off", async () => {
     const t = await unlocked();
-    expect(await t.preferences.get()).toEqual({ spendRewards: true });
-    const on = await t.send.build("preprod", THEIRS, "3000000", []);
+    expect(await t.preferences.get()).toMatchObject({ spendRewards: true });
+    const on = await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
     expect(on.withdrawal).toBe(REWARDS);
 
-    expect(await t.preferences.set({ spendRewards: false })).toEqual({ spendRewards: false });
+    expect(await t.preferences.set({ spendRewards: false })).toMatchObject({ spendRewards: false });
     t.koios.calls.length = 0;
-    const off = await t.send.build("preprod", THEIRS, "3000000", []);
+    const off = await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
     expect(off.withdrawal).toBe("0");
     // Off, the stake key isn't even read.
     expect(paths(t)).toEqual(["account_addresses", "credential_utxos", "epoch_params"]);
@@ -261,8 +261,8 @@ describe("spending rewards", () => {
     const t = await unlocked();
     await t.preferences.set({ spendRewards: false });
     await t.preferences.set({ nonsense: 1 } as never);
-    expect(await t.preferences.get()).toEqual({ spendRewards: false });
+    expect(await t.preferences.get()).toEqual({ spendRewards: false, hideBalances: false, lockAfterMinutes: 15, currency: "usd" });
     await t.wallet.reset();
-    expect(await t.preferences.get()).toEqual({ spendRewards: true });
+    expect(await t.preferences.get()).toMatchObject({ spendRewards: true });
   });
 });

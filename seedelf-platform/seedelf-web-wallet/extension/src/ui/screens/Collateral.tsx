@@ -75,9 +75,9 @@ export function Collateral({ onBack }: { onBack: () => void }) {
         }
       >
         <ReviewRows testId="collateral-review">
-          <Row label="To" value="Your Cardano account" strong />
-          <Row label="Address" value={shortHex(summary.address, 16, 8)} title={summary.address} />
-          <Row label="Set aside" value={`${formatAda(summary.lovelace)} ₳`} strong />
+          <Row label="To" value="Your public account" strong />
+          <Row label="Address" value={shortHex(summary.payments[0]!.address, 16, 8)} title={summary.payments[0]!.address} />
+          <Row label="Set aside" value={`${formatAda(summary.payments[0]!.lovelace)} ₳`} strong />
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
           <Row label="UTxOs spent" value={String(summary.inputs)} />
         </ReviewRows>
@@ -136,7 +136,7 @@ export function Collateral({ onBack }: { onBack: () => void }) {
         <p className="note" data-testid="collateral-none">
           {status.candidate
             ? "Your account holds a UTxO of exactly 5 ₳, which can be the collateral with no transaction."
-            : "Setting it pays 5 ₳ from your Cardano account to itself: only the network fee leaves it."}
+            : "Setting it pays 5 ₳ from your public account to itself: only the network fee leaves it."}
         </p>
         {status.reclaimed && <p className="note">You reclaimed it, so the wallet doesn't set one by itself.</p>}
       </>
@@ -151,13 +151,13 @@ export function Collateral({ onBack }: { onBack: () => void }) {
   return (
     <Screen title="Collateral" titleId="collateral-title" onBack={onBack} backDisabled={busy} error={error} foot={foot}>
       <p className="note">
-        Collateral is 5 ₳ of your Cardano account set aside for transactions that run a smart contract, such as creating
-        a seedelf from your account. It's only taken if the contract fails, which the wallet checks before sending, and
+        Collateral is 5 ₳ of your public account set aside for transactions that run a smart contract, such as creating
+        a Seedelf from your account. It's only taken if the contract fails, which the wallet checks before sending, and
         it's kept out of your payments.
       </p>
       {body}
       <Callout tone="privacy">
-        Seedelf spends never put it up: giveme.my lends theirs, so nothing ties a private payment to your account.
+        Payments from your private balance never put it up: giveme.my lends theirs, so nothing ties them to your account.
       </Callout>
     </Screen>
   );

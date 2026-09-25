@@ -42,7 +42,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
 }
 
 describe("stealth mint (paid from the Seedelf balance)", () => {
-  it("builds a seedelf mint, measured by Ogmios, without sending anything", async () => {
+  it("builds a Seedelf mint, measured by Ogmios, without sending anything", async () => {
     const t = await unlocked();
     const summary = await t.mint.build("preprod", "web-wallet", "seedelf");
     expect(summary).toMatchObject({
@@ -92,7 +92,7 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
     );
 
     const empty = await unlocked({ owned: false });
-    await expect(empty.mint.build("preprod", "", "seedelf")).rejects.toThrow("Your Seedelf balance is empty");
+    await expect(empty.mint.build("preprod", "", "seedelf")).rejects.toThrow("Your private balance is empty");
     expect(empty.koios.calls.map((c) => c.path)).not.toContain("ogmios");
 
     await t.wallet.lock();
@@ -233,7 +233,7 @@ describe("mint paid by the Cardano account (mint first, then move in)", () => {
     const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!;
     const t = testBalances();
     await t.wallet.create(v.phrase, PASSWORD);
-    await expect(t.mint.build("preprod", "", "account")).rejects.toThrow("Your Cardano account is empty");
+    await expect(t.mint.build("preprod", "", "account")).rejects.toThrow("Your public account is empty");
     expect(t.koios.calls.map((c) => c.path)).not.toContain("ogmios");
   });
 });

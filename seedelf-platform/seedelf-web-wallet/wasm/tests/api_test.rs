@@ -61,7 +61,9 @@ mod move_in {
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::schnorr::random_scalar;
     use seedelf_koios::koios::UtxoResponse;
-    use seedelf_wasm::api::{self, MoveInRequest, PathedUtxo, SendRequest, TokenAmount};
+    use seedelf_wasm::api::{
+        self, MoveInRequest, PathedUtxo, SendPayment, SendRequest, TokenAmount,
+    };
     use serde_json::Value;
 
     const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -76,7 +78,7 @@ mod move_in {
 
     /// The 12-word phrase's real preprod UTxOs (recorded by the extension's
     /// tests/fixtures/record-koios.mjs), each with its derivation path.
-    fn account_utxos(account: &CardanoAccount) -> Vec<PathedUtxo> {
+    pub(super) fn account_utxos(account: &CardanoAccount) -> Vec<PathedUtxo> {
         let doc: Value = serde_json::from_str(include_str!(
             "../../extension/tests/fixtures/koios-preprod.json"
         ))
@@ -331,7 +333,7 @@ mod move_in {
         );
     }
 
-    fn tusdm(quantity: &str) -> TokenAmount {
+    pub(super) fn tusdm(quantity: &str) -> TokenAmount {
         TokenAmount {
             policy_id: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9".into(),
             asset_name: "0014df10745553444d".into(),
@@ -381,7 +383,7 @@ mod move_in {
             .to_string()
     }
 
-    fn send(
+    pub(super) fn send(
         utxos: Vec<PathedUtxo>,
         to: &str,
         lovelace: Option<&str>,
@@ -391,10 +393,14 @@ mod move_in {
             network: "preprod".into(),
             params: params(),
             utxos,
-            to: to.into(),
-            lovelace: lovelace.map(String::from),
-            tokens,
+            payments: vec![SendPayment {
+                to: to.into(),
+                recipient: None,
+                lovelace: lovelace.map(String::from),
+                tokens,
+            }],
             withdrawal: None,
+            note: None,
         }
     }
 
@@ -456,9 +462,10 @@ mod move_in {
         )
         .unwrap();
         assert!(!result.max);
-        assert_eq!(result.to, to);
-        assert_eq!(result.lovelace, "3000000");
-        assert_eq!(result.tokens, vec![tusdm("1000000000")]);
+        assert_eq!(result.payments.len(), 1);
+        assert_eq!(result.payments[0].to, to);
+        assert_eq!(result.payments[0].lovelace, "3000000");
+        assert_eq!(result.payments[0].tokens, vec![tusdm("1000000000")]);
         assert_eq!(
             result.change_tokens, 2,
             "the rest of the tUSDM, and its neighbour"
@@ -511,8 +518,9 @@ mod move_in {
             send(account_utxos(&account), &to, Some("0"), vec![tusdm("1")]),
         )
         .unwrap();
-        assert_eq!(Some(result.lovelace.clone()), result.minimum);
-        let minimum: u64 = result.lovelace.parse().unwrap();
+        let paid = &result.payments[0];
+        assert_eq!(Some(paid.lovelace.clone()), paid.minimum);
+        let minimum: u64 = paid.lovelace.parse().unwrap();
         assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
         let outs = outputs(&result.tx_cbor);
         assert_eq!(outs.iter().find(|(a, _, _)| *a == to).unwrap().1, minimum);
@@ -521,8 +529,113 @@ mod move_in {
         let max =
             api::account_send(&account, send(account_utxos(&account), &to, None, vec![])).unwrap();
         assert!(max.max);
-        assert_eq!(max.minimum, None);
+        assert_eq!(max.payments[0].minimum, None);
         assert_eq!(max.inputs, 6);
+    }
+
+    #[test]
+    fn a_note_goes_on_the_send_and_the_keys_sign_it_there() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let to = theirs();
+        let mut request = send(account_utxos(&account), &to, Some("3000000"), vec![]);
+        request.note = Some("  Invoice 42  ".into());
+        let result = api::account_send(&account, request).unwrap();
+        assert_eq!(result.note.as_deref(), Some("Invoice 42"));
+
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        assert_eq!(hex::encode(*tx.hash()), result.tx_hash);
+        assert!(tx.metadata().find(674).is_some(), "CIP-20's label");
+        assert!(!tx.vkey_witnesses().is_empty());
+        for w in tx.vkey_witnesses().iter() {
+            let key: [u8; 32] = w.vkey.to_vec().try_into().unwrap();
+            let sig: [u8; 64] = w.signature.to_vec().try_into().unwrap();
+            assert!(
+                PublicKey::from(key).verify(tx.hash(), &Signature::from(sig)),
+                "signed over the hash with the note in it"
+            );
+        }
+
+        // No note, or only spaces: nothing is added.
+        let mut request = send(account_utxos(&account), &to, Some("3000000"), vec![]);
+        request.note = Some("   ".into());
+        let result = api::account_send(&account, request).unwrap();
+        assert_eq!(result.note, None);
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        assert!(
+            MultiEraTx::decode(&bytes)
+                .unwrap()
+                .metadata()
+                .find(674)
+                .is_none()
+        );
+
+        // A note that can't go on a transaction is refused, in words.
+        let mut request = send(account_utxos(&account), &to, Some("3000000"), vec![]);
+        request.note = Some("x".repeat(65));
+        let e = api::account_send(&account, request)
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(e, "A note is at most 64 characters, not 65");
+    }
+
+    #[test]
+    fn sends_to_several_addresses_in_one_payment() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let to = theirs();
+        let home = account
+            .base_address(true, Role::Receive, 0)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let mut request = send(
+            account_utxos(&account),
+            &to,
+            Some("3000000"),
+            vec![tusdm("400")],
+        );
+        request.payments.push(SendPayment {
+            to: format!(" {to} "),
+            recipient: None,
+            lovelace: Some("0".into()),
+            tokens: vec![tusdm("600")],
+        });
+        let result = api::account_send(&account, request).unwrap();
+        assert!(!result.max);
+        assert_eq!(result.payments.len(), 2);
+        assert_eq!(result.payments[1].to, to, "trimmed");
+        assert_eq!(
+            result.payments[1].lovelace,
+            result.payments[1].minimum.clone().unwrap()
+        );
+        // Both payments, in order, then the change to 0/0.
+        let outs = outputs(&result.tx_cbor);
+        let tusdm_key =
+            "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9.0014df10745553444d";
+        assert_eq!(
+            outs[0],
+            (to.clone(), 3_000_000, vec![(tusdm_key.to_string(), 400)])
+        );
+        assert_eq!(outs[1].0, to);
+        assert_eq!(outs[1].2, vec![(tusdm_key.to_string(), 600)]);
+        assert!(outs[2..].iter().all(|(a, _, _)| *a == home));
+
+        // Max is for one recipient; and there's a limit to how many.
+        let mut two_max = send(account_utxos(&account), &to, None, vec![]);
+        two_max.payments.push(two_max.payments[0].clone());
+        let e = api::account_send(&account, two_max)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("Max pays a single recipient"), "{e}");
+        let mut crowd = send(account_utxos(&account), &to, Some("2000000"), vec![]);
+        crowd.payments = vec![crowd.payments[0].clone(); api::MAX_RECIPIENTS + 1];
+        let e = api::account_send(&account, crowd).unwrap_err().to_string();
+        assert!(e.contains("at most 20 recipients"), "{e}");
+        let mut nobody = send(account_utxos(&account), &to, Some("2000000"), vec![]);
+        nobody.payments.clear();
+        let e = api::account_send(&account, nobody).unwrap_err().to_string();
+        assert!(e.contains("someone to pay"), "{e}");
     }
 
     #[test]
@@ -810,7 +923,7 @@ mod mint {
         let err = |r: anyhow::Result<api::SpendDraft>| r.unwrap_err().to_string();
 
         // The UTxO holding a seedelf.
-        assert!(err(api::draft_mint(sk, request(owned(), ""))).contains("holds a seedelf"));
+        assert!(err(api::draft_mint(sk, request(owned(), ""))).contains("holds a Seedelf"));
         // Someone else's UTxO: real contract UTxOs from preprod.
         let theirs: Vec<UtxoResponse> = serde_json::from_value(
             fixture("../extension/tests/fixtures/koios-preprod.json")["contract_utxos"].clone(),
@@ -1105,7 +1218,7 @@ mod transfer {
     use seedelf_crypto::register::Register;
     use seedelf_crypto::schnorr::random_scalar;
     use seedelf_koios::koios::{InlineDatum, UtxoResponse};
-    use seedelf_wasm::api::{self, TokenAmount, TransferRequest};
+    use seedelf_wasm::api::{self, SeedelfPayment, TokenAmount, TransferRequest};
     use serde_json::{Value, json};
 
     const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -1144,18 +1257,29 @@ mod transfer {
             network: "preprod".into(),
             params: params(),
             utxos: spendable(),
-            to: r["to"].as_str().unwrap().into(),
-            recipient: serde_json::from_value(r["recipient"].clone()).unwrap(),
-            lovelace: r["lovelace"].as_str().unwrap().into(),
-            tokens: serde_json::from_value(r["tokens"].clone()).unwrap(),
+            payments: vec![SeedelfPayment {
+                to: r["to"].as_str().unwrap().into(),
+                recipient: serde_json::from_value(r["recipient"].clone()).unwrap(),
+                lovelace: r["lovelace"].as_str().unwrap().into(),
+                tokens: serde_json::from_value(r["tokens"].clone()).unwrap(),
+            }],
             seed: None,
             evaluation: None,
         }
     }
 
+    /// The recorded recipient: a live preprod Seedelf's name, and its UTxO.
+    fn their_name() -> String {
+        request().payments[0].to.clone()
+    }
+
+    fn their_utxo() -> UtxoResponse {
+        request().payments[0].recipient.clone()
+    }
+
     /// The recorded recipient's UTxO, but under `register`.
     fn under(register: &Register) -> UtxoResponse {
-        let mut utxo = request().recipient;
+        let mut utxo = their_utxo();
         utxo.inline_datum = Some(InlineDatum {
             bytes: hex::encode(register.to_vec().unwrap()),
             value: json!({"constructor": 0, "fields": [
@@ -1227,11 +1351,11 @@ mod transfer {
 
         let result = finish(sk, request());
         let final_ = &recorded()["final"];
-        assert!(!result.to_self);
-        assert_eq!(result.to, final_["to"].as_str().unwrap());
-        assert_eq!(result.lovelace, "5000000");
+        assert!(!result.payments[0].to_self);
+        assert_eq!(result.payments[0].to, final_["to"].as_str().unwrap());
+        assert_eq!(result.payments[0].lovelace, "5000000");
         assert_eq!(
-            result.tokens,
+            result.payments[0].tokens,
             vec![TokenAmount {
                 policy_id: "c0".repeat(28),
                 asset_name: hex::encode("tUSDM"),
@@ -1248,7 +1372,7 @@ mod transfer {
         assert_eq!((result.change_tokens, result.change_outputs), (1, 1));
 
         // The payment is a new copy of the recipient's register, never the one found.
-        let found = register_from_utxo(&request().recipient);
+        let found = register_from_utxo(&their_utxo());
         let outs = outputs(&result.tx_cbor);
         assert_eq!(outs.len(), 2);
         let (paid, lovelace, tokens) = &outs[0];
@@ -1267,20 +1391,20 @@ mod transfer {
         // "0" with a token: only the ADA the token needs.
         for asked in ["0", "1000000"] {
             let mut r = request();
-            r.lovelace = asked.into();
+            r.payments[0].lovelace = asked.into();
             let result = finish(sk, r);
-            let minimum: u64 = result.minimum.parse().unwrap();
+            let minimum: u64 = result.payments[0].minimum.parse().unwrap();
             assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
             assert_eq!(
-                result.lovelace, result.minimum,
+                result.payments[0].lovelace, result.payments[0].minimum,
                 "{asked} goes up to the minimum"
             );
             assert_eq!(outputs(&result.tx_cbor)[0].1, minimum);
         }
         // More than the minimum is paid as asked.
         let result = finish(sk, request());
-        assert_eq!(result.lovelace, "5000000");
-        assert!(result.minimum.parse::<u64>().unwrap() < 5_000_000);
+        assert_eq!(result.payments[0].lovelace, "5000000");
+        assert!(result.payments[0].minimum.parse::<u64>().unwrap() < 5_000_000);
     }
 
     fn register_from_utxo(utxo: &UtxoResponse) -> Register {
@@ -1298,9 +1422,9 @@ mod transfer {
         // Someone whose key we know: the payment is theirs, not ours.
         let bob = random_scalar();
         let mut r = request();
-        r.recipient = under(&Register::create(bob).unwrap().rerandomize().unwrap());
+        r.payments[0].recipient = under(&Register::create(bob).unwrap().rerandomize().unwrap());
         let result = finish(sk, r);
-        assert!(!result.to_self);
+        assert!(!result.payments[0].to_self);
         let paid = &outputs(&result.tx_cbor)[0].0;
         assert!(paid.is_owned(bob).unwrap());
         assert!(!paid.is_owned(sk).unwrap());
@@ -1308,11 +1432,46 @@ mod transfer {
         // Your own seedelf: allowed, flagged, and the payment comes back.
         let mine = owned().pop().unwrap();
         let mut r = request();
-        r.to = mine.asset_list.as_ref().unwrap()[0].asset_name.clone();
-        r.recipient = mine;
+        r.payments[0].to = mine.asset_list.as_ref().unwrap()[0].asset_name.clone();
+        r.payments[0].recipient = mine;
         let result = finish(sk, r);
-        assert!(result.to_self);
+        assert!(result.payments[0].to_self);
         assert!(outputs(&result.tx_cbor)[0].0.is_owned(sk).unwrap());
+    }
+
+    #[test]
+    fn pays_several_seedelfs_in_one_transfer() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let bob = random_scalar();
+        let mut r = request();
+        let mut second = r.payments[0].clone();
+        second.recipient = under(&Register::create(bob).unwrap().rerandomize().unwrap());
+        second.lovelace = "2000000".into();
+        second.tokens = vec![];
+        r.payments.push(second);
+        let result = finish(sk, r);
+        assert_eq!(result.payments.len(), 2);
+        assert_eq!(result.payments[1].lovelace, "2000000");
+        assert!(!result.payments[1].to_self);
+        // Each Seedelf as asked, in order, under a fresh copy of its register; then our change.
+        let outs = outputs(&result.tx_cbor);
+        assert_eq!((outs[0].1, outs[0].2), (5_000_000, 1));
+        assert_eq!((outs[1].1, outs[1].2), (2_000_000, 0));
+        assert!(outs[1].0.is_owned(bob).unwrap());
+        assert!(!outs[0].0.is_owned(bob).unwrap() && !outs[0].0.is_owned(sk).unwrap());
+        assert!(
+            outs[2..].iter().all(|o| o.0.is_owned(sk).unwrap()),
+            "the change is ours"
+        );
+
+        let mut crowd = request();
+        crowd.payments = vec![crowd.payments[0].clone(); api::MAX_RECIPIENTS + 1];
+        let e = api::draft_transfer(sk, crowd).unwrap_err().to_string();
+        assert!(e.contains("at most 20 recipients"), "{e}");
+        let mut none = request();
+        none.payments.clear();
+        let e = api::draft_transfer(sk, none).unwrap_err().to_string();
+        assert!(e.contains("someone to pay"), "{e}");
     }
 
     #[test]
@@ -1323,32 +1482,32 @@ mod transfer {
         // Names: 64 lowercase hex characters starting 5eed0e1f.
         for bad in [
             "5eed0e1f",
-            &request().to.to_uppercase(),
-            &format!("00{}", &request().to[2..]),
-            &format!("{}zz", &request().to[..62]),
+            &their_name().to_uppercase(),
+            &format!("00{}", &their_name()[2..]),
+            &format!("{}zz", &their_name()[..62]),
         ] {
             let mut r = request();
-            r.to = bad.to_string();
+            r.payments[0].to = bad.to_string();
             assert!(err(r).contains("64 hex characters"), "{bad}");
         }
-        assert!(api::is_seedelf_name(&request().to));
+        assert!(api::is_seedelf_name(&their_name()));
 
         // The recipient's UTxO must hold that seedelf, in the contract, under a register.
         let mut r = request();
-        r.to = format!("{}00", &request().to[..62]);
-        assert!(err(r).contains("doesn't hold the seedelf"));
+        r.payments[0].to = format!("{}00", &their_name()[..62]);
+        assert!(err(r).contains("doesn't hold the Seedelf"));
         let mut r = request();
-        r.recipient.payment_cred = "00".repeat(28);
-        assert!(err(r).contains("isn't in the Seedelf wallet contract"));
+        r.payments[0].recipient.payment_cred = "00".repeat(28);
+        assert!(err(r).contains("isn't in the Seedelf Wallet contract"));
         let mut r = request();
-        r.recipient.inline_datum = None;
+        r.payments[0].recipient.inline_datum = None;
         assert!(err(r).contains("no register"));
         let mut r = request();
-        r.recipient = under(&Register::new("00".repeat(48), "00".repeat(48)));
+        r.payments[0].recipient = under(&Register::new("00".repeat(48), "00".repeat(48)));
         assert!(err(r).contains("register isn't valid"));
         let identity = format!("c0{}", "00".repeat(47));
         let mut r = request();
-        r.recipient = under(&Register::new(
+        r.payments[0].recipient = under(&Register::new(
             Register::create(random_scalar()).unwrap().generator,
             identity,
         ));
@@ -1357,7 +1516,7 @@ mod transfer {
         // What pays: only this wallet's UTxOs, never one holding a seedelf.
         let mut r = request();
         r.utxos = owned();
-        assert!(err(r).contains("holds a seedelf"));
+        assert!(err(r).contains("holds a Seedelf"));
         assert!(
             api::draft_transfer(random_scalar(), request())
                 .unwrap_err()
@@ -1367,16 +1526,16 @@ mod transfer {
 
         // Amounts.
         let mut r = request();
-        r.tokens[0].quantity = "0".into();
+        r.payments[0].tokens[0].quantity = "0".into();
         assert!(err(r).contains("above zero"));
         let mut r = request();
-        r.lovelace = "45000000000000001".into();
+        r.payments[0].lovelace = "45000000000000001".into();
         assert!(err(r).contains("45 billion"));
         let mut r = request();
-        r.tokens[0].quantity = "1234560001".into();
+        r.payments[0].tokens[0].quantity = "1234560001".into();
         assert!(err(r).contains("holds only 1234560000"));
         let mut r = request();
-        r.lovelace = "30000000".into();
+        r.payments[0].lovelace = "30000000".into();
         assert!(err(r).contains("Not enough ADA"));
 
         // Finishing needs the draft's seed and Ogmios's answer.
@@ -1391,6 +1550,97 @@ mod transfer {
         r.seed = Some("ab".repeat(32));
         let e = api::finish_transfer(sk, r).unwrap_err().to_string();
         assert!(e.contains("evaluation"), "{e}");
+    }
+    /// The contract outputs of a send from the Cardano account: each one's
+    /// register and lovelace. Everything else is change.
+    fn contract_outputs(tx_cbor: &str) -> Vec<(Register, u64)> {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        tx.outputs()
+            .iter()
+            .filter_map(|o| Some((register_from(o.datum()?.into()), o.value().coin())))
+            .collect()
+    }
+
+    #[test]
+    fn the_cardano_account_pays_someones_seedelf_under_a_fresh_copy_of_its_register() {
+        use super::move_in::{account_utxos, send, tusdm};
+        use seedelf_crypto::cardano::{CardanoAccount, Role};
+
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let to = their_name();
+        let pay = |recipient: Option<UtxoResponse>, to: &str| {
+            let mut r = send(
+                account_utxos(&account),
+                to,
+                Some("5000000"),
+                vec![tusdm("1")],
+            );
+            r.payments[0].recipient = recipient;
+            api::account_send(&account, r)
+        };
+
+        let result = pay(Some(their_utxo()), &to).unwrap();
+        assert_eq!(result.payments[0].to, to);
+        assert_eq!(result.payments[0].lovelace, "5000000");
+        let found = register_from_utxo(&their_utxo());
+        let paid = contract_outputs(&result.tx_cbor);
+        assert_eq!(paid.len(), 1, "one contract output: the payment");
+        assert_eq!(paid[0].1, 5_000_000);
+        assert!(build::is_payable(&paid[0].0));
+        assert_ne!(
+            paid[0].0.generator, found.generator,
+            "never the register found"
+        );
+        assert!(!paid[0].0.is_owned(sk).unwrap(), "not ours");
+        assert!(!result.tx_cbor.contains(&found.public_value));
+        // Everything else goes back to the account's 0/0, and only its keys sign.
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        let home = account.base_address(true, Role::Receive, 0).unwrap();
+        assert!(
+            tx.outputs()
+                .iter()
+                .all(|o| o.datum().is_some() || o.address().unwrap() == home)
+        );
+        assert!(tx.redeemers().is_empty(), "no script runs");
+
+        // Whoever owns the register owns the payment.
+        let bob = random_scalar();
+        let result = pay(
+            Some(under(
+                &Register::create(bob).unwrap().rerandomize().unwrap(),
+            )),
+            &to,
+        )
+        .unwrap();
+        assert!(
+            contract_outputs(&result.tx_cbor)[0]
+                .0
+                .is_owned(bob)
+                .unwrap()
+        );
+
+        // Only the UTxO holding that seedelf, in the contract, under a safe register.
+        let err =
+            |recipient: Option<UtxoResponse>, to: &str| pay(recipient, to).unwrap_err().to_string();
+        assert!(err(None, &to).contains("needs the contract UTxO"));
+        assert!(
+            err(Some(their_utxo()), &format!("{}00", &to[..62]))
+                .contains("doesn't hold the Seedelf")
+        );
+        let mut elsewhere = their_utxo();
+        elsewhere.payment_cred = "00".repeat(28);
+        assert!(err(Some(elsewhere), &to).contains("isn't in the Seedelf Wallet contract"));
+        let identity = format!("c0{}", "00".repeat(47));
+        let taken = Register::new(
+            Register::create(random_scalar()).unwrap().generator,
+            identity,
+        );
+        assert!(err(Some(under(&taken)), &to).contains("register isn't valid"));
+        // A name that isn't whole is read as an address.
+        assert!(err(Some(their_utxo()), &to[..62]).contains("isn't a Cardano address"));
     }
 }
 
@@ -1443,6 +1693,8 @@ mod withdraw {
     fn request(which: &str) -> WithdrawRequest {
         let mut r = recorded()[which]["request"].clone();
         r["params"] = params();
+        // Recorded paying one address, before a withdrawal could pay several.
+        r["payments"] = json!([{"to": r["to"], "lovelace": r["lovelace"], "tokens": r["tokens"]}]);
         serde_json::from_value(r).unwrap()
     }
 
@@ -1515,7 +1767,10 @@ mod withdraw {
         assert!(!result.max);
         assert_eq!(result.fee.total, rec["amount"]["final"]["fee"]["total"]);
         assert_eq!(
-            (result.lovelace.as_str(), result.tokens.len()),
+            (
+                result.payments[0].lovelace.as_str(),
+                result.payments[0].tokens.len()
+            ),
             ("5000000", 1)
         );
         assert_eq!(
@@ -1536,14 +1791,49 @@ mod withdraw {
         .unwrap();
         assert!(result.max);
         let fee: u64 = result.fee.total.parse().unwrap();
-        assert_eq!(result.lovelace, (28_000_000 - fee).to_string());
-        assert_eq!(result.tokens.len(), 1);
+        assert_eq!(result.payments[0].lovelace, (28_000_000 - fee).to_string());
+        assert_eq!(result.payments[0].tokens.len(), 1);
         assert_eq!(
             (result.change_lovelace.as_str(), result.change_outputs),
             ("0", 0)
         );
         let outs = outputs(&result.tx_cbor);
         assert!(outs.iter().all(|(a, _)| *a == theirs()));
+    }
+
+    #[test]
+    fn withdraws_to_several_addresses_at_once() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let rec = recorded();
+        let mut r = request("amount");
+        let mut second = r.payments[0].clone();
+        second.lovelace = Some("2000000".into());
+        second.tokens = vec![];
+        r.payments.push(second);
+        let result = api::finish_withdraw(
+            sk,
+            with_evaluation(r, |r| {
+                r.seed = Some("42".repeat(32));
+                r.evaluation = Some(rec["amount"]["evaluation"].clone());
+            }),
+        )
+        .unwrap();
+        assert!(!result.max);
+        assert_eq!(result.payments.len(), 2);
+        assert_eq!(result.payments[1].lovelace, "2000000");
+        let outs = outputs(&result.tx_cbor);
+        assert_eq!(outs[0], (theirs(), 5_000_000));
+        assert_eq!(outs[1], (theirs(), 2_000_000));
+        assert!(
+            outs[2..].iter().all(|(a, _)| *a == contract()),
+            "the change goes back in"
+        );
+
+        // Max is for one address.
+        let mut two = request("max");
+        two.payments.push(two.payments[0].clone());
+        let e = api::draft_withdraw(sk, two).unwrap_err().to_string();
+        assert!(e.contains("Max pays a single recipient"), "{e}");
     }
 
     #[test]
@@ -1554,7 +1844,7 @@ mod withdraw {
             api::finish_withdraw(
                 sk,
                 with_evaluation(request("amount"), |r| {
-                    r.lovelace = Some(lovelace.into());
+                    r.payments[0].lovelace = Some(lovelace.into());
                     r.seed = Some("42".repeat(32));
                     r.evaluation = Some(rec["amount"]["evaluation"].clone());
                 }),
@@ -1563,14 +1853,17 @@ mod withdraw {
         };
         for asked in ["0", "500000"] {
             let result = finish(asked);
-            let minimum = result.minimum.clone().unwrap();
-            assert_eq!(result.lovelace, minimum, "{asked} goes up to the minimum");
+            let minimum = result.payments[0].minimum.clone().unwrap();
+            assert_eq!(
+                result.payments[0].lovelace, minimum,
+                "{asked} goes up to the minimum"
+            );
             let minimum: u64 = minimum.parse().unwrap();
             assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
             assert_eq!(outputs(&result.tx_cbor)[0], (theirs(), minimum));
         }
         let result = finish("5000000");
-        assert_eq!(result.lovelace, "5000000");
+        assert_eq!(result.payments[0].lovelace, "5000000");
 
         // Max has no minimum to speak of.
         let max = api::finish_withdraw(
@@ -1581,7 +1874,7 @@ mod withdraw {
             }),
         )
         .unwrap();
-        assert_eq!(max.minimum, None);
+        assert_eq!(max.payments[0].minimum, None);
     }
 
     #[test]
@@ -1673,7 +1966,7 @@ mod withdraw {
         let err = |r: WithdrawRequest| api::draft_withdraw(sk, r).unwrap_err().to_string();
         let to = |to: &str| {
             let mut r = request("amount");
-            r.to = to.into();
+            r.payments[0].to = to.into();
             r
         };
 
@@ -1689,7 +1982,7 @@ mod withdraw {
         assert!(err(request("amount").tap_max()).contains("takes no token amounts"));
         let mut r = request("amount");
         r.utxos = owned();
-        assert!(err(r).contains("holds a seedelf"));
+        assert!(err(r).contains("holds a Seedelf"));
         assert!(
             api::draft_withdraw(random_scalar(), request("amount"))
                 .unwrap_err()
@@ -1716,7 +2009,7 @@ mod withdraw {
             api::draft_remove(sk, r)
                 .unwrap_err()
                 .to_string()
-                .contains("exactly one seedelf")
+                .contains("exactly one Seedelf")
         );
         let r = removal(Some(contract()));
         assert!(
@@ -1741,7 +2034,7 @@ mod withdraw {
     impl TapMax for WithdrawRequest {
         /// Max, but with the amount's tokens left in.
         fn tap_max(mut self) -> Self {
-            self.lovelace = None;
+            self.payments[0].lovelace = None;
             self
         }
     }
@@ -2130,10 +2423,14 @@ mod staking {
             network: "preprod".into(),
             params: params(),
             utxos: account_utxos(&account),
-            to: to.clone(),
-            lovelace: None,
-            tokens: vec![],
+            payments: vec![api::SendPayment {
+                to: to.clone(),
+                recipient: None,
+                lovelace: None,
+                tokens: vec![],
+            }],
             withdrawal: withdrawal.map(String::from),
+            note: None,
         };
         let plain = api::account_send(&account, send(None)).unwrap();
         assert_eq!(plain.withdrawal, "0");
@@ -2149,8 +2446,8 @@ mod staking {
         assert!(tx.signers.contains(&stake_key(&account)));
         assert_eq!(tx.withdrawals.len(), 1);
         // Max sends the rewards too, less the stake key's witness in the fee.
-        let more: u64 =
-            with.lovelace.parse::<u64>().unwrap() - plain.lovelace.parse::<u64>().unwrap();
+        let more: u64 = with.payments[0].lovelace.parse::<u64>().unwrap()
+            - plain.payments[0].lovelace.parse::<u64>().unwrap();
         let extra_fee: u64 = with.fee.parse::<u64>().unwrap() - plain.fee.parse::<u64>().unwrap();
         assert_eq!(more + extra_fee, 57_475_311);
 

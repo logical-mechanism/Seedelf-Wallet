@@ -19,7 +19,7 @@
 - **DReps are searched by name, not only pasted by ID** (the user asked, after the PR opened): the wallet ships its own list of named DReps (`npm run dreps`, `src/dreps/`), as it does its token list. The follow-up below is done.
 - **The pinned choices in a list,** as radio rows with a line each, not a segmented switch: "Always no confidence" needs saying what it does.
 
-**Checked on preprod without spending anything** ([`tests/fixtures/probe-staking.mjs`](../../extension/tests/fixtures/probe-staking.mjs)): every kind of staking transaction for the public 12-word account decodes on the node's Conway decoder (Ogmios `evaluateTransaction` answers `[]`), and an account-paid mint with its 57.475311 ₳ of rewards riding along passes the real seedelf policy (72,835 memory, 21,396,008 steps, the same as without).
+**Checked on preprod without spending anything** ([`tests/fixtures/probe-staking.mjs`](../../extension/tests/fixtures/probe-staking.mjs)): every kind of staking transaction for the public 12-word account decodes on the node's Conway decoder (Ogmios `evaluateTransaction` answers `[]`), and an account-paid mint with its 57.475311 ₳ of rewards riding along passes the real Seedelf policy (72,835 memory, 21,396,008 steps, the same as without).
 
 ## Start here
 

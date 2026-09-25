@@ -14,7 +14,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { formatAda, shortHex } from "../format";
 
-const DESTINATIONS: Record<RemoveTo, string> = { account: "Cardano account", seedelf: "Seedelf balance" };
+const DESTINATIONS: Record<RemoveTo, string> = { account: "Public account", seedelf: "Private balance" };
 
 export function RemoveSeedelf({
   seedelf,
@@ -29,7 +29,7 @@ export function RemoveSeedelf({
   const [summary, setSummary] = useState<RemoveSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const name = seedelf.label ?? "a seedelf";
+  const name = seedelf.label ?? "a Seedelf";
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -75,7 +75,7 @@ export function RemoveSeedelf({
         <ReviewRows testId="remove-review">
           {summary.label && <Row label="Seedelf" value={summary.label} strong />}
           <Row label="Token name" value={shortHex(summary.name, 16, 8)} title={summary.name} strong={!summary.label} />
-          <Row label={`Back to your ${DESTINATIONS[summary.to]}`} value={`${formatAda(summary.lovelace)} ₳`} strong />
+          <Row label={`Back to your ${DESTINATIONS[summary.to].toLowerCase()}`} value={`${formatAda(summary.lovelace)} ₳`} strong />
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
         </ReviewRows>
         <p className="note">
@@ -101,7 +101,7 @@ export function RemoveSeedelf({
       }
     >
       <p className="note">
-        Removing burns the seedelf's token and frees the ADA locked with it, less the fee. Payments already sent to it
+        Removing burns the Seedelf's token and frees the ADA locked with it, less the fee. Payments already sent to it
         stay yours; after this, nobody can pay it by name.
       </p>
       <code className="copy-field__value" title={seedelf.assetName}>
@@ -117,8 +117,8 @@ export function RemoveSeedelf({
       />
       <Callout tone="privacy" testId="remove-to-note">
         {to === "account"
-          ? "Back where an account-paid seedelf's ADA came from, so it links nothing new."
-          : "For a seedelf you minted from your Seedelf balance. For one your Cardano account paid for, this ties the seedelf's name to the new UTxO, and to whatever it's later spent with."}
+          ? "Back where an account-paid Seedelf's ADA came from, so it links nothing new."
+          : "For a Seedelf you minted from your private balance. For one your public account paid for, this ties the Seedelf's name to the new UTxO, and to whatever it's later spent with."}
       </Callout>
     </Screen>
   );

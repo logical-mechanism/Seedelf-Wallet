@@ -46,7 +46,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
   return { service, calls };
 }
 
-describe("finding a seedelf", () => {
+describe("finding a Seedelf", () => {
   it("finds it by its full name, asking Koios only about the whole contract", async () => {
     const t = await unlocked();
     expect(await t.transfer.lookup("preprod", THEIRS)).toEqual({ name: THEIRS, label: "This is a test.", own: false });
@@ -67,7 +67,7 @@ describe("finding a seedelf", () => {
     }
     expect(t.koios.calls).toHaveLength(0);
     await expect(t.transfer.lookup("preprod", `5eed0e1f${"00".repeat(28)}`)).rejects.toThrow(
-      "No seedelf with that name on preprod.",
+      "No Seedelf with that name on preprod.",
     );
   });
 });
@@ -75,14 +75,10 @@ describe("finding a seedelf", () => {
 describe("transfer", () => {
   it("builds a payment, measured by Ogmios, without sending anything", async () => {
     const t = await unlocked();
-    const summary = await t.transfer.build("preprod", THEIRS, transferPreprod.lovelace, transferPreprod.tokens);
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens }]);
     expect(summary).toMatchObject({
       network: "preprod",
-      to: THEIRS,
-      label: "This is a test.",
-      toSelf: false,
-      lovelace: "5000000",
-      tokens: transferPreprod.tokens,
+      payments: [{ to: THEIRS, label: "This is a test.", toSelf: false, lovelace: "5000000", tokens: transferPreprod.tokens }],
       changeOutputs: 1,
       changeTokens: 1,
       // The tUSDM UTxO, then the 25 ₳ one.
@@ -105,44 +101,59 @@ describe("transfer", () => {
     expect(built.seed).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("pays your own seedelf, and says so", async () => {
+  it("pays your own Seedelf, and says so", async () => {
     const t = await unlocked();
-    const summary = await t.transfer.build("preprod", MINE, "2000000", []);
-    expect(summary).toMatchObject({ to: MINE, label: "web-wallet", toSelf: true, inputs: 1 });
+    const summary = await t.transfer.build("preprod", [{ to: MINE, lovelace: "2000000", tokens: [] }]);
+    expect(summary).toMatchObject({ payments: [{ to: MINE, label: "web-wallet", toSelf: true }], inputs: 1 });
+  });
+
+  it("pays several Seedelfs in one transfer", async () => {
+    const t = await unlocked();
+    const summary = await t.transfer.build("preprod", [
+      { to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens },
+      { to: MINE, lovelace: "2000000", tokens: [] },
+    ]);
+    expect(summary.payments).toMatchObject([
+      { to: THEIRS, label: "This is a test.", toSelf: false, lovelace: "5000000" },
+      { to: MINE, label: "web-wallet", toSelf: true, lovelace: "2000000" },
+    ]);
+    // The contract read once for both, and Ogmios once.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
+    await expect(t.transfer.build("preprod", [])).rejects.toThrow("someone to pay");
   });
 
   it("raises a short amount to the least the payment needs", async () => {
     const t = await unlocked();
     const tokens = [{ ...transferPreprod.tokens[0]!, quantity: "1" }];
     for (const asked of ["0", "1000000"]) {
-      const summary = await t.transfer.build("preprod", THEIRS, asked, tokens);
-      expect(summary.lovelace).toBe(summary.minimum);
-      expect(BigInt(summary.minimum)).toBeGreaterThan(1_000_000n);
+      const [paid] = (await t.transfer.build("preprod", [{ to: THEIRS, lovelace: asked, tokens: tokens }])).payments;
+      expect(paid!.lovelace).toBe(paid!.minimum);
+      expect(BigInt(paid!.minimum)).toBeGreaterThan(1_000_000n);
     }
   });
 
   it("explains what stops a transfer", async () => {
     const t = await unlocked();
-    await expect(t.transfer.build("preprod", "5eed0e1f", "2000000", [])).rejects.toThrow(SEEDELF_NAME_RULE);
-    await expect(t.transfer.build("preprod", `5eed0e1f${"00".repeat(28)}`, "2000000", [])).rejects.toThrow(
-      "No seedelf with that name",
+    await expect(t.transfer.build("preprod", [{ to: "5eed0e1f", lovelace: "2000000", tokens: [] }])).rejects.toThrow(SEEDELF_NAME_RULE);
+    await expect(t.transfer.build("preprod", [{ to: `5eed0e1f${"00".repeat(28)}`, lovelace: "2000000", tokens: [] }])).rejects.toThrow(
+      "No Seedelf with that name",
     );
-    await expect(t.transfer.build("preprod", THEIRS, "30000000", [])).rejects.toThrow("Not enough ADA");
+    await expect(t.transfer.build("preprod", [{ to: THEIRS, lovelace: "30000000", tokens: [] }])).rejects.toThrow("Not enough ADA");
     const tooMany = [{ ...transferPreprod.tokens[0]!, quantity: "1234560001" }];
-    await expect(t.transfer.build("preprod", THEIRS, "2000000", tooMany)).rejects.toThrow("holds only 1234560000");
+    await expect(t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: tooMany }])).rejects.toThrow("holds only 1234560000");
     expect(t.koios.calls.map((c) => c.path)).not.toContain("ogmios");
 
     const empty = await unlocked({ owned: false });
-    await expect(empty.transfer.build("preprod", THEIRS, "2000000", [])).rejects.toThrow("Your Seedelf balance is empty");
+    await expect(empty.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow("Your private balance is empty");
     expect(empty.koios.calls.map((c) => c.path)).not.toContain("ogmios");
 
     await t.wallet.lock();
-    await expect(t.transfer.build("preprod", THEIRS, "2000000", [])).rejects.toThrow("locked");
+    await expect(t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow("locked");
   });
 
   it("sends nothing when giveme.my refuses, or its signature doesn't check out", async () => {
     const t = await unlocked();
-    const summary = await t.transfer.build("preprod", THEIRS, "2000000", []);
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
     await expect(t.transfer.submit("preprod", summary.txHash)).rejects.toThrow(
       "giveme.my, which lends the collateral, refused this transaction: Transaction Fails Validation",
     );
@@ -155,7 +166,7 @@ describe("transfer", () => {
 
   it("submits exactly the signed transaction, then watches it", async () => {
     const t = await unlocked();
-    const summary = await t.transfer.build("preprod", THEIRS, transferPreprod.lovelace, transferPreprod.tokens);
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens }]);
     const built = (await t.session.get<Stored>(SESSION_TRANSFER))!;
     t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
     // Stands in for WebAssembly's signing (Rust tests cover it): returns the transaction as it came.
@@ -175,12 +186,12 @@ describe("transfer", () => {
 
   it("refuses to send anything but the reviewed transaction", async () => {
     const t = await unlocked();
-    await expect(t.transfer.submit("preprod", "00".repeat(32))).rejects.toThrow("That transfer isn't ready to send");
-    const summary = await t.transfer.build("preprod", THEIRS, "2000000", []);
+    await expect(t.transfer.submit("preprod", "00".repeat(32))).rejects.toThrow("That payment isn't ready to send");
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
     await expect(t.transfer.submit("preprod", "11".repeat(32))).rejects.toThrow("isn't ready to send");
     await expect(t.transfer.submit("mainnet", summary.txHash)).rejects.toThrow("isn't ready to send");
     // A mint's Send never sends a transfer.
-    await expect(t.mint.submit("preprod", summary.txHash)).rejects.toThrow("That seedelf isn't ready to send");
+    await expect(t.mint.submit("preprod", summary.txHash)).rejects.toThrow("That Seedelf isn't ready to send");
 
     t.clock.now += 11 * 60_000;
     await expect(t.transfer.submit("preprod", summary.txHash)).rejects.toThrow("more than 10 minutes ago");

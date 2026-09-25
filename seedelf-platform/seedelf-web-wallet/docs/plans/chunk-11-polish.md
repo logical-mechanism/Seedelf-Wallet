@@ -79,7 +79,7 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 | Accent and palette | **Teal `#00c4bc` is the accent** (buttons, links, focus); navy for the light theme's text. Lace's neutrals, radii, spacing and shadows | "The look but not the brand". |
 | Font | **The system font stack, as today** | The alternative is to bundle one OFL font (for example Inter or Montserrat, a variable `woff2` of about 100–300 KB) with its licence, and add `font-src 'self'` to the CSP. |
 | Icons | **Lucide (ISC), copied as inline SVG, only the icons used** | The icons are hand-drawn today (`components/Icons.tsx`). Lace's own icons are Apache-2.0, but they sit close to its brand. |
-| Home's structure | **A header with the Seedelf balance; tabs or a segmented switch for Seedelf and Cardano account; round action buttons** (Send, Withdraw, Move in, Receive) like Lace's action buttons; *Your seedelfs* as a list | Today Home is one long scroll of three cards. Confirm with a sketch, or a screenshot of a first cut, before restyling every screen. |
+| Home's structure | **A header with the Seedelf balance; tabs or a segmented switch for Seedelf and Cardano account; round action buttons** (Send, Withdraw, Move in, Receive) like Lace's action buttons; *Your Seedelfs* as a list | Today Home is one long scroll of three cards. Confirm with a sketch, or a screenshot of a first cut, before restyling every screen. |
 | Forms and review screens | **One shared layout:** a step header, a title, fields, notes as callouts, and a sticky primary button. The review uses Lace's detail-row style | Today every screen repeats this markup, and a `Row` component is copied in five files. Pull it into `components/`. |
 
 ### Work items
@@ -88,10 +88,10 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 2. **Shared components:**
    - `Button` (primary, secondary, link, icon, round action), `Card`, `StepHeader`, `ReviewRows` (the five copies of `Row`), `Callout`, `Field` (label, input and note).
    - `AdaInput`, `TokenAmounts`, `CopyButton` and `TokenList` restyled.
-3. **Home:** the new structure, the pending banner, the empty states, and *Your seedelfs* rows with Copy and Remove.
-   - Fix found in chunk 10: "Send to a seedelf" wraps onto two lines in the popup next to Withdraw.
+3. **Home:** the new structure, the pending banner, the empty states, and *Your Seedelfs* rows with Copy and Remove.
+   - Fix found in chunk 10: "Send to a Seedelf" wraps onto two lines in the popup next to Withdraw.
 4. **Every other screen,** one at a time, checked against its screenshot in the popup and the tab:
-   - Welcome, Create (reveal, confirm, password), Restore, Unlock (and reset), Move in, Create a seedelf, Send to a seedelf, Withdraw, Remove, and the start-up error.
+   - Welcome, Create (reveal, confirm, password), Restore, Unlock (and reset), Move in, Create a Seedelf, Send to a Seedelf, Withdraw, Remove, and the start-up error.
 5. **Flow fixes the user lists,** and any found on the way. Keep the privacy notes (see the rules above).
 6. **Tests:**
    - Keep all 18 Playwright tests green, and add screenshots of the popup for each new layout.

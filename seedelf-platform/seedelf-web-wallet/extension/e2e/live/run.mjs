@@ -25,7 +25,7 @@
 import { FLOWS, run } from "./flows.mjs";
 import { log, openWallet } from "./lib.mjs";
 
-const ALL = "mint live-1 account + move-in 25.5 + mint live-2 seedelf + transfer 3.3 live-1 + withdraw 5.5 + remove live-2 seedelf";
+const ALL = "mint live-1 account + move-in 25.5 + mint live-2 Seedelf + transfer 3.3 live-1 + withdraw 5.5 + remove live-2 Seedelf";
 
 const STAKING = "stake TPREP + vote abstain + stake LOGIC";
 

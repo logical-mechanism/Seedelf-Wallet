@@ -66,18 +66,23 @@ test("sends from the Cardano account to an address inside WebAssembly", () => {
   ).preprod.receive_0;
   const tusdm = { policyId: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9", assetName: "0014df10745553444d" };
   const sent = JSON.parse(
-    buildAccountSend(account, JSON.stringify({ network: "preprod", params, utxos, to, lovelace: "0", tokens: [{ ...tusdm, quantity: "5" }] })),
+    buildAccountSend(
+      account,
+      JSON.stringify({ network: "preprod", params, utxos, payments: [{ to, lovelace: "0", tokens: [{ ...tusdm, quantity: "5" }] }] }),
+    ),
   );
-  assert.equal(sent.to, to);
+  const [paid] = sent.payments;
+  assert.equal(paid.to, to);
   assert.equal(sent.max, false);
-  assert.equal(sent.lovelace, sent.minimum);
-  assert.deepEqual(sent.tokens, [{ ...tusdm, quantity: "5" }]);
+  assert.equal(paid.lovelace, paid.minimum);
+  assert.deepEqual(paid.tokens, [{ ...tusdm, quantity: "5" }]);
   assert.match(sent.txHash, /^[0-9a-f]{64}$/);
   assert.match(sent.txCbor, /^84/);
 
   assert.throws(() => buildAccountSend(account, "{}"), /bad send request/);
   assert.throws(
-    () => buildAccountSend(account, JSON.stringify({ network: "preprod", params, utxos, to: "nope", lovelace: "0", tokens: [] })),
+    () =>
+      buildAccountSend(account, JSON.stringify({ network: "preprod", params, utxos, payments: [{ to: "nope", lovelace: "0", tokens: [] }] })),
     /isn't a Cardano address/,
   );
   assert.throws(() => checkPayableAddress(account.stakeAddress(Network.Preprod), Network.Preprod), /normal preprod address/);

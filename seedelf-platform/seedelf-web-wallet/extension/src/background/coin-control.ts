@@ -172,7 +172,7 @@ export class CoinControlService {
       const lists = await this.lists(network);
       const found = lists[side].find((u) => `${u.txHash}#${u.index}` === utxo);
       if (!found) throw new Error("That UTxO isn't in your last reading. Refresh, then try again.");
-      if (found.seedelf) throw new Error("A seedelf's UTxO is never spent by a payment: only removing it does.");
+      if (found.seedelf) throw new Error("A Seedelf's UTxO is never spent by a payment: only removing it does.");
       if (found.collateral) throw new Error("That's your collateral. Reclaim it in Settings, under Collateral.");
       const choices = await this.choices(network);
       // Only what's still there is kept, so the record doesn't grow with spent UTxOs.

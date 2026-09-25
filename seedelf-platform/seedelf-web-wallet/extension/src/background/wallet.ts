@@ -24,7 +24,7 @@ import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord }
 const STORE_SALT = new TextEncoder().encode("seedelf-web-wallet-private-store-v1");
 const STORE_INFO = new TextEncoder().encode("records");
 
-/** Lock after this long without UI activity. */
+/** Lock after this long without UI activity, unless the settings say otherwise (`lockAfterMs`). */
 export const AUTO_LOCK_MS = 15 * 60_000;
 
 /** chrome.storage.session: the vault entropy (base64) while unlocked. */
@@ -63,6 +63,8 @@ export interface WalletDeps {
   now: () => number;
   /** Starts and stops the periodic auto-lock check (chrome.alarms). */
   autoLock: { start(): Promise<void>; stop(): Promise<void> };
+  /** How long without activity before it locks: the user's setting. [`AUTO_LOCK_MS`] without one. */
+  lockAfterMs?: () => Promise<number>;
   /** Tells open UI pages the state changed. */
   changed: () => void;
 }
@@ -175,6 +177,29 @@ export class Wallet {
     });
   }
 
+  /**
+   * Whether `phrase` is this wallet's recovery phrase, for Settings' check of
+   * a written copy. It says only yes or no, never which words differ, so it
+   * tells nobody at an unlocked browser more than a whole phrase they
+   * already have; no password is needed. A phrase that isn't one (a word off
+   * the list, a bad checksum) fails with the reason, as restore's does.
+   */
+  checkPhrase(phrase: string): Promise<boolean> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      const typed = this.deps.wasm.phraseToEntropy(phrase);
+      const kept = fromBase64((await this.deps.session.get<string>(SESSION_ENTROPY))!);
+      try {
+        let differ = typed.length ^ kept.length;
+        for (let i = 0; i < Math.max(typed.length, kept.length); i++) differ |= (typed[i] ?? 0) ^ (kept[i] ?? 0);
+        return differ === 0;
+      } finally {
+        typed.fill(0);
+        kept.fill(0);
+      }
+    });
+  }
+
   /** Seals the vault under a new password; the current one proves who's asking. */
   changePassword(current: string, next: string): Promise<void> {
     return this.serial(async () => {
@@ -265,7 +290,8 @@ export class Wallet {
     const stored = await session.get<string>(SESSION_ENTROPY);
     if (stored) {
       const last = (await session.get<number>(SESSION_ACTIVITY)) ?? 0;
-      if (now() - last < AUTO_LOCK_MS) {
+      const lockAfter = (await this.deps.lockAfterMs?.()) ?? AUTO_LOCK_MS;
+      if (now() - last < lockAfter) {
         if (!this.keys) {
           const entropy = fromBase64(stored);
           try {

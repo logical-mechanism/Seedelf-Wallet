@@ -2,7 +2,7 @@
 // fixtures and the public 12-word test phrase, so no real wallet is on screen
 // and the same build always gives the same images:
 //
-// - five 1280×800 screenshots: the popup at 2×, framed, with a caption;
+// - five 1280×800 screenshots: the side panel at 2×, framed, with a caption;
 // - the 440×280 small promo tile;
 // - the 128×128 store icon: 96×96 of artwork in 16 px of transparent padding.
 //
@@ -37,7 +37,7 @@ const page = (body: string, css: string) => `<!doctype html>
   ${css}
 </style></head><body>${body}</body></html>`;
 
-/** A 1280×800 screenshot: the caption on the left, the popup on the right. */
+/** A 1280×800 screenshot: the caption on the left, the wallet on the right. */
 const screenshot = (popup: Buffer, title: string, text: string) =>
   page(
     `<main>
@@ -97,8 +97,8 @@ test("the Web Store listing's images", async ({ context }) => {
   await expect(tab.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await tab.close();
 
-  // A Chrome popup is at most 600 px tall.
-  const popup = await openApp(context, "popup");
+  // The side panel at its default width, cut to what the listing's frame fits.
+  const popup = await openApp(context, "panel");
   await popup.setViewportSize({ width: 360, height: 600 });
   const shoot = () => popup.screenshot({ animations: "disabled" });
   const back = () => popup.getByRole("button", { name: "Back", exact: true }).click();
@@ -109,38 +109,38 @@ test("the Web Store listing's images", async ({ context }) => {
   shots.push([
     await shoot(),
     "Private money on Cardano",
-    "Your Seedelf balance sits in UTxOs that don't say who owns them.",
+    "Your private balance sits in UTxOs that don't say who owns them.",
   ]);
 
-  await popup.getByRole("button", { name: "Send to a seedelf" }).click();
+  await popup.getByRole("button", { name: "Send privately" }).click();
   await popup.getByLabel("Seedelf name").fill(transferPreprod.to);
   await expect(popup.getByTestId("transfer-to-note")).toContainText("Found: This is a test.");
   await popup.getByLabel("Amount", { exact: true }).fill("5");
   shots.push([
     await shoot(),
-    "Pay any seedelf by name",
-    "Paste the name and the wallet finds it. The payment can't be linked to the seedelf it pays.",
+    "Pay any Seedelf by name",
+    "Paste the name and the wallet finds it. The payment can't be linked to the Seedelf it pays.",
   ]);
   await back();
 
-  await popup.getByRole("button", { name: "Create a seedelf" }).click();
+  await popup.getByRole("button", { name: "Create a Seedelf" }).click();
   await expect(popup.getByTestId("mint-from-note")).toBeVisible();
   await popup.getByLabel("Personal tag (optional)").fill("alice");
   shots.push([
     await shoot(),
     "Get paid privately",
-    "Create a seedelf and share its name. Anyone can pay it, and no payment points back to it.",
+    "Create a Seedelf and share its name. Anyone can pay it, and no payment points back to it.",
   ]);
   await back();
 
-  await popup.getByRole("button", { name: "Withdraw" }).click();
+  await popup.getByRole("button", { name: "Make public" }).click();
   await popup.getByLabel("To", { exact: true }).fill(vector(12).preprod.receive_0);
-  await expect(popup.getByTestId("withdraw-own")).toContainText("This is your own Cardano account");
+  await expect(popup.getByTestId("withdraw-own")).toContainText("This is your own public account");
   await popup.getByLabel("Amount", { exact: true }).fill("10");
   shots.push([
     await shoot(),
     "It says what links",
-    "Withdraw to any address or $handle. The wallet warns you before a move ties your accounts together.",
+    "Make money public to any address or $handle. The wallet warns you before a payment ties your accounts together.",
   ]);
   await back();
 

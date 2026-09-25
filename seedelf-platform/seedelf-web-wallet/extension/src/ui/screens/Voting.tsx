@@ -155,7 +155,7 @@ export function Voting({
       {!registered && (
         <p className="note">Your account isn't registered to stake yet: this registers it, with a 2 ₳ deposit that comes back when you stop.</p>
       )}
-      <Callout tone="privacy">Where your voting power goes is public, and it names your Cardano account.</Callout>
+      <Callout tone="privacy">Where your voting power goes is public, and it names your public account.</Callout>
     </Screen>
   );
 }

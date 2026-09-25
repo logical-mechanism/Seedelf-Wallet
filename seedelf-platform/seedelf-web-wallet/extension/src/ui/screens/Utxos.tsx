@@ -16,7 +16,8 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { formatAda, plural, shortHex, tokenKey } from "../format";
+import { plural, shortHex, tokenKey } from "../format";
+import { useAmounts } from "../preferences";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, viewToken } from "../tokens";
 
@@ -43,6 +44,7 @@ function Icon({ u }: { u: UtxoInfo }) {
 const arrange = (all: UtxoInfo[]) => [...all.filter((u) => tag(u)), ...all.filter((u) => !tag(u))].map(ref);
 
 export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => void; onChanged: () => void }) {
+  const amounts = useAmounts();
   const [lists, setLists] = useState<UtxoLists>();
   // The order is set when the list is read, so a row stays put while it's locked and unlocked.
   const [order, setOrder] = useState<string[]>([]);
@@ -97,7 +99,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
 
   return (
     <Screen
-      title={of === "seedelf" ? "Seedelf UTxOs" : "Cardano account UTxOs"}
+      title={of === "seedelf" ? "Private UTxOs" : "Public UTxOs"}
       titleId="utxos-title"
       onBack={onBack}
       aside={list ? `${plural(list.length, "UTxO")}${locked ? ` · ${locked} locked` : ""}` : " "}
@@ -119,20 +121,20 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
         <section className="section" aria-label="UTxOs">
           <ul className="list" data-testid="utxos">
             {list.map((u) => {
-              const name = `${formatAda(u.lovelace)} ₳, ${shortHex(u.txHash)}#${u.index}`;
+              const name = `${amounts.ada(u.lovelace)} ₳, ${shortHex(u.txHash)}#${u.index}`;
               return (
                 <li key={ref(u)} className="utxo-row">
                   <button
                     type="button"
                     className="token-row"
                     onClick={() => setOpen(ref(u))}
-                    aria-label={`${formatAda(u.lovelace)} ₳${tag(u) ? `, ${tag(u)!.toLowerCase()}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
+                    aria-label={`${amounts.ada(u.lovelace)} ₳${tag(u) ? `, ${tag(u)}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
                   >
                     <span className={`avatar activity__icon${tag(u) ? " utxo__icon--kept" : ""}`}>
                       <Icon u={u} />
                     </span>
                     <span className="token-row__label">
-                      {formatAda(u.lovelace)} ₳{u.tokens.length ? ` and ${plural(u.tokens.length, "token")}` : ""}
+                      {amounts.ada(u.lovelace)} ₳{u.tokens.length ? ` and ${plural(u.tokens.length, "token")}` : ""}
                     </span>
                     <span className="token-row__amount">
                       {!lockable(u) && <span className="utxo-tag">{tag(u)}</span>}
@@ -191,6 +193,7 @@ function UtxoDetails({
   onLock: (lock: boolean) => void;
   onClose: () => void;
 }) {
+  const amounts = useAmounts();
   const foot = lockable(utxo) ? (
     <>
       {error && (
@@ -205,19 +208,19 @@ function UtxoDetails({
     </>
   ) : undefined;
   return (
-    <Modal title={`${formatAda(utxo.lovelace)} ₳`} titleId="utxo-details-title" onClose={onClose} foot={foot}>
+    <Modal title={`${amounts.ada(utxo.lovelace)} ₳`} titleId="utxo-details-title" onClose={onClose} foot={foot}>
       <div className="stack" data-testid="utxo-details">
         {utxo.seedelf ? (
           <>
             <Callout tone="info">
               {utxo.seedelf.label ? (
                 <>
-                  It holds your seedelf <strong>{utxo.seedelf.label}</strong>.
+                  It holds your Seedelf <strong>{utxo.seedelf.label}</strong>.
                 </>
               ) : (
-                "It holds one of your seedelfs."
+                "It holds one of your Seedelfs."
               )}{" "}
-              Only removing the seedelf spends it.
+              Only removing the Seedelf spends it.
             </Callout>
             <CopyField
               label="Seedelf name"
@@ -262,6 +265,7 @@ const SEARCH_FROM = 10;
  */
 function UtxoTokens({ tokens }: { tokens: UtxoInfo["tokens"] }) {
   const network = useNetwork();
+  const amounts = useAmounts();
   const [all, setAll] = useState(false);
   const [query, setQuery] = useState("");
   const views = useMemo(() => sortTokens(tokens.map((t) => viewToken(network, t)), "name"), [network, tokens]);
@@ -287,7 +291,7 @@ function UtxoTokens({ tokens }: { tokens: UtxoInfo["tokens"] }) {
         {shown.length ? (
           <ReviewRows testId="utxo-token-rows">
             {shown.map((v) => (
-              <Row key={tokenKey(v.token)} label={v.label} value={v.amount} title={v.sub} />
+              <Row key={tokenKey(v.token)} label={v.label} value={amounts.text(v.amount)} title={v.sub} />
             ))}
           </ReviewRows>
         ) : (

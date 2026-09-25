@@ -29,7 +29,7 @@ export class Collateral {
     } catch (e) {
       const cause = e instanceof Error ? e.message : String(e);
       throw new CollateralError(
-        `Couldn't reach giveme.my, the service that lends Seedelf spends their collateral (${cause}). ` +
+        `Couldn't reach giveme.my, the service that lends private payments their collateral (${cause}). ` +
           "Check your internet connection, and any VPN or ad blocker that might block giveme.my.",
       );
     }

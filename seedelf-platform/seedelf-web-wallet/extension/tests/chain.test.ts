@@ -72,13 +72,13 @@ describe("sumValue", () => {
   });
 });
 
-describe("seedelf names", () => {
+describe("Seedelf names", () => {
   it("reads the personal tag, as in the README's examples", () => {
     expect(seedelfLabel("5eed0e1f5b416e6369656e744b72616b656e5d016ad73d1216555b07ad5a449ff2")).toBe("[AncientKraken]");
     expect(seedelfLabel("5eed0e1f00000acab00000018732122c62aea887cd16d743c3045e524f019aea")).toBeUndefined();
   });
 
-  it("has no label for real preprod seedelfs minted without a tag", () => {
+  it("has no label for real preprod Seedelfs minted without a tag", () => {
     const names = koiosPreprod.contract_utxos
       .map((u) => seedelfTokenOf(u, CONTRACT_V1.seedelfPolicyId))
       .filter((n): n is string => !!n);

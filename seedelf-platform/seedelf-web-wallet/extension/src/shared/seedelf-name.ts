@@ -13,4 +13,10 @@ export function seedelfName(input: string): string | undefined {
   return NAME.test(name) ? name : undefined;
 }
 
-export const SEEDELF_NAME_RULE = "A seedelf's name is 64 hex characters starting 5eed0e1f.";
+export const SEEDELF_NAME_RULE = "A Seedelf's name is 64 hex characters starting 5eed0e1f.";
+
+/** Send from the public account pays someone else's seedelf; paying your own is Make private (a move-in). */
+export const OWN_SEEDELF_FROM_ACCOUNT = "That Seedelf is yours. To put money into your private balance, use Make private.";
+
+/** Make public (withdraw) pays an address; a seedelf is paid by Send. */
+export const SEEDELF_NOT_AN_ADDRESS = "That's a Seedelf's name. Make public pays a Cardano address; Send pays a Seedelf.";

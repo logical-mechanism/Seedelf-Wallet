@@ -1,4 +1,4 @@
-# Chunk 8 plan: create a seedelf (stealth mint)
+# Chunk 8 plan: create a Seedelf (stealth mint)
 
 **Branch:** `web-wallet/create-seedelf`, created from `seedelf-web-wallet` after PR #251 (chunk 7) is merged. It ends with a PR back into `seedelf-web-wallet`.
 
@@ -12,7 +12,7 @@ This is the first **script spend** in the web wallet. Every Seedelf spend in chu
    git log --oneline HEAD..origin/main   # merge main first if this lists anything
    git checkout -b web-wallet/create-seedelf
    ```
-2. Read this plan, then the chunk 7 entry in [roadmap.md](../roadmap.md#handoff-notes), [architecture.md](../architecture.md) *Transaction building*, [flows.md](../flows.md) *Create a seedelf*, and [privacy.md](../privacy.md) *Rules the wallet enforces*.
+2. Read this plan, then the chunk 7 entry in [roadmap.md](../roadmap.md#handoff-notes), [architecture.md](../architecture.md) *Transaction building*, [flows.md](../flows.md) *Create a Seedelf*, and [privacy.md](../privacy.md) *Rules the wallet enforces*.
 3. Read the code this chunk extracts: `seedelf-cli/src/commands/util/mint.rs` (about 500 lines), and the helpers it uses in `seedelf-core/src/transaction.rs` (`seedelf_token_name`, `extract_budgets`, `total_computation_fee`, `seedelf_minimum_lovelace`, `collateral_input`, `reference_utxo`), `seedelf-core/src/data_structures.rs` (the redeemers), and `seedelf-cli/src/commands/fee.rs` (the collateral output and even rounding).
 4. **Finish chunk 7's live move-in first.** Minting spends *owned contract UTxOs*, and on preprod none exist for a phrase wallet until a move-in lands.
    - The test wallet is in `extension/.preprod-test-wallet.txt` (gitignored). The user funds its `receive_0` from the faucet.
@@ -25,16 +25,16 @@ This is the first **script spend** in the web wallet. Every Seedelf spend in chu
 
 `seedelf-cli/src/commands/util/mint.rs`, which becomes network-free builders plus a thin `run()`:
 
-1. **Select** owned contract UTxOs (`collect_wallet_utxos`, which skips UTxOs holding a seedelf) worth the seedelf minimum (about 1.5 ADA) plus a fee guess.
+1. **Select** owned contract UTxOs (`collect_wallet_utxos`, which skips UTxOs holding a Seedelf) worth the Seedelf minimum (about 1.5 ADA) plus a fee guess.
 2. **Token name:** `seedelf_token_name(label, inputs)`, which is `5eed0e1f` ‖ the label (at most 15 bytes) ‖ the index of the *lexicographically smallest* input ‖ its tx id, cut to 32 bytes.
 3. **Outputs:**
-   - The new seedelf: the minimum ADA, the token, and a freshly re-randomized own register.
+   - The new Seedelf: the minimum ADA, the token, and a freshly re-randomized own register.
    - Change back to the contract under fresh registers, with tokens 20 to an output.
 4. **One-time key:** a fresh random ed25519 key. Its hash `pkh` is a required signer, and so is `COLLATERAL_HASH`.
 5. **Spend redeemers:** per input, `create_proof(register, sk, pkh)` gives `(z, g_r)`. The proof is bound to `pkh`, which is the rollback-replay defence.
 6. **Script plumbing:**
    - The mint redeemer carries the label.
-   - Reference inputs for the seedelf and wallet scripts.
+   - Reference inputs for the Seedelf and wallet scripts.
    - The PlutusV3 language view.
    - The collateral input is giveme.my's UTxO. The collateral output returns 5 ADA − 1.5 × fee to the collateral address.
 7. **Draft → evaluate:**
@@ -55,9 +55,9 @@ This is the first **script spend** in the web wallet. Every Seedelf spend in chu
 |---|---|---|
 | Label (personal tag) | Optional; **printable ASCII, at most 15 characters**, with a live preview of how it will read | On chain it's any bytes, cut to 15. Multi-byte text could be cut mid-character, and the wallet reads tags back as printable ASCII (`seedelfLabel` in `chain.ts`). |
 | When giveme.my is contacted | **At Send**, not at Review | Draft, evaluate and finalize happen at Review, so the user sees the real fee. The collateral witness is fetched only once the user commits. |
-| The seedelf's register | **A fresh re-randomization of the user's own base register** | The CLI can also mint to someone else's register (`--generator/--public-value`). The web wallet doesn't need that in v1. |
+| The Seedelf's register | **A fresh re-randomization of the user's own base register** | The CLI can also mint to someone else's register (`--generator/--public-value`). The web wallet doesn't need that in v1. |
 | Which UTxOs pay | **Automatic**, from the Seedelf balance (as in the CLI's `select`) | Privacy: few inputs, and never the Cardano account (privacy rule 5). |
-| Minimum balance | Show the cost up front: about 1.5 ADA locked with the seedelf, plus about 0.3–0.6 ADA in fees | Only `remove` gets the locked ADA back (chunk 10). |
+| Minimum balance | Show the cost up front: about 1.5 ADA locked with the Seedelf, plus about 0.3–0.6 ADA in fees | Only `remove` gets the locked ADA back (chunk 10). |
 
 ## Work items
 
@@ -104,12 +104,12 @@ This is the first **script spend** in the web wallet. Every Seedelf spend in chu
 
 ### 4. UI
 
-- **"Create a seedelf"**, on the Seedelf balance card, disabled when the balance can't cover the cost:
+- **"Create a Seedelf"**, on the Seedelf balance card, disabled when the balance can't cover the cost:
   - A label field with a live preview and the ASCII/15 limit.
   - The cost, stated plainly.
-  - A privacy note: the seedelf is paid from the Seedelf balance, so it's never linked to the Cardano account.
+  - A privacy note: the Seedelf is paid from the Seedelf balance, so it's never linked to the Cardano account.
 - **Review:** the token name, ADA locked, the fee (size, compute and script parts can fold into one line), and change back to Seedelf → **Send**.
-- **After Send:** the pending banner from chunk 7 (generalize its wording: "Seedelf mint sent…"). Once confirmed, the new seedelf appears under **Your seedelfs**.
+- **After Send:** the pending banner from chunk 7 (generalize its wording: "Seedelf mint sent…"). Once confirmed, the new Seedelf appears under **Your Seedelfs**.
 
 ### 5. Tests
 
@@ -117,12 +117,12 @@ This is the first **script spend** in the web wallet. Every Seedelf spend in chu
 - **Vitest:** the Koios `evaluate`, the giveme.my client, and the mint service over fakes. Fixtures:
   - A **recorded real Ogmios response**. Evaluate a CLI-built preprod draft against live Koios once and save it.
   - A giveme.my witness shape. The CLI harness in `seedelf-cli/tests/cli/harness.rs` mocks both and is a good reference.
-- **Playwright:** create a seedelf end to end with Koios, Ogmios and giveme.my served from fixtures: the label preview, review, send, pending, confirmed, and the seedelf listed.
-- **Live:** mint on preprod from the test wallet after its move-in. Check the seedelf appears, and that its register is owned and valid.
+- **Playwright:** create a Seedelf end to end with Koios, Ogmios and giveme.my served from fixtures: the label preview, review, send, pending, confirmed, and the Seedelf listed.
+- **Live:** mint on preprod from the test wallet after its move-in. Check the Seedelf appears, and that its register is owned and valid.
 
 ### 6. Docs
 
-- architecture.md *Transaction building*, flows.md *Create a seedelf* (as built), privacy.md (confirm rules 1, 2 and 5 hold), `seedelf-platform/CLAUDE.md` (what's extracted now), and the READMEs.
+- architecture.md *Transaction building*, flows.md *Create a Seedelf* (as built), privacy.md (confirm rules 1, 2 and 5 hold), `seedelf-platform/CLAUDE.md` (what's extracted now), and the READMEs.
 - roadmap.md: tick chunk 8 and add a handoff note.
 
 ## Risks and things to check

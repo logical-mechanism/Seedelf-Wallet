@@ -1,9 +1,10 @@
 // Withdraw: take money out of the Seedelf balance. Both are Seedelf script
 // spends, built and sent by script-spend.ts:
 //
-// send    to any normal address, or an ADA Handle (the CLI's `sweep`): an
-//         amount with optional tokens, or everything (Max, 20 UTxOs at most).
-//         The change goes back into the Seedelf balance.
+// send    to any normal addresses or ADA Handles (the CLI's `sweep`), up to
+//         20 in one transaction: an amount with optional tokens for each, or
+//         everything to a single one (Max, 20 UTxOs at most). The change goes
+//         back into the Seedelf balance.
 // remove  one of this wallet's seedelfs (the CLI's `remove`): the token is
 //         burned, and the ADA locked with it goes to the Cardano account's
 //         0/0 or back into the Seedelf balance. Returning it to whatever paid
@@ -14,16 +15,18 @@
 
 import type { NetworkName } from "../networks";
 import type {
+  Paid,
+  PaymentAsk,
   PendingTx,
   RemoveSummary,
   RemoveTo,
-  TokenQuantity,
   WithdrawDestination,
   WithdrawSummary,
 } from "../shared/rpc";
+import { checkRecipients } from "../shared/recipients";
 import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
-import { resolveDestination } from "./destination";
+import { destinationResolver, resolveDestination } from "./destination";
 import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the withdrawal built last, until it's sent or replaced. */
@@ -31,10 +34,10 @@ export const SESSION_WITHDRAW = "seedelf.withdraw.built";
 /** chrome.storage.session: the removal built last, until it's sent or replaced. */
 export const SESSION_REMOVE = "seedelf.remove.built";
 
-type WithdrawResult = Omit<WithdrawSummary, "network" | "address" | "handle" | "own" | "inputs"> & {
+type WithdrawResult = Omit<WithdrawSummary, "network" | "payments" | "inputs"> & {
   txCbor: string;
   seed: string;
-  to: string;
+  payments: Array<Paid & { to: string }>;
   inputs: unknown[];
 };
 
@@ -54,18 +57,22 @@ export class WithdrawService {
     return resolveDestination(this.deps, network, to);
   }
 
-  async build(
-    network: NetworkName,
-    to: string,
-    lovelace: string | null,
-    tokens: TokenQuantity[],
-  ): Promise<WithdrawSummary> {
+  /** Pays each of `payments`, addresses or handles, in one transaction; `lovelace` null is Max, to a single one. */
+  async build(network: NetworkName, payments: PaymentAsk[]): Promise<WithdrawSummary> {
     const { wasm } = this.deps;
-    const destination = await this.resolve(network, to);
+    checkRecipients(payments.length);
+    const resolve = destinationResolver(this.deps, network);
+    const destinations: WithdrawDestination[] = [];
+    for (const p of payments) destinations.push(await resolve(p.to));
     const { view, utxos, params } = await readContract(this.deps, network);
-    const request = { network, params, utxos, to: destination.address, lovelace, tokens };
+    const request = {
+      network,
+      params,
+      utxos,
+      payments: payments.map((p, i) => ({ to: destinations[i]!.address, lovelace: p.lovelace, tokens: p.tokens })),
+    };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your Seedelf balance is empty, so there's nothing to withdraw.");
+      throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to make public.");
     }
     const finished = await measure<WithdrawResult>(
       this.deps,
@@ -74,26 +81,31 @@ export class WithdrawService {
       (keys, r) => wasm.draftWithdraw(keys.seedelf, r),
       (keys, r) => wasm.finishWithdraw(keys.seedelf, r),
     );
-    const { txCbor, seed, to: _to, inputs, ...rest } = finished;
-    const summary: WithdrawSummary = { ...rest, ...destination, network, inputs: inputs.length };
+    const { txCbor, seed, inputs, payments: paid, ...rest } = finished;
+    const summary: WithdrawSummary = {
+      ...rest,
+      network,
+      payments: paid.map(({ to: _to, ...p }, i) => ({ ...destinations[i]!, ...p })),
+      inputs: inputs.length,
+    };
     await keep(this.deps, SESSION_WITHDRAW, { ...summary, txCbor, seed });
     return summary;
   }
 
   submit(network: NetworkName, txHash: string): Promise<PendingTx> {
-    return send(this.deps, network, txHash, SESSION_WITHDRAW, "withdraw", "withdrawal");
+    return send(this.deps, network, txHash, SESSION_WITHDRAW, "withdraw", "payment");
   }
 
   /** Builds the removal of the seedelf `name`; its ADA goes `to` the account's 0/0 or the Seedelf balance. */
   async buildRemove(network: NetworkName, name: string, to: RemoveTo): Promise<RemoveSummary> {
     const { wasm, wallet } = this.deps;
     const seedelf = seedelfName(name);
-    if (!seedelf) throw new Error("That isn't a seedelf's name.");
+    if (!seedelf) throw new Error("That isn't a Seedelf's name.");
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const { view, params } = await readContract(this.deps, network);
     // Any seedelf is found; WebAssembly refuses one that isn't this wallet's.
     const utxo = view.seedelfs[seedelf];
-    if (!utxo) throw new Error(`No seedelf with that name on ${network}. It may be removed already.`);
+    if (!utxo) throw new Error(`No Seedelf with that name on ${network}. It may be removed already.`);
     const request = await wallet.withKeys((keys) => ({
       network,
       params,

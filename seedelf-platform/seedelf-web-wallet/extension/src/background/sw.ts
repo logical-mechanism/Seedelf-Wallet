@@ -2,6 +2,7 @@
 // await, so the event that woke the worker is never lost.
 
 import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
+import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
 import { isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
@@ -14,6 +15,7 @@ import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
 import { PreferencesService } from "./preferences";
+import { PriceService } from "./prices";
 import { PrivateStore } from "./private-store";
 import { SendService } from "./send";
 import { StakingService } from "./staking";
@@ -42,19 +44,21 @@ function getContext(): Promise<Context> {
   context = loadWasm().then((wasm) => {
     const session = chromeArea(chrome.storage.session);
     const local = chromeArea(chrome.storage.local);
+    const preferences = new PreferencesService(local);
     const wallet = new Wallet({
       wasm,
       local,
       session,
       now: Date.now,
       autoLock,
+      lockAfterMs: () => preferences.lockAfterMs(),
       // No page open means nobody is listening; that's fine.
       changed: () => void chrome.runtime.sendMessage(STATE_CHANGED).catch(() => undefined),
     });
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
     const store = new PrivateStore({ wallet, local });
-    const preferences = new PreferencesService(local);
-    const activity = new ActivityService({ wallet, session, store, koios });
+    const prices = new PriceService({ local, preferences, now: Date.now });
+    const activity = new ActivityService({ wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now });
     const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins });
@@ -82,6 +86,7 @@ function getContext(): Promise<Context> {
       coins,
       staking,
       preferences,
+      prices,
       version: __VERSION__,
       network: defaultNetwork(__MAINNET_ENABLED__),
       networks: enabledNetworks(__MAINNET_ENABLED__),
@@ -92,10 +97,23 @@ function getContext(): Promise<Context> {
   return context;
 }
 
+// The toolbar button, when the wallet opens in a tab (a side panel opens
+// without the worker): bring back the wallet's tab if one is open, or open one.
+chrome.action.onClicked.addListener(() => void showWalletTab());
+
+// Chrome keeps what the button does, but it's set again whenever the
+// extension starts, in case it didn't (an update, a profile copied over).
+const applyKeptOpenIn = () => void readOpenIn().then(applyOpenIn).catch(() => undefined);
+chrome.runtime.onInstalled.addListener(applyKeptOpenIn);
+chrome.runtime.onStartup.addListener(applyKeptOpenIn);
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== AUTO_LOCK_ALARM) return;
   // Reading the state applies auto-lock once the user has been idle too long.
-  void getContext().then(({ wallet }) => wallet.state());
+  // A worker that can't start says why on the next request, not here.
+  void getContext()
+    .then(({ wallet }) => wallet.state())
+    .catch(() => undefined);
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {

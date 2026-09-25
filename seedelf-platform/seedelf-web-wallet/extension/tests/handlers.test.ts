@@ -11,7 +11,7 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(t = testBalances()): Context {
-  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences } =
+  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -28,6 +28,7 @@ function context(t = testBalances()): Context {
     coins,
     staking,
     preferences,
+    prices,
     version: "0.1.0",
     network: "preprod",
     networks: ["preprod"],
@@ -98,6 +99,24 @@ describe("handlers", () => {
     await expect(handle({ type: "validate-phrase", phrase: swapped }, ctx)).rejects.toThrow("checksum");
   });
 
+  it("checks a written phrase, sets preferences, and asks no price on preprod", async () => {
+    const t = testBalances();
+    const ctx = context(t);
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    const other = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 24)!;
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    expect(await handle({ type: "check-phrase", phrase: v.phrase }, ctx)).toEqual({ matches: true });
+    expect(await handle({ type: "check-phrase", phrase: other.phrase }, ctx)).toEqual({ matches: false });
+    expect(isMessage({ type: "check-phrase", phrase: v.phrase })).toBe(true);
+
+    expect(await handle({ type: "preferences-set", hideBalances: true, currency: "eur" }, ctx)).toMatchObject({
+      hideBalances: true,
+      currency: "eur",
+    });
+    expect(await handle({ type: "price" }, ctx)).toBeNull();
+    expect(t.coingecko.state.urls).toEqual([]);
+  });
+
   it("reads balances once unlocked", async () => {
     const ctx = context();
     await expect(handle({ type: "balances" }, ctx)).rejects.toThrow("locked");
@@ -137,7 +156,7 @@ describe("handlers", () => {
     expect(isMessage({ type: "unlock", password: "x" })).toBe(true);
     expect(isMessage({ type: "mint-build", label: "" })).toBe(true);
     expect(isMessage({ type: "mint-submit", txHash: "ab" })).toBe(true);
-    expect(isMessage({ type: "transfer-lookup", to: "5eed0e1f" })).toBe(true);
+    expect(isMessage({ type: "seedelf-lookup", to: "5eed0e1f" })).toBe(true);
     expect(isMessage({ type: "transfer-build", to: "", lovelace: "1", tokens: [] })).toBe(true);
     expect(isMessage({ type: "transfer-submit", txHash: "ab" })).toBe(true);
     for (const type of [

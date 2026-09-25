@@ -12,7 +12,7 @@ use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::Output;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::assets::Assets;
-use seedelf_core::build::{self, AccountAmount, fake_signer, minimum_deposit};
+use seedelf_core::build::{self, AccountAmount, AccountPay, Payee, fake_signer, minimum_deposit};
 use seedelf_core::constants::get_config;
 use seedelf_core::staking::Staking;
 use seedelf_core::transaction::calculate_min_required_utxo;
@@ -789,5 +789,318 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
     assert_eq!(
         build::minimum_seedelf_payment(&w.params, &tokens).unwrap(),
         deposit
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Cardano account pays someone's seedelf
+// ---------------------------------------------------------------------------
+
+#[test]
+fn funds_a_seedelf_under_a_fresh_copy_of_its_register() {
+    let w = world();
+    // The register a seedelf sits under: already a re-randomization of its
+    // owner's base register (the world's `sk`).
+    let found = w.owner.clone().rerandomize().unwrap();
+    let tokens: Vec<Asset> = (0..25).map(|i| token(&format!("t{i:02}"), 3)).collect();
+    let picked: Vec<(String, String, u64)> = tokens
+        .iter()
+        .map(|t| (t.policy_id.clone(), t.asset_name.clone(), 2))
+        .collect();
+    let available = vec![
+        utxo(&w, 1, 0, 3_000_000, tokens),
+        utxo(&w, 2, 1, 40_000_000, vec![]),
+    ];
+    let seedelf = Payee::Seedelf {
+        owner: &found,
+        wallet_addr: &w.wallet,
+    };
+    let fund = |amount, picked: &[(String, String, u64)]| {
+        build::account_send_many(
+            &w.params,
+            &available,
+            &[AccountPay::new(seedelf, amount, picked)],
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+    };
+    let built = fund(AccountAmount::Lovelace(10_000_000), &picked).unwrap();
+    // Every contract output is the owner's, valid, and re-randomized.
+    let tx = assert_sound(&w, &available, &built);
+    assert_eq!(deposits(&w, &tx), (10_000_000, 2), "20 tokens to an output");
+    for o in tx.outputs.iter().filter(|o| o.address == w.wallet) {
+        let paid = o.register.as_ref().unwrap();
+        assert_ne!(paid.generator, found.generator, "never the register found");
+        assert_ne!(paid.public_value, found.public_value);
+        assert!(!paid.is_owned(random_scalar()).unwrap());
+    }
+    // The rest of each token comes back to the account.
+    assert_eq!(built.change_tokens.items.len(), 25);
+    assert!(built.change_tokens.items.iter().all(|a| a.amount == 1));
+
+    // Max pays everything the account holds, less the fee and the change floor.
+    let max = fund(AccountAmount::Max, &[]).unwrap();
+    let tx = assert_sound(&w, &available, &max);
+    assert_eq!(tx.inputs.len(), 2);
+    assert_eq!(deposits(&w, &tx).0, max.lovelace);
+}
+
+#[test]
+fn paying_a_seedelf_refuses_a_register_that_would_lose_the_money() {
+    let w = world();
+    let available = vec![utxo(&w, 1, 0, 20_000_000, vec![])];
+    let err = |recipient: &Register, lovelace| {
+        let seedelf = Payee::Seedelf {
+            owner: recipient,
+            wallet_addr: &w.wallet,
+        };
+        build::account_send_many(
+            &w.params,
+            &available,
+            &[AccountPay::new(
+                seedelf,
+                AccountAmount::Lovelace(lovelace),
+                &[],
+            )],
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default()
+    };
+    let identity = format!("c0{}", "00".repeat(47));
+    let generator = Register::create(random_scalar()).unwrap().generator;
+    for bad in [
+        // Anyone could prove the key to an identity public value, and take it.
+        Register::new(generator.clone(), identity.clone()),
+        // An identity generator, or points that aren't on the curve, lock it for good.
+        Register::new(identity, w.owner.public_value.clone()),
+        Register::new("00".repeat(48), "00".repeat(48)),
+        Register::new(generator, "zz".into()),
+    ] {
+        assert!(
+            err(&bad, 2_000_000).contains("register isn't valid"),
+            "{bad:?}"
+        );
+    }
+    // A good register still has the minimums and the balance to meet.
+    assert!(err(&w.owner, 500_000).contains("needs at least"));
+    assert!(err(&w.owner, 19_990_000).contains("for this payment"));
+}
+
+// ---------------------------------------------------------------------------
+// Several recipients in one payment from the Cardano account
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pays_several_recipients_in_order_each_its_own_amount_and_tokens() {
+    let w = world();
+    let to = elsewhere();
+    let found = w.owner.clone().rerandomize().unwrap();
+    let seedelf = Payee::Seedelf {
+        owner: &found,
+        wallet_addr: &w.wallet,
+    };
+    let tusdm = |q| vec![(POLICY.to_string(), hex::encode("tUSDM"), q)];
+    let available = vec![
+        utxo(
+            &w,
+            1,
+            0,
+            2_000_000,
+            vec![token("tUSDM", 1000), token("keep", 1)],
+        ),
+        utxo(&w, 2, 1, 30_000_000, vec![]),
+    ];
+    let recipients = [
+        AccountPay::new(
+            Payee::Address(&to),
+            AccountAmount::Lovelace(3_000_000),
+            &tusdm(250),
+        ),
+        AccountPay::new(seedelf, AccountAmount::Lovelace(4_000_000), &tusdm(100)),
+        AccountPay::new(Payee::Address(&to), AccountAmount::Lovelace(2_000_000), &[]),
+    ];
+    let built = build::account_send_many(
+        &w.params,
+        &available,
+        &recipients,
+        true,
+        &w.change,
+        &Staking::none(),
+        None,
+    )
+    .unwrap();
+    let tx = assert_paid(&w, &available, &built, Some(&to));
+
+    let key = (POLICY.to_string(), hex::encode("tUSDM"));
+    let shape: Vec<(bool, u64, Option<u64>)> = tx
+        .outputs
+        .iter()
+        .take(3)
+        .map(|o| {
+            (
+                o.address == w.wallet,
+                o.lovelace,
+                o.assets.get(&key).copied(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            (false, 3_000_000, Some(250)),
+            (true, 4_000_000, Some(100)),
+            (false, 2_000_000, None),
+        ],
+        "each recipient as asked, in order, before the change"
+    );
+    assert_eq!(tx.outputs[0].address, to);
+    assert_eq!(tx.outputs[2].address, to);
+    let paid = tx.outputs[1].register.as_ref().unwrap();
+    assert_ne!(
+        paid.generator, found.generator,
+        "a fresh copy of the Seedelf's register"
+    );
+    assert_eq!(built.paid, vec![3_000_000, 4_000_000, 2_000_000]);
+    assert_eq!(built.lovelace, 9_000_000);
+    assert_eq!(built.outputs, 3);
+    assert_eq!(built.tokens.items[0].amount, 350);
+    let change: u64 = paid_to(&tx, &w.change)
+        .iter()
+        .filter_map(|o| o.assets.get(&key))
+        .sum();
+    assert_eq!(change, 650, "the rest of the token comes back");
+}
+
+#[test]
+fn several_recipients_refuse_max_too_much_and_no_one() {
+    let w = world();
+    let to = elsewhere();
+    let available = vec![
+        utxo(&w, 1, 0, 2_000_000, vec![token("tUSDM", 1000)]),
+        utxo(&w, 2, 1, 30_000_000, vec![]),
+    ];
+    let tusdm = |q| vec![(POLICY.to_string(), hex::encode("tUSDM"), q)];
+    let err = |recipients: &[AccountPay]| {
+        build::account_send_many(
+            &w.params,
+            &available,
+            recipients,
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default()
+    };
+    let two = |a, b| {
+        [
+            AccountPay::new(Payee::Address(&to), a, &[]),
+            AccountPay::new(Payee::Address(&to), b, &[]),
+        ]
+    };
+    assert!(
+        err(&two(AccountAmount::Max, AccountAmount::Lovelace(2_000_000)))
+            .contains("Max pays a single recipient")
+    );
+    assert!(
+        err(&two(
+            AccountAmount::Lovelace(20_000_000),
+            AccountAmount::Lovelace(20_000_000)
+        ))
+        .contains("for this payment")
+    );
+    // Their tokens together can't be more than the account holds.
+    let greedy = [
+        AccountPay::new(
+            Payee::Address(&to),
+            AccountAmount::Lovelace(2_000_000),
+            &tusdm(600),
+        ),
+        AccountPay::new(
+            Payee::Address(&to),
+            AccountAmount::Lovelace(2_000_000),
+            &tusdm(401),
+        ),
+    ];
+    assert!(err(&greedy).contains("holds only 1000"));
+    assert!(err(&[]).contains("someone to pay"));
+    assert!(
+        err(&[AccountPay::new(
+            Payee::Nobody,
+            AccountAmount::Lovelace(0),
+            &[]
+        )])
+        .contains("someone to pay")
+    );
+    let identity = format!("c0{}", "00".repeat(47));
+    let lost = Register::new(
+        Register::create(random_scalar()).unwrap().generator,
+        identity,
+    );
+    let bad = Payee::Seedelf {
+        owner: &lost,
+        wallet_addr: &w.wallet,
+    };
+    assert!(
+        err(&[AccountPay::new(
+            bad,
+            AccountAmount::Lovelace(2_000_000),
+            &[]
+        )])
+        .contains("register isn't valid")
+    );
+    let script = Payee::Address(&w.wallet);
+    assert!(
+        err(&[AccountPay::new(
+            script,
+            AccountAmount::Lovelace(2_000_000),
+            &[]
+        )])
+        .contains("normal preprod address")
+    );
+}
+
+#[test]
+fn a_transaction_over_the_size_limit_is_refused_in_words() {
+    let w = world();
+    let to = elsewhere();
+    let available = vec![utxo(&w, 1, 0, 1_000_000_000, vec![])];
+    let recipients: Vec<AccountPay> = (0..300)
+        .map(|_| AccountPay::new(Payee::Address(&to), AccountAmount::Lovelace(1_500_000), &[]))
+        .collect();
+    let e = build::account_send_many(
+        &w.params,
+        &available,
+        &recipients,
+        true,
+        &w.change,
+        &Staking::none(),
+        None,
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(e.contains("over the network's limit of 16384"), "{e}");
+    // Well under it, the same payments are fine.
+    assert!(
+        build::account_send_many(
+            &w.params,
+            &available,
+            &recipients[..20],
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+        .is_ok()
     );
 }

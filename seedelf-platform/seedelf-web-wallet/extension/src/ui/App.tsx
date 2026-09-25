@@ -14,6 +14,7 @@ import { Onboarding } from "./screens/Onboarding";
 import { Settings } from "./screens/Settings";
 import { Reset, Unlock } from "./screens/Unlock";
 import { NetworkContext } from "./network";
+import { PreferencesProvider } from "./preferences";
 import { openInTab, startFromHash, view } from "./view";
 
 export function App() {
@@ -70,7 +71,7 @@ export function App() {
         onCancel={() => setResetting(false)}
         onReset={(s) => {
           setResetting(false);
-          if (view === "popup") openInTab("restore");
+          if (view === "panel") openInTab("restore");
           setStart("restore");
           setStatus(s);
         }}
@@ -97,7 +98,7 @@ export function App() {
     <div className={`app app--${view}`}>
       <header className="topbar">
         <img className="topbar__mark" src="/icons/icon-48.png" alt="" width={28} height={28} />
-        <span className="wordmark">seedelf</span>
+        <span className="wordmark">Seedelf</span>
         {network && (
           <span className={`badge badge--${network.name}`} data-testid="network">
             {network.label.toUpperCase()}
@@ -120,7 +121,7 @@ export function App() {
             <LockIcon />
           </button>
         )}
-        {view === "popup" && (
+        {view === "panel" && (
           <button className="icon-button" onClick={() => openInTab()} aria-label="Open in tab" title="Open in a full tab">
             <ExpandIcon />
           </button>
@@ -128,7 +129,9 @@ export function App() {
       </header>
 
       <main>
-        <NetworkContext.Provider value={status?.network ?? "preprod"}>{screen}</NetworkContext.Provider>
+        <NetworkContext.Provider value={status?.network ?? "preprod"}>
+          <PreferencesProvider unlocked={unlocked}>{screen}</PreferencesProvider>
+        </NetworkContext.Provider>
       </main>
 
       <footer className="footer">

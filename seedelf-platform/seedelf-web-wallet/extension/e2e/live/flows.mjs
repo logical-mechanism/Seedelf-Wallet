@@ -4,11 +4,11 @@
 // transaction hash.
 import { balances, confirmed, log, reviewAndSend, seedelfName, sendReviewed, yourSeedelfs } from "./lib.mjs";
 
-const home = (page) => page.getByRole("tab", { name: "Seedelf" }).click();
+const home = (page) => page.getByRole("tab", { name: "Private", exact: true }).click();
 
 /** The Cardano tab's staking row, into Staking. */
 async function staking(page) {
-  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
+  await page.getByRole("tab", { name: "Public", exact: true }).click();
   await page.getByTestId("staking-row").click();
   await page.getByRole("heading", { name: "Voting power" }).waitFor();
 }
@@ -18,11 +18,11 @@ const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export const FLOWS = {
   /** `mint [tag] [account|seedelf]`: create a seedelf, paid by the Cardano account (mint first) or the Seedelf balance (a stealth mint). */
   async mint({ page }, tag = "live-mint", from = "account") {
-    if (from !== "account" && from !== "seedelf") throw new Error("mint: pay with account or seedelf");
+    if (from !== "account" && from !== "seedelf") throw new Error("mint: pay with account or Seedelf");
     await home(page);
-    await page.getByRole("button", { name: "Create a seedelf" }).click();
+    await page.getByRole("button", { name: "Create a Seedelf" }).click();
     await page.getByLabel("Personal tag (optional)").fill(tag);
-    await page.getByRole("button", { name: from === "account" ? "Cardano account" : "Seedelf balance" }).click();
+    await page.getByRole("button", { name: from === "account" ? "Public account" : "Private balance" }).click();
     await reviewAndSend(page, "mint-review", `mint-${from}`);
     const txHash = await confirmed(page, "Seedelf created");
     await yourSeedelfs(page, (list) => list.getByText(tag, { exact: true }).waitFor({ timeout: 60_000 }));
@@ -31,8 +31,8 @@ export const FLOWS = {
 
   /** `move-in [ada]`: ADA and every token the Cardano account holds, into the Seedelf balance. */
   async "move-in"({ page }, ada = "10") {
-    await page.getByRole("tab", { name: "Cardano", exact: true }).click();
-    await page.getByRole("button", { name: "Move in" }).click();
+    await page.getByRole("tab", { name: "Public", exact: true }).click();
+    await page.getByRole("button", { name: "Make private" }).click();
     await page.getByLabel("Amount", { exact: true }).fill(ada);
     const add = page.getByRole("button", { name: "Add tokens" });
     if (await add.count()) {
@@ -43,14 +43,14 @@ export const FLOWS = {
     }
     for (const all of await page.getByRole("button", { name: /^All of / }).all()) await all.click();
     await reviewAndSend(page, "move-in-review", "move-in");
-    return confirmed(page, "Move-in confirmed");
+    return confirmed(page, "Made private");
   },
 
   /** `transfer [ada] [to]`: pay a seedelf, by its full name or the tag of one of the wallet's own (flagged, allowed). */
   async transfer({ page }, ada = "3.3", to = "live-mint") {
     await home(page);
     const name = /^5eed0e1f[0-9a-f]{56}$/i.test(to) ? to : await seedelfName(page, to);
-    await page.getByRole("button", { name: "Send to a seedelf" }).click();
+    await page.getByRole("button", { name: "Send privately" }).click();
     await page.getByLabel("Seedelf name").fill(name);
     const note = page.getByTestId("transfer-to-note");
     await note.filter({ hasText: "Found:" }).waitFor({ timeout: 60_000 }).catch(async () => {
@@ -59,19 +59,19 @@ export const FLOWS = {
     log("recipient:", await note.innerText());
     await page.getByLabel("Amount", { exact: true }).fill(ada);
     await reviewAndSend(page, "transfer-review", "transfer");
-    return confirmed(page, "Transfer confirmed");
+    return confirmed(page, "Private payment confirmed");
   },
 
   /** `withdraw [ada|max] [address|$handle]`: by default to the wallet's own receive address (flagged, allowed). */
   async withdraw({ page }, amount = "5.5", to) {
     if (!to) {
-      await page.getByRole("tab", { name: "Cardano", exact: true }).click();
+      await page.getByRole("tab", { name: "Public", exact: true }).click();
       await page.getByRole("button", { name: "Receive" }).click();
       to = await page.getByTestId("receive-address").getAttribute("data-value");
       await page.getByRole("button", { name: "Back", exact: true }).click();
     }
     await home(page);
-    await page.getByRole("button", { name: "Withdraw" }).click();
+    await page.getByRole("button", { name: "Make public" }).click();
     await page.getByLabel("To", { exact: true }).fill(to);
     const note = page.getByTestId("withdraw-to-note");
     await note.filter({ hasText: /^(Sends to|\$\S+ is) / }).waitFor({ timeout: 60_000 }).catch(async () => {
@@ -81,7 +81,7 @@ export const FLOWS = {
     if (amount === "max") await page.getByRole("button", { name: "Max" }).click();
     else await page.getByLabel("Amount", { exact: true }).fill(amount);
     await reviewAndSend(page, "withdraw-review", "withdraw");
-    return confirmed(page, "Withdrawal confirmed");
+    return confirmed(page, "Made public");
   },
 
   /** `stake [ticker|pool1…]`: stake the Cardano account with a pool, found in the pool browser; a first delegation pays the 2 ₳ deposit. */
@@ -139,11 +139,11 @@ export const FLOWS = {
 
   /** `remove [tag] [account|seedelf]`: burn a seedelf of the wallet's; its ADA goes to the Cardano account or the Seedelf balance. */
   async remove({ page }, tag = "live-mint", to = "account") {
-    if (to !== "account" && to !== "seedelf") throw new Error("remove: send the freed ADA to account or seedelf");
+    if (to !== "account" && to !== "seedelf") throw new Error("remove: send the freed ADA to account or Seedelf");
     await home(page);
-    await page.getByRole("button", { name: "Receive into Seedelf" }).click();
+    await page.getByRole("button", { name: "Receive privately" }).click();
     await page.getByRole("button", { name: `Remove ${tag}`, exact: true }).click();
-    await page.getByRole("button", { name: to === "account" ? "Cardano account" : "Seedelf balance" }).click();
+    await page.getByRole("button", { name: to === "account" ? "Public account" : "Private balance" }).click();
     await reviewAndSend(page, "remove-review", `remove-${to}`);
     return confirmed(page, "Seedelf removed");
   },

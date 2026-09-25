@@ -24,27 +24,33 @@ const recorded = json("../../extension/tests/fixtures/withdraw-preprod.json");
 const owned = json("../../extension/tests/fixtures/owned-utxos.json").owned_utxos;
 const to = vector(15).preprod.receive_0;
 
+/** A recorded request, which paid one address, with `changes` to its payment. */
+function withdrawal(which, changes = {}) {
+  const { to, lovelace, tokens, ...rest } = recorded[which].request;
+  return { ...rest, params, payments: [{ to, lovelace, tokens, ...changes }] };
+}
+
 test("withdraws an amount, or everything, to an address", () => {
   const key = SeedelfKey.fromPhrase(vector(12).phrase, 0);
-  const amount = { ...recorded.amount.request, params };
+  const amount = withdrawal("amount");
   const draft = JSON.parse(draftWithdraw(key, JSON.stringify(amount)));
   assert.deepEqual(draft.inputs, recorded.amount.draft.inputs);
   const final = JSON.parse(
     finishWithdraw(key, JSON.stringify({ ...amount, seed: draft.seed, evaluation: recorded.amount.evaluation })),
   );
-  assert.equal(final.to, to);
+  assert.equal(final.payments[0].to, to);
   assert.equal(final.max, false);
-  assert.equal(final.lovelace, "5000000");
+  assert.equal(final.payments[0].lovelace, "5000000");
   assert.equal(final.fee.total, recorded.amount.final.fee.total);
   assert.throws(
     () => signScriptSpend(key, JSON.stringify({ txCbor: final.txCbor, seed: final.seed, collateral: recorded.collateral.answer })),
     /Transaction Fails Validation/,
   );
 
-  const max = { ...recorded.max.request, params };
+  const max = withdrawal("max");
   const all = JSON.parse(finishWithdraw(key, JSON.stringify({ ...max, seed: "42".repeat(32), evaluation: recorded.max.evaluation })));
   assert.equal(all.max, true);
-  assert.equal(all.lovelace, String(28_000_000 - Number(all.fee.total)));
+  assert.equal(all.payments[0].lovelace, String(28_000_000 - Number(all.fee.total)));
   assert.equal(all.changeOutputs, 0);
   assert.equal(all.left, 0);
   key.free();
@@ -60,8 +66,8 @@ test("removes a seedelf, and refuses what it must", () => {
   assert.equal(final.lovelace, String(1_500_000 - Number(final.fee.total)));
 
   assert.throws(() => draftWithdraw(key, "{}"), /bad withdrawal request/);
-  assert.throws(() => draftWithdraw(key, JSON.stringify({ ...recorded.amount.request, params, to: "nope" })), /isn't a Cardano address/);
-  assert.throws(() => draftRemove(key, JSON.stringify({ ...request, utxo: owned[0] })), /exactly one seedelf/);
+  assert.throws(() => draftWithdraw(key, JSON.stringify(withdrawal("amount", { to: "nope" }))), /isn't a Cardano address/);
+  assert.throws(() => draftRemove(key, JSON.stringify({ ...request, utxo: owned[0] })), /exactly one Seedelf/);
   assert.throws(() => draftRemove(key, "{}"), /bad removal request/);
   key.free();
 });

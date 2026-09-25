@@ -80,14 +80,11 @@ describe("withdraw", () => {
   it("builds an amount with a token, measured by Ogmios, without sending anything", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.amount.evaluation;
-    const summary = await t.withdraw.build("preprod", THEIRS, "5000000", TUSDM);
+    const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: TUSDM }]);
     expect(summary).toMatchObject({
       network: "preprod",
-      address: THEIRS,
-      own: false,
+      payments: [{ address: THEIRS, own: false, lovelace: "5000000", tokens: TUSDM }],
       max: false,
-      lovelace: "5000000",
-      tokens: TUSDM,
       changeOutputs: 1,
       changeTokens: 1,
       inputs: 2,
@@ -105,37 +102,60 @@ describe("withdraw", () => {
   it("sends everything with Max, and nothing comes back", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.max.evaluation;
-    const summary = await t.withdraw.build("preprod", THEIRS, null, []);
+    const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
     expect(summary).toMatchObject({ max: true, changeLovelace: "0", changeOutputs: 0, inputs: 2, left: 0 });
-    expect(BigInt(summary.lovelace)).toBe(28_000_000n - BigInt(summary.fee.total));
-    expect(summary.tokens).toHaveLength(1);
+    expect(BigInt(summary.payments[0]!.lovelace)).toBe(28_000_000n - BigInt(summary.fee.total));
+    expect(summary.payments[0]!.tokens).toHaveLength(1);
+  });
+
+  it("pays several addresses in one withdrawal; Max is for one", async () => {
+    const t = await unlocked();
+    t.koios.evaluation = withdrawPreprod.amount.evaluation;
+    t.koios.nfts.set(`${ADA_HANDLE_POLICY}.${Buffer.from("bob").toString("hex")}`, THEIRS);
+    const summary = await t.withdraw.build("preprod", [
+      { to: THEIRS, lovelace: "5000000", tokens: TUSDM },
+      { to: "$bob", lovelace: "2000000", tokens: [] },
+    ]);
+    expect(summary).toMatchObject({
+      max: false,
+      payments: [
+        { address: THEIRS, lovelace: "5000000", tokens: TUSDM },
+        { address: THEIRS, handle: "bob", lovelace: "2000000", tokens: [] },
+      ],
+    });
+    await expect(
+      t.withdraw.build("preprod", [
+        { to: THEIRS, lovelace: null, tokens: [] },
+        { to: THEIRS, lovelace: "2000000", tokens: [] },
+      ]),
+    ).rejects.toThrow("Max pays a single recipient");
   });
 
   it("raises a short amount to the least the payment needs", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.amount.evaluation;
-    const short = await t.withdraw.build("preprod", THEIRS, "500000", []);
-    expect(short.lovelace).toBe(short.minimum);
-    expect(BigInt(short.minimum!)).toBeGreaterThan(500_000n);
-    const token = await t.withdraw.build("preprod", THEIRS, "0", [{ ...TUSDM[0]!, quantity: "1" }]);
-    expect(token.lovelace).toBe(token.minimum);
-    expect(BigInt(token.minimum!)).toBeGreaterThan(BigInt(short.minimum!));
+    const [short] = (await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "500000", tokens: [] }])).payments;
+    expect(short!.lovelace).toBe(short!.minimum);
+    expect(BigInt(short!.minimum!)).toBeGreaterThan(500_000n);
+    const [token] = (await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "0", tokens: [{ ...TUSDM[0]!, quantity: "1" }] }])).payments;
+    expect(token!.lovelace).toBe(token!.minimum);
+    expect(BigInt(token!.minimum!)).toBeGreaterThan(BigInt(short!.minimum!));
   });
 
   it("explains what stops a withdrawal", async () => {
     const t = await unlocked();
-    await expect(t.withdraw.build("preprod", THEIRS, "30000000", [])).rejects.toThrow("Not enough ADA");
-    await expect(t.withdraw.build("preprod", "nope", "5000000", [])).rejects.toThrow("isn't a Cardano address");
+    await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "30000000", tokens: [] }])).rejects.toThrow("Not enough ADA");
+    await expect(t.withdraw.build("preprod", [{ to: "nope", lovelace: "5000000", tokens: [] }])).rejects.toThrow("isn't a Cardano address");
     expect(t.koios.calls.map((c) => c.path)).not.toContain("ogmios");
     const empty = await unlocked({ owned: false });
-    await expect(empty.withdraw.build("preprod", THEIRS, null, [])).rejects.toThrow("Your Seedelf balance is empty");
+    await expect(empty.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Your private balance is empty");
   });
 
   it("submits exactly the signed transaction, and refuses anything else", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.amount.evaluation;
-    await expect(t.withdraw.submit("preprod", "00".repeat(32))).rejects.toThrow("That withdrawal isn't ready to send");
-    const summary = await t.withdraw.build("preprod", THEIRS, "5000000", TUSDM);
+    await expect(t.withdraw.submit("preprod", "00".repeat(32))).rejects.toThrow("That payment isn't ready to send");
+    const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: TUSDM }]);
     // giveme.my's recorded refusal: nothing is sent, and Send can be tried again.
     await expect(t.withdraw.submit("preprod", summary.txHash)).rejects.toThrow("Transaction Fails Validation");
     expect(t.koios.submitted).toHaveLength(0);
@@ -151,7 +171,7 @@ describe("withdraw", () => {
   });
 });
 
-describe("removing a seedelf", () => {
+describe("removing a Seedelf", () => {
   it("burns it and sends its ADA to the Cardano account", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.remove.evaluation;
@@ -176,9 +196,9 @@ describe("removing a seedelf", () => {
     await expect(t.withdraw.buildRemove("preprod", MINE, "seedelf")).rejects.toThrow("Not enough ADA");
     await expect(t.withdraw.buildRemove("preprod", transferPreprod.to, "account")).rejects.toThrow("isn't this wallet's");
     await expect(t.withdraw.buildRemove("preprod", `5eed0e1f${"00".repeat(28)}`, "account")).rejects.toThrow(
-      "No seedelf with that name",
+      "No Seedelf with that name",
     );
-    await expect(t.withdraw.buildRemove("preprod", "web-wallet", "account")).rejects.toThrow("isn't a seedelf's name");
+    await expect(t.withdraw.buildRemove("preprod", "web-wallet", "account")).rejects.toThrow("isn't a Seedelf's name");
     await expect(t.withdraw.submitRemove("preprod", "00".repeat(32))).rejects.toThrow("That removal isn't ready to send");
   });
 });

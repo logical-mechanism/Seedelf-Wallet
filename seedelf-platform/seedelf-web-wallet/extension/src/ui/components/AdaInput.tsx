@@ -88,19 +88,23 @@ export function MinimumNote({
   minimum,
   asked,
   tokens,
+  who,
 }: {
   lovelace: string;
   minimum: string | null;
   /** The lovelace the form asked for. */
   asked: string;
   tokens: number;
+  /** Which recipient, when there are several. */
+  who?: string;
 }) {
   if (minimum === null || lovelace !== minimum) return null;
   const least = `${formatAda(minimum)} ₳ is the least ADA the network accepts ${tokens ? "with these tokens" : "in a payment"}.`;
   const raised = BigInt(asked) > 0n && BigInt(asked) < BigInt(minimum);
+  const note = raised ? `Raised from ${formatAda(asked)} ₳: ${least}` : least;
   return (
     <p className="note" data-testid="minimum-note">
-      {raised ? `Raised from ${formatAda(asked)} ₳: ${least}` : least}
+      {who ? `${who}: ${note}` : note}
     </p>
   );
 }

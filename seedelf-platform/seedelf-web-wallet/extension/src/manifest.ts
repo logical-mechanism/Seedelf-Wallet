@@ -27,20 +27,28 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
     name: mainnetEnabled ? "Seedelf Wallet" : "Seedelf Wallet (preprod)",
     short_name: "Seedelf",
     // Also the Web Store's summary line: at most 132 characters.
-    description: "A Cardano wallet with private payments built in. Stake, send, and pay anyone through Seedelf, where no UTxO says who owns it.",
+    description: "A Cardano wallet with a private balance built in. Stake and send in public, or pay anyone privately through Seedelf.",
     version,
     icons: ICONS,
+    // No popup: the button opens the wallet in a full tab (the worker's
+    // action.onClicked), or in the side panel when the user chooses it
+    // (shared/open-in.ts).
     action: {
       default_title: "Seedelf Wallet",
-      default_popup: "index.html",
       default_icon: ICONS,
+    },
+    side_panel: {
+      default_path: "index.html?view=panel",
     },
     background: {
       service_worker: "sw.js",
       type: "module",
     },
-    // storage: the vault and the unlocked session; alarms: auto-lock.
-    permissions: ["storage", "alarms"],
+    // storage: the vault and the unlocked session; alarms: auto-lock;
+    // sidePanel: the wallet in Chrome's side panel, when the user chooses it.
+    permissions: ["storage", "alarms", "sidePanel"],
+    // runtime.getContexts, which finds the wallet's open tab.
+    minimum_chrome_version: "116",
     host_permissions: origins.map((o) => `${o}/*`),
     // WebAssembly needs 'wasm-unsafe-eval'; connect-src limits network access
     // to the extension itself and the wallet's own services. Fonts and images

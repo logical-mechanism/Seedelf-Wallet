@@ -56,19 +56,19 @@ export async function openWallet() {
 
 /** Home's balances, and the seedelfs from Receive, on one line. Leaves Home on the Seedelf tab. */
 export async function balances(page) {
-  await page.getByRole("tab", { name: "Seedelf" }).click();
+  await page.getByRole("tab", { name: "Private", exact: true }).click();
   const seedelf = await page.getByTestId("seedelf-lovelace").textContent();
   const seedelfs = await yourSeedelfs(page, (list) => list.innerText({ timeout: 1000 }).catch(() => "(none)"));
-  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
+  await page.getByRole("tab", { name: "Public", exact: true }).click();
   const cardano = await page.getByTestId("cardano-lovelace").textContent();
-  await page.getByRole("tab", { name: "Seedelf" }).click();
-  return `Seedelf ${seedelf} | Cardano ${cardano} | seedelfs: ${seedelfs.replace(/\n/g, " ")}`;
+  await page.getByRole("tab", { name: "Private", exact: true }).click();
+  return `Seedelf ${seedelf} | Cardano ${cardano} | Seedelfs: ${seedelfs.replace(/\n/g, " ")}`;
 }
 
 /** Opens the Seedelf tab's Receive, hands `read` its list of your seedelfs, then goes back to Home. */
 export async function yourSeedelfs(page, read) {
-  await page.getByRole("tab", { name: "Seedelf" }).click();
-  await page.getByRole("button", { name: "Receive into Seedelf" }).click();
+  await page.getByRole("tab", { name: "Private", exact: true }).click();
+  await page.getByRole("button", { name: "Receive privately" }).click();
   try {
     return await read(page.getByTestId("seedelfs"));
   } finally {
@@ -80,7 +80,7 @@ export async function yourSeedelfs(page, read) {
 export async function seedelfName(page, tag) {
   return yourSeedelfs(page, async (list) => {
     const row = list.getByRole("listitem").filter({ has: page.getByText(tag, { exact: true }) });
-    if ((await row.count()) !== 1) throw new Error(`expected one seedelf tagged "${tag}", found ${await row.count()}`);
+    if ((await row.count()) !== 1) throw new Error(`expected one Seedelf tagged "${tag}", found ${await row.count()}`);
     return row.getAttribute("title");
   });
 }

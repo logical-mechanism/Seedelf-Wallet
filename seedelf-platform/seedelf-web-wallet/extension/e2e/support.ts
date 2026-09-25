@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test as base, chromium, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
 import { txIdOf } from "../tests/fixtures/cbor";
 
@@ -216,11 +216,12 @@ export const test = base.extend<{ scale: number; userDataDir: string; koios: Koi
   },
 });
 
-export async function openApp(context: BrowserContext, view: "popup" | "tab" = "tab"): Promise<Page> {
+/** The app in a full tab, or narrow as the side panel shows it (360 px, Chrome's default width). */
+export async function openApp(context: BrowserContext, view: "panel" | "tab" = "tab"): Promise<Page> {
   const page = await context.newPage();
-  if (view === "popup") await page.setViewportSize({ width: 360, height: 640 });
+  if (view === "panel") await page.setViewportSize({ width: 360, height: 640 });
   const app = await appUrl(context);
-  await page.goto(view === "tab" ? `${app}?view=tab` : app);
+  await page.goto(`${app}?view=${view}`);
   return page;
 }
 
@@ -254,8 +255,8 @@ export async function snap(page: Page, name: string) {
 }
 
 /** Picks tokens in a form's "Add tokens" picker: the ones named, or every one. */
-export async function addTokens(page: Page, names?: string[]) {
-  await page.getByRole("button", { name: /^Add (more )?tokens$/ }).click();
+export async function addTokens(page: Page, names?: string[], within: Page | Locator = page) {
+  await within.getByRole("button", { name: /^Add (more )?tokens$/ }).click();
   const picker = page.getByRole("dialog", { name: "Add tokens" });
   if (names) for (const name of names) await picker.getByRole("button", { name, exact: true }).click();
   else await picker.getByRole("button", { name: /^Select all/ }).click();
@@ -263,12 +264,12 @@ export async function addTokens(page: Page, names?: string[]) {
   await expect(picker).toHaveCount(0);
 }
 
-/** Home's Cardano account tab. */
+/** Home's Public tab (the Cardano account). */
 export async function cardanoTab(page: Page) {
-  await page.getByRole("tab", { name: "Cardano", exact: true }).click();
+  await page.getByRole("tab", { name: "Public", exact: true }).click();
 }
 
-/** Home → Cardano account → Receive: the receive and stake addresses. */
+/** Home → Public → Receive: the receive and stake addresses. */
 export async function openReceive(page: Page) {
   await cardanoTab(page);
   await page.getByRole("button", { name: "Receive" }).click();

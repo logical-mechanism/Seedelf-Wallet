@@ -6,7 +6,7 @@ A wallet is one **BIP39 recovery phrase**. New wallets get 24 words (256 bits of
 
 - **Cardano tree:** standard CIP-1852 derivation (`m/1852'/1815'/account'/role/index`) from the usual Icarus master key.
   - Because it is standard, the phrase also restores the Cardano side in Lace, Eternl and other wallets.
-  - Those wallets see the Cardano account. They never see seedelfs.
+  - Those wallets see the Cardano account. They never see Seedelfs.
 - **Seedelf key:** one BLS12-381 scalar `x`, derived from the same phrase by a separate, Seedelf-specific derivation.
   - The two trees are independent: knowing one reveals nothing about the other.
 
@@ -45,7 +45,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 - **Phrase rules (wallet policy, applied before the derivation):**
   - New phrases are 24 words. Restore accepts 12, 15 or 24 BIP39 English words with a valid checksum. These are the lengths Lace accepts; 18 and 21 are refused.
   - The rule is checked before the derivation, which works the same for any length. Accepting another length later wouldn't change any existing wallet's keys.
-  - **Restoring another wallet's phrase:** if someone restores a phrase from Lace or Yoroi, the Cardano account is that wallet's standard account 0. The Seedelf wallet can then see and spend those funds, and the Seedelf key is new.
+  - **Restoring another wallet's phrase:** if someone restores a phrase from Lace or Yoroi, the Cardano account is that wallet's standard account 0. Seedelf Wallet can then see and spend those funds, and the Seedelf key is new.
   - Case and extra whitespace are ignored. The seed is always computed from the canonical words.
   - `generatePhrase` and `validatePhrase` in the WebAssembly module apply these rules, and `validatePhrase` says what is wrong.
 - **One implementation:** the derivation lives in Rust (`seedelf-crypto`), and the extension uses it through WebAssembly (`SeedelfKey.fromPhrase`).
@@ -54,7 +54,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 
 | Account | What it is | Address | Lifetime |
 |---|---|---|---|
-| **Seedelf** | The scalar `x`. The base register is `(G1, G1^x)`. Each seedelf's root UTxO holds a re-randomized copy that senders use. | Wallet contract (script address, no staking part) | Permanent |
+| **Seedelf** | The scalar `x`. The base register is `(G1, G1^x)`. Each Seedelf's root UTxO holds a re-randomized copy that senders use. | Wallet contract (script address, no staking part) | Permanent |
 | **Cardano** | CIP-1852 account `0'` in v1: receive keys `0/i`, change keys `1/i`, staking key `2/0` | Standard base addresses | Permanent. See [The Cardano account](#the-cardano-account). |
 | **One-time** (round-trip phase) | Reserved CIP-1852 account `24301'` (`0x5EED`), payment `0/i`, a fresh `i` each session | Base address with the shared Seedelf staking part, the same as the CLI's External Wallet. See [privacy.md](privacy.md#known-links). | One session, then retired |
 
@@ -92,7 +92,7 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
 3. **Tokens and NFTs are shown.** Move-in moves ADA by default, and tokens only when the user picks them. Each Seedelf UTxO can only hold so many tokens (see the root README's *Wallet Limitations*).
 4. **The account stakes, with its own stake key `2/0` (chunk 13).**
    - Delegation to one pool, the vote's delegation, and the rewards are the account's, as in Lace: a restored phrase shows the same pool and DRep, and a change made here shows there.
-   - The stake key signs inside WebAssembly, only for a certificate or a withdrawal, and never leaves it. See [flows.md](flows.md#staking-and-voting-cardano-account).
+   - The stake key signs inside WebAssembly, only for a certificate or a withdrawal, and never leaves it. See [flows.md](flows.md#staking-and-voting-public-account).
    - Moving ADA into Seedelf lowers the stake behind that delegation, because Seedelf addresses have no staking part.
 5. **Using it alongside another wallet is fine.** Both wallets can spend the same UTxOs. If both try at once, one transaction simply fails.
 6. **It is not private.** For a restored wallet, this account is the user's public identity, and the UI never suggests otherwise.

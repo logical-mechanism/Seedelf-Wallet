@@ -2,6 +2,9 @@
 // The service worker owns every secret; the UI only ever asks it to do work.
 
 import type { NetworkName } from "../networks";
+import type { Currency, Preferences } from "./preferences";
+
+export type { Preferences };
 
 export type WalletState = "no-wallet" | "locked" | "unlocked";
 
@@ -56,6 +59,38 @@ export interface ActivityEntry {
   fee?: string;
   /** Who or where: a seedelf's tag, a $handle, an address. */
   detail?: string;
+  /** The tokens that moved, each with a signed quantity (negative: out), when known. Older entries have only `tokens`. */
+  assets?: TokenQuantity[];
+  /** The Cardano account's only: a note on the transaction (CIP-20's message), in whoever wrote it's words. */
+  note?: string;
+  /** The Cardano account's only: what the transaction did with its stake key. */
+  staking?: ActivityStaking;
+}
+
+/** What a transaction in the Cardano account's Activity did with its stake key. Lovelace amounts are decimal strings. */
+export interface ActivityStaking {
+  /** Staked with this pool (`pool1…`), and its ticker when the pool list on the device has it. */
+  pool?: string;
+  ticker?: string;
+  /** Delegated the vote: a DRep's ID, `drep_always_abstain` or `drep_always_no_confidence`. */
+  drep?: string;
+  /** Paid to register the stake key. */
+  deposit?: string;
+  /** Returned by unregistering it. */
+  refund?: string;
+  /** Rewards withdrawn. */
+  rewards?: string;
+  /** Unregistered: staking stopped. */
+  stopped?: boolean;
+}
+
+/** ADA's value in the currency chosen, on mainnet: CoinGecko's, kept on the device five minutes. */
+export interface AdaPrice {
+  currency: Exclude<Currency, "off">;
+  /** What one ADA is worth in it. */
+  rate: number;
+  /** When CoinGecko was read (ms since the epoch). */
+  updatedAt: number;
 }
 
 /** A name for a seedelf or an address this wallet pays, kept sealed on the device. */
@@ -215,12 +250,6 @@ export interface StakingSummary {
   inputs: number;
 }
 
-/** The user's settings, kept on the device. */
-export interface Preferences {
-  /** Spend staking rewards whenever the Cardano account pays (a send, a move-in, a mint). */
-  spendRewards: boolean;
-}
-
 export type UtxoSide = "seedelf" | "cardano";
 
 /** One UTxO of the wallet's, for the UTxOs screen. */
@@ -312,7 +341,7 @@ export interface MintSummary {
 /** A token and an amount to send. `quantity` is the raw integer, as a decimal string. */
 export type TokenQuantity = TokenRef & { quantity: string };
 
-/** A seedelf found on chain, for the transfer form. */
+/** A seedelf found on chain, for the forms that pay one: Send to a seedelf, and Send from the Cardano account. */
 export interface SeedelfLookup {
   /** The full token name, hex. */
   name: string;
@@ -322,19 +351,38 @@ export interface SeedelfLookup {
   own: boolean;
 }
 
+/** One recipient of a payment, as a form asks for it. `lovelace` null is Max (a single recipient only). */
+export interface PaymentAsk<L extends string | null = string | null> {
+  /** An address, a `$handle`, or a seedelf's full name, as the screen allows. */
+  to: string;
+  lovelace: L;
+  tokens: TokenQuantity[];
+}
+
+/** What one recipient of a payment receives. Amounts are lovelace strings. */
+export interface Paid {
+  lovelace: string;
+  /** The least the payment could carry: an amount below it was raised to it. Null for Max. */
+  minimum: string | null;
+  tokens: TokenQuantity[];
+}
+
+/** One seedelf a transfer pays. */
+export interface SeedelfPaid extends Paid {
+  /** Its full token name, and its tag when it reads as text. */
+  to: string;
+  label?: string;
+  /** One of your own seedelfs: the payment comes back to your Seedelf balance. */
+  toSelf: boolean;
+  minimum: string;
+}
+
 /** A finished transfer, waiting for the user to send it. Amounts are lovelace strings. */
 export interface TransferSummary {
   network: NetworkName;
   txHash: string;
-  /** The seedelf paid: its full token name, and its tag when it reads as text. */
-  to: string;
-  label?: string;
-  /** Paying one of your own seedelfs: the payment comes back to your Seedelf balance. */
-  toSelf: boolean;
-  lovelace: string;
-  /** The least the payment could carry: an amount below it was raised to it. */
-  minimum: string;
-  tokens: TokenQuantity[];
+  /** The seedelfs paid, in order. */
+  payments: SeedelfPaid[];
   fee: { size: string; compute: string; scriptReference: string; total: string };
   /** Back into the Seedelf balance. */
   changeLovelace: string;
@@ -355,16 +403,13 @@ export interface WithdrawDestination {
 }
 
 /** A finished withdrawal, waiting for the user to send it. Amounts are lovelace strings. */
-export interface WithdrawSummary extends WithdrawDestination {
+export interface WithdrawSummary {
   network: NetworkName;
   txHash: string;
-  /** Everything (Max), rather than an amount. */
+  /** The addresses paid, in order, and what each receives. */
+  payments: Array<WithdrawDestination & Paid>;
+  /** Everything (Max) to a single address, rather than amounts. */
   max: boolean;
-  /** What the address receives. */
-  lovelace: string;
-  /** The least the payment could carry: an amount below it was raised to it. Null for Max. */
-  minimum: string | null;
-  tokens: TokenQuantity[];
   fee: { size: string; compute: string; scriptReference: string; total: string };
   /** Back into the Seedelf balance: nothing, for Max. */
   changeLovelace: string;
@@ -376,20 +421,25 @@ export interface WithdrawSummary extends WithdrawDestination {
   left: number;
 }
 
+/** One recipient of a send from the Cardano account: an address (found by `$handle`, maybe), or someone's seedelf. */
+export interface SendPaid extends WithdrawDestination, Paid {
+  /** Paying someone's seedelf: its full token name, and its tag when it reads as text. `address` is then the wallet contract's. */
+  seedelf?: { name: string; label?: string };
+}
+
 /** A built and signed payment from the Cardano account, waiting for the user to send it. Amounts are lovelace strings. */
-export interface SendSummary extends WithdrawDestination {
+export interface SendSummary {
   network: NetworkName;
   txHash: string;
-  /** The most possible (Max), rather than an amount. */
+  /** Who's paid, in order, and what each receives. */
+  payments: SendPaid[];
+  /** The most possible (Max) to a single recipient, rather than amounts. */
   max: boolean;
-  /** What the address receives. */
-  lovelace: string;
-  /** The least the payment could carry: an amount below it was raised to it. Null for Max. */
-  minimum: string | null;
-  tokens: TokenQuantity[];
   fee: string;
   /** Staking rewards withdrawn to pay for it. */
   withdrawal?: string;
+  /** The note on it, as the transaction carries it. */
+  note?: string | null;
   /** Back to the Cardano account's receive address. */
   changeLovelace: string;
   changeTokens: number;
@@ -460,26 +510,23 @@ export interface Requests {
   /** Submits the mint built last, if its hash matches: an account-paid one as signed, a stealth one once giveme.my has witnessed it. */
   "mint-submit": { payload: { txHash: string }; result: PendingTx };
   /** Finds a seedelf by its full name in the wallet contract, as read from Koios. */
-  "transfer-lookup": { payload: { to: string }; result: SeedelfLookup };
-  /** Builds a transfer to a seedelf (Ogmios measures its spends) without sending it. `lovelace` below what the payment needs is raised to that. */
-  "transfer-build": { payload: { to: string; lovelace: string; tokens: TokenQuantity[] }; result: TransferSummary };
+  "seedelf-lookup": { payload: { to: string }; result: SeedelfLookup };
+  /** Builds a transfer to one or more seedelfs (Ogmios measures its spends) without sending it. A `lovelace` below what a payment needs is raised to that. */
+  "transfer-build": { payload: { payments: PaymentAsk<string>[] }; result: TransferSummary };
   /** Submits the transfer built last, if its hash matches, once giveme.my has witnessed it. */
   "transfer-submit": { payload: { txHash: string }; result: PendingTx };
   /** Reads a withdrawal's or a send's destination: an address, or `$handle` looked up through Koios. */
   "resolve-destination": { payload: { to: string }; result: WithdrawDestination };
-  /** Builds a withdrawal (`lovelace` null sends everything; below what the payment needs, it's raised to that) without sending it. */
-  "withdraw-build": {
-    payload: { to: string; lovelace: string | null; tokens: TokenQuantity[] };
-    result: WithdrawSummary;
-  };
+  /** Builds a withdrawal to one or more addresses (`lovelace` null sends everything, to one; below what a payment needs, it's raised to that) without sending it. */
+  "withdraw-build": { payload: { payments: PaymentAsk[] }; result: WithdrawSummary };
   /** Submits the withdrawal built last, if its hash matches, once giveme.my has witnessed it. */
   "withdraw-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds the removal of one of this wallet's seedelfs without sending it. */
   "remove-build": { payload: { name: string; to: RemoveTo }; result: RemoveSummary };
   /** Submits the removal built last, if its hash matches, once giveme.my has witnessed it. */
   "remove-submit": { payload: { txHash: string }; result: PendingTx };
-  /** Builds and signs a payment from the Cardano account without submitting it. `lovelace` as for a move-in. */
-  "send-build": { payload: { to: string; lovelace: string | null; tokens: TokenQuantity[] }; result: SendSummary };
+  /** Builds and signs a payment from the Cardano account to one or more recipients without submitting it: each an address, a `$handle`, or someone's seedelf by its full name. `lovelace` as for a move-in. */
+  "send-build": { payload: { payments: PaymentAsk[]; note?: string }; result: SendSummary };
   /** Submits the payment built last, if its hash matches. */
   "send-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
@@ -487,6 +534,8 @@ export interface Requests {
   "reset-wallet": { payload: None; result: Status };
   /** The recovery phrase's words, for Settings; the password again, even while unlocked. */
   "reveal-phrase": { payload: { password: string }; result: { words: string[] } };
+  /** Whether a typed phrase is this wallet's, for Settings' check: yes or no, never which words differ. */
+  "check-phrase": { payload: { phrase: string }; result: { matches: boolean } };
   /** Seals the vault under a new password. */
   "change-password": { payload: { current: string; next: string }; result: None };
   /** This network's contacts, by name. */
@@ -530,6 +579,8 @@ export interface Requests {
   "stake-submit": { payload: { txHash: string }; result: PendingTx };
   preferences: { payload: None; result: Preferences };
   "preferences-set": { payload: Partial<Preferences>; result: Preferences };
+  /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
+  price: { payload: None; result: AdaPrice | null };
 }
 
 export type RequestName = keyof Requests;
@@ -558,7 +609,7 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "move-in-submit",
   "mint-build",
   "mint-submit",
-  "transfer-lookup",
+  "seedelf-lookup",
   "transfer-build",
   "transfer-submit",
   "resolve-destination",
@@ -571,6 +622,7 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "pending-tx",
   "reset-wallet",
   "reveal-phrase",
+  "check-phrase",
   "change-password",
   "contacts",
   "contact-save",
@@ -590,6 +642,7 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "stake-submit",
   "preferences",
   "preferences-set",
+  "price",
 ]);
 
 export function isMessage(value: unknown): value is Message {

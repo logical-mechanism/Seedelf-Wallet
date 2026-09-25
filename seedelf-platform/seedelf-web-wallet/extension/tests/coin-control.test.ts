@@ -46,7 +46,7 @@ describe("the collateral", () => {
     const status = await t.coins.collateral("preprod");
     expect(status).toMatchObject({ state: "set", by: "wallet", utxo: { txHash: fives[0]!.tx_hash, index: 0, locked: true, collateral: true } });
 
-    const max = await t.send.build("preprod", THEIRS, null, []);
+    const max = await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
     expect(max.inputs).toBe(ours.length - 1);
     const built = await t.session.get<{ txCbor: string }>("seedelf.send.built");
     const inputs = bodyOutpoints(hexBytes(built!.txCbor), 0)!;
@@ -62,7 +62,7 @@ describe("the collateral", () => {
 
     expect(await t.coins.reclaim("preprod")).toMatchObject({ state: "none", reclaimed: true, candidate: { txHash: fives[0]!.tx_hash } });
     expect((await t.balances.get("preprod")).cardano.locked.utxos).toBe(0);
-    expect((await t.send.build("preprod", THEIRS, null, [])).inputs).toBe(ours.length);
+    expect((await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).inputs).toBe(ours.length);
 
     const chosen = at(fives[2]!);
     expect(await t.coins.use("preprod", chosen)).toMatchObject({ state: "set", by: "you", utxo: { txHash: fives[2]!.tx_hash } });
@@ -77,7 +77,7 @@ describe("the collateral", () => {
     expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
 
     const summary = await t.send.buildCollateral("preprod");
-    expect(summary).toMatchObject({ address: phrase(12).preprod.receive_0, own: true, lovelace: "5000000", tokens: [] });
+    expect(summary.payments).toMatchObject([{ address: phrase(12).preprod.receive_0, own: true, lovelace: "5000000", tokens: [] }]);
     expect(await t.session.get(SESSION_COLLATERAL)).toMatchObject({ txHash: summary.txHash });
     const pending = await t.send.submitCollateral("preprod", summary.txHash);
     expect(pending).toMatchObject({ kind: "collateral", txHash: summary.txHash });
@@ -126,16 +126,16 @@ describe("locked UTxOs", () => {
     expect(b.cardano.locked.tokens).toEqual(biggest.tokens);
 
     // More than what's left, even with the staking rewards.
-    await expect(t.send.build("preprod", THEIRS, "100000000", [])).rejects.toThrow("Not enough ADA");
-    const max = await t.send.build("preprod", THEIRS, null, []);
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "100000000", tokens: [] }])).rejects.toThrow("Not enough ADA");
+    const max = await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
     expect(max.inputs).toBe(5);
 
     await t.coins.setLocked("preprod", "cardano", at(biggest), false);
     expect((await t.balances.get("preprod")).cardano.locked.utxos).toBe(0);
-    expect((await t.send.build("preprod", THEIRS, "100000000", [])).inputs).toBeGreaterThan(0);
+    expect((await t.send.build("preprod", [{ to: THEIRS, lovelace: "100000000", tokens: [] }])).inputs).toBeGreaterThan(0);
   });
 
-  it("are left out of Seedelf spends; a seedelf's UTxO can't be locked, and everything locked says so", async () => {
+  it("are left out of Seedelf spends; a Seedelf's UTxO can't be locked, and everything locked says so", async () => {
     const t = await unlocked(12);
     await t.balances.get("preprod");
     const { seedelf } = await t.coins.lists("preprod");
@@ -148,12 +148,12 @@ describe("locked UTxOs", () => {
     await t.coins.setLocked("preprod", "seedelf", at(big), true);
     expect((await t.balances.get("preprod")).seedelf.locked).toMatchObject({ lovelace: "25000000", utxos: 1 });
     t.koios.evaluation = withdrawPreprod.max.evaluation;
-    const max = await t.withdraw.build("preprod", THEIRS, null, []);
+    const max = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
     expect(max.inputs).toBe(1);
 
     const other = seedelf.find((u) => !u.seedelf && u !== big)!;
     await t.coins.setLocked("preprod", "seedelf", at(other), true);
-    await expect(t.withdraw.build("preprod", THEIRS, null, [])).rejects.toThrow("Every UTxO in your Seedelf balance is locked");
+    await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Every UTxO in your private balance is locked");
   });
 
   it("refuse the collateral and UTxOs not in the last reading, and forget spent ones", async () => {

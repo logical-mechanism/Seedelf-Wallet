@@ -1,29 +1,60 @@
 // Settings, from the gear in the top bar: contacts, the Cardano account's
-// collateral, whether payments spend the staking rewards, the recovery phrase
-// (the password again first, even while unlocked), a new password, removing
-// the wallet from this browser, and what this is. Nothing here asks Koios
+// collateral, where the wallet opens (a full tab or the side panel), ADA's
+// value in a currency, whether payments spend the staking rewards, how long
+// it stays unlocked, the recovery phrase (the password again first, even
+// while unlocked) and a check of a written copy, a new password, removing the
+// wallet from this browser, and what this is. Nothing here asks Koios
 // anything, except setting a collateral that needs a transaction.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { NETWORKS } from "../../networks";
-import type { Preferences, Status } from "../../shared/rpc";
+import { readOpenIn, type OpenIn } from "../../shared/open-in";
+import { CURRENCIES, LOCK_AFTER_MINUTES, type Currency, type LockAfterMinutes } from "../../shared/preferences";
+import type { Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
+import { Choice } from "../components/Choice";
 import { ContactsPage, useContacts } from "../components/Contacts";
-import { ChevronRightIcon, ExternalIcon, EyeIcon, LockIcon, TrashIcon, UsersIcon, VaultIcon } from "../components/Icons";
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  ExternalIcon,
+  EyeIcon,
+  LockIcon,
+  TrashIcon,
+  UsersIcon,
+  VaultIcon,
+} from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
+import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
+import { usePreferences } from "../preferences";
+import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/seedelf-web-wallet/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
-type Page = "menu" | "contacts" | "collateral" | "phrase" | "password" | "remove";
+type Page = "menu" | "contacts" | "collateral" | "phrase" | "check-phrase" | "password" | "remove";
+
+/** The currencies ADA's value can be shown in, by name. */
+const CURRENCY_NAMES: Record<(typeof CURRENCIES)[number], string> = {
+  usd: "US dollar (USD)",
+  eur: "Euro (EUR)",
+  gbp: "Pound sterling (GBP)",
+  jpy: "Japanese yen (JPY)",
+  cad: "Canadian dollar (CAD)",
+  aud: "Australian dollar (AUD)",
+  chf: "Swiss franc (CHF)",
+  brl: "Brazilian real (BRL)",
+};
+
+const lockLabel = (m: LockAfterMinutes) => (m === 60 ? "1 hour" : m === 1 ? "1 minute" : `${m} minutes`);
 
 export function Settings({
   status,
@@ -35,10 +66,13 @@ export function Settings({
   onRemoved: (status: Status) => void;
 }) {
   const [page, setPage] = useState<Page>("menu");
+  const { prefs } = usePreferences();
+  const prices = !!NETWORKS[status.network].prices && prefs.currency !== "off";
   const menu = () => setPage("menu");
   if (page === "contacts") return <Contacts onBack={menu} />;
   if (page === "collateral") return <Collateral onBack={menu} />;
   if (page === "phrase") return <ShowPhrase onBack={menu} />;
+  if (page === "check-phrase") return <CheckPhrase onBack={menu} />;
   if (page === "password") return <ChangePassword onBack={menu} />;
   if (page === "remove") return <RemoveWallet onBack={menu} onRemoved={onRemoved} />;
 
@@ -51,11 +85,14 @@ export function Settings({
           <MenuRow icon={<VaultIcon size={16} />} label="Collateral" onClick={() => setPage("collateral")} />
         </ul>
       </section>
+      <PreferencesSection network={status.network} />
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
         <h2 id="security-title">Security</h2>
+        <LockAfter />
         <ul className="list">
           <MenuRow icon={<EyeIcon size={16} />} label="Show recovery phrase" onClick={() => setPage("phrase")} />
+          <MenuRow icon={<CheckIcon size={16} />} label="Check recovery phrase" onClick={() => setPage("check-phrase")} />
           <MenuRow icon={<LockIcon size={16} />} label="Change password" onClick={() => setPage("password")} />
           <MenuRow icon={<TrashIcon size={16} />} label="Remove wallet" onClick={() => setPage("remove")} danger />
         </ul>
@@ -72,26 +109,132 @@ export function Settings({
         <a className="menu-link" href={PRIVACY} target="_blank" rel="noreferrer">
           Privacy policy <ExternalIcon size={12} />
         </a>
-        <p className="note">
-          The wallet only ever talks to Koios and giveme.my. It has no accounts, analytics or tracking.
+        <p className="note" data-testid="talks-to">
+          {prices
+            ? "The wallet only ever talks to Koios and giveme.my, and to CoinGecko for ADA's price. It has no accounts, analytics or tracking."
+            : "The wallet only ever talks to Koios and giveme.my. It has no accounts, analytics or tracking."}
         </p>
       </section>
     </Screen>
   );
 }
 
+/**
+ * Where the toolbar button opens the wallet, and ADA's value in a currency.
+ * Switching where it opens opens it that way at once, as in Lace.
+ */
+function PreferencesSection({ network }: { network: Status["network"] }) {
+  const { prefs, loaded, set } = usePreferences();
+  const [openIn, setOpenIn] = useState<OpenIn>();
+  const [error, setError] = useState<string>();
+  const windowId = useWindowId();
+  useEffect(() => {
+    readOpenIn().then(setOpenIn, () => setOpenIn("tab"));
+  }, []);
+  const priced = !!NETWORKS[network].prices;
+
+  function chooseOpenIn(mode: OpenIn) {
+    if (mode === openIn) return;
+    setOpenIn(mode);
+    switchOpenIn(mode, windowId).catch((e: Error) => setError(e.message));
+  }
+
+  return (
+    <section className="section" aria-labelledby="preferences-title">
+      <h2 id="preferences-title">Preferences</h2>
+      {openIn && (
+        <div className="stack-tight">
+          <Choice<OpenIn>
+            label="Open Seedelf Wallet in"
+            id="open-in-label"
+            options={[
+              { value: "tab", label: "A full tab" },
+              { value: "panel", label: "The side panel" },
+            ]}
+            value={openIn}
+            onChange={chooseOpenIn}
+          />
+          <p className="note" data-testid="open-in-note">
+            {openIn === "panel"
+              ? "The toolbar button opens the wallet beside the page you're on, and it stays open as you browse."
+              : "The toolbar button opens the wallet in a tab, or brings back the one already open."}
+            {openIn === "panel" && view === "tab" ? " Open it with the toolbar button." : ""}
+          </p>
+        </div>
+      )}
+      <div className="field">
+        <label htmlFor="currency">Show ADA's value in</label>
+        <select
+          id="currency"
+          value={prefs.currency}
+          disabled={!loaded}
+          onChange={(e) => void set({ currency: e.target.value as Currency }).catch((err: Error) => setError(err.message))}
+        >
+          <option value="off">Nothing (don't ask for prices)</option>
+          {CURRENCIES.map((c) => (
+            <option key={c} value={c}>
+              {CURRENCY_NAMES[c]}
+            </option>
+          ))}
+        </select>
+        <p className="note" data-testid="currency-note">
+          {priced
+            ? prefs.currency === "off"
+              ? "No prices: the wallet asks CoinGecko nothing."
+              : "From CoinGecko, read when Home opens, at most every five minutes. It learns only that someone at your IP address uses the wallet: nothing about what you hold."
+            : "Values show on mainnet only: test ADA has no price, so nothing is asked on preprod."}
+        </p>
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** How long the wallet stays unlocked without anything done in it. */
+function LockAfter() {
+  const { prefs, loaded, set } = usePreferences();
+  const [error, setError] = useState<string>();
+  return (
+    <div className="field">
+      <label htmlFor="lock-after">Lock after</label>
+      <select
+        id="lock-after"
+        value={prefs.lockAfterMinutes}
+        disabled={!loaded}
+        onChange={(e) =>
+          void set({ lockAfterMinutes: Number(e.target.value) as LockAfterMinutes }).catch((err: Error) => setError(err.message))
+        }
+      >
+        {LOCK_AFTER_MINUTES.map((m) => (
+          <option key={m} value={m}>
+            {lockLabel(m)} without activity
+          </option>
+        ))}
+      </select>
+      <p className="note">Closing the browser always locks it.</p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Whether a payment from the Cardano account withdraws the staking rewards too. */
 function SpendRewards() {
-  const [prefs, setPrefs] = useState<Preferences>();
+  const { prefs: all, loaded, set } = usePreferences();
+  const prefs = loaded ? all : undefined;
   const [error, setError] = useState<string>();
-  useEffect(() => {
-    call("preferences", {}).then(setPrefs, (e: Error) => setError(e.message));
-  }, []);
 
   async function toggle() {
     if (!prefs) return;
     try {
-      setPrefs(await call("preferences-set", { spendRewards: !prefs.spendRewards }));
+      await set({ spendRewards: !prefs.spendRewards });
       setError(undefined);
     } catch (e) {
       setError((e as Error).message);
@@ -107,7 +250,7 @@ function SpendRewards() {
           <span className="note" id="spend-rewards-note">
             {prefs?.spendRewards === false
               ? "Rewards wait until you withdraw them on the Staking page."
-              : "A send, a move-in or a seedelf paid by your Cardano account withdraws the rewards too."}
+              : "Anything your public account pays (a send, making money private, a Seedelf) withdraws the rewards too."}
           </span>
         </span>
         <button
@@ -224,6 +367,96 @@ function ShowPhrase({ onBack }: { onBack: () => void }) {
   );
 }
 
+const blank = (n: number) => Array<string>(n).fill("");
+
+/**
+ * A check of the phrase as written down: type it, and the wallet says whether
+ * it's this wallet's, never which words differ. Nothing is kept.
+ */
+function CheckPhrase({ onBack }: { onBack: () => void }) {
+  const [count, setCount] = useState<WordCount>(24);
+  const [words, setWords] = useState<string[]>(blank(24));
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<boolean>();
+  const [error, setError] = useState<string>();
+
+  function changeCount(n: WordCount) {
+    setCount(n);
+    setWords((w) => Array.from({ length: n }, (_, i) => w[i] ?? ""));
+    setResult(undefined);
+    setError(undefined);
+  }
+
+  async function check() {
+    setBusy(true);
+    setError(undefined);
+    setResult(undefined);
+    try {
+      const { matches } = await call("check-phrase", { phrase: words.join(" ") });
+      setResult(matches);
+      if (matches) setWords(blank(count));
+    } catch (e) {
+      const text = (e as Error).message;
+      setError(`${text.charAt(0).toUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Screen
+      title="Check recovery phrase"
+      titleId="check-phrase-title"
+      onBack={onBack}
+      backDisabled={busy}
+      error={error}
+      foot={
+        <button type="button" className="primary" disabled={busy || words.some((w) => !w)} onClick={check}>
+          {busy ? "Checking…" : "Check"}
+        </button>
+      }
+    >
+      <p className="note">
+        Type the words from where you wrote them down, to make sure that copy restores this wallet. The wallet only says
+        whether they match. Nothing is saved.
+      </p>
+      <div className="segmented" role="radiogroup" aria-label="Number of words">
+        {WORD_COUNTS.map((n) => (
+          <button
+            key={n}
+            type="button"
+            role="radio"
+            aria-checked={n === count}
+            className={n === count ? "segmented__item segmented__item--on" : "segmented__item"}
+            onClick={() => changeCount(n)}
+          >
+            {n} words
+          </button>
+        ))}
+      </div>
+      <PhraseInput
+        words={words}
+        onChange={(w) => {
+          setWords(w);
+          setResult(undefined);
+        }}
+        onCountChange={changeCount}
+      />
+      {result === true && (
+        <Callout tone="info" testId="phrase-matches">
+          That's this wallet's recovery phrase. Keep that copy somewhere safe and offline.
+        </Callout>
+      )}
+      {result === false && (
+        <Callout tone="warn" testId="phrase-differs">
+          That isn't this wallet's recovery phrase. Check each word against your copy; if it's wrong, write the phrase down
+          again from Show recovery phrase.
+        </Callout>
+      )}
+    </Screen>
+  );
+}
+
 function ChangePassword({ onBack }: { onBack: () => void }) {
   const [current, setCurrent] = useState("");
   const [busy, setBusy] = useState(false);
@@ -309,7 +542,7 @@ function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (s
     >
       <p className="note">
         This deletes the wallet from this browser. Your funds stay on the chain: your recovery phrase brings them back,
-        here or in another Seedelf wallet.
+        here or in Seedelf Wallet on another device.
       </p>
       <Callout tone="warn">
         Make sure you have your recovery phrase first (Show recovery phrase). Without it, removing the wallet loses your

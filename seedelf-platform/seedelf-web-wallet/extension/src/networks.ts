@@ -8,6 +8,8 @@ export interface NetworkConfig {
   label: string;
   koios: string;
   collateral: string;
+  /** Where ADA's price is read (CoinGecko's public API). Mainnet only, as in Lace: test ADA has no value. */
+  prices?: string;
 }
 
 export const NETWORKS: Record<NetworkName, NetworkConfig> = {
@@ -22,6 +24,7 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
     label: "Mainnet",
     koios: "https://api.koios.rest/api/v1",
     collateral: "https://www.giveme.my/mainnet/collateral/",
+    prices: "https://api.coingecko.com/api/v3",
   },
 };
 
@@ -37,6 +40,6 @@ export function defaultNetwork(mainnetEnabled: boolean): NetworkName {
 
 /** Origins the extension may talk to, e.g. `https://preprod.koios.rest`. */
 export function networkOrigins(networks: NetworkName[]): string[] {
-  const origins = networks.flatMap((n) => [NETWORKS[n].koios, NETWORKS[n].collateral]);
+  const origins = networks.flatMap((n) => [NETWORKS[n].koios, NETWORKS[n].collateral, NETWORKS[n].prices ?? []].flat());
   return [...new Set(origins.map((url) => new URL(url).origin))];
 }
