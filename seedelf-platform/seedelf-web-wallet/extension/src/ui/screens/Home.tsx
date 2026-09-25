@@ -345,6 +345,9 @@ export function Home() {
           onChange={setTab}
         />
 
+        {/* Up by the balances, both of which it reads again: no scrolling down to it. */}
+        <RefreshRow reading={reading} updatedAt={balances?.updatedAt} onRefresh={() => void load(true)} />
+
         {/* Each panel has its own key, so its buttons are new, not restyled Seedelf ones. */}
         {tab === "seedelf" ? (
           <section key="seedelf" className="stack" role="tabpanel" id="panel-seedelf" aria-labelledby="tab-seedelf">
@@ -511,8 +514,6 @@ export function Home() {
             <Links onActivity={() => setActivityOf("cardano")} onUtxos={() => setUtxosOf("cardano")} />
           </section>
         )}
-
-        <RefreshRow reading={reading} updatedAt={balances?.updatedAt} onRefresh={() => void load(true)} />
       </div>
     </>
   );
