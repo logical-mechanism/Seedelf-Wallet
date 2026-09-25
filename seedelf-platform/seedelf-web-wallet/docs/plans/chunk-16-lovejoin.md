@@ -377,11 +377,9 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 
 ## Handoff to the third session (2026-09-25)
 
-**The branch.** `web-wallet/lovejoin`, pushed through `8e65bc0` (the second session `7db8117`, then the fixes `db35e24` and `8e65bc0`). No PR yet.
+**The branch.** `web-wallet/lovejoin`, pushed through `18b4847`: the second session `7db8117`, then the live-test fixes `db35e24`, `8e65bc0` and `18b4847` (the stopped return, a submit Koios didn't answer, the rate limit, and this handoff). Nothing was left uncommitted. No PR yet.
 
-- **Uncommitted at the handoff, all tests green:** the last three items of *Found in the user's first run* above (the stopped return, a submit Koios didn't answer, the rate limit). They're in `koios.ts`, `lovejoin.ts`, `sessions.ts`, `sw.ts`, their tests, this file and `architecture.md`.
-- **First thing:** ask the user whether to commit and push them. They've asked for each fix so far; commit only when asked.
-- **Suites:** Rust 322, WebAssembly (Node) 33, Vitest 286, Playwright 49. `extension/dist/` holds the dev build of the working tree, which the user loads directly.
+- **Suites:** Rust 322, WebAssembly (Node) 33, Vitest 286, Playwright 49. `extension/dist/` holds the dev build, which the user loads directly.
 
 **The user's live testing on preprod, where it stood:**
 
@@ -439,7 +437,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 
 ## Start here
 
-1. `git fetch origin && git checkout web-wallet/lovejoin`. Check `git status`: the handoff above lists what was left uncommitted.
+1. `git fetch origin && git checkout web-wallet/lovejoin`.
 2. Read, in order:
    - this file, starting with *Handoff to the third session*
    - [architecture.md, *Private sessions*](../architecture.md#private-sessions)
