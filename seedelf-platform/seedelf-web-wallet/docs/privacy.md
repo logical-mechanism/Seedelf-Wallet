@@ -39,7 +39,7 @@ These are not user settings:
    - **A stealth mint from the Seedelf balance is the other choice.** It hides the payer only when that balance came from other people's Seedelf payments. For it, the mint service passes only Seedelf UTxOs to WebAssembly, and WebAssembly refuses any it doesn't own.
    - This rule used to say "stealth mint from the Seedelf balance, never paid by the Cardano account". That was wrong whenever your own move-in funded the balance: the mint spends that deposit and ties the account, the name and the mint's change together.
 6. **The Cardano account is never a one-time account.** Each one-time account is used for a single session. One-time accounts use a reserved account index (`24301'`), never a low index like `1'` that a restored Lace wallet may already use: sharing payment keys with a real account would link every one-time address back to the user.
-7. **No analytics or telemetry.** The wallet talks to Koios and giveme.my, and on mainnet to CoinGecko for ADA's price unless the currency is set to nothing, and to nothing else.
+7. **No analytics or telemetry.** The wallet talks to Koios and giveme.my, on mainnet to CoinGecko for ADA's price unless the currency is set to nothing, and to Minswap's aggregator only when the user swaps, and to nothing else.
 8. **Sites only ever see the public account** (the dApp connector, chunk 15). The private balance, the Seedelf key and the Seedelfs are never offered over CIP-30. The connector is off until the user turns it on, and until then nothing is added to any web page.
 
 ## Known links
@@ -104,6 +104,13 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Which sites are connected** is a sealed private record, like Contacts. The site's origin comes from Chrome, not the page.
   - **What Koios learns:** reading the account for a site is the same query as a balance reading (at most every 30 s). Signing a site's transaction that spends UTxOs the account doesn't hold asks Koios about those (`utxo_info`); they're the site's, and the transaction names them anyway.
   - **Turning it on** asks Chrome to let the wallet onto every https site, which is what adds `window.cardano.seedelf`. The wallet doesn't read or change the pages beyond that one entry.
+- **A private swap** (chunk 15, a private session): a one-time account (`24301'/0/i`) is funded from the private balance, Minswap's aggregator builds the swap for it, and everything comes back into the private balance.
+  - **What links, on chain:** the funding spend's private UTxOs and change to the one-time account, as Make public does; the account to the order and the proceeds; the return to new private UTxOs, as Make private does. Anyone can follow the whole path. What's hidden is who: the public account never appears.
+  - The amounts and the times tie the two ends together, as the path does anyway. The account's shared Seedelf staking part marks it as a Seedelf one.
+  - **Minswap** sees the account's address, the tokens and amounts, what's searched for in its token list, and the IP address. Its note on the order (CIP-20 metadata, which anyone can read) names the account's address too.
+  - **Koios** is asked about every open session's account together (one request, only when the Swaps screen reads the chain), so it can tie them to each other and to the IP address.
+  - **On this device:** the list of sessions (their indexes, stages and transactions) is a sealed private record, like Contacts.
+  - Each account is used for one session, then never again (rule 6). Its index comes from the phrase in order, so a restore can find leftovers.
 - **Save as CSV** (chunk 14) writes the listed Activity to a file on the device, unencrypted. For the private side that's the payments only this wallet can tell are yours, and the screen says so.
 
 ## Holding and staking

@@ -36,7 +36,7 @@ So money that sits stays staked in the public account, and is made private when 
 **Next: dApps, privately** ([plans/chunk-15-dapp-connector.md](docs/plans/chunk-15-dapp-connector.md))
 
 1. **The public connector** (chunk 15, built): sites connect to the public account over CIP-30, as with Lace. It's off until you turn it on in Settings, and nothing is added to any page until then.
-2. **Private sessions:** move funds out of Seedelf into a one-time account, use a dApp with that account, and whatever comes back is swept into Seedelf automatically.
+2. **Private sessions** (chunk 15, a swap built): move funds out of Seedelf into a one-time account, use a dApp with that account, and bring what comes back into Seedelf. The first is a swap through Minswap's aggregator, from Home's **Swaps**; each step is a button.
 3. **A dApp browser in the wallet,** where dApps run in private sessions. Minswap is the first.
 
 **Also in v1** (chunk 14, from what Lace and Eternl have): the public account's staking changes in its Activity, a note on a public send, hiding the balances, the lock time, a check of the written recovery phrase, Activity saved as CSV, and ADA's value in a currency on mainnet. See [plans/chunk-14-style-flow-2.md](docs/plans/chunk-14-style-flow-2.md).

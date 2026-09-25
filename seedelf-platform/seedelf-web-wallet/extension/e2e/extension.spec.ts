@@ -21,6 +21,7 @@ import {
   PASSWORD,
   PINNED_ID,
   restore,
+  sessionSwap,
   setPassword,
   snap,
   stakingPreprod,
@@ -1286,6 +1287,111 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("alert")).toContainText("doesn't match this transaction, so it wasn't sent");
   expect(koios.submitted).toHaveLength(0);
+});
+
+test("a private swap: Minswap's quote, a one-time account funded, the order placed with its key, and everything back", async ({
+  context,
+  koios,
+  swaps,
+}) => {
+  // One spend: the funding takes the 25 ₳ UTxO alone.
+  koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Swaps" }).click();
+  await expect(page.getByTestId("swaps-empty")).toBeVisible();
+  await page.getByRole("button", { name: "New swap" }).click();
+
+  // 10 ₳ for MIN, found on Minswap's list.
+  await page.getByLabel("Amount").fill("10");
+  await page.getByLabel("To").fill("MIN");
+  await page.getByTestId("swap-tokens").getByRole("button", { name: /MIN/ }).click();
+  await expect(page.getByTestId("swap-to")).toContainText("MIN");
+  await snap(page, "swap-form");
+  await page.getByRole("button", { name: "Get a quote" }).click();
+  const quote = page.getByTestId("swap-quote-rows");
+  await expect(quote).toContainText("You swap10 ₳");
+  await expect(quote).toContainText("You get about906.5941 MIN");
+  await expect(quote).toContainText("At least902.083681 MIN");
+  await expect(quote).toContainText("ThroughMinswap");
+  await snap(page, "swap-quote");
+
+  // The funding: the swap and its costs, and the account's own collateral.
+  await page.getByRole("button", { name: "Continue" }).click();
+  const fund = page.getByTestId("swap-fund-review");
+  await expect(fund).toContainText("ToPrivate session 1");
+  await expect(fund).toContainText("For the swap16 ₳");
+  await expect(fund).toContainText("Its collateral5 ₳");
+  await snap(page, "swap-fund-review");
+  // giveme.my refuses (its recorded answer): nothing is sent, but the session keeps its account.
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction");
+  expect(koios.submitted).toHaveLength(0);
+
+  // Say the account holds it anyway: it's open.
+  koios.addedToAccounts.push({
+    ...sessionSwap.utxo,
+    payment_cred: sessionSwap.keyHash,
+    stake_address: null,
+    epoch_no: 315,
+    block_height: 5_000_000,
+    block_time: 1_800_000_000,
+    datum_hash: null,
+    inline_datum: null,
+    reference_script: null,
+    asset_list: [],
+    is_spent: false,
+  });
+  for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("swaps")).toContainText("10 ₳ → MIN");
+  await expect(page.getByTestId("swaps")).toContainText("Session 1 · Open");
+  await page.getByTestId("swaps").getByRole("button").first().click();
+  await expect(page.getByTestId("session-rows")).toContainText("It holds145.790603 ₳");
+  await snap(page, "swap-session");
+
+  // The order: Minswap builds it for the account, the wallet reads it, the session's key signs it.
+  await page.getByRole("button", { name: "Place the order" }).click();
+  const order = page.getByTestId("session-tx-review");
+  await expect(order).toContainText("You get about906.5941 MIN");
+  await expect(order).toContainText("Into the order14 ₳");
+  await expect(order).toContainText("Network fee0.205189 ₳");
+  await snap(page, "swap-order-review");
+  expect(swaps.calls.find((c) => c.path === "build-tx")?.body).toMatchObject({ sender: sessionSwap.address });
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Swap order");
+  expect(koios.submitted).toHaveLength(1);
+  const swapTx = koios.submitted[0]!;
+
+  // Filled: the change and the proceeds are at the account.
+  const funded = koios.addedToAccounts[0]!;
+  koios.addedToAccounts.splice(0, 1, { ...funded, tx_hash: swapTx, tx_index: 1, value: "131585414" }, {
+    ...funded,
+    tx_hash: "aa".repeat(32),
+    tx_index: 0,
+    value: "2000000",
+    asset_list: [
+      {
+        policy_id: "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72",
+        asset_name: "4d494e",
+        quantity: "906594100",
+        decimals: 0,
+        fingerprint: "",
+      },
+    ],
+  });
+  await page.getByRole("button", { name: "Swaps" }).click();
+  await page.getByTestId("swaps").getByRole("button").first().click();
+  await expect(page.getByTestId("session-next")).toContainText("Nothing is waiting");
+  await page.getByRole("button", { name: "Bring it back" }).click();
+  const back = page.getByTestId("session-back-review");
+  await expect(back).toContainText("906.5941 MIN");
+  await expect(back).toContainText("From2 UTxOs at session 1");
+  await snap(page, "swap-back-review");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Return from a private session");
+  expect(koios.submitted).toHaveLength(2);
+  expect(swaps.calls.map((c) => c.path)).toEqual(["tokens", "estimate", "estimate", "build-tx", "pending-orders", "pending-orders"]);
 });
 
 test("remove a Seedelf: where its ADA goes, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {

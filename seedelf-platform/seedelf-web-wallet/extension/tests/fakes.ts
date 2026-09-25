@@ -9,6 +9,7 @@ import { CoinControlService } from "../src/background/coin-control";
 import { Collateral } from "../src/background/collateral";
 import { ContactsService } from "../src/background/contacts";
 import { DappService, type ApprovalWindow } from "../src/background/dapp";
+import { Minswap, type Estimate, type PendingOrder } from "../src/background/minswap";
 import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
 import {
@@ -26,11 +27,13 @@ import { PendingService } from "../src/background/pending";
 import { PreferencesService } from "../src/background/preferences";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
+import { SessionService } from "../src/background/sessions";
 import { StakingService } from "../src/background/staking";
 import { PrivateStore } from "../src/background/private-store";
 import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
+import type { SwapAsk } from "../src/shared/rpc";
 import { txIdOf } from "./fixtures/cbor";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
 
@@ -139,6 +142,16 @@ export const stakingPreprod = fixture("staking-preprod.json") as {
 };
 
 /** A real mint round trip on preprod (tests/fixtures/record-mint.mjs). */
+/** Minswap's recorded preprod quote: 10 ADA to MIN. */
+export const minswapEstimate = fixture("minswap-estimate-preprod.json") as { ask: SwapAsk; estimate: Estimate };
+/** Session 0 of the 12-word phrase, its UTxO, and a swap from it (wasm/tests/session_test.rs). */
+export const sessionSwap = fixture("session-swap.json") as {
+  address: string;
+  keyHash: string;
+  utxo: { tx_hash: string; tx_index: number; address: string; value: string };
+  swapCbor: string;
+};
+
 export const mintPreprod = fixture("mint-preprod.json") as {
   evaluation: unknown;
   collateral: { status: number; answer: unknown };
@@ -296,6 +309,40 @@ export function fakeCollateral(): FakeCollateral {
   return fake;
 }
 
+export interface FakeMinswap {
+  fetch: FetchLike;
+  calls: Array<{ path: string; body: any }>;
+  /** `estimate`'s answer. */
+  estimate: Estimate;
+  /** `build-tx`'s transaction. */
+  swapCbor: string;
+  /** `pending-orders`' answer. */
+  orders: PendingOrder[];
+  /** `cancel-tx`'s transaction. */
+  cancelCbor: string;
+}
+
+/** Minswap's aggregator: the recorded quote, and the session's swap. */
+export function fakeMinswap(): FakeMinswap {
+  const fake: FakeMinswap = {
+    calls: [],
+    estimate: minswapEstimate.estimate,
+    swapCbor: sessionSwap.swapCbor,
+    orders: [],
+    cancelCbor: "",
+    fetch: async (url, init) => {
+      const path = new URL(url).pathname.split("/").pop()!;
+      fake.calls.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+      if (path === "estimate") return Response.json(fake.estimate);
+      if (path === "build-tx") return Response.json({ cbor: fake.swapCbor });
+      if (path === "pending-orders") return Response.json({ orders: fake.orders, amount_in_decimal: false });
+      if (path === "cancel-tx") return Response.json({ cbor: fake.cancelCbor });
+      return new Response("not found", { status: 404 });
+    },
+  };
+  return fake;
+}
+
 /** A wallet plus the balance, move-in, mint, transfer, withdraw, send and pending services over the fake Koios and giveme.my. */
 export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) => Promise<void> }) {
   const t = testWallet();
@@ -308,6 +355,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now });
   const preferences = new PreferencesService(t.local);
   const coingecko = fakeCoinGecko();
+  const minswap = fakeMinswap();
   const dappWindow = fakeWindow();
   let dappChanged = 0;
   const deps = {
@@ -350,6 +398,13 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),
     pending: new PendingService(deps),
+    minswap,
+    sessions: new SessionService({
+      ...deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+      store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", minswap.fetch),
+    }),
     store,
     activity,
     coins,

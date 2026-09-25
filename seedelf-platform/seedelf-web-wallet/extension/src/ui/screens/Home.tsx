@@ -39,6 +39,7 @@ import {
   ReceiveIcon,
   SendIcon,
   SproutIcon,
+  SwapIcon,
   WithdrawIcon,
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
@@ -55,6 +56,7 @@ import { Staking } from "./Staking";
 import { Tokens } from "./Tokens";
 import { Transfer } from "./Transfer";
 import { Utxos } from "./Utxos";
+import { Swaps } from "./Swaps";
 import { Withdraw } from "./Withdraw";
 
 /** How the banner names a sent transaction, and says it's confirmed. */
@@ -70,6 +72,10 @@ const SENT: Record<PendingTx["kind"], string> = {
   vote: "Vote delegation",
   "withdraw-rewards": "Reward withdrawal",
   unstake: "Stop staking",
+  "session-out": "Payment into a private session",
+  "session-swap": "Swap order",
+  "session-cancel": "Order cancel",
+  "session-back": "Return from a private session",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Made private",
@@ -83,6 +89,10 @@ const CONFIRMED: Record<PendingTx["kind"], string> = {
   vote: "Voting power delegated",
   "withdraw-rewards": "Rewards withdrawn",
   unstake: "Staking stopped",
+  "session-out": "Private session funded",
+  "session-swap": "Swap order placed",
+  "session-cancel": "Order cancelled",
+  "session-back": "Back in your private balance",
 };
 
 /** Read again on open when the last reading is older than this. */
@@ -113,6 +123,7 @@ export function Home() {
     | "withdraw"
     | "staking"
     | "staking-vote"
+    | "swaps"
   >("home");
   const { prefs } = usePreferences();
   const amounts = useAmounts();
@@ -250,6 +261,9 @@ export function Home() {
   if (screen === "create" && free) return <CreateSeedelf balances={free} onCancel={home} onSent={sent} />;
   if (screen === "transfer" && free) return <Transfer seedelf={free.seedelf} onCancel={home} onSent={sent} />;
   if (screen === "withdraw" && free) return <Withdraw seedelf={free.seedelf} onCancel={home} onSent={sent} />;
+  if (screen === "swaps" && free) {
+    return <Swaps seedelf={free.seedelf} blocked={watching ? BUSY : undefined} onBack={home} onSent={sent} />;
+  }
   if (activityOf) {
     const pendingHash = watching ? pending?.txHash : undefined;
     return (
@@ -376,7 +390,11 @@ export function Home() {
               </section>
             )}
 
-            <Links onActivity={() => setActivityOf("seedelf")} onUtxos={() => setUtxosOf("seedelf")} />
+            <Links
+              onActivity={() => setActivityOf("seedelf")}
+              onUtxos={() => setUtxosOf("seedelf")}
+              onSwaps={() => setScreen("swaps")}
+            />
           </section>
         ) : (
           <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
@@ -524,10 +542,21 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
 }
 
 /** Opens this tab's Activity, or its UTxOs. */
-function Links({ onActivity, onUtxos }: { onActivity: () => void; onUtxos: () => void }) {
+function Links({ onActivity, onUtxos, onSwaps }: { onActivity: () => void; onUtxos: () => void; onSwaps?: () => void }) {
   return (
     <section className="section">
       <ul className="list">
+        {onSwaps && (
+          <li>
+            <button type="button" className="menu-row" onClick={onSwaps}>
+              <span className="menu-row__icon">
+                <SwapIcon size={16} />
+              </span>
+              <span>Swaps</span>
+              <ChevronRightIcon size={16} />
+            </button>
+          </li>
+        )}
         <li>
           <button type="button" className="menu-row" onClick={onActivity}>
             <span className="menu-row__icon">

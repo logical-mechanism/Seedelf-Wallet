@@ -16,6 +16,7 @@ import type { PendingService } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
 import type { SendService } from "./send";
+import type { SessionService } from "./sessions";
 import type { StakingService } from "./staking";
 import type { TransferService } from "./transfer";
 import type { WithdrawService } from "./withdraw";
@@ -38,6 +39,8 @@ export interface Context {
   preferences: PreferencesService;
   prices: PriceService;
   dapp: DappService;
+  /** Private sessions: swaps from one-time accounts (sessions.ts). */
+  sessions: SessionService;
   /** Registers or removes the dApp connector's content scripts (connector.ts). */
   connector: (on: boolean) => Promise<boolean>;
   version: string;
@@ -181,6 +184,37 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.dapp.sites();
     case "dapp-forget":
       return ctx.dapp.forget(message.origin);
+    case "sessions":
+      return ctx.sessions.list(ctx.network, message.refresh);
+    case "swap-tokens":
+      return ctx.sessions.tokens(ctx.network, message.query);
+    case "swap-quote":
+      return ctx.sessions.quote(ctx.network, {
+        amount: message.amount,
+        tokenIn: message.tokenIn,
+        tokenOut: message.tokenOut,
+        slippage: message.slippage,
+      });
+    case "session-out-build":
+      return ctx.sessions.outBuild(ctx.network, message.quote, message.display);
+    case "session-out-submit":
+      return ctx.sessions.outSubmit(ctx.network, message.txHash);
+    case "session-swap-build":
+      return ctx.sessions.swapBuild(ctx.network, message.index);
+    case "session-swap-submit":
+      return ctx.sessions.txSubmit(ctx.network, message.txHash, "swap");
+    case "session-orders":
+      return ctx.sessions.orders(ctx.network, message.index);
+    case "session-cancel-build":
+      return ctx.sessions.cancelBuild(ctx.network, message.index);
+    case "session-cancel-submit":
+      return ctx.sessions.txSubmit(ctx.network, message.txHash, "cancel");
+    case "session-back-build":
+      return ctx.sessions.backBuild(ctx.network, message.index);
+    case "session-back-submit":
+      return ctx.sessions.backSubmit(ctx.network, message.txHash);
+    case "session-forget":
+      return ctx.sessions.forget(ctx.network, message.index);
   }
 }
 

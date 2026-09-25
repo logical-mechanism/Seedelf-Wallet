@@ -327,18 +327,28 @@ The account's own outputs of a transaction it signed are kept, so a site can bui
 
 ## Contract round trip
 
-This comes after the public connector: the private steps of [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md), which has the user's two designs (a round trip through a new account, or straight from Seedelf with giveme.my's collateral) and when each fits. The idea: take money out of Seedelf to use a contract, then have what comes back returned automatically.
+Money leaves Seedelf to use a contract, then comes back: a **private session** on a one-time account (account `24301'`, key `0/i`, the shared Seedelf staking part). The plan is [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md), with the user's two designs (a round trip through a new account, or straight from Seedelf with giveme.my's collateral) and when each fits. The first built use is a swap through Minswap's aggregator (route A1).
 
-1. **Out:**
-   - Make a Seedelf spend to a fresh one-time account.
-   - Wait about one block before connecting. Many dApps look up inputs and run script checks against their own backend, which can't see unconfirmed outputs.
-2. **Use:**
-   - The dApp connects over CIP-30 and sees an ordinary wallet: that one account and nothing else.
-   - The wallet shows its own signing prompt for each transaction.
-3. **Back (auto-return):**
-   - The wallet watches the one-time account.
-   - Anything that lands there is paid into the contract under a freshly re-randomized own register, the same as move-in: no script, no collateral.
-   - This covers both kinds of dApp:
-     - **One-shot dApps:** the wallet signed the dApp transaction, so it already knows the change output. It can submit the return right behind it.
-     - **Async dApps** (for example DEX orders filled later by batchers): proceeds arrive blocks later, and the watcher catches them.
+### A private swap (built in chunk 15)
+
+Home's Private tab → **Swaps**: the sessions, newest first, each with where it's at, and **New swap**.
+
+1. **New swap:** from the private balance (ADA, or one of its tokens, for ADA), an amount, the token to buy (searched on Minswap's list, which then knows what was searched for), and the slippage (0.5, 1 or 3%).
+2. **The quote:** Minswap's estimate: what you get about and at least, the route, the price impact, the DEX's fee, and the order's deposit (back with the proceeds). It says there are three transactions, each with its fee.
+3. **The funding** (review, then Send): a Seedelf spend with giveme.my's collateral, paying the session's account twice: the swap with its costs and 2 ₳ of room, and 5 ₳ as the account's own collateral. The change goes back into the private balance. The session is recorded before it's sent, so its account is never used twice, even if the send fails.
+4. **The session**, once the network has the funding: **Place the order**. The wallet asks Minswap for a fresh quote and the swap, built for the account (Minswap picks the account's UTxOs itself, so it waits for the funding to confirm). WebAssembly reads it against the session's key alone, and refuses one that spends anything else, needs another key, touches staking or governance, or mints. The review shows what comes back, what goes into the order, and the fee; Send signs it with the session's key, puts the signature in without changing a byte of Minswap's transaction, and submits it through Koios.
+5. **Filled:** a DEX's batchers pay the proceeds to the account, usually within a few blocks. The session asks Minswap about its orders when it's opened; one that waits can be cancelled (**Cancel the order**, built by Minswap, read and signed the same way; the refund comes back to the account).
+6. **Bring it back** (review, then Send): everything at the account into the private balance, under fresh registers, signed by the session's key, with no script and no collateral. It's refused while an order still waits. Once it's on chain and the account is empty, the session is done, and its account is never used again.
+
+**It's not automatic:** each step is a button, and the wallet reads the chain only when the Swaps screen opens or is refreshed, never in the background. Bring it back is also there before any order, to give up on a session.
+
+**If a session stalls,** everything is recoverable from the phrase: money left in the account comes back with Bring it back; an order that never fills is cancelled, then brought back. A session whose funding never reached the chain shows so, and can be forgotten (its index isn't reused). After a restore on another device, a scan of the one-time accounts (not built yet) finds what's left: see the plan's *Recovery*.
+
+### Other dApps (next)
+
+The same session, offered to a site over CIP-30 instead of the public account (step 4 of the plan):
+
+1. **Out:** a Seedelf spend to a fresh one-time account. Wait about one block before connecting: dApps' backends can't see unconfirmed outputs.
+2. **Use:** the dApp connects and sees an ordinary wallet, that one account and nothing else. The wallet shows its own signing prompt for each transaction.
+3. **Back:** whatever lands at the account is brought back into the private balance, as for a swap: right behind a one-shot dApp's transaction, or blocks later for one whose proceeds come from batchers.
 4. **Retire:** once the account is empty and the session ends, it is never used again.

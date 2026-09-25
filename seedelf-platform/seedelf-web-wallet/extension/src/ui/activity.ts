@@ -38,6 +38,14 @@ export function activityTitle(e: ActivityEntry): string {
       return "Withdrew rewards";
     case "unstake":
       return "Stopped staking";
+    case "session-out":
+      return "Into a private session";
+    case "session-swap":
+      return "Placed a swap order";
+    case "session-cancel":
+      return "Cancelled an order";
+    case "session-back":
+      return "Back from a private session";
   }
 }
 

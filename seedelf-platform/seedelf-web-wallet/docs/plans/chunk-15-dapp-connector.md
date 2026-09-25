@@ -4,7 +4,7 @@
 
 ## Status (2026-09-25)
 
-**Built:** the public connector, the whole of *This chunk* below. Rust, worker, content scripts, the connector's window and Settings, with Rust, Vitest and Playwright tests. Committed as fe8b774; the user chose to keep building on this branch (private sessions next) and open one PR at the end. **Fixed after:** the connector's off state took the wallet's own Koios access with it, which Koios's CORS change on 2026-09-25 made fatal (*Koios and CORS*). **Not done:** a live run against a real dApp. On preprod, a site that lists wallets from `window.cardano` will offer Seedelf Wallet. Minswap won't (see *Minswap*).
+**Built:** the public connector, the whole of *This chunk* below. Rust, worker, content scripts, the connector's window and Settings, with Rust, Vitest and Playwright tests. Committed as fe8b774; the user chose to keep building on this branch and open one PR at the end. **Step 2 built:** a swap through Minswap in a private session (*Step 2*, *Built*). **Fixed after:** the connector's off state took the wallet's own Koios access with it, which Koios's CORS change on 2026-09-25 made fatal (*Koios and CORS*). **Not done:** a live run against a real dApp. On preprod, a site that lists wallets from `window.cardano` will offer Seedelf Wallet. Minswap won't (see *Minswap*).
 
 ## Start here
 
@@ -152,7 +152,83 @@ Checked on 2026-09-25 against the preprod site (`testnet-preprod.minswap.org`) a
 
 **The choice for the next chunk (the user's):**
 
-- **(a) In-wallet swaps through the aggregator.** The wallet builds and signs the swap itself. It works with a one-time account, and with design 2 for a plain order. No framing, and no need to be on Minswap's list.
+- **(a) In-wallet swaps.** The wallet builds and signs the swap itself: through the aggregator from a one-time account (**A1**), or as a Minswap V2 order it builds straight from Seedelf (**A2**, design 2). No framing, and no need to be on Minswap's list. **Chosen: A1** (see *Step 2* below).
 - **(b) Minswap inside the wallet, in a frame, as Eternl does.** It needs Minswap to accept Seedelf Wallet in its bridge and list. Answering as "eternl" would be pretending to be another wallet, which this plan doesn't propose.
 - **(c) Minswap in a normal tab with a private session.** It needs Minswap's wallet list too.
 - Asking Minswap to add Seedelf Wallet helps (b) and (c), and the public connector (this chunk) too.
+
+## Step 2: private sessions, and swaps through them
+
+### Decided (the user, 2026-09-25)
+
+- **Route (a) as A1:** swaps through Minswap's aggregator, from a one-time account.
+- **The extra transactions are the price of privacy.** The same sessions let any dApp be used privately later (step 4, private CIP-30), because a dApp sees an ordinary key account.
+- **Built on this branch,** with one PR at the end, connector included.
+- **A2 waits** for one preprod swap showing that Minswap's batcher fills an order paying a contract.
+
+### Built (2026-09-25)
+
+A swap in a private session, end to end, as *A swap (A1), step by step* below says. The flow is in [flows.md](../flows.md#contract-round-trip), the design in [architecture.md](../architecture.md#private-sessions).
+
+- **Rust:** `ONE_TIME_ACCOUNT` in `seedelf-crypto`; in `seedelf-wasm`, the `OneTimeAccounts` type, `buildSessionReturn` (`build::external_sweep`), `inspectSessionTx`/`signSessionTx` (the connector's code on a session's key), and `attachWitnesses`, which splices a signature into a transaction someone else built, byte for byte.
+- **Worker:** `sessions.ts` (the sealed `sessions.<network>` record; out, swap, cancel, back; the stages) and `minswap.ts` (the aggregator: estimate, build-tx, pending-orders, cancel-tx, tokens). Minswap is only in the pages' `connect-src`: it answers with CORS headers, so no new permission.
+- **UI:** `screens/Swaps.tsx`, from a **Swaps** row on Home's Private tab: the sessions, a new swap (from ADA or a private token, the token to buy searched on Minswap's list, the slippage), the quote, the funding to review, and a session's page with its next step.
+- **Tests:** Rust `wasm/tests/session_test.rs` (5, and 1 ignored that writes the extension's fixture): the account derivation pinned against `cardano-address`, the return, and a real preprod swap from Minswap read, signed and assembled byte for byte. Vitest `tests/sessions.test.ts` (6). Playwright: the whole swap in the extension against fakes of Koios and Minswap.
+- **Changed from the plan:**
+  - **No auto-return:** each step is a button (Place the order, Cancel the order, Bring it back), and the wallet reads the chain only when the Swaps screen opens or is refreshed. Bring it back is refused while an order waits.
+  - **The connector's `scripts` flag is redeemers only.** Minswap's order carries a script data hash for the datum in its witness set, and nothing runs.
+- **Not done:**
+  - **A live swap on preprod.** It needs the user's go-ahead: fund a session from the private test wallet, place a small order (10 ₳ to MIN, as recorded), bring it back.
+  - **The restore scan** (*Recovery*, *On a new device*), and Find leftovers.
+  - **A cancel against a real order:** Minswap's `cancel-tx` is wired and its review works like the swap's, but no test cancels a recorded order.
+  - **Private CIP-30** (step 4): offering a session to a site instead of the public account.
+  - A2, and asking Minswap to list Seedelf Wallet.
+
+### A private session
+
+- **Its account:** a one-time account, `24301'/0/i`, a base address with the shared Seedelf staking part (decided in [privacy.md](../privacy.md#known-links)).
+- **Its stages:** funding, ready, in use (orders open, positions held), returning, closed.
+- **It lasts as long as what the dApp holds for it.** A swap closes in minutes. A lending or liquidity position keeps its account open until the position closes, across restarts and devices. That's why recovery matters.
+
+### A swap (A1), step by step
+
+1. **Quote:** `/estimate`. Minswap sees the pair, the amount and the IP address.
+2. **Out:** a Seedelf spend with giveme.my's collateral. It pays the one-time account:
+   - the amount, plus what the swap costs (fees, and the deposits the orders pay back);
+   - 5 ₳ as the account's own collateral.
+
+   The change goes back into Seedelf.
+3. **Wait for Out to confirm.** The aggregator builds from its own view of the chain.
+4. **Swap:**
+   - `/build-tx` with the one-time account as sender returns an unsigned transaction.
+   - The connector's `inspectDappTx` reads it against that account. It may spend only that account's UTxOs; it pays order contracts; its change goes back to the account.
+   - The user reviews it, the account's key signs, and it's submitted through Koios.
+5. **Fill:** batchers pay the proceeds to the account.
+   - The wallet watches only while it's open, never in the background.
+   - It reads the account's UTxOs, and asks `/pending-orders` about the account while an order is open.
+6. **No fill:** `/cancel-tx`, signed by the account, and the refund lands at the account. The account's collateral is what the cancel's script needs.
+7. **Back:** a key-signed move-in of everything at the account into Seedelf, under fresh registers: proceeds, change, returned deposits and collateral. The session closes, and the account is never used again.
+
+**What links:**
+- The whole path is public: Seedelf → the account → the order → the account → Seedelf.
+- Who it is isn't: the public account never appears.
+- The amounts and the timing tie the two ends together, as the path does anyway.
+
+### Recovery
+
+- **The index is sequential, from 0, from the phrase.** It moves on only once a session's Out is sent (a failed Out reuses it), so the used accounts stay in a row.
+- **On this device:** a sealed list of sessions, like Contacts: each one's index, stage and transactions.
+  - When the wallet opens, it reads every open session's account in one Koios request. `credential_utxos` names each row's credential and takes up to 75.
+  - It asks the aggregator only about sessions waiting on an order.
+  - Home lists the open sessions with what's left to do: **Bring back**, or **Cancel the order**.
+- **Every stall is recoverable from the phrase alone:**
+  - Money sitting in the account: Bring back.
+  - An order never filled: Cancel, then Bring back.
+  - Proceeds that arrived while the wallet was closed: brought back at the next open (the auto-return in [flows.md](../flows.md#contract-round-trip)).
+- **On a new device (restore),** the list is gone, so the wallet scans the one-time accounts:
+  - **Which were used:** `credential_txs` over 20 indices a request, until a request finds none, and new sessions start from there.
+    - Its rows don't name the credential, so it shows that a batch was used, not which account in it. Skipping the rest of a batch costs nothing.
+    - The transactions it returns (`tx_info`) show which accounts they paid.
+  - **Money left:** `credential_utxos` over the used accounts.
+  - **Orders left open:** `/pending-orders` for the used accounts with no return after their order.
+  - This is a few requests, once. Koios and Minswap see those accounts asked about together, from one IP address, so the scan runs only at restore or from **Find leftovers**, never on every open.

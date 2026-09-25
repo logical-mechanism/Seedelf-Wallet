@@ -56,7 +56,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 |---|---|---|---|
 | **Seedelf** | The scalar `x`. The base register is `(G1, G1^x)`. Each Seedelf's root UTxO holds a re-randomized copy that senders use. | Wallet contract (script address, no staking part) | Permanent |
 | **Cardano** | CIP-1852 account `0'` in v1: receive keys `0/i`, change keys `1/i`, staking key `2/0` | Standard base addresses | Permanent. See [The Cardano account](#the-cardano-account). |
-| **One-time** (round-trip phase) | Reserved CIP-1852 account `24301'` (`0x5EED`), payment `0/i`, a fresh `i` each session | Base address with the shared Seedelf staking part, the same as the CLI's External Wallet. See [privacy.md](privacy.md#known-links). | One session, then retired |
+| **One-time** (private sessions, chunk 15) | Reserved CIP-1852 account `24301'` (`0x5EED`, `ONE_TIME_ACCOUNT`), payment `0/i`: session `i`, counting from 0 in order | Base address with the shared Seedelf staking part, the same as the CLI's External Wallet. See [privacy.md](privacy.md#known-links). | One session, then retired |
 
 - **The Cardano account is what exchanges and other wallets pay.** It is linked to the user by definition, so it is never used as a one-time account.
 - **One-time accounts are how funds leave Seedelf to use a contract.** The wallet sweeps them back automatically (see [flows.md](flows.md#contract-round-trip)).

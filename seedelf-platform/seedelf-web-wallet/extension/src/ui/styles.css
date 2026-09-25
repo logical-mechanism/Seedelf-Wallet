@@ -1773,6 +1773,30 @@ main {
   font-size: var(--text-sm);
 }
 
+/* Swaps (screens/Swaps.tsx): the three steps of a private session, and the
+   token chosen to buy. */
+
+.steps {
+  margin: 0;
+  padding-left: var(--s5);
+  list-style: decimal;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.token-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
 /* Chrome took the wallet's access to Koios away (App.tsx's ServiceAccess) */
 
 .service-access {

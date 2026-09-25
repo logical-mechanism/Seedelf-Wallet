@@ -534,7 +534,7 @@ pub struct TxSummary {
     pub certificates: Vec<Cert>,
     pub withdrawals: Vec<Withdrawal>,
     pub collateral: Option<CollateralOut>,
-    /// It runs smart contracts (redeemers, a script data hash).
+    /// It runs smart contracts (it has redeemers), so its collateral is at stake.
     pub scripts: bool,
     pub reference_inputs: usize,
     pub votes: usize,
@@ -1042,7 +1042,9 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         _ => (false, None),
     };
     let witnesses = &tx.transaction_witness_set;
-    let scripts = body.script_data_hash.is_some() || witnesses.redeemer.is_some();
+    // Redeemers are what run Plutus scripts. A script data hash alone only
+    // covers datums in the witness set, as a DEX order's is: nothing runs.
+    let scripts = witnesses.redeemer.is_some();
 
     let (net, net_tokens) = difference(&spent, &returned);
     others_sign += foreign_keys.len();
@@ -1116,11 +1118,11 @@ pub fn sign_tx(account: &CardanoAccount, request: &TxRequest) -> Result<Signed> 
         tx_hash,
     } = inspect(account, request)?;
     if signers.is_empty() {
-        bail!("Nothing in this transaction is the public account's to sign.");
+        bail!("Nothing in this transaction is this account's to sign.");
     }
     if !request.partial_sign && !summary.complete {
         bail!(
-            "This transaction needs signatures the wallet can't give: it spends or is signed for by keys that aren't the public account's."
+            "This transaction needs signatures the wallet can't give: it spends or is signed for by keys that aren't this account's."
         );
     }
     let mut witnesses = Vec::new();
@@ -1160,6 +1162,136 @@ pub fn sign_tx(account: &CardanoAccount, request: &TxRequest) -> Result<Signed> 
         witness_set: hex::encode(witness_set),
         summary,
     })
+}
+
+/// The raw bytes of the next CBOR item.
+fn raw_item<'b>(d: &mut minicbor::Decoder<'b>) -> Result<&'b [u8]> {
+    let start = d.position();
+    d.skip()
+        .map_err(|e| anyhow!("the transaction isn't valid CBOR: {e}"))?;
+    Ok(&d.input()[start..d.position()])
+}
+
+/// A definite-length map's `(key, raw value)` entries, keys as numbers.
+fn raw_map<'b>(d: &mut minicbor::Decoder<'b>) -> Result<Vec<(u64, &'b [u8])>> {
+    let entries = d
+        .map()
+        .map_err(|e| anyhow!("a witness set is a map: {e}"))?
+        .ok_or_else(|| anyhow!("an indefinite-length witness set isn't supported"))?;
+    let mut out = Vec::with_capacity(entries as usize);
+    for _ in 0..entries {
+        let key = d
+            .u64()
+            .map_err(|e| anyhow!("a witness set's keys are numbers: {e}"))?;
+        out.push((key, raw_item(d)?));
+    }
+    Ok(out)
+}
+
+/// The vkey witnesses in a witness set's key 0, each raw, and whether the
+/// list is a tagged set (`#6.258`).
+fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
+    let mut d = minicbor::Decoder::new(value);
+    let tagged = d.datatype().ok() == Some(minicbor::data::Type::Tag);
+    if tagged {
+        d.tag().map_err(|e| anyhow!("bad witness tag: {e}"))?;
+    }
+    let n = d
+        .array()
+        .map_err(|e| anyhow!("vkey witnesses are a list: {e}"))?
+        .ok_or_else(|| anyhow!("an indefinite-length witness list isn't supported"))?;
+    let mut items = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        items.push(raw_item(&mut d)?);
+    }
+    Ok((tagged, items))
+}
+
+/// A whole transaction with `witness_set` (CIP-30's, vkey witnesses only,
+/// as [`sign_tx`] makes) added to its own witness set, for the wallet to
+/// submit a transaction someone else built (a session's swap).
+///
+/// Everything else is copied byte for byte: the body, so the transaction's
+/// id is unchanged, and the witness set's other entries, so a datum the
+/// builder put there still has the hash its output names. Witnesses already
+/// there stay; one for the same key isn't added twice.
+pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String> {
+    let tx = hex::decode(tx_cbor.trim())?;
+    let added = hex::decode(witness_set.trim())?;
+
+    let mut d = minicbor::Decoder::new(&tx);
+    if d.array()
+        .map_err(|e| anyhow!("a transaction is a list: {e}"))?
+        != Some(4)
+    {
+        bail!("a transaction is a list of four: body, witnesses, validity, metadata");
+    }
+    let body = raw_item(&mut d)?;
+    let mut own = raw_map(&mut d)?;
+    let rest = &tx[d.position()..];
+    // The validity flag and the metadata, as they were.
+    let mut tail = minicbor::Decoder::new(rest);
+    raw_item(&mut tail)?;
+    raw_item(&mut tail)?;
+    if tail.position() != rest.len() {
+        bail!("the transaction has bytes after its end");
+    }
+
+    let new_vkeys = {
+        let mut a = minicbor::Decoder::new(&added);
+        let entries = raw_map(&mut a)?;
+        match entries.as_slice() {
+            [(0, value)] => raw_vkeys(value)?.1,
+            _ => bail!("the signatures to add are a witness set of vkey witnesses only"),
+        }
+    };
+
+    let tagged_default = uses_set_tags(&tx);
+    let (tagged, mut vkeys) = match own.iter().find(|(k, _)| *k == 0) {
+        Some((_, value)) => raw_vkeys(value)?,
+        None => (tagged_default, Vec::new()),
+    };
+    // A witness is [vkey, signature]; the same vkey signs once.
+    let vkey_of = |raw: &[u8]| -> Result<Vec<u8>> {
+        let mut w = minicbor::Decoder::new(raw);
+        w.array()
+            .map_err(|e| anyhow!("a vkey witness is a pair: {e}"))?;
+        Ok(w.bytes()
+            .map_err(|e| anyhow!("a vkey witness starts with its key: {e}"))?
+            .to_vec())
+    };
+    let mut seen: BTreeSet<Vec<u8>> = vkeys.iter().map(|w| vkey_of(w)).collect::<Result<_>>()?;
+    for w in new_vkeys {
+        if seen.insert(vkey_of(w)?) {
+            vkeys.push(w);
+        }
+    }
+    let vkey_list = cbor(|e| {
+        if tagged {
+            e.tag(minicbor::data::Tag::new(258))?;
+        }
+        e.array(vkeys.len() as u64)?;
+        for w in &vkeys {
+            e.writer_mut().extend_from_slice(w);
+        }
+        Ok(())
+    });
+    own.retain(|(k, _)| *k != 0);
+    own.push((0, &vkey_list));
+    own.sort_by_key(|(k, _)| *k);
+
+    let out = cbor(|e| {
+        e.array(4)?;
+        e.writer_mut().extend_from_slice(body);
+        e.map(own.len() as u64)?;
+        for (key, value) in &own {
+            e.u64(*key)?;
+            e.writer_mut().extend_from_slice(value);
+        }
+        e.writer_mut().extend_from_slice(rest);
+        Ok(())
+    });
+    Ok(hex::encode(out))
 }
 
 /// Whether a transaction writes its inputs as a tagged set (`#6.258`), as

@@ -16,8 +16,9 @@ describe("manifest", () => {
     expect(m.minimum_chrome_version).toBe("116");
     expect(m.host_permissions).toEqual(["https://preprod.koios.rest/*", "https://www.giveme.my/*"]);
     expect(m.content_security_policy.extension_pages).toContain("script-src 'self' 'wasm-unsafe-eval'");
+    // Minswap's aggregator answers with CORS headers: the page may reach it, with no host permission.
     expect(m.content_security_policy.extension_pages).toContain(
-      "connect-src 'self' https://preprod.koios.rest https://www.giveme.my",
+      "connect-src 'self' https://preprod.koios.rest https://www.giveme.my https://aggr.monorepo-testnet-preprod.minswap.org",
     );
     expect(m.content_security_policy.extension_pages).not.toContain("api.koios.rest");
     expect(m.content_security_policy.extension_pages).not.toContain("coingecko");
@@ -46,6 +47,8 @@ describe("manifest", () => {
       "https://preprod.koios.rest/*",
     ]);
     expect(m.content_security_policy.extension_pages).toContain("https://api.coingecko.com");
+    expect(m.content_security_policy.extension_pages).toContain("https://agg-api.minswap.org");
+    expect(m.host_permissions.join(" ")).not.toContain("minswap");
   });
 
   it("pins the dev extension ID unless building for the Web Store", () => {
@@ -64,7 +67,7 @@ describe("manifest", () => {
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval'",
         "object-src 'none'",
-        "connect-src 'self' https://preprod.koios.rest https://www.giveme.my",
+        "connect-src 'self' https://preprod.koios.rest https://www.giveme.my https://aggr.monorepo-testnet-preprod.minswap.org",
         "style-src 'self'",
         "img-src 'self' data:",
         "font-src 'self'",

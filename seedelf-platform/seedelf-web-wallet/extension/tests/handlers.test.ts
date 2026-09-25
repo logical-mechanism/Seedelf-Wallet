@@ -11,7 +11,7 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(t = testBalances()): Context {
-  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, dapp } =
+  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, dapp, sessions } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -30,6 +30,7 @@ function context(t = testBalances()): Context {
     preferences,
     prices,
     dapp,
+    sessions,
     connector: async (on) => on,
     version: "0.1.0",
     network: "preprod",

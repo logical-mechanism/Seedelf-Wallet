@@ -50,6 +50,7 @@ What you can do:
 • Send privately to any Seedelf by its name, several at once.
 • Make money public: pay any Cardano address or ADA Handle from the private balance. Or remove a Seedelf.
 • Connect Cardano sites (dApps) to the public account, as with any Cardano wallet. It's off until you turn it on in Settings, and sites never see the private balance.
+• Swap privately through Minswap: each swap runs from a new one-time account, funded from your private balance, and everything comes back into it afterwards. Your public account never appears.
 
 What it doesn't hide:
 • Amounts, tokens, timing and which transactions spend which outputs are public, as with any Cardano wallet.
@@ -61,7 +62,7 @@ Private money earns no staking rewards: it has no staking part, which is what ke
 How it works:
 • Everything is built and signed inside the extension. The cryptography and the transaction building are Rust, compiled to WebAssembly and shipped in the package.
 • Your recovery phrase never leaves your device. It's encrypted with your password (Argon2id and ChaCha20-Poly1305).
-• The wallet talks to two services and nothing else. Koios reads the chain and submits your transactions. giveme.my adds shared collateral to private payments, so your own address stays out of them. Both see your IP address.
+• The wallet talks to two services, and to a third only when you swap. Koios reads the chain and submits your transactions. giveme.my adds shared collateral to private payments, so your own address stays out of them. Minswap quotes and builds your swaps, for the one-time account. Each sees your IP address.
 • It adds nothing to web pages unless you turn on connecting sites. Then it adds only the standard Cardano wallet entry (window.cardano) to https pages, and asks you before anything is signed.
 • There are no accounts, analytics or tracking.
 
@@ -111,13 +112,13 @@ Seedelf Wallet is a Cardano wallet with the Seedelf stealth wallet contract buil
 **Remote code:** No, I am not using remote code.
 
 ```text
-All code ships in the package, including the WebAssembly module (Rust compiled to wasm). The page CSP's 'wasm-unsafe-eval' is only there to compile that bundled module. The extension fetches data (JSON and CBOR) from Koios and giveme.my, never code.
+All code ships in the package, including the WebAssembly module (Rust compiled to wasm). The page CSP's 'wasm-unsafe-eval' is only there to compile that bundled module. The extension fetches data (JSON and CBOR) from Koios, giveme.my and, for swaps, Minswap's aggregator, never code.
 ```
 
 **Data usage.** Check these two, and leave the rest unchecked:
 
 - **Authentication information:** the recovery phrase and the password. The phrase is kept encrypted on the device; the password is never stored.
-- **Financial and payment information:** the wallet's addresses, balances, staking and transactions, sent to Koios and giveme.my to read the chain and to send transactions. When the user connects a site, it sees the public account's addresses, balance and UTxOs, and what the user signs for it.
+- **Financial and payment information:** the wallet's addresses, balances, staking and transactions, sent to Koios and giveme.my to read the chain and to send transactions. When the user connects a site, it sees the public account's addresses, balance and UTxOs, and what the user signs for it. For a swap, Minswap's aggregator gets the one-time account's address and the tokens and amounts, and builds the swap for it.
 
 **To decide at the next submission (chunk 15):** whether to check **Web history** as well. The wallet keeps the list of sites the user connected (their addresses and when), sealed on the device, and Google's FAQ counts data handled only on the device.
 
@@ -150,7 +151,7 @@ To see a wallet with test funds: choose "Restore wallet" instead and paste the s
 abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
 Home then shows its preprod balances. It's public, so its funds are shared test ADA.
 
-Every screen works without any account or server of ours. The wallet only contacts preprod.koios.rest and www.giveme.my.
+Every screen works without any account or server of ours. The wallet only contacts preprod.koios.rest and www.giveme.my, and for a swap, Minswap's preprod aggregator (aggr.monorepo-testnet-preprod.minswap.org).
 ```
 
 ## After approval

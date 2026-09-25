@@ -329,3 +329,13 @@ export const GlobeIcon = icon(
     <path d="M2 12h20" />
   </>,
 );
+
+/** arrow-left-right */
+export const SwapIcon = icon(
+  <>
+    <path d="M8 3 4 7l4 4" />
+    <path d="M4 7h16" />
+    <path d="m16 21 4-4-4-4" />
+    <path d="M20 17H4" />
+  </>,
+);

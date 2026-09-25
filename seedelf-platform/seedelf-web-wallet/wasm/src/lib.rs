@@ -32,10 +32,11 @@ pub mod api {
     };
     use pallas_crypto::hash::{Hash, Hasher};
     use pallas_crypto::key::ed25519::{PublicKey, SecretKey, Signature};
+    use pallas_primitives::Fragment;
     use pallas_txbuilder::BuiltTransaction;
     use pallas_wallet::PrivateKey;
     use rand_core::{OsRng, RngCore};
-    use seedelf_core::address::wallet_contract;
+    use seedelf_core::address::{dapp_address, wallet_contract};
     use seedelf_core::assets::{Asset, Assets};
     use seedelf_core::build::{
         self, AccountAmount, AccountPay, AddressPayment, Budgets, Chain, Payee, Payment,
@@ -44,6 +45,7 @@ pub mod api {
     use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
     use seedelf_core::note::Note;
     use seedelf_core::staking::{self, StakeAction, StakeKey, StakeState, Staking};
+    use seedelf_core::utxos::assets_of as utxo_assets;
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::derivation;
     use seedelf_crypto::register::Register;
@@ -389,6 +391,105 @@ pub mod api {
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             inputs: built.inputs.len(),
+        })
+    }
+
+    /// Session `index`'s one-time account: payment key `0/index` of account
+    /// `24301'` (`accounts`), at a base address with the shared Seedelf
+    /// staking part, as the CLI's External Wallet (`address::dapp_address`).
+    /// A dApp sees an ordinary address whose staking part names no one. The
+    /// account's own stake key is never used.
+    pub fn one_time_address(
+        accounts: &CardanoAccount,
+        network_flag: bool,
+        index: u32,
+    ) -> Result<Address> {
+        let key = accounts.key_hash(Role::Receive, index)?;
+        dapp_address(hex::encode(key), network_flag)
+    }
+
+    /// Bringing a private session's one-time account back into Seedelf, as
+    /// JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SessionReturnRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        /// The session: payment key `0/index` of account `24301'`.
+        pub index: u32,
+        /// Every UTxO at the session's account, as Koios returns them.
+        pub utxos: Vec<UtxoResponse>,
+    }
+
+    /// A signed return, ready to submit, and what it moves.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SessionReturnResult {
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub fee: String,
+        /// Into the wallet contract: everything the account held, less the fee.
+        pub lovelace: String,
+        pub tokens: Vec<TokenAmount>,
+        /// The contract outputs holding it (tokens go a limited number to one).
+        pub deposit_outputs: usize,
+        pub inputs: usize,
+    }
+
+    /// Builds and signs a session's return: every UTxO at its one-time
+    /// account into the wallet contract, under fresh re-randomizations of
+    /// `sk`'s base register (the CLI's `external sweep`, `build::external_sweep`).
+    /// Each UTxO must be under the session's payment key; it signs inside
+    /// this module. No script runs, so there's no collateral.
+    pub fn session_return(
+        accounts: &CardanoAccount,
+        sk: Scalar,
+        request: SessionReturnRequest,
+    ) -> Result<SessionReturnResult> {
+        let network_flag = network_flag(&request.network)?;
+        let params = ProtocolParameters::from_koios(&request.params)?;
+        if request.utxos.is_empty() {
+            bail!("The session's account is empty, so there's nothing to bring back.");
+        }
+        let key = accounts.key_hash(Role::Receive, request.index)?;
+        for utxo in &request.utxos {
+            if payment_key_of(&utxo.address, network_flag) != Some(key) {
+                bail!(
+                    "UTxO {}#{} isn't at session {}'s account",
+                    utxo.tx_hash,
+                    utxo.tx_index,
+                    request.index
+                );
+            }
+        }
+        let config = get_config(VARIANT, network_flag)?;
+        let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
+        let owner = Register::create(sk)?;
+        let (tx, fee) = build::external_sweep(&params, &request.utxos, &owner, &wallet, key)?;
+        let signed = tx
+            .sign(
+                accounts
+                    .private_key(Role::Receive, request.index)?
+                    .to_ed25519_private_key(),
+            )
+            .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
+
+        let (total, tokens) = utxo_assets(request.utxos.clone())?;
+        // Every output is a deposit into the contract.
+        let deposit_outputs = pallas_primitives::conway::Tx::decode_fragment(&signed.tx_bytes.0)
+            .map_err(|e| anyhow!("the return doesn't decode: {e}"))?
+            .transaction_body
+            .outputs
+            .len();
+        Ok(SessionReturnResult {
+            tx_cbor: hex::encode(&signed.tx_bytes.0),
+            tx_hash: hex::encode(signed.tx_hash.0),
+            fee: fee.to_string(),
+            lovelace: (total - fee).to_string(),
+            tokens: tokens.items.iter().map(token_amount).collect(),
+            deposit_outputs,
+            inputs: request.utxos.len(),
         })
     }
 
@@ -1924,6 +2025,95 @@ impl WasmCardanoAccount {
             .and_then(|a| a.to_bech32().map_err(anyhow::Error::from))
             .map_err(js_error)
     }
+}
+
+/// The one-time accounts of private sessions: CIP-1852 account `24301'`
+/// (`cardano::ONE_TIME_ACCOUNT`), payment key `0/i` for session `i`, each at
+/// an address with the shared Seedelf staking part. A separate type from the
+/// public account's, so nothing that pays or shows the public account can be
+/// handed these keys. They never leave WebAssembly; call `free()` to drop them.
+#[wasm_bindgen(js_name = OneTimeAccounts)]
+pub struct WasmOneTimeAccounts {
+    inner: cardano::CardanoAccount,
+}
+
+#[wasm_bindgen(js_class = OneTimeAccounts)]
+impl WasmOneTimeAccounts {
+    /// From a 12-, 15- or 24-word phrase.
+    #[wasm_bindgen(js_name = fromPhrase)]
+    pub fn from_phrase(phrase: &str) -> Result<WasmOneTimeAccounts, JsError> {
+        cardano::CardanoAccount::from_phrase(phrase, cardano::ONE_TIME_ACCOUNT)
+            .map(|inner| WasmOneTimeAccounts { inner })
+            .map_err(js_error)
+    }
+
+    /// From the recovery phrase's BIP39 entropy, as the vault stores it.
+    #[wasm_bindgen(js_name = fromEntropy)]
+    pub fn from_entropy(entropy: &[u8]) -> Result<WasmOneTimeAccounts, JsError> {
+        api::with_phrase(entropy, |phrase| {
+            cardano::CardanoAccount::from_phrase(phrase, cardano::ONE_TIME_ACCOUNT)
+        })
+        .map(|inner| WasmOneTimeAccounts { inner })
+        .map_err(js_error)
+    }
+
+    /// Session `index`'s address (bech32).
+    pub fn address(&self, network: Network, index: u32) -> Result<String, JsError> {
+        api::one_time_address(&self.inner, network.flag(), index)
+            .and_then(|a| a.to_bech32().map_err(anyhow::Error::from))
+            .map_err(js_error)
+    }
+
+    /// Session `index`'s payment key hash, hex: Koios is asked for the UTxOs
+    /// under it.
+    #[wasm_bindgen(js_name = keyHash)]
+    pub fn key_hash(&self, index: u32) -> Result<String, JsError> {
+        self.inner
+            .key_hash(cardano::Role::Receive, index)
+            .map(hex::encode)
+            .map_err(js_error)
+    }
+}
+
+/// Builds and signs a session's return: everything at its one-time account
+/// into the Seedelf balance. `request` is JSON (`api::SessionReturnRequest`);
+/// the result is JSON (`api::SessionReturnResult`).
+#[wasm_bindgen(js_name = buildSessionReturn)]
+pub fn build_session_return(
+    accounts: &WasmOneTimeAccounts,
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<String, JsError> {
+    let request: api::SessionReturnRequest = from_json(request)?;
+    to_json(&api::session_return(&accounts.inner, key.sk, request).map_err(js_error)?)
+}
+
+/// What a transaction built for a session (a swap, a cancel) does to its
+/// one-time account, as JSON, read the way the connector reads a dApp's
+/// (`cip30::inspect_tx`); `keys` is the session's one path, `0/i`.
+#[wasm_bindgen(js_name = inspectSessionTx)]
+pub fn inspect_session_tx(
+    accounts: &WasmOneTimeAccounts,
+    request: &str,
+) -> Result<String, JsError> {
+    let request: cip30::TxRequest = from_json(request)?;
+    to_json(&cip30::inspect_tx(&accounts.inner, &request).map_err(js_error)?)
+}
+
+/// Signs a transaction built for a session with its one-time key: JSON
+/// `{ witnessSet, summary }`, as `signDappTx`.
+#[wasm_bindgen(js_name = signSessionTx)]
+pub fn sign_session_tx(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
+    let request: cip30::TxRequest = from_json(request)?;
+    to_json(&cip30::sign_tx(&accounts.inner, &request).map_err(js_error)?)
+}
+
+/// A transaction someone else built (a session's swap) with the wallet's
+/// signatures (`witnessSet`, as `signSessionTx` gives them) added, ready to
+/// submit. The body and the builder's witnesses are kept byte for byte.
+#[wasm_bindgen(js_name = attachWitnesses)]
+pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String, JsError> {
+    cip30::attach_witnesses(tx_cbor, witness_set).map_err(js_error)
 }
 
 /// A new 24-word recovery phrase from the browser's secure random source.

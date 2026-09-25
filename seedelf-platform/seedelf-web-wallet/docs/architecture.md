@@ -345,6 +345,31 @@ flowchart LR
   - It refuses the other network, a collateral return to someone else, and a transaction marked to fail its scripts.
 - **The window** (`dapp-window.ts`, `screens/DappApprovals.tsx`): a popup, one at a time. Closing it declines everything, and it closes itself once nothing's left.
 
+## Private sessions
+
+Chunk 15, step 2: a swap through Minswap's aggregator, run from a one-time account funded from the private balance and brought back into it. The flow is in [flows.md](flows.md#contract-round-trip).
+
+```mermaid
+flowchart LR
+  UI["Swaps screen"] -- "sessions, swap-quote,<br/>session-out/swap/cancel/back" --> S["sessions.ts"]
+  S -- "estimate, build-tx,<br/>pending-orders, cancel-tx" --> M["Minswap's aggregator"]
+  S -- "credential_utxos, tx_status,<br/>utxo_info, submittx" --> K["Koios"]
+  S -- "draftWithdraw/finishWithdraw (out),<br/>inspectSessionTx, signSessionTx,<br/>attachWitnesses, buildSessionReturn" --> X["WebAssembly"]
+```
+
+- **The accounts** (WebAssembly's `OneTimeAccounts`, a type of its own so nothing that pays the public account can be handed these keys): account `24301'` (`seedelf_crypto::cardano::ONE_TIME_ACCOUNT`), payment key `0/i` for session `i`, at a base address with the shared Seedelf staking part (`address::dapp_address`). Session 0's key hash of the 12-word test phrase is pinned in `wasm/tests/session_test.rs`, checked with `cardano-address`.
+- **The record** is the sealed `sessions.<network>`: the next index, and each session's index, its transactions (funding, swap, cancels, return) with whether the chain has them, and its swap as quoted, with how its two tokens are shown.
+  - A session is recorded before its funding is sent, and the index moves on then, so no account is used twice even when a send fails.
+  - A session's stage is worked out when it's read: funding, open, returning, closed (brought back, confirmed, and the account empty), or failed (the funding never reached the chain).
+- **Out** is Make public's builder (`draftWithdraw`/`finishWithdraw`): two payments to the account, the swap with its costs (Minswap's DEX fee and deposits, plus 2 ₳ of room, `SWAP_MARGIN`) and 5 ₳ of collateral (`SESSION_COLLATERAL`).
+- **The swap** is Minswap's (`build-tx` takes only a sender): the worker checks that its inputs are all the session's, then WebAssembly reads it with the connector's code (`cip30::inspect_tx`) against the session's one key path. `refuseOddities` in `sessions.ts` refuses one that isn't complete with that key alone, spends what the wallet can't find, touches staking or governance, or mints.
+  - `signSessionTx` gives the vkey witness; `attachWitnesses` (`cip30::attach_witnesses`) splices it into Minswap's witness set, copying the body and the other entries byte for byte, so the id is unchanged and the order's datum still hashes to what the order names. Checked on a real preprod swap Minswap built (`wasm/tests/fixtures/minswap-swap-preprod.json`).
+  - A connector summary's `scripts` is now redeemers only: a script data hash alone covers witness-set datums, as an order's, and runs nothing.
+- **The cancel** is the same with Minswap's `cancel-tx`: its inputs are the orders (read from Koios `utxo_info`) and the account's collateral.
+- **Back** is `buildSessionReturn`: every UTxO at the account into the contract under fresh registers (`build::external_sweep`, the CLI's external sweep), signed by the session's key. The worker refuses it while Minswap lists an order of a session that placed one.
+- **What each costs:** reading the sessions is one Koios `credential_utxos` for every open session's key hash, and one `tx_status` for the transactions waiting, only when the Swaps screen reads. Opening a session that placed an order asks Minswap for its orders. The swap costs two Minswap requests (`estimate`, `build-tx`) and one Koios read of the account.
+- **Minswap's aggregator** answers browsers with CORS headers, so the manifest only lists it in the pages' `connect-src` (`networks.ts` `corsOrigins`): no host permission, no new warning at install. If it ever stops, it'll need an optional host permission.
+
 ## What we borrow from Lace
 
 Paths are relative to a `lace-extension@2.4.0` checkout (see the [README](../README.md#reference-lace)).

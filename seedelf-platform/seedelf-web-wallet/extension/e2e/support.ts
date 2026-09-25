@@ -72,6 +72,9 @@ export const transferPreprod = fixture("transfer-preprod.json");
 export const withdrawPreprod = fixture("withdraw-preprod.json");
 export const activityPreprod = fixture("activity-preprod.json");
 export const stakingPreprod = fixture("staking-preprod.json");
+export const minswapEstimate = fixture("minswap-estimate-preprod.json");
+/** Session 0 of the 12-word phrase, its UTxO, and a swap from it (wasm/tests/session_test.rs). */
+export const sessionSwap = fixture("session-swap.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -96,6 +99,18 @@ export interface KoiosFake {
   nfts: Map<string, string>;
   /** Each stake key's account_info, by stake address: the recorded 12-word account's to begin with. */
   stakes: Map<string, Record<string, unknown>>;
+  /** UTxOs under other payment keys, as credential_utxos finds them: a private session's, say. */
+  addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
+}
+
+/** Minswap's aggregator, for swaps in private sessions. */
+export interface MinswapFake {
+  calls: Array<{ path: string; body: any }>;
+  /** Its token list, searched by ticker. */
+  tokens: Array<Record<string, unknown>>;
+  estimate: unknown;
+  swapCbor: string;
+  orders: unknown[];
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
@@ -160,9 +175,12 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const after = Number(/gt\.(\d+)/.exec(new URL(request.url()).searchParams.get("block_height") ?? "")?.[1] ?? -1);
     // credential_utxos: the wallet contract's, or the accounts' by payment key.
     const credentials: string[] = body?._payment_credentials ?? [];
-    const byKey = Object.values(koiosPreprod.accounts as Record<string, { account_utxos: Array<{ payment_cred: string }> }>)
-      .flatMap((a) => a.account_utxos)
-      .filter((u) => credentials.includes(u.payment_cred));
+    const byKey = [
+      ...Object.values(koiosPreprod.accounts as Record<string, { account_utxos: Array<{ payment_cred: string }> }>).flatMap(
+        (a) => a.account_utxos,
+      ),
+      ...koios.addedToAccounts,
+    ].filter((u) => credentials.includes(u.payment_cred));
     const rows =
       path === "credential_utxos"
         ? credentials.includes(koiosPreprod.wallet_contract)
@@ -183,9 +201,28 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     });
   });
   // Nothing else leaves the browser.
-  await context.route(/^https?:\/\/(?!preprod\.koios\.rest|www\.giveme\.my\/preprod\/collateral\/$)/, (route) =>
-    route.abort(),
+  await context.route(
+    /^https?:\/\/(?!preprod\.koios\.rest|www\.giveme\.my\/preprod\/collateral\/$|aggr\.monorepo-testnet-preprod\.minswap\.org)/,
+    (route) => route.abort(),
   );
+}
+
+async function fakeMinswap(context: BrowserContext, swaps: MinswapFake) {
+  await context.route("https://aggr.monorepo-testnet-preprod.minswap.org/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.split("/").pop()!;
+    const body = request.method() === "POST" ? request.postDataJSON() : null;
+    swaps.calls.push({ path, body });
+    const answer = (value: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
+    if (path === "tokens") {
+      const q = String(body.query).toLowerCase();
+      return answer({ tokens: swaps.tokens.filter((t) => String(t.ticker).toLowerCase().includes(q)), search_after: [] });
+    }
+    if (path === "estimate") return answer(swaps.estimate);
+    if (path === "build-tx") return answer({ cbor: swaps.swapCbor });
+    if (path === "pending-orders") return answer({ orders: swaps.orders, amount_in_decimal: false });
+    return route.fulfill({ status: 404, body: "" });
+  });
 }
 
 /**
@@ -207,6 +244,7 @@ export const test = base.extend<{
   siteAccess: boolean;
   userDataDir: string;
   koios: KoiosFake;
+  swaps: MinswapFake;
   context: BrowserContext;
 }>({
   /** The device scale factor: 2 for the store images. */
@@ -229,12 +267,33 @@ export const test = base.extend<{
       evaluation: mintPreprod.evaluation,
       nfts: new Map(),
       stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
+      addedToAccounts: [],
     });
   },
-  context: async ({ scale, siteAccess, userDataDir, koios }, use) => {
+  swaps: async ({}, use) => {
+    await use({
+      calls: [],
+      tokens: [
+        {
+          token_id: minswapEstimate.ask.tokenOut,
+          ticker: "MIN",
+          project_name: "Minswap",
+          decimals: 6,
+          is_verified: true,
+          logo: null,
+          price_by_ada: null,
+        },
+      ],
+      estimate: minswapEstimate.estimate,
+      swapCbor: sessionSwap.swapCbor,
+      orders: [],
+    });
+  },
+  context: async ({ scale, siteAccess, userDataDir, koios, swaps }, use) => {
     const extension = siteAccess ? withSiteAccess(dist, `${userDataDir}-extension`) : dist;
     const context = await launch(userDataDir, { scale, extension });
     await fakeKoios(context, koios);
+    await fakeMinswap(context, swaps);
     await use(context);
     await context.close();
     if (siteAccess) rmSync(extension, { recursive: true, force: true });

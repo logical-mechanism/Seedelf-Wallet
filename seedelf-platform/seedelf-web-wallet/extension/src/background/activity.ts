@@ -62,7 +62,15 @@ interface AccountPages {
 }
 
 /** What the Seedelf history notes when it's sent: flows that touch the Seedelf balance or a seedelf. */
-const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set(["move-in", "transfer", "withdraw", "mint", "remove"]);
+const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
+  "move-in",
+  "transfer",
+  "withdraw",
+  "mint",
+  "remove",
+  "session-out",
+  "session-back",
+]);
 
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
 const shortHex = (hex: string) => (hex.length > 20 ? `${hex.slice(0, 12)}…${hex.slice(-6)}` : hex);
@@ -117,7 +125,8 @@ export class ActivityService {
     const paid: Array<Record<string, any>> = Array.isArray(s.payments) ? s.payments : [s];
     const lovelace = paid.reduce((sum, p) => sum + BigInt(p.lovelace ?? "0"), 0n).toString();
     const moved = paid.flatMap((p) => (Array.isArray(p.tokens) ? p.tokens : []));
-    const assets = signedAssets(moved, pending.kind === "move-in" ? 1n : -1n);
+    const into = pending.kind === "move-in" || pending.kind === "session-back";
+    const assets = signedAssets(moved, into ? 1n : -1n);
     const shared = {
       txHash: pending.txHash,
       at: pending.submittedAt,
@@ -126,21 +135,27 @@ export class ActivityService {
       fee: feeOf(s.fee),
       ...(assets.length ? { assets } : {}),
     };
+    // A session is shown by its number, from 1; its address says nothing to the user.
+    const session = typeof s.index === "number" ? `Private session ${s.index + 1}` : undefined;
     const entry: ActivityEntry =
       pending.kind === "move-in"
         ? { ...shared, kind: "move-in", direction: "in" }
-        : pending.kind === "transfer"
-          ? { ...shared, kind: "transfer", direction: "out", detail: several(paid.map((p) => p.label ?? shortHex(String(p.to)))) }
-          : pending.kind === "withdraw"
-            ? {
-                ...shared,
-                kind: "withdraw",
-                direction: "out",
-                detail: several(paid.map((p) => (p.handle ? `$${p.handle}` : shortHex(String(p.address))))),
-              }
-            : pending.kind === "mint"
-              ? { ...shared, kind: "mint", direction: "none", detail: s.label || undefined }
-              : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };
+        : pending.kind === "session-out"
+          ? { ...shared, kind: "session-out", direction: "out", detail: session }
+          : pending.kind === "session-back"
+            ? { ...shared, kind: "session-back", direction: "in", detail: session }
+            : pending.kind === "transfer"
+              ? { ...shared, kind: "transfer", direction: "out", detail: several(paid.map((p) => p.label ?? shortHex(String(p.to)))) }
+              : pending.kind === "withdraw"
+                ? {
+                    ...shared,
+                    kind: "withdraw",
+                    direction: "out",
+                    detail: several(paid.map((p) => (p.handle ? `$${p.handle}` : shortHex(String(p.address))))),
+                  }
+                : pending.kind === "mint"
+                  ? { ...shared, kind: "mint", direction: "none", detail: s.label || undefined }
+                  : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };
     return this.update(network, (h) => ({ ...h, entries: [...h.entries.filter((e) => e.txHash !== entry.txHash), entry] }));
   }
 
