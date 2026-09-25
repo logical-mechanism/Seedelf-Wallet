@@ -1774,7 +1774,9 @@ main {
 }
 
 /* Swaps (screens/Swaps.tsx): the three steps of a private session, and the
-   token chosen to buy. */
+   form in Minswap's shape: You pay over You receive, each a card with a big
+   amount beside its token, a round Switch across the seam between them, and
+   the quote under them. */
 
 .steps {
   margin: 0;
@@ -1787,14 +1789,369 @@ main {
   font-size: var(--text-sm);
 }
 
-.token-chosen {
+.swap-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.swap-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: border-color 120ms;
+}
+
+.swap-card:focus-within {
+  border-color: var(--border-strong);
+}
+
+.swap-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--s2) var(--s3);
+  min-height: 20px;
+}
+
+.swap-card__head label,
+.swap-card__head .label {
+  color: var(--muted);
+}
+
+.swap-card__quick {
+  display: flex;
+  gap: var(--s3);
+}
+
+.swap-card__main {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 44px;
+}
+
+.swap-card__amount {
+  flex: 1;
+  min-width: 0;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.swap-card__amount--long {
+  font-size: 22px;
+}
+
+input.swap-card__amount {
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+input.swap-card__amount:focus {
+  box-shadow: none;
+}
+
+output.swap-card__amount {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swap-card__amount--empty {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+/* A new quote is on its way: the last one stays, fading in and out. */
+.swap-card__amount--waiting {
+  animation: swap-waiting 1s ease-in-out infinite alternate;
+}
+
+@keyframes swap-waiting {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 0.25;
+  }
+}
+
+.swap-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.swap-card__held {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.swap-card__held--short {
+  color: var(--danger-text);
+}
+
+/* A card's token: its logo, name and a chevron; Select token until one's chosen. */
+.swap-token {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  max-width: 55%;
+  height: 40px;
+  padding: 0 var(--s2) 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border-color: var(--border);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 120ms;
+}
+
+.swap-token:hover {
+  background: var(--surface-hover);
+}
+
+.swap-token > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.swap-token .avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 10.5px;
+}
+
+.swap-token__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.swap-token--empty {
+  gap: 6px;
+  padding: 0 var(--s3);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.swap-token--empty:hover {
+  background: rgb(0 196 188 / 0.2);
+}
+
+.swap-token--empty > svg {
+  color: currentColor;
+}
+
+/* ADA's avatar: ₳ on Cardano's blue. */
+.avatar--ada,
+.swap-token .avatar--ada {
+  background: #0033ad;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Switch: a round button over the seam between the two cards. */
+.swap-flip {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin: -22px 0;
+  border-radius: 50%;
+  background: var(--bg);
+  border-color: var(--border-strong);
+  color: var(--text-2);
+  transition:
+    color 120ms,
+    transform 200ms;
+}
+
+.swap-flip:not(:disabled):hover {
+  color: var(--accent);
+  transform: rotate(180deg);
+}
+
+.swap-flip:disabled {
+  color: var(--muted);
+}
+
+/* The quote: the rate, and its details under a chevron. */
+.swap-details {
+  padding: 0 var(--s2) 0 var(--s4);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
+  transition: opacity 120ms;
+}
+
+.swap-details--stale {
+  opacity: 0.55;
+}
+
+.swap-rate {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  min-height: 44px;
+  font-size: 13px;
+}
+
+.swap-rate__text {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.swap-rate__text:hover {
+  color: var(--text);
+}
+
+.swap-rate__impact {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.swap-rate .icon-button {
+  background: none;
+  border-color: transparent;
+}
+
+.swap-rate__icon,
+.swap-chevron {
+  display: flex;
+  transition: transform 150ms;
+}
+
+.swap-chevron--open {
+  transform: rotate(180deg);
+}
+
+.swap-details__rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0;
+  padding: var(--s3) var(--s2) var(--s3) 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.swap-details__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.swap-details__row dt {
+  color: var(--muted);
+}
+
+.swap-details__row dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.swap-impact--warn {
+  color: var(--warn);
+}
+
+.swap-impact--high {
+  color: var(--danger-text);
+}
+
+.swap-asking {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* The review's swap: what's paid over what's received. */
+.swap-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s4);
   background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.swap-summary__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.swap-summary__label {
+  color: var(--muted);
+}
+
+.swap-summary__amount {
+  font-size: 17px;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.swap-summary__foot {
+  margin: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* The token picker's two lists: what's held, and what Minswap lists. */
+.swap-pick__heading {
+  margin: var(--s2) 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swap-card__amount--waiting {
+    animation: none;
+    opacity: 0.4;
+  }
+
+  .swap-flip,
+  .swap-rate__icon,
+  .swap-chevron {
+    transition: none;
+  }
 }
 
 /* Chrome took the wallet's access to Koios away (App.tsx's ServiceAccess) */

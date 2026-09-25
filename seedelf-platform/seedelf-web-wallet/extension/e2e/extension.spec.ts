@@ -1303,22 +1303,59 @@ test("a private swap: Minswap's quote, a one-time account funded, the order plac
   await expect(page.getByTestId("swaps-empty")).toBeVisible();
   await page.getByRole("button", { name: "New swap" }).click();
 
-  // 10 ₳ for MIN, found on Minswap's list.
-  await page.getByLabel("Amount").fill("10");
-  await page.getByLabel("To").fill("MIN");
-  await page.getByTestId("swap-tokens").getByRole("button", { name: /MIN/ }).click();
+  // Minswap's shape: You pay, You receive, and the button says what's missing.
+  await expect(page.getByRole("button", { name: "Select a token" })).toBeDisabled();
+  await expect(page.getByTestId("swap-held")).toHaveText("28");
+  await snap(page, "swap-form-empty");
+  await page.getByLabel("You pay", { exact: true }).fill("30");
+  await page.getByTestId("swap-to").click();
+
+  // MIN, found on Minswap's list.
+  const picker = page.getByRole("dialog", { name: "You receive" });
+  await expect(picker.getByTestId("swap-own-tokens")).toContainText("ADA");
+  await picker.getByLabel("Search tokens").fill("MIN");
+  await expect(picker.getByTestId("swap-tokens")).toContainText("MIN");
+  await snap(page, "swap-picker");
+  await picker.getByTestId("swap-tokens").getByRole("button", { name: /MIN/ }).click();
+  await expect(picker).toBeHidden();
   await expect(page.getByTestId("swap-to")).toContainText("MIN");
-  await snap(page, "swap-form");
-  await page.getByRole("button", { name: "Get a quote" }).click();
+  await expect(page.getByRole("button", { name: "Not enough ADA" })).toBeDisabled();
+  await expect(page.getByTestId("swap-short")).toContainText("That's more than the 28 ₳ in your private balance");
+  // Minswap quotes it all the same.
+  await expect(page.getByTestId("swap-out")).toHaveText("906.5941");
+
+  // 10 ₳: the quote fills in what's received, the rate turns around, and the details open.
+  await page.getByLabel("You pay", { exact: true }).fill("10");
+  // The last quote stays, dimmed, until the new one comes.
+  await expect(page.getByRole("button", { name: "Review swap" })).toBeEnabled();
+  await expect(page.getByTestId("swap-out")).toHaveText("906.5941");
+  await expect(page.getByTestId("swap-rate")).toHaveText("1 ADA ≈ 90.6594 MIN");
+  await page.getByTestId("swap-rate").click();
+  await expect(page.getByTestId("swap-rate")).toHaveText("1 MIN ≈ 0.01103 ADA");
+  await page.getByRole("button", { name: "The quote's details" }).click();
   const quote = page.getByTestId("swap-quote-rows");
-  await expect(quote).toContainText("You swap10 ₳");
-  await expect(quote).toContainText("You get about906.5941 MIN");
-  await expect(quote).toContainText("At least902.083681 MIN");
-  await expect(quote).toContainText("ThroughMinswap");
-  await snap(page, "swap-quote");
+  await expect(quote).toContainText("Minimum received902.083681 MIN");
+  await expect(quote).toContainText("Price impact0.34%");
+  await expect(quote).toContainText("Slippage1%");
+  await expect(quote).toContainText("RouteMinswap");
+  await snap(page, "swap-form");
+
+  // Slippage: its own setting, and a quote to match.
+  await page.getByRole("button", { name: "Slippage: 1%" }).click();
+  const settings = page.getByRole("dialog", { name: "Slippage" });
+  await settings.getByLabel("Your own").fill("30");
+  await expect(settings).toContainText("Between 0.1% and 20%");
+  await settings.getByLabel("Your own").fill("2");
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(quote).toContainText("Slippage2%");
+  await expect(page.getByRole("button", { name: "Review swap" })).toBeEnabled();
+  await expect.poll(() => swaps.calls.filter((c) => c.path === "estimate").at(-1)?.body.slippage).toBe(2);
 
   // The funding: the swap and its costs, and the account's own collateral.
-  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Review swap" }).click();
+  const summary = page.getByTestId("swap-summary");
+  await expect(summary).toContainText("You pay10 ₳");
+  await expect(summary).toContainText("You receive about906.5941 MIN");
   const fund = page.getByTestId("swap-fund-review");
   await expect(fund).toContainText("ToPrivate session 1");
   await expect(fund).toContainText("For the swap16 ₳");
@@ -1343,7 +1380,7 @@ test("a private swap: Minswap's quote, a one-time account funded, the order plac
     asset_list: [],
     is_spent: false,
   });
-  for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
+  for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("swaps")).toContainText("10 ₳ → MIN");
   await expect(page.getByTestId("swaps")).toContainText("Session 1 · Open");
   await page.getByTestId("swaps").getByRole("button").first().click();
@@ -1391,7 +1428,17 @@ test("a private swap: Minswap's quote, a one-time account funded, the order plac
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByTestId("pending-tx")).toContainText("Return from a private session");
   expect(koios.submitted).toHaveLength(2);
-  expect(swaps.calls.map((c) => c.path)).toEqual(["tokens", "estimate", "estimate", "build-tx", "pending-orders", "pending-orders"]);
+  // One quote for 30 ₳, one for 10 ₳, one at 2% slippage, and a fresh one for the order.
+  expect(swaps.calls.map((c) => c.path)).toEqual([
+    "tokens",
+    "estimate",
+    "estimate",
+    "estimate",
+    "estimate",
+    "build-tx",
+    "pending-orders",
+    "pending-orders",
+  ]);
 });
 
 test("remove a Seedelf: where its ADA goes, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {

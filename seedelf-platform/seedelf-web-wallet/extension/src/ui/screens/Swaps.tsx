@@ -4,12 +4,15 @@
 // comes back into the private balance. The public account never appears.
 //
 // Swaps       the sessions, newest first, and New swap.
-// NewSwap     what to swap, Minswap's quote, then the funding payment to review.
+// NewSwap     Minswap's shape: You pay over You receive, a live quote under
+//             them, then the swap and its funding payment to review.
 // Session     one session: where it's at, and the next step (swap, cancel, bring back).
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 
+import type { NetworkName } from "../../networks";
 import type {
+  AdaPrice,
   Balances,
   PendingTx,
   SessionBackSummary,
@@ -17,21 +20,57 @@ import type {
   SessionOutSummary,
   SessionTxReview,
   SessionView,
+  SwapAsk,
   SwapQuote,
   SwapSide,
   SwapTokenInfo,
   TokenQuantity,
 } from "../../shared/rpc";
 import { call } from "../background";
+import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
-import { Choice } from "../components/Choice";
-import { ChevronRightIcon } from "../components/Icons";
+import {
+  ArrowDownIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  PlusIcon,
+  RefreshIcon,
+  SearchIcon,
+  SlidersIcon,
+  SpinnerIcon,
+  WalletIcon,
+} from "../components/Icons";
+import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { formatAda, formatPercent, formatQuantity, parseQuantity, plural, shortHex, timeAgo, tokenKey } from "../format";
+import {
+  ADA_RULES,
+  type AmountRules,
+  formatAda,
+  formatFiat,
+  formatPercent,
+  formatQuantity,
+  parseQuantity,
+  plural,
+  sanitizeAmount,
+  shortHex,
+  timeAgo,
+  tokenKey,
+} from "../format";
 import { useNetwork } from "../network";
-import { isNft, tokenInfo, tokenLabel } from "../tokens";
+import {
+  adaShort,
+  halfOf,
+  impactLevel,
+  maxAdaIn,
+  parseSlippage,
+  rateOf,
+  sameAsk,
+  SLIPPAGE_MAX,
+  SLIPPAGE_MIN,
+} from "../swap";
+import { initials, sortTokens, tint, tokenInfo, tokenLabel, viewToken } from "../tokens";
 
 const ADA: SwapSide = { label: "₳", decimals: 6 };
 
@@ -170,12 +209,122 @@ export function Swaps({
 // A new swap
 // ---------------------------------------------------------------------------
 
-/** What can be sold: ADA, or a token in the private balance. */
-interface Source {
+/** One side of a swap: ADA ("lovelace") or a token, by Minswap's ID, and how it's shown. */
+interface Pick {
   id: string;
   side: SwapSide;
-  /** What the private balance holds of it. */
-  held: string;
+}
+
+const ADA_PICK: Pick = { id: "lovelace", side: ADA };
+
+/** The most of one token a value can hold: 2⁶³ − 1. */
+const TOKEN_MAX = 2n ** 63n - 1n;
+/** How long typing pauses before Minswap is asked for a quote: it limits how often it's asked. */
+const QUOTE_PAUSE_MS = 600;
+/** A quote older than this is asked for again before the funding is built on it. */
+const QUOTE_FRESH_MS = 60_000;
+
+/** A side's name on its button and in the lists: ADA, or the token's ticker. */
+const nameOf = (p: Pick) => (p.id === "lovelace" ? "ADA" : p.side.label);
+
+/** What the private balance holds of a side. */
+function heldOf(seedelf: Balances["seedelf"], id: string): string {
+  if (id === "lovelace") return seedelf.lovelace;
+  return seedelf.tokens.find((t) => t.policyId + t.assetName === id)?.quantity ?? "0";
+}
+
+/** ADA, then the private balance's tokens by name, with a second line and what's held. NFTs aren't swapped on a DEX. */
+function ownPicks(network: NetworkName, seedelf: Balances["seedelf"]): Array<Pick & { sub: string; held: string }> {
+  const views = sortTokens(
+    seedelf.tokens.map((t) => viewToken(network, t)),
+    "name",
+  ).filter((v) => !v.nft);
+  return [
+    { ...ADA_PICK, sub: "Cardano", held: seedelf.lovelace },
+    ...views.map((v) => ({
+      id: v.token.policyId + v.token.assetName,
+      side: { label: tokenLabel(network, v.token), decimals: tokenInfo(network, v.token)?.decimals ?? v.token.decimals },
+      sub: v.sub,
+      held: v.token.quantity,
+    })),
+  ];
+}
+
+/** What the amount box takes for a side: its decimals, and no more than there can be. */
+function rulesFor(p: Pick): AmountRules {
+  if (p.id === "lovelace") return ADA_RULES;
+  const { label, decimals } = p.side;
+  return {
+    decimals,
+    max: TOKEN_MAX,
+    notANumber: decimals ? "Enter an amount, like 25 or 12.5." : "Enter a whole number, like 25.",
+    tooPrecise: decimals
+      ? `${label} has at most ${decimals} decimal places, so the extra digits were dropped.`
+      : `${label} comes in whole units, so the decimals were dropped.`,
+    tooMuch: `That's more ${label} than there can be.`,
+  };
+}
+
+/** A big amount's class: smaller type once it's long, so it fits beside its token. */
+const amountClass = (text: string, extra = "") =>
+  `swap-card__amount${text.length > 10 ? " swap-card__amount--long" : ""}${extra}`;
+
+/** A side's logo: ₳ for ADA, the wallet's listed logo for a token, or two letters. */
+function SwapAvatar({ pick }: { pick: Pick }) {
+  const network = useNetwork();
+  if (pick.id === "lovelace") {
+    return (
+      <span className="avatar avatar--ada" aria-hidden="true">
+        ₳
+      </span>
+    );
+  }
+  const token = tokenOf(pick.id);
+  const logo = tokenInfo(network, token)?.logo;
+  if (logo) return <img className="avatar avatar--logo" src={logo} alt="" />;
+  return (
+    <span className={`avatar avatar--tint-${tint(token.policyId)}`} aria-hidden="true">
+      {initials(nameOf(pick))}
+    </span>
+  );
+}
+
+/** A card's token: its logo, name and a chevron, or Select token. Opens the picker. */
+function TokenButton({ pick, what, testId, onClick }: { pick?: Pick; what: string; testId: string; onClick: () => void }) {
+  if (!pick) {
+    return (
+      <button type="button" className="swap-token swap-token--empty" onClick={onClick} aria-haspopup="dialog" data-testid={testId}>
+        <PlusIcon size={16} />
+        Select token
+        <ChevronDownIcon size={16} />
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="swap-token"
+      onClick={onClick}
+      aria-haspopup="dialog"
+      aria-label={`${nameOf(pick)}: change ${what}`}
+      title={`Change ${what}`}
+      data-testid={testId}
+    >
+      <SwapAvatar pick={pick} />
+      <span className="swap-token__name">{nameOf(pick)}</span>
+      <ChevronDownIcon size={16} />
+    </button>
+  );
+}
+
+/** One row of a quote's details. */
+function Detail({ label, value, tone }: { label: string; value: ReactNode; tone?: "ok" | "warn" | "high" }) {
+  return (
+    <div className="swap-details__row">
+      <dt>{label}</dt>
+      <dd className={tone && tone !== "ok" ? `swap-impact--${tone}` : undefined}>{value}</dd>
+    </div>
+  );
 }
 
 function NewSwap({
@@ -188,51 +337,120 @@ function NewSwap({
   onSent: (pending: PendingTx) => void;
 }) {
   const network = useNetwork();
-  const sources: Source[] = [
-    { id: "lovelace", side: ADA, held: seedelf.lovelace },
-    // NFTs aren't swapped on a DEX.
-    ...seedelf.tokens
-      .filter((t) => !isNft(t, tokenInfo(network, t)))
-      .map((t) => ({
-        id: t.policyId + t.assetName,
-        side: { label: tokenLabel(network, t), decimals: tokenInfo(network, t)?.decimals ?? t.decimals },
-        held: t.quantity,
-      })),
-  ];
-  const [from, setFrom] = useState<Source>(sources[0]!);
-  const [to, setTo] = useState<{ id: string; side: SwapSide }>();
+  const [pay, setPay] = useState<Pick>(ADA_PICK);
+  const [get, setGet] = useState<Pick>();
   const [amount, setAmount] = useState("");
-  const [slippage, setSlippage] = useState<"0.5" | "1" | "3">("1");
-  const [quote, setQuote] = useState<SwapQuote>();
-  const [out, setOut] = useState<SessionOutSummary>();
+  // What the last edit of the amount changed or refused.
+  const [note, setNote] = useState<string>();
+  const [slippage, setSlippage] = useState(1);
+  const [picking, setPicking] = useState<"pay" | "get">();
+  const [settings, setSettings] = useState(false);
+  const [quoted, setQuoted] = useState<{ quote: SwapQuote; at: number }>();
+  const [quoting, setQuoting] = useState(false);
+  const [quoteError, setQuoteError] = useState<string>();
+  // Bumped to ask Minswap again for the same swap.
+  const [again, setAgain] = useState(0);
+  const [details, setDetails] = useState(false);
+  const [inverted, setInverted] = useState(false);
+  const [price, setPrice] = useState<AdaPrice | null>(null);
+  const [out, setOut] = useState<{ summary: SessionOutSummary; quote: SwapQuote }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
-  const raw = parseQuantity(amount, from.side.decimals);
-  const tooMuch = !!raw && BigInt(raw) > BigInt(from.held);
-  const ready = !!to && !!raw && raw !== "0" && !tooMuch;
-  const display = to && { in: from.side, out: to.side };
+  useEffect(() => {
+    call("price", {}).then(setPrice, () => setPrice(null));
+  }, []);
 
-  async function getQuote(e: FormEvent) {
-    e.preventDefault();
-    if (!ready || busy) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      setQuote(await call("swap-quote", { amount: raw!, tokenIn: from.id, tokenOut: to!.id, slippage: Number(slippage) }));
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
+  const held = heldOf(seedelf, pay.id);
+  const raw = parseQuantity(amount, pay.side.decimals);
+  const tooMuch = !!raw && BigInt(raw) > BigInt(held);
+  const getId = get?.id;
+  const ask = useMemo<SwapAsk | undefined>(
+    () => (getId && raw && raw !== "0" ? { amount: raw, tokenIn: pay.id, tokenOut: getId, slippage } : undefined),
+    [pay.id, getId, raw, slippage],
+  );
+
+  // Minswap's quote, asked again whenever the swap changes, once typing pauses.
+  useEffect(() => {
+    setQuoteError(undefined);
+    if (!ask) {
+      setQuoting(false);
+      return;
+    }
+    let live = true;
+    setQuoting(true);
+    const timer = setTimeout(() => {
+      call("swap-quote", ask).then(
+        (quote) => {
+          if (!live) return;
+          setQuoted({ quote, at: Date.now() });
+          setQuoting(false);
+        },
+        (e: Error) => {
+          if (!live) return;
+          setQuoteError(e.message);
+          setQuoting(false);
+        },
+      );
+    }, QUOTE_PAUSE_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [ask, again]);
+
+  const current = quoted && ask && sameAsk(quoted.quote.ask, ask) ? quoted.quote : undefined;
+  // While a new amount is quoted, the last quote for the same pair stays, dimmed.
+  const shown =
+    ask && quoted && quoted.quote.ask.tokenIn === ask.tokenIn && quoted.quote.ask.tokenOut === ask.tokenOut
+      ? quoted.quote
+      : undefined;
+  const short = current && !tooMuch ? adaShort(seedelf.lovelace, current) : undefined;
+  const max = pay.id === "lovelace" ? maxAdaIn(held, quoted?.quote) : held;
+  const ready = !!current && !tooMuch && !short && !quoteError;
+  const level = shown ? impactLevel(shown.priceImpact) : "ok";
+
+  const setTyped = (value: string) => {
+    setAmount(value);
+    setNote(undefined);
+  };
+  const fill = (quantity: string) => setTyped(quantity === "0" ? "" : formatQuantity(quantity, pay.side.decimals));
+
+  /** What's received becomes what's paid, and the other way round. */
+  function flip() {
+    if (!get) return;
+    setPay(get);
+    setGet(pay);
+    setTyped(current ? formatQuantity(current.amountOut, get.side.decimals) : "");
+  }
+
+  function choose(which: "pay" | "get", p: Pick) {
+    setPicking(undefined);
+    // The other side's token: they change places.
+    if ((which === "pay" ? get : pay)?.id === p.id) return flip();
+    if (which === "get") return setGet(p);
+    if (p.id !== pay.id) {
+      setPay(p);
+      setTyped("");
     }
   }
 
-  async function fund() {
-    if (!quote || busy) return;
+  async function review(e: FormEvent) {
+    e.preventDefault();
+    if (!ready || !current || !quoted || !get || busy) return;
     setBusy(true);
     setError(undefined);
     try {
-      setOut(await call("session-out-build", { quote, display }));
+      let quote = current;
+      // Prices move: a quote over a minute old is asked for again before the funding is built on it.
+      if (Date.now() - quoted.at > QUOTE_FRESH_MS) {
+        quote = await call("swap-quote", quote.ask);
+        setQuoted({ quote, at: Date.now() });
+        // The form now says what's short.
+        if (adaShort(seedelf.lovelace, quote)) return;
+      }
+      const summary = await call("session-out-build", { quote, display: { in: pay.side, out: get.side } });
+      setOut({ summary, quote });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -245,18 +463,19 @@ function NewSwap({
     setBusy(true);
     setError(undefined);
     try {
-      onSent(await call("session-out-submit", { txHash: out.txHash }));
+      onSent(await call("session-out-submit", { txHash: out.summary.txHash }));
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
     }
   }
 
-  if (out && quote && display) {
-    const [swapPart, collateral] = out.payments;
+  if (out && get) {
+    const { summary, quote } = out;
+    const [swapPart, collateral] = summary.payments;
     return (
       <Screen
-        title="Review the funding"
+        title="Review the swap"
         titleId="swap-fund-review"
         onBack={() => setOut(undefined)}
         backDisabled={busy}
@@ -268,17 +487,40 @@ function NewSwap({
           </button>
         }
       >
+        <div className="swap-summary" data-testid="swap-summary">
+          <div className="swap-summary__row">
+            <SwapAvatar pick={pay} />
+            <span className="swap-summary__label">You pay</span>
+            <span className="swap-summary__amount">{amountOf(quote.amountIn, pay.side)}</span>
+          </div>
+          <div className="swap-summary__row">
+            <SwapAvatar pick={get} />
+            <span className="swap-summary__label">You receive about</span>
+            <span className="swap-summary__amount">{amountOf(quote.amountOut, get.side)}</span>
+          </div>
+          <p className="swap-summary__foot">
+            At least {amountOf(quote.minAmountOut, get.side)} · {formatPercent(quote.priceImpact)} price impact · through{" "}
+            {quote.route.join(", ")}
+          </p>
+        </div>
+        <h2>First, a one-time account is funded</h2>
         <ReviewRows testId="swap-fund-review">
-          <Row label="To" value={`Private session ${out.index + 1}`} strong />
-          <Row label="Account" value={shortHex(out.address, 16, 8)} title={out.address} />
-          <Row label="For the swap" value={fundText(swapPart!.lovelace, swapPart!.tokens, display.in, network)} strong />
+          <Row label="To" value={`Private session ${summary.index + 1}`} strong />
+          <Row label="Account" value={shortHex(summary.address, 16, 8)} title={summary.address} />
+          <Row label="For the swap" value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} strong />
           <Row label="Its collateral" value={`${formatAda(collateral!.lovelace)} ₳`} />
-          <Row label="Network fee" value={`${formatAda(out.fee.total)} ₳`} />
-          <Row label="Back to your private balance" value={`${formatAda(out.changeLovelace)} ₳`} />
+          <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
+          <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
         </ReviewRows>
         <p className="note">
           What the swap doesn't use, the collateral, and the order's deposit all come back when you bring the session back.
         </p>
+        <ol className="steps" data-testid="swap-steps">
+          <li>Send funds a one-time account from your private balance.</li>
+          <li>Once that's confirmed, place the order from it.</li>
+          <li>When it's filled, bring everything back into your private balance.</li>
+        </ol>
+        <p className="note">Three transactions, each with its network fee: that's the cost of keeping your public account out of it.</p>
         <Callout tone="privacy">
           This payment links the private UTxOs it spends to the one-time account, as Make public does. The account then
           links to Minswap and back again.
@@ -291,101 +533,251 @@ function NewSwap({
     );
   }
 
-  if (quote && display) {
-    return (
-      <Screen
-        title="The quote"
-        titleId="swap-quote"
-        onBack={() => setQuote(undefined)}
-        backDisabled={busy}
-        aside="From Minswap, freshly asked again when the order is placed"
-        error={error}
-        foot={
-          <button type="button" className="primary" onClick={fund} disabled={busy}>
-            {busy ? "Building…" : "Continue"}
-          </button>
-        }
-      >
-        <ReviewRows testId="swap-quote-rows">
-          <Row label="You swap" value={amountOf(quote.amountIn, display.in)} strong />
-          <Row label="You get about" value={amountOf(quote.amountOut, display.out)} strong />
-          <Row label="At least" value={amountOf(quote.minAmountOut, display.out)} />
-          <Row label="Through" value={quote.route.join(", ")} />
-          <Row label="Price impact" value={formatPercent(quote.priceImpact)} />
-          <Row label="DEX fee" value={`${formatAda(quote.dexFee)} ₳`} />
-          {quote.aggregatorFee !== "0" && <Row label="Minswap's fee" value={`${formatAda(quote.aggregatorFee)} ₳`} />}
-          <Row label="Order deposit" value={`${formatAda(quote.deposits)} ₳, back with the proceeds`} />
-        </ReviewRows>
-        <ol className="steps" data-testid="swap-steps">
-          <li>Fund a one-time account from your private balance.</li>
-          <li>Once that's confirmed, place the order from it.</li>
-          <li>When it's filled, bring everything back into your private balance.</li>
-        </ol>
-        <p className="note">Three transactions, each with its network fee: that's the cost of keeping your public account out of it.</p>
-      </Screen>
-    );
-  }
+  const outText = shown && get ? formatQuantity(shown.amountOut, get.side.decimals) : "";
+  const fiat = (id: string, quantity?: string) =>
+    id === "lovelace" && quantity && quantity !== "0" && price ? `≈ ${formatFiat(quantity, price)}` : "";
+  const cta = !get
+    ? "Select a token"
+    : !raw || raw === "0"
+      ? "Enter an amount"
+      : tooMuch
+        ? `Not enough ${nameOf(pay)}`
+        : !current
+          ? "Getting a quote…"
+          : short
+            ? "Not enough ADA"
+            : busy
+              ? "Building…"
+              : "Review swap";
 
   return (
     <Screen
-      onSubmit={getQuote}
-      title="New swap"
+      onSubmit={review}
+      title="Swap"
       titleId="swap-title"
       onBack={onCancel}
+      backDisabled={busy}
       aside="Through Minswap, from a one-time account"
-      error={error}
-      foot={
-        <button type="submit" className="primary" disabled={!ready || busy}>
-          {busy ? "Asking Minswap…" : "Get a quote"}
+      action={
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => setSettings(true)}
+          aria-label={`Slippage: ${formatPercent(slippage)}`}
+          title="Slippage"
+        >
+          <SlidersIcon />
         </button>
       }
+      error={error ?? quoteError}
+      foot={
+        quoteError && !error ? (
+          <button type="button" className="primary" onClick={() => setAgain((n) => n + 1)}>
+            Try again
+          </button>
+        ) : (
+          <button type="submit" className="primary" disabled={!ready || busy}>
+            {cta}
+          </button>
+        )
+      }
     >
-      <div className="field">
-        <label htmlFor="swap-from">From your private balance</label>
-        <select
-          id="swap-from"
-          value={from.id}
-          onChange={(e) => {
-            const source = sources.find((s) => s.id === e.target.value)!;
-            setFrom(source);
-            // A token sells for ADA; ADA buys what's searched for.
-            setTo(source.id === "lovelace" ? undefined : { id: "lovelace", side: ADA });
-          }}
+      <div className="swap-cards">
+        <div className="swap-card">
+          <div className="swap-card__head">
+            <label htmlFor="swap-amount">You pay</label>
+            <span className="swap-card__quick">
+              <button
+                type="button"
+                className="link"
+                onClick={() => fill(halfOf(held, max))}
+                disabled={max === "0"}
+                aria-label={`Half of your ${nameOf(pay)}`}
+              >
+                Half
+              </button>
+              <button
+                type="button"
+                className="link"
+                onClick={() => fill(max)}
+                disabled={max === "0"}
+                aria-label={`As much ${nameOf(pay)} as a swap can take`}
+                title={pay.id === "lovelace" ? "All of it, less the swap's costs and the collateral" : "All of it"}
+              >
+                Max
+              </button>
+            </span>
+          </div>
+          <div className="swap-card__main">
+            <AmountField
+              id="swap-amount"
+              className={amountClass(amount)}
+              placeholder="0.0"
+              value={amount}
+              clean={(previous, text) => sanitizeAmount(previous, text, rulesFor(pay))}
+              onChange={(value, why) => {
+                setAmount(value);
+                setNote(why);
+              }}
+              aria-invalid={tooMuch || undefined}
+              autoFocus
+            />
+            <TokenButton pick={pay} what="the token you pay with" testId="swap-from" onClick={() => setPicking("pay")} />
+          </div>
+          <div className="swap-card__foot">
+            <span>{fiat(pay.id, raw)}</span>
+            <span
+              className={tooMuch ? "swap-card__held swap-card__held--short" : "swap-card__held"}
+              title="In your private balance"
+              data-testid="swap-held"
+            >
+              <WalletIcon size={14} />
+              {formatQuantity(held, pay.side.decimals)}
+            </span>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="swap-flip"
+          onClick={flip}
+          disabled={!get}
+          aria-label="Switch what you pay and what you receive"
+          title="Switch them"
         >
-          {sources.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.side === ADA ? "ADA" : s.side.label}
-            </option>
-          ))}
-        </select>
+          <ArrowDownIcon size={18} />
+        </button>
+        <div className="swap-card">
+          <div className="swap-card__head">
+            <span className="label" id="swap-out-label">
+              You receive
+            </span>
+          </div>
+          <div className="swap-card__main">
+            <output
+              className={amountClass(outText, !outText ? " swap-card__amount--empty" : quoting ? " swap-card__amount--waiting" : "")}
+              aria-labelledby="swap-out-label"
+              aria-busy={quoting}
+              data-testid="swap-out"
+            >
+              {outText || "0.0"}
+            </output>
+            <TokenButton pick={get} what="the token you receive" testId="swap-to" onClick={() => setPicking("get")} />
+          </div>
+          <div className="swap-card__foot">
+            <span>{get && fiat(get.id, shown?.amountOut)}</span>
+            {get && (
+              <span className="swap-card__held" title="In your private balance">
+                <WalletIcon size={14} />
+                {formatQuantity(heldOf(seedelf, get.id), get.side.decimals)}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
-      <div className="field">
-        <label htmlFor="swap-amount">Amount</label>
-        <input
-          id="swap-amount"
-          inputMode="decimal"
-          autoComplete="off"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          placeholder="0"
-        />
-        <p className={tooMuch ? "field-note" : "note"} data-testid="swap-held">
-          {tooMuch ? "That's more than " : ""}
-          {amountOf(from.held, from.side)} in your private balance
+      {note && <p className="field-note">{note}</p>}
+      {tooMuch && (
+        <p className="field-note" data-testid="swap-short">
+          That's more than the {amountOf(held, pay.side)} in your private balance.
         </p>
-      </div>
-      {from.id === "lovelace" ? <TokenSearch value={to} onChange={setTo} /> : <p className="note">For ADA.</p>}
-      <Choice
-        label="Slippage"
-        id="swap-slippage"
-        options={[
-          { value: "0.5", label: "0.5%" },
-          { value: "1", label: "1%" },
-          { value: "3", label: "3%" },
-        ]}
-        value={slippage}
-        onChange={setSlippage}
-      />
+      )}
+      {short && current && (
+        <p className="field-note" data-testid="swap-short">
+          Not enough ADA: the swap takes {formatAda(current.fund.lovelace)} ₳ with its costs, and the one-time account{" "}
+          {formatAda(current.collateral)} ₳ of collateral, which comes back. Your private balance has{" "}
+          {formatAda(seedelf.lovelace)} ₳.
+        </p>
+      )}
+      {shown && get && (
+        <div className={current ? "swap-details" : "swap-details swap-details--stale"} data-testid="swap-details">
+          <div className="swap-rate">
+            <button
+              type="button"
+              className="swap-rate__text"
+              onClick={() => setInverted(!inverted)}
+              title="Turn the rate around"
+              data-testid="swap-rate"
+            >
+              {inverted
+                ? `1 ${nameOf(get)} ≈ ${rateOf(shown.amountOut, get.side.decimals, shown.amountIn, pay.side.decimals)} ${nameOf(pay)}`
+                : `1 ${nameOf(pay)} ≈ ${rateOf(shown.amountIn, pay.side.decimals, shown.amountOut, get.side.decimals)} ${nameOf(get)}`}
+            </button>
+            {level !== "ok" && !details && (
+              <span className={`swap-rate__impact swap-impact--${level}`}>{formatPercent(shown.priceImpact)} impact</span>
+            )}
+            <button
+              type="button"
+              className="icon-button icon-button--small"
+              onClick={() => setAgain((n) => n + 1)}
+              disabled={quoting}
+              aria-label="Ask Minswap again"
+              title="Ask Minswap again"
+            >
+              <span className={quoting ? "spin" : "swap-rate__icon"}>
+                <RefreshIcon size={14} />
+              </span>
+            </button>
+            <button
+              type="button"
+              className="icon-button icon-button--small"
+              onClick={() => setDetails(!details)}
+              aria-expanded={details}
+              aria-controls="swap-quote-rows"
+              aria-label="The quote's details"
+              title={details ? "Hide the details" : "Show the details"}
+            >
+              <span className={details ? "swap-chevron swap-chevron--open" : "swap-chevron"}>
+                <ChevronDownIcon size={16} />
+              </span>
+            </button>
+          </div>
+          {details && (
+            <dl className="swap-details__rows" id="swap-quote-rows" data-testid="swap-quote-rows">
+              <Detail label="Minimum received" value={amountOf(shown.minAmountOut, get.side)} />
+              <Detail label="Price impact" value={formatPercent(shown.priceImpact)} tone={level} />
+              <Detail
+                label="Slippage"
+                value={
+                  <button type="button" className="link" onClick={() => setSettings(true)}>
+                    {formatPercent(slippage)}
+                  </button>
+                }
+              />
+              <Detail label="Route" value={shown.route.join(", ")} />
+              <Detail label="DEX fee" value={`${formatAda(shown.dexFee)} ₳`} />
+              {shown.aggregatorFee !== "0" && <Detail label="Minswap's fee" value={`${formatAda(shown.aggregatorFee)} ₳`} />}
+              <Detail label="Order deposit" value={`${formatAda(shown.deposits)} ₳, back with the proceeds`} />
+            </dl>
+          )}
+        </div>
+      )}
+      {!shown && quoting && (
+        <p className="note swap-asking">
+          <span className="spin">
+            <SpinnerIcon size={14} />
+          </span>
+          Asking Minswap for a quote…
+        </p>
+      )}
+      {level === "high" && shown && (
+        <Callout tone="warn" testId="swap-impact-warning">
+          This swap moves the price by {formatPercent(shown.priceImpact)}, so each {nameOf(pay)} gets noticeably less than
+          the pool's price. A smaller amount moves it less.
+        </Callout>
+      )}
+      <Callout tone="privacy">
+        Quotes come from Minswap as you type: it sees the pair, the amount and your IP address, never your private balance
+        or your public account.
+      </Callout>
+      {picking && (
+        <TokenSelect
+          which={picking}
+          seedelf={seedelf}
+          chosen={picking === "pay" ? pay.id : get?.id}
+          onPick={(p) => choose(picking, p)}
+          onClose={() => setPicking(undefined)}
+        />
+      )}
+      {settings && <SlippageSettings value={slippage} onChange={setSlippage} onClose={() => setSettings(false)} />}
     </Screen>
   );
 }
@@ -397,82 +789,191 @@ function fundText(lovelace: string, tokens: TokenQuantity[], side: SwapSide, net
   return `${ada} and ${tokens.map((t) => `${formatQuantity(t.quantity, side.decimals)} ${tokenLabel(network, t)}`).join(", ")}`;
 }
 
-/** Picks the token to buy from Minswap's list; Minswap sees what's searched for. */
-function TokenSearch({
-  value,
-  onChange,
+/**
+ * Picks one side's token: ADA or one in the private balance, and for what's
+ * received, any on Minswap's list too. Minswap sees what's searched for.
+ */
+function TokenSelect({
+  which,
+  seedelf,
+  chosen,
+  onPick,
+  onClose,
 }: {
-  value?: { id: string; side: SwapSide };
-  onChange: (to: { id: string; side: SwapSide } | undefined) => void;
+  which: "pay" | "get";
+  seedelf: Balances["seedelf"];
+  chosen?: string;
+  onPick: (pick: Pick) => void;
+  onClose: () => void;
 }) {
+  const network = useNetwork();
+  const own = useMemo(() => ownPicks(network, seedelf), [network, seedelf]);
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<SwapTokenInfo[]>();
   const [error, setError] = useState<string>();
+  const q = query.trim();
+  const search = which === "get" && q.length >= 2;
 
   useEffect(() => {
-    const q = query.trim();
-    if (q.length < 2) {
-      setFound(undefined);
-      return;
-    }
+    setFound(undefined);
+    setError(undefined);
+    if (!search) return;
+    let live = true;
     // Asked once typing pauses, not on every key.
     const timer = setTimeout(() => {
       call("swap-tokens", { query: q }).then(
-        (list) => {
-          setFound(list.filter((t) => t.id !== "lovelace"));
-          setError(undefined);
-        },
-        (e: Error) => setError(e.message),
+        (list) => live && setFound(list.filter((t) => t.id !== "lovelace")),
+        (e: Error) => live && setError(e.message),
       );
     }, 400);
-    return () => clearTimeout(timer);
-  }, [query]);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [search, q]);
 
-  if (value) {
-    return (
-      <div className="field">
-        <span className="label">To</span>
-        <div className="token-chosen" data-testid="swap-to">
-          <span>{value.side.label}</span>
-          <button type="button" className="link" onClick={() => onChange(undefined)}>
-            Change
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const lower = q.toLowerCase();
+  const mine = lower ? own.filter((p) => [nameOf(p), p.sub, p.id].some((s) => s.toLowerCase().includes(lower))) : own;
+  const theirs = found?.filter((t) => !own.some((p) => p.id === t.id));
+
+  const row = (p: Pick, sub: string, held?: string) => (
+    <li key={p.id}>
+      <button
+        type="button"
+        className={p.id === chosen ? "token-row token-row--on" : "token-row"}
+        aria-label={nameOf(p)}
+        aria-current={p.id === chosen || undefined}
+        onClick={() => onPick(p)}
+      >
+        <SwapAvatar pick={p} />
+        <span className="token-row__label">{nameOf(p)}</span>
+        <span className="token-row__amount">{held === undefined ? "" : formatQuantity(held, p.side.decimals)}</span>
+        <span className="token-row__sub">{sub}</span>
+      </button>
+    </li>
+  );
+
   return (
-    <div className="field">
-      <label htmlFor="swap-to">To</label>
-      <input
-        id="swap-to"
-        autoComplete="off"
-        placeholder="A ticker, a name, or the token's ID"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      <p className="field-note">Searching asks Minswap, which then knows what you looked for.</p>
-      {error && <p className="error">{error}</p>}
-      {found && found.length === 0 && <p className="note">Minswap lists nothing by that name.</p>}
-      {!!found?.length && (
-        <ul className="list section" data-testid="swap-tokens">
-          {found.slice(0, 8).map((t) => (
-            <li key={t.id}>
-              <button
-                type="button"
-                className="menu-row"
-                onClick={() => onChange({ id: t.id, side: { label: t.ticker ?? t.name ?? shortHex(t.id), decimals: t.decimals } })}
-              >
-                <span className="stack-tight">
-                  <span>{t.ticker ?? t.name ?? shortHex(t.id)}</span>
-                  <span className="note">{t.name ?? shortHex(t.id, 12, 6)}</span>
-                </span>
-              </button>
-            </li>
-          ))}
+    <Modal title={which === "pay" ? "You pay with" : "You receive"} titleId="swap-pick-title" onClose={onClose}>
+      <label className="search">
+        <SearchIcon size={16} />
+        <input
+          type="search"
+          aria-label="Search tokens"
+          placeholder={which === "get" ? "A ticker, a name, or the token's ID" : "Name, ticker or ID"}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          spellCheck={false}
+          autoFocus
+        />
+      </label>
+      {which === "get" && <p className="field-note">Searching asks Minswap, which then knows what you looked for.</p>}
+      <h3 className="swap-pick__heading">In your private balance</h3>
+      {mine.length ? (
+        <ul className="list" data-testid="swap-own-tokens">
+          {mine.map((p) => row(p, p.sub, p.held))}
         </ul>
+      ) : (
+        <p className="note">Nothing you hold matches “{q}”.</p>
       )}
-    </div>
+      {which === "get" && (
+        <>
+          <h3 className="swap-pick__heading">On Minswap</h3>
+          {!search && <p className="note">Search to find any token Minswap lists.</p>}
+          {search && error && <p className="error">{error}</p>}
+          {search && !found && !error && <p className="note">Searching…</p>}
+          {theirs?.length === 0 && <p className="note">Minswap lists nothing else by that name.</p>}
+          {!!theirs?.length && (
+            <ul className="list" data-testid="swap-tokens">
+              {theirs.slice(0, 12).map((t) => {
+                const label = t.ticker ?? t.name ?? shortHex(t.id);
+                return row({ id: t.id, side: { label, decimals: t.decimals } }, t.name ?? shortHex(t.id, 12, 6));
+              })}
+            </ul>
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/** The slippage: a few usual ones, or the user's own. */
+function SlippageSettings({
+  value,
+  onChange,
+  onClose,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  onClose: () => void;
+}) {
+  const presets = [0.5, 1, 3];
+  const [own, setOwn] = useState(presets.includes(value) ? "" : String(value));
+  const typed = own.trim() ? parseSlippage(own) : undefined;
+  return (
+    <Modal
+      title="Slippage"
+      titleId="swap-slippage-title"
+      onClose={onClose}
+      foot={
+        <button type="button" className="primary" onClick={onClose}>
+          Done
+        </button>
+      }
+    >
+      <p className="note">
+        How far the price may move against you before the order is filled. Past it, the order isn't filled: it waits, and
+        you can cancel it.
+      </p>
+      <div className="segmented" role="group" aria-label="Usual slippages">
+        {presets.map((p) => {
+          const on = value === p && !own.trim();
+          return (
+            <button
+              key={p}
+              type="button"
+              className={on ? "segmented__item segmented__item--on" : "segmented__item"}
+              aria-pressed={on}
+              onClick={() => {
+                setOwn("");
+                onChange(p);
+              }}
+            >
+              {formatPercent(p)}
+            </button>
+          );
+        })}
+      </div>
+      <div className="field">
+        <label htmlFor="swap-slippage-own">Your own</label>
+        <div className="amount-box">
+          <input
+            id="swap-slippage-own"
+            inputMode="decimal"
+            autoComplete="off"
+            placeholder="2"
+            value={own}
+            aria-invalid={(!!own.trim() && typed === undefined) || undefined}
+            onChange={(e) => {
+              setOwn(e.target.value);
+              const n = parseSlippage(e.target.value);
+              if (n !== undefined) onChange(n);
+            }}
+          />
+          <span className="amount-box__unit">%</span>
+        </div>
+        {!!own.trim() && typed === undefined && (
+          <p className="field-note">
+            Between {formatPercent(SLIPPAGE_MIN)} and {formatPercent(SLIPPAGE_MAX)}, with at most two decimal places.
+          </p>
+        )}
+      </div>
+      {value >= 5 && (
+        <Callout tone="warn" testId="swap-slippage-warning">
+          At {formatPercent(value)}, the order can be filled for that much less than the quote.
+        </Callout>
+      )}
+    </Modal>
   );
 }
 
@@ -663,9 +1164,14 @@ function Session({
   );
 }
 
+/** A Minswap token ID as a policy ID and an asset name. */
+function tokenOf(id: string): { policyId: string; assetName: string } {
+  return { policyId: id.slice(0, 56), assetName: id.slice(56) };
+}
+
 /** A Minswap token ID as the wallet keys tokens. */
 function tokenKeyOf(id: string): string {
-  return tokenKey({ policyId: id.slice(0, 56), assetName: id.slice(56) });
+  return tokenKey(tokenOf(id));
 }
 
 function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {

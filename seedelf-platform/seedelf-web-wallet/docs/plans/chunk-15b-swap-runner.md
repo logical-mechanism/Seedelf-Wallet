@@ -25,7 +25,7 @@
 - **`src/background/minswap.ts`:** the aggregator client.
 - **`src/ui/screens/Swaps.tsx`:**
   - `Swaps`: the list.
-  - `NewSwap`: the form, the quote, and the funding review.
+  - `NewSwap`: the form in Minswap's shape (You pay, You receive, a live quote), and the swap and funding review. Its arithmetic is in `src/ui/swap.ts`.
   - `Session`: the rows, and a `SessionFoot` of buttons.
   - After the funding is sent, the user lands on Home (`onSent`), not on the session.
 - **WebAssembly:** `OneTimeAccounts`, `buildSessionReturn`, `inspectSessionTx`, `signSessionTx`, `attachWitnesses`.

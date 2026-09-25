@@ -257,6 +257,40 @@ export const SearchIcon = icon(
 /** chevron-right */
 export const ChevronRightIcon = icon(<path d="m9 18 6-6-6-6" />);
 
+/** chevron-down */
+export const ChevronDownIcon = icon(<path d="m6 9 6 6 6-6" />);
+
+/** arrow-down */
+export const ArrowDownIcon = icon(
+  <>
+    <path d="M12 5v14" />
+    <path d="m19 12-7 7-7-7" />
+  </>,
+);
+
+/** wallet */
+export const WalletIcon = icon(
+  <>
+    <path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1" />
+    <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
+  </>,
+);
+
+/** sliders-horizontal */
+export const SlidersIcon = icon(
+  <>
+    <path d="M10 5H3" />
+    <path d="M12 19H3" />
+    <path d="M14 3v4" />
+    <path d="M16 17v4" />
+    <path d="M21 12h-9" />
+    <path d="M21 19h-5" />
+    <path d="M21 5h-7" />
+    <path d="M8 10v4" />
+    <path d="M8 12H3" />
+  </>,
+);
+
 /** lock-open */
 export const LockOpenIcon = icon(
   <>

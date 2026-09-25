@@ -14,6 +14,8 @@ interface ScreenProps {
   onBack?: () => void;
   backDisabled?: boolean;
   aside?: ReactNode;
+  /** A small button at the header's right, across from Back: a swap's settings. */
+  action?: ReactNode;
   error?: string;
   /** The primary action, or actions. */
   foot?: ReactNode;
@@ -22,7 +24,7 @@ interface ScreenProps {
   children: ReactNode;
 }
 
-export function Screen({ title, titleId, onBack, backDisabled, aside, error, foot, onSubmit, children }: ScreenProps) {
+export function Screen({ title, titleId, onBack, backDisabled, aside, action, error, foot, onSubmit, children }: ScreenProps) {
   const inner = (
     <>
       <header className="screen__head">
@@ -43,7 +45,7 @@ export function Screen({ title, titleId, onBack, backDisabled, aside, error, foo
         <h1 id={titleId} className="screen__title">
           {title}
         </h1>
-        <span />
+        {action ?? <span />}
       </header>
       {aside && <p className="screen__aside">{aside}</p>}
       <div className="screen__body">{children}</div>
