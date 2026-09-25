@@ -3,10 +3,11 @@
 // into Seedelf under a fresh copy of its register, like a move-in. Up to 20
 // recipients at once, each with an amount and optional tokens (with tokens,
 // the amount may stay empty: only the ADA they need goes); or the most
-// possible (Max) to a single recipient. It's paid in the open; the privacy
-// note says what that shows, and how to pay without that link. The worker
-// builds and signs; nothing is sent until the user has reviewed it and
-// pressed Send.
+// possible (Max) to a single recipient, and an optional note (CIP-20's
+// message, one line of 64 characters, which anyone can read). It's paid in
+// the open; the privacy note says what that shows, and how to pay without
+// that link. The worker builds and signs; nothing is sent until the user has
+// reviewed it and pressed Send.
 
 import { useState, type FormEvent } from "react";
 
@@ -15,6 +16,7 @@ import { call } from "../background";
 import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { DestinationInput, type DestinationRead, type KnownRead } from "../components/Destination";
+import { HandleWarning } from "../components/HandleWarning";
 import {
   AddRecipient,
   fieldId,
@@ -33,6 +35,9 @@ import { adaWithTokens, formatAda, formatQuantity, lockedAside, rewardsAside, sh
 import { useNetwork } from "../network";
 import { tokenLabel } from "../tokens";
 
+/** The longest note: one of CIP-20's lines, as Lace allows (core's `MAX_NOTE_CHARS`). */
+const NOTE_MAX = 64;
+
 export function CardanoSend({
   cardano,
   rewards,
@@ -50,6 +55,7 @@ export function CardanoSend({
   const list = useRecipients();
   const [reads, setReads] = useState<Record<number, KnownRead>>({});
   const [max, setMax] = useState(false);
+  const [note, setNote] = useState("");
   const [summary, setSummary] = useState<SendSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -76,7 +82,7 @@ export function CardanoSend({
         const read = readOf(draft);
         return { to: read.state === "seedelf" ? read.seedelf.name : draft.to.trim(), lovelace: lovelace ?? null, tokens: tokens.sent };
       });
-      setSummary(await call("send-build", { payments }));
+      setSummary(await call("send-build", { payments, note: note.trim() || undefined }));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -128,6 +134,7 @@ export function CardanoSend({
         }
       >
         <ReviewRecipients testId="send-review" payments={summary.payments} rows={recipientRows}>
+          {summary.note && <Row label="Note" value={summary.note} />}
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
           <WithdrawalRow withdrawal={summary.withdrawal} />
           <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
@@ -227,6 +234,7 @@ export function CardanoSend({
               typed={d.tokens}
               onChange={(tokens) => list.update(d.id, { tokens })}
             />
+            {read.state === "seedelf" && <HandleWarning tokens={amounts.each[i]?.tokens.sent ?? []} />}
           </RecipientCard>
         );
       })}
@@ -245,6 +253,23 @@ export function CardanoSend({
           where="available in your public account"
         />
       )}
+
+      <div className="field">
+        <label htmlFor="send-note">Note (optional)</label>
+        <input
+          id="send-note"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          maxLength={NOTE_MAX}
+          autoComplete="off"
+          placeholder="What it's for"
+          aria-describedby="send-note-hint"
+        />
+        <p className="note" id="send-note-hint" data-testid="send-note-hint">
+          {[...note].length}/{NOTE_MAX}. Anyone can read it, for good
+          {toSeedelf ? ", and it could say whose Seedelf this pays" : ""}.
+        </p>
+      </div>
 
       <Callout tone="privacy">
         {toSeedelf

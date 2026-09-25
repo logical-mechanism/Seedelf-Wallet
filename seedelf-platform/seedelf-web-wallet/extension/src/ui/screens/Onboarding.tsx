@@ -15,7 +15,7 @@ export function Onboarding({ start, onDone }: { start?: "create" | "restore"; on
   const [step, setStep] = useState<Step>(view === "tab" && start ? start : "welcome");
 
   function go(next: "create" | "restore") {
-    if (view === "popup") openInTab(next);
+    if (view === "panel") openInTab(next);
     else setStep(next);
   }
 

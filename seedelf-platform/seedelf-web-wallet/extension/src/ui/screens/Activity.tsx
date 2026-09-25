@@ -1,19 +1,25 @@
 // Activity: one balance's history, newest first, grouped by day, after Lace's
 // Activity tab. The Seedelf history comes from the device (no requests); the
-// Cardano account's, a page of 20 at a time from Koios. An entry opens its
+// Cardano account's, a page of 20 at a time from Koios, with what each
+// transaction did with the stake key and its note. An entry opens its
 // details, with the transaction on Cardanoscan. Refresh reads again: the
 // balances, for the Seedelf side's arrivals; what's newer, for the account's.
+// Export saves what's listed as CSV, on the device: the file isn't
+// encrypted, and the screen says so.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ActivityEntry } from "../../shared/rpc";
+import { activityCsv, activityTitle as title, poolOf, stakingLine, tokenMoved, voteOf } from "../activity";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
 import {
   ArrowUpRightIcon,
+  DownloadIcon,
   ExternalIcon,
   MoveInIcon,
+  PieIcon,
   ReceiveIcon,
   SproutIcon,
   TrashIcon,
@@ -25,40 +31,9 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { explorerUrl, formatAda, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
+import { useAmounts } from "../preferences";
 
 type Of = "seedelf" | "cardano";
-
-/** What an entry is called. */
-function title(e: ActivityEntry): string {
-  switch (e.kind) {
-    case "received":
-      return "Received";
-    case "sent":
-      return "Sent";
-    case "move-in":
-      return "Made private";
-    case "mint":
-      return "Created a Seedelf";
-    case "transfer":
-      return "Sent to a Seedelf";
-    case "withdraw":
-      return "Made public";
-    case "remove":
-      return "Removed a Seedelf";
-    case "send":
-      return "Sent";
-    case "collateral":
-      return "Set collateral";
-    case "stake":
-      return "Staked";
-    case "vote":
-      return "Delegated voting power";
-    case "withdraw-rewards":
-      return "Withdrew rewards";
-    case "unstake":
-      return "Stopped staking";
-  }
-}
 
 function icon(e: ActivityEntry): ReactNode {
   switch (e.kind) {
@@ -70,15 +45,30 @@ function icon(e: ActivityEntry): ReactNode {
       return <WithdrawIcon size={16} />;
     case "remove":
       return <TrashIcon size={16} />;
+    case "stake":
+    case "vote":
+    case "withdraw-rewards":
+    case "unstake":
+      return <PieIcon size={16} />;
     default:
       return e.direction === "in" ? <ReceiveIcon size={16} /> : <ArrowUpRightIcon size={16} />;
   }
 }
 
-/** "+25 ₳", "−5 ₳ and 1 token", or "1.74986 ₳" for a seedelf's locked ADA. */
-function amount(e: ActivityEntry): string {
+/** "+25 ₳", "−5 ₳ and 1 token", or "1.74986 ₳" for a seedelf's locked ADA; masked while balances are hidden. */
+function amount(e: ActivityEntry, ada: (lovelace: string) => string): string {
   const sign = e.direction === "in" ? "+" : e.direction === "out" ? "−" : "";
-  return `${sign}${formatAda(e.lovelace)} ₳${e.tokens ? ` and ${plural(e.tokens, "token")}` : ""}`;
+  return `${sign}${ada(e.lovelace)} ₳${e.tokens ? ` and ${plural(e.tokens, "token")}` : ""}`;
+}
+
+/** Saves `text` as a file on the device, as the browser saves any download. */
+function download(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 /** Today, Yesterday, or the date; "Earlier" when the time isn't known. */
@@ -106,6 +96,7 @@ export function Activity({
   onRead: () => void;
 }) {
   const network = useNetwork();
+  const amounts = useAmounts();
   const [entries, setEntries] = useState<ActivityEntry[]>();
   const [more, setMore] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
@@ -177,10 +168,12 @@ export function Activity({
                     <button type="button" className="token-row" onClick={() => setOpen(e)}>
                       <span className={`avatar activity__icon activity__icon--${e.direction}`}>{icon(e)}</span>
                       <span className="token-row__label">{title(e)}</span>
-                      <span className={`token-row__amount activity__amount--${e.direction}`}>{amount(e)}</span>
+                      <span className={`token-row__amount activity__amount--${e.direction}`}>
+                        {amount(e, amounts.ada)}
+                      </span>
                       <span className="token-row__sub">
                         {e.txHash === pendingHash ? "Pending · " : ""}
-                        {[time(e.at), e.detail].filter(Boolean).join(" · ")}
+                        {[time(e.at), e.detail ?? stakingLine(network, e.staking)].filter(Boolean).join(" · ")}
                       </span>
                     </button>
                   </li>
@@ -195,14 +188,62 @@ export function Activity({
           {busy === "more" ? "Reading…" : "Load more"}
         </button>
       )}
+      {entries && entries.length > 0 && (
+        <section className="section" aria-labelledby="export-title">
+          <h2 id="export-title">Export</h2>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const day = new Date().toISOString().slice(0, 10);
+              download(`seedelf-wallet-${of === "seedelf" ? "private" : "public"}-activity-${network}-${day}.csv`, activityCsv(network, entries));
+            }}
+          >
+            <DownloadIcon size={16} />
+            Save as CSV
+          </button>
+          <p className="note" data-testid="export-note">
+            {of === "cardano" && more
+              ? `It has the ${plural(entries.length, "transaction")} read so far: Load more first to include older ones. `
+              : ""}
+            {of === "seedelf"
+              ? "The file isn't encrypted: anyone who has it can read these private payments."
+              : "The file isn't encrypted, though everything in it is on the chain anyway."}
+          </p>
+        </section>
+      )}
       {open && (
         <Modal title={title(open)} titleId="activity-details-title" onClose={() => setOpen(undefined)}>
           <ReviewRows testId="activity-details">
-            <Row label="Amount" value={amount(open)} strong />
+            <Row label="Amount" value={amount(open, amounts.ada)} strong />
+            {open.assets?.map((t) => (
+              <Row key={`${t.policyId}.${t.assetName}`} label="" value={amounts.hidden ? "••••" : tokenMoved(network, t)} />
+            ))}
             {open.fee && <Row label="Network fee" value={`${formatAda(open.fee)} ₳`} />}
             {open.detail && <Row label={open.kind === "withdraw" || open.kind === "transfer" ? "To" : "Seedelf"} value={open.detail} />}
+            {open.staking && poolOf(open.staking) && (
+              <Row label="Pool" value={poolOf(open.staking)!} title={open.staking.pool} />
+            )}
+            {open.staking && voteOf(network, open.staking) && (
+              <Row label="Voting power" value={voteOf(network, open.staking)!} title={open.staking.drep} />
+            )}
+            {open.staking?.deposit && <Row label="Deposit" value={`${formatAda(open.staking.deposit)} ₳`} />}
+            {open.staking?.refund && <Row label="Deposit back" value={`${formatAda(open.staking.refund)} ₳`} />}
+            {open.staking?.rewards && (
+              <Row
+                label={open.kind === "withdraw-rewards" || open.kind === "unstake" ? "Rewards withdrawn" : "Staking rewards spent"}
+                value={`${amounts.ada(open.staking.rewards)} ₳`}
+              />
+            )}
             <Row label="When" value={open.at ? new Date(open.at).toLocaleString("en-GB") : "Before this wallet"} />
           </ReviewRows>
+          {open.note && (
+            <div className="stack-tight" data-testid="activity-note">
+              <span className="label">Note</span>
+              <p className="note activity__note">{open.note}</p>
+              <p className="note">Anyone can read a note on a transaction, and anyone can write one.</p>
+            </div>
+          )}
           <div className="field-row">
             <code className="note">{shortHex(open.txHash, 14, 8)}</code>
             <CopyButton value={open.txHash} label="Copy the transaction id" />

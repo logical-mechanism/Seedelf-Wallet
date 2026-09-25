@@ -21,9 +21,13 @@ flowchart LR
 
 The **private balance** (the Seedelf balance) means every UTxO at the wallet contract whose register this wallet owns. A **Seedelf** is a named token (`5eed0e1f…`) sitting in one of those UTxOs. Its register is what other people use to pay you.
 
+## Opening the wallet
+
+The toolbar button opens the wallet in a **full tab**, or brings back the one already open (chunk 14). Settings' **Open Seedelf Wallet in** switches it to **the side panel**, as Lace does: Chrome's panel beside the page, which stays open as the user browses. Switching opens the wallet the new way at once and closes the page it was chosen on. The choice is the browser's, not the wallet's: removing the wallet keeps it. There's no popup.
+
 ## Onboarding
 
-Onboarding runs in a full tab. From the popup, **Create** and **Restore** open one, because a popup closes as soon as the user clicks elsewhere.
+Onboarding runs in a full tab. From the side panel, **Create** and **Restore** open one.
 
 - **Create:**
   1. The worker generates a 24-word phrase.
@@ -45,12 +49,15 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
   - "Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website."
   - "This phrase restores your Seedelfs only in Seedelf Wallet. Other Cardano wallets will show your public account and nothing else."
 - **Home** has two tabs, and under them when the chain was last read, and **Refresh**.
+  - **The eye** beside each balance's label hides the amounts (chunk 14, after Eternl's), and shows them again. It's a setting, so the wallet opens hidden until it's pressed again. Hidden, the balances, the tokens' amounts, the staking rewards and what's locked show as "••••" on Home, Tokens, UTxOs, Activity, Receive and Staking. The forms and reviews still show their amounts: what's being sent is always shown. It asks no one anything.
+  - **ADA's value** in the chosen currency, "≈ $1,234.56", sits under each balance on mainnet (chunk 14, as in Lace; test ADA has no value, so preprod shows none). It's read from CoinGecko when Home opens or is refreshed, at most every five minutes, and not at all with the currency set to "off" in Settings.
   - **Private:**
     - the **private balance**: ADA in the contract UTxOs this wallet owns, with round **Receive** (your Seedelfs), **Send** (to Seedelfs), **Make public** and **Create** (a Seedelf) actions;
     - its tokens: the first five (fungible first, by name, then NFTs) and **View all**. Tapping a token opens its details.
 
     The base register's public value isn't shown: a Seedelf's name is what people pay, and nothing else takes the public value.
   - **Public:** the public account's ADA, how many addresses it has used, **Receive**, **Send** and **Make private**, and its tokens (as on the Private tab). Until a Seedelf exists, a note says to create one before making money private.
+  - **An ADA Handle in the private balance** gets a warning on the Private tab (chunk 14): a wallet paying `$name` pays the address holding it, which is then the Seedelf contract, with no register to say whose the payment is. The contract lets a UTxO without a register go to anyone, so anyone can take it. It says to make the handle public. Make private and both Sends warn before a handle goes into a Seedelf.
   - **While the first reading loads** (after an unlock, a restore or a create), a splash covers Home instead of empty balances: the emblem on navy with a teal arc circling it. It fades out into the wallet when the balances arrive. A cached reading shows Home at once, and the splash gives up after about 8 s, so a slow Koios can't hide Refresh or an error.
   - **Tokens** (from **View all**): one balance's tokens in two tabs, **Tokens** and **NFTs**, with a search (name, ticker, policy ID, fingerprint) and a sort (name or amount), 50 rows at a time.
     - **A token's details** open in a modal, centred and never taller than the window: the amount, the policy ID, the asset name and the fingerprint, each with Copy.
@@ -66,18 +73,24 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 ## Lock and unlock
 
 - **Unlock:** opening the vault with the password derives every key.
-- **Lock:** the lock button in the top bar, or automatically after 15 minutes without activity (key presses and clicks in the wallet). Locking wipes all secrets from memory and session storage, and every open wallet page switches to the unlock screen.
-- **Closing the browser locks the wallet;** closing the popup doesn't.
+- **Lock:** the lock button in the top bar, or automatically after 15 minutes without activity (key presses and clicks in the wallet), or the time chosen in Settings: 1, 5, 15, 30 or 60 minutes (chunk 14, Lace's choices less "never"). Locking wipes all secrets from memory and session storage, and every open wallet page switches to the unlock screen.
+- **Closing the browser locks the wallet;** closing its tab or the side panel doesn't.
 - **Failed unlocks:** exponential back-off (1 s, 2 s, 4 s … capped at 60 s), enforced by the worker. The unlock screen shows the countdown.
 - **Forgot password:** "Restore from your phrase" deletes the wallet from this browser after a typed confirmation (`delete wallet`), then goes straight to restore.
 
-**Settings** (the gear in the top bar, while unlocked): **Contacts**, **Collateral**, **Show recovery phrase** (the password again first), **Change password**, **Remove wallet** (typed confirmation), and About (the version, the network, the source code and the privacy policy). Settings asks Koios nothing, except to set a collateral by payment.
+**Settings** (the gear in the top bar, while unlocked): **Contacts**, **Collateral**; *Preferences*: **Open Seedelf Wallet in** (a full tab or the side panel; see [Opening the wallet](#opening-the-wallet)) and **Show ADA's value in** (eight currencies, or nothing, which asks for no prices; mainnet only); *Staking*: whether payments spend the rewards; *Security*: **Lock after**, **Show recovery phrase** (the password again first), **Check recovery phrase**, **Change password**, **Remove wallet** (typed confirmation); and About (the version, the network, the source code, the privacy policy, and whom the wallet talks to). Settings asks Koios nothing, except to set a collateral by payment.
+
+**Check recovery phrase** (chunk 14, after Lace's recovery phrase verification) is for a written copy: type it (12, 15 or 24 boxes with autocomplete, or paste it), and the wallet says only whether it's this wallet's phrase, never which words differ, so it tells someone at an unlocked browser nothing a whole phrase they already have wouldn't. No password is needed, and nothing is kept: a match empties the boxes. A phrase that isn't one (a word off the list, a bad checksum) gets the Rust core's reason, as restore does.
 
 **Activity** (the row at the bottom of each Home tab), newest first and grouped by day, after Lace's Activity tab. Each entry opens its details, with the transaction on Cardanoscan.
 
 - **Seedelf:** what this wallet sent, written down at Send from the summary the user reviewed, and what arrived, noted from the balance reading (one entry per transaction; the wallet's own change and a UTxO holding a Seedelf don't count). It asks Koios nothing, and never about one transaction. It's encrypted on the device, and starts from when this wallet first saw each payment.
 - **Cardano account:** from Koios, which knows the account already: 20 transactions a page (`account_txs` and one `tx_info`), only while Activity is open, and **Load more** for the next 20. Opening it again, or **Refresh**, asks only for what's newer.
+  - **Staking** is in it since chunk 14, from the same `tx_info`: **Staked** (with the pool, by its ticker when the device has it, and the deposit the first time), **Delegated voting power** (with the vote, a DRep by its name from the wallet's list), **Withdrew rewards**, and **Stopped staking** (with the deposit back). A payment that spent the rewards stays **Sent**, and its details say how much of the rewards it spent.
+  - **A note** on a transaction (CIP-20's message, anyone's) shows in its details, with a line saying anyone can read one, and write one.
+  - An entry's details list each token that moved, with its sign.
 - **Refresh** on the Seedelf side reads the balances again, as Home's does, since that's how arrivals are noted. Each entry is what the transaction did to the account's own addresses; a move-in or a mint this wallet made is named as such.
+- **Save as CSV** (chunk 14, after Eternl's export) saves what's listed to a file on the device, asking no one: the date (UTC), the kind, the direction, the ADA (signed), the fee, each token with its sign, who or where, the note, the pool, the vote, a deposit or its return, the rewards withdrawn, and the transaction. On the public side it has the transactions read so far, and says to **Load more** first for older ones. The file isn't encrypted, and the private side says so: anyone who has it can read those payments. Someone else's words (a note, a tag, a token's name) never run as a spreadsheet formula: a cell starting `=`, `+`, `-` or `@` gets a leading `'`.
 
 **Contacts** name the Seedelfs and addresses (or `$handles`) the user pays, after Lace's address book. They're managed in Settings, picked with **Contacts** above Send's Seedelf name or Withdraw's destination, and saved from either form with **Save to contacts** once it's found. They're encrypted on the device (see [privacy.md](privacy.md#known-links)).
 
@@ -103,6 +116,7 @@ See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 
 - a QR code of the receive address `0/0`, so someone paying from a phone wallet can scan it. It's drawn dark on white with the standard quiet zone;
 - the address, with a copy button;
+- **your ADA Handles** (chunk 14): each handle the account holds, from its tokens (asking no one), with Copy. A wallet paying one pays the address holding it: this account. The screen says a handle is as public as the address;
 - the stake address.
 
 Anything that can pay a Cardano address can fund the wallet. The screen also says that this is an ordinary address, which anyone can watch: to be paid privately, give out a Seedelf's name instead. For a restored wallet, the funds already in the account show up here too.
@@ -111,7 +125,7 @@ Anything that can pay a Cardano address can fund the wallet. The screen also say
 
 **Receive** on the Private tab (chunk 12) is where your Seedelfs live: each by its tag, with the ADA locked with it, **Copy** for its whole name (to give to anyone who wants to pay you, or to paste into Send) and **Remove**. It asks Koios nothing: the list comes from the last balance reading.
 
-- The whole name sits on one line under the tag. When it doesn't fit, as in the popup, it's cut in the middle (`5eed0e1f7765…ababab`), keeping the last six characters; the cut moves with the width (`MiddleEllipsis`, CSS only). Copy and the tooltip always give all of it.
+- The whole name sits on one line under the tag. When it doesn't fit, as in the side panel, it's cut in the middle (`5eed0e1f7765…ababab`), keeping the last six characters; the cut moves with the width (`MiddleEllipsis`, CSS only). Copy and the tooltip always give all of it.
 
 - It says to give out the whole name, since tags aren't unique, and that nobody can tell a payment to it is yours.
 - Its privacy note: the name is public, and linked to whatever paid to create it; what's paid to it isn't.
@@ -125,7 +139,7 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
 - **What it does:** the Cardano account pays into the wallet contract. Each contract output gets a freshly re-randomized copy of the user's own base register.
 - **What the user chooses:**
   - An **ADA amount, or Max**.
-  - **Tokens to bring along:** **Add tokens** opens a searchable picker; each picked token gets an amount box, with Max for all of it. The rest of a token stays in the account. Send and Withdraw pick tokens the same way.
+  - **Tokens to bring along:** **Add tokens** opens a searchable picker; each picked token gets an amount box, with Max for all of it. The rest of a token stays in the account. Send and Withdraw pick tokens the same way. An ADA Handle among them gets a warning (chunk 14): in the private balance, a payment to it from another wallet is anyone's to take (see *Home*).
   - **The amount boxes** (ADA's and each token's) group the thousands with commas as you type, and regroup them as digits come and go; Backspace or Delete on a comma takes the digit beside it, and the caret stays among the same digits. Extra decimal places are dropped. A token's box refuses more than the wallet holds, keeping what was there with a note, as ADA's refuses more than the 45 billion there is (`sanitizeAmount`).
   - **The minimum ADA is worked out.** With tokens, the amount can stay empty (the box says "Minimum"): only the least ADA the deposit needs moves. An amount below that least, with or without tokens, is raised to it. The review says so ("1.17 ₳ is the least ADA the network accepts with these tokens", or "Raised from 0.5 ₳: …"). Send and Withdraw work the same way. Lace instead shows the minimum as an error and waits for the user to type it.
   - The form nudges towards round amounts, which are harder to match to a later withdrawal.
@@ -160,10 +174,12 @@ An ordinary Cardano payment from the account, so a user needn't open another wal
    - **Your own Seedelf is refused**, pointing to Move in, which does the same thing.
 3. **What's sent:** an ADA amount or Max, and tokens from the picker. The minimum ADA is worked out as for a move-in. **Max** is the move-in's: everything but the fee and what the tokens you keep need, and the collateral and locked UTxOs stay put. Each address gets one output (a Seedelf, one per 20 tokens), in order; the change goes back to `0/0`.
    - **Several recipients** (see [below](#several-recipients)): up to 20, each an address, a handle or a Seedelf, with its own amount and tokens.
-4. **Review:** where it goes (for a Seedelf, its tag and short name), the amount and tokens, the fee, the change and how many UTxOs pay; with several recipients, each under "Recipient N", then the total. The account's keys sign here, inside WebAssembly.
+   - **A note** (optional, chunk 14, as Lace's "Add a note"): one line of at most 64 characters, written on the transaction as CIP-20's message (label 674), which wallets and explorers show with it. The box counts the characters, and says anyone can read it, for good; paying a Seedelf, that it could say whose Seedelf this pays. Core refuses tabs and line breaks, and splits a note over 64 bytes into CIP-20's lines. The fee pays for its bytes and the hash of them the body carries: 0.00242 ₳ more for "Invoice 42", 0.00484 ₳ for all 64 characters. Make private, the private side's flows and staking offer none.
+   - **An ADA Handle going to a Seedelf** is warned about, as on Make private: in a private balance, anyone paying the handle from another wallet pays the contract with nothing to say whose it is.
+4. **Review:** where it goes (for a Seedelf, its tag and short name), the amount and tokens, the note, the fee, the change and how many UTxOs pay; with several recipients, each under "Recipient N", then the total. The account's keys sign here, inside WebAssembly.
 5. **Send** submits exactly the reviewed transaction. No script runs, so no collateral and no giveme.my. A banner follows it to "Payment confirmed". It's listed in the Cardano account's Activity from Koios, not in the Seedelf history.
 
-**Privacy:** it's paid in the open, from the account. The form says so, and that paying from Seedelf instead avoids the link. For a Seedelf, it adds that anyone can see the money went into Seedelf, though not whose Seedelf it is; for several recipients, that they can be seen to be paid together.
+**Privacy:** it's paid in the open, from the account. The form says so, and that paying from Seedelf instead avoids the link. For a Seedelf, it adds that anyone can see the money went into Seedelf, though not whose Seedelf it is; for several recipients, that they can be seen to be paid together. A note is as public as the payment.
 
 ## Several recipients
 

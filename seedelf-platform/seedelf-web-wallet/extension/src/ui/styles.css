@@ -266,7 +266,7 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  /* Four fit the popup's hero: Receive, Send, Withdraw, Create. */
+  /* Four fit the side panel's hero: Receive, Send, Make public, Create. */
   width: 64px;
   font-size: var(--text-sm);
   font-weight: 500;
@@ -369,7 +369,8 @@ label,
   gap: var(--s2);
 }
 
-/* Layout: a fixed-width popup, or a centered column in a full tab. */
+/* Layout: the side panel's narrow column, as wide as Chrome makes it, or a
+   centered column in a full tab. */
 
 .app {
   display: flex;
@@ -378,9 +379,10 @@ label,
   padding: var(--s3) var(--s4);
 }
 
-.app--popup {
-  width: 360px;
-  min-height: 580px;
+.app--panel {
+  max-width: 520px;
+  margin: 0 auto;
+  min-height: 100vh;
 }
 
 .app--tab {
@@ -656,7 +658,7 @@ main {
   gap: var(--s4);
 }
 
-.app--popup .screen {
+.app--panel .screen {
   flex: 1;
 }
 
@@ -685,7 +687,7 @@ main {
   gap: var(--s3);
 }
 
-.app--popup .screen__body {
+.app--panel .screen__body {
   flex: 1;
 }
 
@@ -841,7 +843,7 @@ main {
   margin-top: var(--s2);
 }
 
-/* Recovery phrase grid: three columns in a tab, two in the popup. */
+/* Recovery phrase grid: three columns in a tab, two in the side panel. */
 
 .phrase-grid {
   list-style: none;
@@ -1038,6 +1040,32 @@ main {
   color: var(--muted);
 }
 
+/* The label and the eye that hides the amounts: the eye sits beside the
+   label, which stays centred over the amount. */
+.hero__head {
+  display: grid;
+  grid-template-columns: 30px auto 30px;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.hero__head .hero__label {
+  grid-column: 2;
+  margin: 0;
+}
+
+.hero__head .icon-button {
+  grid-column: 3;
+  color: var(--muted);
+}
+
+/* The balance's value in the chosen currency, under it. */
+.hero__fiat {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
 .amount {
   margin: 0;
   font-size: 34px;
@@ -1102,6 +1130,14 @@ main {
 }
 
 /* Activity (screens/Activity.tsx): what came in, went out, or neither. */
+/* Someone's note on a transaction: their words, wrapped wherever they need. */
+.activity__note {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .activity__icon {
   background: var(--surface-2);
   color: var(--text-2);
@@ -1419,7 +1455,7 @@ main {
 }
 
 /* A modal (components/Modal.tsx), centred over a dimmed page. It never grows
-   past the window: its body scrolls, so nothing is cut off in the popup. */
+   past the window: its body scrolls, so nothing is cut off in the side panel. */
 
 .modal {
   width: calc(100% - 2 * var(--s4));

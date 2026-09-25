@@ -1,7 +1,8 @@
 // Receive, one per Home tab.
 //
-// Cardano account: its address as a QR code and text, and its stake address.
-// This is how a new wallet gets its first ADA.
+// Cardano account: its address as a QR code and text, its ADA Handles (a
+// name anyone can pay it by, found among its tokens: no request), and its
+// stake address. This is how a new wallet gets its first ADA.
 // Seedelf: your seedelfs, each with its whole name on one line (cut in the
 // middle only when it doesn't fit), Copy, the ADA locked with it, and Remove.
 // A name is what people pay privately; without one, the screen says to
@@ -15,9 +16,9 @@ import { TrashIcon } from "../components/Icons";
 import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import { QrCode } from "../components/QrCode";
 import { Screen } from "../components/Screen";
-import { formatAda } from "../format";
+import { useAmounts } from "../preferences";
 
-export function Receive({ account, onBack }: { account: Account; onBack: () => void }) {
+export function Receive({ account, handles, onBack }: { account: Account; handles: string[]; onBack: () => void }) {
   return (
     <Screen title="Receive" titleId="receive-title" onBack={onBack} aside="Into your public account">
       <div className="qr-wrap">
@@ -32,6 +33,25 @@ export function Receive({ account, onBack }: { account: Account; onBack: () => v
         This is an ordinary Cardano address: anyone can see what it receives. To be paid privately, give out one of your
         Seedelfs' names instead.
       </Callout>
+      {handles.length > 0 && (
+        <section className="section" aria-labelledby="your-handles">
+          <h2 id="your-handles">Your ADA Handles</h2>
+          <ul className="list" data-testid="handles">
+            {handles.map((h) => (
+              <li key={h} className="list__row">
+                <span className="list__name">${h}</span>
+                <span className="list__actions">
+                  <CopyButton value={`$${h}`} label={`Copy $${h}`} />
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="note">
+            A wallet paying {handles.length === 1 ? "this handle" : "one of these"} pays the address holding it: this
+            account. A handle is as public as the address.
+          </p>
+        </section>
+      )}
       <CopyField label="Stake address" value={account.stakeAddress} testId="stake-address" />
     </Screen>
   );
@@ -54,6 +74,7 @@ export function ReceiveSeedelf({
   /** Why Remove is disabled, if it is. */
   removeTitle?: string;
 }) {
+  const amounts = useAmounts();
   if (seedelfs.length === 0) {
     return (
       <Screen
@@ -91,7 +112,7 @@ export function ReceiveSeedelf({
                 <span className="list__name">{s.label ?? ""}</span>
                 <span className="list__actions">
                   <span className="list__value" title="Locked with it: Remove gives it back">
-                    {formatAda(s.lovelace)} ₳
+                    {amounts.ada(s.lovelace)} ₳
                   </span>
                   <CopyButton value={s.assetName} label={`Copy the name of ${tag}`} />
                   <button

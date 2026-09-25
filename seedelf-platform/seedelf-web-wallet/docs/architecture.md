@@ -6,7 +6,7 @@ Keep it light: a small Manifest V3 extension, the Seedelf crypto and transaction
 
 ```mermaid
 flowchart LR
-  UI["UI<br/>(popup or full tab)"] -- "typed RPC (runtime messages)" --> SW
+  UI["UI<br/>(full tab or side panel)"] -- "typed RPC (runtime messages)" --> SW
   subgraph SW["Service worker"]
     Vault["Vault + lock"]
     Wallet["Wallet state"]
@@ -37,7 +37,8 @@ flowchart LR
   - Static imports of the extension's own files are fine. The build emits `sw.js` plus a shared chunk.
   - Dynamic `import()` and top-level `await` are not allowed in service workers, so WASM initializes lazily: `loadWasm()` in `extension/src/background/wasm.ts`.
   - Lace's classic-worker `importScripts` preloading isn't needed.
-- **Staying unlocked across restarts (built in chunk 5).** A worker restart loses everything held in memory, including the unlocked keys. The popup can't hold the keys either, because it closes as soon as the user clicks away.
+- **The toolbar button (chunk 14).** There's no popup: the manifest's `action` has no `default_popup`. With the wallet set to open in a tab (the default), a click reaches the worker's `action.onClicked`, which brings back the wallet's open tab (`runtime.getContexts`) or opens one. Set to the side panel, Chrome opens the panel itself (`sidePanel.setPanelBehavior`), and the worker isn't asked. The choice is `seedelf.openIn` in `chrome.storage.local` (`shared/open-in.ts`), and it's applied again whenever the extension installs or starts.
+- **Staying unlocked across restarts (built in chunk 5).** A worker restart loses everything held in memory, including the unlocked keys. No page can hold the keys either: there may be several, and each closes when the user closes it.
   - On unlock, the vault's entropy goes into `chrome.storage.session` (`seedelf.entropy`), along with the time of the last activity (`seedelf.lastActivity`). That storage is in memory only, never written to disk, cleared when the browser closes, and not readable by content scripts.
   - A restarted worker re-derives the keys from there, unless the auto-lock deadline has passed, in which case it locks.
   - **Lock** (manual or auto-lock) clears the key from session storage as well as from memory.
@@ -98,6 +99,7 @@ flowchart LR
     - `Staking::withdraw` rides along with `move_in`, `account_send` and `account_mint`: the rewards count towards what the inputs pay, value being inputs + withdrawal + refund = outputs + fee + deposit.
     - Pool IDs (bech32 or hex) and DRep IDs (CIP-129 as Koios gives them, or CIP-105's `drep1…` and `drep_script1…`) are read there too, and written back the way Koios names them.
     - Checked on preprod without spending anything ([`tests/fixtures/probe-staking.mjs`](../extension/tests/fixtures/probe-staking.mjs)): every kind of staking transaction decodes on the node's Conway decoder, and an account-paid mint with a withdrawal passes the real Seedelf policy at the same budget as without (72,835 memory, 21.4M steps).
+  - **A note is patched in the same way** ([`seedelf-core/src/note.rs`](../../seedelf-core/src/note.rs), chunk 14): Pallas can't stage metadata either. `Note::new` takes one line of at most 64 characters (Lace's limit), refusing control characters, and splits it into CIP-20 lines of at most 64 bytes, at a space when it can. `Note::patch` sets the auxiliary data (a plain metadata map, `{674: {"msg": [lines]}}`) and its hash in the body, after the staking patch and before signing; pricing patches each draft too, so the fee pays for its bytes. `account_send_many` takes an optional note; nothing else does. Checked on preprod without spending ([`tests/fixtures/probe-note.mjs`](../extension/tests/fixtures/probe-note.mjs)): a send with a note, with one of two lines, and with the rewards too, each decodes on the node.
   - Shared pieces: `deposit_outputs` (contract outputs under fresh re-randomizations, tokens 20 to an output), and `settle_fee`, which signs each draft with one throwaway key per signer and reprices until the fee covers the signed size.
   - **No transaction over 16 KiB** (chunk 14): `settle`, which prices every draft, refuses one whose signed size is over `MAX_TX_SIZE` (the ledger's `max_tx_size`, 16,384 bytes on mainnet and preprod), in words, rather than letting the node refuse it at submit. Many recipients or tokens are how a payment gets there.
   - **The least ADA a payment can carry** has a function per kind: `minimum_deposit` (a move-in), `minimum_address_payment` (a withdrawal or a send) and `minimum_seedelf_payment` (a transfer), each the same sum the builder checks. The builders still refuse less, as the CLI expects; the web wallet's WebAssembly raises a smaller amount to it (so "0" with tokens sends only that) and reports the least as `minimum` (chunk 12).
@@ -199,7 +201,7 @@ flowchart LR
   - The worker remembers the inputs of every transaction it submits (`spent.ts`, in `chrome.storage.session`, wiped on lock).
   - A balance reading or a build whose answer lists one of them is read again, up to three more times, 3 s apart.
   - What's spent is left out either way, so a stale answer can't be built on.
-- **Activity (chunk 12, `activity.ts`):** the Seedelf history makes no requests (sends are written at submit, arrivals come from the contract scan), sealed in the private store. The Cardano account's comes from `account_txs` (newest first, 20 a page; after the newest block read, to catch up) and one `tx_info` a page, with only inputs, outputs and assets turned on (about 2 KB a transaction). The pages stay in `chrome.storage.session`; the account's addresses come from the last balance reading.
+- **Activity (chunk 12, `activity.ts`):** the Seedelf history makes no requests (sends are written at submit, arrivals come from the contract scan), sealed in the private store. The Cardano account's comes from `account_txs` (newest first, 20 a page; after the newest block read, to catch up) and one `tx_info` a page, with inputs, outputs, assets, metadata, withdrawals and certificates turned on (about 2 KB a transaction): each entry names its staking (a registration's deposit, the pool, the vote, a withdrawal, stopping), from the certificates naming the account's stake address, and carries its note (CIP-20's label 674, at most 500 characters kept). A pool's ticker comes only from the device (the session's pool reads, then the kept pool list), never from a request. The pages stay in `chrome.storage.session`; the account's addresses come from the last balance reading.
 - **Coin control (chunk 12, `coin-control.ts`):** the UTxOs the user locked, per side, and the Cardano account's collateral. None of it asks Koios anything: the UTxOs screen and the locked amounts read the last balance reading's UTxOs (`seedelf.accountUtxos.<network>`) and the contract scan's.
   - **Locked** UTxOs are left out before WebAssembly sees the UTxOs, in `readAccount` (a move-in, a send, an account-paid mint) and `readContract` (every Seedelf spend). The balance still counts them, and reports them apart (`locked` on each side), fresh on every request. A Seedelf's UTxO can't be locked, and the collateral is reclaimed, not unlocked.
   - **The collateral** is one pure-ADA 5 ₳ UTxO under the account: the one the user chose, or else the oldest the account holds, unless the user reclaimed it. It's always left out of payments, and passed to `draftAccountMint` as the mint's collateral. Setting one with none to take is a send of 5 ₳ to the account's own `0/0` (`SendService.buildCollateral`); its output 0 is the collateral from Send on, and it's "waiting" until a reading has it, for up to 10 minutes.
@@ -209,6 +211,7 @@ flowchart LR
   - A pool's details: `pool_info`, fresh each time (live stake, saturation, pledge, delegators, blocks, retiring).
   - A DRep: `drep_info` and `drep_metadata` with `select=drep_id,meta_json->body->givenName`: the name only, never the image, which could be anywhere. Only for the DRep picked: searching uses the wallet's own list (below).
   - A build: the account (three requests) and `account_info`. Submit refusals in plain words: `WithdrawalsNotInRewards` (an epoch paid more between Review and Send), `NotDelegatedToDRep`, a pool or DRep that's gone, an account whose staking changed.
+- **ADA's price (chunk 14, `prices.ts`):** on mainnet only, as in Lace (test ADA has no value). CoinGecko's public `simple/price` for `cardano` in every currency the wallet offers, in one request, kept in `chrome.storage.local` for five minutes, and read only when Home opens or is refreshed. With the currency set to "off", nothing is asked. A failed read keeps showing the last price for up to an hour. Only ADA is priced: asking about the wallet's tokens would say what it holds. `api.coingecko.com` is in the host permissions and the CSP only when the build enables mainnet.
 - **ADA Handles (chunk 10):** `asset_nft_address` for the handle policy (`f0ff48bb…`, the same on preprod), the plain name and then the CIP-68 one. Only when the user types `$name` as a withdrawal's or a send's destination, and again at Review.
 - **A send from the Cardano account (chunk 12):** Review reads the destination (a handle: one or two requests) and the account (four, with `account_info`); Send is one `submittx`. The pending watch then asks `tx_status`, as for every transaction.
   - To a Seedelf (chunk 14): the name is found as a transfer finds it, in the contract as the scan has it (usually one request for what's new, when the name is pasted and again at Review). Koios is never asked about its token.
@@ -242,10 +245,9 @@ flowchart LR
 
 - **Decrypted secrets live only in service-worker memory and `chrome.storage.session`** (see above).
 - **They are wiped on lock.** Lace keeps the last verified password in memory after use (`packages/contract/authentication-prompt/src/store/auth-secret-accessor.ts`), and we don't.
-- **Auto-lock** after 15 minutes without activity.
+- **Auto-lock** after 15 minutes without activity, or the time chosen in Settings (chunk 14): 1, 5, 15, 30 or 60 minutes, Lace's choices less "never". The wallet reads the setting (`lockAfterMinutes`) on every check, so a change applies at once.
   - While unlocked, the UI reports activity (a key press or a click) to the worker, at most every 30 seconds.
   - A `chrome.alarms` alarm checks once a minute, and every request checks too.
-  - A settings screen for the delay can come later.
 - **Failed unlocks** trigger an exponential back-off: 1 s, 2 s, 4 s and so on, capped at 60 s (Lace's values).
   - Unlike Lace, the worker enforces it: an attempt that comes too early is refused before the password is even tried.
   - The count is kept in `chrome.storage.local`, so restarting the worker or the browser doesn't reset it. The right password resets it.
@@ -253,7 +255,7 @@ flowchart LR
 ## UI
 
 - **React + TypeScript, bundled with Vite 8 (Rolldown) (decided).**
-  - One build emits the popup/tab page, `sw.js`, the WASM asset, and `manifest.json` (generated by `extension/src/manifest.ts`).
+  - One build emits the page (the tab and the side panel), `sw.js`, the WASM asset, and `manifest.json` (generated by `extension/src/manifest.ts`).
   - The page CSP is `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'` plus the enabled network's Koios and giveme.my origins only. Styles, images and fonts come only from the extension itself.
   - No component library, and nothing loaded from the web: the font and the icons ship inside the extension.
   - Not Lace's React Native / Expo stack.
@@ -279,7 +281,7 @@ flowchart LR
   - `Recipients` (chunk 14) holds a form's recipients (`useRecipients`), a card for each once there are several (`RecipientCard`), **Add recipient**, the together-too-much note, and the review's sections (`ReviewRecipients`). `DestinationInput` is a To field that reads itself and reports what it read, with the text, so a field that comes back after Review doesn't ask again.
   - `TxBanner` is a sent transaction's banner, centred: its status, the Cardanoscan link, and Dismiss once there's nothing to wait for (Home's pending banner, the collateral's "waiting").
   - `Splash` covers Home while its first reading loads (`useSplash`: shown only after 150 ms without data, at least 600 ms once shown, a 320 ms fade out, and never more than 8 s).
-  - `Modal` is a `<dialog>` centred over the page, capped at the window's height with its body scrolling, so nothing is cut off in the popup. `TokenList` holds `TokenRow`, `TokenAvatar` and `TokenDetails` (a modal).
+  - `Modal` is a `<dialog>` centred over the page, capped at the window's height with its body scrolling, so nothing is cut off in the side panel. `TokenList` holds `TokenRow`, `TokenAvatar` and `TokenDetails` (a modal).
   - `TokenAmounts` is a token picker after Lace's "Add assets": **Add tokens** opens a searchable `Modal` (select, Select all, Add), and only the picked tokens get an amount box, with **Max** and **×**. Move in, Send and Withdraw use it, so a wallet with hundreds of tokens never lists them all in a form. `Modal` takes an optional `foot` that stays in view while its body scrolls. Forms and reviews name tokens by `tokenLabel`, the list's ticker when there is one.
   - The rest: `AdaInput` (with `RoundNote`), `TokenAmounts`, `CopyButton`, `CopyField`, `QrCode`, `PhraseInput`, `PhraseGrid` and `SetPassword`.
 - **The wallet's token list** (chunk 12): tickers, names, decimals and logos for a hand-kept list of fungible tokens per network, bundled in the extension, so a balance never asks anyone about the tokens it holds.
@@ -294,12 +296,13 @@ flowchart LR
 - **How we write the name (chunk 14, decided):** always **Seedelf**, and **Seedelf Wallet** for the app. That covers a Seedelf (the named token), Seedelfs, the Seedelf balance, "Send to a Seedelf", and the top bar's wordmark. It holds for everything a person reads: screens, worker and WebAssembly messages, the store listing and these docs.
   - Lowercase stays only in code: identifiers, storage keys, test ids, file names, and the frozen derivation strings (`seedelf-wallet-v1`, `seedelf-key`, `seedelf-one-time-key-v1`), which can never change.
   - `extension/tests/words.test.ts` parses every source file and fails on a lowercase "seedelf" or a "Seedelf wallet" in any text a person could read.
-- **Popup plus full tab (decided), like Eternl:**
-  - Clicking the toolbar icon opens a popup.
-  - An "expand" button opens the same app in a full browser tab.
-  - One responsive UI serves both.
-  - Onboarding (create or restore) opens in a full tab, as in Lace and Eternl, because a popup closes as soon as the user clicks elsewhere.
-  - No side panel. Lace opens in a side panel, which feels cramped.
+- **A full tab, or the side panel (chunk 14, decided; it was a popup and a tab until then):**
+  - The toolbar button opens the wallet in a full tab by default, or brings back the one already open.
+  - Settings' **Open Seedelf Wallet in** switches it to Chrome's side panel, as Lace does (its view mode, `packages/module/views-extension/src/default-open-mode/`; Lace's default is the side panel). The panel stays open beside the page as the user browses. Switching opens the wallet the new way at once and closes the page it was chosen on, as Lace's does.
+  - There's no popup. Lace 2.4 has none either (its manifest's `action` is empty).
+  - One UI serves both: `?view=tab`, a centred column, and `?view=panel`, the narrow layout (the popup's, at the panel's width, up to 520 px). In the panel an "expand" button opens the same app in a tab.
+  - Onboarding (create or restore) runs in a full tab: from the side panel, Create and Restore open one.
+  - It needs the `sidePanel` permission, and Chrome 116 (`runtime.getContexts`).
 
 ## What we borrow from Lace
 

@@ -26,6 +26,7 @@ import {
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { HandleWarning } from "../components/HandleWarning";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { adaWithTokens, formatAda, formatQuantity, lockedAside, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
@@ -225,6 +226,7 @@ export function Transfer({
               typed={d.tokens}
               onChange={(tokens) => list.update(d.id, { tokens })}
             />
+            <HandleWarning tokens={e?.tokens.sent ?? []} />
           </RecipientCard>
         );
       })}

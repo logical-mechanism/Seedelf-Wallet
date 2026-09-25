@@ -40,6 +40,7 @@ pub mod api {
         ScriptSpend,
     };
     use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
+    use seedelf_core::note::Note;
     use seedelf_core::staking::{self, StakeAction, StakeKey, StakeState, Staking};
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::derivation;
@@ -417,6 +418,10 @@ pub mod api {
         /// The staking rewards to withdraw along with it: see [`withdrawing`].
         #[serde(default)]
         pub withdrawal: Option<String>,
+        /// A note on the transaction, CIP-20's message, which anyone can
+        /// read: one line, at most 64 characters (see [`Note::new`]).
+        #[serde(default)]
+        pub note: Option<String>,
     }
 
     /// One recipient of a send from the Cardano account.
@@ -465,6 +470,8 @@ pub mod api {
         pub fee: String,
         /// Staking rewards withdrawn to pay for it ("0" for none).
         pub withdrawal: String,
+        /// The note on it, as the transaction carries it, when there is one.
+        pub note: Option<String>,
         /// Back to the Cardano account's receive address `0/0`.
         pub change_lovelace: String,
         pub change_tokens: usize,
@@ -541,6 +548,7 @@ pub mod api {
         }
         let change = account.base_address(network_flag, Role::Receive, 0)?;
         let rewards = withdrawing(account, network_flag, request.withdrawal.as_deref())?;
+        let note = Note::new(request.note.as_deref().unwrap_or(""))?;
         let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
 
         let built = build::account_send_many(
@@ -550,6 +558,7 @@ pub mod api {
             network_flag,
             &change,
             &rewards,
+            note.as_ref(),
         )?;
 
         let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
@@ -575,6 +584,7 @@ pub mod api {
             max: matches!(request.payments.as_slice(), [only] if only.lovelace.is_none()),
             fee: built.fee.to_string(),
             withdrawal: rewards.withdrawn().to_string(),
+            note: note.map(|n| n.text()),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             inputs: built.inputs.len(),

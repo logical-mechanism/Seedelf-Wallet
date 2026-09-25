@@ -11,11 +11,16 @@
 // Balances come from the worker's last reading; it reads the chain again
 // when that is over a minute old, or on Refresh. A sent move-in, seedelf
 // mint, transfer, withdrawal or removal shows as a banner until the network
-// confirms it.
+// confirms it. The eye beside each balance hides the amounts (a setting),
+// and on mainnet each balance's value shows in the chosen currency, read
+// with the balances (prices.ts). An ADA Handle in the private balance gets a
+// warning: anyone paying it from another wallet pays the contract with no
+// datum, which anyone can take.
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { Account, Balances, PendingTx, Preferences, SeedelfInfo, StakeInfo } from "../../shared/rpc";
+import { handlesIn } from "../../shared/handles";
+import type { Account, AdaPrice, Balances, PendingTx, SeedelfInfo, StakeInfo } from "../../shared/rpc";
 import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
@@ -26,6 +31,8 @@ import {
   ChevronRightIcon,
   CoinsIcon,
   DoneIcon,
+  EyeIcon,
+  EyeOffIcon,
   HistoryIcon,
   MoveInIcon,
   PieIcon,
@@ -36,7 +43,8 @@ import {
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { formatAda, plural, poolLabel, rewardsLocked, spentRewards, unlocked, withRewards } from "../format";
+import { formatFiat, plural, poolLabel, rewardsLocked, spentRewards, unlocked, withRewards } from "../format";
+import { useAmounts, usePreferences } from "../preferences";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
@@ -106,7 +114,9 @@ export function Home() {
     | "staking"
     | "staking-vote"
   >("home");
-  const [prefs, setPrefs] = useState<Preferences>();
+  const { prefs } = usePreferences();
+  const amounts = useAmounts();
+  const [price, setPrice] = useState<AdaPrice | null>(null);
   const [removing, setRemoving] = useState<SeedelfInfo>();
   const [tokensOf, setTokensOf] = useState<Tab>();
   const [activityOf, setActivityOf] = useState<Tab>();
@@ -115,6 +125,8 @@ export function Home() {
 
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
+    // ADA's value, alongside: kept five minutes, and nothing at all off mainnet or with no currency.
+    call("price", {}).then(setPrice, () => setPrice(null));
     try {
       const b = await call("balances", { refresh });
       setBalances(b);
@@ -143,7 +155,6 @@ export function Home() {
 
   useEffect(() => {
     call("account", {}).then(setAccount, (e: Error) => setError(e.message));
-    call("preferences", {}).then(setPrefs, () => setPrefs({ spendRewards: true }));
     void load(false).then((b) => {
       if (b && Date.now() - b.updatedAt > STALE_MS) void load(true);
     });
@@ -165,7 +176,7 @@ export function Home() {
   const seedelfs = balances?.seedelf.seedelfs ?? [];
   // What the forms may spend: each side less what's locked, and the account's
   // staking rewards when a payment spends them too.
-  const spendRewards = prefs?.spendRewards ?? true;
+  const spendRewards = prefs.spendRewards;
   const rewards = balances ? spentRewards(balances.cardano.staking, spendRewards) : 0n;
   const rewardsProp = rewards > 0n ? rewards.toString() : undefined;
   const free = balances && {
@@ -203,7 +214,9 @@ export function Home() {
   if (removing) {
     return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
   }
-  if (screen === "receive" && account) return <Receive account={account} onBack={home} />;
+  if (screen === "receive" && account) {
+    return <Receive account={account} handles={handlesIn(balances?.cardano.tokens ?? [])} onBack={home} />;
+  }
   if (screen === "receive-seedelf") {
     return (
       <ReceiveSeedelf
@@ -288,12 +301,15 @@ export function Home() {
         {tab === "seedelf" ? (
           <section key="seedelf" className="stack" role="tabpanel" id="panel-seedelf" aria-labelledby="tab-seedelf">
             <div className="hero">
-              <h1 id="seedelf-balance" className="hero__label">
-                Private balance
-              </h1>
-              <Amount lovelace={balances?.seedelf.lovelace} testId="seedelf-lovelace" />
+              <div className="hero__head">
+                <h1 id="seedelf-balance" className="hero__label">
+                  Private balance
+                </h1>
+                <HideToggle />
+              </div>
+              <Amount lovelace={balances?.seedelf.lovelace} price={price} testId="seedelf-lovelace" />
               <span className="hero__meta" data-testid="seedelf-meta">
-                {balances ? `${plural(balances.seedelf.utxos, "UTxO")}${lockedMeta(balances.seedelf)}` : "\u00a0"}
+                {balances ? `${plural(balances.seedelf.utxos, "UTxO")}${lockedMeta(balances.seedelf, amounts.ada)}` : "\u00a0"}
               </span>
               <div className="hero__actions">
                 <ActionButton
@@ -343,6 +359,12 @@ export function Home() {
               />
             )}
 
+            {balances && handlesIn(balances.seedelf.tokens).length > 0 && (
+              <Callout tone="warn" testId="private-handle">
+                {handleWarning(handlesIn(balances.seedelf.tokens))} Make it public to your public account.
+              </Callout>
+            )}
+
             {balances && balances.seedelf.tokens.length > 0 && (
               <section className="section" aria-labelledby="seedelf-tokens-title">
                 <h2 id="seedelf-tokens-title">Tokens</h2>
@@ -359,13 +381,16 @@ export function Home() {
         ) : (
           <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
             <div className="hero">
-              <h1 id="cardano-account" className="hero__label">
-                Public account
-              </h1>
-              <Amount lovelace={balances && accountTotal(balances.cardano)} testId="cardano-lovelace" />
+              <div className="hero__head">
+                <h1 id="cardano-account" className="hero__label">
+                  Public account
+                </h1>
+                <HideToggle />
+              </div>
+              <Amount lovelace={balances && accountTotal(balances.cardano)} price={price} testId="cardano-lovelace" />
               <span className="hero__meta" data-testid="cardano-meta">
                 {balances
-                  ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used${lockedMeta(balances.cardano)}`
+                  ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used${lockedMeta(balances.cardano, amounts.ada)}`
                   : "\u00a0"}
               </span>
               <div className="hero__actions">
@@ -400,7 +425,7 @@ export function Home() {
               <Callout tone="warn" testId="home-rewards-locked">
                 <div className="stack-tight">
                   <span>
-                    Your {formatAda(balances.cardano.staking.rewards)} ₳ of staking rewards are locked until you delegate
+                    Your {amounts.ada(balances.cardano.staking.rewards)} ₳ of staking rewards are locked until you delegate
                     your voting power.
                   </span>
                   <button type="button" className="link align-start" onClick={() => setScreen("staking-vote")}>
@@ -438,8 +463,33 @@ export function Home() {
 }
 
 /** " · 5 ₳ locked" under a balance, when some of it is. */
-function lockedMeta(side: Balances["seedelf" | "cardano"]): string {
-  return side.locked.utxos ? ` · ${formatAda(side.locked.lovelace)} ₳ locked` : "";
+function lockedMeta(side: Balances["seedelf" | "cardano"], ada: (lovelace: string) => string): string {
+  return side.locked.utxos ? ` · ${ada(side.locked.lovelace)} ₳ locked` : "";
+}
+
+/** Why an ADA Handle doesn't belong in Seedelf: what's paid to it can be taken by anyone. */
+export function handleWarning(handles: string[]): string {
+  const names = handles.map((h) => `$${h}`).join(", ");
+  const one = handles.length === 1;
+  return `${one ? "The handle" : "The handles"} ${names} ${one ? "is" : "are"} in your private balance. Anyone who pays ${one ? "it" : "them"} from another wallet pays the Seedelf contract with nothing to say whose the payment is, so anyone can take it.`;
+}
+
+/** The eye beside a balance: hides every amount on the screens that show what the wallet holds, or shows them again. */
+function HideToggle() {
+  const { prefs, set } = usePreferences();
+  const hidden = prefs.hideBalances;
+  return (
+    <button
+      type="button"
+      className="icon-button icon-button--small"
+      onClick={() => void set({ hideBalances: !hidden }).catch(() => undefined)}
+      aria-label={hidden ? "Show balances" : "Hide balances"}
+      aria-pressed={hidden}
+      title={hidden ? "Show balances" : "Hide balances"}
+    >
+      {hidden ? <EyeOffIcon size={16} /> : <EyeIcon size={16} />}
+    </button>
+  );
 }
 
 /** Everything the account holds: its UTxOs and its staking rewards, as other wallets show it. */
@@ -449,6 +499,7 @@ function accountTotal(cardano: Balances["cardano"]): string {
 
 /** "Staking with LOGIC · 57.47 ₳ rewards", or "Not staking": opens Staking. */
 function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => void }) {
+  const amounts = useAmounts();
   const rewards = BigInt(staking.rewards) > 0n;
   return (
     <section className="section">
@@ -461,7 +512,7 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
             <span className="menu-row__text">
               <span>{staking.pool ? `Staking with ${poolLabel(staking.pool)}` : "Not staking"}</span>
               <span className="menu-row__sub">
-                {staking.pool || rewards ? `${formatAda(staking.rewards)} ₳ rewards` : "Stake to earn rewards"}
+                {staking.pool || rewards ? `${amounts.ada(staking.rewards)} ₳ rewards` : "Stake to earn rewards"}
               </span>
             </span>
             <ChevronRightIcon size={16} />
@@ -599,11 +650,20 @@ function Pending({ pending, watching, onDismiss }: { pending: PendingTx; watchin
   );
 }
 
-function Amount({ lovelace, testId }: { lovelace?: string; testId: string }) {
+/** A balance in ADA, and under it its value in the chosen currency when there's a price. */
+function Amount({ lovelace, price, testId }: { lovelace?: string; price: AdaPrice | null; testId: string }) {
+  const amounts = useAmounts();
   return (
-    <p className="amount" data-testid={testId}>
-      {lovelace === undefined ? <span className="amount__placeholder">—</span> : formatAda(lovelace)}
-      <span className="amount__unit"> ₳</span>
-    </p>
+    <>
+      <p className="amount" data-testid={testId}>
+        {lovelace === undefined ? <span className="amount__placeholder">—</span> : amounts.ada(lovelace)}
+        <span className="amount__unit"> ₳</span>
+      </p>
+      {lovelace !== undefined && price && (
+        <p className="hero__fiat" data-testid={`${testId}-fiat`} title={`At ${formatFiat("1000000", price)} for one ADA, from CoinGecko`}>
+          ≈ {amounts.text(formatFiat(lovelace, price))}
+        </p>
+      )}
+    </>
   );
 }

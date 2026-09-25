@@ -2,7 +2,7 @@
 // fixtures and the public 12-word test phrase, so no real wallet is on screen
 // and the same build always gives the same images:
 //
-// - five 1280×800 screenshots: the popup at 2×, framed, with a caption;
+// - five 1280×800 screenshots: the side panel at 2×, framed, with a caption;
 // - the 440×280 small promo tile;
 // - the 128×128 store icon: 96×96 of artwork in 16 px of transparent padding.
 //
@@ -37,7 +37,7 @@ const page = (body: string, css: string) => `<!doctype html>
   ${css}
 </style></head><body>${body}</body></html>`;
 
-/** A 1280×800 screenshot: the caption on the left, the popup on the right. */
+/** A 1280×800 screenshot: the caption on the left, the wallet on the right. */
 const screenshot = (popup: Buffer, title: string, text: string) =>
   page(
     `<main>
@@ -97,8 +97,8 @@ test("the Web Store listing's images", async ({ context }) => {
   await expect(tab.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await tab.close();
 
-  // A Chrome popup is at most 600 px tall.
-  const popup = await openApp(context, "popup");
+  // The side panel at its default width, cut to what the listing's frame fits.
+  const popup = await openApp(context, "panel");
   await popup.setViewportSize({ width: 360, height: 600 });
   const shoot = () => popup.screenshot({ animations: "disabled" });
   const back = () => popup.getByRole("button", { name: "Back", exact: true }).click();

@@ -17,7 +17,7 @@ The screens call the Seedelf balance the **private balance** and the Cardano acc
 - **The transaction graph and timing.**
 - **Which normal addresses paid into or received from the contract,** such as the Cardano account and one-time accounts.
 - **Everything the Cardano account does,** staking included: its pool, where its vote goes, and its rewards.
-- **The user's IP address,** as seen by Koios and giveme.my.
+- **The user's IP address,** as seen by Koios and giveme.my, and on mainnet by CoinGecko for ADA's price.
 
 ## Rules the wallet enforces
 
@@ -39,7 +39,7 @@ These are not user settings:
    - **A stealth mint from the Seedelf balance is the other choice.** It hides the payer only when that balance came from other people's Seedelf payments. For it, the mint service passes only Seedelf UTxOs to WebAssembly, and WebAssembly refuses any it doesn't own.
    - This rule used to say "stealth mint from the Seedelf balance, never paid by the Cardano account". That was wrong whenever your own move-in funded the balance: the mint spends that deposit and ties the account, the name and the mint's change together.
 6. **The Cardano account is never a one-time account.** Each one-time account is used for a single session. One-time accounts use a reserved account index (`24301'`), never a low index like `1'` that a restored Lace wallet may already use: sharing payment keys with a real account would link every one-time address back to the user.
-7. **No analytics or telemetry.** The wallet talks to Koios and giveme.my and nothing else.
+7. **No analytics or telemetry.** The wallet talks to Koios and giveme.my, and on mainnet to CoinGecko for ADA's price unless the currency is set to nothing, and to nothing else.
 
 ## Known links
 
@@ -80,6 +80,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
 - **Network:** Koios and giveme.my see the user's IP address, and Koios has no Tor access. A VPN helps; see the root README's IP-tracking section.
   - A balance reading asks Koios about the Cardano account and the whole wallet contract at the same moment (between full reads, the part of it after the last block seen). Koios can tell that the account's owner uses Seedelf, though not which contract UTxOs are theirs: the ownership check runs in the extension, on every row.
   - The wallet only reads the chain when Home opens (at most once a minute) or on Refresh. It never polls in the background.
+  - **Hiding the balances** (chunk 14) only changes what's drawn: the wallet reads the same and asks no one anything more.
   - **Token names and logos come from a list inside the extension** (`src/tokens/`, refreshed at each release). Asking Koios about the tokens in the Seedelf balance would tell it which contract UTxOs are yours, so the wallet never does.
   - **Finding a recipient** uses the contract as the balance reading sees it, and picks the Seedelf's UTxO in the extension. The wallet never asks Koios about the recipient's token (`asset_utxos` and the like): that would tell Koios exactly who is being paid.
   - **An ADA Handle can't be found that way:** withdrawing or sending to `$name` asks Koios who holds that handle (`asset_nft_address`), so Koios learns it. The transaction names the address anyway once it's submitted. Pasting the address instead asks Koios nothing.
@@ -92,6 +93,10 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Rewards spent along with a payment** (on by default, a Settings switch) add a withdrawal to a send, a move-in or an account-paid mint. It names the stake key, which the account's base addresses carry anyway, so it links nothing new. A move-in with rewards moves them into Seedelf with the rest.
   - **What Koios learns:** every balance reading asks for the account's `account_info`, and its pool's `pool_info` once a session. The pool list is the same for everyone and kept on the device for a day. Searching DReps asks no one: the list of named DReps ships with the wallet. Picking one reads it from Koios, which then knows which one you're considering, as delegating to it will tell everyone.
   - **Nothing from anywhere else:** a DRep's metadata is read through Koios, its name only. Its image, which could be on any site, is never fetched.
+- **A note on a public send** (chunk 14) is CIP-20's message on the transaction: anyone can read it, for good. The form says so, and when a recipient is a Seedelf, that the note could say whose Seedelf is paid (the payment itself doesn't). There's no note on the private side's flows: it would be public words on a private payment. Notes from others show in the public Activity as text, and Save as CSV never lets one run as a spreadsheet formula.
+- **ADA's price** (chunk 14, mainnet only) comes from CoinGecko's public API: one request for every currency, when Home opens or is refreshed, at most every five minutes, none with the currency set to nothing. It says nothing about the wallet: CoinGecko learns only that someone at this IP address uses it. Only ADA is priced; asking about the tokens held would say what the wallet holds.
+- **An ADA Handle in the private balance** (chunk 14) isn't private and isn't safe: whoever pays `$name` from another wallet pays the address holding it, the Seedelf contract, with no register, and the contract lets such a UTxO go to anyone. The wallet warns before a handle goes into a Seedelf and while one sits in the private balance.
+- **Save as CSV** (chunk 14) writes the listed Activity to a file on the device, unencrypted. For the private side that's the payments only this wallet can tell are yours, and the screen says so.
 
 ## Holding and staking
 

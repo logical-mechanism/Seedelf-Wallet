@@ -1,7 +1,15 @@
 // Display formatting for amounts and token names. Amounts arrive as integer
 // strings and are handled as bigint, so nothing is rounded on the way.
 
-import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type Locked, type PoolRef, type StakeInfo, type TokenAmount } from "../shared/rpc";
+import {
+  ALWAYS_ABSTAIN,
+  ALWAYS_NO_CONFIDENCE,
+  type AdaPrice,
+  type Locked,
+  type PoolRef,
+  type StakeInfo,
+  type TokenAmount,
+} from "../shared/rpc";
 
 /** An integer amount with `decimals` places, grouped and with trailing zeros trimmed: "1,234.5". */
 export function formatQuantity(quantity: string, decimals: number): string {
@@ -239,4 +247,10 @@ export function voteLabel(drep: string | null, name?: string): string {
   if (drep === ALWAYS_ABSTAIN) return "Always abstain";
   if (drep === ALWAYS_NO_CONFIDENCE) return "Always no confidence";
   return name ?? shortHex(drep, 10, 6);
+}
+
+/** An ADA amount's value at `price`, in its currency: "$12.34", "€0.22", "¥397". */
+export function formatFiat(lovelace: string, price: AdaPrice): string {
+  const value = (Number(BigInt(lovelace)) / 1_000_000) * price.rate;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: price.currency.toUpperCase() }).format(value);
 }

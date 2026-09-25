@@ -2,6 +2,9 @@
 // The service worker owns every secret; the UI only ever asks it to do work.
 
 import type { NetworkName } from "../networks";
+import type { Currency, Preferences } from "./preferences";
+
+export type { Preferences };
 
 export type WalletState = "no-wallet" | "locked" | "unlocked";
 
@@ -56,6 +59,38 @@ export interface ActivityEntry {
   fee?: string;
   /** Who or where: a seedelf's tag, a $handle, an address. */
   detail?: string;
+  /** The tokens that moved, each with a signed quantity (negative: out), when known. Older entries have only `tokens`. */
+  assets?: TokenQuantity[];
+  /** The Cardano account's only: a note on the transaction (CIP-20's message), in whoever wrote it's words. */
+  note?: string;
+  /** The Cardano account's only: what the transaction did with its stake key. */
+  staking?: ActivityStaking;
+}
+
+/** What a transaction in the Cardano account's Activity did with its stake key. Lovelace amounts are decimal strings. */
+export interface ActivityStaking {
+  /** Staked with this pool (`pool1…`), and its ticker when the pool list on the device has it. */
+  pool?: string;
+  ticker?: string;
+  /** Delegated the vote: a DRep's ID, `drep_always_abstain` or `drep_always_no_confidence`. */
+  drep?: string;
+  /** Paid to register the stake key. */
+  deposit?: string;
+  /** Returned by unregistering it. */
+  refund?: string;
+  /** Rewards withdrawn. */
+  rewards?: string;
+  /** Unregistered: staking stopped. */
+  stopped?: boolean;
+}
+
+/** ADA's value in the currency chosen, on mainnet: CoinGecko's, kept on the device five minutes. */
+export interface AdaPrice {
+  currency: Exclude<Currency, "off">;
+  /** What one ADA is worth in it. */
+  rate: number;
+  /** When CoinGecko was read (ms since the epoch). */
+  updatedAt: number;
 }
 
 /** A name for a seedelf or an address this wallet pays, kept sealed on the device. */
@@ -213,12 +248,6 @@ export interface StakingSummary {
   changeLovelace: string;
   changeTokens: number;
   inputs: number;
-}
-
-/** The user's settings, kept on the device. */
-export interface Preferences {
-  /** Spend staking rewards whenever the Cardano account pays (a send, a move-in, a mint). */
-  spendRewards: boolean;
 }
 
 export type UtxoSide = "seedelf" | "cardano";
@@ -409,6 +438,8 @@ export interface SendSummary {
   fee: string;
   /** Staking rewards withdrawn to pay for it. */
   withdrawal?: string;
+  /** The note on it, as the transaction carries it. */
+  note?: string | null;
   /** Back to the Cardano account's receive address. */
   changeLovelace: string;
   changeTokens: number;
@@ -495,7 +526,7 @@ export interface Requests {
   /** Submits the removal built last, if its hash matches, once giveme.my has witnessed it. */
   "remove-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds and signs a payment from the Cardano account to one or more recipients without submitting it: each an address, a `$handle`, or someone's seedelf by its full name. `lovelace` as for a move-in. */
-  "send-build": { payload: { payments: PaymentAsk[] }; result: SendSummary };
+  "send-build": { payload: { payments: PaymentAsk[]; note?: string }; result: SendSummary };
   /** Submits the payment built last, if its hash matches. */
   "send-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
@@ -503,6 +534,8 @@ export interface Requests {
   "reset-wallet": { payload: None; result: Status };
   /** The recovery phrase's words, for Settings; the password again, even while unlocked. */
   "reveal-phrase": { payload: { password: string }; result: { words: string[] } };
+  /** Whether a typed phrase is this wallet's, for Settings' check: yes or no, never which words differ. */
+  "check-phrase": { payload: { phrase: string }; result: { matches: boolean } };
   /** Seals the vault under a new password. */
   "change-password": { payload: { current: string; next: string }; result: None };
   /** This network's contacts, by name. */
@@ -546,6 +579,8 @@ export interface Requests {
   "stake-submit": { payload: { txHash: string }; result: PendingTx };
   preferences: { payload: None; result: Preferences };
   "preferences-set": { payload: Partial<Preferences>; result: Preferences };
+  /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
+  price: { payload: None; result: AdaPrice | null };
 }
 
 export type RequestName = keyof Requests;
@@ -587,6 +622,7 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "pending-tx",
   "reset-wallet",
   "reveal-phrase",
+  "check-phrase",
   "change-password",
   "contacts",
   "contact-save",
@@ -606,6 +642,7 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "stake-submit",
   "preferences",
   "preferences-set",
+  "price",
 ]);
 
 export function isMessage(value: unknown): value is Message {

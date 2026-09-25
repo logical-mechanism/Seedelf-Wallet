@@ -18,10 +18,12 @@ import {
   type KoiosDrepName,
   type KoiosPool,
   type KoiosPoolInfo,
+  type KoiosTxInfo,
   type KoiosUtxo,
 } from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
 import { PreferencesService } from "../src/background/preferences";
+import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
 import { StakingService } from "../src/background/staking";
 import { PrivateStore } from "../src/background/private-store";
@@ -164,6 +166,8 @@ export interface FakeKoios {
   addedToAccounts: KoiosUtxo[];
   /** Each stake key's `account_info`, by stake address: the recorded 12-word account's to begin with. */
   stakes: Map<string, KoiosAccountInfo>;
+  /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
+  txExtras: Map<string, Partial<KoiosTxInfo>>;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -183,6 +187,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     added: [],
     addedToAccounts: [],
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
+    txExtras: new Map(),
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -225,7 +230,9 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         const after = body._after_block_height;
         rows = after === undefined ? all : all.filter((t) => t.block_height > after);
       } else if (path === "tx_info") {
-        rows = activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash));
+        rows = activityPreprod.tx_info
+          .filter((t) => body._tx_hashes.includes(t.tx_hash))
+          .map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) }));
       } else if (path === "account_addresses") {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_addresses ?? [];
       } else if (path === "account_utxos") {
@@ -285,9 +292,10 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const store = new PrivateStore({ wallet: t.wallet, local: t.local });
   let ids = 0;
   const koiosFor = () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined);
-  const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor });
+  const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor, local: t.local });
   const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now });
   const preferences = new PreferencesService(t.local);
+  const coingecko = fakeCoinGecko();
   const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
@@ -332,6 +340,22 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     activity,
     coins,
     preferences,
+    coingecko,
+    prices: new PriceService({ local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
   };
+}
+
+/** CoinGecko's simple price, answering ADA in every currency asked; `fail` makes it refuse. */
+export function fakeCoinGecko(rates: Record<string, number> = { usd: 0.25, eur: 0.22, gbp: 0.19, jpy: 39.65 }) {
+  const state = { urls: [] as string[], fail: false, rates };
+  const fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    state.urls.push(url);
+    if (state.fail) return new Response("rate limited", { status: 429 });
+    const asked = new URL(url).searchParams.get("vs_currencies")?.split(",") ?? [];
+    const cardano = Object.fromEntries(asked.filter((c) => c in state.rates).map((c) => [c, state.rates[c]]));
+    return new Response(JSON.stringify({ cardano }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof globalThis.fetch;
+  return { ...state, state, fetch };
 }

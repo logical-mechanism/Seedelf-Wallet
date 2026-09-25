@@ -15,6 +15,7 @@ import { ChevronRightIcon, TrashIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { adaWithTokens, formatAda, formatPercent, poolLabel, rewardsLocked, voteLabel } from "../format";
+import { useAmounts } from "../preferences";
 import { Pools } from "./Pools";
 import { Voting } from "./Voting";
 
@@ -44,6 +45,7 @@ export function Staking({
   onBack: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const amounts = useAmounts();
   const [page, setPage] = useState<Page>(start);
   const [pool, setPool] = useState<PoolDetails>();
   const [poolError, setPoolError] = useState<string>();
@@ -162,7 +164,7 @@ export function Staking({
         <section className="section" aria-labelledby="rewards-title">
           <h2 id="rewards-title">Rewards</h2>
           <p className="amount amount--small" data-testid="staking-rewards">
-            {formatAda(staking.rewards)}
+            {amounts.ada(staking.rewards)}
             <span className="amount__unit"> ₳</span>
           </p>
           <p className="note">
@@ -189,7 +191,7 @@ export function Staking({
         </ReviewRows>
         {locked && (
           <Callout tone="warn" testId="rewards-locked">
-            Your {formatAda(staking.rewards)} ₳ of rewards can't be withdrawn until you delegate your voting power: to a
+            Your {amounts.ada(staking.rewards)} ₳ of rewards can't be withdrawn until you delegate your voting power: to a
             DRep, or always abstain.
           </Callout>
         )}

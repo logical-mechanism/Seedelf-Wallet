@@ -10,8 +10,9 @@ import {
   SESSION_ENTROPY,
   UNLOCK_FAILURES,
   unlockBackoffMs,
+  Wallet,
 } from "../src/background/wallet";
-import { loadTestWasm, testWallet, vectors } from "./fakes";
+import { loadTestWasm, memoryArea, testWallet, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const cardano = vectors("cardano_account.json").filter((v) => v.account === 0);
@@ -166,6 +167,53 @@ describe("wallet", () => {
     expect(await wallet.state()).toBe("locked");
     expect(session.data.size).toBe(0);
     expect(events).toEqual({ changed: 2, alarm: "stopped" });
+  });
+
+  it("locks after the time the settings give, whatever it is", async () => {
+    const clock = { now: 1_800_000_000_000 };
+    let minutes = 5;
+    // `lockAfterMs` is read on every check, so a change applies at once.
+    const set = new Wallet({
+      wasm: loadTestWasm(),
+      local: memoryArea(),
+      session: memoryArea(),
+      now: () => clock.now,
+      autoLock: { start: async () => undefined, stop: async () => undefined },
+      lockAfterMs: async () => minutes * 60_000,
+      changed: () => undefined,
+    });
+    await set.create(cardano[0]!.phrase, PASSWORD);
+    clock.now += 5 * 60_000 - 1000;
+    expect(await set.state()).toBe("unlocked");
+    clock.now += 1000;
+    expect(await set.state()).toBe("locked");
+
+    // A longer time, changed while unlocked, counts from the last activity.
+    expect(await set.unlock(PASSWORD)).toEqual({ unlocked: true });
+    minutes = 60;
+    clock.now += 59 * 60_000;
+    expect(await set.state()).toBe("unlocked");
+    clock.now += 60_000;
+    expect(await set.state()).toBe("locked");
+  });
+
+  it("checks a typed phrase against its own: yes or no, and why a phrase isn't one", async () => {
+    const { wallet } = testWallet();
+    const mine = cardano.find((v) => v.phrase.split(" ").length === 24)!.phrase;
+    const theirs = cardano.find((v) => v.phrase.split(" ").length === 12)!.phrase;
+    await wallet.create(mine, PASSWORD);
+    expect(await wallet.checkPhrase(mine)).toBe(true);
+    expect(await wallet.checkPhrase(`  ${mine.toUpperCase()}  `)).toBe(true);
+    expect(await wallet.checkPhrase(theirs)).toBe(false);
+    // The last word changed: a bad checksum, so it isn't a phrase at all.
+    const words = mine.split(" ");
+    words[23] = words[23] === "art" ? "zoo" : "art";
+    await expect(wallet.checkPhrase(words.join(" "))).rejects.toThrow(/checksum/i);
+    await expect(wallet.checkPhrase("not a phrase")).rejects.toThrow();
+    // Only while unlocked, and it never counts as a wrong password.
+    expect(await wallet.retryAfterMs()).toBe(0);
+    await wallet.lock();
+    await expect(wallet.checkPhrase(mine)).rejects.toThrow("locked");
   });
 
   it("a restarted worker past the deadline locks instead of unlocking", async () => {

@@ -27,6 +27,7 @@ use crate::address::{collateral_address, is_not_a_script, is_on_correct_network,
 use crate::assets::{Asset, Assets};
 use crate::constants::{COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO};
 use crate::data_structures::{create_mint_redeemer, create_spend_redeemer};
+use crate::note::Note;
 use crate::staking::Staking;
 use crate::transaction::{
     address_minimum_lovelace_with_assets, checked_lovelace, collateral_input, computation_fee,
@@ -60,7 +61,7 @@ pub fn settle_fee(
 ) -> Result<(u64, StagingTransaction)> {
     settle(
         signers,
-        &Staking::none(),
+        Patches::staking(&Staking::none()),
         |size| linear_fee(params, size),
         build,
     )
@@ -70,20 +71,47 @@ pub fn settle_fee(
 /// mainnet and preprod. A bigger one is refused at submit.
 pub const MAX_TX_SIZE: u64 = 16_384;
 
+/// What's patched into a built transaction, since Pallas can stage neither:
+/// staking (certificates, a withdrawal; see [`Staking::patch`]) and a note
+/// ([`Note::patch`]).
+#[derive(Clone, Copy)]
+struct Patches<'a> {
+    staking: &'a Staking,
+    note: Option<&'a Note>,
+}
+
+impl<'a> Patches<'a> {
+    /// Only `staking`: every transaction but a send with a note.
+    fn staking(staking: &'a Staking) -> Self {
+        Patches {
+            staking,
+            note: None,
+        }
+    }
+
+    fn apply(&self, built: BuiltTransaction) -> Result<BuiltTransaction> {
+        let built = self.staking.patch(built)?;
+        match self.note {
+            Some(note) => note.patch(built),
+            None => Ok(built),
+        }
+    }
+}
+
 /// [`settle_fee`] with any pricing: `price(size)` is the fee a transaction of
-/// `size` signed bytes needs. `staking` is patched into each draft before
-/// it's priced (see [`Staking::patch`]); `signers` doesn't count its stake key.
+/// `size` signed bytes needs. `patches` go into each draft before it's
+/// priced; `signers` doesn't count the stake key a staking patch needs.
 /// A draft over [`MAX_TX_SIZE`] is refused here, in words.
 fn settle(
     signers: usize,
-    staking: &Staking,
+    patches: Patches,
     price: impl Fn(u64) -> u64,
     mut build: impl FnMut(u64) -> Result<StagingTransaction>,
 ) -> Result<(u64, StagingTransaction)> {
     let mut fee: u64 = 200_000;
     for _ in 0..5 {
         let staged = build(fee)?;
-        let size = signed_size(&staged, signers, staking)?;
+        let size = signed_size(&staged, signers, patches)?;
         if size > MAX_TX_SIZE {
             bail!(
                 "This transaction would be {size} bytes, over the network's limit of {MAX_TX_SIZE}. Send fewer tokens, or pay fewer recipients, at once"
@@ -99,9 +127,9 @@ fn settle(
     bail!("The transaction fee did not settle")
 }
 
-fn signed_size(staged: &StagingTransaction, signers: usize, staking: &Staking) -> Result<u64> {
-    let mut built = built_with(staged.clone(), staking)?;
-    for _ in 0..signers.max(1) + staking.signers() {
+fn signed_size(staged: &StagingTransaction, signers: usize, patches: Patches) -> Result<u64> {
+    let mut built = built_with(staged.clone(), patches)?;
+    for _ in 0..signers.max(1) + patches.staking.signers() {
         built = built
             .sign(fake_signer())
             .context("Failed To Sign The Draft Transaction")?;
@@ -109,9 +137,9 @@ fn signed_size(staged: &StagingTransaction, signers: usize, staking: &Staking) -
     Ok(built.tx_bytes.0.len() as u64)
 }
 
-/// Builds a staged transaction, then patches `staking` into it.
-fn built_with(staged: StagingTransaction, staking: &Staking) -> Result<BuiltTransaction> {
-    staking.patch(
+/// Builds a staged transaction, then patches `patches` into it.
+fn built_with(staged: StagingTransaction, patches: Patches) -> Result<BuiltTransaction> {
+    patches.apply(
         staged
             .build_conway_raw()
             .context("Failed To Build The Transaction")?,
@@ -467,7 +495,7 @@ pub fn move_in(
         params,
         available,
         &[AccountPay::new(payee, amount, picked)],
-        staking,
+        Patches::staking(staking),
         change_addr,
         MOVE_IN_SHORT,
     )
@@ -495,6 +523,7 @@ pub fn account_send(
         network_flag,
         change_addr,
         staking,
+        None,
     )
 }
 
@@ -502,7 +531,9 @@ pub fn account_send(
 /// order given, then the change. Each is a key address on this network or a
 /// Seedelf (see [`account_fund`]), with its own amount and tokens. Max pays a
 /// single recipient. The UTxOs are chosen, the change made, and `staking`
-/// carried, as for [`move_in`].
+/// carried, as for [`move_in`]. A `note` goes on the transaction as CIP-20's
+/// message, which anyone can read; the fee pays for its bytes.
+#[allow(clippy::too_many_arguments)]
 pub fn account_send_many(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
@@ -510,6 +541,7 @@ pub fn account_send_many(
     network_flag: bool,
     change_addr: &Address,
     staking: &Staking,
+    note: Option<&Note>,
 ) -> Result<AccountPayment> {
     if recipients.is_empty() {
         bail!("A payment needs someone to pay");
@@ -525,7 +557,7 @@ pub fn account_send_many(
         params,
         available,
         recipients,
-        staking,
+        Patches { staking, note },
         change_addr,
         SEND_SHORT,
     )
@@ -568,7 +600,7 @@ pub fn account_fund(
         params,
         available,
         &[AccountPay::new(payee, amount, picked)],
-        staking,
+        Patches::staking(staking),
         change_addr,
         SEND_SHORT,
     )
@@ -596,7 +628,7 @@ pub fn account_staking(
             AccountAmount::Lovelace(0),
             &[],
         )],
-        staking,
+        Patches::staking(staking),
         change_addr,
         STAKE_SHORT,
     )
@@ -606,7 +638,7 @@ fn account_payment(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
     pays: &[AccountPay],
-    staking: &Staking,
+    patches: Patches,
     change_addr: &Address,
     short: NotEnough,
 ) -> Result<AccountPayment> {
@@ -656,7 +688,7 @@ fn account_payment(
     });
 
     let attempt = |selected: &[UtxoResponse]| {
-        build_account_payment(params, selected, pays, staking, change_addr, short)
+        build_account_payment(params, selected, pays, patches, change_addr, short)
     };
 
     if max {
@@ -690,13 +722,13 @@ fn build_account_payment(
     params: &ProtocolParameters,
     selected: &[UtxoResponse],
     pays: &[AccountPay],
-    staking: &Staking,
+    patches: Patches,
     change_addr: &Address,
     short: NotEnough,
 ) -> Result<AccountPayment> {
     let (inputs_total, all_tokens) = assets_of(selected.to_vec())?;
     // What pays: the inputs, plus rewards and a refund, less a deposit.
-    let total = staking.net(inputs_total).ok_or(short)?;
+    let total = patches.staking.net(inputs_total).ok_or(short)?;
     // How much of a held token `picked` asks for (0 for tokens not picked).
     let asked_in = |picked: &[(String, String, u64)], a: &Asset| -> u64 {
         let policy = hex::encode(a.policy_id);
@@ -746,7 +778,7 @@ fn build_account_payment(
     let mut change = 0;
     let mut outputs = 0;
     let price = |size| linear_fee(params, size);
-    let (fee, staged) = settle(signers, staking, price, |fee| {
+    let (fee, staged) = settle(signers, patches, price, |fee| {
         (paid, change) = match pays {
             [only] if only.amount == AccountAmount::Max => {
                 let all = total
@@ -789,7 +821,7 @@ fn build_account_payment(
     })?;
 
     Ok(AccountPayment {
-        tx: built_with(staged, staking)?,
+        tx: built_with(staged, patches)?,
         inputs: selected.to_vec(),
         fee,
         lovelace: paid.iter().sum(),
@@ -1326,7 +1358,7 @@ impl ScriptSpend {
         // Two signatures: the one-time key and giveme.my's collateral key.
         let (fee, staged) = settle(
             2,
-            &Staking::none(),
+            Patches::staking(&Staking::none()),
             |size| even(linear_fee(&self.chain.params, size) + compute + script_reference),
             |fee| self.stage(fee, Some(budgets), redeemers),
         )?;
@@ -2026,7 +2058,7 @@ impl AccountMint {
     /// [`DRAFT_BUDGET`], and the fee is the estimate.
     pub fn draft(&self) -> Result<BuiltTransaction> {
         let fee = self.estimate()?.fee.total;
-        built_with(self.stage(fee, None)?, &self.staking)
+        built_with(self.stage(fee, None)?, Patches::staking(&self.staking))
     }
 
     /// The unsigned transaction, with the policy's measured budget and the
@@ -2060,14 +2092,14 @@ impl AccountMint {
             self.chain.config.contract.seedelf_contract_size * REFERENCE_SCRIPT_FEE_PER_BYTE;
         let (fee, staged) = settle(
             self.signers(),
-            &self.staking,
+            Patches::staking(&self.staking),
             |size| even(linear_fee(&self.chain.params, size) + compute + script_reference),
             |fee| self.stage(fee, Some(budgets)),
         )?;
         let (change_lovelace, change_tokens) = self.change(fee)?;
         let change_outputs = staged.outputs.as_ref().map_or(0, Vec::len) - 1;
         Ok(FinalAccountMint {
-            tx: built_with(staged, &self.staking)?,
+            tx: built_with(staged, Patches::staking(&self.staking))?,
             fee: ScriptFee {
                 size: fee - compute - script_reference,
                 compute,

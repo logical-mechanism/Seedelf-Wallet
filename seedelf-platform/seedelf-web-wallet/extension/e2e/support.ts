@@ -216,11 +216,12 @@ export const test = base.extend<{ scale: number; userDataDir: string; koios: Koi
   },
 });
 
-export async function openApp(context: BrowserContext, view: "popup" | "tab" = "tab"): Promise<Page> {
+/** The app in a full tab, or narrow as the side panel shows it (360 px, Chrome's default width). */
+export async function openApp(context: BrowserContext, view: "panel" | "tab" = "tab"): Promise<Page> {
   const page = await context.newPage();
-  if (view === "popup") await page.setViewportSize({ width: 360, height: 640 });
+  if (view === "panel") await page.setViewportSize({ width: 360, height: 640 });
   const app = await appUrl(context);
-  await page.goto(view === "tab" ? `${app}?view=tab` : app);
+  await page.goto(`${app}?view=${view}`);
   return page;
 }
 

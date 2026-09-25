@@ -13,6 +13,7 @@ import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
 import type { PreferencesService } from "./preferences";
+import type { PriceService } from "./prices";
 import type { SendService } from "./send";
 import type { StakingService } from "./staking";
 import type { TransferService } from "./transfer";
@@ -34,6 +35,7 @@ export interface Context {
   coins: CoinControlService;
   staking: StakingService;
   preferences: PreferencesService;
+  prices: PriceService;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -92,7 +94,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "remove-submit":
       return ctx.withdraw.submitRemove(ctx.network, message.txHash);
     case "send-build":
-      return ctx.send.build(ctx.network, message.payments);
+      return ctx.send.build(ctx.network, message.payments, message.note);
     case "send-submit":
       return ctx.send.submit(ctx.network, message.txHash);
     case "pending-tx":
@@ -102,6 +104,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return status(ctx);
     case "reveal-phrase":
       return { words: await wallet.revealPhrase(message.password) };
+    case "check-phrase":
+      return { matches: await wallet.checkPhrase(message.phrase) };
     case "change-password":
       await wallet.changePassword(message.current, message.next);
       return null;
@@ -151,8 +155,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.staking.submit(ctx.network, message.txHash);
     case "preferences":
       return ctx.preferences.get();
-    case "preferences-set":
-      return ctx.preferences.set(message);
+    case "preferences-set": {
+      const { type: _type, ...change } = message;
+      return ctx.preferences.set(change);
+    }
+    case "price":
+      return ctx.prices.get(ctx.network);
   }
 }
 

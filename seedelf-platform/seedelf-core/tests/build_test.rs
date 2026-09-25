@@ -931,6 +931,7 @@ fn pays_several_recipients_in_order_each_its_own_amount_and_tokens() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -992,6 +993,7 @@ fn several_recipients_refuse_max_too_much_and_no_one() {
             true,
             &w.change,
             &Staking::none(),
+            None,
         )
         .err()
         .map(|e| e.to_string())
@@ -1080,6 +1082,7 @@ fn a_transaction_over_the_size_limit_is_refused_in_words() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .err()
     .unwrap()
@@ -1093,7 +1096,8 @@ fn a_transaction_over_the_size_limit_is_refused_in_words() {
             &recipients[..20],
             true,
             &w.change,
-            &Staking::none()
+            &Staking::none(),
+            None,
         )
         .is_ok()
     );

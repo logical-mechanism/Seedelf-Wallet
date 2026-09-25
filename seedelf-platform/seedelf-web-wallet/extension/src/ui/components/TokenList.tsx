@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import type { TokenAmount } from "../../shared/rpc";
 import { tokenKey } from "../format";
 import { useNetwork } from "../network";
+import { useAmounts } from "../preferences";
 import { initials, sortTokens, tint, type TokenView, viewToken } from "../tokens";
 import { CopyField } from "./CopyField";
 import { CheckIcon, ChevronRightIcon } from "./Icons";
@@ -26,18 +27,19 @@ export function TokenAvatar({ view, large }: { view: TokenView; large?: boolean 
 }
 
 export function TokenRow({ view, onOpen }: { view: TokenView; onOpen: (view: TokenView) => void }) {
+  const amount = useAmounts().text(view.amount);
   return (
     <li>
       <button
         type="button"
         className="token-row"
         onClick={() => onOpen(view)}
-        aria-label={`${view.label}, ${view.amount}`}
+        aria-label={`${view.label}, ${amount}`}
         title={`${view.label}: details`}
       >
         <TokenAvatar view={view} />
         <span className="token-row__label">{view.label}</span>
-        <span className="token-row__amount">{view.amount}</span>
+        <span className="token-row__amount">{amount}</span>
         <span className="token-row__sub">{view.sub}</span>
       </button>
     </li>
@@ -85,13 +87,14 @@ export function TokenList({
 /** A token's details, in a modal: what it is, how much, and the ids that identify it, each with Copy. */
 export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () => void }) {
   const t = view.token;
+  const amounts = useAmounts();
   return (
     <Modal title={view.label} titleId="token-details-title" onClose={onClose}>
       <div className="token-details" data-testid="token-details">
         <div className="token-details__top">
           <TokenAvatar view={view} large />
           <p className="token-details__amount" data-testid="token-amount">
-            {view.amount}
+            {amounts.text(view.amount)}
           </p>
           {view.info && <p className="note">{view.info.name}</p>}
         </div>

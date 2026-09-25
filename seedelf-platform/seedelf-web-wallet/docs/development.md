@@ -33,7 +33,7 @@ Chrome runs an extension straight from a folder once developer mode is on. There
 1. Build it: `cd seedelf-web-wallet/extension && npm install && npm run build`. This builds the Rust core to WebAssembly and then the extension into `dist/`. The default build targets preprod.
 2. Open `chrome://extensions` and turn on **Developer mode** (top right).
 3. Click **Load unpacked** and choose the `dist/` folder.
-4. Pin the extension, then click its icon to open the popup.
+4. Pin the extension, then click its icon: the wallet opens in a tab, or in the side panel once Settings says so.
 
 After a rebuild, click the reload arrow on the extension's card. `npm run dev` rebuilds `dist/` on every change, but you still reload the extension by hand.
 
@@ -46,7 +46,7 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 - **Service worker:** click the "service worker" link under *Inspect views* on the extension's card.
   - That DevTools window shows the worker's console and network calls.
   - It also shows its storage, under **Application → Extension storage**.
-- **Popup:** right-click inside the popup and choose **Inspect**.
+- **Side panel:** right-click inside the panel and choose **Inspect**.
 - **Full tab:** use normal DevTools.
 
 **Gotchas:**
@@ -70,7 +70,7 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 | Rust | `seedelf-crypto`, `seedelf-core`, and the wasm crate | `cargo test`. The CLI's offline integration tests (`seedelf-cli/tests/cli/`) guard the builder extraction. |
 | Key derivation | The frozen v1 Seedelf key vectors, and the Cardano account vectors (verified against `@cardano-sdk`, Lace's library) | Checked in Rust, and again from JS through WebAssembly, so both sides agree |
 | TypeScript | The manifest, the vault and wallet state, the Koios and giveme.my clients, and the worker's services and handlers against the real WASM, over recorded preprod answers | Vitest (`npm test`) |
-| End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the popup and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. |
+| End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the side panel's layout and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. |
 | Live reads | The balance scan and the ADA Handle lookup against the real preprod Koios | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`; skipped otherwise |
 | Probes | Transactions checked against preprod's node and scripts, submitting nothing | `node tests/fixtures/probe-staking.mjs`: every staking transaction through Ogmios's decoder, and an account-paid mint with the rewards through the real policy. The `record-*.mjs` scripts do the same for the Seedelf spends, and keep what they recorded as fixtures. |
 | Live | Real preprod transactions from the built extension, by hand, never in CI | `node e2e/live/run.mjs all` runs every Seedelf flow in one browser session on the private test wallet, waiting for each to confirm, and prints the hashes. `node e2e/live/run.mjs staking` stakes, delegates the vote and changes pool; `withdraw-rewards` and `unstake` wait until rewards arrive. `run.mjs` also takes single flows: `mint live-1 account + move-in 25.5`. |
@@ -78,13 +78,13 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 
 ## Preprod checklist before a release
 
-On the built extension (`npm run build`, then load `dist/` unpacked), in the popup and in a tab.
+On the built extension (`npm run build`, then load `dist/` unpacked), in the side panel and in a tab.
 
 1. **The automated layers:** `cargo test --workspace`, the WASM tests, `npm test` and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
-2. **Onboarding:** create a wallet from the popup (it opens a tab): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match. Restore a 12- or 15-word phrase from Lace or Eternl, and check its account.
+2. **Onboarding:** create a wallet from the toolbar button (it opens a tab), and once from the side panel (it opens one too): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match. Restore a 12- or 15-word phrase from Lace or Eternl, and check its account.
 3. **Locking:**
    - the lock button;
-   - auto-lock after 15 minutes;
+   - auto-lock after 15 minutes, and after 1 minute once Settings says so;
    - a wrong password's back-off;
    - Forgot password, then delete, then restore;
    - a browser restart comes back locked.

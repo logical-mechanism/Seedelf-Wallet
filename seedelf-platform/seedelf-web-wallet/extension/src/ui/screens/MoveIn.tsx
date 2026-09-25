@@ -11,6 +11,7 @@ import { AdaInput, lovelaceToSend, MinimumHint, MinimumNote, RoundNote } from ".
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { HandleWarning } from "../components/HandleWarning";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { adaWithTokens, formatAda, formatQuantity, lockedAside, rewardsAside, tokenKey as key } from "../format";
 import { WithdrawalRow } from "./CardanoSend";
@@ -169,6 +170,7 @@ export function MoveIn({
         onChange={setTokenAmounts}
         legend="Bring tokens along (optional)"
       />
+      <HandleWarning tokens={tokens.sent} />
 
       <Callout tone="privacy">
         Making money private links your public account to the new private UTxOs, but not to any Seedelf name.

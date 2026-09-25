@@ -11,15 +11,22 @@
 // first, and one batched `tx_info` per page of 20, only while Activity is
 // open. The pages are kept for the session, so opening it again asks only
 // for what's newer: one request. The account's addresses come from the last
-// balance reading.
+// balance reading. `tx_info` also says what each transaction did with the
+// stake key (its certificates and withdrawals) and carries its note
+// (CIP-20's message), at no extra request; a pool's ticker comes only from
+// what's on the device.
+//
+// Each entry keeps the tokens that moved, with signed quantities, for its
+// details and the CSV export (older Seedelf entries have only a count).
 
 import type { NetworkName } from "../networks";
-import type { ActivityEntry, PendingTx } from "../shared/rpc";
+import type { ActivityEntry, ActivityStaking, PendingTx, TokenQuantity } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
 import type { Koios, KoiosTxInfo, KoiosUtxo } from "./koios";
 import type { PrivateStore } from "./private-store";
 import { outpoint } from "./spent";
+import { knownPool } from "./staking";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
 
@@ -69,6 +76,21 @@ export interface ActivityDeps {
   store: PrivateStore;
   koios: (network: NetworkName) => Koios;
   contract?: ContractConfig;
+  /** chrome.storage.local, where the pool list is kept: a staking entry's ticker is looked up there. */
+  local?: Area;
+}
+
+/** Each token's quantity, signed by `sign`, from anything listing tokens. */
+function signedAssets(tokens: Array<{ policyId: string; assetName: string; quantity: string }>, sign: 1n | -1n): TokenQuantity[] {
+  const sums = new Map<string, bigint>();
+  for (const t of tokens) {
+    const key = `${t.policyId}.${t.assetName}`;
+    sums.set(key, (sums.get(key) ?? 0n) + BigInt(t.quantity));
+  }
+  return [...sums].map(([key, q]) => {
+    const [policyId, assetName] = key.split(".") as [string, string];
+    return { policyId, assetName, quantity: (sign * q).toString() };
+  });
 }
 
 export class ActivityService {
@@ -94,8 +116,16 @@ export class ActivityService {
     // A transfer or a withdrawal pays one or more; the rest pay one amount.
     const paid: Array<Record<string, any>> = Array.isArray(s.payments) ? s.payments : [s];
     const lovelace = paid.reduce((sum, p) => sum + BigInt(p.lovelace ?? "0"), 0n).toString();
-    const kinds = new Set(paid.flatMap((p) => (Array.isArray(p.tokens) ? p.tokens : []).map((t: any) => `${t.policyId}.${t.assetName}`)));
-    const shared = { txHash: pending.txHash, at: pending.submittedAt, lovelace, tokens: kinds.size, fee: feeOf(s.fee) };
+    const moved = paid.flatMap((p) => (Array.isArray(p.tokens) ? p.tokens : []));
+    const assets = signedAssets(moved, pending.kind === "move-in" ? 1n : -1n);
+    const shared = {
+      txHash: pending.txHash,
+      at: pending.submittedAt,
+      lovelace,
+      tokens: assets.length,
+      fee: feeOf(s.fee),
+      ...(assets.length ? { assets } : {}),
+    };
     const entry: ActivityEntry =
       pending.kind === "move-in"
         ? { ...shared, kind: "move-in", direction: "in" }
@@ -138,7 +168,11 @@ export class ActivityService {
           tokens: 0,
         };
         entry.lovelace = (BigInt(entry.lovelace) + BigInt(u.value)).toString();
-        entry.tokens += u.asset_list?.length ?? 0;
+        const came = (u.asset_list ?? []).map((a) => ({ policyId: a.policy_id, assetName: a.asset_name, quantity: a.quantity }));
+        // Everything here arrived: the quantities are all positive.
+        const assets = signedAssets([...(entry.assets ?? []), ...came], 1n);
+        entry.tokens = assets.length;
+        if (assets.length) entry.assets = assets;
         byTx.set(u.tx_hash, entry);
       }
       const known = new Set(h.entries.map((e) => e.txHash));
@@ -166,21 +200,22 @@ export class ActivityService {
     const koios = this.deps.koios(network);
     const ours = new Set(account.addresses);
     const own = new Map((await this.seedelf(network)).map((e) => [e.txHash, e]));
+    const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake));
 
     let pages: AccountPages;
     if (!kept) {
       const rows = await koios.accountTxs(stake, { offset: 0, limit: PAGE });
       // tx_info doesn't answer in the order asked: every page is sorted newest first.
-      const entries = merge([], describe(await koios.txInfo(rows.map((r) => r.tx_hash)), ours, own));
+      const entries = merge([], await read(await koios.txInfo(rows.map((r) => r.tx_hash))));
       pages = { entries, top: Math.max(0, ...rows.map((r) => r.block_height)), offset: rows.length, more: rows.length === PAGE };
     } else if (more) {
       const rows = await koios.accountTxs(stake, { offset: kept.offset, limit: PAGE });
-      const entries = describe(await koios.txInfo(rows.map((r) => r.tx_hash)), ours, own);
+      const entries = await read(await koios.txInfo(rows.map((r) => r.tx_hash)));
       pages = { ...kept, entries: merge(kept.entries, entries), offset: kept.offset + rows.length, more: rows.length === PAGE };
     } else {
       const rows = await koios.accountTxs(stake, { after: kept.top });
       const fresh = rows.filter((r) => !kept.entries.some((e) => e.txHash === r.tx_hash));
-      const entries = describe(await txInfoPaged(koios, fresh.map((r) => r.tx_hash)), ours, own);
+      const entries = await read(await txInfoPaged(koios, fresh.map((r) => r.tx_hash)));
       pages = {
         ...kept,
         entries: merge(kept.entries, entries),
@@ -190,6 +225,18 @@ export class ActivityService {
     }
     await wallet.withKeys(() => session.set(key, pages));
     return { entries: pages.entries, more: pages.more };
+  }
+
+  /** Staking entries' pool tickers, from what's on the device only. */
+  private async tickers(network: NetworkName, entries: ActivityEntry[]): Promise<ActivityEntry[]> {
+    const { wallet, session, local } = this.deps;
+    for (const e of entries) {
+      const pool = e.staking?.pool;
+      if (!pool) continue;
+      const ticker = (await knownPool({ wallet, session, local }, network, pool))?.ticker;
+      if (ticker) e.staking = { ...e.staking, ticker };
+    }
+    return entries;
   }
 
   private update(network: NetworkName, change: (h: History) => History | undefined): Promise<void> {
@@ -214,16 +261,74 @@ async function txInfoPaged(koios: Koios, hashes: string[]): Promise<KoiosTxInfo[
 const merge = (a: ActivityEntry[], b: ActivityEntry[]) =>
   [...new Map([...a, ...b].map((e) => [e.txHash, e])).values()].sort(newestFirst);
 
+/** The most of someone's note an entry keeps. */
+const NOTE_MAX = 500;
+
+/** CIP-20's message in a transaction's metadata (label 674, `msg`): its lines joined, as other wallets show it. */
+export function noteOf(metadata: KoiosTxInfo["metadata"]): string | undefined {
+  const message = metadata?.["674"] as { msg?: unknown } | undefined;
+  const msg = message?.msg;
+  const lines = Array.isArray(msg) ? msg : typeof msg === "string" ? [msg] : [];
+  const text = lines
+    .filter((l): l is string => typeof l === "string")
+    .join(" ")
+    .trim();
+  if (!text) return undefined;
+  return text.length > NOTE_MAX ? `${text.slice(0, NOTE_MAX)}…` : text;
+}
+
+/** A certificate's field as a string (Koios gives amounts as strings, or now and then as numbers). */
+const field = (info: Record<string, unknown>, key: string): string | undefined => {
+  const v = info[key];
+  return typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
+};
+const plus = (a: string | undefined, b: string | undefined) => (b === undefined ? a : (BigInt(a ?? "0") + BigInt(b)).toString());
+
+/** What a transaction did with the account's stake key: its certificates naming it, and its withdrawal. */
+export function stakingOf(tx: KoiosTxInfo, stake: string): ActivityStaking | undefined {
+  const s: ActivityStaking = {};
+  for (const c of tx.certificates ?? []) {
+    const info = c.info ?? {};
+    if (info.stake_address !== stake) continue;
+    switch (c.type) {
+      case "stake_registration":
+        s.deposit = plus(s.deposit, field(info, "deposit"));
+        break;
+      // Koios's documentation spells it both ways.
+      case "stake_deregistration":
+      case "stake_deregistraion":
+        s.stopped = true;
+        s.refund = plus(s.refund, field(info, "refund") ?? field(info, "deposit"));
+        break;
+      case "pool_delegation":
+      case "delegation":
+        s.pool = field(info, "pool_id_bech32") ?? field(info, "pool");
+        break;
+      case "vote_delegation":
+        s.drep = field(info, "drep_id");
+        break;
+    }
+  }
+  const rewards = (tx.withdrawals ?? []).filter((w) => w.stake_addr === stake).reduce((sum, w) => sum + BigInt(w.amount), 0n);
+  if (rewards > 0n) s.rewards = rewards.toString();
+  return Object.keys(s).length ? s : undefined;
+}
+
 /**
  * What each transaction did to the account: its outputs to the account's
- * addresses less its inputs from them, in ADA, and how many kinds of token
- * changed. One of this wallet's own flows (a move-in, an account-paid mint, a
- * withdrawal to the account) is named as such.
+ * addresses less its inputs from them, in ADA, and which tokens changed.
+ * One of this wallet's own flows (a move-in, an account-paid mint, a
+ * withdrawal to the account) is named as such; otherwise a transaction that
+ * staked, delegated the vote, stopped staking, or only withdrew the rewards
+ * is named for that, from its certificates and withdrawals (`stake`: the
+ * account's stake address). A payment that also spent the rewards stays
+ * "Sent", with the rewards in its `staking`.
  */
 export function describe(
   txs: KoiosTxInfo[],
   ours: ReadonlySet<string>,
   own: ReadonlyMap<string, ActivityEntry>,
+  stake?: string,
 ): ActivityEntry[] {
   return txs.map((tx) => {
     let net = 0n;
@@ -241,15 +346,42 @@ export function describe(
     const spent = tx.inputs.some((i) => ours.has(i.payment_addr.bech32));
     const mine = own.get(tx.tx_hash);
     const direction = net > 0n ? "in" : net < 0n ? "out" : "none";
+    const staking = stake ? stakingOf(tx, stake) : undefined;
+    const paysOthers = tx.outputs.some((o) => !ours.has(o.payment_addr.bech32));
+    const kind: ActivityEntry["kind"] = mine
+      ? mine.kind
+      : staking?.stopped
+        ? "unstake"
+        : staking?.pool
+          ? "stake"
+          : staking?.drep
+            ? "vote"
+            : staking?.rewards && !paysOthers
+              ? "withdraw-rewards"
+              : direction === "in" && !spent
+                ? "received"
+                : "sent";
+    const moved = [...assets].filter(([, q]) => q !== 0n);
+    const note = noteOf(tx.metadata);
     return {
       txHash: tx.tx_hash,
       at: tx.tx_timestamp * 1000,
-      kind: mine ? mine.kind : direction === "in" && !spent ? "received" : "sent",
+      kind,
       direction,
       lovelace: (net < 0n ? -net : net).toString(),
-      tokens: [...assets.values()].filter((q) => q !== 0n).length,
+      tokens: moved.length,
       ...(spent ? { fee: tx.fee } : {}),
       ...(mine?.detail ? { detail: mine.detail } : {}),
+      ...(moved.length
+        ? {
+            assets: moved.map(([key, q]) => {
+              const [policyId, assetName] = key.split(".") as [string, string];
+              return { policyId, assetName, quantity: q.toString() };
+            }),
+          }
+        : {}),
+      ...(note ? { note } : {}),
+      ...(staking ? { staking } : {}),
     };
   });
 }

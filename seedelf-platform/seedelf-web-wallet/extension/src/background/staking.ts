@@ -82,16 +82,29 @@ function stakeInfoOf(info: KoiosAccountInfo | undefined, pool: PoolRef | null): 
 }
 
 /**
- * A pool's ticker and name: from what this session has read, then the pool
- * list on the device, then one `pool_info`. A failed lookup leaves just the ID.
+ * A pool's ticker and name from what's on the device, asking no one: what
+ * this session has read, then the pool list.
  */
-async function poolRef(deps: StakeDeps, network: NetworkName, id: string): Promise<PoolRef> {
+export async function knownPool(
+  deps: Pick<StakeDeps, "wallet" | "session" | "local">,
+  network: NetworkName,
+  id: string,
+): Promise<PoolRef | undefined> {
   const known = await deps.wallet.withKeys(() =>
     deps.session.get<Record<string, PoolRef>>(SESSION_POOL_REFS_PREFIX + network),
   );
   if (known?.[id]) return known[id];
   const listed = (await deps.local?.get<PoolList>(LOCAL_POOLS_PREFIX + network))?.pools.find((p) => p.id === id);
-  if (listed?.ticker) return { id, ticker: listed.ticker };
+  return listed?.ticker ? { id, ticker: listed.ticker } : undefined;
+}
+
+/**
+ * A pool's ticker and name: from what's on the device (`knownPool`), then
+ * one `pool_info`. A failed lookup leaves just the ID.
+ */
+async function poolRef(deps: StakeDeps, network: NetworkName, id: string): Promise<PoolRef> {
+  const known = await knownPool(deps, network, id);
+  if (known) return known;
   try {
     const [info] = await deps.koios(network).poolInfo([id]);
     if (!info) return { id };

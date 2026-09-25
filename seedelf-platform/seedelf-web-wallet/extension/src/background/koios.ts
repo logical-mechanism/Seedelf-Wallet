@@ -43,6 +43,12 @@ export interface KoiosTxInfo {
   fee: string;
   inputs: KoiosTxOut[];
   outputs: KoiosTxOut[];
+  /** The transaction's metadata, by label. */
+  metadata?: Record<string, unknown> | null;
+  /** Rewards withdrawn, per reward account. */
+  withdrawals?: Array<{ amount: string; stake_addr: string }> | null;
+  /** Its certificates: `type` is Koios's name (`stake_registration`, `pool_delegation`, `vote_delegation`, …), `info` what each names. */
+  certificates?: Array<{ index: number | null; type: string; info: Record<string, unknown> | null }> | null;
 }
 
 export interface KoiosTxOut {
@@ -223,13 +229,14 @@ export class Koios {
   /** Inputs, outputs and fee of up to 20 transactions, in one request; nothing else. */
   txInfo(txHashes: string[]): Promise<KoiosTxInfo[]> {
     if (!txHashes.length) return Promise.resolve([]);
+    // Metadata, withdrawals and certificates cost no extra request: they're what Activity shows of notes and staking.
     return this.post<KoiosTxInfo>("tx_info", {
       _tx_hashes: txHashes,
       _inputs: true,
-      _metadata: false,
+      _metadata: true,
       _assets: true,
-      _withdrawals: false,
-      _certs: false,
+      _withdrawals: true,
+      _certs: true,
       _scripts: false,
       _bytecode: false,
     });

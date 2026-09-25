@@ -400,6 +400,7 @@ mod move_in {
                 tokens,
             }],
             withdrawal: None,
+            note: None,
         }
     }
 
@@ -530,6 +531,53 @@ mod move_in {
         assert!(max.max);
         assert_eq!(max.payments[0].minimum, None);
         assert_eq!(max.inputs, 6);
+    }
+
+    #[test]
+    fn a_note_goes_on_the_send_and_the_keys_sign_it_there() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let to = theirs();
+        let mut request = send(account_utxos(&account), &to, Some("3000000"), vec![]);
+        request.note = Some("  Invoice 42  ".into());
+        let result = api::account_send(&account, request).unwrap();
+        assert_eq!(result.note.as_deref(), Some("Invoice 42"));
+
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        assert_eq!(hex::encode(*tx.hash()), result.tx_hash);
+        assert!(tx.metadata().find(674).is_some(), "CIP-20's label");
+        assert!(!tx.vkey_witnesses().is_empty());
+        for w in tx.vkey_witnesses().iter() {
+            let key: [u8; 32] = w.vkey.to_vec().try_into().unwrap();
+            let sig: [u8; 64] = w.signature.to_vec().try_into().unwrap();
+            assert!(
+                PublicKey::from(key).verify(tx.hash(), &Signature::from(sig)),
+                "signed over the hash with the note in it"
+            );
+        }
+
+        // No note, or only spaces: nothing is added.
+        let mut request = send(account_utxos(&account), &to, Some("3000000"), vec![]);
+        request.note = Some("   ".into());
+        let result = api::account_send(&account, request).unwrap();
+        assert_eq!(result.note, None);
+        let bytes = hex::decode(&result.tx_cbor).unwrap();
+        assert!(
+            MultiEraTx::decode(&bytes)
+                .unwrap()
+                .metadata()
+                .find(674)
+                .is_none()
+        );
+
+        // A note that can't go on a transaction is refused, in words.
+        let mut request = send(account_utxos(&account), &to, Some("3000000"), vec![]);
+        request.note = Some("x".repeat(65));
+        let e = api::account_send(&account, request)
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(e, "A note is at most 64 characters, not 65");
     }
 
     #[test]
@@ -2382,6 +2430,7 @@ mod staking {
                 tokens: vec![],
             }],
             withdrawal: withdrawal.map(String::from),
+            note: None,
         };
         let plain = api::account_send(&account, send(None)).unwrap();
         assert_eq!(plain.withdrawal, "0");

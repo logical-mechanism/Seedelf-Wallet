@@ -11,7 +11,7 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(t = testBalances()): Context {
-  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences } =
+  const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -28,6 +28,7 @@ function context(t = testBalances()): Context {
     coins,
     staking,
     preferences,
+    prices,
     version: "0.1.0",
     network: "preprod",
     networks: ["preprod"],
@@ -96,6 +97,24 @@ describe("handlers", () => {
     );
     const swapped = v.phrase.split(" ").reverse().join(" ");
     await expect(handle({ type: "validate-phrase", phrase: swapped }, ctx)).rejects.toThrow("checksum");
+  });
+
+  it("checks a written phrase, sets preferences, and asks no price on preprod", async () => {
+    const t = testBalances();
+    const ctx = context(t);
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    const other = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 24)!;
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    expect(await handle({ type: "check-phrase", phrase: v.phrase }, ctx)).toEqual({ matches: true });
+    expect(await handle({ type: "check-phrase", phrase: other.phrase }, ctx)).toEqual({ matches: false });
+    expect(isMessage({ type: "check-phrase", phrase: v.phrase })).toBe(true);
+
+    expect(await handle({ type: "preferences-set", hideBalances: true, currency: "eur" }, ctx)).toMatchObject({
+      hideBalances: true,
+      currency: "eur",
+    });
+    expect(await handle({ type: "price" }, ctx)).toBeNull();
+    expect(t.coingecko.state.urls).toEqual([]);
   });
 
   it("reads balances once unlocked", async () => {

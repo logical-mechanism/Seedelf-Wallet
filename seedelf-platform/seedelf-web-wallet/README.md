@@ -39,7 +39,9 @@ So money that sits stays staked in the public account, and is made private when 
 2. Use a dApp with that account.
 3. Whatever comes back is swept into a Seedelf automatically.
 
-**Next, maybe:** the Cardano account's staking changes and withdrawals in its Activity. See [plans/chunk-13-staking.md](docs/plans/chunk-13-staking.md#follow-ups-not-this-chunk).
+**Also in v1** (chunk 14, from what Lace and Eternl have): the public account's staking changes in its Activity, a note on a public send, hiding the balances, the lock time, a check of the written recovery phrase, Activity saved as CSV, and ADA's value in a currency on mainnet. See [plans/chunk-14-style-flow-2.md](docs/plans/chunk-14-style-flow-2.md).
+
+**Later, maybe:** the dApp connector for the public account (with the contract round trip), NFT images, several accounts, and word of incoming payments without opening the wallet (it would need reading the chain in the background).
 
 **Not planned:** voting on proposals or registering as a DRep, several pools per account, swaps, hardware wallets, other chains, mobile. We add features only if there's demand.
 
@@ -82,7 +84,7 @@ Every Lace path in these docs is relative to that checkout.
 
 - **Networks:** preprod first. Mainnet is a build flag. See [architecture.md](docs/architecture.md#networks).
 - **Seedelf key derivation:** domain-tagged HKDF over the BIP39 seed. It is permanent once shipped. See [keys-and-accounts.md](docs/keys-and-accounts.md#seedelf-key-derivation).
-- **UI:** a popup, plus a full-tab view of the same app, like Eternl. No side panel. See [architecture.md](docs/architecture.md#ui).
+- **UI:** the same app in a full tab (the default) or Chrome's side panel, the user's choice in Settings, as in Lace. No popup. See [architecture.md](docs/architecture.md#ui).
 - **Look:** the Seedelf logo set lives in [brand/](brand/). The UI's colours come from it.
 - **Staying unlocked:** Chrome stops the extension's background worker after about 30 seconds idle, which clears its memory.
   - The unlocked key is kept in `chrome.storage.session` (memory-only, cleared when the browser closes).

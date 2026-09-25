@@ -59,6 +59,22 @@ describe("send", () => {
     expect(txIdOf(Uint8Array.from(Buffer.from(built!.txCbor, "hex")))).toBe(summary.txHash);
   });
 
+  it("puts a note on the payment as the transaction carries it, and refuses one that can't go", async () => {
+    const t = await unlocked();
+    const to = [{ to: THEIRS, lovelace: "3000000", tokens: [] }];
+    const plain = await t.send.build("preprod", to);
+    expect(plain.note ?? null).toBeNull();
+    const noted = await t.send.build("preprod", to, "  Invoice 42  ");
+    expect(noted.note).toBe("Invoice 42");
+    // Its bytes are paid for.
+    expect(BigInt(noted.fee)).toBeGreaterThan(BigInt(plain.fee));
+    const built = await t.session.get<{ txCbor: string; txHash: string; note: string }>(SESSION_SEND);
+    expect(built!.note).toBe("Invoice 42");
+    expect(txIdOf(Uint8Array.from(Buffer.from(built!.txCbor, "hex")))).toBe(noted.txHash);
+    await expect(t.send.build("preprod", to, "x".repeat(65))).rejects.toThrow("A note is at most 64 characters, not 65");
+    await expect(t.send.build("preprod", to, "two\tparts")).rejects.toThrow("one line of text");
+  });
+
   it("sends only the ADA the tokens need when the amount is empty, and raises a short one", async () => {
     const t = await unlocked();
     const [token] = (await t.send.build("preprod", [{ to: THEIRS, lovelace: "0", tokens: [{ ...TUSDM, quantity: "1" }] }])).payments;

@@ -99,7 +99,8 @@ Seedelf Wallet is a Cardano wallet with the Seedelf stealth wallet contract buil
 | Permission | Justification |
 |---|---|
 | `storage` | `Keeps the wallet on the user's device: the recovery phrase, encrypted with the user's password, in chrome.storage.local, and the unlocked session in chrome.storage.session, which is memory-only and cleared when the wallet locks or the browser closes. Nothing is synced.` |
-| `alarms` | `Locks the wallet automatically after 15 minutes without use. A one-minute alarm checks the time since the user last did something.` |
+| `alarms` | `Locks the wallet automatically after a time without use that the user sets (15 minutes unless changed). A one-minute alarm checks the time since the user last did something.` |
+| `sidePanel` | `Lets the user open the wallet in Chrome's side panel instead of a tab, a choice in its Settings. The side panel shows only the extension's own page.` |
 | Host `https://preprod.koios.rest/*` | `Koios is the public Cardano API the wallet uses to read the user's balances, UTxOs and staking, and the stake pools and DReps, to evaluate scripts, and to submit the transactions the user approves.` |
 | Host `https://www.giveme.my/*` | `giveme.my adds shared collateral to Seedelf script transactions. The wallet sends it each such transaction to witness, so that the user's own address never appears as collateral.` |
 
@@ -137,7 +138,7 @@ Paste this if the dashboard asks for test instructions:
 ```text
 The extension runs on Cardano's preprod test network, so nothing costs real money.
 
-To see an empty wallet: click the toolbar icon and choose "Create new wallet". A tab opens: reveal and write down the phrase, confirm three of its words, then set a password.
+To see an empty wallet: click the toolbar icon, and the wallet opens in a tab. Choose "Create new wallet": reveal and write down the phrase, confirm three of its words, then set a password.
 
 To see a wallet with test funds: choose "Restore wallet" instead and paste the standard public BIP39 test phrase:
 abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about

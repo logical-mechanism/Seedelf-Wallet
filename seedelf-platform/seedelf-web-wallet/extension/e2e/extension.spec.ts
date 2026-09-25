@@ -36,15 +36,15 @@ test("the extension loads with a module service worker, and a dev build with the
   else expect(id).toMatch(/^[a-p]{32}$/);
 });
 
-test("the popup welcomes a new user and hands onboarding to a full tab", async ({ context }) => {
-  const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("network")).toHaveText("PREPROD");
-  await expect(popup.getByRole("img", { name: "Seedelf Wallet" })).toBeVisible();
-  await popup.screenshot({ path: "test-results/welcome.png" });
+test("the side panel welcomes a new user and hands onboarding to a full tab", async ({ context }) => {
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("network")).toHaveText("PREPROD");
+  await expect(panel.getByRole("img", { name: "Seedelf Wallet" })).toBeVisible();
+  await panel.screenshot({ path: "test-results/welcome.png" });
 
   const [tab] = await Promise.all([
     context.waitForEvent("page"),
-    popup.getByRole("button", { name: "Restore wallet" }).click(),
+    panel.getByRole("button", { name: "Restore wallet" }).click(),
   ]);
   await expect(tab).toHaveURL(`${await appUrl(context)}?view=tab#restore`);
   await expect(tab.getByRole("heading", { name: "Restore a wallet" })).toBeVisible();
@@ -97,16 +97,16 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
   const address = await page.getByTestId("receive-address").textContent();
 
   // Reopening the app keeps it unlocked, on the same wallet.
-  const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("getting-started")).toContainText("Fund your public account");
-  await snap(popup, "home-popup");
-  await openReceive(popup);
-  await expect(popup.getByTestId("receive-address")).toHaveText(address!);
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("getting-started")).toContainText("Fund your public account");
+  await snap(panel, "home-panel");
+  await openReceive(panel);
+  await expect(panel.getByTestId("receive-address")).toHaveText(address!);
 
   // Lock: every open page follows the worker.
   await page.getByRole("button", { name: "Lock" }).click();
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
-  await expect(popup.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 
   // Show lets you check what you typed; Hide covers it again.
   const password = page.getByLabel("Password");
@@ -120,9 +120,9 @@ test("create: reveal, confirm three words, set a password, then lock and unlock"
   await expect(password).toHaveAttribute("type", "password");
   await page.getByRole("button", { name: "Unlock" }).click();
   await expect(page.getByTestId("getting-started")).toBeVisible();
-  await expect(popup.getByTestId("getting-started")).toBeVisible();
-  await openReceive(popup);
-  await expect(popup.getByTestId("receive-address")).toHaveText(address!);
+  await expect(panel.getByTestId("getting-started")).toBeVisible();
+  await openReceive(panel);
+  await expect(panel.getByTestId("receive-address")).toHaveText(address!);
 });
 
 test("restore: a pasted vector phrase gives its Lace-matching address", async ({ context }) => {
@@ -296,19 +296,19 @@ test("home shows the private balance, Seedelfs and the public account", async ({
   await snap(page, "receive-seedelf");
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
-  // The popup opens from the worker's reading; Refresh reads the chain again.
-  const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
-  await snap(popup, "home-balances-popup");
+  // The panel opens from the worker's reading; Refresh reads the chain again.
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await snap(panel, "home-balances-panel");
   expect(koios.calls).toHaveLength(5);
   // The pool's ticker is remembered for the session.
-  await popup.getByRole("button", { name: "Refresh" }).click();
+  await panel.getByRole("button", { name: "Refresh" }).click();
   await expect.poll(() => koios.calls.length).toBe(9);
-  await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
+  await expect(panel.getByTestId("updated")).toHaveText("Updated just now");
 
-  // In the narrow popup the name is cut in the middle, keeping its start and end.
-  await popup.getByRole("button", { name: "Receive privately" }).click();
-  const narrow = popup.getByTestId(`seedelf-name-${mine}`);
+  // In the narrow panel the name is cut in the middle, keeping its start and end.
+  await panel.getByRole("button", { name: "Receive privately" }).click();
+  const narrow = panel.getByTestId(`seedelf-name-${mine}`);
   await expect(narrow).toHaveText(mine);
   expect(await narrow.locator(".middle-ellipsis__head").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
   await expect(narrow.locator(".middle-ellipsis__tail")).toHaveText(mine.slice(-6));
@@ -345,19 +345,19 @@ test("the first reading shows the splash, which fades into the wallet; a kept re
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("splash")).toBeVisible();
   await expect(page.getByRole("status", { name: "Loading your wallet" })).toBeVisible();
-  const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("splash")).toBeVisible();
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("splash")).toBeVisible();
   await page.screenshot({ path: "test-results/splash.png" });
-  await popup.screenshot({ path: "test-results/popup-splash.png" });
+  await panel.screenshot({ path: "test-results/panel-splash.png" });
 
   await expect(page.getByTestId("splash")).toHaveCount(0);
   await expect(page.getByTestId("seedelf-lovelace")).toBeVisible();
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
-  await expect(popup.getByTestId("splash")).toHaveCount(0);
+  await expect(panel.getByTestId("splash")).toHaveCount(0);
 
-  // The worker keeps the reading, so a popup opened now goes straight to it.
+  // The worker keeps the reading, so a side panel opened now goes straight to it.
   koios.delayMs = undefined;
-  const again = await openApp(context, "popup");
+  const again = await openApp(context, "panel");
   await expect(again.getByTestId("seedelf-lovelace")).toBeVisible();
   await expect(again.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await expect(again.getByTestId("splash")).toHaveCount(0);
@@ -577,6 +577,17 @@ test("activity: the private history from the device, the public account's from K
   await expect.poll(() => koios.calls.slice(before)).toEqual(["account_txs", "tx_info", "account_txs", "tx_info", "account_txs"]);
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
   await expect(list.getByRole("listitem")).toHaveCount(40);
+
+  // Save as CSV: what's listed, on the device, with no request.
+  const calls = koios.calls.length;
+  await expect(page.getByTestId("export-note")).toContainText("40 transactions read so far: Load more first");
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Save as CSV" }).click()]);
+  expect(download.suggestedFilename()).toMatch(/^seedelf-wallet-public-activity-preprod-\d{4}-\d{2}-\d{2}\.csv$/);
+  const csv = readFileSync((await download.path())!, "utf8");
+  const rows = csv.replace(/^\uFEFF/, "").trimEnd().split("\r\n");
+  expect(rows[0]).toMatch(/^Date \(UTC\),Type,Direction,ADA,/);
+  expect(rows).toHaveLength(41);
+  expect(koios.calls).toHaveLength(calls);
 });
 
 test("move in: amount and a token, review, send, then watch it confirm", async ({ context, koios }) => {
@@ -676,13 +687,13 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   // Reopening the wallet resumes the watch; once confirmed, balances are read again.
   koios.confirmations = 2;
   const readsBefore = koios.calls.filter((c) => c === "credential_utxos").length;
-  const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("pending-tx")).toContainText("Made private");
-  await expect(popup.getByRole("button", { name: "Dismiss" })).toBeVisible();
-  await snap(popup, "pending-confirmed");
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("pending-tx")).toContainText("Made private");
+  await expect(panel.getByRole("button", { name: "Dismiss" })).toBeVisible();
+  await snap(panel, "pending-confirmed");
   await expect.poll(() => koios.calls.filter((c) => c === "credential_utxos").length).toBeGreaterThan(readsBefore);
-  await popup.getByRole("button", { name: "Dismiss" }).click();
-  await expect(popup.getByTestId("pending-tx")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Dismiss" }).click();
+  await expect(panel.getByTestId("pending-tx")).toHaveCount(0);
 });
 
 test("move in: Max, and an amount that's too big", async ({ context, koios }) => {
@@ -919,8 +930,8 @@ test("send from the public account: a token with only the ADA it needs, review, 
   expect(sent.sort()).toEqual(["asset_nft_address", ...review1, ...review1, "submittx"].sort());
 
   koios.confirmations = 1;
-  const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("pending-tx")).toContainText("Payment confirmed");
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("pending-tx")).toContainText("Payment confirmed");
 });
 
 test("send from the public account to a Seedelf: paste its name, see it found, review, send", async ({ context, koios }) => {
@@ -1097,8 +1108,8 @@ test("create a Seedelf from the public account: review, send, then watch it conf
   expect(koios.collateralAsked).toBe(0);
   await expect(page.getByRole("button", { name: "Create a Seedelf" })).toBeDisabled();
   koios.confirmations = 1;
-  const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("pending-tx")).toContainText("Seedelf created");
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("pending-tx")).toContainText("Seedelf created");
 });
 
 test("create a Seedelf from the private balance: tag rules, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
@@ -1367,15 +1378,15 @@ test("staking: the page, the pool browser, a change of pool reviewed and sent, t
   expect(koios.submitted).toHaveLength(1);
   expect(koios.collateralAsked).toBe(0);
   koios.confirmations = 1;
-  const popup = await openApp(context, "popup");
-  await expect(popup.getByTestId("pending-tx")).toContainText("Now staking");
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("pending-tx")).toContainText("Now staking");
 
   // The pool list is kept on the device: browsing again asks nothing.
   reads = koios.calls.length;
-  await cardanoTab(popup);
-  await popup.getByTestId("staking-row").click();
-  await popup.getByRole("button", { name: "Change pool" }).click();
-  await expect(popup.getByText("559 live pools")).toBeVisible();
+  await cardanoTab(panel);
+  await panel.getByTestId("staking-row").click();
+  await panel.getByRole("button", { name: "Change pool" }).click();
+  await expect(panel.getByText("559 live pools")).toBeVisible();
   expect(koios.calls.slice(reads).filter((c) => ["pool_list", "totals", "epoch_params"].includes(c))).toEqual([]);
 });
 
@@ -1495,119 +1506,246 @@ test("settings: payments spend the staking rewards until switched off", async ({
   await page.getByRole("button", { name: "Settings" }).click();
 
   // A new page reads the setting: the rewards are left out.
-  const popup = await openApp(context, "popup");
-  await cardanoTab(popup);
-  await popup.getByRole("button", { name: "Send publicly" }).click();
-  await expect(popup.getByText(/₳ available$/)).toBeVisible();
-  await expect(popup.getByText("of rewards")).toHaveCount(0);
+  const panel = await openApp(context, "panel");
+  await cardanoTab(panel);
+  await panel.getByRole("button", { name: "Send publicly" }).click();
+  await expect(panel.getByText(/₳ available$/)).toBeVisible();
+  await expect(panel.getByText("of rewards")).toHaveCount(0);
 });
 
-test("every wallet screen in the popup, for the look", async ({ context, koios }) => {
-  // Restoring happens in a tab; the popup then opens on the unlocked wallet.
+test("settings: the wallet opens in a tab until the side panel is chosen, and Chrome is told", async ({ context }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  const behavior = () => page.evaluate(() => chrome.sidePanel.getPanelBehavior());
+  const kept = () => page.evaluate(() => chrome.storage.local.get("seedelf.openIn"));
+  // A tab to begin with: the toolbar button reaches the worker, which opens or brings back the wallet's tab.
+  expect(await behavior()).toMatchObject({ openPanelOnActionClick: false });
+
+  const panel = await openApp(context, "panel");
+  await panel.getByRole("button", { name: "Settings" }).click();
+  const choice = panel.getByRole("group", { name: "Open Seedelf Wallet in" });
+  await expect(choice.getByRole("button", { name: "A full tab" })).toHaveAttribute("aria-pressed", "true");
+  await expect(panel.getByTestId("open-in-note")).toContainText("opens the wallet in a tab");
+  await choice.getByRole("button", { name: "The side panel" }).click();
+  await expect(choice.getByRole("button", { name: "The side panel" })).toHaveAttribute("aria-pressed", "true");
+  await expect(panel.getByTestId("open-in-note")).toContainText("stays open as you browse");
+  await expect.poll(behavior).toMatchObject({ openPanelOnActionClick: true });
+  expect(await kept()).toEqual({ "seedelf.openIn": "panel" });
+  await snap(panel, "settings-open-in");
+
+  // Back to a tab, from the side panel: the wallet opens in one at once.
+  const [tab] = await Promise.all([context.waitForEvent("page"), choice.getByRole("button", { name: "A full tab" }).click()]);
+  await expect(tab).toHaveURL(`${await appUrl(context)}?view=tab`);
+  await expect.poll(behavior).toMatchObject({ openPanelOnActionClick: false });
+  expect(await kept()).toEqual({ "seedelf.openIn": "tab" });
+
+  // ADA's value: mainnet only, so a preprod wallet asks no one.
+  await tab.getByRole("button", { name: "Settings" }).click();
+  await expect(tab.getByTestId("currency-note")).toContainText("mainnet only");
+  await expect(tab.getByLabel("Show ADA's value in")).toHaveValue("usd");
+  await expect(tab.getByTestId("talks-to")).toHaveText(/only ever talks to Koios and giveme\.my\. It has/);
+});
+
+test("hide balances: the eye masks what the wallet holds, but not what a form sends, and stays", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Hide balances" }).click();
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("•••• ₳");
+  await expect(page.getByTestId("seedelf-meta")).toHaveText("2 UTxOs");
+  await expect(page.getByTestId("seedelf-tokens")).toContainText("••••");
+  await snap(page, "home-hidden");
+  await cardanoTab(page);
+  await expect(page.getByTestId("cardano-lovelace")).toHaveText("•••• ₳");
+  await expect(page.getByTestId("staking-row")).toContainText("•••• ₳ rewards");
+  // Hiding asks no one anything.
+  expect(koios.calls).toHaveLength(reads);
+
+  // Activity and UTxOs hide theirs too.
+  await page.getByRole("button", { name: "UTxOs" }).click();
+  await expect(page.getByTestId("utxos")).toContainText("•••• ₳");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // A form still says what it can send, and its review what it will.
+  await page.getByRole("button", { name: "Send publicly" }).click();
+  await expect(page.getByText(/^[\d,.]+ ₳ available, with 57\.475311 ₳ of rewards$/)).toBeVisible();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // It's a setting: a new page opens hidden, and the eye shows them again.
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("seedelf-lovelace")).toHaveText("•••• ₳");
+  await panel.getByRole("button", { name: "Show balances" }).click();
+  await expect(panel.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await expect(panel.getByRole("button", { name: "Hide balances" })).toHaveAttribute("aria-pressed", "false");
+  // The tab still open follows, with no reload.
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("•••• ₳");
+});
+
+test("settings: how long it stays unlocked, and a check of the written phrase", async ({ context, koios }) => {
+  const v = vector(24);
+  const page = await openApp(context);
+  await restore(page, v.phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  const lockAfter = page.getByLabel("Lock after");
+  await expect(lockAfter).toHaveValue("15");
+  await lockAfter.selectOption("5");
+  await expect
+    .poll(() => page.evaluate(() => chrome.storage.local.get("seedelf.preferences")))
+    .toMatchObject({ "seedelf.preferences": { lockAfterMinutes: 5 } });
+
+  // The phrase as written down: pasted, it fills every box; the answer is yes or no.
+  const paste = async (phrase: string) => {
+    await page.getByLabel("Word 1", { exact: true }).focus();
+    await page.evaluate((text) => {
+      const data = new DataTransfer();
+      data.setData("text", text);
+      document.activeElement!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+    }, phrase);
+  };
+  await page.getByRole("button", { name: "Check recovery phrase" }).click();
+  await expect(page.getByRole("heading", { name: "Check recovery phrase" })).toBeVisible();
+  await paste(vector(12).phrase);
+  await page.getByRole("button", { name: "Check", exact: true }).click();
+  await expect(page.getByTestId("phrase-differs")).toContainText("isn't this wallet's recovery phrase");
+  await paste(v.phrase);
+  await page.getByRole("button", { name: "Check", exact: true }).click();
+  await expect(page.getByTestId("phrase-matches")).toContainText("That's this wallet's recovery phrase");
+  // Nothing kept: the boxes are empty again.
+  await expect(page.getByLabel("Word 1", { exact: true })).toHaveValue("");
+  await snap(page, "settings-check-phrase");
+  expect(koios.calls).toHaveLength(reads);
+});
+
+test("send from the public account with a note: its count, the review, and what it tells", async ({ context }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "Send publicly" }).click();
+  await page.getByLabel("To", { exact: true }).fill(vector(15).preprod.receive_0);
+  await page.getByLabel("Amount", { exact: true }).fill("3");
+  const note = page.getByLabel("Note (optional)");
+  await note.fill("Invoice 42");
+  await expect(page.getByTestId("send-note-hint")).toHaveText("10/64. Anyone can read it, for good.");
+  // At most 64 characters.
+  await note.fill("x".repeat(80));
+  await expect(note).toHaveValue("x".repeat(64));
+  await note.fill("Invoice 42");
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByTestId("send-review")).toContainText("NoteInvoice 42");
+  await snap(page, "send-review-note");
+});
+
+test("every wallet screen in the side panel, for the look", async ({ context, koios }) => {
+  // Restoring happens in a tab; the side panel then opens on the unlocked wallet.
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.close();
 
-  const popup = await openApp(context, "popup");
-  const shot = (name: string) => snap(popup, `popup-${name}`);
-  const back = () => popup.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(popup.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  const panel = await openApp(context, "panel");
+  const shot = (name: string) => snap(panel, `panel-${name}`);
+  const back = () => panel.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(panel.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await shot("home-seedelf");
 
-  await cardanoTab(popup);
-  await expect(popup.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await cardanoTab(panel);
+  await expect(panel.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await shot("home-cardano");
-  await popup.getByRole("button", { name: "View all 6 tokens" }).click();
-  await expect(popup.getByRole("heading", { name: "Public tokens" })).toBeVisible();
+  await panel.getByRole("button", { name: "View all 6 tokens" }).click();
+  await expect(panel.getByRole("heading", { name: "Public tokens" })).toBeVisible();
   await shot("tokens");
-  await popup.getByRole("button", { name: "LINK, 550,999,000" }).click();
-  await expect(popup.getByRole("dialog", { name: "LINK" })).toBeVisible();
-  await popup.screenshot({ path: "test-results/popup-token-details.png", animations: "disabled" });
-  await popup.getByRole("button", { name: "Close" }).click();
+  await panel.getByRole("button", { name: "LINK, 550,999,000" }).click();
+  await expect(panel.getByRole("dialog", { name: "LINK" })).toBeVisible();
+  await panel.screenshot({ path: "test-results/panel-token-details.png", animations: "disabled" });
+  await panel.getByRole("button", { name: "Close" }).click();
   await back();
-  await popup.getByRole("button", { name: "Receive" }).click();
-  await expect(popup.getByRole("img", { name: "QR code of the receive address" })).toBeVisible();
+  await panel.getByRole("button", { name: "Receive" }).click();
+  await expect(panel.getByRole("img", { name: "QR code of the receive address" })).toBeVisible();
   await shot("receive");
   await back();
-  await popup.getByRole("button", { name: "Make private" }).click();
-  await popup.getByLabel("Amount", { exact: true }).fill("25.5");
-  await addTokens(popup, ["tUSDM"]);
-  await popup.getByLabel("Amount of tUSDM").fill("1000");
+  await panel.getByRole("button", { name: "Make private" }).click();
+  await panel.getByLabel("Amount", { exact: true }).fill("25.5");
+  await addTokens(panel, ["tUSDM"]);
+  await panel.getByLabel("Amount of tUSDM").fill("1000");
   await shot("move-in");
-  await popup.getByRole("button", { name: "Review" }).click();
-  await expect(popup.getByTestId("move-in-review")).toBeVisible();
+  await panel.getByRole("button", { name: "Review" }).click();
+  await expect(panel.getByTestId("move-in-review")).toBeVisible();
   await shot("move-in-review");
   await back();
   await back();
-  await popup.getByRole("button", { name: "Send publicly" }).click();
-  await addTokens(popup, ["tUSDM"]);
-  await popup.getByLabel("Amount of tUSDM").fill("1000");
+  await panel.getByRole("button", { name: "Send publicly" }).click();
+  await addTokens(panel, ["tUSDM"]);
+  await panel.getByLabel("Amount of tUSDM").fill("1000");
   await shot("send");
   await back();
-  await popup.getByTestId("staking-row").click();
-  await expect(popup.getByTestId("your-pool-facts")).toBeVisible();
+  await panel.getByTestId("staking-row").click();
+  await expect(panel.getByTestId("your-pool-facts")).toBeVisible();
   await shot("staking");
-  await popup.getByRole("button", { name: "Change pool" }).click();
-  await expect(popup.getByTestId("pool-results")).toBeVisible();
+  await panel.getByRole("button", { name: "Change pool" }).click();
+  await expect(panel.getByTestId("pool-results")).toBeVisible();
   await shot("pools");
-  await popup.getByLabel("Search pools").fill("tprep");
-  await popup.getByTestId("pool-results").getByRole("button").first().click();
-  await expect(popup.getByTestId("pool-details-facts")).toBeVisible();
+  await panel.getByLabel("Search pools").fill("tprep");
+  await panel.getByTestId("pool-results").getByRole("button").first().click();
+  await expect(panel.getByTestId("pool-details-facts")).toBeVisible();
   await shot("pool-details");
   await back();
   await back();
-  await popup.getByRole("button", { name: "Change", exact: true }).click();
-  await popup.getByRole("radio", { name: /^A DRep/ }).click();
-  await expect(popup.getByTestId("drep-results")).toBeVisible();
+  await panel.getByRole("button", { name: "Change", exact: true }).click();
+  await panel.getByRole("radio", { name: /^A DRep/ }).click();
+  await expect(panel.getByTestId("drep-results")).toBeVisible();
   await shot("voting-search");
-  await popup.getByLabel("Search DReps").fill(LOGIC_DREP);
-  await popup.getByTestId("drep-results").getByRole("button").click();
-  await expect(popup.getByTestId("drep-details")).toBeVisible();
+  await panel.getByLabel("Search DReps").fill(LOGIC_DREP);
+  await panel.getByTestId("drep-results").getByRole("button").click();
+  await expect(panel.getByTestId("drep-details")).toBeVisible();
   await shot("voting");
   await back();
   await back();
 
-  await popup.getByRole("tab", { name: "Private", exact: true }).click();
+  await panel.getByRole("tab", { name: "Private", exact: true }).click();
   for (const [button, name] of [
     ["Receive privately", "receive-seedelf"],
     ["Send privately", "transfer"],
     ["Make public", "withdraw"],
     ["Create a Seedelf", "create-seedelf"],
   ] as const) {
-    await popup.getByRole("button", { name: button }).click();
-    await expect(popup.getByRole("heading", { level: 1 })).toBeVisible();
+    await panel.getByRole("button", { name: button }).click();
+    await expect(panel.getByRole("heading", { level: 1 })).toBeVisible();
     await shot(name);
     await back();
   }
-  await popup.getByRole("button", { name: "Receive privately" }).click();
-  await popup.getByRole("button", { name: "Remove web-wallet" }).click();
-  await expect(popup.getByRole("heading", { level: 1 })).toBeVisible();
+  await panel.getByRole("button", { name: "Receive privately" }).click();
+  await panel.getByRole("button", { name: "Remove web-wallet" }).click();
+  await expect(panel.getByRole("heading", { level: 1 })).toBeVisible();
   await shot("remove");
   await back();
   await back();
   expect(koios.submitted).toHaveLength(0);
 
-  await popup.getByRole("button", { name: "Activity" }).click();
-  await expect(popup.getByTestId("activity")).toBeVisible();
+  await panel.getByRole("button", { name: "Activity" }).click();
+  await expect(panel.getByTestId("activity")).toBeVisible();
   await shot("activity");
   await back();
-  await popup.getByRole("button", { name: "UTxOs", exact: true }).click();
-  await expect(popup.getByTestId("utxos")).toBeVisible();
+  await panel.getByRole("button", { name: "UTxOs", exact: true }).click();
+  await expect(panel.getByTestId("utxos")).toBeVisible();
   await shot("utxos");
   await back();
 
-  await popup.getByRole("button", { name: "Settings" }).click();
-  await expect(popup.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await panel.getByRole("button", { name: "Settings" }).click();
+  await expect(panel.getByRole("heading", { name: "Settings" })).toBeVisible();
   await shot("settings");
-  await popup.getByRole("button", { name: "Collateral" }).click();
-  await expect(popup.getByTestId("collateral-none")).toBeVisible();
+  await panel.getByRole("button", { name: "Collateral" }).click();
+  await expect(panel.getByTestId("collateral-none")).toBeVisible();
   await shot("collateral");
   await back();
-  await popup.getByRole("button", { name: "Settings" }).click();
+  await panel.getByRole("button", { name: "Settings" }).click();
 
-  await popup.getByRole("button", { name: "Lock" }).click();
-  await expect(popup.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await panel.getByRole("button", { name: "Lock" }).click();
+  await expect(panel.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await shot("unlock");
 });
 

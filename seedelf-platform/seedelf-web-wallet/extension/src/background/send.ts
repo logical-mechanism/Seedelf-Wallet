@@ -1,7 +1,8 @@
 // Send: pay any normal address, or an ADA Handle, from the Cardano account,
 // as any Cardano wallet does; or someone's seedelf, by its full name. One
-// payment pays up to 20 of them, each its own amount and tokens. It's paid
-// in the open, and the Cardano account's Activity lists it from Koios.
+// payment pays up to 20 of them, each its own amount and tokens, with an
+// optional note (CIP-20's message, which anyone can read). It's paid in the
+// open, and the Cardano account's Activity lists it from Koios.
 //
 // build   reads each destination (destination.ts) and the account
 //         (account.ts), then builds and signs inside WebAssembly
@@ -53,7 +54,7 @@ export class SendService {
    * payment needs, it's raised to that, so "0" sends only the ADA the tokens
    * need.
    */
-  async build(network: NetworkName, payments: PaymentAsk[]): Promise<SendSummary> {
+  async build(network: NetworkName, payments: PaymentAsk[], note?: string): Promise<SendSummary> {
     checkRecipients(payments.length);
     const names = payments.map((p) => seedelfName(p.to));
     // Every seedelf among them is found in one reading of the contract.
@@ -63,7 +64,7 @@ export class SendService {
       const name = names[i];
       destinations.push(name ? seedelf(view!, network, name) : await resolveDestination(this.deps, network, p.to));
     }
-    return this.pay(network, destinations, payments, SESSION_SEND);
+    return this.pay(network, destinations, payments, SESSION_SEND, note);
   }
 
   /** Signed at review: Send only submits it. */
@@ -92,6 +93,7 @@ export class SendService {
     destinations: Destination[],
     asked: PaymentAsk[],
     key: string,
+    note?: string,
   ): Promise<SendSummary> {
     const { wasm, wallet } = this.deps;
     const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
@@ -103,7 +105,8 @@ export class SendService {
       lovelace: asked[i]!.lovelace,
       tokens: asked[i]!.tokens,
     }));
-    const request = { network, params, utxos, payments, withdrawal };
+    // A note is CIP-20's message on the transaction, which WebAssembly checks and writes.
+    const request = { network, params, utxos, payments, withdrawal, note: note || undefined };
     const result = await wallet.withKeys(
       (keys) => JSON.parse(wasm.buildAccountSend(keys.cardano, JSON.stringify(request))) as SendResult,
     );
