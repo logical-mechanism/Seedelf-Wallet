@@ -93,17 +93,31 @@ export class MinswapError extends Error {}
  */
 export const DIRECT_PROTOCOLS = ["DanogoCLMMV1", "ChakraBondingCurve", "OpenDjedV1"];
 
+/**
+ * On preprod, Minswap builds Splash's orders with Splash's mainnet order
+ * address (header 0x11, seen 2026-09-25), and a preprod node refuses an
+ * output on another network. Mainnet's are fine.
+ */
+const PREPROD_BROKEN = ["Splash", "SplashStable"];
+
+/** What routing leaves out on `network`. */
+export function excludedProtocols(network: "preprod" | "mainnet"): string[] {
+  return network === "preprod" ? [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN] : DIRECT_PROTOCOLS;
+}
+
 const TIMEOUT_MS = 20_000;
 
 export class Minswap {
   constructor(
     private readonly base: string,
     private readonly fetchFn: FetchLike = (url, init) => fetch(url, init),
+    /** Protocols routing leaves out (`excludedProtocols`). */
+    private readonly exclude: string[] = DIRECT_PROTOCOLS,
   ) {}
 
   /** The best route for `ask` through DEXes that take orders, and what it's expected to give. */
   estimate(ask: SwapAsk): Promise<Estimate> {
-    return this.post<Estimate>("estimate", { ...routed(ask), amount_in_decimal: false });
+    return this.post<Estimate>("estimate", { ...routed(ask, this.exclude), amount_in_decimal: false });
   }
 
   /** An unsigned swap from `sender`, for the ask quoted; it gives at least `minAmountOut` or is refunded. */
@@ -111,7 +125,7 @@ export class Minswap {
     const { cbor } = await this.post<{ cbor: string }>("build-tx", {
       sender,
       min_amount_out: minAmountOut,
-      estimate: routed(ask),
+      estimate: routed(ask, this.exclude),
       amount_in_decimal: false,
     });
     return cbor;
@@ -173,12 +187,12 @@ export class Minswap {
 }
 
 /** An ask as Minswap's estimate takes it: the route through DEXes that take orders only. */
-function routed(ask: SwapAsk) {
+function routed(ask: SwapAsk, exclude: string[]) {
   return {
     amount: ask.amount,
     token_in: ask.tokenIn,
     token_out: ask.tokenOut,
     slippage: ask.slippage,
-    exclude_protocols: DIRECT_PROTOCOLS,
+    exclude_protocols: exclude,
   };
 }

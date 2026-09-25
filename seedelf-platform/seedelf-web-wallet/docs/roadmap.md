@@ -81,6 +81,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **The user's first try, MIN to ADA, paused:** Minswap routed it through DanogoCLMMV1, which swaps against its pools and spends UTxOs that aren't the session's. The user chose orders only for now: routing leaves the DEXes that do this out (`exclude_protocols`). See the 15b plan's *Found on the user's first try*.
     - **The user's second try sat on "Order placed"** (the order never reached the chain; the retry line under the timeline was missed). A failure now shows in the timeline itself, and retries start at 30 s.
     - **Each session gets its own stake key** (the user, on learning all one-time accounts shared one): `24301'/2/i`, pinned against `cardano-address`. Older sessions keep their shared-stake address.
+    - **Third try:** Minswap's preprod Splash orders pay a mainnet address. Preprod routing leaves Splash out, and a transaction the wallet won't read pauses instead of retrying.
     - **For the user:** approve a live swap on preprod (fund, fill, back), and one Stop against a real order.
     - **Next:** the restore scan, then private CIP-30 (step 4), then the PR for chunk 15.
 

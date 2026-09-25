@@ -702,7 +702,15 @@ export class SessionService {
       inputs: [...refs.flatMap((r) => own.get(r) ?? []), ...foreign],
       partialSign: false,
     });
-    const summary = await wallet.withKeys((keys) => JSON.parse(wasm.inspectSessionTx(keys.oneTime, request)) as DappTxSummary);
+    let summary: DappTxSummary;
+    try {
+      summary = await wallet.withKeys((keys) => JSON.parse(wasm.inspectSessionTx(keys.oneTime, request)) as DappTxSummary);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (/locked/i.test(message)) throw e;
+      // What WebAssembly won't read (an output on another network, say) won't read any better later: pause.
+      throw new Refused(message.charAt(0).toLowerCase() + message.slice(1));
+    }
     refuseOddities(summary, index);
     return { network, index, kind, txHash: summary.txHash, txCbor, request, quote, builtAt: now(), summary };
   }

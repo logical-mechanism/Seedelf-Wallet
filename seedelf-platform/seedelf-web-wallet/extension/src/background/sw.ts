@@ -15,7 +15,7 @@ import { DappError, DappService, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
 import { Koios } from "./koios";
-import { Minswap } from "./minswap";
+import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
@@ -108,7 +108,8 @@ function getContext(): Promise<Context> {
     const send = new SendService(spends);
     const staking = new StakingService({ ...spends, local });
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
-    const minswap = (network: keyof typeof NETWORKS) => new Minswap(NETWORKS[network].swaps);
+    const minswap = (network: keyof typeof NETWORKS) =>
+      new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm });
     dapp = new DappService({
       ...spends,

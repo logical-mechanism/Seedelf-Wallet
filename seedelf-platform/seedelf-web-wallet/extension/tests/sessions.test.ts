@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { DIRECT_PROTOCOLS, Minswap } from "../src/background/minswap";
+import { DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
 import { SESSION_PENDING } from "../src/background/pending";
 import { checkAsk, SESSION_OUT, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
@@ -124,6 +124,11 @@ describe("a swap's quote", () => {
       lovelace: "6000000",
       tokens: [{ policyId: MIN.slice(0, 56), assetName: "4d494e", quantity: "500" }],
     });
+  });
+
+  it("leaves Splash out of routing on preprod, where Minswap builds its orders with a mainnet address", () => {
+    expect(excludedProtocols("preprod")).toEqual([...DIRECT_PROTOCOLS, "Splash", "SplashStable"]);
+    expect(excludedProtocols("mainnet")).toEqual(DIRECT_PROTOCOLS);
   });
 
   it("refuses an ask before Minswap sees it", () => {
