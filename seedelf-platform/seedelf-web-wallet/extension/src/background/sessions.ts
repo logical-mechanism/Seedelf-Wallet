@@ -149,6 +149,13 @@ interface SessionRecord {
    * `skipped`: why Lovejoin was left out, when it was.
    */
   mix?: { boxes: number; again?: boolean; skipped?: string };
+  /**
+   * The latest return through Lovejoin: how many transactions its chain has,
+   * the return last (`last`), and when it began to be sent (`at`), recorded
+   * before the first is sent, so its progress shows as they're sent and
+   * confirmed.
+   */
+  chain?: { total: number; last: string; at: number };
   closedAt?: number;
 }
 
@@ -473,16 +480,16 @@ export class SessionService {
 
   /**
    * Mix my boxes again: the funding of a new one-time account that pays for
-   * every box of the wallet's in the pool (10 at most) to be fanned out
-   * again, with no deposit, and its own collateral. One at a time: two would
-   * spend the same boxes.
+   * every box of the wallet's in the pool to be fanned out again (as many as
+   * the pool has others for), with no deposit, and its own collateral. One at
+   * a time: two would spend the same boxes.
    */
   async againBuild(network: NetworkName): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
     if (await this.mixingAgain(network)) throw new Error("Your boxes are being mixed again already.");
-    const boxes = await lovejoin.againBoxes(network);
-    return this.mixFunding(network, await lovejoin.funding(network, boxes, true));
+    const { boxes, owned } = await lovejoin.againBoxes(network);
+    return this.mixFunding(network, { ...(await lovejoin.funding(network, boxes, true)), owned });
   }
 
   /** Whether a mix of the wallet's boxes again may still spend them: Lovejoin withdraws none meanwhile. */
@@ -1134,7 +1141,9 @@ export class SessionService {
     const merge = await this.fundingChange(network, index);
     const record = (await this.book(network)).sessions.find((r) => r.index === index);
     // A chain that went in partly already: what's left comes back directly, rather than go in again.
-    const started = record?.txs.some((t) => (t.kind === "deposit" || t.kind === "mix") && !t.unsent);
+    // One that finished (its return sent) doesn't hold a later return back (a site's session is paid again).
+    const finished = !!record?.chain && record.txs.some((t) => t.txHash === record.chain!.last && !t.unsent);
+    const started = !finished && record?.txs.some((t) => (t.kind === "deposit" || t.kind === "mix") && !t.unsent);
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
     if (!direct && !started && lovejoin?.available(network)) {
@@ -1232,6 +1241,9 @@ export class SessionService {
   private async sendChain(network: NetworkName, built: KeptBack, kept: string): Promise<PendingTx> {
     const chain = built.chain!;
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    await this.update(network, built.index, (s) => {
+      s.chain = { total: chain.length, last: chain.at(-1)!.txHash, at: this.deps.now() };
+    });
     let last: PendingTx | undefined;
     for (const [i, step] of chain.entries()) {
       const bytes = hexBytes(step.txCbor);
@@ -1403,6 +1415,7 @@ export class SessionService {
       ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
       ...(s.site ? { site: s.site } : {}),
       ...(s.mix ? { mix: s.mix } : {}),
+      ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
     };
   }
 
@@ -1477,6 +1490,22 @@ export class SessionService {
     this.queue = run.catch(() => undefined);
     return run;
   }
+}
+
+/**
+ * How far a return's chain through Lovejoin has got: its transactions sent
+ * and confirmed, and whether it stopped partway (what was left came back
+ * directly, in a return of its own).
+ */
+function chainView(chain: NonNullable<SessionRecord["chain"]>, txs: RecordedTx[]): NonNullable<SessionView["chain"]> {
+  const since = txs.filter((t) => t.at >= chain.at);
+  const own = since.filter((t) => t.kind === "deposit" || t.kind === "mix" || t.txHash === chain.last);
+  return {
+    total: chain.total,
+    sent: own.length,
+    confirmed: own.filter((t) => t.confirmed).length,
+    cut: !own.some((t) => t.txHash === chain.last) && since.some((t) => t.kind === "back"),
+  };
 }
 
 /** Where a swap or a mix that runs itself is at, for its timeline. A mix's chain is its return. */

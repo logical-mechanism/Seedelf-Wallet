@@ -34,7 +34,16 @@ import type {
 import { call } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
-import { delayText, IntoRow, LovejoinNote, LovejoinRows, ReturnLinks } from "../components/LovejoinReturn";
+import {
+  chainText,
+  delayText,
+  IntoRow,
+  LovejoinNote,
+  LovejoinRows,
+  ReturnLinks,
+  useSendingLabel,
+  useSessionsWhile,
+} from "../components/LovejoinReturn";
 import {
   ArrowDownIcon,
   CheckIcon,
@@ -1217,6 +1226,14 @@ function Session({
     const timer = setInterval(() => void advance(false), ADVANCE_EVERY_MS);
     return () => clearInterval(timer);
   }, [runs, advance]);
+  // A return brought back by hand, through Lovejoin: its Send button counts the chain's transactions.
+  const backSending = useSendingLabel(s.index, busy && !!back?.lovejoin);
+  // Once it's coming back, a chain through Lovejoin moves on with every transaction: read its progress from the record.
+  const returning = runs && (s.auto!.step === "returning" || s.auto!.filled || s.auto!.stopping);
+  useSessionsWhile(returning, (all) => {
+    const now = all.find((x) => x.index === index);
+    if (now) setS(now);
+  });
 
   const swapped = s.txs.some((t) => t.kind === "swap");
   useEffect(() => {
@@ -1326,7 +1343,7 @@ function Session({
               })
             }
           >
-            {busy ? "Sending…" : "Send"}
+            {busy ? backSending : "Send"}
           </button>
         }
       >
@@ -1656,6 +1673,10 @@ function nowLine(s: SessionView): string {
     case "cancelling":
       return "Cancelling the order. Once that's confirmed, it all comes back.";
     case "returning":
+      if (s.chain) {
+        const how = chainText(s.chain);
+        return `Coming back through Lovejoin: ${how.charAt(0).toLowerCase()}${how.slice(1)}.`;
+      }
       return "Coming back into your private balance: waiting for the network to confirm it.";
     case "done":
       return a.filled ? "Done: the swap is in your private balance." : "Stopped: everything is back in your private balance.";

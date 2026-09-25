@@ -13,6 +13,7 @@ import {
   expect,
   extensionId,
   koiosPreprod,
+  type KoiosFake,
   launch,
   lovejoinPool,
   ownedLovejoinBox,
@@ -1547,16 +1548,17 @@ test("Lovejoin: mix my boxes again, paid from the private balance: the review sa
   koios,
 }) => {
   const phrase = vector(12).phrase;
-  koios.addedToAccounts.push(...lovejoinPool, ownedLovejoinBox(phrase, "d6"), ownedLovejoinBox(phrase, "d7"));
+  koios.addedToAccounts.push(...lovejoinPool, ownedLovejoinBox(phrase, "d6"), ownedLovejoinBox(phrase, "d7"), ownedLovejoinBox(phrase, "d8"));
   koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
   const page = await openApp(context);
   await restore(page, phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "dApps", exact: true }).click();
   await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
-  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the pool2 boxes, 20 ₳");
+  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the pool3 boxes, 30 ₳");
 
-  // Both boxes, two waves deep: eight mixes and the change they leave, into a one-time account. No box to pay for.
+  // Two waves deep, the pool's 20 other boxes mix two of the three: eight mixes and the change they leave, into a
+  // one-time account. No box to pay for.
   await page.getByTestId("lovejoin-again").click();
   await expect(page.getByRole("heading", { name: "Review mixing again" })).toBeVisible();
   const funding = page.getByTestId("lovejoin-again-review");
@@ -1564,7 +1566,8 @@ test("Lovejoin: mix my boxes again, paid from the private balance: the review sa
   await expect(funding).toContainText("For the mixes9.1 ₳");
   await expect(funding).toContainText("Its collateral5 ₳");
   const then = page.getByTestId("lovejoin-again-then");
-  await expect(then).toContainText("Mixed again2 boxes of yours in the pool");
+  await expect(then).toContainText("Mixed again2 of your 3 boxes in the pool");
+  await expect(page.getByTestId("lovejoin-again-rest")).toContainText("the pool has enough other boxes for 2 boxes at this depth");
   await expect(then).toContainText("Mixed2 waves deep, 8 mixes, about 7.6 ₳");
   await expect(then).toContainText("Back laterEach box on its own, after 1 to 6 hours from the mixes");
   await snap(page, "lovejoin-again-review");
@@ -2432,10 +2435,12 @@ test.describe("the dApp connector", () => {
     await expect(page.getByTestId("dapp-sites-hint")).toBeVisible();
   });
 
-  test("a site's private session comes back through Lovejoin, or directly: the review says which, and a switch rebuilds it", async ({
-    context,
-    koios,
-  }) => {
+  /**
+   * A site's private session whose funding the connector's window tried to
+   * send (giveme.my refused it), said to hold 40 ₳ and its 5 ₳ collateral
+   * anyway, open on its page with Bring it back pressed.
+   */
+  async function siteSessionHolding40(context: BrowserContext, koios: KoiosFake): Promise<Page> {
     // The funding is measured as recorded; the network agrees with the chain's first mix.
     const spend = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
     koios.evaluation = (body: { params: { additionalUtxo?: unknown[] } }) =>
@@ -2484,6 +2489,15 @@ test.describe("the dApp connector", () => {
     await page.getByTestId("dapp-sites").getByRole("button").click();
     await page.getByRole("button", { name: "Bring it back" }).click();
 
+    return page;
+  }
+
+  test("a site's private session comes back through Lovejoin, or directly: the review says which, and a switch rebuilds it", async ({
+    context,
+    koios,
+  }) => {
+    const page = await siteSessionHolding40(context, koios);
+
     // Through Lovejoin: two boxes, fanned out, back later; the rest now.
     const review = page.getByTestId("site-back-review");
     await expect(review).toContainText("Through Lovejoin2 boxes of 10 ₳");
@@ -2497,6 +2511,25 @@ test.describe("the dApp connector", () => {
     await expect(page.getByTestId("lovejoin-direct")).toHaveCount(0);
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect.poll(() => koios.submitted.length).toBe(1);
+  });
+
+  test("a site session's return through Lovejoin counts its chain as it's sent, then how much is on chain", async ({ context, koios }) => {
+    const page = await siteSessionHolding40(context, koios);
+    await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳");
+    // Each Koios answer waits a little, so the count shows as the ten go in.
+    koios.delayMs = 500;
+    const send = page.getByRole("button", { name: /^(Send|Sending)/ });
+    await send.click();
+    await expect(send).toHaveText(/^Sending \d+ of 10…$/);
+    await expect.poll(() => koios.submitted.length, { timeout: 30_000 }).toBe(10);
+    koios.delayMs = 0;
+    // Back on the session's page: none of it on chain yet, then, read again, all of it. (The fake Koios
+    // still lists what the chain spent, so each reading waits out the wallet's stale-read tries first.)
+    const rows = page.getByTestId("site-session-rows");
+    await expect(rows).toContainText("Through Lovejoin0 of 10 transactions on chain", { timeout: 20_000 });
+    koios.confirmations = 1;
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await expect(rows).not.toContainText("Through Lovejoin", { timeout: 20_000 });
   });
 
   test("a locked wallet asks for the password in the connector's window first", async ({ context }) => {

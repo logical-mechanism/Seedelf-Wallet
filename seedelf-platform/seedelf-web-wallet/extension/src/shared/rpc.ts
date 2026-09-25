@@ -697,6 +697,13 @@ export interface SessionView {
    * why Lovejoin was left out, when it was.
    */
   mix?: { boxes: number; again?: boolean; skipped?: string };
+  /**
+   * A return through Lovejoin: its chain's transactions (the return last),
+   * how many are sent and how many are on chain, as the runner last read
+   * them, and `cut`: it stopped partway, and what was left came back
+   * directly.
+   */
+  chain?: { total: number; sent: number; confirmed: number; cut: boolean };
 }
 
 /** A funding payment into a new session, built and waiting for Send. */
@@ -754,6 +761,8 @@ export interface LovejoinFunding {
   boxes: number;
   /** The wallet's boxes in the pool, mixed again: no deposit, and no box to pay for. */
   again?: boolean;
+  /** Mixing again: how many boxes the wallet has in the pool (`boxes` is how many go this time). */
+  owned?: number;
   /** What pays for the boxes, every mix, and the deposit and its change: what the mixes don't use comes back. */
   lovelace: string;
   mixes: number;
@@ -984,8 +993,8 @@ export interface Requests {
   "lovejoin-mix-private-build": { payload: { boxes: number }; result: SessionOutSummary & { mix: LovejoinFunding } };
   /**
    * Builds the funding of a new one-time account that mixes every box of the
-   * wallet's in the pool again (10 at most), with no deposit, and runs itself
-   * once sent. Sent with lovejoin-mix-private-submit.
+   * wallet's in the pool again (as many as the pool has others for), with no
+   * deposit, and runs itself once sent. Sent with lovejoin-mix-private-submit.
    */
   "lovejoin-again-build": { payload: None; result: SessionOutSummary & { mix: LovejoinFunding } };
   /** Records the mix session, then sends its funding. */
@@ -994,6 +1003,8 @@ export interface Requests {
   "lovejoin-mix-public-build": { payload: { boxes: number }; result: LovejoinPublicSummary };
   /** Sends the public mix built last, in order. */
   "lovejoin-mix-public-submit": { payload: { txHash: string }; result: PendingTx };
+  /** How far the public mix being sent has got (transactions sent of its total), or null when none is. */
+  "lovejoin-mix-public-progress": { payload: None; result: { total: number; sent: number } | null };
   /** Withdraws one of the wallet's boxes now, whatever its wait (`box`, or any). */
   "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number } }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
@@ -1100,6 +1111,7 @@ const REQUEST_LIST = [
   "lovejoin-mix-private-submit",
   "lovejoin-mix-public-build",
   "lovejoin-mix-public-submit",
+  "lovejoin-mix-public-progress",
 ] as const satisfies readonly RequestName[];
 
 /** Every request is listed: one left out would be dropped as unknown. A missing name fails the typecheck here. */

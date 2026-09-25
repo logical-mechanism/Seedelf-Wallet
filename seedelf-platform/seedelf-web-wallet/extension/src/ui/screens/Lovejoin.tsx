@@ -24,7 +24,7 @@ import type { LovejoinFunding, LovejoinPublicSummary, LovejoinStatus, PendingTx,
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ShieldIcon } from "../components/Icons";
-import { delayText } from "../components/LovejoinReturn";
+import { chainText, delayText, useSessionsWhile } from "../components/LovejoinReturn";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
@@ -59,14 +59,16 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
   return { tone: "live", label: "Running" };
 }
 
-/** What a mix is doing, in a line. */
+/** What a mix is doing, in a line: its chain sent, then on chain. */
 function subOf(s: SessionView, now: number): string {
   if (s.stage === "failed") return "Its funding didn't go through";
   if (s.stage === "funding") return "Its one-time account is being funded";
   if (s.mix?.skipped) return `Lovejoin was left out: ${s.mix.skipped}`;
+  if (s.chain?.cut) return chainText(s.chain);
   if (s.stage === "closed") return `In Lovejoin since ${whenOf(s.createdAt, new Date(now))}`;
   if (s.auto?.retry) return `Trying again: ${s.auto.retry.error}`;
-  return s.txs.some((t) => t.kind === "deposit" || t.kind === "mix") ? "Mixing, then the rest comes back" : "Funded: mixing next";
+  if (s.chain) return chainText(s.chain);
+  return "Funded: the mixes are built and sent next";
 }
 
 export function Lovejoin({
@@ -124,6 +126,26 @@ export function Lovejoin({
     }, ADVANCE_EVERY_MS);
     return () => clearInterval(timer);
   }, [mixes]);
+
+  // Its chain's progress, as it's sent and confirmed: the record alone, every few seconds.
+  useSessionsWhile(
+    mixes.some((m) => !isOver(m)),
+    (all) => setMixes(all.filter((x) => x.mix)),
+  );
+
+  // The public mix being sent: how many of its transactions are in so far.
+  const [sending, setSending] = useState<{ total: number; sent: number } | null>(null);
+  const sendingPublic = busy && review?.source === "public";
+  useEffect(() => {
+    if (!sendingPublic) {
+      setSending(null);
+      return;
+    }
+    const timer = setInterval(() => {
+      call("lovejoin-mix-public-progress", {}).then(setSending, () => undefined);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [sendingPublic]);
 
   // What the chosen number of boxes takes: WebAssembly and the settings, no Koios.
   useEffect(() => {
@@ -195,7 +217,7 @@ export function Lovejoin({
         error={error}
         foot={
           <button type="button" className="primary" disabled={busy} onClick={() => void send()} data-testid="lovejoin-send">
-            {busy ? "Sending…" : "Send"}
+            {!busy ? "Send" : sending ? `Sending ${sending.sent} of ${sending.total}…` : "Sending…"}
           </button>
         }
       >
@@ -368,7 +390,11 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
       </ReviewRows>
       <h2>Then it runs by itself</h2>
       <ReviewRows testId="lovejoin-again-then">
-        <Row label="Mixed again" value={`${plural(mix.boxes, "box", "boxes")} of yours in the pool`} strong />
+        <Row
+          label="Mixed again"
+          value={mix.owned && mix.owned > mix.boxes ? `${mix.boxes} of your ${mix.owned} boxes in the pool` : `${plural(mix.boxes, "box", "boxes")} of yours in the pool`}
+          strong
+        />
         <Row label="Mixed" value={`${waves(mix.depth)}, ${plural(mix.mixes, "mix", "mixes")}, about ${formatAda(mix.mixFees)} ₳`} />
         <Row label="Back later" value={`Each box on its own, after ${delayText(mix.delay)} from the mixes`} />
       </ReviewRows>
@@ -377,6 +403,12 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
         and every box coming out is mixed again, as deep as Settings says. What the mixes don't use comes back with the
         collateral into the private UTxO this payment leaves. Until then no box comes back; after, each waits again.
       </p>
+      {mix.owned && mix.owned > mix.boxes && (
+        <p className="note" data-testid="lovejoin-again-rest">
+          That's as many as one go mixes now: the pool has enough other boxes for {plural(mix.boxes, "box", "boxes")} at this depth.
+          Mix the rest again once this is done.
+        </p>
+      )}
       <Callout tone="privacy">
         This payment links the private UTxOs it spends to the one-time account, and the account to the mixes it pays for:
         one of the three boxes going into each first mix is likely yours. The mixes after hide which boxes coming out are

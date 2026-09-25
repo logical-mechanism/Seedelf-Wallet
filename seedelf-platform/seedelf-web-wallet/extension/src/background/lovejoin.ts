@@ -150,6 +150,13 @@ export function delayHours(delay: LovejoinDelay): [number, number] {
 /** The most boxes one mix from the tile takes. */
 export const MAX_MIX_BOXES = 10;
 
+/**
+ * The most mixes one chain makes: ten boxes three waves deep, the most a mix
+ * from the tile makes (about 15 s to build). Mixing boxes again takes as
+ * many as fit, the pool allowing.
+ */
+export const MAX_CHAIN_MIXES = MAX_MIX_BOXES * mixesPerBox(3);
+
 /** A whole number of boxes, one to MAX_MIX_BOXES, or why not. */
 export function checkBoxes(boxes: number): void {
   if (!Number.isInteger(boxes) || boxes < 1 || boxes > MAX_MIX_BOXES) {
@@ -158,7 +165,16 @@ export function checkBoxes(boxes: number): void {
 }
 
 export class LovejoinService {
+  /** The public account's mix being sent, and how far it has got, for its Send button. */
+  private sending?: { network: NetworkName; total: number; sent: number };
+
   constructor(private readonly deps: LovejoinDeps) {}
+
+  /** How far the public account's mix being sent has got, if one is. */
+  progress(network: NetworkName): { total: number; sent: number } | null {
+    const s = this.sending;
+    return s && s.network === network ? { total: s.total, sent: s.sent } : null;
+  }
 
   /** Whether Lovejoin is deployed on `network`. */
   available(network: NetworkName): boolean {
@@ -202,15 +218,20 @@ export class LovejoinService {
   }
 
   /**
-   * How many of the wallet's boxes Mix my boxes again takes (a pool read):
-   * every one, MAX_MIX_BOXES at most, checked against the pool.
+   * How many of the wallet's boxes Mix my boxes again takes (a pool read), of
+   * how many it has there: every one, as far as the pool has other boxes to
+   * mix them with and one chain goes (MAX_CHAIN_MIXES).
    */
-  async againBoxes(network: NetworkName): Promise<number> {
+  async againBoxes(network: NetworkName): Promise<{ boxes: number; owned: number }> {
+    const { depth } = await this.settings();
     const { pool, owned } = await this.split(network);
     if (!owned.length) throw new Error("None of your boxes is in Lovejoin's pool, so there's nothing to mix again.");
-    const boxes = Math.min(owned.length, MAX_MIX_BOXES);
-    await this.enough(pool.length - owned.length, boxes);
-    return boxes;
+    const others = pool.length - owned.length;
+    const perBox = mixesPerBox(depth);
+    const boxes = Math.min(owned.length, Math.floor(others / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
+    // None fits: say what the pool has.
+    if (boxes < 1) await this.enough(others, 1);
+    return { boxes, owned: owned.length };
   }
 
   /** Whether `others` boxes in the pool mix `boxes` boxes at the set depth, or why not. */
@@ -364,25 +385,32 @@ export class LovejoinService {
     if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
     const koios = this.deps.koios(network);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
-    for (const [i, step] of built.chain.entries()) {
-      const bytes = hexBytes(step.txCbor);
-      for (let attempt = 0; ; attempt++) {
-        try {
-          const submitted = await koios.submitTx(bytes);
-          if (submitted !== step.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
-          break;
-        } catch (e) {
-          // Sent already (a Send pressed twice, or a retry that got through).
-          if (e instanceof SpentInputError && (await koios.txStatus([step.txHash]).catch(() => undefined))?.get(step.txHash) != null) {
+    const sending = { network, total: built.chain.length, sent: 0 };
+    this.sending = sending;
+    try {
+      for (const [i, step] of built.chain.entries()) {
+        const bytes = hexBytes(step.txCbor);
+        for (let attempt = 0; ; attempt++) {
+          try {
+            const submitted = await koios.submitTx(bytes);
+            if (submitted !== step.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
             break;
+          } catch (e) {
+            // Sent already (a Send pressed twice, or a retry that got through).
+            if (e instanceof SpentInputError && (await koios.txStatus([step.txHash]).catch(() => undefined))?.get(step.txHash) != null) {
+              break;
+            }
+            const wait = chainRetryMs(i, attempt, e);
+            if (wait === undefined) throw e;
+            await sleep(wait);
           }
-          const wait = chainRetryMs(i, attempt, e);
-          if (wait === undefined) throw e;
-          await sleep(wait);
         }
+        await wallet.withKeys(() => rememberSpent(session, bytes));
+        if (step.kind === "deposit") await this.schedule(network, built.boxes);
+        sending.sent = i + 1;
       }
-      await wallet.withKeys(() => rememberSpent(session, bytes));
-      if (step.kind === "deposit") await this.schedule(network, built.boxes);
+    } finally {
+      if (this.sending === sending) this.sending = undefined;
     }
     const pending: PendingTx = { kind: "lovejoin-mix", network, txHash, submittedAt: now(), confirmations: null };
     await wallet.withKeys(async () => {

@@ -104,6 +104,10 @@ describe("a session's return through Lovejoin", () => {
     const kinds = book.sessions[0]!.txs.slice(1).map((x) => x.kind);
     expect(kinds).toEqual(["deposit", ...Array(8).fill("mix"), "back"]);
     expect(book.sessions[0]!.txs.slice(1).map((x) => x.txHash)).toEqual(chain.map((bytes) => txIdOf(bytes)));
+    // Its progress: all ten sent, none on chain yet; then, read again, all on chain.
+    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 10, confirmed: 0, cut: false });
+    t.koios.confirmations = 1;
+    expect((await sessions.list("preprod", true))[0]!.chain).toEqual({ total: 10, sent: 10, confirmed: 10, cut: false });
 
     // Each box comes back on its own, 1 to 6 hours from now.
     const schedule = (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!;
@@ -133,6 +137,37 @@ describe("a session's return through Lovejoin", () => {
     await sessions.backSubmit("preprod", review.txHash);
     expect(t.koios.submitted.slice(before)).toHaveLength(10);
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(review.txHash);
+  });
+
+  it("counts a chain that stopped partway, whose rest came back directly; a finished one lets the next return through Lovejoin", async () => {
+    const { t, sessions } = await withSession("40000000");
+    const review = await sessions.backBuild("preprod", 0);
+    // The fourth transaction is refused for good: the chain stops there.
+    const fetch = t.koios.fetch;
+    let submits = 0;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx") && ++submits === 4) return new Response("ValueNotConservedUTxO", { status: 400 });
+      return fetch(url, init);
+    };
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow();
+    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 3, confirmed: 0, cut: false });
+    // Brought back again: what's left comes back directly, and the chain says it stopped.
+    const direct = await sessions.backBuild("preprod", 0);
+    expect(direct.lovejoin).toBeUndefined();
+    await sessions.backSubmit("preprod", direct.txHash);
+    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 3, confirmed: 0, cut: true });
+
+    // Another session's chain goes through whole; paid again later, its next return goes through Lovejoin too.
+    const whole = await withSession("40000000");
+    const first = await whole.sessions.backBuild("preprod", 0);
+    await whole.sessions.backSubmit("preprod", first.txHash);
+    whole.t.clock.now += 60_000;
+    whole.t.koios.spent.add(`${"c1".repeat(32)}#0`).add(`${"c2".repeat(32)}#1`);
+    whole.t.koios.addedToAccounts.push(atSession("c3".repeat(32), 0, "40000000"), atSession("c4".repeat(32), 1, "5000000"));
+    // The first chain took 16 of the 20 pool boxes: one wave deep, the 4 left mix two.
+    await whole.t.deps.preferences.set({ lovejoinDepth: 1 });
+    const again = await whole.sessions.backBuild("preprod", 0);
+    expect(again.lovejoin).toMatchObject({ boxes: 2, depth: 1 });
   });
 
   it("comes back directly when asked, or when the spare ADA doesn't pay for a box", async () => {
@@ -409,6 +444,20 @@ describe("mixing from the tile", () => {
     expect(await sessions.mixingAgain("preprod")).toBe(false);
   });
 
+  it("mixes as many of the wallet's boxes again as the pool has others for, past ten", async () => {
+    const t = await wallet();
+    // Forty other boxes, and twelve of ours.
+    const others = [...POOL, ...POOL.map((b, i) => ({ ...b, tx_hash: (i % 2 ? "e1" : "e2").repeat(31) + i.toString(16).padStart(2, "0") }))];
+    t.koios.addedToAccounts.splice(0, t.koios.addedToAccounts.length, ...others);
+    for (let i = 0; i < 12; i++) t.koios.addedToAccounts.push(await ownedBox(t, (0xa0 + i).toString(16)));
+    // One wave deep, 40 others mix twenty: all twelve go.
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    expect(await t.lovejoin.againBoxes("preprod")).toEqual({ boxes: 12, owned: 12 });
+    // Two waves deep, each box takes eight others: five of the twelve go.
+    await t.deps.preferences.set({ lovejoinDepth: 2 });
+    expect(await t.lovejoin.againBoxes("preprod")).toEqual({ boxes: 5, owned: 12 });
+  });
+
   it("won't mix again with no box of the wallet's in the pool", async () => {
     const t = await wallet();
     const { sessions } = mixRunner(t);
@@ -443,7 +492,16 @@ describe("mixing from the tile", () => {
     expect(summary).toMatchObject({ boxes: 1, depth: 2, mixes: 4, txs: 5 });
     expect(BigInt(summary.change)).toBeGreaterThan(1_000_000n);
     const before = t.koios.submitted.length;
+    // Its Send button counts the transactions as they go in.
+    const counted: Array<{ total: number; sent: number } | null> = [];
+    const fetch = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx")) counted.push(t.lovejoin.progress("preprod"));
+      return fetch(url, init);
+    };
     const pending = await t.lovejoin.publicSubmit("preprod", summary.txHash);
+    expect(counted).toEqual([0, 1, 2, 3, 4].map((sent) => ({ total: 5, sent })));
+    expect(t.lovejoin.progress("preprod")).toBeNull();
     expect(pending).toMatchObject({ kind: "lovejoin-mix", txHash: summary.txHash });
     const sent = t.koios.submitted.slice(before);
     expect(sent).toHaveLength(5);

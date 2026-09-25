@@ -406,9 +406,9 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 
 **Offered, not decided (ask before building):**
 
-- Progress while a mix runs ("9 of 14 on chain"), each box's due time on the Lovejoin page, and a Cardanoscan link for each mix.
+- Each box's due time on the Lovejoin page, and a Cardanoscan link for each mix. (Progress while a mix runs was built in the third session.)
 - Bring one back now preferring a box someone else has mixed since, which is better hidden.
-- Saying when a chain was cut short, recording public mixes so they can be resumed, and finishing the mixing from where it stopped with fresh pool boxes (the design's original rebuild).
+- Recording public mixes so they can be resumed, and finishing the mixing from where it stopped with fresh pool boxes (the design's original rebuild). (Saying when a chain was cut short was built in the third session.)
 - Home's banner for the withdraws that run by themselves.
 - A *Through Lovejoin* switch on Make private: the user said "maybe not".
 
@@ -437,6 +437,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
   - An again chain pays its first mix from the session's largest ADA UTxO. Its other ADA UTxOs come back with the return, which merges into the funding's change as before.
 - **Worker:**
   - `SessionService.againBuild` (request `lovejoin-again-build`) checks the pool first, then builds the funding, sent with `lovejoin-mix-private-submit`.
+  - **How many boxes:** every one of the wallet's, as far as the pool has other boxes to mix them with (`2 × mixes` each) and one chain goes (`MAX_CHAIN_MIXES`, 130, the most a mix from the tile already makes: about 15 s to build). The first build stopped at 10; the user asked for any number (2026-09-25). At depth 2 a pool of about 100 boxes mixes 12 at a time, so the pool is what usually decides. The review says *2 of your 3 boxes* when it can't take them all, and to mix the rest once this is done.
   - The record is a mix session with `mix: { boxes, again }`. The runner builds its chain with no deposit.
   - The network's check measures the first mix with nothing extra, since all its inputs are on chain.
   - **While one runs, no box is withdrawn:** `SessionService.mixingAgain`, from the funding until the return is sent. Lovejoin asks it before `withdrawDue`, and *Bring one back now* refuses meanwhile. A second one is refused too, since it would spend the same boxes.
@@ -455,6 +456,17 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 - **What counts as activity:** while the countdown shows, a click or a key anywhere puts the lock off at once, as Stay unlocked does. Mouse movement doesn't count (the user's choice). There's no badge and no lock hold.
 - **Mine, for the user to overrule:** with the 1-minute lock, the countdown shows for the last 30 s, not the whole minute.
 
+**Progress while a chain goes** (the user asked, 2026-09-25; offered in the second session's handoff).
+
+- **Measured first:** building a chain takes about 110 ms a mix in WebAssembly (Node; a 12-mix chain in 1.5 s), and the worker can't answer while it builds anyway. What takes the time is sending the transactions and the network taking them, so that's what the progress counts.
+- **The record:** before a return's chain is sent, the session records it (`chain: { total, last, at }`). Its view (`SessionView.chain`) counts its transactions sent and those the runner has seen on chain, and says whether it stopped partway (`cut`: its return never went, and what was left came back directly).
+- **Where it shows:**
+  - The Lovejoin page's list: *Sending 7 of 13 transactions*, then *7 of 13 transactions on chain*, or *Stopped after 7 of 13 transactions; what was left came back directly*. The page reads the record every 2 s while a mix runs (no Koios); the on-chain count moves as the runner reads `tx_status`, every 20 s while the page is open.
+  - A swap's timeline, once it's coming back: *Coming back through Lovejoin: 7 of 13 transactions on chain.*
+  - A site session's page: a *Through Lovejoin* row until the chain is all on chain.
+  - Every return's Send button while its chain goes: *Sending 7 of 10…*. The public account's mix too (`lovejoin-mix-public-progress`, kept in the worker's memory while it sends).
+- **Fixed with it:** a session whose chain finished (its return sent) held every later return back from Lovejoin, since the rule was "a deposit is recorded". A site's session paid again later now goes through Lovejoin again. Only a chain that stopped partway sends the rest back directly.
+
 **Also fixed:** the pool counts that `fits` and a return's chain checked against included the wallet's own boxes, which a mix never takes. They're counted out now. A return that stopped partway also counts a recorded mix, not only a deposit, as the chain having started.
 
 **Tests:**
@@ -463,20 +475,21 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 |---|---|
 | `seedelf-core` | `lovejoin_test` +3 (our boxes fanned out again, measured against the scripts; the refusals; the funding for the mixes alone) |
 | `seedelf-wasm` | `lovejoin_test` +2 (a mix session's again chain, signed, its return taking the ADA it left alone; its funding) |
-| Vitest | `lovejoin.test.ts` +3 (mixing again end to end, with the withdraws held and the due times drawn again; boxes gone before the funding landed; no box to mix); `wallet.test.ts` +1 (the deadline, and locking when asked past it) |
-| Playwright | mixing again's review, and the mix listed; the countdown on Settings, Stay unlocked, then the lock at 0:00 |
+| Vitest | `lovejoin.test.ts` +5 (mixing again end to end, with the withdraws held and the due times drawn again; boxes gone before the funding landed; no box to mix; past ten boxes, as the pool allows; a chain's progress, one that stopped partway, and a finished one letting the next return through; the public mix's count); `wallet.test.ts` +1 (the deadline, and locking when asked past it) |
+| Playwright | mixing again's review (2 of 3 boxes), and the mix listed; the countdown on Settings, Stay unlocked, then the lock at 0:00; a site session's return counting its chain on Send, then how much is on chain |
 
-Totals: Rust 327, WebAssembly (Node) 33, Vitest 290, Playwright 51. The module is 762 KB gzipped.
+Totals: Rust 327, WebAssembly (Node) 33, Vitest 292, Playwright 52. The module is 762 KB gzipped.
 
 ## Handoff to the fourth session (2026-09-25)
 
-- **Built and tested offline, not live:** *Mix my boxes again* and the countdown. Neither has run on preprod yet.
+- **Built and tested offline, not live:** *Mix my boxes again* (any number of boxes, as the pool allows), the chain progress, and the countdown. None has run on preprod yet.
+- **A risk to watch live:** a long chain sits in the mempool all at once. A node's mempool holds about two blocks' worth (my understanding, not checked), about 65 mixes of 2.7 KB, so a chain past that may find submits waiting or refused until a block clears. The busy retries (10 to 40 s) should ride it out; if a chain stops there, the rest comes back directly and the progress says where it stopped. If it happens, the fix is sending a long chain in windows.
 - **Still to confirm with the user,** from the third session's handoff:
   - the stopped MIN → ADA swap came back after `18b4847`;
   - a withdraw landed;
   - the merged return used the collateral as an input of the same transaction.
 - **Offered, not decided:** the third session's list stands. Ask before building any of it.
-- **At the chunk's end:** the roadmap tick, the handoff note, and the PR into `seedelf-web-wallet`.
+- **The chunk ended here** (2026-09-25): the roadmap is ticked, and the PR into `seedelf-web-wallet` is open. The live runs above are what's left, in whichever session comes next.
 
 ## Out of scope
 

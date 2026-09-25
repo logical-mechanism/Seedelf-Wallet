@@ -12,7 +12,7 @@ import type { Balances, PendingTx, SessionBackSummary, SessionOutSummary, Sessio
 import { call } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
-import { IntoRow, LovejoinNote, LovejoinRows, ReturnLinks } from "../components/LovejoinReturn";
+import { chainText, IntoRow, LovejoinNote, LovejoinRows, ReturnLinks, useSendingLabel } from "../components/LovejoinReturn";
 import { CopyButton } from "../components/CopyButton";
 import { ExternalIcon, GlobeIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
@@ -85,6 +85,8 @@ export function SiteSession({
   const [back, setBack] = useState<SessionBackSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // A return through Lovejoin: its Send button counts the chain's transactions.
+  const backSending = useSendingLabel(s.index, busy && !!back?.lovejoin);
 
   const act = async (task: () => Promise<void>) => {
     if (busy) return;
@@ -136,7 +138,7 @@ export function SiteSession({
               })
             }
           >
-            {busy ? "Sending…" : "Send"}
+            {busy ? backSending : "Send"}
           </button>
         }
       >
@@ -221,6 +223,7 @@ export function SiteSession({
         ))}
         <Row label="Account" value={shortHex(s.address, 16, 8)} title={s.address} />
         <Row label="Started" value={whenOf(s.createdAt, new Date())} />
+        {s.chain && (s.chain.cut || s.chain.confirmed < s.chain.total) && <Row label="Through Lovejoin" value={chainText(s.chain)} />}
       </ReviewRows>
       <div className="field-row">
         <span className="note">The account's address, as the site sees it</span>

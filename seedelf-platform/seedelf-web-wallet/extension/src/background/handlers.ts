@@ -255,6 +255,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.lovejoin.publicBuild(ctx.network, message.boxes);
     case "lovejoin-mix-public-submit":
       return ctx.lovejoin.publicSubmit(ctx.network, message.txHash);
+    case "lovejoin-mix-public-progress":
+      return ctx.lovejoin.progress(ctx.network);
     case "lovejoin-withdraw-now":
       return ctx.lovejoin.withdrawNow(ctx.network, message.box);
   }

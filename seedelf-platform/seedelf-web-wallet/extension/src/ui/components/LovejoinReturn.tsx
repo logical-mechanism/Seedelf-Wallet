@@ -2,10 +2,56 @@
 // chunk 16): into the private UTxO the session's funding made, or new ones;
 // and, when its spare ADA goes through Lovejoin first, the boxes, the
 // fan-out, when each comes back, and a way to bring this one back directly.
-import type { SessionBackSummary } from "../../shared/rpc";
+// Then, as its chain goes, how far it has got: sent, then on chain.
+import { useEffect, useRef, useState } from "react";
+
+import type { SessionBackSummary, SessionView } from "../../shared/rpc";
+import { call } from "../background";
 import { formatAda, plural } from "../format";
 import { Callout } from "./Callout";
 import { Row } from "./ReviewRows";
+
+/** How far a return's chain through Lovejoin has got, in words. */
+export function chainText(c: NonNullable<SessionView["chain"]>): string {
+  if (c.cut) return `Stopped after ${c.sent} of ${c.total} transactions; what was left came back directly`;
+  if (c.sent < c.total) return `Sending ${c.sent} of ${c.total} transactions`;
+  if (c.confirmed < c.total) return `${c.confirmed} of ${c.total} transactions on chain`;
+  return `All ${c.total} transactions on chain`;
+}
+
+/** How often a page reads a chain's progress: the device's record alone, no Koios. */
+const WATCH_EVERY_MS = 2_000;
+
+/**
+ * Reads the sessions' record every few seconds while `active`. A chain being
+ * sent moves on with every transaction, but the request that sends it
+ * answers only at its end, and the runner's confirmations land in the record
+ * as it reads them.
+ */
+export function useSessionsWhile(active: boolean, onRead: (sessions: SessionView[]) => void): void {
+  const read = useRef(onRead);
+  read.current = onRead;
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => {
+      call("sessions", {}).then(
+        (all) => read.current(all),
+        () => undefined,
+      );
+    }, WATCH_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [active]);
+}
+
+/** A return's Send button while it's sent (`active`): "Sending 7 of 13…" once its chain is on its way. */
+export function useSendingLabel(index: number, active: boolean): string {
+  const [chain, setChain] = useState<SessionView["chain"]>();
+  useSessionsWhile(active, (all) => setChain(all.find((s) => s.index === index)?.chain));
+  useEffect(() => {
+    if (!active) setChain(undefined);
+  }, [active]);
+  return active && chain && !chain.cut && chain.sent < chain.total ? `Sending ${chain.sent} of ${chain.total}…` : "Sending…";
+}
 
 /** "1-6" as "1 to 6 hours". */
 export function delayText(delay: string): string {
