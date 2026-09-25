@@ -14,8 +14,9 @@
 // move them, and the Seedelf key's check finds them wherever they are, after a
 // restore too. Only the due times are kept, sealed (`lovejoin.<network>`).
 //
-// Koios requests: one pool read for a chain, and one at each unlock (to find
-// boxes a restore brought back); a withdraw is giveme.my plus one submit.
+// Koios requests: one pool read for a chain; one at each unlock, only on a
+// wallet that has used Lovejoin here (a restored wallet finds its boxes when
+// the Lovejoin tile opens); a withdraw is giveme.my plus one submit.
 
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
 import type { NetworkName } from "../networks";
@@ -152,23 +153,30 @@ export class LovejoinService {
     await this.update(network, (s) => s.due.push(...due));
   }
 
-  /** The wallet's boxes in the pool (a pool read), and when they're due. */
+  /**
+   * The wallet's boxes in the pool (a pool read), and when they're due. A box
+   * found with no due time (a restore) gets one here.
+   */
   async status(network: NetworkName): Promise<LovejoinStatus> {
     if (!this.available(network)) return { available: false, boxes: [], lovelace: "0", due: [] };
     const owned = await this.owned(network, await this.pool(network));
+    const known = (await this.read(network)).due.length;
+    if (owned.length > known) await this.schedule(network, owned.length - known);
     const { due } = await this.read(network);
     return { available: true, boxes: owned, lovelace: (BigInt(owned.length) * LOVEJOIN_DENOM).toString(), due: [...due].sort((a, b) => a - b) };
   }
 
   /**
-   * Withdraws every box that's due. `scan` reads the pool even when nothing
-   * is due yet (at unlock), so boxes a restore brought back get due times.
+   * Withdraws every box that's due. `scan` (at unlock) reads the pool even
+   * when nothing is due yet, on a wallet that has used Lovejoin here, so its
+   * boxes' due times follow the pool.
    */
   async withdrawDue(network: NetworkName, scan = false): Promise<PendingTx[]> {
     if (!this.available(network)) return [];
+    const used = (await this.deps.store.get<Schedule>(`lovejoin.${network}` as const)) !== undefined;
     const { due } = await this.read(network);
     const now = this.deps.now();
-    if (!scan && !due.some((t) => t <= now)) return [];
+    if (!(scan && used) && !due.some((t) => t <= now)) return [];
     const pool = await this.pool(network);
     const owned = await this.owned(network, pool);
     // A box with no due time (a restore) gets one; a due time with no box

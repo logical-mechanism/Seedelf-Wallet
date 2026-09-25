@@ -34,6 +34,7 @@ import type {
 import { call } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
+import { LovejoinNote, LovejoinRows } from "../components/LovejoinReturn";
 import {
   ArrowDownIcon,
   CheckIcon,
@@ -1313,13 +1314,19 @@ function Session({
         }
       >
         <ReviewRows testId="session-back-review">
-          <Row label="Into your private balance" value={`${formatAda(back.lovelace)} ₳`} strong />
+          <LovejoinRows back={back} />
+          <Row label={back.lovejoin ? "Back now" : "Into your private balance"} value={`${formatAda(back.lovelace)} ₳`} strong />
           {back.tokens.map((t) => (
             <Row key={tokenKey(t)} label="" value={tokenText(t, s, network)} />
           ))}
-          <Row label="Network fee" value={`${formatAda(back.fee)} ₳`} />
+          <Row label={back.lovejoin ? "Network fees" : "Network fee"} value={`${formatAda(back.fee)} ₳`} />
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at session ${s.index + 1}`} />
         </ReviewRows>
+        <LovejoinNote
+          back={back}
+          busy={busy}
+          onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
+        />
         <Callout tone="privacy">
           This links the one-time account to the new private UTxOs, as Make private does. The account is never used again.
         </Callout>

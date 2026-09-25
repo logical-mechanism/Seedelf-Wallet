@@ -14,15 +14,17 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { Balances, PendingTx, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
-import { SwapIcon } from "../components/Icons";
+import { ShieldIcon, SwapIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
 import { Screen } from "../components/Screen";
 import { formatAda, plural } from "../format";
+import { useNetwork } from "../network";
 import { ClaimAll, isClaimable } from "./ClaimAll";
+import { Lovejoin } from "./Lovejoin";
 import { isSiteSession, SiteRow, SiteSession } from "./SiteSessions";
 import { isRunningSwap, Swaps, SwapTag } from "./Swaps";
 
-type DappId = "minswap";
+type DappId = "minswap" | "lovejoin";
 
 interface Dapp {
   id: DappId;
@@ -32,7 +34,10 @@ interface Dapp {
   icon: ReactNode;
 }
 
-const DAPPS: Dapp[] = [{ id: "minswap", name: "Minswap", what: "Swap tokens, routed across Cardano's DEXes", icon: <SwapIcon size={20} /> }];
+const DAPPS: Dapp[] = [
+  { id: "minswap", name: "Minswap", what: "Swap tokens, routed across Cardano's DEXes", icon: <SwapIcon size={20} /> },
+  { id: "lovejoin", name: "Lovejoin", what: "Mix ADA in 10 ₳ boxes: your boxes, and bringing them back", icon: <ShieldIcon size={20} /> },
+];
 
 /** Where the browser opens: a dApp, and one of its sessions. */
 export interface DappStart {
@@ -62,6 +67,7 @@ export function Dapps({
   const [reading, setReading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [error, setError] = useState<string>();
+  const network = useNetwork();
 
   // From the device's own record; `refresh` reads the sessions' accounts too (a site's page asks for it).
   const load = useCallback(async (refresh: boolean) => {
@@ -86,6 +92,10 @@ export function Dapps({
   useEffect(() => {
     if (site !== undefined) void load(true);
   }, [site, load]);
+
+  if (open === "lovejoin") {
+    return <Lovejoin onBack={() => setOpen(undefined)} onPending={onPending} />;
+  }
 
   if (open === "minswap") {
     return (
@@ -146,12 +156,12 @@ export function Dapps({
       )}
       {claimable.length > 0 && <ClaimCard sessions={claimable} onOpen={() => setClaiming(true)} />}
       <div className="dapp-grid" data-testid="dapps">
-        {DAPPS.map((d) => (
+        {DAPPS.filter((d) => d.id !== "lovejoin" || network === "preprod").map((d) => (
           <button key={d.id} type="button" className="dapp-tile" onClick={() => setOpen(d.id)}>
             <span className="dapp-tile__logo">{d.icon}</span>
             <span className="dapp-tile__name">{d.name}</span>
             <span className="dapp-tile__what">{d.what}</span>
-            {running.length > 0 && (
+            {d.id === "minswap" && running.length > 0 && (
               <span className="dapp-tile__badge">
                 {waiting ? (
                   <SwapTag tone="wait" label={`${waiting} ${waiting === 1 ? "needs" : "need"} you`} />

@@ -152,10 +152,17 @@ describe("the boxes' withdraws", () => {
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
   });
 
-  it("gives a box found with no due time one (a restore), at unlock's scan", async () => {
+  it("reads the pool at unlock only on a wallet that has used Lovejoin here", async () => {
+    const { t } = await withSession("40000000");
+    const calls = t.koios.calls.length;
+    expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect(t.koios.calls.length).toBe(calls);
+  });
+
+  it("gives a box found with no due time one (a restore), when the tile opens", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "d3"), await ownedBox(t, "d4"));
-    expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect((await t.lovejoin.status("preprod")).boxes).toHaveLength(2);
     const due = (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due;
     expect(due).toHaveLength(2);
     expect(Math.min(...due)).toBeGreaterThanOrEqual(t.clock.now + HOUR);

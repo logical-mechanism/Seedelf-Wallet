@@ -222,6 +222,76 @@
 - **Collateral:** whether the last transaction can name the UTxO it spends as its own collateral (see *Decided in the design*).
 - **Mainnet:** Lovejoin isn't deployed there, so the tile and the return step are preprod-only until it is.
 
+## Built (2026-09-25, first session)
+
+**Rust:**
+
+- **`seedelf-core::eval`:** `uplc` 1.1.23 runs inside the wallet and answers in Ogmios's shape.
+  - It evaluates against Koios rows, a chain's own unsent outputs, and bundled reference outputs (`references.rs`: Seedelf's four and Lovejoin's three).
+  - The five recorded preprod transactions (`tests/fixtures/eval-preprod.json`) match to the unit.
+- **`seedelf-core::withdraw_zero`:** the withdrawal, its `Reward` redeemer, and the script data hash recomputed.
+  - That hash equals the recorded transactions' own.
+  - `Budgets` gains `withdraw`, `with_margin` and `covers`.
+- **`seedelf-crypto::lovejoin`:** Lovejoin's Schnorr and sigma-OR provers with its RFC 6979 nonces.
+  - Byte for byte on its vectors: 30 Schnorr and 50 sigma-OR (N 2, 3, 4, 6, 8); its 84 negatives are refused.
+  - The vectors are a credited subset, `tests/vectors/lovejoin_v1.json`.
+- **`seedelf-core::lovejoin`:** `deposit`, `mix`, `withdraw`, `owner_context`, `chain`, and `boxes_affordable`.
+  - Offline, against the deployed scripts: a mix of real pool boxes passes `mix_logic`, and deposit → mix → mix → withdraw chains before anything is on chain.
+  - The withdraw context read from the recorded withdraw verifies that transaction's own proofs.
+- **WebAssembly (`wasm/src/lovejoin.rs`):** `planLovejoin`, `buildLovejoinChain`, `lovejoinOwned`, `buildLovejoinWithdraw`, `finishLovejoinWithdraw`.
+  - The chain is signed by the session's key: the deposit, the mixes, then the return of the last change, the collateral and any token UTxOs into fresh registers.
+
+**Worker:**
+
+- **`lovejoin.ts`:** reads the pool, plans, builds, schedules, and handles `status`, `withdrawDue` and `withdrawNow`.
+- **`sessions.ts`:**
+  - `buildBack` takes the chain unless the review asks for `direct`.
+  - `sendBack` sends the chain in order, trying a child again up to 4 times when Koios hasn't seen its parent.
+  - The kinds `deposit` and `mix` are recorded.
+  - Due times are set once the deposit is in.
+- **`sw.ts`:** runs the due withdraws at unlock and on the sessions alarm.
+  - The unlock scan reads the pool only on a wallet that has used Lovejoin on this device, so Home's requests are unchanged for everyone else.
+  - A restored wallet's boxes get their due times when the Lovejoin tile opens.
+- **Settings:** `lovejoinDepth` and `lovejoinDelay`.
+- **Requests:** `lovejoin-status` and `lovejoin-withdraw-now`.
+- **History:** a withdraw is `lovejoin-withdraw` in the banner and the private Activity.
+
+**UI:**
+
+- The return reviews on Minswap's page and a site session's page show the boxes, the fan-out, the fees and when each box comes back, with **Bring it back directly instead**.
+- Bring everything back counts the boxes.
+- Settings gains a *Lovejoin* section (preprod), with each depth's cost.
+- The dApps page gains a **Lovejoin** tile: your boxes in the pool, the next one due, and **Bring one back now**.
+
+**Tests:**
+
+| Where | New |
+|---|---|
+| `seedelf-core` | `eval_test` 5, `withdraw_zero_test` 5, `lovejoin_test` 11 |
+| `seedelf-crypto` | `lovejoin_test` 6 |
+| `seedelf-wasm` | `lovejoin_test` 4 |
+| Vitest | `lovejoin.test.ts` 6: a 40 ₳ session's ten-transaction chain built, measured, sent in order and scheduled, against 20 recorded preprod pool boxes |
+
+Totals: Rust 312, Vitest 273, Playwright 47 (unchanged).
+
+**Departed from the design:**
+
+- **Today's Seedelf spends still ask Koios to evaluate them.** Switching them would re-record most of the extension's fixtures, and Lovejoin doesn't need it. Local evaluation is used where chains need it.
+- **The Koios cross-check on a chain's first transaction isn't built.** The recorded fixtures pin `uplc` against the chain instead.
+- **The WebAssembly module is 739 KB gzipped,** not 697: Lovejoin's builders and the bundled references come on top of `uplc`.
+- **The return is still a key-signed sweep into new registers,** not merged into the funding change (below). So the question of the collateral as an input doesn't arise yet: the return spends it as an ordinary input, and no script runs.
+- **A chain that fails partway isn't rebuilt from where it stopped.** Its error shows. Boxes already deposited are the wallet's and are found by the scan, and bringing the session back again returns what's still at its account (plainly, or through a new chain).
+
+**Not done yet:**
+
+1. The merge of the leftover and tokens into the session's funding change.
+2. The tile's own mixing, from the private balance through a one-time account and from the public account.
+3. The swap approval's words about Lovejoin. A swap that runs itself already goes through Lovejoin on its way back.
+4. Home's *In Lovejoin* row (the dApps tile shows it instead).
+5. The Koios cross-check.
+6. End-to-end tests for the tile and the review.
+7. **A live preprod run** (on the user's go-ahead): a session through Lovejoin, then its withdraws.
+
 ## Out of scope
 
 - Tokens through Lovejoin.

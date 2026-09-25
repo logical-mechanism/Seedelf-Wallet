@@ -12,6 +12,7 @@ import type { Balances, PendingTx, SessionBackSummary, SessionOutSummary, Sessio
 import { call } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { LovejoinNote, LovejoinRows } from "../components/LovejoinReturn";
 import { CopyButton } from "../components/CopyButton";
 import { ExternalIcon, GlobeIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
@@ -140,13 +141,19 @@ export function SiteSession({
         }
       >
         <ReviewRows testId="site-back-review">
-          <Row label="Into your private balance" value={`${formatAda(back.lovelace)} ₳`} strong />
+          <LovejoinRows back={back} />
+          <Row label={back.lovejoin ? "Back now" : "Into your private balance"} value={`${formatAda(back.lovelace)} ₳`} strong />
           {back.tokens.map((t) => (
             <Row key={tokenKey(t)} label="" value={`${formatQuantity(t.quantity, tokenInfo(network, t)?.decimals ?? 0)} ${tokenLabel(network, t)}`} />
           ))}
-          <Row label="Network fee" value={`${formatAda(back.fee)} ₳`} />
+          <Row label={back.lovejoin ? "Network fees" : "Network fee"} value={`${formatAda(back.fee)} ₳`} />
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at private session ${s.index + 1}`} />
         </ReviewRows>
+        <LovejoinNote
+          back={back}
+          busy={busy}
+          onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
+        />
         <p className="note">The site stays connected, to an empty account: Top up fills it again.</p>
         <Callout tone="privacy">
           This links the one-time account to the new private UTxOs, as Make private does.

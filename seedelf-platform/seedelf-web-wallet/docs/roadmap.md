@@ -44,6 +44,27 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-25: chunk 16, Lovejoin (first session)** (`web-wallet/lovejoin`). Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md), whose *Built* lists everything. Chunk 15 merged as PR #262.
+  - **What landed:**
+    - Pallas 0.35.
+    - Scripts evaluated in the wallet (`uplc` 1.1.23).
+    - The withdraw-zero patch.
+    - Lovejoin's provers.
+    - Deposit, mix, withdraw and whole chains, measured offline against the deployed scripts.
+    - The worker: a private session's spare ADA goes through Lovejoin on its way back, and the boxes come back later, each on its own, through giveme.my.
+    - Settings, the review lines, and a Lovejoin tile.
+  - **Surprises:**
+    - `uplc` 1.1.21 (on our old Pallas) mis-costs protocol 11's cost model, and it failed every mix. 1.1.23 matches the chain exactly.
+    - No Pallas version (to 1.4.0) stages withdrawals or a `Reward` redeemer.
+    - The module grew from 484 to 739 KB gzipped.
+  - **Next:**
+    - the merge into the funding change
+    - the tile's own mixing (from the private balance and from the public account)
+    - the swap approval's words
+    - Home's *In Lovejoin* row
+    - end-to-end tests
+    - a live preprod run, on the user's go-ahead
+
 - **2026-09-25: chunk 15, the public dApp connector** (`web-wallet/dapp-connector`). Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md). Chunk 14 merged as PR #261.
   - **What landed:**
     - **Core, in WebAssembly** (`wasm/src/cip30.rs`): CIP-30's encodings, what a dApp's transaction does to the public account, signing it with the keys it needs, and CIP-8 data signatures. Exports: `cip30Utxos`, `cip30Value`, `cip30Address`, `cip30ReadValue`, `inspectDappTx`, `signDappTx`, `dataSigner`, `signDappData`.

@@ -12,7 +12,16 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { NETWORKS } from "../../networks";
 import { DAPP_ORIGINS } from "../../shared/dapp";
 import { readOpenIn, type OpenIn } from "../../shared/open-in";
-import { CURRENCIES, LOCK_AFTER_MINUTES, type Currency, type LockAfterMinutes } from "../../shared/preferences";
+import {
+  CURRENCIES,
+  LOCK_AFTER_MINUTES,
+  LOVEJOIN_DELAYS,
+  LOVEJOIN_DEPTHS,
+  type Currency,
+  type LockAfterMinutes,
+  type LovejoinDelay,
+  type LovejoinDepth,
+} from "../../shared/preferences";
 import type { DappSite, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
@@ -32,6 +41,7 @@ import {
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
+import { delayText } from "../components/LovejoinReturn";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
@@ -91,6 +101,7 @@ export function Settings({
       </section>
       <PreferencesSection network={status.network} />
       <DappConnector onSites={() => setPage("sites")} />
+      {status.network === "preprod" && <LovejoinSettings />}
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
         <h2 id="security-title">Security</h2>
@@ -189,6 +200,64 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
               : "From CoinGecko, read when Home opens, at most every five minutes. It learns only that someone at your IP address uses the wallet: nothing about what you hold."
             : "Values show on mainnet only: test ADA has no price, so nothing is asked on preprod."}
         </p>
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** About what a box's fan-out costs, at preprod's 0.877 ₳ a mix. */
+const DEPTH_COST: Record<LovejoinDepth, string> = { 1: "1 mix, about 0.9 ₳", 2: "4 mixes, about 3.5 ₳", 3: "13 mixes, about 11.4 ₳" };
+
+/**
+ * Lovejoin, for a private session's return: how deep each box fans out, and
+ * how long each waits before it comes back (roadmap chunk 16).
+ */
+function LovejoinSettings() {
+  const { prefs, loaded, set } = usePreferences();
+  const [error, setError] = useState<string>();
+  const fail = (err: Error) => setError(err.message);
+  return (
+    <section className="section" aria-labelledby="lovejoin-settings-title">
+      <h2 id="lovejoin-settings-title">Lovejoin</h2>
+      <p className="note">
+        When a private session comes back with ADA to spare, that ADA goes through Lovejoin first, in boxes of 10 ₳ mixed with
+        other people's, so what comes back isn't tied to the session. The session pays for the mixes.
+      </p>
+      <div className="field">
+        <label htmlFor="lovejoin-depth">Mixing, for each box</label>
+        <select
+          id="lovejoin-depth"
+          value={prefs.lovejoinDepth}
+          disabled={!loaded}
+          onChange={(e) => void set({ lovejoinDepth: Number(e.target.value) as LovejoinDepth }).catch(fail)}
+        >
+          {LOVEJOIN_DEPTHS.map((d) => (
+            <option key={d} value={d}>
+              {d} {d === 1 ? "wave" : "waves"} deep: {DEPTH_COST[d]} (1 in {3 ** d})
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor="lovejoin-delay">Each box comes back after</label>
+        <select
+          id="lovejoin-delay"
+          value={prefs.lovejoinDelay}
+          disabled={!loaded}
+          onChange={(e) => void set({ lovejoinDelay: e.target.value as LovejoinDelay }).catch(fail)}
+        >
+          {LOVEJOIN_DELAYS.map((d) => (
+            <option key={d} value={d}>
+              {delayText(d)}, at random
+            </option>
+          ))}
+        </select>
+        <p className="note">A box comes back the first time the wallet is unlocked after its wait.</p>
       </div>
       {error && (
         <p className="error" role="alert">
