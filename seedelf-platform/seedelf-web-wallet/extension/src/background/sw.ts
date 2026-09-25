@@ -110,7 +110,10 @@ chrome.runtime.onStartup.addListener(applyKeptOpenIn);
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== AUTO_LOCK_ALARM) return;
   // Reading the state applies auto-lock once the user has been idle too long.
-  void getContext().then(({ wallet }) => wallet.state());
+  // A worker that can't start says why on the next request, not here.
+  void getContext()
+    .then(({ wallet }) => wallet.state())
+    .catch(() => undefined);
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {

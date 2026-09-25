@@ -43,9 +43,13 @@ export async function showWalletTab(): Promise<void> {
   const contexts = await chrome.runtime.getContexts({ contextTypes: ["TAB"] });
   const open = contexts.find((c) => new URL(c.documentUrl ?? "", location.href).searchParams.get("view") === "tab");
   if (open) {
-    await chrome.tabs.update(open.tabId, { active: true });
-    await chrome.windows.update(open.windowId, { focused: true });
-    return;
+    try {
+      await chrome.tabs.update(open.tabId, { active: true });
+      await chrome.windows.update(open.windowId, { focused: true });
+      return;
+    } catch {
+      // Closed since it was found: a new one, then.
+    }
   }
   await chrome.tabs.create({ url: chrome.runtime.getURL(TAB_PAGE) });
 }
