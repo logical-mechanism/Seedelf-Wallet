@@ -1773,20 +1773,108 @@ main {
   font-size: var(--text-sm);
 }
 
-/* Swaps (screens/Swaps.tsx): the three steps of a private session, and the
-   form in Minswap's shape: You pay over You receive, each a card with a big
-   amount beside its token, a round Switch across the seam between them, and
-   the quote under them. */
+/* Swaps (screens/Swaps.tsx): the list, each swap a row with its two tokens
+   and a tag for how it's doing, and the form in Minswap's shape: You pay over
+   You receive, each a card with a big amount beside its token, a round Switch
+   across the seam between them, and the quote under them. */
 
-.steps {
-  margin: 0;
-  padding-left: var(--s5);
-  list-style: decimal;
+/* A swap in a list (Minswap's page, Home's running ones): an Activity-style
+   row whose avatar is the pair, what's paid overlapping what's received. */
+.swap-pair {
+  grid-row: 1 / 3;
   display: flex;
-  flex-direction: column;
-  gap: var(--s1);
+  align-items: center;
+}
+
+.swap-pair .avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 10px;
+}
+
+.swap-pair .avatar--ada {
+  font-size: 13px;
+}
+
+.swap-pair .avatar + .avatar {
+  margin-left: -9px;
+  box-shadow: 0 0 0 2px var(--menu);
+}
+
+.swap-row .swap-tag {
+  grid-row: 1 / 3;
+  grid-column: 3;
+}
+
+.swap-row__sub--wait {
+  color: var(--warn);
+}
+
+/* How a swap is doing, as a small pill: running (a live dot), waiting on
+   you, done, stopped, or failed. */
+.swap-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.swap-tag__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.swap-tag--live .swap-tag__dot {
+  background: var(--accent);
+  animation: swap-tag-live 1.6s ease-out infinite;
+}
+
+@keyframes swap-tag-live {
+  from {
+    box-shadow: 0 0 0 0 rgb(0 196 188 / 0.7);
+  }
+  to {
+    box-shadow: 0 0 0 5px rgb(0 196 188 / 0);
+  }
+}
+
+.swap-tag--wait {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn);
+}
+
+.swap-tag--done {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+/* Stopped: neutral, its dot a stop square. */
+.swap-tag--off {
+  border-color: var(--border);
   color: var(--muted);
-  font-size: var(--text-sm);
+}
+
+.swap-tag--off .swap-tag__dot {
+  border-radius: 1px;
+}
+
+.swap-tag--bad {
+  background: rgb(224 30 90 / 0.12);
+  border-color: rgb(255 122 154 / 0.3);
+  color: var(--danger-text);
 }
 
 .swap-cards {
@@ -2219,6 +2307,11 @@ output.swap-card__amount {
   color: var(--warn);
 }
 
+.timeline__step--failed .timeline__icon {
+  border-color: var(--danger-text);
+  color: var(--danger-text);
+}
+
 .timeline__title {
   font-weight: 600;
 }
@@ -2292,11 +2385,6 @@ output.swap-card__amount {
   gap: var(--s4);
 }
 
-/* A swap that's paused and waits for the user, in a list. */
-.swap-needs-you {
-  color: var(--warn);
-}
-
 /* The dApp browser (screens/Dapps.tsx): a grid of tiles. */
 .dapp-grid {
   display: grid;
@@ -2345,12 +2433,10 @@ button.dapp-tile:hover {
   color: var(--muted);
 }
 
+/* How many of its swaps run, or wait on you: a swap tag, at the tile's foot. */
 .dapp-tile__badge {
   margin-top: auto;
   padding-top: var(--s2);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent);
 }
 
 /* Not a dApp yet: where the next ones go. */
@@ -2379,6 +2465,10 @@ button.dapp-tile:hover {
   .swap-chevron,
   .timeline {
     transition: none;
+  }
+
+  .swap-tag--live .swap-tag__dot {
+    animation: none;
   }
 }
 

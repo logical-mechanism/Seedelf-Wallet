@@ -40,7 +40,6 @@ import {
   ReceiveIcon,
   SendIcon,
   SproutIcon,
-  SwapIcon,
   WithdrawIcon,
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
@@ -58,7 +57,7 @@ import { Staking } from "./Staking";
 import { Tokens } from "./Tokens";
 import { Transfer } from "./Transfer";
 import { Utxos } from "./Utxos";
-import { isRunningSwap, swapLine } from "./Swaps";
+import { isRunningSwap, SwapRow } from "./Swaps";
 import { Withdraw } from "./Withdraw";
 
 /** How the banner names a sent transaction, and says it's confirmed. */
@@ -580,23 +579,15 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
   );
 }
 
-/** Swaps running by themselves: each opens its page, where it's watched. */
+/** Swaps running by themselves, as Minswap's page lists them: each opens its page, where it's watched. */
 function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index: number) => void }) {
   return (
-    <section className="section" aria-label="Swaps in progress">
+    <section className="section" aria-labelledby="swaps-running-title">
+      <h2 id="swaps-running-title">Swaps in progress</h2>
       <ul className="list" data-testid="swaps-running">
         {swaps.map((s) => (
           <li key={s.index}>
-            <button type="button" className="menu-row" onClick={() => onOpen(s.index)}>
-              <span className="menu-row__icon">
-                <SwapIcon size={16} />
-              </span>
-              <span className="menu-row__text">
-                <span>{s.auto?.stopping ? "Swap stopping" : "Swap in progress"}</span>
-                <span className={s.auto?.paused ? "menu-row__sub swap-needs-you" : "menu-row__sub"}>{swapLine(s)}</span>
-              </span>
-              <ChevronRightIcon size={16} />
-            </button>
+            <SwapRow session={s} onOpen={() => onOpen(s.index)} />
           </li>
         ))}
       </ul>

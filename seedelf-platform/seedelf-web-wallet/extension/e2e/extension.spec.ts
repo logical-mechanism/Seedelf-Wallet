@@ -1358,7 +1358,9 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await page.getByRole("button", { name: "Review swap" }).click();
   const summary = page.getByTestId("swap-summary");
   await expect(summary).toContainText("You pay10 ₳");
-  await expect(summary).toContainText("You receive about906.5941 MIN");
+  await expect(summary).toContainText("You receive≈ 906.5941 MIN");
+  // What Send approves: the four steps it then takes by itself, and the least it may give.
+  await expect(page.getByTestId("swap-steps")).toContainText("Through Minswap, for at least 902.083681 MIN");
   const fund = page.getByTestId("swap-fund-review");
   await expect(fund).toContainText("ToPrivate session 1");
   await expect(fund).toContainText("For the swap16 ₳");
@@ -1385,7 +1387,8 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
     is_spent: false,
   });
   for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(page.getByTestId("swaps")).toContainText("10 ₳ → MIN");
+  // In progress, with its pair and a tag for how it's doing.
+  await expect(page.getByRole("region", { name: "In progress" })).toContainText("10 ₳ → MINRunning");
   // Minswap's rate limit, first: the timeline says so in plain words, and when it tries again.
   swaps.limited = true;
   await page.getByTestId("swaps").getByRole("button").first().click();
@@ -1414,7 +1417,8 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("dapps")).toContainText("1 running");
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(page.getByTestId("swaps-running")).toContainText("Swap in progress10 ₳ → MIN · Placing the order");
+  await expect(page.getByTestId("swaps-running")).toContainText("10 ₳ → MINRunningPlacing the order");
+  await snap(page, "home-swaps-running");
   await page.getByTestId("swaps-running").getByRole("button").click();
   await expect(timeline).toBeVisible();
 
@@ -1449,7 +1453,9 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await expect(timeline.locator('[data-state="done"]')).toHaveCount(4);
   await snap(page, "swap-done");
   await page.getByRole("button", { name: "Done", exact: true }).click();
-  await expect(page.getByTestId("swaps")).toContainText("Session 1 · Done");
+  await expect(page.getByRole("region", { name: "Past swaps" })).toContainText("10 ₳ → MINDone");
+  await expect(page.getByRole("region", { name: "In progress" })).toHaveCount(0);
+  await snap(page, "swaps");
   // One quote for 30 ₳, one for 10 ₳, one at 2% slippage, the order's fresh one refused by the rate limit, then again; never a cancel.
   const paths = swaps.calls.map((c) => c.path);
   expect(paths.slice(0, 8)).toEqual(["tokens", "estimate", "estimate", "estimate", "estimate", "estimate", "build-tx", "pending-orders"]);
@@ -1502,6 +1508,10 @@ test("a private swap paused by a price move, then stopped: everything comes back
   await expect(paused.getByRole("button", { name: "Review it myself" })).toBeVisible();
   await expect(page.getByTestId("session-timeline").locator('[data-state="paused"]')).toHaveCount(1);
   await snap(page, "swap-paused");
+  // The list says it needs you, and why, in the warning colour.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByRole("region", { name: "In progress" })).toContainText("10 ₳ → MINNeeds youThe price moved");
+  await page.getByTestId("swaps").getByRole("button").first().click();
 
   // Stop, always there: one confirmation.
   await page.getByRole("button", { name: "Stop", exact: true }).click();

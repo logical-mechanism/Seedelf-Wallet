@@ -82,6 +82,12 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **The user's second try sat on "Order placed"** (the order never reached the chain; the retry line under the timeline was missed). A failure now shows in the timeline itself, and retries start at 30 s.
     - **Each session gets its own stake key** (the user, on learning all one-time accounts shared one): `24301'/2/i`, pinned against `cardano-address`. Older sessions keep their shared-stake address.
     - **Third try:** Minswap's preprod Splash orders pay a mainnet address. Preprod routing leaves Splash out, and a transaction the wallet won't read pauses instead of retrying.
+    - **The swaps' look (the user asked for a review):**
+      - **Minswap's list:** *In progress* and *Past swaps* cards. Each row shows the pair's two tokens, what the swap is doing (or when it ran), and a tag: Running, Needs you, Retrying, Stopping, Done, Stopped or Failed.
+      - **The same row and tag elsewhere:** Home's *Swaps in progress* uses the row, and the dApp tile the tag.
+      - **The funding review** says what Send approves (the order placed by itself for at least the minimum, or a pause), and shows the four steps to come instead of the manual ones.
+      - **A swap's page:** a funding that never reached the chain fails its step in the error colour. A paused swap's callout comes first, and the page shows *Started*.
+      - **Fixed:** the list's card had lost its padding (`list section` on one element), and a second `.steps` rule from b858d22 had indented and muted Home's *Get started*.
     - **For the user:** approve a live swap on preprod (fund, fill, back), and one Stop against a real order.
     - **Next:** the restore scan, then private CIP-30 (step 4), then the PR for chunk 15.
 

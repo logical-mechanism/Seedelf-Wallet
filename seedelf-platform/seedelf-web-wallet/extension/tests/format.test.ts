@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatAda, formatQuantity, shortHex, timeAgo, tokenName } from "../src/ui/format";
+import { formatAda, formatQuantity, shortHex, timeAgo, tokenName, whenOf } from "../src/ui/format";
 
 describe("formatting", () => {
   it("formats lovelace as ADA exactly", () => {
@@ -34,6 +34,14 @@ describe("formatting", () => {
     expect(timeAgo(0, 42_000)).toBe("42 s ago");
     expect(timeAgo(0, 3 * 60_000)).toBe("3 min ago");
     expect(timeAgo(0, 2 * 3_600_000)).toBe("2 h ago");
+  });
+
+  it("says when, for a list: today, yesterday, a date, and the year when it isn't this one", () => {
+    const now = new Date(2026, 2, 25, 9, 30);
+    expect(whenOf(new Date(2026, 2, 25, 8, 5).getTime(), now)).toBe("Today, 08:05");
+    expect(whenOf(new Date(2026, 2, 24, 23, 59).getTime(), now)).toBe("Yesterday, 23:59");
+    expect(whenOf(new Date(2026, 2, 23, 18, 40).getTime(), now)).toBe("23 Mar, 18:40");
+    expect(whenOf(new Date(2025, 11, 31, 7, 0).getTime(), now)).toBe("31 Dec 2025, 07:00");
   });
 });
 

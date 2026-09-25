@@ -11,7 +11,7 @@ import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { SwapIcon } from "../components/Icons";
 import { Screen } from "../components/Screen";
-import { isRunningSwap, Swaps } from "./Swaps";
+import { isRunningSwap, Swaps, SwapTag } from "./Swaps";
 
 type DappId = "minswap";
 
@@ -58,6 +58,8 @@ export function Dapps({
     );
   }, [open]);
 
+  const waiting = running.filter((s) => s.auto?.paused).length;
+
   if (open === "minswap") {
     return (
       <Swaps
@@ -81,7 +83,15 @@ export function Dapps({
             <span className="dapp-tile__logo">{d.icon}</span>
             <span className="dapp-tile__name">{d.name}</span>
             <span className="dapp-tile__what">{d.what}</span>
-            {running.length > 0 && <span className="dapp-tile__badge">{running.length} running</span>}
+            {running.length > 0 && (
+              <span className="dapp-tile__badge">
+                {waiting ? (
+                  <SwapTag tone="wait" label={`${waiting} ${waiting === 1 ? "needs" : "need"} you`} />
+                ) : (
+                  <SwapTag tone="live" label={`${running.length} running`} />
+                )}
+              </span>
+            )}
           </button>
         ))}
         <div className="dapp-tile dapp-tile--soon">
