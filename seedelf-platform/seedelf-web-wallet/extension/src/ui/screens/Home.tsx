@@ -77,6 +77,7 @@ const SENT: Record<PendingTx["kind"], string> = {
   "session-swap": "Swap order",
   "session-cancel": "Order cancel",
   "session-back": "Return from a private session",
+  "lovejoin-withdraw": "A box back from Lovejoin",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Made private",
@@ -94,6 +95,7 @@ const CONFIRMED: Record<PendingTx["kind"], string> = {
   "session-swap": "Swap order placed",
   "session-cancel": "Order cancelled",
   "session-back": "Back in your private balance",
+  "lovejoin-withdraw": "Back in your private balance",
 };
 
 /** Read again on open when the last reading is older than this. */

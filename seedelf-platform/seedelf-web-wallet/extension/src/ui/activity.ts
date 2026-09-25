@@ -46,6 +46,8 @@ export function activityTitle(e: ActivityEntry): string {
       return "Cancelled an order";
     case "session-back":
       return "Back from a private session";
+    case "lovejoin-withdraw":
+      return "Back from Lovejoin";
   }
 }
 

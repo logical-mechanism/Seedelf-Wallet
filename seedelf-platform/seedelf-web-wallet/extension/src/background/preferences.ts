@@ -22,7 +22,15 @@
 // Where the toolbar button opens the wallet isn't one of these: it's the
 // browser's, not the wallet's (shared/open-in.ts).
 
-import { DEFAULT_PREFERENCES, isCurrency, isLockAfter, LOCAL_PREFERENCES, type Preferences } from "../shared/preferences";
+import {
+  DEFAULT_PREFERENCES,
+  isCurrency,
+  isLockAfter,
+  isLovejoinDelay,
+  isLovejoinDepth,
+  LOCAL_PREFERENCES,
+  type Preferences,
+} from "../shared/preferences";
 import type { Area } from "./storage";
 
 export { LOCAL_PREFERENCES };
@@ -39,6 +47,8 @@ export class PreferencesService {
       currency: isCurrency(kept.currency) ? kept.currency : DEFAULT_PREFERENCES.currency,
       dappConnector: typeof kept.dappConnector === "boolean" ? kept.dappConnector : DEFAULT_PREFERENCES.dappConnector,
       dappPassword: typeof kept.dappPassword === "boolean" ? kept.dappPassword : DEFAULT_PREFERENCES.dappPassword,
+      lovejoinDepth: isLovejoinDepth(kept.lovejoinDepth) ? kept.lovejoinDepth : DEFAULT_PREFERENCES.lovejoinDepth,
+      lovejoinDelay: isLovejoinDelay(kept.lovejoinDelay) ? kept.lovejoinDelay : DEFAULT_PREFERENCES.lovejoinDelay,
     };
   }
 
@@ -51,6 +61,8 @@ export class PreferencesService {
     if (isCurrency(change.currency)) next.currency = change.currency;
     if (typeof change.dappConnector === "boolean") next.dappConnector = change.dappConnector;
     if (typeof change.dappPassword === "boolean") next.dappPassword = change.dappPassword;
+    if (isLovejoinDepth(change.lovejoinDepth)) next.lovejoinDepth = change.lovejoinDepth;
+    if (isLovejoinDelay(change.lovejoinDelay)) next.lovejoinDelay = change.lovejoinDelay;
     await this.local.set(LOCAL_PREFERENCES, next);
     return next;
   }

@@ -63,6 +63,7 @@ import type {
 import { bodyOutpoints, txId } from "./cbor";
 import { SpentInputError, type KoiosUtxo } from "./koios";
 import type { Estimate, Minswap, PendingOrder } from "./minswap";
+import type { LovejoinChain, LovejoinService } from "./lovejoin";
 import type { PrivateStore } from "./private-store";
 import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 import { outpoint, readFresh, rememberSpent, spentSet, unspent } from "./spent";
@@ -181,6 +182,8 @@ interface KeptTx {
 interface KeptBack extends SessionBackSummary {
   txCbor: string;
   builtAt: number;
+  /** Through Lovejoin: the whole chain, in order, the return last (`txCbor`, `txHash`). */
+  chain?: LovejoinChain["txs"];
 }
 
 export interface SessionDeps extends ScriptSpendDeps {
@@ -188,6 +191,8 @@ export interface SessionDeps extends ScriptSpendDeps {
   minswap: (network: NetworkName) => Minswap;
   /** Wakes the runner every minute while a swap runs (chrome.alarms). */
   alarm?: { start(): Promise<void>; stop(): Promise<void> };
+  /** Where a return's spare ADA goes first, when it pays for a box. */
+  lovejoin?: LovejoinService;
 }
 
 /** What Minswap built failed a check: the swap pauses for the user instead of trying again. */
@@ -209,7 +214,13 @@ const PENDING_KIND = {
   swap: "session-swap",
   cancel: "session-cancel",
   back: "session-back",
+  deposit: "session-back",
+  mix: "session-back",
 } as const satisfies Record<SessionTx["kind"], PendingTx["kind"]>;
+
+/** A chained transaction Koios refuses as spending what it hasn't seen: tried again this many times, waiting this much longer each time. */
+const CHAIN_RETRIES = 4;
+const CHAIN_RETRY_MS = 2_000;
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
@@ -621,7 +632,7 @@ export class SessionService {
   }
 
   /** Builds and signs the return of everything at the session's account into the private balance. */
-  async backBuild(network: NetworkName, index: number): Promise<SessionBackSummary> {
+  async backBuild(network: NetworkName, index: number, direct = false): Promise<SessionBackSummary> {
     const { wallet, session } = this.deps;
     const s = await this.live(network, index);
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
@@ -631,9 +642,9 @@ export class SessionService {
     }
     const rows = await this.utxosOf(network, keyHash);
     if (!rows.length) throw new Error("The session's account is empty, so there's nothing to bring back.");
-    const built = await this.buildBack(network, index, rows);
+    const built = await this.buildBack(network, index, rows, undefined, direct);
     await wallet.withKeys(() => session.set(SESSION_BACK, built));
-    const { txCbor: _txCbor, builtAt: _builtAt, ...summary } = built;
+    const { txCbor: _txCbor, builtAt: _builtAt, chain: _chain, ...summary } = built;
     return summary;
   }
 
@@ -660,6 +671,7 @@ export class SessionService {
   async claimBuild(
     network: NetworkName,
     indexes: number[],
+    direct = false,
   ): Promise<{ returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> }> {
     const { wallet, session } = this.deps;
     const params = await this.deps.koios(network).epochParams();
@@ -675,13 +687,13 @@ export class SessionService {
         }
         const rows = await this.utxosOf(network, keyHash);
         if (!rows.length) throw new Error("It holds nothing.");
-        returns.push(await this.buildBack(network, index, rows, params));
+        returns.push(await this.buildBack(network, index, rows, params, direct));
       } catch (e) {
         skipped.push({ index, reason: (e as Error).message });
       }
     }
     await wallet.withKeys(() => session.set(SESSION_CLAIM, returns));
-    return { returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, ...summary }) => summary), skipped };
+    return { returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, chain: _chain, ...summary }) => summary), skipped };
   }
 
   /** Sends the returns Bring everything back built, those chosen, one after another. One that fails doesn't stop the rest. */
@@ -977,10 +989,51 @@ export class SessionService {
     });
   }
 
-  /** The return of everything at the session's account, built and signed by the session's key. */
-  private async buildBack(network: NetworkName, index: number, rows: KoiosUtxo[], known?: unknown): Promise<KeptBack> {
+  /**
+   * The return of everything at the session's account, built and signed by
+   * the session's key. Unless `direct`, spare ADA that pays for a Lovejoin
+   * box goes through Lovejoin first: the whole chain is built here, the
+   * return last, and the boxes come back later, each on its own.
+   */
+  private async buildBack(
+    network: NetworkName,
+    index: number,
+    rows: KoiosUtxo[],
+    known?: unknown,
+    direct = false,
+  ): Promise<KeptBack> {
     const { wasm, wallet, now } = this.deps;
     const params = known ?? (await this.deps.koios(network).epochParams());
+    const lovejoin = this.deps.lovejoin;
+    if (!direct && lovejoin?.available(network)) {
+      const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length);
+      const chain = await lovejoin.chain(network, index, rows, collateral, params);
+      if (chain) {
+        const back = chain.txs[chain.txs.length - 1]!;
+        const { delay } = await lovejoin.settings();
+        return {
+          network,
+          index,
+          txHash: back.txHash,
+          txCbor: back.txCbor,
+          fee: chain.fees,
+          lovelace: chain.returned,
+          tokens: [],
+          depositOutputs: 1,
+          inputs: rows.length,
+          lovejoin: {
+            boxes: chain.boxes,
+            depth: chain.depth,
+            mixes: chain.txs.filter((t) => t.kind === "mix").length,
+            fees: chain.fees,
+            txs: chain.txs.length,
+            delay,
+          },
+          chain: chain.txs,
+          builtAt: now(),
+        };
+      }
+    }
     const result = await wallet.withKeys(
       (keys) =>
         JSON.parse(
@@ -992,9 +1045,40 @@ export class SessionService {
 
   /** Sends a return, and puts it in the private history. `kept`: where it was kept for Send, cleared once it's sent. */
   private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK): Promise<PendingTx> {
+    if (built.chain) return this.sendChain(network, built, kept);
     const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), kept);
     await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
     return pending;
+  }
+
+  /**
+   * Sends a chain through Lovejoin in order, each transaction on the one
+   * before's outputs before any is on chain. Koios spreads submits over its
+   * nodes, so a child can reach one that hasn't seen its parent yet: it's
+   * tried again, a few times, a little later. The boxes' withdraws are set
+   * once the deposit is in.
+   */
+  private async sendChain(network: NetworkName, built: KeptBack, kept: string): Promise<PendingTx> {
+    const chain = built.chain!;
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    let last: PendingTx | undefined;
+    for (const [i, step] of chain.entries()) {
+      const bytes = hexBytes(step.txCbor);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          last = await this.sendRecorded(network, built.index, step.kind, step.txHash, bytes, kept);
+          break;
+        } catch (e) {
+          if (i === 0 || attempt >= CHAIN_RETRIES || !(e instanceof SpentInputError)) throw e;
+          await sleep(CHAIN_RETRY_MS * (attempt + 1));
+        }
+      }
+      if (step.kind === "deposit" && built.lovejoin) {
+        await this.deps.lovejoin?.schedule(network, built.lovejoin.boxes);
+      }
+    }
+    await this.deps.activity?.sent(network, last!, built).catch(() => undefined);
+    return last!;
   }
 
   /**

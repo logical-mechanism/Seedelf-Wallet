@@ -27,6 +27,7 @@ import { SessionService } from "./sessions";
 import { StakingService } from "./staking";
 import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
+import { LovejoinService } from "./lovejoin";
 import { chromeArea } from "./storage";
 import { Wallet } from "./wallet";
 import { loadWasm } from "./wasm";
@@ -56,13 +57,18 @@ const sessionsAlarm = {
   },
 };
 
-/** The next step of every swap that runs itself, while the wallet is unlocked; locked, the alarm stops until unlock. */
-async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "network">): Promise<void> {
+/**
+ * The next step of every swap that runs itself, and Lovejoin's boxes that are
+ * due back, while the wallet is unlocked; locked, the alarm stops until
+ * unlock. `scan`: read Lovejoin's pool even with nothing due (at unlock).
+ */
+async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "network">, scan = false): Promise<void> {
   if ((await ctx.wallet.state()) !== "unlocked") {
     await sessionsAlarm.stop();
     return;
   }
   await ctx.sessions.runAll(ctx.network);
+  await ctx.lovejoin.withdrawDue(ctx.network, scan).catch(() => undefined);
 }
 
 let context: Promise<Context> | undefined;
@@ -78,6 +84,7 @@ function getContext(): Promise<Context> {
     const broadcast = (message: object) => void chrome.runtime.sendMessage(message).catch(() => undefined);
     let dapp: DappService | undefined;
     let sessions: SessionService | undefined;
+    let lovejoin: LovejoinService | undefined;
     const wallet = new Wallet({
       wasm,
       local,
@@ -89,7 +96,7 @@ function getContext(): Promise<Context> {
         broadcast(STATE_CHANGED);
         // Sites waiting for an unlock go on, and so does a swap that runs itself.
         void dapp?.stateChanged();
-        if (sessions) void runSessions({ wallet, sessions, network }).catch(() => undefined);
+        if (sessions && lovejoin) void runSessions({ wallet, sessions, lovejoin, network }, true).catch(() => undefined);
       },
     });
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
@@ -110,7 +117,8 @@ function getContext(): Promise<Context> {
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
-    sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm });
+    lovejoin = new LovejoinService({ ...spends, store, preferences });
+    sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
     dapp = new DappService({
       ...spends,
       preferences,
@@ -138,6 +146,7 @@ function getContext(): Promise<Context> {
       prices,
       dapp,
       sessions,
+      lovejoin,
       connector: applyConnector,
       version: __VERSION__,
       network,

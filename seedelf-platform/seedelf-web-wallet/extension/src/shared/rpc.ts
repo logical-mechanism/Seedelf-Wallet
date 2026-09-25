@@ -480,7 +480,8 @@ export interface PendingTx {
     | "session-out"
     | "session-swap"
     | "session-cancel"
-    | "session-back";
+    | "session-back"
+    | "lovejoin-withdraw";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -640,7 +641,7 @@ export interface SwapQuote {
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
 export interface SessionTx {
-  kind: "out" | "swap" | "cancel" | "back";
+  kind: "out" | "swap" | "cancel" | "back" | "deposit" | "mix";
   txHash: string;
   at: number;
   confirmed?: boolean;
@@ -719,6 +720,21 @@ export interface SessionBackSummary {
   tokens: TokenQuantity[];
   depositOutputs: number;
   inputs: number;
+  /**
+   * When the spare ADA goes through Lovejoin first: its boxes (10 ₳ each),
+   * the fan-out, and every fee of the chain. `lovelace` is then what comes
+   * back at once; each box comes back later, after a random wait in `delay`
+   * (hours, "1-6").
+   */
+  lovejoin?: { boxes: number; depth: number; mixes: number; fees: string; txs: number; delay: string };
+}
+
+/** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
+export interface LovejoinStatus {
+  available: boolean;
+  boxes: Array<{ txHash: string; txIndex: number }>;
+  lovelace: string;
+  due: number[];
 }
 
 /** A session's order not filled yet, from Minswap. */
@@ -869,7 +885,8 @@ export interface Requests {
   "session-cancel-build": { payload: { index: number }; result: SessionTxReview };
   "session-cancel-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds and signs the return of everything at the session's account into the private balance. */
-  "session-back-build": { payload: { index: number }; result: SessionBackSummary };
+  /** `direct`: straight back, not through Lovejoin. */
+  "session-back-build": { payload: { index: number; direct?: boolean }; result: SessionBackSummary };
   "session-back-submit": { payload: { txHash: string }; result: PendingTx };
   /** Forgets a session whose funding never reached the chain. */
   "session-forget": { payload: { index: number }; result: SessionView[] };
@@ -882,7 +899,7 @@ export interface Requests {
    * something, each its own transaction; `skipped` says why a session wasn't.
    */
   "session-claim-build": {
-    payload: { indexes: number[] };
+    payload: { indexes: number[]; direct?: boolean };
     result: { returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> };
   };
   /** Sends the chosen returns Bring everything back built, one after another. */
@@ -890,6 +907,10 @@ export interface Requests {
     payload: { txHashes: string[] };
     result: { sent: Array<{ index: number; txHash: string }>; failed: Array<{ index: number; error: string }> };
   };
+  /** The wallet's boxes in Lovejoin's pool (a pool read), and when they're due back. */
+  "lovejoin-status": { payload: Record<string, never>; result: LovejoinStatus };
+  /** Withdraws one of the wallet's boxes now, whatever its wait (`box`, or any). */
+  "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number } }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
   "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
   /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */
@@ -984,6 +1005,8 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "session-advance",
   "session-stop",
   "session-resume",
+  "lovejoin-status",
+  "lovejoin-withdraw-now",
 ]);
 
 export function isMessage(value: unknown): value is Message {

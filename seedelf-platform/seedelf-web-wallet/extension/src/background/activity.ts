@@ -70,6 +70,7 @@ const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
   "remove",
   "session-out",
   "session-back",
+  "lovejoin-withdraw",
 ]);
 
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
@@ -144,6 +145,8 @@ export class ActivityService {
           ? { ...shared, kind: "session-out", direction: "out", detail: session }
           : pending.kind === "session-back"
             ? { ...shared, kind: "session-back", direction: "in", detail: session }
+            : pending.kind === "lovejoin-withdraw"
+              ? { ...shared, kind: "lovejoin-withdraw", direction: "in", detail: "Lovejoin" }
             : pending.kind === "transfer"
               ? { ...shared, kind: "transfer", direction: "out", detail: several(paid.map((p) => p.label ?? shortHex(String(p.to)))) }
               : pending.kind === "withdraw"

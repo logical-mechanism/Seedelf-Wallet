@@ -25,6 +25,8 @@ export const PRIVATE_RECORDS = [
   "dapps",
   "sessions.preprod",
   "sessions.mainnet",
+  "lovejoin.preprod",
+  "lovejoin.mainnet",
 ] as const;
 export type RecordName = (typeof PRIVATE_RECORDS)[number];
 

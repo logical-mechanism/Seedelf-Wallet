@@ -16,6 +16,7 @@ import type { PendingService } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
 import type { SendService } from "./send";
+import type { LovejoinService } from "./lovejoin";
 import type { SessionService } from "./sessions";
 import type { StakingService } from "./staking";
 import type { TransferService } from "./transfer";
@@ -41,6 +42,8 @@ export interface Context {
   dapp: DappService;
   /** Private sessions: swaps from one-time accounts (sessions.ts). */
   sessions: SessionService;
+  /** Lovejoin, the mixer: a session's spare ADA on its way back, and the boxes' withdraws (lovejoin.ts). */
+  lovejoin: LovejoinService;
   /** Registers or removes the dApp connector's content scripts (connector.ts). */
   connector: (on: boolean) => Promise<boolean>;
   version: string;
@@ -215,7 +218,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "session-cancel-submit":
       return ctx.sessions.txSubmit(ctx.network, message.txHash, "cancel");
     case "session-back-build":
-      return ctx.sessions.backBuild(ctx.network, message.index);
+      return ctx.sessions.backBuild(ctx.network, message.index, message.direct ?? false);
     case "session-back-submit":
       return ctx.sessions.backSubmit(ctx.network, message.txHash);
     case "session-forget":
@@ -225,7 +228,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "session-top-up-submit":
       return ctx.sessions.topUpSubmit(ctx.network, message.txHash);
     case "session-claim-build":
-      return ctx.sessions.claimBuild(ctx.network, message.indexes);
+      return ctx.sessions.claimBuild(ctx.network, message.indexes, message.direct ?? false);
     case "session-claim-submit":
       return ctx.sessions.claimSubmit(ctx.network, message.txHashes);
     case "session-advance":
@@ -234,6 +237,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.sessions.stop(ctx.network, message.index);
     case "session-resume":
       return ctx.sessions.resume(ctx.network, message.index);
+    case "lovejoin-status":
+      return ctx.lovejoin.status(ctx.network);
+    case "lovejoin-withdraw-now":
+      return ctx.lovejoin.withdrawNow(ctx.network, message.box);
   }
 }
 

@@ -27,6 +27,7 @@ import { PendingService } from "../src/background/pending";
 import { PreferencesService } from "../src/background/preferences";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
+import { LovejoinService } from "../src/background/lovejoin";
 import { SessionService } from "../src/background/sessions";
 import { StakingService } from "../src/background/staking";
 import { PrivateStore } from "../src/background/private-store";
@@ -382,11 +383,20 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     store,
     minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", minswap.fetch),
   });
+  // Lovejoin on its own: the default sessions above come back plainly, as
+  // their tests expect; lovejoin.test.ts wires one in.
+  const lovejoin = new LovejoinService({
+    ...deps,
+    collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    store,
+    preferences,
+  });
   return {
     ...t,
     koios,
     collateral,
     deps,
+    lovejoin,
     balances: new BalanceService(deps),
     moveIn: new MoveInService(deps),
     mint: new MintService({
