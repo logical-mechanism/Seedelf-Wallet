@@ -351,11 +351,12 @@ Home's Private tab → **dApps**, a grid of the dApps the wallet uses privately 
 
 **If a session stalls,** everything is recoverable from the phrase: money left in the account comes back; an order that never fills is stopped, then brought back. A session whose funding never reached the chain shows so, and can be forgotten (its index isn't reused). Sessions from before swaps ran themselves keep their buttons (Place the order, Cancel the order, Bring it back). After a restore on another device, a scan of the one-time accounts (not built yet) finds what's left: see the plan's *Recovery*.
 
-### Other dApps (next)
+### Any site (private CIP-30, chunk 15c)
 
-The same session, offered to a site over CIP-30 instead of the public account (step 4 of the plan):
+The same session, offered to a site over CIP-30 instead of the public account. The plan is [plans/chunk-15c-private-cip30.md](plans/chunk-15c-private-cip30.md).
 
-1. **Out:** a Seedelf spend to a fresh one-time account. Wait about one block before connecting: dApps' backends can't see unconfirmed outputs.
-2. **Use:** the dApp connects and sees an ordinary wallet, that one account and nothing else. The wallet shows its own signing prompt for each transaction.
-3. **Back:** whatever lands at the account is brought back into the private balance, as for a swap: right behind a one-shot dApp's transaction, or blocks later for one whose proceeds come from batchers.
-4. **Retire:** once the account is empty and the session ends, it is never used again.
+1. **Connect:** the site's `enable()` opens the connector's window. **A private session** asks what to put in it (ADA, and tokens), and the funding's review shows it with 5 ₳ of collateral. **Send** needs the password when *Ask for your password to sign for a site* is on.
+2. **Out:** a Seedelf spend to a fresh one-time account, with giveme.my's collateral. The window waits until Koios sees the money (about a minute), then `enable()` answers, so the site's first reading already shows it. Closing the window doesn't undo the payment.
+3. **Use:** the site sees an ordinary wallet: that account, its reward address and its 5 ₳ collateral, and nothing else. Each transaction and message gets the window's prompt, signed with the session's keys.
+4. **Top up and Bring it back** from the dApps page's *Sites*. Bringing it back leaves the site connected, to an empty account, because something still open at the site (a listing, an order) may pay it later.
+5. **Disconnect** ends the session, once the account is empty. It is never used again, and the site's next connect asks again.

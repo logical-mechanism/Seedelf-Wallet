@@ -40,7 +40,7 @@ These are not user settings:
    - This rule used to say "stealth mint from the Seedelf balance, never paid by the Cardano account". That was wrong whenever your own move-in funded the balance: the mint spends that deposit and ties the account, the name and the mint's change together.
 6. **The Cardano account is never a one-time account.** Each one-time account is used for a single session. One-time accounts use a reserved account index (`24301'`), never a low index like `1'` that a restored Lace wallet may already use: sharing payment keys with a real account would link every one-time address back to the user.
 7. **No analytics or telemetry.** The wallet talks to Koios and giveme.my, on mainnet to CoinGecko for ADA's price unless the currency is set to nothing, and to Minswap's aggregator only when the user swaps, and to nothing else.
-8. **Sites only ever see the public account** (the dApp connector, chunk 15). The private balance, the Seedelf key and the Seedelfs are never offered over CIP-30. The connector is off until the user turns it on, and until then nothing is added to any web page.
+8. **A site sees the public account, or a private session's one-time account, never the private balance** (the dApp connector, chunks 15 and 15c). The Seedelf key and the Seedelfs are never offered over CIP-30. The connector is off until the user turns it on, and until then nothing is added to any web page.
 
 ## Known links
 
@@ -110,6 +110,10 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Koios** is asked about every open session's account together (one request, only when the Swaps screen reads the chain), so it can tie them to each other and to the IP address.
   - **On this device:** the list of sessions (their indexes, stages and transactions) is a sealed private record, like Contacts.
   - Each account is used for one session, then never again (rule 6). Its index comes from the phrase in order, so a restore can find leftovers.
+- **A site connected to a private session** (chunk 15c, private CIP-30): the same one-time account as a swap's, funded from the private balance in the connector's window, and used by the site as an ordinary wallet.
+  - **What links, on chain:** the funding to the account, as for a swap; whatever the site does with the account, in the open; each top-up; and the return to new private UTxOs. The public account never appears.
+  - **The site** sees the account's address, its reward address (its own stake key, never registered), its UTxOs and collateral, and what the user signs for it. It sees the same account on every visit until the session ends, like a pen name: its visits link to each other, but to nothing else.
+  - **On this device:** which site has which session is part of the sealed list of connected sites.
 - **Save as CSV** (chunk 14) writes the listed Activity to a file on the device, unencrypted. For the private side that's the payments only this wallet can tell are yours, and the screen says so.
 
 ## Holding and staking

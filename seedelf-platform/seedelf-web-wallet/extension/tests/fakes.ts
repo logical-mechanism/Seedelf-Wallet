@@ -376,6 +376,12 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coins,
     preferences,
   };
+  const sessions = new SessionService({
+    ...deps,
+    collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    store,
+    minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", minswap.fetch),
+  });
   return {
     ...t,
     koios,
@@ -405,12 +411,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     }),
     pending: new PendingService(deps),
     minswap,
-    sessions: new SessionService({
-      ...deps,
-      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
-      store,
-      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", minswap.fetch),
-    }),
+    sessions,
     store,
     activity,
     coins,
@@ -423,6 +424,8 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     dapp: new DappService({
       ...deps,
       store,
+      sessions,
+      fundingPollMs: 1,
       network: "preprod",
       window: dappWindow,
       changed: () => void dappChanged++,

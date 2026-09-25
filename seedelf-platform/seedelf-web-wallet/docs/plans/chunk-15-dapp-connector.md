@@ -19,7 +19,7 @@
 | 1 | **The public connector.** CIP-30 for the public account, the way Lace does it, off until the user turns it on in Settings. | This chunk |
 | 2 | **Private sessions.** A one-time account funded from the private balance, used by a dApp, and swept back into Seedelf. The user's first design, below. | Next chunk |
 | 3 | **The dApp browser.** dApps listed in the wallet. Each opens either as a site or inside the wallet, as Eternl does, and runs in a private session. Minswap first. | Next chunk, or its own |
-| 4 | **Private CIP-30.** Any site connects to a private session instead of the public account, chosen per site. | After 3 |
+| 4 | **Private CIP-30.** Any site connects to a private session instead of the public account, chosen per site. | Built in [chunk 15c](chunk-15c-private-cip30.md) |
 
 ## This chunk: the public connector
 

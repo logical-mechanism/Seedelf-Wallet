@@ -555,12 +555,20 @@ export interface DappTxSummary {
   complete: boolean;
 }
 
-/** What a site asks the user for. A signature's `password`: Sign needs the password typed too (the `dappPassword` setting). */
+/**
+ * What a site asks the user for. A signature's `password`: Sign needs the
+ * password typed too (the `dappPassword` setting). Its `session`: the site is
+ * connected to that private session, not the public account. A connect's
+ * `funding`: the private session it chose is funded and on its way, and the
+ * site connects once Koios sees it. `password` on a connect: sending a
+ * private session's funding needs it.
+ */
 export type DappAsk =
-  | { kind: "connect" }
-  | { kind: "sign-tx"; partial: boolean; summary: DappTxSummary; password: boolean }
+  | { kind: "connect"; password: boolean; funding?: { index: number; txHash: string } }
+  | { kind: "sign-tx"; partial: boolean; summary: DappTxSummary; password: boolean; session?: number }
   | {
       kind: "sign-data";
+      session?: number;
       /** Bech32. */
       address: string;
       key: "payment" | "stake";
@@ -577,6 +585,8 @@ export type DappApproval = { id: string; origin: string; title?: string } & Dapp
 export interface DappSite {
   origin: string;
   connectedAt: number;
+  /** Connected to this private session (private CIP-30), not the public account. */
+  session?: number;
 }
 
 /** "lovelace", or a token's policy ID and name in hex, run together (Minswap's form). */
@@ -676,6 +686,8 @@ export interface SessionView {
   holding: { lovelace: string; tokens: TokenQuantity[]; utxos: number } | null;
   /** Set when the swap runs itself; a session from before (every step a button) has none. */
   auto?: SessionAuto;
+  /** A site's private session (private CIP-30): the site it's connected to, rather than a swap. */
+  site?: { origin: string };
 }
 
 /** A funding payment into a new session, built and waiting for Send. */
@@ -822,7 +834,17 @@ export interface Requests {
    * Answers one: `error` says why an approved one couldn't be done (the site hears it too).
    * A signature that needs the password takes it here; a wrong one leaves it waiting.
    */
-  "dapp-answer": { payload: { id: string; approve: boolean; password?: string }; result: { error?: string } };
+  "dapp-answer": {
+    payload: { id: string; approve: boolean; password?: string; fund?: { txHash: string } };
+    result: { error?: string };
+  };
+  /** Ends a site's private session, once its account is empty, and disconnects the site that has it. */
+  "dapp-disconnect-session": { payload: { index: number }; result: null };
+  /** Builds the funding of a private session for the site a waiting connect is from. `fund` in `dapp-answer` sends it. */
+  "dapp-private-build": {
+    payload: { id: string; lovelace: string; tokens: TokenQuantity[] };
+    result: SessionOutSummary;
+  };
   /** The sites connected to the public account on this network. */
   "dapp-sites": { payload: None; result: DappSite[] };
   /** Disconnects a site; returns the rest. */
@@ -851,6 +873,10 @@ export interface Requests {
   "session-back-submit": { payload: { txHash: string }; result: PendingTx };
   /** Forgets a session whose funding never reached the chain. */
   "session-forget": { payload: { index: number }; result: SessionView[] };
+  /** Builds another funding payment into a site's private session. */
+  "session-top-up-build": { payload: { index: number; lovelace: string; tokens: TokenQuantity[] }; result: SessionOutSummary };
+  /** Sends the top-up built last. */
+  "session-top-up-submit": { payload: { txHash: string }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
   "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
   /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */
@@ -921,6 +947,8 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "price",
   "dapp-approvals",
   "dapp-answer",
+  "dapp-private-build",
+  "dapp-disconnect-session",
   "dapp-sites",
   "dapp-forget",
   "sessions",
@@ -936,6 +964,8 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "session-back-build",
   "session-back-submit",
   "session-forget",
+  "session-top-up-build",
+  "session-top-up-submit",
   "session-advance",
   "session-stop",
   "session-resume",

@@ -383,13 +383,14 @@ pub fn read_value(value_hex: &str) -> Result<(u64, Vec<Token>)> {
 // The account's keys
 // ---------------------------------------------------------------------------
 
-/// The account's key hashes: every payment key in range, and the stake key.
+/// The account's key hashes: every payment key in range, and the stake key
+/// (`2/0` for the public account, `2/i` for private session `i`).
 struct Keys {
     payment: HashMap<Hash<28>, KeyPath>,
     stake: Hash<28>,
 }
 
-fn keys_of(account: &CardanoAccount, paths: &[KeyPath]) -> Result<Keys> {
+fn keys_of(account: &CardanoAccount, paths: &[KeyPath], stake_index: u32) -> Result<Keys> {
     let mut payment = HashMap::new();
     for p in paths {
         let role = match p.role {
@@ -401,7 +402,7 @@ fn keys_of(account: &CardanoAccount, paths: &[KeyPath]) -> Result<Keys> {
     }
     Ok(Keys {
         payment,
-        stake: account.key_hash(Role::Staking, 0)?,
+        stake: account.key_hash(Role::Staking, stake_index)?,
     })
 }
 
@@ -439,6 +440,10 @@ pub struct TxRequest {
     pub inputs: Vec<KoiosRow>,
     #[serde(default)]
     pub partial_sign: bool,
+    /// The stake key's index: 0 for the public account, `i` for private
+    /// session `i`, whose stake key is `2/i`.
+    #[serde(default)]
+    pub stake_index: u32,
 }
 
 /// One output paying anyone but the account.
@@ -684,7 +689,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         .map_err(|e| anyhow!("The wallet can't read this transaction: {e}"))?;
     let tx_hash = build::tx_id(&bytes)?;
     let body = &tx.transaction_body;
-    let keys = keys_of(account, &request.keys)?;
+    let keys = keys_of(account, &request.keys, request.stake_index)?;
 
     if body
         .network_id
@@ -1136,7 +1141,7 @@ pub fn sign_tx(account: &CardanoAccount, request: &TxRequest) -> Result<Signed> 
                 };
                 account.private_key(role, p.index)?
             }
-            Signer::Stake => account.private_key(Role::Staking, 0)?,
+            Signer::Stake => account.private_key(Role::Staking, request.stake_index)?,
         }
         .to_ed25519_private_key();
         let signature = key.sign(tx_hash);
@@ -1326,6 +1331,9 @@ pub struct DataRequest {
     /// Hex.
     #[serde(default)]
     pub payload: String,
+    /// The stake key's index, as `TxRequest`'s.
+    #[serde(default)]
+    pub stake_index: u32,
 }
 
 /// Which of the account's keys an address signs data with.
@@ -1356,7 +1364,7 @@ fn data_key(account: &CardanoAccount, request: &DataRequest) -> Result<Option<(A
     {
         return Ok(None);
     }
-    let keys = keys_of(account, &request.keys)?;
+    let keys = keys_of(account, &request.keys, request.stake_index)?;
     let signer = match &address {
         Address::Shelley(s) => match s.payment() {
             ShelleyPaymentPart::Key(h) => keys.payment.get(h).copied().map(Signer::Payment),
@@ -1404,8 +1412,8 @@ pub struct DataSignature {
 /// protected header names EdDSA and the address, over the payload as given
 /// (not hashed).
 pub fn sign_data(account: &CardanoAccount, request: &DataRequest) -> Result<DataSignature> {
-    let (address, signer) = data_key(account, request)?
-        .ok_or_else(|| anyhow!("That address isn't the public account's."))?;
+    let (address, signer) =
+        data_key(account, request)?.ok_or_else(|| anyhow!("That address isn't this account's."))?;
     let payload =
         hex::decode(request.payload.trim()).map_err(|_| anyhow!("The data to sign isn't hex."))?;
     let key = match signer {
@@ -1417,7 +1425,7 @@ pub fn sign_data(account: &CardanoAccount, request: &DataRequest) -> Result<Data
             };
             account.private_key(role, p.index)?
         }
-        Signer::Stake => account.private_key(Role::Staking, 0)?,
+        Signer::Stake => account.private_key(Role::Staking, request.stake_index)?,
     }
     .to_ed25519_private_key();
 

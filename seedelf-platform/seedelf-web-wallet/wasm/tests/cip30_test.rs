@@ -138,6 +138,7 @@ fn request(tx: String, inputs: Vec<KoiosRow>, partial_sign: bool) -> TxRequest {
         keys: keys(),
         inputs,
         partial_sign,
+        stake_index: 0,
     }
 }
 
@@ -517,6 +518,7 @@ fn data_request(address: &str) -> DataRequest {
         keys: keys(),
         address: address.into(),
         payload: hex::encode("Sign in to example.com: nonce 42"),
+        stake_index: 0,
     }
 }
 

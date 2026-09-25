@@ -179,7 +179,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "dapp-approvals":
       return ctx.dapp.approvals();
     case "dapp-answer":
-      return ctx.dapp.answer(message.id, message.approve, message.password);
+      return ctx.dapp.answer(message.id, message.approve, message.password, message.fund);
+    case "dapp-private-build":
+      return ctx.dapp.privateBuild(message.id, message.lovelace, message.tokens);
+    case "dapp-disconnect-session":
+      await ctx.dapp.disconnectSession(message.index);
+      return null;
     case "dapp-sites":
       return ctx.dapp.sites();
     case "dapp-forget":
@@ -215,6 +220,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.sessions.backSubmit(ctx.network, message.txHash);
     case "session-forget":
       return ctx.sessions.forget(ctx.network, message.index);
+    case "session-top-up-build":
+      return ctx.sessions.topUpBuild(ctx.network, message.index, message.lovelace, message.tokens);
+    case "session-top-up-submit":
+      return ctx.sessions.topUpSubmit(ctx.network, message.txHash);
     case "session-advance":
       return ctx.sessions.advance(ctx.network, message.index, message.now ?? false);
     case "session-stop":

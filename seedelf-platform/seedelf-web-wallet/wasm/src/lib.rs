@@ -28,7 +28,7 @@ pub mod api {
     use cryptoxide::sha2::Sha256;
     use ff::Field;
     use pallas_addresses::{
-        Address, Network as AddressNetwork, ShelleyDelegationPart, ShelleyPaymentPart,
+        Address, Network as AddressNetwork, ShelleyDelegationPart, ShelleyPaymentPart, StakeAddress,
     };
     use pallas_crypto::hash::{Hash, Hasher};
     use pallas_crypto::key::ed25519::{PublicKey, SecretKey, Signature};
@@ -414,6 +414,22 @@ pub mod api {
             ShelleyPaymentPart::key_hash(accounts.key_hash(Role::Receive, index)?),
             ShelleyDelegationPart::key_hash(accounts.key_hash(Role::Staking, index)?),
         )))
+    }
+
+    /// Session `index`'s reward (stake) address: its stake key `2/index`, never
+    /// registered. A site connected to the session (private CIP-30) is given
+    /// it, and some sign in with it.
+    pub fn one_time_reward_address(
+        accounts: &CardanoAccount,
+        network_flag: bool,
+        index: u32,
+    ) -> Result<Address> {
+        let Address::Shelley(base) = one_time_address(accounts, network_flag, index)? else {
+            bail!("a one-time account's address is a Shelley address");
+        };
+        StakeAddress::try_from(base)
+            .map(Address::from)
+            .map_err(|e| anyhow!("failed to build the stake address: {e}"))
     }
 
     /// Session `index`'s address as sessions started before chunk 15b's fix
@@ -2086,6 +2102,14 @@ impl WasmOneTimeAccounts {
             .map_err(js_error)
     }
 
+    /// Session `index`'s reward address (bech32): its own stake key `2/index`.
+    #[wasm_bindgen(js_name = rewardAddress)]
+    pub fn reward_address(&self, network: Network, index: u32) -> Result<String, JsError> {
+        api::one_time_reward_address(&self.inner, network.flag(), index)
+            .and_then(|a| a.to_bech32().map_err(anyhow::Error::from))
+            .map_err(js_error)
+    }
+
     /// Session `index`'s address with the shared Seedelf staking part, as
     /// sessions started before chunk 15b's fix have it (bech32).
     #[wasm_bindgen(js_name = sharedStakeAddress)]
@@ -2137,6 +2161,26 @@ pub fn inspect_session_tx(
 pub fn sign_session_tx(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
     let request: cip30::TxRequest = from_json(request)?;
     to_json(&cip30::sign_tx(&accounts.inner, &request).map_err(js_error)?)
+}
+
+/// Which of a session's keys signs data for an address (a site connected to
+/// the session, private CIP-30), as JSON, or `null` when it isn't the
+/// session's; `keys` is its one path, `0/i`, and `stakeIndex` is `i`.
+#[wasm_bindgen(js_name = sessionDataSigner)]
+pub fn session_data_signer(
+    accounts: &WasmOneTimeAccounts,
+    request: &str,
+) -> Result<String, JsError> {
+    let request: cip30::DataRequest = from_json(request)?;
+    to_json(&cip30::data_signer(&accounts.inner, &request).map_err(js_error)?)
+}
+
+/// Signs data (CIP-8) for a site connected to a session: JSON
+/// `{ signature, key }`, as `signDappData`.
+#[wasm_bindgen(js_name = signSessionData)]
+pub fn sign_session_data(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
+    let request: cip30::DataRequest = from_json(request)?;
+    to_json(&cip30::sign_data(&accounts.inner, &request).map_err(js_error)?)
 }
 
 /// A transaction someone else built (a session's swap) with the wallet's

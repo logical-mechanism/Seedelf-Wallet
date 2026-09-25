@@ -252,7 +252,8 @@ export function Swaps({
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
     try {
-      setSessions(await call("sessions", { refresh }));
+      // A site's private session (private CIP-30) is listed under the dApps page's Sites, not here.
+      setSessions((await call("sessions", { refresh })).filter((s) => !s.site));
       if (refresh) setUpdatedAt(Date.now());
       setError(undefined);
     } catch (e) {

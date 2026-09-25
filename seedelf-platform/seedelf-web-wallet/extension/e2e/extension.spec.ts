@@ -1799,7 +1799,7 @@ test("settings: the wallet opens in a tab until the side panel is chosen, and Ch
   await tab.getByRole("button", { name: "Settings" }).click();
   await expect(tab.getByTestId("currency-note")).toContainText("mainnet only");
   await expect(tab.getByLabel("Show ADA's value in")).toHaveValue("usd");
-  await expect(tab.getByTestId("talks-to")).toHaveText(/only ever talks to Koios and giveme\.my\. It has/);
+  await expect(tab.getByTestId("talks-to")).toHaveText(/only ever talks to Koios and giveme\.my, and to Minswap when you swap\. It has/);
 });
 
 test("hide balances: the eye masks what the wallet holds, but not what a form sends, and stays", async ({ context, koios }) => {
@@ -2107,7 +2107,7 @@ test.describe("the dApp connector", () => {
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByTestId("dapp-connector-note")).toContainText("only ever see your public account");
+    await expect(page.getByTestId("dapp-connector-note")).toContainText("Each sees your public account, or a private session if you choose one");
     // A site's signature needs the password too, until the user says otherwise.
     await expect(page.getByRole("switch", { name: "Ask for your password to sign for a site" })).toHaveAttribute("aria-checked", "true");
 
@@ -2214,6 +2214,68 @@ test.describe("the dApp connector", () => {
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await dapp.reload();
     expect(await dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("undefined");
+  });
+
+  test("a site connects to a private session instead: funded from the window, and listed under dApps' Sites", async ({
+    context,
+    koios,
+  }) => {
+    // One spend: the funding takes the 25 ₳ UTxO alone.
+    koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to your public account" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const dapp = await openDapp(context);
+
+    // The connect window offers a private session: an amount from the private balance, and 5 ₳ of collateral.
+    const opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() =>
+      (window as any).cardano.seedelf.enable().then(
+        () => "connected",
+        (e: { info?: string }) => e.info,
+      ),
+    );
+    const connect = await opened;
+    await connect.getByRole("button", { name: "A private session" }).click();
+    await expect(connect.getByTestId("dapp-private-held")).toContainText("28 ₳ in your private balance");
+    await connect.getByLabel("What to put in it").fill("15");
+    await snap(connect, "dapp-connect-private");
+    await connect.getByRole("button", { name: "Review" }).click();
+    const rows = connect.getByTestId("dapp-funding-rows");
+    await expect(rows).toContainText("ToPrivate session 1");
+    await expect(rows).toContainText("For the site15 ₳");
+    await expect(rows).toContainText("Its collateral5 ₳");
+    // Sending needs the password, as a signature does.
+    await expect(connect.getByRole("button", { name: "Send" })).toBeDisabled();
+    await connect.getByLabel("Your password, to send").fill(PASSWORD);
+    await snap(connect, "dapp-funding-review");
+    await connect.getByRole("button", { name: "Send" }).click();
+    // giveme.my refuses (its recorded answer): nothing is sent, and the request still waits for the user.
+    await expect(connect.getByRole("alert")).toContainText("refused this transaction");
+    expect(koios.submitted).toHaveLength(0);
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Cancel" }).click();
+    expect(await enabling).toBe("The user declined.");
+    await closed;
+
+    // The session it recorded never got its money: dApps lists it under Sites, and Disconnect closes it.
+    await page.getByRole("button", { name: "Back" }).click();
+    await page.getByRole("button", { name: "dApps", exact: true }).click();
+    const sites = page.getByTestId("dapp-sites");
+    await expect(sites).toContainText("dapp.example");
+    await expect(sites).toContainText("Not funded");
+    await snap(page, "dapp-sites");
+    await sites.getByRole("button").click();
+    await expect(page.getByTestId("site-session-failed")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disconnect" })).toBeEnabled();
+    await snap(page, "site-session");
+    await page.getByRole("button", { name: "Disconnect" }).click();
+    await expect(page.getByTestId("dapp-sites")).toHaveCount(0);
+    await expect(page.getByTestId("dapp-sites-hint")).toBeVisible();
   });
 
   test("a locked wallet asks for the password in the connector's window first", async ({ context }) => {

@@ -116,8 +116,8 @@ export function Settings({
         </a>
         <p className="note" data-testid="talks-to">
           {prices
-            ? "The wallet only ever talks to Koios and giveme.my, and to CoinGecko for ADA's price. It has no accounts, analytics or tracking."
-            : "The wallet only ever talks to Koios and giveme.my. It has no accounts, analytics or tracking."}
+            ? "The wallet only ever talks to Koios and giveme.my, to CoinGecko for ADA's price, and to Minswap when you swap. It has no accounts, analytics or tracking."
+            : "The wallet only ever talks to Koios and giveme.my, and to Minswap when you swap. It has no accounts, analytics or tracking."}
         </p>
       </section>
     </Screen>
@@ -278,7 +278,7 @@ function DappConnector({ onSites }: { onSites: () => void }) {
           <span id="dapp-connector-label">Let sites connect to your public account</span>
           <span className="note" id="dapp-connector-note" data-testid="dapp-connector-note">
             {on
-              ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. They only ever see your public account, and nothing is signed without you."
+              ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. Each sees your public account, or a private session if you choose one, and nothing is signed without you."
               : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. That's all it adds."}
           </span>
         </span>
@@ -357,7 +357,10 @@ function ConnectedSites({ onBack }: { onBack: () => void }) {
             <li key={s.origin} className="list__row">
               <span className="stack-tight">
                 <strong>{new URL(s.origin).host}</strong>
-                <span className="note">Since {new Date(s.connectedAt).toLocaleDateString()}</span>
+                <span className="note">
+                  {s.session === undefined ? "Your public account" : `Private session ${s.session + 1}`} · since{" "}
+                  {new Date(s.connectedAt).toLocaleDateString()}
+                </span>
               </span>
               <button type="button" className="chip" onClick={() => forget(s.origin)}>
                 Disconnect
@@ -366,7 +369,10 @@ function ConnectedSites({ onBack }: { onBack: () => void }) {
           ))}
         </ul>
       )}
-      <p className="note">A disconnected site has to ask again before it sees anything.</p>
+      <p className="note">
+        A disconnected site has to ask again before it sees anything. A private session is disconnected once everything in
+        it is brought back, from the dApps page.
+      </p>
     </Screen>
   );
 }

@@ -4,11 +4,16 @@
 // one reading of the account, and nothing is signed until the user approves.
 import { describe, expect, it } from "vitest";
 
-import { SESSION_DAPP_SIGNED, type DappSession } from "../src/background/dapp";
+import { Collateral } from "../src/background/collateral";
+import { DappService, SESSION_DAPP_SIGNED, type DappSession } from "../src/background/dapp";
+import type { KoiosUtxo } from "../src/background/koios";
+import { Minswap } from "../src/background/minswap";
 import { SESSION_SEND } from "../src/background/send";
+import { SessionService } from "../src/background/sessions";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { APIError, DataSignError, TxSignError } from "../src/shared/dapp";
-import { koiosPreprod, testBalances, vectors } from "./fakes";
+import { txIdOf } from "./fixtures/cbor";
+import { koiosPreprod, loadTestWasm, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
@@ -344,3 +349,215 @@ describe("the dApp connector", () => {
     expect(t.dapp.approvals()).toEqual([]);
   });
 });
+
+describe("private CIP-30: a site connected to a private session", () => {
+  type T = Awaited<ReturnType<typeof on>>;
+
+  /** A UTxO at session 0's account, as Koios lists it. */
+  function atSession(tx_hash: string, tx_index: number, value: string): KoiosUtxo {
+    return {
+      ...(sessionSwap.utxo as unknown as KoiosUtxo),
+      tx_hash,
+      tx_index,
+      value,
+      payment_cred: sessionSwap.keyHash,
+      stake_address: null,
+      block_height: 5_000_000,
+      asset_list: [],
+      is_spent: false,
+    } as KoiosUtxo;
+  }
+
+  /**
+   * The connector over a session service whose giveme.my witness and Seedelf
+   * signature are stood in for, as sessions.test.ts does: the funding takes
+   * the private balance's 25 ₳ UTxO alone.
+   */
+  function privately(t: T) {
+    const wasm = loadTestWasm();
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const evaluation = withdrawPreprod.amount.evaluation as { result: unknown[] };
+    t.koios.evaluation = { ...evaluation, result: evaluation.result.slice(0, 1) };
+    const sessions = new SessionService({
+      ...t.deps,
+      wasm: {
+        ...wasm,
+        signScriptSpend: (_key: unknown, request: string) => {
+          const { txCbor } = JSON.parse(request) as { txCbor: string };
+          return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+        },
+      } as typeof wasm,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+    });
+    const dapp = new DappService({
+      ...t.deps,
+      store: t.store,
+      sessions,
+      fundingPollMs: 1,
+      network: "preprod",
+      window: t.dappWindow,
+      changed: () => undefined,
+    });
+    return { dapp, sessions };
+  }
+
+  /** A site connected to session 0, whose account holds the recorded swap's UTxO and its 5 ₳ collateral. */
+  async function connectedPrivately(t: T, dapp: DappService, s = site()) {
+    const enabling = dapp.call(s, "enable", []);
+    await until(() => dapp.approvals().length === 1);
+    const out = await dapp.privateBuild(dapp.approvals()[0]!.id, "15000000", []);
+    await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD, { txHash: out.txHash });
+    t.koios.addedToAccounts.push(
+      atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value),
+      atSession(out.txHash, 1, "5000000"),
+    );
+    expect(await enabling).toBe(true);
+    return { s, out };
+  }
+
+  it("is funded from the window, and enable() answers once Koios sees the money, even with the window closed", async () => {
+    const t = await on();
+    const { dapp, sessions } = privately(t);
+    const s = site();
+    const enabling = dapp.call(s, "enable", []);
+    let settled = false;
+    enabling.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await until(() => dapp.approvals().length === 1);
+    const connect = dapp.approvals()[0]!;
+    expect(connect).toMatchObject({ kind: "connect", password: true });
+
+    // The funding: 15 ₳ for the site and 5 ₳ of collateral, into session 0's own account.
+    const out = await dapp.privateBuild(connect.id, "15000000", []);
+    expect(out).toMatchObject({ index: 0, address: sessionSwap.address });
+    expect(out.payments.map((p) => [p.address, p.lovelace])).toEqual([
+      [sessionSwap.address, "15000000"],
+      [sessionSwap.address, "5000000"],
+    ]);
+
+    // Sending it needs the password, as a signature does; then it's sent, and the site is connected to the session.
+    expect(await dapp.answer(connect.id, true, undefined, { txHash: out.txHash })).toEqual({ error: "Type your password to send." });
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(await dapp.answer(connect.id, true, PASSWORD, { txHash: out.txHash })).toEqual({});
+    expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([out.txHash]);
+    expect(await dapp.sites()).toEqual([{ origin: s.origin, connectedAt: expect.any(Number), session: 0 }]);
+
+    // It waits for the money: the window shows it, the site hasn't heard, and closing the window doesn't undo it.
+    expect(dapp.approvals()).toMatchObject([{ kind: "connect", funding: { index: 0, txHash: out.txHash } }]);
+    t.dappWindow.open = false;
+    await dapp.windowClosed();
+    expect(dapp.approvals()).toHaveLength(1);
+    expect(settled).toBe(false);
+
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, "15000000"), atSession(out.txHash, 1, "5000000"));
+    expect(await enabling).toBe(true);
+    expect(dapp.approvals()).toEqual([]);
+    expect((await sessions.list("preprod"))[0]).toMatchObject({ index: 0, site: { origin: s.origin } });
+  });
+
+  it("gives the site the session's account alone: its address, its reward address, its money and its collateral", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s } = await connectedPrivately(t, dapp);
+    const { wasm } = t.deps;
+    const reward = await t.wallet.withKeys((k) => k.oneTime.rewardAddress(wasm.Network.Preprod, 0));
+
+    expect(await dapp.call(s, "getUsedAddresses", [])).toEqual([wasm.cip30Address(sessionSwap.address)]);
+    expect(await dapp.call(s, "getChangeAddress", [])).toBe(wasm.cip30Address(sessionSwap.address));
+    expect(await dapp.call(s, "getUnusedAddresses", [])).toEqual([]);
+    expect(await dapp.call(s, "getRewardAddresses", [])).toEqual([wasm.cip30Address(reward)]);
+    // The recorded swap's UTxO to spend; the 5 ₳ is the collateral, kept out of it.
+    expect(await dapp.call(s, "getUtxos", [])).toHaveLength(1);
+    expect(await dapp.call(s, "getCollateral", [])).toHaveLength(1);
+    expect(await dapp.call(s, "getBalance", [])).toBe(wasm.cip30Value(sessionSwap.utxo.value, "[]"));
+    // Nothing of the public account's: its used address isn't there.
+    const publicAddress = wasm.cip30Address(account(12).preprod.receive_0 as string);
+    expect(await dapp.call(s, "getUsedAddresses", [])).not.toContain(publicAddress);
+  });
+
+  it("signs the site's transaction and message with the session's keys, after the password", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s } = await connectedPrivately(t, dapp);
+    const { wasm } = t.deps;
+
+    const signing = dapp.call(s, "signTx", [sessionSwap.swapCbor, false]);
+    await until(() => dapp.approvals().length === 1);
+    const approval = dapp.approvals()[0]!;
+    if (approval.kind !== "sign-tx") throw new Error(approval.kind);
+    expect(approval).toMatchObject({ session: 0, password: true });
+    expect(approval.summary.signs).toEqual(["0/0"]);
+    expect(approval.summary.complete).toBe(true);
+    expect(await dapp.answer(approval.id, true, PASSWORD)).toEqual({});
+    expect(((await signing) as string).slice(0, 4)).toBe("a100");
+
+    // A message, with the session's payment key, and with its own stake key for its reward address.
+    const reward = await t.wallet.withKeys((k) => k.oneTime.rewardAddress(wasm.Network.Preprod, 0));
+    for (const [address, key] of [
+      [sessionSwap.address, "payment"],
+      [reward, "stake"],
+    ] as const) {
+      const message = dapp.call(s, "signData", [wasm.cip30Address(address), hex("Sign in")]);
+      await until(() => dapp.approvals().length === 1);
+      expect(dapp.approvals()[0]).toMatchObject({ kind: "sign-data", session: 0, key });
+      await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD);
+      expect(((await message) as { signature: string }).signature.slice(0, 2)).toBe("84");
+    }
+    // The public account's address isn't the session's to sign for.
+    await expect(dapp.call(s, "signData", [OWN, hex("x")])).rejects.toMatchObject({
+      failure: { code: DataSignError.ProofGeneration, info: "That address isn't this private session's." },
+    });
+  });
+
+  it("keeps the request waiting when the funding isn't sent, and its unfunded session can be closed from the dApps page", async () => {
+    const t = await on();
+    const { dapp, sessions } = privately(t);
+    const s = site();
+    const enabling = dapp.call(s, "enable", []);
+    enabling.catch(() => undefined);
+    await until(() => dapp.approvals().length === 1);
+    const connect = dapp.approvals()[0]!;
+    const out = await dapp.privateBuild(connect.id, "15000000", []);
+    // giveme.my refuses: nothing is sent, the site isn't connected, and the request still waits for the user.
+    t.collateral.answer = { status: 400, body: { error: "refused" } };
+    const { error } = await dapp.answer(connect.id, true, PASSWORD, { txHash: out.txHash });
+    expect(error).toBeTruthy();
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(await dapp.sites()).toEqual([]);
+    expect(dapp.approvals()).toMatchObject([{ kind: "connect" }]);
+    expect(dapp.approvals()[0]).not.toHaveProperty("funding");
+    // The session it recorded never got its money: closed from the dApps page, its index isn't used again.
+    expect((await sessions.list("preprod"))[0]).toMatchObject({ index: 0, stage: "failed", site: { origin: s.origin } });
+    await dapp.disconnectSession(0);
+    expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
+    expect((await dapp.privateBuild(connect.id, "15000000", [])).index).toBe(1);
+  });
+
+  it("takes a top-up, and disconnects only once everything's brought back, ending the session", async () => {
+    const t = await on();
+    const { dapp, sessions } = privately(t);
+    const { s } = await connectedPrivately(t, dapp);
+
+    // Top up: another payment into the same account, recorded in the session.
+    t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "ee".repeat(32), block_height: 9_000_001 });
+    const more = await sessions.topUpBuild("preprod", 0, "3000000", []);
+    expect(more.payments.map((p) => [p.address, p.lovelace])).toEqual([[sessionSwap.address, "3000000"]]);
+    await sessions.topUpSubmit("preprod", more.txHash);
+    expect((await sessions.list("preprod"))[0]!.txs.map((x) => x.kind)).toEqual(["out", "out"]);
+
+    // The account holds something: disconnecting refuses, and the site stays connected.
+    await expect(dapp.forget(s.origin)).rejects.toThrow("Bring it back first");
+    expect(await dapp.sites()).toHaveLength(1);
+
+    // Brought back (the account is empty): disconnecting ends the session, and the site's next connect asks again.
+    t.koios.addedToAccounts.splice(0);
+    expect(await dapp.forget(s.origin)).toEqual([]);
+    expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
+    await expect(dapp.call(s, "getBalance", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+  });
+});
+

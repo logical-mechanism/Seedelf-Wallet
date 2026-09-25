@@ -93,7 +93,21 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Then (2026-09-25): the password at Sign for sites.** The user connected the public account to Minswap's preprod site (custom wallet, CIP-30 ID `seedelf`) and asked whether signing without the password was safe.
     - **What landed:** a site's transaction or message needs the password typed in the connector's window, even while unlocked (`dappPassword`, on by default, a switch under Settings' *Sites*). A wrong one leaves the request waiting and counts towards the unlock back-off (`Wallet.checkPassword`). The connector window's Unlock says a site is waiting.
     - **Surprise:** skipping it right after an unlock doesn't work, because sites call `enable()` first and the unlock goes to that call. So Sign always asks.
-    - **Next:** private CIP-30 (step 4) on this branch, to be designed with the user: most people use dApps on their own sites, not in the wallet's browser.
+  - **Then (2026-09-25): chunk 15c, private CIP-30** (step 4). Plan: [plans/chunk-15c-private-cip30.md](plans/chunk-15c-private-cip30.md), whose *Built* lists what landed.
+    - **The user decided:**
+      - the choice is in the connect window, remembered per site;
+      - one session per site;
+      - it's funded before the site gets it;
+      - it's managed from the dApps page's *Sites*.
+    - **My calls, in the plan:**
+      - Bring it back leaves the site connected; Disconnect ends the session, once it's empty.
+      - The funding asks for the password when `dappPassword` is on.
+      - The session's stake key signs too (`stakeIndex`).
+    - **What landed:** WebAssembly's `stakeIndex` and session data signing, site sessions in `sessions.ts`, every connector path resolving the site's account, the connect window's private path, and `screens/SiteSessions.tsx`.
+    - **Tests:** Rust 2, Vitest 5, Playwright 1.
+    - **Also fixed:** Settings said the wallet talks only to Koios and giveme.my, leaving out Minswap since chunk 15.
+    - **For the user:** connect a real preprod site to a private session (fund, use, bring back, disconnect). The store listing text is updated for it.
+    - **Next:** the restore scan, then the chunk 15 PR's merge.
 
 - **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md), whose *Status* says where the build departed from it.
   - **What landed:**

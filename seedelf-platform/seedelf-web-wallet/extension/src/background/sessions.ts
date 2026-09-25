@@ -26,6 +26,13 @@
 // waits is cancelled, then everything comes back. Every transaction is
 // recorded before it's submitted.
 //
+// A site's private session (chunk 15c, private CIP-30) is the same account,
+// connected to a site instead of used for a swap: the connector (dapp.ts)
+// funds it from its window, the site uses it as an ordinary wallet, and
+// Top up and Bring it back work from the wallet. Nothing runs by itself, and
+// its return doesn't end it: what's still open at the site may pay the
+// account later. Disconnecting ends it, once the account is empty.
+//
 // The accounts are account 24301', payment key 0/index and stake key 2/index,
 // both the session's own, so no two sessions share a key (WebAssembly's
 // OneTimeAccounts). Sessions recorded before that have the shared Seedelf
@@ -67,6 +74,10 @@ export const SESSION_OUT = "seedelf.session.out";
 export const SESSION_TX = "seedelf.session.tx";
 /** chrome.storage.session: a session's return, signed and waiting for Send. */
 export const SESSION_BACK = "seedelf.session.back";
+/** chrome.storage.session: a site's private session's funding, built and waiting for Send in the connector's window. */
+export const SESSION_SITE_OUT = "seedelf.session.site-out";
+/** chrome.storage.session: a top-up of a site's private session, built and waiting for Send. */
+export const SESSION_TOP_UP = "seedelf.session.top-up";
 
 /** Each session's own collateral, as the public account's. */
 export const SESSION_COLLATERAL = 5_000_000n;
@@ -122,6 +133,8 @@ interface SessionRecord {
   swap?: SessionView["swap"];
   /** Set on sessions started since swaps run themselves. */
   auto?: AutoRecord;
+  /** A site's private session (private CIP-30), rather than a swap. */
+  site?: { origin: string };
   closedAt?: number;
 }
 
@@ -139,6 +152,15 @@ interface KeptOut {
   index: number;
   swap: SessionView["swap"];
   approved: AutoRecord["approved"];
+  builtAt: number;
+}
+
+/** A site's private session's funding, or a top-up of one. */
+interface KeptFunding extends SessionOutSummary {
+  txCbor: string;
+  seed: string;
+  /** The site a new session is for; a top-up has none. */
+  site?: { origin: string };
   builtAt: number;
 }
 
@@ -309,23 +331,168 @@ export class SessionService {
     quote: SwapQuote,
     display?: { in: SwapSide; out: SwapSide },
   ): Promise<SessionOutSummary> {
-    const { wasm } = this.deps;
     const ask = checkAsk(quote.ask);
     const index = (await this.book(network)).next;
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
-    const { view, utxos, params } = await readContract(this.deps, network);
-    if (!utxos.length) {
-      throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to swap from.");
-    }
-    const request = {
+    const { summary, txCbor, seed } = await this.buildFunding(
       network,
-      params,
-      utxos,
-      payments: [
+      index,
+      address,
+      [
         { to: address, lovelace: quote.fund.lovelace, tokens: quote.fund.tokens },
         { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
       ],
-    };
+      "Your private balance is empty, so there's nothing to swap from.",
+    );
+    const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) };
+    // Sending this is the approval: the swap runs itself within it.
+    const approved = { minAmountOut: quote.minAmountOut, fund: quote.fund };
+    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved };
+    await keep(this.deps, SESSION_OUT, kept);
+    return summary;
+  }
+
+  /**
+   * Builds the payment that funds a new private session for a site (private
+   * CIP-30): `lovelace` and `tokens` for it, and the account's own collateral.
+   */
+  async siteOutBuild(network: NetworkName, origin: string, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
+    const index = (await this.book(network)).next;
+    const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
+    const { summary, txCbor, seed } = await this.buildFunding(
+      network,
+      index,
+      address,
+      [
+        { to: address, lovelace, tokens },
+        { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
+      ],
+      "Your private balance is empty, so there's nothing to put in a private session.",
+    );
+    const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed, site: { origin } };
+    await keep(this.deps, SESSION_SITE_OUT, kept);
+    return summary;
+  }
+
+  /** Records the site's private session, then sends its funding. The connector waits for it to arrive. */
+  siteOutSubmit(network: NetworkName, txHash: string, origin: string): Promise<{ index: number; pending: PendingTx }> {
+    return this.serial(async () => {
+      const { wallet, session, now } = this.deps;
+      const built = await wallet.withKeys(() => session.get<KeptFunding>(SESSION_SITE_OUT));
+      if (!built || built.txHash !== txHash || built.network !== network || built.site?.origin !== origin) {
+        throw new Error("That payment isn't ready to send. Review it again.");
+      }
+      if (now() - built.builtAt > BUILT_TTL_MS) {
+        throw new Error("That payment was built more than 10 minutes ago. Review it again.");
+      }
+      const book = await this.book(network);
+      if (built.index < book.next) throw new Error("That session was started already. Start a new one.");
+      // Recorded before it's sent: whatever happens next, this index is never used again.
+      const record: SessionRecord = {
+        index: built.index,
+        ownStake: true,
+        createdAt: now(),
+        txs: [{ kind: "out", txHash, at: now() }],
+        site: { origin },
+      };
+      await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
+      try {
+        return { index: built.index, pending: await send(this.deps, network, txHash, SESSION_SITE_OUT, "session-out", "payment") };
+      } catch (e) {
+        await this.update(network, built.index, (s) => {
+          s.txs[0]!.unsent = true;
+        });
+        throw e;
+      }
+    });
+  }
+
+  /** Builds another payment into a site's private session: `lovelace` and `tokens`, from the private balance. */
+  async topUpBuild(network: NetworkName, index: number, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
+    const s = await this.live(network, index);
+    if (!s.site) throw new Error("Only a site's private session takes a top-up.");
+    const { address } = (await this.accounts(network, [s])).get(index)!;
+    const { summary, txCbor, seed } = await this.buildFunding(
+      network,
+      index,
+      address,
+      [{ to: address, lovelace, tokens }],
+      "Your private balance is empty, so there's nothing to top up with.",
+    );
+    const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
+    await keep(this.deps, SESSION_TOP_UP, kept);
+    return summary;
+  }
+
+  /** Records the top-up built last in its session, then sends it. */
+  topUpSubmit(network: NetworkName, txHash: string): Promise<PendingTx> {
+    return this.serial(async () => {
+      const { wallet, session, now } = this.deps;
+      const built = await wallet.withKeys(() => session.get<KeptFunding>(SESSION_TOP_UP));
+      if (!built || built.txHash !== txHash || built.network !== network) {
+        throw new Error("That top-up isn't ready to send. Review it again.");
+      }
+      if (now() - built.builtAt > BUILT_TTL_MS) {
+        throw new Error("That top-up was built more than 10 minutes ago. Review it again.");
+      }
+      await this.live(network, built.index);
+      await this.update(network, built.index, (s) => {
+        s.txs.push({ kind: "out", txHash, at: now() });
+      });
+      try {
+        return await send(this.deps, network, txHash, SESSION_TOP_UP, "session-out", "top-up");
+      } catch (e) {
+        await this.update(network, built.index, (s) => {
+          const t = s.txs.find((r) => r.txHash === txHash);
+          if (t) t.unsent = true;
+        });
+        throw e;
+      }
+    });
+  }
+
+  /** Ends a site's private session, once its account is empty. Its index isn't used again. */
+  disconnect(network: NetworkName, index: number): Promise<void> {
+    return this.serial(async () => {
+      const s = await this.live(network, index);
+      if (!s.site) throw new Error("This session isn't a site's.");
+      const { keyHash } = (await this.accounts(network, [s])).get(index)!;
+      if ((await this.utxosOf(network, keyHash)).length) {
+        throw new Error("The session's account still holds something. Bring it back first, then disconnect.");
+      }
+      await this.update(network, index, (r) => {
+        r.closedAt = this.deps.now();
+      });
+    });
+  }
+
+  /** A site's private session, for the connector: its address, reward address and payment key hash. */
+  async siteAccount(network: NetworkName, index: number): Promise<{ address: string; reward: string; keyHash: string }> {
+    const s = await this.live(network, index);
+    if (!s.site) throw new Error("This session isn't a site's.");
+    const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
+    const { wasm, wallet } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const reward = await wallet.withKeys((keys) => keys.oneTime.rewardAddress(net, index));
+    return { address, reward, keyHash };
+  }
+
+  /** What a session's account holds now, fresh from Koios, less what this wallet has spent. */
+  async accountUtxos(network: NetworkName, keyHash: string): Promise<KoiosUtxo[]> {
+    return this.utxosOf(network, keyHash);
+  }
+
+  /** A funding payment into `address` from the private balance (Make public's builder), measured and ready for Send. */
+  private async buildFunding(
+    network: NetworkName,
+    index: number,
+    address: string,
+    payments: Array<{ to: string; lovelace: string; tokens: TokenQuantity[] }>,
+    empty: string,
+  ): Promise<{ summary: SessionOutSummary; txCbor: string; seed: string }> {
+    const { wasm } = this.deps;
+    const { view, utxos, params } = await readContract(this.deps, network);
+    if (!utxos.length) throw nothingToSpend(this.deps, view, empty);
     type Finished = Omit<SessionOutSummary, "network" | "payments" | "inputs" | "index" | "address"> & {
       txCbor: string;
       seed: string;
@@ -335,25 +502,20 @@ export class SessionService {
     const finished = await measure<Finished>(
       this.deps,
       network,
-      request,
+      { network, params, utxos, payments },
       (keys, r) => wasm.draftWithdraw(keys.seedelf, r),
       (keys, r) => wasm.finishWithdraw(keys.seedelf, r),
     );
-    const { txCbor, seed, inputs, payments, ...rest } = finished;
+    const { txCbor, seed, inputs, payments: paid, ...rest } = finished;
     const summary: SessionOutSummary = {
       ...rest,
       network,
       index,
       address,
-      payments: payments.map(({ to, ...p }) => ({ address: to, own: false, ...p })),
+      payments: paid.map(({ to, ...p }) => ({ address: to, own: false, ...p })),
       inputs: inputs.length,
     };
-    const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) };
-    // Sending this is the approval: the swap runs itself within it.
-    const approved = { minAmountOut: quote.minAmountOut, fund: quote.fund };
-    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved };
-    await keep(this.deps, SESSION_OUT, kept);
-    return summary;
+    return { summary, txCbor, seed };
   }
 
   /** Records the session, then sends its funding payment. From here the swap runs itself. */
@@ -858,8 +1020,9 @@ export class SessionService {
       }
       for (const s of live) {
         const last = s.txs.at(-1)!;
-        // Brought back, and nothing has arrived since: the session is over.
-        if (last.kind === "back" && last.confirmed && !holdings.get(s.index)!.length) {
+        // Brought back, and nothing has arrived since: the session is over. A
+        // site's goes on until it's disconnected: the site may pay it later.
+        if (!s.site && last.kind === "back" && last.confirmed && !holdings.get(s.index)!.length) {
           s.closedAt = now();
           changed = true;
         }
@@ -908,6 +1071,7 @@ export class SessionService {
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(utxos) : null,
       ...(s.auto ? { auto: autoView(s.auto, txs, stage) } : {}),
+      ...(s.site ? { site: s.site } : {}),
     };
   }
 

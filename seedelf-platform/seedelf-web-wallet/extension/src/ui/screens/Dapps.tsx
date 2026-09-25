@@ -3,14 +3,18 @@
 // accounts funded from the private balance, never the public account.
 // Minswap is the first: its tile opens its swaps (Swaps.tsx). The next
 // contract gets a tile of its own.
+//
+// Under the tiles, Sites: each site connected to a private session (chunk
+// 15c, private CIP-30), which opens its page (SiteSessions.tsx).
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import type { Balances, PendingTx, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { SwapIcon } from "../components/Icons";
 import { Screen } from "../components/Screen";
+import { isSiteSession, SiteRow, SiteSession } from "./SiteSessions";
 import { isRunningSwap, Swaps, SwapTag } from "./Swaps";
 
 type DappId = "minswap";
@@ -47,18 +51,34 @@ export function Dapps({
 }) {
   const [open, setOpen] = useState<DappId | undefined>(start?.dapp);
   const [session, setSession] = useState(start?.session);
-  const [running, setRunning] = useState<SessionView[]>([]);
+  const [sessions, setSessions] = useState<SessionView[]>([]);
+  const [site, setSite] = useState<number>();
+  const [reading, setReading] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number>();
+  const [error, setError] = useState<string>();
 
-  // What's running, from the device's own record: no request leaves the wallet.
+  // From the device's own record; `refresh` reads the sessions' accounts too (a site's page asks for it).
+  const load = useCallback(async (refresh: boolean) => {
+    setReading(refresh);
+    try {
+      setSessions(await call("sessions", { refresh }));
+      if (refresh) setUpdatedAt(Date.now());
+      setError(undefined);
+    } catch (e) {
+      if (refresh) setError((e as Error).message);
+    } finally {
+      setReading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (open) return;
-    call("sessions", {}).then(
-      (all) => setRunning(all.filter(isRunningSwap)),
-      () => undefined,
-    );
-  }, [open]);
+    if (!open) void load(false);
+  }, [open, load]);
 
-  const waiting = running.filter((s) => s.auto?.paused).length;
+  // A site's page reads what its account holds when it opens.
+  useEffect(() => {
+    if (site !== undefined) void load(true);
+  }, [site, load]);
 
   if (open === "minswap") {
     return (
@@ -75,8 +95,31 @@ export function Dapps({
     );
   }
 
+  const opened = site === undefined ? undefined : sessions.find((s) => s.index === site);
+  if (opened) {
+    return (
+      <SiteSession
+        session={opened}
+        seedelf={seedelf}
+        reading={reading}
+        updatedAt={updatedAt}
+        onRefresh={() => void load(true)}
+        onBack={() => setSite(undefined)}
+        onPending={onPending}
+        onDisconnected={() => {
+          setSite(undefined);
+          void load(false);
+        }}
+      />
+    );
+  }
+
+  const running = sessions.filter(isRunningSwap);
+  const waiting = running.filter((s) => s.auto?.paused).length;
+  const sites = sessions.filter(isSiteSession);
+
   return (
-    <Screen title="dApps" titleId="dapps-title" onBack={onBack} aside="Used privately, from one-time accounts">
+    <Screen title="dApps" titleId="dapps-title" onBack={onBack} aside="Used privately, from one-time accounts" error={error}>
       <div className="dapp-grid" data-testid="dapps">
         {DAPPS.map((d) => (
           <button key={d.id} type="button" className="dapp-tile" onClick={() => setOpen(d.id)}>
@@ -98,11 +141,29 @@ export function Dapps({
           <span className="dapp-tile__what">More dApps come here as the wallet learns to use them privately.</span>
         </div>
       </div>
+      {sites.length > 0 && (
+        <section className="section" aria-label="Sites">
+          <h2>Sites</h2>
+          <ul className="list" data-testid="dapp-sites">
+            {sites.map((s) => (
+              <li key={s.index}>
+                <SiteRow session={s} onOpen={() => setSite(s.index)} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <Callout tone="privacy">
         A dApp here never sees your public account or your private balance: each use runs from a new one-time account,
         funded from your private balance and brought back into it. Anyone can follow the money through that account,
         though.
       </Callout>
+      {sites.length === 0 && (
+        <p className="note" data-testid="dapp-sites-hint">
+          On a dApp's own site, connect Seedelf Wallet and choose a private session: the site then sees a one-time account,
+          and it's listed here.
+        </p>
+      )}
     </Screen>
   );
 }

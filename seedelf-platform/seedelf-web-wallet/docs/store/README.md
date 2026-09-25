@@ -49,7 +49,7 @@ What you can do:
 • Make ADA and tokens private: move them from the public account into your private balance.
 • Send privately to any Seedelf by its name, several at once.
 • Make money public: pay any Cardano address or ADA Handle from the private balance. Or remove a Seedelf.
-• Connect Cardano sites (dApps) to the public account, as with any Cardano wallet. It's off until you turn it on in Settings, and sites never see the private balance.
+• Connect Cardano sites (dApps) to the public account, as with any Cardano wallet, or to a private session: a one-time account funded from your private balance, so the site never sees your public account either. It's off until you turn it on in Settings, and sites never see the private balance.
 • Swap privately through Minswap: each swap runs from a new one-time account, funded from your private balance, and everything comes back into it afterwards. Your public account never appears.
 
 What it doesn't hide:

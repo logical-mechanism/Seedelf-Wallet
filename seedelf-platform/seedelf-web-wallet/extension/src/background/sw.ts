@@ -115,6 +115,7 @@ function getContext(): Promise<Context> {
       ...spends,
       preferences,
       store,
+      sessions,
       network,
       window: approvalWindow,
       changed: () => broadcast(DAPP_CHANGED),

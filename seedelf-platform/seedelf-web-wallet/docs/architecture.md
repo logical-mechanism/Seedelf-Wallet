@@ -312,7 +312,7 @@ flowchart LR
 
 ## dApp connector
 
-**Built in chunk 15, for the public account only.** The plan is [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md). The private steps come after it.
+**Built in chunk 15 for the public account, and in chunk 15c for private sessions.** The plans are [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md) and [plans/chunk-15c-private-cip30.md](plans/chunk-15c-private-cip30.md).
 
 ```mermaid
 flowchart LR
@@ -344,6 +344,14 @@ flowchart LR
   - The Rust side decides ownership by payment key hash, and which keys sign: inputs, collateral, required signers, stake certificates and withdrawals.
   - It refuses the other network, a collateral return to someone else, and a transaction marked to fail its scripts.
 - **The window** (`dapp-window.ts`, `screens/DappApprovals.tsx`): a popup, one at a time. Closing it declines everything, and it closes itself once nothing's left.
+- **Private CIP-30** (chunk 15c): a connected site's record may name a private session (`session: i`). Each call resolves whom the site talks to, the public account or session `i`, and every path branches on it:
+  - **Reading:** the session's one address, its UTxOs from `SessionService.accountUtxos`, its reward address (`OneTimeAccounts.rewardAddress`, stake key `2/i`), and the funding's pure 5 ₳ UTxO as its collateral, kept out of `getUtxos`. The reading and the signed outputs kept for chaining are stored per account (`…:i`).
+  - **Signing:** `inspectSessionTx`/`signSessionTx` and `sessionDataSigner`/`signSessionData`, with `stakeIndex: i` so the session's own stake key counts as its own. The prompt says "Your private session".
+  - **Connecting:**
+    - The connect window offers a private session. `dapp-private-build` builds its funding (`siteOutBuild`, Make public's builder). `dapp-answer` with `fund` sends it (`siteOutSubmit`, recorded first) and records the site with the session.
+    - The request is then marked `funding`, and the worker reads the account every 10 s until the money is there. Only then does `enable()` answer.
+    - A window closed meanwhile doesn't decline it: the payment is sent.
+  - **Managing:** the dApps page's *Sites*: Top up (`topUpBuild`/`topUpSubmit`), Bring it back (the session return), and Disconnect (`disconnectSession`: the account must be empty, and the site's record goes). A site's session doesn't close at its return, only at its disconnect: something still open at the site may pay the account later.
 - **The password at Sign** (the `dappPassword` setting, on by default): a site's `signTx` or `signData` is signed only once the password typed in the window checks out (`Wallet.checkPassword`), even while unlocked and even right after an unlock. A wrong one leaves the request waiting, tells the site nothing, and counts towards the unlock back-off. Only the wallet's own pages can answer a request: the worker refuses messages from anywhere else.
 
 ## Private sessions

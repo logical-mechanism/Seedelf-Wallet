@@ -2739,6 +2739,28 @@ button.dapp-tile:hover {
   color: var(--accent);
 }
 
+/* A site connected to a private session says so, under its origin. */
+.dapp-site__session {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* A private session's funding, sent: the window waits for the network. */
+.dapp-waiting {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin: 0;
+  color: var(--text-2);
+}
+
+.dapp-waiting .spin {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
 .dapp-points {
   margin: 0;
   padding-left: 1.1em;

@@ -2,8 +2,9 @@
 //! each session with its own payment and stake keys), bringing one back into Seedelf, and the
 //! connector's reading and signing of a transaction built for one (a swap).
 
-use pallas_addresses::{Address, ShelleyDelegationPart, ShelleyPaymentPart};
-use pallas_codec::utils::{Bytes, Nullable, Set};
+use pallas_addresses::{Address, ShelleyDelegationPart, ShelleyPaymentPart, StakePayload};
+use pallas_codec::minicbor;
+use pallas_codec::utils::{Bytes, NonEmptyKeyValuePairs, Nullable, Set};
 use pallas_crypto::hash::{Hash, Hasher};
 use pallas_crypto::key::ed25519::{PublicKey, Signature};
 use pallas_primitives::{Fragment, PlutusData, TransactionInput, conway};
@@ -15,7 +16,7 @@ use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
 use seedelf_koios::koios::UtxoResponse;
 use seedelf_wasm::api::{self, SessionReturnRequest};
-use seedelf_wasm::cip30::{self, KeyPath, KoiosRow, TxRequest};
+use seedelf_wasm::cip30::{self, DataRequest, KeyPath, KoiosRow, TxRequest};
 use serde_json::{Value, json};
 
 const PHRASE: &str =
@@ -374,6 +375,7 @@ fn the_connector_reads_and_signs_a_swap_for_a_session_with_its_key_alone() {
         keys: vec![KeyPath { role: 0, index: 5 }],
         inputs,
         partial_sign: false,
+        stake_index: 5,
     };
     let summary = cip30::inspect_tx(&accounts, &request).unwrap();
     assert_eq!(summary.own_inputs, 1);
@@ -418,6 +420,121 @@ fn the_connector_reads_and_signs_a_swap_for_a_session_with_its_key_alone() {
     );
 }
 
+/// The public key in a COSE_Key (CIP-8's `key`): its `-2` entry.
+fn cose_key_x(key_hex: &str) -> [u8; 32] {
+    let key = hex::decode(key_hex).unwrap();
+    let mut d = minicbor::Decoder::new(&key);
+    let entries = d.map().unwrap().unwrap();
+    for _ in 0..entries {
+        let label = d.i64().unwrap();
+        if label == -2 {
+            return d.bytes().unwrap().try_into().unwrap();
+        }
+        d.skip().unwrap();
+    }
+    panic!("no -2 in the COSE key")
+}
+
+#[test]
+fn a_site_connected_to_a_session_signs_in_with_its_payment_key_or_its_own_stake_key() {
+    let accounts = accounts();
+    let index = 7;
+    let reward = api::one_time_reward_address(&accounts, true, index).unwrap();
+    let Address::Stake(stake) = &reward else {
+        panic!("a reward address")
+    };
+    assert!(
+        matches!(stake.payload(), StakePayload::Stake(h) if *h == accounts.key_hash(Role::Staking, index).unwrap()),
+        "its reward address is its own stake key's, 2/{index}"
+    );
+    let request = |address: &Address, stake_index: u32| DataRequest {
+        network: "preprod".into(),
+        keys: vec![KeyPath { role: 0, index }],
+        address: address.to_bech32().unwrap(),
+        payload: hex::encode("Sign in to example.com"),
+        stake_index,
+    };
+
+    // Its address signs with its payment key.
+    let signer = cip30::data_signer(&accounts, &request(&session(index), index))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (signer.key.as_str(), signer.index),
+        ("payment", Some(index))
+    );
+    let signed = cip30::sign_data(&accounts, &request(&session(index), index)).unwrap();
+    assert_eq!(
+        Hasher::<224>::hash(&cose_key_x(&signed.key)),
+        accounts.key_hash(Role::Receive, index).unwrap()
+    );
+
+    // Its reward address, with its stake key, 2/index.
+    assert_eq!(
+        cip30::data_signer(&accounts, &request(&reward, index))
+            .unwrap()
+            .unwrap()
+            .key,
+        "stake"
+    );
+    let signed = cip30::sign_data(&accounts, &request(&reward, index)).unwrap();
+    assert_eq!(
+        Hasher::<224>::hash(&cose_key_x(&signed.key)),
+        accounts.key_hash(Role::Staking, index).unwrap()
+    );
+
+    // Asked with the public account's stake index, the reward address isn't the session's.
+    assert!(
+        cip30::data_signer(&accounts, &request(&reward, 0))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_withdrawal_from_a_sessions_reward_account_is_signed_by_its_own_stake_key() {
+    let accounts = accounts();
+    let index = 5;
+    let (tx, inputs) = swap_tx(index);
+    let mut whole = conway::Tx::decode_fragment(&hex::decode(&tx).unwrap()).unwrap();
+    let reward = api::one_time_reward_address(&accounts, true, index).unwrap();
+    whole.transaction_body.withdrawals =
+        NonEmptyKeyValuePairs::try_from(vec![(Bytes::from(reward.to_vec()), 0)]).ok();
+    let tx = hex::encode(whole.encode_fragment().unwrap());
+    let request = TxRequest {
+        network: "preprod".into(),
+        tx_cbor: tx.clone(),
+        keys: vec![KeyPath { role: 0, index }],
+        inputs,
+        partial_sign: false,
+        stake_index: index,
+    };
+    let summary = cip30::inspect_tx(&accounts, &request).unwrap();
+    assert_eq!(summary.signs, vec!["0/5".to_string(), "stake".to_string()]);
+    assert!(summary.withdrawals[0].own);
+    assert!(summary.complete);
+
+    let signed = cip30::sign_tx(&accounts, &request).unwrap();
+    let witness_set =
+        conway::WitnessSet::decode_fragment(&hex::decode(&signed.witness_set).unwrap()).unwrap();
+    let signers: Vec<_> = witness_set
+        .vkeywitness
+        .unwrap()
+        .iter()
+        .map(|w| Hasher::<224>::hash(&w.vkey.to_vec()))
+        .collect();
+    assert!(signers.contains(&accounts.key_hash(Role::Staking, index).unwrap()));
+
+    // With the public account's stake index, it's someone else's withdrawal: the session can't sign it all.
+    let public = TxRequest {
+        stake_index: 0,
+        ..request
+    };
+    let summary = cip30::inspect_tx(&accounts, &public).unwrap();
+    assert!(!summary.withdrawals[0].own);
+    assert!(!summary.complete);
+}
+
 /// Minswap's aggregator's real preprod swap (`fixtures/minswap-swap-preprod.json`):
 /// read, signed, and put back together for Koios with nothing of the
 /// builder's changed, the order's datum above all.
@@ -435,6 +552,7 @@ fn a_real_aggregator_swap_is_read_signed_and_assembled_byte_for_byte() {
         keys: vec![KeyPath { role: 0, index: 0 }],
         inputs: vec![input],
         partial_sign: false,
+        stake_index: 0,
     };
     let summary = cip30::inspect_tx(&public, &request).unwrap();
     assert!(summary.complete);
