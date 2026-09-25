@@ -10,6 +10,12 @@ export interface NetworkConfig {
   collateral: string;
   /** Where ADA's price is read (CoinGecko's public API). Mainnet only, as in Lace: test ADA has no value. */
   prices?: string;
+  /**
+   * Minswap's aggregator API, for swaps in private sessions. It answers
+   * browsers with CORS headers, so it needs no host permission (no new
+   * warning at install): only the pages' connect-src lists it.
+   */
+  swaps: string;
 }
 
 export const NETWORKS: Record<NetworkName, NetworkConfig> = {
@@ -18,6 +24,7 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
     label: "Preprod",
     koios: "https://preprod.koios.rest/api/v1",
     collateral: "https://www.giveme.my/preprod/collateral/",
+    swaps: "https://aggr.monorepo-testnet-preprod.minswap.org/aggregator",
   },
   mainnet: {
     name: "mainnet",
@@ -25,6 +32,7 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
     koios: "https://api.koios.rest/api/v1",
     collateral: "https://www.giveme.my/mainnet/collateral/",
     prices: "https://api.coingecko.com/api/v3",
+    swaps: "https://agg-api.minswap.org/aggregator",
   },
 };
 
@@ -42,4 +50,19 @@ export function defaultNetwork(mainnetEnabled: boolean): NetworkName {
 export function networkOrigins(networks: NetworkName[]): string[] {
   const origins = networks.flatMap((n) => [NETWORKS[n].koios, NETWORKS[n].collateral, NETWORKS[n].prices ?? []].flat());
   return [...new Set(origins.map((url) => new URL(url).origin))];
+}
+
+/** Origins the pages may reach without a host permission: services that answer with CORS headers. */
+export function corsOrigins(networks: NetworkName[]): string[] {
+  return [...new Set(networks.map((n) => new URL(NETWORKS[n].swaps).origin))];
+}
+
+/**
+ * The manifest's host permissions: the wallet's own services. Chrome's grant
+ * is what lets the wallet read Koios at all: its public tier sends browsers
+ * no CORS headers (since 2026-09-25), and an extension's requests to a host
+ * it holds skip CORS.
+ */
+export function serviceHosts(networks: NetworkName[]): string[] {
+  return networkOrigins(networks).map((o) => `${o}/*`);
 }

@@ -60,6 +60,17 @@ export function timeAgo(then: number, now: number): string {
   return `${Math.floor(s / 3600)} h ago`;
 }
 
+/** When something happened, in a list: "Today, 14:02", "Yesterday, 09:12", "23 Mar, 18:40", and the year if it isn't this one. */
+export function whenOf(at: number, now: Date): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const days = Math.round((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86_400_000);
+  if (days === 0) return `Today, ${time}`;
+  if (days === 1) return `Yesterday, ${time}`;
+  const year = d.getFullYear() === now.getFullYear() ? {} : ({ year: "numeric" } as const);
+  return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...year })}, ${time}`;
+}
+
 /** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */
 export function parseAda(text: string): string | undefined {
   return parseQuantity(text, 6);

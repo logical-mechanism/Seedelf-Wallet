@@ -1,7 +1,17 @@
 {
-  "//": "Fungible tokens the wallet knows by name, per network: each unit pinned with the ticker the Cardano token registry must give it. Vet every entry before adding it; `npm run tokens` rebuilds registry.<network>.json. Left out on purpose (mainnet): tickers with several registry entries (MILK, C3, NMKR, MELD, WRT, WMTX), BOOK (its asset name reads HODOR) and USDCx (not confirmed).",
+  "//": "Fungible tokens the wallet knows by name, per network: each unit pinned with the ticker the Cardano token registry must give it. On a test network, a token the registry lacks can carry `unregistered`: its name and decimals, vetted by hand, and their source (never on mainnet). Vet every entry before adding it; `npm run tokens` rebuilds registry.<network>.json. Left out on purpose (mainnet): tickers with several registry entries (MILK, C3, NMKR, MELD, WRT, WMTX), BOOK (its asset name reads HODOR) and USDCx (not confirmed).",
   "preprod": [
-    { "ticker": "tUSDM", "policy": "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde", "name": "0014df10745553444d" }
+    { "ticker": "tUSDM", "policy": "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde", "name": "0014df10745553444d" },
+    {
+      "ticker": "MIN",
+      "policy": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72",
+      "name": "4d494e",
+      "unregistered": {
+        "name": "Minswap (preprod)",
+        "decimals": 6,
+        "source": "Minswap's preprod token list, verified, 2026-09-25: the MIN its preprod pools trade"
+      }
+    }
   ],
   "mainnet": [
     { "ticker": "DJED", "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61", "name": "446a65644d6963726f555344" },

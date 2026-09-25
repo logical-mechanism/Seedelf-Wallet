@@ -2,6 +2,8 @@ import { cpSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } fr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { BrowserContext, Page } from "@playwright/test";
+
 import {
   accountMintPreprod,
   addTokens,
@@ -13,11 +15,13 @@ import {
   koiosPreprod,
   launch,
   openApp,
+  openDapp,
   openReceive,
   ownedUtxos,
   PASSWORD,
   PINNED_ID,
   restore,
+  sessionSwap,
   setPassword,
   snap,
   stakingPreprod,
@@ -1285,6 +1289,251 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   expect(koios.submitted).toHaveLength(0);
 });
 
+test("a private swap: Minswap's quote, a one-time account funded, and then it runs itself: the order, the fill, everything back", async ({
+  context,
+  koios,
+  swaps,
+}) => {
+  // One spend: the funding takes the 25 ₳ UTxO alone.
+  koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  // The dApp browser: Minswap's tile opens its swaps.
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await snap(page, "dapps");
+  await page.getByTestId("dapps").getByRole("button", { name: /Minswap/ }).click();
+  await expect(page.getByTestId("swaps-empty")).toBeVisible();
+  await page.getByRole("button", { name: "New swap" }).click();
+
+  // Minswap's shape: You pay, You receive, and the button says what's missing.
+  await expect(page.getByRole("button", { name: "Select a token" })).toBeDisabled();
+  await expect(page.getByTestId("swap-held")).toHaveText("28");
+  await snap(page, "swap-form-empty");
+  await page.getByLabel("You pay", { exact: true }).fill("30");
+  await page.getByTestId("swap-to").click();
+
+  // MIN, found on Minswap's list.
+  const picker = page.getByRole("dialog", { name: "You receive" });
+  await expect(picker.getByTestId("swap-own-tokens")).toContainText("ADA");
+  await picker.getByLabel("Search tokens").fill("MIN");
+  await expect(picker.getByTestId("swap-tokens")).toContainText("MIN");
+  await snap(page, "swap-picker");
+  await picker.getByTestId("swap-tokens").getByRole("button", { name: /MIN/ }).click();
+  await expect(picker).toBeHidden();
+  await expect(page.getByTestId("swap-to")).toContainText("MIN");
+  await expect(page.getByRole("button", { name: "Not enough ADA" })).toBeDisabled();
+  await expect(page.getByTestId("swap-short")).toContainText("That's more than the 28 ₳ in your private balance");
+  // Minswap quotes it all the same.
+  await expect(page.getByTestId("swap-out")).toHaveText("906.5941");
+
+  // 10 ₳: the quote fills in what's received, the rate turns around, and the details open.
+  await page.getByLabel("You pay", { exact: true }).fill("10");
+  // The last quote stays, dimmed, until the new one comes.
+  await expect(page.getByRole("button", { name: "Review swap" })).toBeEnabled();
+  await expect(page.getByTestId("swap-out")).toHaveText("906.5941");
+  await expect(page.getByTestId("swap-rate")).toHaveText("1 ADA ≈ 90.6594 MIN");
+  await page.getByTestId("swap-rate").click();
+  await expect(page.getByTestId("swap-rate")).toHaveText("1 MIN ≈ 0.01103 ADA");
+  await page.getByRole("button", { name: "The quote's details" }).click();
+  const quote = page.getByTestId("swap-quote-rows");
+  await expect(quote).toContainText("Minimum received902.083681 MIN");
+  await expect(quote).toContainText("Price impact0.34%");
+  await expect(quote).toContainText("Slippage1%");
+  await expect(quote).toContainText("RouteMinswap");
+  await snap(page, "swap-form");
+
+  // Slippage: its own setting, and a quote to match.
+  await page.getByRole("button", { name: "Slippage: 1%" }).click();
+  const settings = page.getByRole("dialog", { name: "Slippage" });
+  await settings.getByLabel("Your own").fill("30");
+  await expect(settings).toContainText("Between 0.1% and 20%");
+  await settings.getByLabel("Your own").fill("2");
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(quote).toContainText("Slippage2%");
+  await expect(page.getByRole("button", { name: "Review swap" })).toBeEnabled();
+  await expect.poll(() => swaps.calls.filter((c) => c.path === "estimate").at(-1)?.body.slippage).toBe(2);
+
+  // The funding: the swap and its costs, and the account's own collateral.
+  await page.getByRole("button", { name: "Review swap" }).click();
+  const summary = page.getByTestId("swap-summary");
+  await expect(summary).toContainText("You pay10 ₳");
+  await expect(summary).toContainText("You receive≈ 906.5941 MIN");
+  // What Send approves: the four steps it then takes by itself, and the least it may give.
+  await expect(page.getByTestId("swap-steps")).toContainText("Through Minswap, for at least 902.083681 MIN");
+  const fund = page.getByTestId("swap-fund-review");
+  await expect(fund).toContainText("ToPrivate session 1");
+  await expect(fund).toContainText("For the swap16 ₳");
+  await expect(fund).toContainText("Its collateral5 ₳");
+  await snap(page, "swap-fund-review");
+  // giveme.my refuses (its recorded answer): nothing is sent, but the session keeps its account.
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction");
+  expect(koios.submitted).toHaveLength(0);
+
+  // Say it reached the chain anyway, and the account holds it: from here the swap runs itself.
+  koios.confirmations = 1;
+  koios.addedToAccounts.push({
+    ...sessionSwap.utxo,
+    payment_cred: sessionSwap.keyHash,
+    stake_address: null,
+    epoch_no: 315,
+    block_height: 5_000_000,
+    block_time: 1_800_000_000,
+    datum_hash: null,
+    inline_datum: null,
+    reference_script: null,
+    asset_list: [],
+    is_spent: false,
+  });
+  for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
+  // In progress, with its pair and a tag for how it's doing.
+  await expect(page.getByRole("region", { name: "In progress" })).toContainText("10 ₳ → MINRunning");
+  // Minswap's rate limit, first: the timeline says so in plain words, and when it tries again.
+  swaps.limited = true;
+  await page.getByTestId("swaps").getByRole("button").first().click();
+  const timeline = page.getByTestId("session-timeline");
+  const retry = page.getByTestId("session-retry");
+  await expect(retry).toContainText("Minswap is limiting requests from this connection for a minute. Trying again in under a minute.");
+  await expect(retry).toContainText("Minswap is limiting requests from your connection");
+  await expect(timeline.locator('[data-state="paused"]')).toHaveCount(1);
+  await snap(page, "swap-retry");
+
+  // Try now: the order, from a fresh quote, for at least what was approved, signed by the session's key alone.
+  swaps.limited = false;
+  await retry.getByRole("button", { name: "Try now" }).click();
+  await expect(page.getByTestId("session-now")).toContainText("The order is on its way");
+  expect(swaps.calls.find((c) => c.path === "build-tx")?.body).toMatchObject({
+    sender: sessionSwap.address,
+    min_amount_out: "902083681",
+  });
+  expect(koios.submitted).toHaveLength(1);
+  const swapTx = koios.submitted[0]!;
+  await expect(timeline.locator('[data-state="done"]')).toHaveCount(1);
+  await snap(page, "swap-running");
+
+  // The dApp browser and Home both show it running; Home's row opens its page.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("dapps")).toContainText("1 running");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  // Running; the dApps page read the chain on its way, so it may already know the order landed.
+  await expect(page.getByTestId("swaps-running")).toContainText("10 ₳ → MINRunning");
+  await snap(page, "home-swaps-running");
+  await page.getByTestId("swaps-running").getByRole("button").click();
+  await expect(timeline).toBeVisible();
+
+  // Filled: the change and the proceeds are at the account, and it all comes back by itself.
+  const funded = koios.addedToAccounts[0]!;
+  koios.addedToAccounts.splice(0, 1, { ...funded, tx_hash: swapTx, tx_index: 1, value: "131585414" }, {
+    ...funded,
+    tx_hash: "aa".repeat(32),
+    tx_index: 0,
+    value: "2000000",
+    asset_list: [
+      {
+        policy_id: "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72",
+        asset_name: "4d494e",
+        quantity: "906594100",
+        decimals: 0,
+        fingerprint: "",
+      },
+    ],
+  });
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("session-now")).toContainText("Coming back into your private balance");
+  await expect(timeline.locator('[data-state="done"]')).toHaveCount(3);
+  await expect(page.getByTestId("session-rows")).toContainText("906.5941 MIN");
+  expect(koios.submitted).toHaveLength(2);
+
+  // The return lands and the account is empty: done, in the success colour.
+  koios.addedToAccounts.splice(0);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("session-now")).toHaveText("Done: the swap is in your private balance.");
+  await expect(timeline).toHaveClass(/timeline--done/);
+  await expect(timeline.locator('[data-state="done"]')).toHaveCount(4);
+  await snap(page, "swap-done");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Past swaps" })).toContainText("10 ₳ → MINDone");
+  await expect(page.getByRole("region", { name: "In progress" })).toHaveCount(0);
+  await snap(page, "swaps");
+  // One quote for 30 ₳, one for 10 ₳, one at 2% slippage, the order's fresh one refused by the rate limit, then again; never a cancel.
+  const paths = swaps.calls.map((c) => c.path);
+  expect(paths.slice(0, 8)).toEqual(["tokens", "estimate", "estimate", "estimate", "estimate", "estimate", "build-tx", "pending-orders"]);
+  expect(paths).not.toContain("cancel-tx");
+});
+
+test("a private swap paused by a price move, then stopped: everything comes back and nothing is ordered", async ({
+  context,
+  koios,
+  swaps,
+}) => {
+  koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Minswap/ }).click();
+  await page.getByRole("button", { name: "New swap" }).click();
+  await page.getByLabel("You pay", { exact: true }).fill("10");
+  await page.getByTestId("swap-to").click();
+  const picker = page.getByRole("dialog", { name: "You receive" });
+  await picker.getByLabel("Search tokens").fill("MIN");
+  await picker.getByTestId("swap-tokens").getByRole("button", { name: /MIN/ }).click();
+  await page.getByRole("button", { name: "Review swap" }).click();
+  // giveme.my refuses, as recorded: say the funding reached the chain anyway.
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction");
+  koios.confirmations = 1;
+  koios.addedToAccounts.push({
+    ...sessionSwap.utxo,
+    payment_cred: sessionSwap.keyHash,
+    stake_address: null,
+    epoch_no: 315,
+    block_height: 5_000_000,
+    block_time: 1_800_000_000,
+    datum_hash: null,
+    inline_datum: null,
+    reference_script: null,
+    asset_list: [],
+    is_spent: false,
+  });
+  // Meanwhile the price moved: Minswap now expects less than the least approved.
+  swaps.estimate = { ...(swaps.estimate as object), amount_out: "900000000", min_amount_out: "891000000" };
+  for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByTestId("swaps").getByRole("button").first().click();
+
+  // It pauses rather than place the order, and says why.
+  const paused = page.getByTestId("session-paused");
+  await expect(paused).toContainText("The price moved: the order would give about 900 MIN now, less than the 902.083681 MIN you approved at least");
+  await expect(paused.getByRole("button", { name: "Review it myself" })).toBeVisible();
+  await expect(page.getByTestId("session-timeline").locator('[data-state="paused"]')).toHaveCount(1);
+  await snap(page, "swap-paused");
+  // The list says it needs you, and why, in the warning colour.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByRole("region", { name: "In progress" })).toContainText("10 ₳ → MINNeeds youThe price moved");
+  await page.getByTestId("swaps").getByRole("button").first().click();
+
+  // Stop, always there: one confirmation.
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "Stop this swap?" });
+  await expect(confirm).toContainText("No order is placed");
+  await snap(page, "swap-stop");
+  await confirm.getByRole("button", { name: "Stop the swap" }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.getByTestId("session-now")).toContainText("Coming back into your private balance");
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
+  expect(koios.submitted).toHaveLength(1);
+
+  // The return lands: stopped, everything back, and nothing was ever ordered.
+  koios.addedToAccounts.splice(0);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("session-now")).toHaveText("Stopped: everything is back in your private balance.");
+  await expect(page.getByTestId("session-timeline").locator('[data-state="skipped"]')).toHaveCount(2);
+  await snap(page, "swap-stopped");
+  expect(swaps.calls.map((c) => c.path)).not.toContain("build-tx");
+});
+
 test("remove a Seedelf: where its ADA goes, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
   koios.evaluation = withdrawPreprod.remove.evaluation;
   const page = await openApp(context);
@@ -1551,7 +1800,7 @@ test("settings: the wallet opens in a tab until the side panel is chosen, and Ch
   await tab.getByRole("button", { name: "Settings" }).click();
   await expect(tab.getByTestId("currency-note")).toContainText("mainnet only");
   await expect(tab.getByLabel("Show ADA's value in")).toHaveValue("usd");
-  await expect(tab.getByTestId("talks-to")).toHaveText(/only ever talks to Koios and giveme\.my\. It has/);
+  await expect(tab.getByTestId("talks-to")).toHaveText(/only ever talks to Koios and giveme\.my, and to Minswap when you swap\. It has/);
 });
 
 test("hide balances: the eye masks what the wallet holds, but not what a form sends, and stays", async ({ context, koios }) => {
@@ -1788,4 +2037,287 @@ test("a worker that lost its WASM file explains itself and recovers", async ({ u
     await context.close();
     rmSync(copy, { recursive: true, force: true });
   }
+});
+
+test("the connector off keeps Chrome's access to Koios; without it, the wallet says so and asks Chrome again", async ({
+  context,
+}) => {
+  // Koios's public tier sends browsers no CORS headers (since 2026-09-25):
+  // the wallet reads it only through Chrome's grant for its host.
+  const page = await openApp(context);
+  const services = ["https://preprod.koios.rest/*", "https://www.giveme.my/*"];
+  const granted = () => page.evaluate(async () => (await chrome.permissions.getAll()).origins ?? []);
+  expect(await granted()).toEqual(expect.arrayContaining(services));
+
+  // Off, as at every start: the scripts go, Chrome's access stays. Taking
+  // back the optional https://*/* would take Koios's host with it.
+  const reply = await page.evaluate(() => chrome.runtime.sendMessage({ type: "preferences-set", dappConnector: false }));
+  expect(reply).toMatchObject({ ok: true });
+  expect(await granted()).toEqual(expect.arrayContaining(services));
+  await expect(page.getByTestId("service-access")).toHaveCount(0);
+
+  // The user limits the wallet's site access in Chrome. Here that's Chrome's
+  // own rule: taking back https://*/* takes every https host under it.
+  await page.evaluate(() => chrome.permissions.remove({ origins: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"] }));
+  expect(await granted()).toEqual([]);
+  const notice = page.getByTestId("service-access");
+  await expect(notice).toContainText("Chrome isn't letting Seedelf Wallet reach Koios");
+  await snap(page, "service-access");
+  // It asks Chrome from the click; Chrome's dialog can't be answered from here.
+  await notice.getByRole("button", { name: "Ask Chrome again" }).click();
+  await expect(notice.locator(".error")).toHaveCount(0);
+});
+
+test.describe("the dApp connector", () => {
+  // Chrome's own dialog for the access to sites can't be answered here, so
+  // this build has it from install (support.ts `withSiteAccess`).
+  test.use({ siteAccess: true });
+
+  /** CIP-30 on the dApp's page: a call's answer, or its error's code and info. */
+  const cip30 = (dapp: Page, method: string, ...args: unknown[]) =>
+    dapp.evaluate(
+      async ([method, args]) => {
+        const api = await (window as any).cardano.seedelf.enable();
+        try {
+          return { value: await api[method as string](...(args as unknown[])) };
+        } catch (e) {
+          return { error: { code: (e as { code?: number }).code, info: (e as { info?: string }).info } };
+        }
+      },
+      [method, args] as const,
+    );
+
+  /** The connector's window, once a site's call opens it. */
+  const connectorWindow = async (context: BrowserContext) => {
+    const page = await context.waitForEvent("page", (p) => p.url().includes("view=dapp"));
+    await page.setViewportSize({ width: 400, height: 640 });
+    return page;
+  };
+
+  test("off, sites see nothing; on, a site connects, reads, and has things signed only by the user", async ({
+    context,
+    koios,
+  }) => {
+    const dapp = await openDapp(context);
+    expect(await dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("undefined");
+
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("dapp-connector-note")).toContainText("you choose what it sees: your public account, or a private session");
+    // A site's signature needs the password too, until the user says otherwise.
+    await expect(page.getByRole("switch", { name: "Ask for your password to sign for a site" })).toHaveAttribute("aria-checked", "true");
+
+    await dapp.reload();
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.name)).toBe("Seedelf Wallet");
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(false);
+
+    // Connecting asks the user, in the connector's window.
+    const opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
+    const connect = await opened;
+    await expect(connect.getByRole("heading", { name: "Connect a site" })).toBeVisible();
+    await expect(connect.getByTestId("dapp-origin")).toContainText("dapp.example");
+    await expect(connect.getByTestId("dapp-connect-privacy")).toContainText("Your private balance stays out of it");
+    await snap(connect, "dapp-connect");
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe(true);
+    await closed;
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(true);
+
+    // Reads: the public account, in CIP-30's encodings.
+    expect(await cip30(dapp, "getNetworkId")).toEqual({ value: 0 });
+    const used = (await cip30(dapp, "getUsedAddresses")).value as string[];
+    expect(used[0]).toMatch(/^00[0-9a-f]{112}$/); // a preprod base address
+    expect(await cip30(dapp, "getChangeAddress")).toEqual({ value: used[0] });
+    expect(((await cip30(dapp, "getUtxos")).value as string[]).length).toBe(koiosPreprod.accounts[vector(12).preprod.stake].account_utxos.length);
+    expect((await cip30(dapp, "getBalance")).value).toMatch(/^82/); // ADA and tokens
+    // The recorded account has no pure 5 ₳ UTxO, so no collateral.
+    expect(await cip30(dapp, "getCollateral")).toEqual({ value: null });
+
+    // A transaction to sign: the wallet's own Send builds one to someone else.
+    const tx = await page.evaluate(async (to) => {
+      await chrome.runtime.sendMessage({ type: "send-build", payments: [{ to, lovelace: "3000000", tokens: [] }] });
+      const kept = await chrome.storage.session.get("seedelf.send.built");
+      return (kept["seedelf.send.built"] as { txCbor: string }).txCbor;
+    }, vector(15).preprod.receive_0);
+
+    let prompt = connectorWindow(context);
+    let signing = cip30(dapp, "signTx", tx);
+    let sign = await prompt;
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    await expect(sign.getByTestId("dapp-paid").locator("[data-value]")).toHaveAttribute("data-value", vector(15).preprod.receive_0);
+    // The account's rewards ride along (57.475311 ₳), so its UTxOs end up with more than they paid: the stake key signs too.
+    await expect(sign.getByTestId("dapp-tx-net")).toContainText("Your public account gets");
+    await expect(sign.getByTestId("dapp-tx-net")).toContainText("your stake key");
+    await expect(sign.getByTestId("dapp-staking")).toContainText("Withdraws your staking rewards: 57.475311 ₳");
+    await snap(sign, "dapp-sign-tx");
+    // Sign waits for the password, even though the wallet is unlocked; a wrong one is refused and the request stays.
+    await expect(sign.getByRole("button", { name: "Sign", exact: true })).toBeDisabled();
+    await sign.getByLabel("Your password, to sign").fill("not the password");
+    await sign.getByRole("button", { name: "Sign", exact: true }).click();
+    await expect(sign.getByRole("alert")).toHaveText("Wrong password.");
+    await expect(sign.getByLabel("Your password, to sign")).toHaveValue("");
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    // The wrong one started the unlock back-off: a second later, the right one signs.
+    await sign.waitForTimeout(1_100);
+    await sign.getByLabel("Your password, to sign").fill(PASSWORD);
+    // With nothing left to answer, the window closes itself.
+    let done = sign.waitForEvent("close");
+    await sign.getByRole("button", { name: "Sign", exact: true }).click();
+    expect((await signing).value).toMatch(/^a100/);
+    await done;
+
+    // Declined.
+    prompt = connectorWindow(context);
+    signing = cip30(dapp, "signTx", tx);
+    sign = await prompt;
+    done = sign.waitForEvent("close");
+    await sign.getByRole("button", { name: "Decline" }).click();
+    expect(await signing).toEqual({ error: { code: 2, info: "The user declined." } });
+    await done;
+
+    // A message.
+    prompt = connectorWindow(context);
+    const message = cip30(dapp, "signData", used[0], Buffer.from("Sign in to dapp.example").toString("hex"));
+    sign = await prompt;
+    await expect(sign.getByRole("heading", { name: "Sign a message" })).toBeVisible();
+    await expect(sign.getByTestId("dapp-data-message")).toHaveText("Sign in to dapp.example");
+    await snap(sign, "dapp-sign-data");
+    done = sign.waitForEvent("close");
+    // Enter in the password box signs.
+    await sign.getByLabel("Your password, to sign").fill(PASSWORD);
+    await sign.getByLabel("Your password, to sign").press("Enter");
+    await done;
+    const signed = (await message).value as { signature: string; key: string };
+    expect(signed.signature).toMatch(/^84/);
+    expect(signed.key).toMatch(/^a4/);
+
+    // Sent through Koios.
+    const submitted = (await cip30(dapp, "submitTx", tx)).value as string;
+    expect(koios.submitted).toEqual([submitted]);
+
+    // Settings lists it, and disconnecting it means asking again.
+    await page.getByRole("button", { name: "Connected sites" }).click();
+    await expect(page.getByTestId("sites")).toContainText("dapp.example");
+    await page.getByRole("button", { name: "Disconnect" }).click();
+    await expect(page.getByTestId("sites-empty")).toBeVisible();
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(false);
+
+    // Off again: new pages get nothing.
+    await page.getByRole("button", { name: "Back" }).click();
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await dapp.reload();
+    expect(await dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("undefined");
+  });
+
+  test("a site connects to a private session instead: funded from the window, and listed under dApps' Sites", async ({
+    context,
+    koios,
+  }) => {
+    // One spend: the funding takes the 25 ₳ UTxO alone.
+    koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const dapp = await openDapp(context);
+
+    // The connect window offers a private session: an amount from the private balance, and 5 ₳ of collateral.
+    const opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() =>
+      (window as any).cardano.seedelf.enable().then(
+        () => "connected",
+        (e: { info?: string }) => e.info,
+      ),
+    );
+    const connect = await opened;
+    await connect.getByRole("button", { name: "A private session" }).click();
+    await expect(connect.getByTestId("dapp-private-held")).toContainText("28 ₳ in your private balance");
+    await connect.getByLabel("What to put in it").fill("15");
+    await snap(connect, "dapp-connect-private");
+    await connect.getByRole("button", { name: "Review" }).click();
+    const rows = connect.getByTestId("dapp-funding-rows");
+    await expect(rows).toContainText("ToPrivate session 1");
+    await expect(rows).toContainText("For the site15 ₳");
+    await expect(rows).toContainText("Its collateral5 ₳");
+    // Sending needs the password, as a signature does.
+    await expect(connect.getByRole("button", { name: "Send" })).toBeDisabled();
+    await connect.getByLabel("Your password, to send").fill(PASSWORD);
+    await snap(connect, "dapp-funding-review");
+    await connect.getByRole("button", { name: "Send" }).click();
+    // giveme.my refuses (its recorded answer): nothing is sent, and the request still waits for the user.
+    await expect(connect.getByRole("alert")).toContainText("refused this transaction");
+    expect(koios.submitted).toHaveLength(0);
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Cancel" }).click();
+    expect(await enabling).toBe("The user declined.");
+    await closed;
+
+    // The session it recorded never got its money: dApps lists it under Sites, and Disconnect closes it.
+    await page.getByRole("button", { name: "Back" }).click();
+    await page.getByRole("button", { name: "dApps", exact: true }).click();
+    const sites = page.getByTestId("dapp-sites");
+    await expect(sites).toContainText("dapp.example");
+    await expect(sites).toContainText("Not funded");
+    await snap(page, "dapp-sites");
+    await sites.getByRole("button").click();
+    await expect(page.getByTestId("site-session-failed")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disconnect" })).toBeEnabled();
+    await snap(page, "site-session");
+    await page.getByRole("button", { name: "Disconnect" }).click();
+    await expect(page.getByTestId("dapp-sites")).toHaveCount(0);
+    await expect(page.getByTestId("dapp-sites-hint")).toBeVisible();
+  });
+
+  test("a locked wallet asks for the password in the connector's window first", async ({ context }) => {
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const dapp = await openDapp(context);
+    let opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
+    const connect = await opened;
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe(true);
+    await closed;
+    await page.getByRole("button", { name: "Lock" }).click();
+
+    opened = connectorWindow(context);
+    const reading = cip30(dapp, "getNetworkId");
+    const unlock = await opened;
+    await expect(unlock.getByTestId("unlock-site")).toHaveText("A site is waiting for Seedelf Wallet. Unlock to see what it asks.");
+    const unlocked = unlock.waitForEvent("close");
+    await unlock.getByLabel("Password").fill(PASSWORD);
+    await unlock.getByRole("button", { name: "Unlock" }).click();
+    expect(await reading).toEqual({ value: 0 });
+    await unlocked;
+
+    // A signature asked for while locked: unlocking comes first, and Sign still asks, once the message is shown.
+    const used = ((await cip30(dapp, "getUsedAddresses")).value as string[])[0]!;
+    await page.getByRole("button", { name: "Lock" }).click();
+    opened = connectorWindow(context);
+    const message = cip30(dapp, "signData", used, Buffer.from("Sign in to dapp.example").toString("hex"));
+    const window = await opened;
+    await window.getByLabel("Password").fill(PASSWORD);
+    await window.getByRole("button", { name: "Unlock" }).click();
+    await expect(window.getByRole("heading", { name: "Sign a message" })).toBeVisible();
+    await expect(window.getByRole("button", { name: "Sign", exact: true })).toBeDisabled();
+    await window.getByLabel("Your password, to sign").fill(PASSWORD);
+    await window.getByRole("button", { name: "Sign", exact: true }).click();
+    expect(((await message).value as { signature: string }).signature).toMatch(/^84/);
+  });
 });

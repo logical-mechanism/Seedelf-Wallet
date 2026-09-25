@@ -8,6 +8,8 @@ import { BalanceService } from "../src/background/balances";
 import { CoinControlService } from "../src/background/coin-control";
 import { Collateral } from "../src/background/collateral";
 import { ContactsService } from "../src/background/contacts";
+import { DappService, type ApprovalWindow } from "../src/background/dapp";
+import { Minswap, type Estimate, type PendingOrder } from "../src/background/minswap";
 import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
 import {
@@ -25,11 +27,13 @@ import { PendingService } from "../src/background/pending";
 import { PreferencesService } from "../src/background/preferences";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
+import { SessionService } from "../src/background/sessions";
 import { StakingService } from "../src/background/staking";
 import { PrivateStore } from "../src/background/private-store";
 import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
+import type { SwapAsk } from "../src/shared/rpc";
 import { txIdOf } from "./fixtures/cbor";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
 
@@ -138,6 +142,16 @@ export const stakingPreprod = fixture("staking-preprod.json") as {
 };
 
 /** A real mint round trip on preprod (tests/fixtures/record-mint.mjs). */
+/** Minswap's recorded preprod quote: 10 ADA to MIN. */
+export const minswapEstimate = fixture("minswap-estimate-preprod.json") as { ask: SwapAsk; estimate: Estimate };
+/** Session 0 of the 12-word phrase, its UTxO, and a swap from it (wasm/tests/session_test.rs). */
+export const sessionSwap = fixture("session-swap.json") as {
+  address: string;
+  keyHash: string;
+  utxo: { tx_hash: string; tx_index: number; address: string; value: string };
+  swapCbor: string;
+};
+
 export const mintPreprod = fixture("mint-preprod.json") as {
   evaluation: unknown;
   collateral: { status: number; answer: unknown };
@@ -154,6 +168,8 @@ export interface FakeKoios {
   rejectSubmit?: string;
   /** What `tx_status` reports for every transaction. */
   confirmations: number | null;
+  /** Transactions `tx_status` doesn't know, whatever `confirmations` says: never on chain. */
+  missing: Set<string>;
   /** Ogmios's answer to every evaluation: the recorded preprod mint's, unless replaced. */
   evaluation: unknown;
   /** Who holds each NFT, by `policy.name`, for `asset_nft_address`. */
@@ -181,6 +197,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     calls: [],
     submitted: [],
     confirmations: null,
+    missing: new Set(),
     evaluation: mintPreprod.evaluation,
     nfts: new Map(),
     spent: new Set(),
@@ -212,7 +229,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
       } else if (path === "epoch_params") {
         rows = epochParams;
       } else if (path === "tx_status") {
-        rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: fake.confirmations }));
+        rows = body._tx_hashes.map((tx_hash: string) => ({
+          tx_hash,
+          num_confirmations: fake.missing.has(tx_hash) ? null : fake.confirmations,
+        }));
       } else if (path === "credential_utxos") {
         // The wallet contract's, or the accounts' by payment key, whatever their staking part.
         const credentials: string[] = body._payment_credentials;
@@ -233,6 +253,17 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         rows = activityPreprod.tx_info
           .filter((t) => body._tx_hashes.includes(t.tx_hash))
           .map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) }));
+      } else if (path === "utxo_info") {
+        // Any UTxO the fixtures know, spent or not, as Koios answers.
+        const refs: string[] = body._utxo_refs;
+        const every = [
+          ...koiosPreprod.contract_utxos,
+          ...ownedUtxos,
+          ...fake.added,
+          ...Object.values(koiosPreprod.accounts).flatMap((a) => a.account_utxos),
+          ...fake.addedToAccounts,
+        ];
+        rows = every.filter((u) => refs.includes(`${u.tx_hash}#${u.tx_index}`));
       } else if (path === "account_addresses") {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_addresses ?? [];
       } else if (path === "account_utxos") {
@@ -284,6 +315,40 @@ export function fakeCollateral(): FakeCollateral {
   return fake;
 }
 
+export interface FakeMinswap {
+  fetch: FetchLike;
+  calls: Array<{ path: string; body: any }>;
+  /** `estimate`'s answer. */
+  estimate: Estimate;
+  /** `build-tx`'s transaction. */
+  swapCbor: string;
+  /** `pending-orders`' answer. */
+  orders: PendingOrder[];
+  /** `cancel-tx`'s transaction. */
+  cancelCbor: string;
+}
+
+/** Minswap's aggregator: the recorded quote, and the session's swap. */
+export function fakeMinswap(): FakeMinswap {
+  const fake: FakeMinswap = {
+    calls: [],
+    estimate: minswapEstimate.estimate,
+    swapCbor: sessionSwap.swapCbor,
+    orders: [],
+    cancelCbor: "",
+    fetch: async (url, init) => {
+      const path = new URL(url).pathname.split("/").pop()!;
+      fake.calls.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+      if (path === "estimate") return Response.json(fake.estimate);
+      if (path === "build-tx") return Response.json({ cbor: fake.swapCbor });
+      if (path === "pending-orders") return Response.json({ orders: fake.orders, amount_in_decimal: false });
+      if (path === "cancel-tx") return Response.json({ cbor: fake.cancelCbor });
+      return new Response("not found", { status: 404 });
+    },
+  };
+  return fake;
+}
+
 /** A wallet plus the balance, move-in, mint, transfer, withdraw, send and pending services over the fake Koios and giveme.my. */
 export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) => Promise<void> }) {
   const t = testWallet();
@@ -296,6 +361,9 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now });
   const preferences = new PreferencesService(t.local);
   const coingecko = fakeCoinGecko();
+  const minswap = fakeMinswap();
+  const dappWindow = fakeWindow();
+  let dappChanged = 0;
   const deps = {
     wasm: loadTestWasm(),
     wallet: t.wallet,
@@ -308,6 +376,12 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coins,
     preferences,
   };
+  const sessions = new SessionService({
+    ...deps,
+    collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    store,
+    minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", minswap.fetch),
+  });
   return {
     ...t,
     koios,
@@ -336,6 +410,8 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     }),
     pending: new PendingService(deps),
+    minswap,
+    sessions,
     store,
     activity,
     coins,
@@ -343,7 +419,34 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coingecko,
     prices: new PriceService({ local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
+    dappWindow,
+    dappChanged: () => dappChanged,
+    dapp: new DappService({
+      ...deps,
+      store,
+      sessions,
+      fundingPollMs: 1,
+      network: "preprod",
+      window: dappWindow,
+      changed: () => void dappChanged++,
+    }),
   };
+}
+
+/** The connector's window: counts how often it's shown, and whether it's open. */
+export function fakeWindow(): ApprovalWindow & { shown: number; open: boolean } {
+  const fake = {
+    shown: 0,
+    open: false,
+    async show() {
+      fake.shown++;
+      fake.open = true;
+    },
+    async isOpen() {
+      return fake.open;
+    },
+  };
+  return fake;
 }
 
 /** CoinGecko's simple price, answering ADA in every currency asked; `fail` makes it refuse. */

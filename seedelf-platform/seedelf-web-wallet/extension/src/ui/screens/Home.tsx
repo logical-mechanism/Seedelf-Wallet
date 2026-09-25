@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { handlesIn } from "../../shared/handles";
-import type { Account, AdaPrice, Balances, PendingTx, SeedelfInfo, StakeInfo } from "../../shared/rpc";
+import type { Account, AdaPrice, Balances, PendingTx, SeedelfInfo, SessionView, StakeInfo } from "../../shared/rpc";
 import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
@@ -33,6 +33,7 @@ import {
   DoneIcon,
   EyeIcon,
   EyeOffIcon,
+  GridIcon,
   HistoryIcon,
   MoveInIcon,
   PieIcon,
@@ -48,6 +49,7 @@ import { useAmounts, usePreferences } from "../preferences";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
+import { Dapps, type DappStart } from "./Dapps";
 import { MoveIn } from "./MoveIn";
 import { Receive, ReceiveSeedelf } from "./Receive";
 import { RemoveSeedelf } from "./RemoveSeedelf";
@@ -55,6 +57,7 @@ import { Staking } from "./Staking";
 import { Tokens } from "./Tokens";
 import { Transfer } from "./Transfer";
 import { Utxos } from "./Utxos";
+import { isRunningSwap, SwapRow } from "./Swaps";
 import { Withdraw } from "./Withdraw";
 
 /** How the banner names a sent transaction, and says it's confirmed. */
@@ -70,6 +73,10 @@ const SENT: Record<PendingTx["kind"], string> = {
   vote: "Vote delegation",
   "withdraw-rewards": "Reward withdrawal",
   unstake: "Stop staking",
+  "session-out": "Payment into a private session",
+  "session-swap": "Swap order",
+  "session-cancel": "Order cancel",
+  "session-back": "Return from a private session",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Made private",
@@ -83,6 +90,10 @@ const CONFIRMED: Record<PendingTx["kind"], string> = {
   vote: "Voting power delegated",
   "withdraw-rewards": "Rewards withdrawn",
   unstake: "Staking stopped",
+  "session-out": "Private session funded",
+  "session-swap": "Swap order placed",
+  "session-cancel": "Order cancelled",
+  "session-back": "Back in your private balance",
 };
 
 /** Read again on open when the last reading is older than this. */
@@ -113,6 +124,7 @@ export function Home() {
     | "withdraw"
     | "staking"
     | "staking-vote"
+    | "dapps"
   >("home");
   const { prefs } = usePreferences();
   const amounts = useAmounts();
@@ -122,6 +134,9 @@ export function Home() {
   const [activityOf, setActivityOf] = useState<Tab>();
   const [utxosOf, setUtxosOf] = useState<Tab>();
   const [pending, setPending] = useState<PendingTx | null>(null);
+  const [dappStart, setDappStart] = useState<DappStart>();
+  // Swaps that run themselves and aren't over, from the device's own record.
+  const [swaps, setSwaps] = useState<SessionView[]>([]);
 
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
@@ -162,6 +177,23 @@ export function Home() {
     const tick = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(tick);
   }, [load, watch]);
+
+  // While Home shows, what's running: read from the device every 20 s, as the worker's alarm moves it on.
+  useEffect(() => {
+    if (screen !== "home") return;
+    let live = true;
+    const read = () =>
+      call("sessions", {}).then(
+        (all) => live && setSwaps(all.filter(isRunningSwap)),
+        () => undefined,
+      );
+    void read();
+    const timer = setInterval(() => void read(), 20_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [screen]);
 
   // Until the first reading (or its error), a splash covers the empty balances.
   const splash = useSplash(balances !== undefined || error !== undefined);
@@ -210,6 +242,10 @@ export function Home() {
     setRemoving(undefined);
   };
   const home = () => setScreen("home");
+  const dapps = (start?: DappStart) => {
+    setDappStart(start);
+    setScreen("dapps");
+  };
   // Remove is reached from Receive, and Back returns there.
   if (removing) {
     return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
@@ -250,6 +286,17 @@ export function Home() {
   if (screen === "create" && free) return <CreateSeedelf balances={free} onCancel={home} onSent={sent} />;
   if (screen === "transfer" && free) return <Transfer seedelf={free.seedelf} onCancel={home} onSent={sent} />;
   if (screen === "withdraw" && free) return <Withdraw seedelf={free.seedelf} onCancel={home} onSent={sent} />;
+  if (screen === "dapps" && free) {
+    return (
+      <Dapps
+        seedelf={free.seedelf}
+        blocked={watching ? BUSY : undefined}
+        start={dappStart}
+        onBack={home}
+        onPending={setPending}
+      />
+    );
+  }
   if (activityOf) {
     const pendingHash = watching ? pending?.txHash : undefined;
     return (
@@ -296,6 +343,9 @@ export function Home() {
           value={tab}
           onChange={setTab}
         />
+
+        {/* Up by the balances, both of which it reads again: no scrolling down to it. */}
+        <RefreshRow reading={reading} updatedAt={balances?.updatedAt} onRefresh={() => void load(true)} />
 
         {/* Each panel has its own key, so its buttons are new, not restyled Seedelf ones. */}
         {tab === "seedelf" ? (
@@ -376,7 +426,15 @@ export function Home() {
               </section>
             )}
 
-            <Links onActivity={() => setActivityOf("seedelf")} onUtxos={() => setUtxosOf("seedelf")} />
+            {swaps.length > 0 && (
+              <RunningSwaps swaps={swaps} onOpen={(index) => dapps({ dapp: "minswap", session: index })} />
+            )}
+
+            <Links
+              onActivity={() => setActivityOf("seedelf")}
+              onUtxos={() => setUtxosOf("seedelf")}
+              onDapps={() => dapps()}
+            />
           </section>
         ) : (
           <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
@@ -455,8 +513,6 @@ export function Home() {
             <Links onActivity={() => setActivityOf("cardano")} onUtxos={() => setUtxosOf("cardano")} />
           </section>
         )}
-
-        <RefreshRow reading={reading} updatedAt={balances?.updatedAt} onRefresh={() => void load(true)} />
       </div>
     </>
   );
@@ -523,11 +579,38 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
   );
 }
 
-/** Opens this tab's Activity, or its UTxOs. */
-function Links({ onActivity, onUtxos }: { onActivity: () => void; onUtxos: () => void }) {
+/** Swaps running by themselves, as Minswap's page lists them: each opens its page, where it's watched. */
+function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index: number) => void }) {
+  return (
+    <section className="section" aria-labelledby="swaps-running-title">
+      <h2 id="swaps-running-title">Swaps in progress</h2>
+      <ul className="list" data-testid="swaps-running">
+        {swaps.map((s) => (
+          <li key={s.index}>
+            <SwapRow session={s} onOpen={() => onOpen(s.index)} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Opens this tab's Activity, or its UTxOs, and on the private tab the dApp browser. */
+function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtxos: () => void; onDapps?: () => void }) {
   return (
     <section className="section">
       <ul className="list">
+        {onDapps && (
+          <li>
+            <button type="button" className="menu-row" onClick={onDapps}>
+              <span className="menu-row__icon">
+                <GridIcon size={16} />
+              </span>
+              <span>dApps</span>
+              <ChevronRightIcon size={16} />
+            </button>
+          </li>
+        )}
         <li>
           <button type="button" className="menu-row" onClick={onActivity}>
             <span className="menu-row__icon">

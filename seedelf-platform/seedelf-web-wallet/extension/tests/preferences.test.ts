@@ -13,13 +13,24 @@ describe("preferences", () => {
   it("start from the defaults, and take only values they may", async () => {
     const prefs = new PreferencesService(memoryArea());
     expect(await prefs.get()).toEqual(DEFAULT_PREFERENCES);
-    expect(DEFAULT_PREFERENCES).toEqual({ spendRewards: true, hideBalances: false, lockAfterMinutes: 15, currency: "usd" });
+    expect(DEFAULT_PREFERENCES).toEqual({
+      spendRewards: true,
+      hideBalances: false,
+      lockAfterMinutes: 15,
+      currency: "usd",
+      // Sites can't see the wallet until the user turns the connector on.
+      dappConnector: false,
+      // A site's signature needs the password until the user says otherwise.
+      dappPassword: true,
+    });
 
     expect(await prefs.set({ hideBalances: true, lockAfterMinutes: 60, currency: "eur" })).toEqual({
       spendRewards: true,
       hideBalances: true,
       lockAfterMinutes: 60,
       currency: "eur",
+      dappConnector: false,
+      dappPassword: true,
     });
     expect(await prefs.lockAfterMs()).toBe(60 * 60_000);
 
@@ -28,6 +39,14 @@ describe("preferences", () => {
     expect(await prefs.get()).toMatchObject({ hideBalances: true, lockAfterMinutes: 60, currency: "eur" });
     await prefs.set({ currency: "off" });
     expect((await prefs.get()).currency).toBe("off");
+    await prefs.set({ dappConnector: "on" as never });
+    expect((await prefs.get()).dappConnector).toBe(false);
+    await prefs.set({ dappConnector: true });
+    expect((await prefs.get()).dappConnector).toBe(true);
+    await prefs.set({ dappPassword: "no" as never });
+    expect((await prefs.get()).dappPassword).toBe(true);
+    await prefs.set({ dappPassword: false });
+    expect((await prefs.get()).dappPassword).toBe(false);
   });
 
   it("read a kept value that's no longer allowed as the default", async () => {

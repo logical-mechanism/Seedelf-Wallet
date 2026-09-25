@@ -476,12 +476,259 @@ export interface PendingTx {
     | "stake"
     | "vote"
     | "withdraw-rewards"
-    | "unstake";
+    | "unstake"
+    | "session-out"
+    | "session-swap"
+    | "session-cancel"
+    | "session-back";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
   /** Null until it's on chain. */
   confirmations: number | null;
+}
+
+/** A token in a dApp transaction's summary; `quantity` is signed where it's a change. */
+export interface DappToken {
+  policyId: string;
+  assetName: string;
+  quantity: string;
+}
+
+/** What a dApp's transaction does to the public account (WebAssembly's `inspectDappTx`). Lovelace amounts are decimal strings. */
+export interface DappTxSummary {
+  txHash: string;
+  fee: string;
+  /** The account's change in ADA (signed) and each token that moved. */
+  netLovelace: string;
+  netTokens: DappToken[];
+  spentLovelace: string;
+  returnedLovelace: string;
+  ownInputs: number;
+  /** Outputs to anyone else. */
+  paid: Array<{
+    address: string;
+    lovelace: string;
+    tokens: DappToken[];
+    datum: "hash" | "inline" | null;
+    /** A script's address: a contract holds what it's paid. */
+    script: boolean;
+    /** Into Seedelf Wallet's contract: under a register, or with none (anyone could take it). */
+    seedelf: "register" | "none" | null;
+  }>;
+  ownOutputs: Array<{
+    txIndex: number;
+    address: string;
+    role: number;
+    index: number;
+    lovelace: string;
+    tokens: DappToken[];
+    inlineDatum: string | null;
+    datumHash: string | null;
+  }>;
+  /** Minted (positive) or burned. */
+  mint: DappToken[];
+  certificates: Array<{
+    kind: string;
+    own: boolean;
+    pool: string | null;
+    drep: string | null;
+    deposit: string | null;
+    refund: string | null;
+  }>;
+  withdrawals: Array<{ address: string; lovelace: string; own: boolean }>;
+  collateral: { own: number; lovelace: string; total: string | null; returnedLovelace: string | null; atRisk: string } | null;
+  scripts: boolean;
+  referenceInputs: number;
+  votes: number;
+  proposals: number;
+  donation: string | null;
+  /** CIP-20's message lines. */
+  note: string[] | null;
+  metadata: boolean;
+  validFrom: number | null;
+  validUntil: number | null;
+  /** The account's keys that sign: `0/3`, `1/0`, `stake`. */
+  signs: string[];
+  unknownInputs: string[];
+  othersSign: number;
+  complete: boolean;
+}
+
+/**
+ * What a site asks the user for. A signature's `password`: Sign needs the
+ * password typed too (the `dappPassword` setting). Its `session`: the site is
+ * connected to that private session, not the public account. A connect's
+ * `funding`: the private session it chose is funded and on its way, and the
+ * site connects once Koios sees it. `password` on a connect: sending a
+ * private session's funding needs it.
+ */
+export type DappAsk =
+  | { kind: "connect"; password: boolean; funding?: { index: number; txHash: string } }
+  | { kind: "sign-tx"; partial: boolean; summary: DappTxSummary; password: boolean; session?: number }
+  | {
+      kind: "sign-data";
+      session?: number;
+      /** Bech32. */
+      address: string;
+      key: "payment" | "stake";
+      payload: string;
+      /** The payload as text, when it reads as UTF-8. */
+      text?: string;
+      password: boolean;
+    };
+
+/** Something a site asked for that waits for the user, in the connector's window. */
+export type DappApproval = { id: string; origin: string; title?: string } & DappAsk;
+
+/** A site connected to the public account. */
+export interface DappSite {
+  origin: string;
+  connectedAt: number;
+  /** Connected to this private session (private CIP-30), not the public account. */
+  session?: number;
+}
+
+/** "lovelace", or a token's policy ID and name in hex, run together (Minswap's form). */
+export type SwapTokenId = string;
+
+/** A swap as asked: `amount` in the input's smallest unit; `slippage` in percent. */
+export interface SwapAsk {
+  amount: string;
+  tokenIn: SwapTokenId;
+  tokenOut: SwapTokenId;
+  slippage: number;
+}
+
+/** How one side of a swap is shown: a token's ticker or name, and its decimals. */
+export interface SwapSide {
+  label: string;
+  decimals: number;
+}
+
+/** A token Minswap can swap, from its list. */
+export interface SwapTokenInfo {
+  id: SwapTokenId;
+  ticker: string | null;
+  name: string | null;
+  decimals: number;
+  verified: boolean;
+}
+
+/** Minswap's quote for a swap, and what a private session for it is funded with. Amounts are decimal strings in smallest units. */
+export interface SwapQuote {
+  network: NetworkName;
+  ask: SwapAsk;
+  amountIn: string;
+  amountOut: string;
+  /** Less than this and the order is refunded: the slippage allowed. */
+  minAmountOut: string;
+  /** The DEXes' batcher fees, in lovelace. */
+  dexFee: string;
+  /** ADA the orders lock and pay back with the proceeds. */
+  deposits: string;
+  aggregatorFee: string;
+  /** Percent. */
+  priceImpact: number;
+  /** The DEXes it routes through, e.g. ["MinswapV2", "SundaeSwapV3"]. */
+  route: string[];
+  /** Moved from the private balance to the session's account: the swap and its costs, with room for the swap's fee and change. */
+  fund: { lovelace: string; tokens: TokenQuantity[] };
+  /** Also moved: the account's own collateral, in lovelace. It comes back with the rest. */
+  collateral: string;
+}
+
+/** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
+export interface SessionTx {
+  kind: "out" | "swap" | "cancel" | "back";
+  txHash: string;
+  at: number;
+  confirmed?: boolean;
+}
+
+/** Why a swap that runs itself waits for the user. */
+export type SessionPause =
+  /** The fresh quote expects `amountOut`, less than the least the user approved: the order couldn't fill. */
+  | { at: number; why: "price"; amountOut: string }
+  /** What Minswap built failed a check (`detail` says which), so the wallet didn't sign it. */
+  | { at: number; why: "refused"; detail: string };
+
+/** A swap that runs itself, after one approval: where it's at, for its timeline. */
+export interface SessionAuto {
+  /** Each step waits for the one before: the funding, the order, its fill (or cancel), the return. */
+  step: "funding" | "ordering" | "filling" | "cancelling" | "returning" | "done";
+  paused?: SessionPause;
+  /** The last step failed (Koios or Minswap didn't answer): it's tried again at `at`. */
+  retry?: { at: number; error: string };
+  /** The user pressed Stop: any order is cancelled, then everything comes back. */
+  stopping: boolean;
+  /** The order was filled. */
+  filled: boolean;
+  /** The least the user approved receiving. */
+  approvedMinOut: string;
+}
+
+/**
+ * A private session: a one-time account (account 24301', key 0/index) funded
+ * from the private balance, used for a swap, and brought back into it.
+ * `failed`: its funding never reached the chain.
+ */
+export interface SessionView {
+  index: number;
+  network: NetworkName;
+  address: string;
+  createdAt: number;
+  stage: "funding" | "open" | "returning" | "closed" | "failed";
+  txs: SessionTx[];
+  /** The swap it's for, as last quoted, and how its two sides are shown. */
+  swap?: SwapAsk & { amountOut: string; minAmountOut: string; display?: { in: SwapSide; out: SwapSide } };
+  /** What its account holds, from Koios; null when it wasn't read. */
+  holding: { lovelace: string; tokens: TokenQuantity[]; utxos: number } | null;
+  /** Set when the swap runs itself; a session from before (every step a button) has none. */
+  auto?: SessionAuto;
+  /** A site's private session (private CIP-30): the site it's connected to, rather than a swap. */
+  site?: { origin: string };
+}
+
+/** A funding payment into a new session, built and waiting for Send. */
+export interface SessionOutSummary extends WithdrawSummary {
+  index: number;
+  address: string;
+}
+
+/** A transaction Minswap built for a session (a swap, a cancel), read by WebAssembly and waiting for Send. */
+export interface SessionTxReview {
+  network: NetworkName;
+  index: number;
+  kind: "swap" | "cancel";
+  txHash: string;
+  summary: DappTxSummary;
+  /** A swap's fresh quote. */
+  quote?: SwapQuote;
+  /** A cancel's orders. */
+  orders?: number;
+}
+
+/** Bringing a session back into the private balance, built and signed, waiting for Send. Amounts in lovelace. */
+export interface SessionBackSummary {
+  network: NetworkName;
+  index: number;
+  txHash: string;
+  fee: string;
+  lovelace: string;
+  tokens: TokenQuantity[];
+  depositOutputs: number;
+  inputs: number;
+}
+
+/** A session's order not filled yet, from Minswap. */
+export interface SessionOrder {
+  protocol: string;
+  /** `txhash#index` */
+  txIn: string;
+  amountIn: string;
+  minAmountOut: string;
+  createdAt: number;
 }
 
 type None = Record<never, never>;
@@ -581,6 +828,74 @@ export interface Requests {
   "preferences-set": { payload: Partial<Preferences>; result: Preferences };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
+  /** What sites are waiting for the user to answer, oldest first. */
+  "dapp-approvals": { payload: None; result: DappApproval[] };
+  /**
+   * Answers one: `error` says why an approved one couldn't be done (the site hears it too).
+   * A signature that needs the password takes it here; a wrong one leaves it waiting.
+   */
+  "dapp-answer": {
+    payload: { id: string; approve: boolean; password?: string; fund?: { txHash: string } };
+    result: { error?: string };
+  };
+  /** Ends a site's private session, once its account is empty, and disconnects the site that has it. */
+  "dapp-disconnect-session": { payload: { index: number }; result: null };
+  /** Builds the funding of a private session for the site a waiting connect is from. `fund` in `dapp-answer` sends it. */
+  "dapp-private-build": {
+    payload: { id: string; lovelace: string; tokens: TokenQuantity[] };
+    result: SessionOutSummary;
+  };
+  /** The sites connected to the public account on this network. */
+  "dapp-sites": { payload: None; result: DappSite[] };
+  /** Disconnects a site; returns the rest. */
+  "dapp-forget": { payload: { origin: string }; result: DappSite[] };
+  /** This network's private sessions, newest first; `refresh` reads their accounts (one Koios request, two with a transaction waiting). */
+  sessions: { payload: { refresh?: boolean }; result: SessionView[] };
+  /** Tokens on Minswap's list matching `query` (a ticker, a name or an ID); Minswap sees what's searched for. */
+  "swap-tokens": { payload: { query: string }; result: SwapTokenInfo[] };
+  /** Minswap's quote for a swap, with what a session for it is funded with. */
+  "swap-quote": { payload: SwapAsk; result: SwapQuote };
+  /** Builds the payment that funds a new session for `quote`, from the private balance, without sending it. */
+  "session-out-build": { payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide } }; result: SessionOutSummary };
+  /** Records the session, then submits its funding payment, if its hash matches. */
+  "session-out-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Has Minswap build the session's swap, freshly quoted, and reads it. */
+  "session-swap-build": { payload: { index: number }; result: SessionTxReview };
+  /** Signs the swap built last with the session's key and submits it. */
+  "session-swap-submit": { payload: { txHash: string }; result: PendingTx };
+  /** The session's orders that aren't filled yet. */
+  "session-orders": { payload: { index: number }; result: SessionOrder[] };
+  /** Has Minswap build a cancel of the session's open orders, and reads it. */
+  "session-cancel-build": { payload: { index: number }; result: SessionTxReview };
+  "session-cancel-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Builds and signs the return of everything at the session's account into the private balance. */
+  "session-back-build": { payload: { index: number }; result: SessionBackSummary };
+  "session-back-submit": { payload: { txHash: string }; result: PendingTx };
+  /** Forgets a session whose funding never reached the chain. */
+  "session-forget": { payload: { index: number }; result: SessionView[] };
+  /** Builds another funding payment into a site's private session. */
+  "session-top-up-build": { payload: { index: number; lovelace: string; tokens: TokenQuantity[] }; result: SessionOutSummary };
+  /** Sends the top-up built last. */
+  "session-top-up-submit": { payload: { txHash: string }; result: PendingTx };
+  /**
+   * Bring everything back: a return for each of these sessions that holds
+   * something, each its own transaction; `skipped` says why a session wasn't.
+   */
+  "session-claim-build": {
+    payload: { indexes: number[] };
+    result: { returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> };
+  };
+  /** Sends the chosen returns Bring everything back built, one after another. */
+  "session-claim-submit": {
+    payload: { txHashes: string[] };
+    result: { sent: Array<{ index: number; txHash: string }>; failed: Array<{ index: number; error: string }> };
+  };
+  /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
+  "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
+  /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */
+  "session-stop": { payload: { index: number }; result: SessionView };
+  /** Goes on after a pause or a failure: the step is tried again now. */
+  "session-resume": { payload: { index: number }; result: SessionView };
 }
 
 export type RequestName = keyof Requests;
@@ -643,6 +958,32 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "preferences",
   "preferences-set",
   "price",
+  "dapp-approvals",
+  "dapp-answer",
+  "dapp-private-build",
+  "dapp-disconnect-session",
+  "dapp-sites",
+  "dapp-forget",
+  "sessions",
+  "swap-tokens",
+  "swap-quote",
+  "session-out-build",
+  "session-out-submit",
+  "session-swap-build",
+  "session-swap-submit",
+  "session-orders",
+  "session-cancel-build",
+  "session-cancel-submit",
+  "session-back-build",
+  "session-back-submit",
+  "session-forget",
+  "session-top-up-build",
+  "session-top-up-submit",
+  "session-claim-build",
+  "session-claim-submit",
+  "session-advance",
+  "session-stop",
+  "session-resume",
 ]);
 
 export function isMessage(value: unknown): value is Message {
@@ -655,4 +996,11 @@ export const STATE_CHANGED = { event: "state-changed" } as const;
 
 export function isStateChanged(value: unknown): boolean {
   return (value as { event?: unknown } | null)?.event === STATE_CHANGED.event;
+}
+
+/** Broadcast by the worker when what sites are waiting for changes. */
+export const DAPP_CHANGED = { event: "dapp-changed" } as const;
+
+export function isDappChanged(value: unknown): boolean {
+  return (value as { event?: unknown } | null)?.event === DAPP_CHANGED.event;
 }

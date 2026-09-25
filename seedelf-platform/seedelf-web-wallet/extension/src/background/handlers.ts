@@ -9,12 +9,14 @@ import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
 import type { CoinControlService } from "./coin-control";
 import type { ContactsService } from "./contacts";
+import type { DappService } from "./dapp";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
 import type { SendService } from "./send";
+import type { SessionService } from "./sessions";
 import type { StakingService } from "./staking";
 import type { TransferService } from "./transfer";
 import type { WithdrawService } from "./withdraw";
@@ -36,6 +38,11 @@ export interface Context {
   staking: StakingService;
   preferences: PreferencesService;
   prices: PriceService;
+  dapp: DappService;
+  /** Private sessions: swaps from one-time accounts (sessions.ts). */
+  sessions: SessionService;
+  /** Registers or removes the dApp connector's content scripts (connector.ts). */
+  connector: (on: boolean) => Promise<boolean>;
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -101,6 +108,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.pending.pending();
     case "reset-wallet":
       await wallet.reset();
+      // The settings went with it: sites can't connect to a wallet that isn't there.
+      await ctx.connector(false).catch(() => false);
       return status(ctx);
     case "reveal-phrase":
       return { words: await wallet.revealPhrase(message.password) };
@@ -157,10 +166,74 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.preferences.get();
     case "preferences-set": {
       const { type: _type, ...change } = message;
-      return ctx.preferences.set(change);
+      const prefs = await ctx.preferences.set(change);
+      if (typeof change.dappConnector === "boolean") {
+        // Turned on without Chrome's access to sites (the switch asks first), it stays off.
+        const working = await ctx.connector(prefs.dappConnector);
+        if (prefs.dappConnector && !working) return ctx.preferences.set({ dappConnector: false });
+      }
+      return prefs;
     }
     case "price":
       return ctx.prices.get(ctx.network);
+    case "dapp-approvals":
+      return ctx.dapp.approvals();
+    case "dapp-answer":
+      return ctx.dapp.answer(message.id, message.approve, message.password, message.fund);
+    case "dapp-private-build":
+      return ctx.dapp.privateBuild(message.id, message.lovelace, message.tokens);
+    case "dapp-disconnect-session":
+      await ctx.dapp.disconnectSession(message.index);
+      return null;
+    case "dapp-sites":
+      return ctx.dapp.sites();
+    case "dapp-forget":
+      return ctx.dapp.forget(message.origin);
+    case "sessions":
+      return ctx.sessions.list(ctx.network, message.refresh);
+    case "swap-tokens":
+      return ctx.sessions.tokens(ctx.network, message.query);
+    case "swap-quote":
+      return ctx.sessions.quote(ctx.network, {
+        amount: message.amount,
+        tokenIn: message.tokenIn,
+        tokenOut: message.tokenOut,
+        slippage: message.slippage,
+      });
+    case "session-out-build":
+      return ctx.sessions.outBuild(ctx.network, message.quote, message.display);
+    case "session-out-submit":
+      return ctx.sessions.outSubmit(ctx.network, message.txHash);
+    case "session-swap-build":
+      return ctx.sessions.swapBuild(ctx.network, message.index);
+    case "session-swap-submit":
+      return ctx.sessions.txSubmit(ctx.network, message.txHash, "swap");
+    case "session-orders":
+      return ctx.sessions.orders(ctx.network, message.index);
+    case "session-cancel-build":
+      return ctx.sessions.cancelBuild(ctx.network, message.index);
+    case "session-cancel-submit":
+      return ctx.sessions.txSubmit(ctx.network, message.txHash, "cancel");
+    case "session-back-build":
+      return ctx.sessions.backBuild(ctx.network, message.index);
+    case "session-back-submit":
+      return ctx.sessions.backSubmit(ctx.network, message.txHash);
+    case "session-forget":
+      return ctx.sessions.forget(ctx.network, message.index);
+    case "session-top-up-build":
+      return ctx.sessions.topUpBuild(ctx.network, message.index, message.lovelace, message.tokens);
+    case "session-top-up-submit":
+      return ctx.sessions.topUpSubmit(ctx.network, message.txHash);
+    case "session-claim-build":
+      return ctx.sessions.claimBuild(ctx.network, message.indexes);
+    case "session-claim-submit":
+      return ctx.sessions.claimSubmit(ctx.network, message.txHashes);
+    case "session-advance":
+      return ctx.sessions.advance(ctx.network, message.index, message.now ?? false);
+    case "session-stop":
+      return ctx.sessions.stop(ctx.network, message.index);
+    case "session-resume":
+      return ctx.sessions.resume(ctx.network, message.index);
   }
 }
 

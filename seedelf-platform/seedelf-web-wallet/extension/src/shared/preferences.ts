@@ -22,6 +22,17 @@ export interface Preferences {
   lockAfterMinutes: LockAfterMinutes;
   /** What ADA's value is shown in, on mainnet. */
   currency: Currency;
+  /**
+   * The dApp connector (CIP-30): each site gets the public account or a
+   * private session, chosen when it connects. Off until the user turns it
+   * on, which asks Chrome for access to sites first.
+   */
+  dappConnector: boolean;
+  /**
+   * A site's signature (a transaction or a message) needs the password,
+   * typed in the connector's window, even while the wallet is unlocked.
+   */
+  dappPassword: boolean;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -29,6 +40,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   hideBalances: false,
   lockAfterMinutes: 15,
   currency: "usd",
+  dappConnector: false,
+  dappPassword: true,
 };
 
 export const isLockAfter = (value: unknown): value is LockAfterMinutes =>

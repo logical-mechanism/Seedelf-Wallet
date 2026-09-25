@@ -72,6 +72,8 @@ export interface WalletDeps {
 export interface Keys {
   seedelf: Wasm.SeedelfKey;
   cardano: Wasm.CardanoAccount;
+  /** Private sessions' one-time accounts (account 24301'): never the public account's keys. */
+  oneTime: Wasm.OneTimeAccounts;
 }
 
 export class Wallet {
@@ -174,6 +176,17 @@ export class Wallet {
       } finally {
         entropy.fill(0);
       }
+    });
+  }
+
+  /**
+   * Checks an unlocked wallet's password, before a site's signature
+   * (dapp.ts). A wrong one counts towards the unlock back-off, as the
+   * phrase's does.
+   */
+  checkPassword(password: string): Promise<void> {
+    return this.serial(async () => {
+      (await this.openWithPassword(password)).fill(0);
     });
   }
 
@@ -322,10 +335,13 @@ export class Wallet {
   private derive(entropy: Uint8Array): Keys {
     const { wasm } = this.deps;
     const seedelf = wasm.SeedelfKey.fromEntropy(entropy, 0);
+    let cardano: Wasm.CardanoAccount | undefined;
     try {
-      return { seedelf, cardano: wasm.CardanoAccount.fromEntropy(entropy, 0) };
+      cardano = wasm.CardanoAccount.fromEntropy(entropy, 0);
+      return { seedelf, cardano, oneTime: wasm.OneTimeAccounts.fromEntropy(entropy) };
     } catch (e) {
       seedelf.free();
+      cardano?.free();
       throw e;
     }
   }
@@ -345,6 +361,7 @@ export class Wallet {
     // free() overwrites the secrets inside WebAssembly before releasing them.
     this.keys?.seedelf.free();
     this.keys?.cardano.free();
+    this.keys?.oneTime.free();
     this.keys = undefined;
   }
 

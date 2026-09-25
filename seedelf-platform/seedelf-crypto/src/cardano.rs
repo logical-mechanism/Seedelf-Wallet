@@ -28,6 +28,11 @@ pub const PURPOSE: u32 = 1852;
 pub const COIN_TYPE: u32 = 1815;
 /// Hardened-derivation offset.
 pub const HARDENED: u32 = 0x8000_0000;
+/// The account of the web wallet's one-time accounts (private sessions):
+/// `24301'` (`0x5EED`), payment key `0/i` for session `i`. Reserved so it
+/// never shares keys with an account a restored Lace wallet uses. Frozen:
+/// every one-time account's funds depend on it.
+pub const ONE_TIME_ACCOUNT: u32 = 0x5EED;
 
 /// The CIP-1852 key roles the wallet uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

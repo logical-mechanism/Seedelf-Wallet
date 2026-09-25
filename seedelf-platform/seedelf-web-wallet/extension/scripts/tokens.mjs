@@ -4,10 +4,16 @@
 // release; it reads the Cardano token registry through Koios `asset_info`.
 //
 //   node scripts/tokens.mjs                      write src/tokens/registry.<network>.json
+//   node scripts/tokens.mjs build <network>      the same for one network
 //   node scripts/tokens.mjs find <network> T...  registry entries for tickers, to curate the list
 //
 // Each listed unit must be in the registry under the ticker the list expects.
 // Other entries claiming the same ticker are reported, never taken.
+//
+// A test network's token that isn't in the registry (preprod's MIN, which
+// Minswap's preprod pools use) can be listed with `unregistered`: its name and
+// decimals, vetted by hand, and where they come from. It's refused on mainnet,
+// and a registry entry, once there is one, wins.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -55,13 +61,13 @@ async function shrink(page, base64) {
   );
 }
 
-async function build() {
+async function build(only) {
   const list = JSON.parse(readFileSync(`${dir}list.json`, "utf8"));
   const browser = await chromium.launch();
   const page = await browser.newPage();
   try {
     for (const [network, tokens] of Object.entries(list)) {
-      if (network.startsWith("//")) continue;
+      if (network.startsWith("//") || (only && network !== only)) continue;
       const info = [];
       for (let i = 0; i < tokens.length; i += 50) {
         const batch = tokens.slice(i, i + 50).map((t) => [t.policy, t.name]);
@@ -70,6 +76,12 @@ async function build() {
       const registry = {};
       for (const t of tokens) {
         const row = info.find((r) => r.policy_id === t.policy && r.asset_name === t.name);
+        if (!row?.token_registry_metadata && t.unregistered) {
+          if (network === "mainnet") throw new Error(`mainnet: ${t.ticker} must be in the token registry`);
+          console.warn(`${network}: ${t.ticker} isn't in the token registry; using the list's (${t.unregistered.source})`);
+          registry[`${t.policy}.${t.name}`] = { ticker: t.ticker, name: t.unregistered.name, decimals: t.unregistered.decimals };
+          continue;
+        }
         const meta = row?.token_registry_metadata;
         if (!meta) throw new Error(`${network}: ${t.ticker} (${t.policy}.${t.name}) isn't in the token registry`);
         if (meta.ticker !== t.ticker) {
@@ -111,5 +123,5 @@ async function find(network, tickers) {
 
 const [command, network, ...rest] = process.argv.slice(2);
 if (command === "find") await find(network, rest);
-else if (!command) await build();
-else throw new Error("usage: node scripts/tokens.mjs [find <network> TICKER...]");
+else if (!command || command === "build") await build(network);
+else throw new Error("usage: node scripts/tokens.mjs [build [network] | find <network> TICKER...]");

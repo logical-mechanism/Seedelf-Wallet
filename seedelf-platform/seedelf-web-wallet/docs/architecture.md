@@ -15,16 +15,16 @@ flowchart LR
   end
   SW -- "fetch" --> Koios["Koios"]
   SW -- "fetch" --> Collat["giveme.my collateral"]
-  Page["dApp page"] -. "CIP-30 via content script<br/>(round-trip phase only)" .-> SW
+  Page["dApp page"] -. "CIP-30 via content scripts<br/>(only when the user turns it on)" .-> SW
 ```
 
 - **Service worker:** owns everything that matters.
   - While unlocked, it holds the decrypted secret. It is the only place secrets ever exist.
   - It also holds wallet state, builds and signs transactions, and makes all network calls.
 - **UI:** renders state and sends the user's actions to the service worker. It never holds keys. The only secret it ever sees is the recovery phrase, while the user writes it down or types it in during onboarding.
-- **Content scripts:** v1 has none. They arrive with the contract round trip, to offer CIP-30 on one-time accounts.
-  - This matters for security: v1 injects nothing into web pages.
-  - v1 only needs host permissions for Koios and giveme.my, not `<all_urls>`.
+- **Content scripts (chunk 15):** none until the user turns on the [dApp connector](#dapp-connector).
+  - This matters for security: until then, the wallet adds nothing to web pages.
+  - Its install-time host permissions are only Koios and giveme.my. The sites are an optional permission, asked for when the connector is turned on, and kept when it's turned off (see [dApp connector](#dapp-connector)).
 
 ## Service worker
 
@@ -180,6 +180,11 @@ flowchart LR
 
 - **Paging:** 1000 rows a page, in a fixed order (`order=tx_hash.asc,tx_index.asc`), until a short page.
 - **Retries:** a rate limit (429), a server error (5xx) or a network failure is retried twice, after 1 s and 3 s. Anything else fails at once with Koios's status.
+- **Koios's public tier, with no API key (decided 2026-09-25).** Its limits are per IP address (5,000 requests a day, 100 every 10 s), so each user has their own, and there's no key to ship, leak or share.
+  - A key in the extension would be anyone's: the extension's files are public. Every user would also share its one daily allowance (50,000 on the free tier), and Koios would tie every request to the key's account.
+  - **Since 2026-09-25 the public tier sends browsers no CORS headers** (Koios's [tiers](https://koios.rest/tiers.html): CORS "Restricted" without a key, "Open" with one). A web page can't read it. The extension can: its requests to a host in its host permissions skip CORS. So the wallet reads Koios only through Chrome's grant for `preprod.koios.rest` (and `api.koios.rest` on mainnet).
+  - If the user limits the wallet's site access in Chrome, that grant goes with it. A failed request then says so (`KOIOS_NOT_ALLOWED` in `koios.ts`, not retried), and the wallet's page shows a notice with **Ask Chrome again** (`ServiceAccess` in `App.tsx`), which asks Chrome for the hosts from the click.
+  - giveme.my still answers with `Access-Control-Allow-Origin: *`.
 - **Finding owned UTxOs:** keep the contract UTxOs whose inline datum is a register (constructor 0, two 48-byte fields) with `generator^x == public_value`. This is `is_owned`, the same method the CLI's `balance` uses, run in WebAssembly. Points that don't decode or aren't torsion-free count as not owned.
   - As in the CLI, a UTxO holding a Seedelf isn't counted in the balance. It's listed as a Seedelf, with the ADA locked with it.
   - The query goes by payment credential, so it finds contract UTxOs with and without a staking part. Older outputs on preprod carry the shared Seedelf stake key; the current CLI writes none.
@@ -221,7 +226,7 @@ flowchart LR
 
 ## Storage
 
-**Permissions:** `storage` and `alarms`, plus the host permissions for the enabled network's Koios and giveme.my.
+**Permissions:** `storage`, `alarms`, `sidePanel` and `scripting`, plus the host permissions for the enabled network's Koios and giveme.my. The sites (`https://*/*`, `http://localhost/*`, `http://127.0.0.1/*`) are optional host permissions, asked for when the dApp connector is first turned on and kept after (see [dApp connector](#dapp-connector)).
 
 | Where | Key | What |
 |---|---|---|
@@ -233,10 +238,11 @@ flowchart LR
 | `chrome.storage.session` | `seedelf.contract.<network>` | This wallet's contract UTxOs, each Seedelf's UTxO and the last block seen (`contract-scan.ts`), only while unlocked |
 | `chrome.storage.session` | `seedelf.accountAddresses.<network>`, `seedelf.accountActivity.<network>` | The account's stake address and addresses (from the balance reading), and its Activity pages, only while unlocked |
 | `chrome.storage.session` | `seedelf.accountUtxos.<network>` | The account's UTxOs with their key paths, from the balance reading, for the UTxOs screen and what's locked; only while unlocked |
-| `chrome.storage.local` | `seedelf.preferences` | The user's settings: `spendRewards` (chunk 13). Not sealed: nothing in it is about money. Deleted with the wallet. |
+| `chrome.storage.local` | `seedelf.preferences` | The user's settings: `spendRewards` (chunk 13); `hideBalances`, `lockAfterMinutes` and `currency` (chunk 14); `dappConnector` (chunk 15). Not sealed: nothing in it is about money. Deleted with the wallet. |
 | `chrome.storage.local` | `seedelf.pools.<network>` | Every live pool, for a day (chunk 13). The same for everyone, so it says nothing about the user. |
 | `chrome.storage.session` | `seedelf.poolRefs.<network>`, `seedelf.stake.built` | The tickers of pools read this session (the user's among them), and the staking transaction built last; only while unlocked |
-| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts`, `history.<network>` (the Seedelf history), and `coins.<network>` (the locked UTxOs and the collateral). See below. |
+| `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts`, `history.<network>` (the Seedelf history), `coins.<network>` (the locked UTxOs and the collateral), and `dapps` (the sites connected to the public account, per network, chunk 15). See below. |
+| `chrome.storage.session` | `seedelf.dapp.view.<network>`, `seedelf.dapp.signed.<network>` | The account as the dApp connector last read it (kept 30 s), and the account's outputs of the last 32 transactions it signed for sites, for chaining; only while unlocked |
 
 - **Private records** (`private-store.ts`, chunk 12) are what the wallet keeps on disk that says something about its user.
   - Each one is JSON sealed with XChaCha20-Poly1305 under a random 24-byte nonce, with the record's key as associated data.
@@ -304,6 +310,88 @@ flowchart LR
   - Onboarding (create or restore) runs in a full tab: from the side panel, Create and Restore open one.
   - It needs the `sidePanel` permission, and Chrome 116 (`runtime.getContexts`).
 
+## dApp connector
+
+**Built in chunk 15 for the public account, and in chunk 15c for private sessions.** The plans are [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md) and [plans/chunk-15c-private-cip30.md](plans/chunk-15c-private-cip30.md).
+
+```mermaid
+flowchart LR
+  subgraph Tab["A site's page (top frame)"]
+    P["cip30-page.js<br/>window.cardano.seedelf"] -- "postMessage" --> B["cip30-bridge.js<br/>(isolated world)"]
+  end
+  B -- "port seedelf.cip30<br/>(origin from Chrome)" --> D["dapp.ts"]
+  D -- "approvals" --> W["The connector's window<br/>(?view=dapp)"]
+  D -- "inspectDappTx, signDappTx,<br/>signDappData" --> X["WebAssembly (cip30.rs)"]
+  D -- "reads, utxo_info, submittx" --> K["Koios"]
+```
+
+- **The switch** (`dappConnector` in the settings) is off by default.
+  - Settings asks Chrome for the sites from the switch's click, because Chrome only asks then. The worker then registers the two content scripts (`connector.ts`).
+  - Off, they're unregistered. **Chrome's access to sites is kept:** `chrome.permissions.remove` of `https://*/*` also takes every https host under it, Koios's and giveme.my's included (found on 2026-09-25), and the wallet can't read Koios without that grant (see *Koios's public tier* above). Chrome's own settings taking it away turns the connector off too.
+  - The worker applies it again whenever the extension starts.
+- **Content scripts** (`src/content/`): each is one file with nothing imported at run time, built as an IIFE by a plugin in `vite.config.ts`, because Chrome runs content scripts as classic scripts.
+  - `cip30-page.js` defines only `window.cardano.seedelf`, and never replaces an existing entry.
+  - `cip30-bridge.js` takes the page's calls (only from the same window and origin), sends them on a port, and pings every 20 s while one waits.
+  - Both run on top frames only.
+- **The worker** (`dapp.ts`) checks each port: this extension, a tab, the top frame, and an https origin or localhost's. The origin is `sender.origin`, never the page's word.
+  - Connected sites are the sealed `dapps` record.
+  - What sites wait for is kept in memory: a restarted worker has lost the ports too.
+  - Locked: `isEnabled` answers false. Anything else waits for an unlock in the window.
+- **Reads** come from `readAccountUtxos` (two requests), kept 30 s.
+  - They leave out what's locked and the collateral, and add what sent transactions return that isn't on chain yet.
+  - `getCollateral` is the set-aside 5 ₳ UTxO, or null.
+- **Signing** is WebAssembly's: `inspectDappTx` for the prompt, `signDappTx` once approved. Both get the same request: the transaction, the account's key paths, and the UTxOs it spends as far as the worker could find them (the account, then its signed transactions' outputs, then Koios `utxo_info`).
+  - The Rust side decides ownership by payment key hash, and which keys sign: inputs, collateral, required signers, stake certificates and withdrawals.
+  - It refuses the other network, a collateral return to someone else, and a transaction marked to fail its scripts.
+- **The window** (`dapp-window.ts`, `screens/DappApprovals.tsx`): a popup, one at a time. Closing it declines everything, and it closes itself once nothing's left.
+- **Private CIP-30** (chunk 15c): a connected site's record may name a private session (`session: i`). Each call resolves whom the site talks to, the public account or session `i`, and every path branches on it:
+  - **Reading:** the session's one address, its UTxOs from `SessionService.accountUtxos`, its reward address (`OneTimeAccounts.rewardAddress`, stake key `2/i`), and the funding's pure 5 ₳ UTxO as its collateral, kept out of `getUtxos`. The reading and the signed outputs kept for chaining are stored per account (`…:i`).
+  - **Signing:** `inspectSessionTx`/`signSessionTx` and `sessionDataSigner`/`signSessionData`, with `stakeIndex: i` so the session's own stake key counts as its own. The prompt says "Your private session".
+  - **Connecting:**
+    - The connect window offers a private session. `dapp-private-build` builds its funding (`siteOutBuild`, Make public's builder). `dapp-answer` with `fund` sends it (`siteOutSubmit`, recorded first) and records the site with the session.
+    - The request is then marked `funding`, and the worker reads the account every 10 s until the money is there. Only then does `enable()` answer.
+    - A window closed meanwhile doesn't decline it: the payment is sent.
+  - **Managing:** the dApps page's *Sites*: Top up (`topUpBuild`/`topUpSubmit`), Bring it back (the session return), and Disconnect (`disconnectSession`: the account must be empty, and the site's record goes). A site's session doesn't close at its return, only at its disconnect: something still open at the site may pay the account later.
+- **Bring everything back** (`claimBuild`/`claimSubmit`, `screens/ClaimAll.tsx`): every session that holds something and isn't a swap that runs itself, with no order waiting, comes back in one go.
+  - Each session's return is its own transaction, signed by its own key, never one spending several sessions' UTxOs: that would show on chain that they share an owner.
+  - They're built up front, for a review where any can be left out, then sent one after another; one that fails doesn't stop the rest.
+  - The dApps page reads the sessions' accounts when it opens (one Koios request for all of them), so it knows what they hold.
+- **The password at Sign** (the `dappPassword` setting, on by default): a site's `signTx` or `signData` is signed only once the password typed in the window checks out (`Wallet.checkPassword`), even while unlocked and even right after an unlock. A wrong one leaves the request waiting, tells the site nothing, and counts towards the unlock back-off. Only the wallet's own pages can answer a request: the worker refuses messages from anywhere else.
+
+## Private sessions
+
+Chunk 15, step 2: a swap through Minswap's aggregator, run from a one-time account funded from the private balance and brought back into it. Since chunk 15b it runs itself after one approval. It's reached from the dApp browser (`screens/Dapps.tsx`: Home's **dApps** row, a grid of tiles, Minswap's opening `screens/Swaps.tsx`). The flow is in [flows.md](flows.md#contract-round-trip).
+
+```mermaid
+flowchart LR
+  UI["dApps → Minswap<br/>(Swaps.tsx)"] -- "sessions, swap-quote, session-out,<br/>session-advance/stop/resume" --> S["sessions.ts"]
+  A["chrome.alarms<br/>seedelf.sessions, unlock"] -- "runAll" --> S
+  S -- "estimate, build-tx,<br/>pending-orders, cancel-tx" --> M["Minswap's aggregator"]
+  S -- "credential_utxos, tx_status,<br/>utxo_info, submittx" --> K["Koios"]
+  S -- "draftWithdraw/finishWithdraw (out),<br/>inspectSessionTx, signSessionTx,<br/>attachWitnesses, buildSessionReturn" --> X["WebAssembly"]
+```
+
+- **The accounts** (WebAssembly's `OneTimeAccounts`, a type of its own so nothing that pays the public account can be handed these keys): account `24301'` (`seedelf_crypto::cardano::ONE_TIME_ACCOUNT`), payment key `0/i` and stake key `2/i` for session `i`, both its own (`api::one_time_address`; never registered). Sessions recorded before chunk 15b have the shared Seedelf staking part instead (`sharedStakeAddress`, `address::dapp_address`), and keep it: the record's `ownStake` says which. Session 0's key hash and both its addresses, for the 12-word test phrase, are pinned in `wasm/tests/session_test.rs`, checked with `cardano-address`.
+- **The record** is the sealed `sessions.<network>`: the next index, and each session's index, its transactions (funding, swap, cancels, return) with whether the chain has them, and its swap as quoted, with how its two tokens are shown.
+  - A session is recorded before its funding is sent, and the index moves on then, so no account is used twice even when a send fails.
+  - A session's stage is worked out when it's read: funding, open, returning, closed (brought back, confirmed, and the account empty), or failed (the funding never reached the chain).
+- **Out** is Make public's builder (`draftWithdraw`/`finishWithdraw`): two payments to the account, the swap with its costs (Minswap's DEX fee and deposits, plus 2 ₳ of room, `SWAP_MARGIN`) and 5 ₳ of collateral (`SESSION_COLLATERAL`).
+- **The swap** is Minswap's (`build-tx` takes only a sender): the worker checks that its inputs are all the session's, then WebAssembly reads it with the connector's code (`cip30::inspect_tx`) against the session's one key path. `refuseOddities` in `sessions.ts` refuses one that isn't complete with that key alone, spends what the wallet can't find, touches staking or governance, or mints.
+  - `signSessionTx` gives the vkey witness; `attachWitnesses` (`cip30::attach_witnesses`) splices it into Minswap's witness set, copying the body and the other entries byte for byte, so the id is unchanged and the order's datum still hashes to what the order names. Checked on a real preprod swap Minswap built (`wasm/tests/fixtures/minswap-swap-preprod.json`).
+  - A connector summary's `scripts` is now redeemers only: a script data hash alone covers witness-set datums, as an order's, and runs nothing.
+- **The cancel** is the same with Minswap's `cancel-tx`: its inputs are the orders (read from Koios `utxo_info`) and the account's collateral.
+- **Back** is `buildSessionReturn`: every UTxO at the account into the contract under fresh registers (`build::external_sweep`, the CLI's external sweep), signed by the session's key. The worker refuses it while Minswap lists an order of a session that placed one.
+- **The runner** (chunk 15b). Sending the funding is the one approval: the record gains `auto` (the approved `minAmountOut` and `fund`). `SessionService.advance` takes whatever step is next from the record and the chain, so it's safe to call any number of times:
+  - **Who calls it:** the session's page every 20 s (and its Refresh, which skips the wait), the `seedelf.sessions` alarm every minute while a swap runs and the wallet is unlocked (`runAll`, which stops the alarm once nothing runs), and unlocking (the wallet's `changed`). Locked, it does nothing and the alarm stops until unlock. One promise queue in the service takes every step, the runner's and the user's, one at a time.
+  - **The steps:** wait for what was sent to confirm (`tx_status`); then place the order, wait for the fill, and bring it all back. A fill is something arriving from a transaction the session didn't make while Minswap lists no order; an empty list alone can be Minswap lagging behind.
+  - **What it signs by itself:** the session's UTxOs only, its key alone (`refuseOddities`), no more paid out, fee included, than was funded for the swap (`withinFunding`), and an order for at least the approved minimum: the order's minimum is the higher of the fresh quote's and the approved one. A fresh quote expecting less than that pauses (`paused.why: "price"`), and a failed check pauses (`"refused"`). A failure (Koios, Minswap's 429) waits 30 s, doubling to five minutes, and tries again; the timeline says why, in plain words, with Try now.
+  - **Every transaction is recorded before it's submitted** (`sending`, then `unsent` if Koios refused it). One Koios never took, and the chain hasn't got, is built again after 2 minutes; one the chain still hasn't seen, after 15. Its inputs are the session's, so the ledger lets only one land. A funding the chain never saw is marked failed after 20 minutes (2 when giveme.my or Koios refused it).
+  - **Stop** (the user's, never the runner's): an order that waits is cancelled (Minswap's `cancel-tx`, refused if it pays anyone but the session), then everything comes back. Before any order, it just comes back.
+  - **Home's banner** watches only the funding, a spend of the private balance. The swap, a cancel and the return are watched on the session's page; a confirmed return drops the kept balances so Home reads them fresh.
+- **What each costs:** reading the sessions is one Koios `credential_utxos` for every open session's key hash, and one `tx_status` for the transactions waiting, only when Minswap's screen reads. A running swap reads its chain at most every 15 s unless the user refreshes: one `tx_status` while something waits to confirm, else one `credential_utxos`, plus Minswap's `pending-orders` once its order is on chain. About 10–20 requests a swap, and nothing while none runs. The form asks Minswap's `estimate` once typing pauses (0.6 s) after each change of the amount, the pair or the slippage, never on every key, and its token search asks `tokens` the same way (0.4 s); a quote over a minute old is asked for once more before the funding. Placing the order costs two Minswap requests (`estimate`, `build-tx`) and one Koios read of the account.
+- **Routing is through DEXes that take orders only.** Some DEXes on Minswap's routes swap straight against their pools in the same transaction: it spends the pools' UTxOs, runs their scripts, and uses someone else's collateral. A session signs only what spends nothing but its own UTxOs, so every `estimate` and `build-tx` asks Minswap to leave them out (`exclude_protocols`, `DIRECT_PROTOCOLS` in `minswap.ts`: DanogoCLMMV1, ChakraBondingCurve, OpenDjedV1). The session's check stays as the backstop: any other DEX that does it pauses the swap. Allowing such swaps (checking the pools' script inputs, the other collateral and the session's net change) is a later step.
+- **Minswap's aggregator** answers browsers with CORS headers, so the manifest only lists it in the pages' `connect-src` (`networks.ts` `corsOrigins`): no host permission, no new warning at install. If it ever stops, it'll need an optional host permission.
+
 ## What we borrow from Lace
 
 Paths are relative to a `lace-extension@2.4.0` checkout (see the [README](../README.md#reference-lace)).
@@ -317,7 +405,7 @@ Paths are relative to a `lace-extension@2.4.0` checkout (see the [README](../REA
 | Lock state machine and inactivity timer | `packages/contract/app-lock/src/store/` | Pattern |
 | Unlock back-off | `packages/contract/authentication-prompt/src/store/unlock-backoff.ts` | Pattern |
 | MV3 manifest and CSP | `apps/lace-extension/assets/manifest.json` | Pattern |
-| CIP-30 injection (round-trip phase) | `apps/lace-extension/src/content-scripts/`, `packages/lib/dapp-connector/`, `packages/module/dapp-connector-cardano/` | Pattern |
+| CIP-30 connector (chunk 15) | `apps/lace-extension/src/content-scripts/`, `packages/lib/dapp-connector/`, `packages/module/dapp-connector-cardano/` | Pattern: a page script and a bridge, the origin from Chrome, pings while a prompt waits, a popup window, the collateral rules, chaining. Not its manifest content scripts on every page: ours are registered only while the user has the connector on. |
 | Keeping existing vkey witnesses intact | `packages/module/blockchain-cardano/src/tx-executor-implementation/merge-pre-existing-vkeys.ts` | Reference |
 
 We don't take Lace's contracts, modules or feature-flag framework, its host/guest shell, its analytics (PostHog, Sentry), or anything for Bitcoin or Midnight.

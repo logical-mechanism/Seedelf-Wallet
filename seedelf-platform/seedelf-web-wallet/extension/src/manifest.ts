@@ -1,6 +1,7 @@
 // Builds manifest.json at build time (see vite.config.ts).
 
-import { enabledNetworks, networkOrigins } from "./networks.ts";
+import { corsOrigins, enabledNetworks, networkOrigins, serviceHosts } from "./networks.ts";
+import { DAPP_ORIGINS } from "./shared/dapp.ts";
 
 /**
  * Public half of a throwaway RSA key. It pins the extension ID of unpacked
@@ -21,7 +22,8 @@ export interface ManifestOptions {
 }
 
 export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestOptions) {
-  const origins = networkOrigins(enabledNetworks(mainnetEnabled));
+  const networks = enabledNetworks(mainnetEnabled);
+  const origins = networkOrigins(networks);
   return {
     manifest_version: 3,
     name: mainnetEnabled ? "Seedelf Wallet" : "Seedelf Wallet (preprod)",
@@ -45,20 +47,27 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
       type: "module",
     },
     // storage: the vault and the unlocked session; alarms: auto-lock;
-    // sidePanel: the wallet in Chrome's side panel, when the user chooses it.
-    permissions: ["storage", "alarms", "sidePanel"],
+    // sidePanel: the wallet in Chrome's side panel, when the user chooses it;
+    // scripting: the dApp connector's content scripts, registered only while
+    // the user has it on (shared/dapp.ts).
+    permissions: ["storage", "alarms", "sidePanel", "scripting"],
     // runtime.getContexts, which finds the wallet's open tab.
     minimum_chrome_version: "116",
-    host_permissions: origins.map((o) => `${o}/*`),
+    host_permissions: serviceHosts(networks),
+    // Asked for only when the user turns the dApp connector on: nothing is
+    // added to any page until then. Kept when it's turned off: taking back
+    // `https://*/*` would take the hosts above too (background/connector.ts).
+    optional_host_permissions: DAPP_ORIGINS,
     // WebAssembly needs 'wasm-unsafe-eval'; connect-src limits network access
-    // to the extension itself and the wallet's own services. Fonts and images
+    // to the extension itself, the wallet's own services, and Minswap's
+    // aggregator for swaps in private sessions. Fonts and images
     // ship inside the extension.
     content_security_policy: {
       extension_pages: [
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval'",
         "object-src 'none'",
-        `connect-src 'self' ${origins.join(" ")}`,
+        `connect-src 'self' ${[...origins, ...corsOrigins(networks)].join(" ")}`,
         "style-src 'self'",
         "img-src 'self' data:",
         "font-src 'self'",

@@ -13,6 +13,7 @@ flowchart LR
   S -- "make public" --> Addr["Any address"]
   S -- "out" --> OT["One-time account"]
   OT -- "CIP-30" --> D["dApp"]
+  Dep -- "CIP-30 (chunk 15)" --> D
   D -. "proceeds" .-> OT
   OT -- "auto-return" --> S
 ```
@@ -309,20 +310,55 @@ Details:
 - The burn policy only checks the policy ID and the `5eed0e1f` prefix. The CLI's `remove` still pays any address (`--address`); the web wallet offers the account or the Seedelf balance.
 - The CLI's `sweep --all` takes the first 20 owned UTxOs, and the web wallet's Max takes the 20 largest.
 
+## Connect a site (public account)
+
+CIP-30 for the public account, as Lace offers it (chunk 15). The design is in [architecture.md](architecture.md#dapp-connector); the plan, with the private steps after it, in [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md).
+
+1. **Turn it on:** Settings → *Sites* → **Let sites connect to Seedelf Wallet**. Each site then gets the public account or a private session, chosen in the connect window (see *Any site* below). Chrome asks to let the wallet onto https sites; only then are its two scripts added to pages. Off (the default), sites can't see the wallet.
+2. **Connect:** a site's **Connect wallet** lists Seedelf Wallet (when the site lists every CIP-30 wallet). Its `enable()` opens the connector's window: the site's address as Chrome reports it, what it will see (the public account's addresses, balance and UTxOs), and that it never sees the private balance. **Connect** or **Cancel**.
+3. **Use it:** reads need no window. A transaction or a message to sign opens the window:
+   - **A transaction:** what it does to the public account (it sends or it gets, each token that moves), the fee, who it pays (a contract, Seedelf Wallet's contract with or without a register, an address), the collateral at risk, any staking change, minting, a note, whether it runs contracts, and which keys sign. **Sign** or **Decline**.
+   - **A message** (CIP-8): the address, which key signs, and the message as text, or hex when it isn't text. Signing moves no money.
+   - A transaction that needs someone else's signature, when the site didn't ask for a partial one, or one that would hand the collateral to someone else, is refused before the window opens.
+4. **Locked:** the window asks for the password first. Closing it refuses the site, which then can't reopen it for a minute.
+5. **Disconnect:** Settings → *Connected sites* lists them, each with **Disconnect**. The list is sealed on the device.
+
+The account's own outputs of a transaction it signed are kept, so a site can build its next transaction on them before they're on chain. A site's `submitTx` goes through Koios, as the wallet's own sends do.
+
 ## Contract round trip
 
-This comes in the phase after v1. The idea: take money out of Seedelf to use a contract, then have what comes back returned automatically.
+Money leaves Seedelf to use a contract, then comes back: a **private session** on a one-time account (account `24301'`, payment key `0/i` and its own stake key `2/i`). The plan is [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md), with the user's two designs (a round trip through a new account, or straight from Seedelf with giveme.my's collateral) and when each fits. The first built use is a swap through Minswap's aggregator (route A1).
 
-1. **Out:**
-   - Make a Seedelf spend to a fresh one-time account.
-   - Wait about one block before connecting. Many dApps look up inputs and run script checks against their own backend, which can't see unconfirmed outputs.
-2. **Use:**
-   - The dApp connects over CIP-30 and sees an ordinary wallet: that one account and nothing else.
-   - The wallet shows its own signing prompt for each transaction.
-3. **Back (auto-return):**
-   - The wallet watches the one-time account.
-   - Anything that lands there is paid into the contract under a freshly re-randomized own register, the same as move-in: no script, no collateral.
-   - This covers both kinds of dApp:
-     - **One-shot dApps:** the wallet signed the dApp transaction, so it already knows the change output. It can submit the return right behind it.
-     - **Async dApps** (for example DEX orders filled later by batchers): proceeds arrive blocks later, and the watcher catches them.
-4. **Retire:** once the account is empty and the session ends, it is never used again.
+### A private swap (built in chunk 15, runs itself since 15b)
+
+Home's Private tab → **dApps**, a grid of the dApps the wallet uses privately → **Minswap**: its swaps, newest first, each with where it's at, and **New swap**. While a swap runs, Home's Private tab shows a **Swap in progress** row that opens it, and Minswap's tile says how many run.
+
+1. **New swap**, in Minswap's shape: a **You pay** card over a **You receive** card, each a big amount beside its token, with a round **Switch** between them that swaps the two sides.
+   - **You pay:** ADA or a token in the private balance, with what's held under it, and **Half** and **Max**. ADA's Max leaves the swap's costs, the collateral and 1 ₳ for the fee.
+   - **You receive:** any token Minswap lists, picked from what's held or searched on Minswap's list (which then knows what was searched for).
+   - **The quote:** it comes in as you type, asked once typing pauses for 0.6 s, since Minswap limits how often it's asked. What you receive fills in, with the rate under the cards; tap the rate to turn it round. Its details show the minimum received, the price impact (amber from 3%, red from 5%, with a warning), the slippage, the route (through DEXes that take orders only: one that swaps against its pools would spend UTxOs that aren't the session's), the DEX's fee, and the order's deposit (back with the proceeds). The refresh button asks again.
+   - **Slippage:** the sliders button at the top. It offers 0.5, 1 or 3%, or your own from 0.1% to 20%, with a warning from 5%.
+   - **The button** says what's missing (Select a token, Enter an amount, Not enough ADA), then **Review swap**. A quote over a minute old is asked for again before the funding is built on it.
+2. **Review the swap:** what you pay and receive about, at least, the price impact and the route. Then the funding, the three transactions, each with its fee, and Send.
+3. **The funding** (Send, the one approval): a Seedelf spend with giveme.my's collateral, paying the session's account twice: the swap with its costs and 2 ₳ of room, and 5 ₳ as the account's own collateral. The change goes back into the private balance. The session is recorded before it's sent, so its account is never used twice, even if the send fails. Home's banner watches this payment; the user lands on the swap's own page.
+4. **From here it runs itself,** on a timeline of four steps: **Funded**, **Order placed**, **Filled**, **Back in your private balance**. Each shows waiting, done (with its transaction on Cardanoscan) or paused, and a line under them says what's happening in plain words. The page checks every 20 s (Refresh checks now); with the page closed, the worker checks once a minute while the wallet is unlocked.
+   - **The order**, once the funding is on chain: a fresh quote and Minswap's swap for the account (Minswap picks the account's UTxOs itself, so it waits for the funding). WebAssembly reads it against the session's key alone; the key signs it, the signature goes in without changing a byte of Minswap's transaction, and Koios submits it. It's placed only within what was approved: the session's UTxOs, its key alone, no more paid out than was funded, and at least the approved minimum. Anything else **pauses** and says why, with **Try again** and **Review it myself** (the order's review, as a button used to give).
+   - **Filled:** a DEX's batchers pay the proceeds to the account, usually within a few blocks. It waits as long as it takes: the wallet never cancels an order by itself.
+   - **Back:** everything at the account into the private balance, under fresh registers, signed by the session's key, with no script and no collateral. Once it's on chain and the account is empty, the swap is done, and **the whole card turns the success colour**. The account is never used again.
+5. **Stop**, there the whole time a swap runs, is always the user's: one confirmation, then an order that waits is cancelled (built by Minswap, read and signed the same way; the refund comes back to the account) and everything comes back. Before any order, everything just comes back.
+
+**Pause and resume at any point:** locked, the swap waits, and unlocking carries on. A closed browser, a restarted worker, or a wallet opened hours later all carry on from what's stored and on chain. A failure (Koios down, Minswap's rate limit) turns the step amber and says what's wrong and when it tries again (30 s, doubling to five minutes), with **Try now**. The auto-lock setting doesn't change for a swap.
+
+**If a session stalls,** everything is recoverable from the phrase: money left in the account comes back; an order that never fills is stopped, then brought back. A session whose funding never reached the chain shows so, and can be forgotten (its index isn't reused). Sessions from before swaps ran themselves keep their buttons (Place the order, Cancel the order, Bring it back). After a restore on another device, a scan of the one-time accounts (not built yet) finds what's left: see the plan's *Recovery*.
+
+### Any site (private CIP-30, chunk 15c)
+
+The same session, offered to a site over CIP-30 instead of the public account. The plan is [plans/chunk-15c-private-cip30.md](plans/chunk-15c-private-cip30.md).
+
+1. **Connect:** the site's `enable()` opens the connector's window. **A private session** asks what to put in it (ADA, and tokens), and the funding's review shows it with 5 ₳ of collateral. **Send** needs the password when *Ask for your password to sign for a site* is on.
+2. **Out:** a Seedelf spend to a fresh one-time account, with giveme.my's collateral. The window waits until Koios sees the money (about a minute), then `enable()` answers, so the site's first reading already shows it. Closing the window doesn't undo the payment.
+3. **Use:** the site sees an ordinary wallet: that account, its reward address and its 5 ₳ collateral, and nothing else. Each transaction and message gets the window's prompt, signed with the session's keys.
+4. **Top up and Bring it back** from the dApps page's *Sites*. Bringing it back leaves the site connected, to an empty account, because something still open at the site (a listing, an order) may pay it later.
+5. **Disconnect** ends the session, once the account is empty. It is never used again, and the site's next connect asks again.
+
+**Bring everything back** (the dApps page, when sessions hold money): every site's session, and every older swap brought back by hand, with nothing on its way, back into the private balance in one go. Each comes back in its own transaction, sent one after another. The review lists them, with the total and the fees, and a tap leaves one out: a site still in use, say.

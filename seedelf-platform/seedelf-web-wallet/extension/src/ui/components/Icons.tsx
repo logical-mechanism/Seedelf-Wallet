@@ -257,6 +257,50 @@ export const SearchIcon = icon(
 /** chevron-right */
 export const ChevronRightIcon = icon(<path d="m9 18 6-6-6-6" />);
 
+/** chevron-down */
+export const ChevronDownIcon = icon(<path d="m6 9 6 6 6-6" />);
+
+/** arrow-down */
+export const ArrowDownIcon = icon(
+  <>
+    <path d="M12 5v14" />
+    <path d="m19 12-7 7-7-7" />
+  </>,
+);
+
+/** wallet */
+export const WalletIcon = icon(
+  <>
+    <path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1" />
+    <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
+  </>,
+);
+
+/** layout-grid */
+export const GridIcon = icon(
+  <>
+    <rect width="7" height="7" x="3" y="3" rx="1" />
+    <rect width="7" height="7" x="14" y="3" rx="1" />
+    <rect width="7" height="7" x="14" y="14" rx="1" />
+    <rect width="7" height="7" x="3" y="14" rx="1" />
+  </>,
+);
+
+/** sliders-horizontal */
+export const SlidersIcon = icon(
+  <>
+    <path d="M10 5H3" />
+    <path d="M12 19H3" />
+    <path d="M14 3v4" />
+    <path d="M16 17v4" />
+    <path d="M21 12h-9" />
+    <path d="M21 19h-5" />
+    <path d="M21 5h-7" />
+    <path d="M8 10v4" />
+    <path d="M8 12H3" />
+  </>,
+);
+
 /** lock-open */
 export const LockOpenIcon = icon(
   <>
@@ -308,5 +352,34 @@ export const LandmarkIcon = icon(
     <path d="M18 18v-7" />
     <path d="M3 22h18" />
     <path d="M6 18v-7" />
+  </>,
+);
+
+/** plug */
+export const PlugIcon = icon(
+  <>
+    <path d="M12 22v-5" />
+    <path d="M15 8V2" />
+    <path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z" />
+    <path d="M9 8V2" />
+  </>,
+);
+
+/** globe */
+export const GlobeIcon = icon(
+  <>
+    <circle cx="12" cy="12" r="10" />
+    <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+    <path d="M2 12h20" />
+  </>,
+);
+
+/** arrow-left-right */
+export const SwapIcon = icon(
+  <>
+    <path d="M8 3 4 7l4 4" />
+    <path d="M4 7h16" />
+    <path d="m16 21 4-4-4-4" />
+    <path d="M20 17H4" />
   </>,
 );

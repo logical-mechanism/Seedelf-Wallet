@@ -23,6 +23,8 @@ export interface KoiosUtxo {
   /** Unix seconds of the block that made it. */
   block_time?: number;
   inline_datum: { bytes: string; value: unknown } | null;
+  /** A datum by hash (older outputs); only the dApp connector reads it. */
+  datum_hash?: string | null;
   asset_list: KoiosAsset[] | null;
 }
 
@@ -140,10 +142,31 @@ const TIMEOUT_MS = 20_000;
  */
 export const CREDENTIALS_PER_REQUEST = 75;
 
+/** Outpoints in one `utxo_info` request: each is about 70 bytes, under the same 5,120-byte cap. */
+export const REFS_PER_REQUEST = 60;
+
 export class KoiosError extends Error {}
 
 /** The network refused a transaction because an input it spends is already spent. */
 export class SpentInputError extends KoiosError {}
+
+/**
+ * Whether Chrome lets the wallet reach `url`'s host. Koios's public tier sends
+ * browsers no CORS headers, so the wallet reads it only through the manifest's
+ * host permission. Without the grant (the user limited the wallet's site
+ * access in Chrome), a request fails like a lost connection. Outside an
+ * extension, as in tests, the answer is yes.
+ */
+export type HostCheck = (url: string) => Promise<boolean>;
+
+const chromeAllows: HostCheck = async (url) => {
+  if (typeof chrome === "undefined" || !chrome.permissions) return true;
+  return chrome.permissions.contains({ origins: [`${new URL(url).origin}/*`] }).catch(() => true);
+};
+
+/** Retrying can't help, and the wallet's page offers to ask Chrome again (App.tsx). */
+export const KOIOS_NOT_ALLOWED =
+  "Chrome isn't letting Seedelf Wallet reach Koios, where it reads Cardano. Press Ask Chrome again, at the top of the wallet, and allow it.";
 
 /** A request that never got an answer: offline, or blocked on the way. */
 function unreachable(e: unknown): string {
@@ -190,6 +213,7 @@ export class Koios {
     private readonly base: string,
     private readonly fetchFn: FetchLike = (url, init) => fetch(url, init),
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+    private readonly allowed: HostCheck = chromeAllows,
   ) {}
 
   /**
@@ -203,6 +227,19 @@ export class Koios {
     for (let i = 0; i < credentials.length; i += CREDENTIALS_PER_REQUEST) {
       const body = { _payment_credentials: credentials.slice(i, i + CREDENTIALS_PER_REQUEST), _extended: true };
       rows.push(...(await this.paged<KoiosUtxo>("credential_utxos", body, filter)));
+    }
+    return rows;
+  }
+
+  /**
+   * The UTxOs asked for (`txhash#index`), spent or not, with their address
+   * and value: for the dApp connector, the inputs of a dApp's transaction
+   * that aren't the account's. At most `REFS_PER_REQUEST` go in a request.
+   */
+  async utxoInfo(refs: string[]): Promise<KoiosUtxo[]> {
+    const rows: KoiosUtxo[] = [];
+    for (let i = 0; i < refs.length; i += REFS_PER_REQUEST) {
+      rows.push(...(await this.post<KoiosUtxo>("utxo_info", { _utxo_refs: refs.slice(i, i + REFS_PER_REQUEST), _extended: true })));
     }
     return rows;
   }
@@ -326,7 +363,7 @@ export class Koios {
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (e) {
-        throw new KoiosError(unreachable(e));
+        throw new KoiosError((await this.allowed(this.base)) ? unreachable(e) : KOIOS_NOT_ALLOWED);
       }
       text = await response.text();
       // Found live: a Koios backend whose own node was down answered. The
@@ -418,6 +455,7 @@ export class Koios {
         if (response.ok || (answer400 && response.status === 400)) return (await response.json()) as R;
         failure = koiosTrouble(response.status, path);
       } catch (e) {
+        if (!(await this.allowed(url))) throw new KoiosError(KOIOS_NOT_ALLOWED);
         failure = unreachable(e);
       }
       const retryable = !response || response.status === 429 || response.status >= 500;

@@ -2,13 +2,14 @@
 // with the built extension, a fake Koios and giveme.my over the recorded
 // preprod fixtures, and the steps most tests start with.
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { test as base, chromium, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
+import { DAPP_ORIGINS } from "../src/shared/dapp";
 import { txIdOf } from "../tests/fixtures/cbor";
 
 export { expect };
@@ -71,6 +72,9 @@ export const transferPreprod = fixture("transfer-preprod.json");
 export const withdrawPreprod = fixture("withdraw-preprod.json");
 export const activityPreprod = fixture("activity-preprod.json");
 export const stakingPreprod = fixture("staking-preprod.json");
+export const minswapEstimate = fixture("minswap-estimate-preprod.json");
+/** Session 0 of the 12-word phrase, its UTxO, and a swap from it (wasm/tests/session_test.rs). */
+export const sessionSwap = fixture("session-swap.json");
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -95,6 +99,20 @@ export interface KoiosFake {
   nfts: Map<string, string>;
   /** Each stake key's account_info, by stake address: the recorded 12-word account's to begin with. */
   stakes: Map<string, Record<string, unknown>>;
+  /** UTxOs under other payment keys, as credential_utxos finds them: a private session's, say. */
+  addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
+}
+
+/** Minswap's aggregator, for swaps in private sessions. */
+export interface MinswapFake {
+  calls: Array<{ path: string; body: any }>;
+  /** Its token list, searched by ticker. */
+  tokens: Array<Record<string, unknown>>;
+  estimate: unknown;
+  swapCbor: string;
+  orders: unknown[];
+  /** While set, quotes and builds answer 429, as Minswap's rate limit does. */
+  limited?: boolean;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
@@ -159,9 +177,12 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const after = Number(/gt\.(\d+)/.exec(new URL(request.url()).searchParams.get("block_height") ?? "")?.[1] ?? -1);
     // credential_utxos: the wallet contract's, or the accounts' by payment key.
     const credentials: string[] = body?._payment_credentials ?? [];
-    const byKey = Object.values(koiosPreprod.accounts as Record<string, { account_utxos: Array<{ payment_cred: string }> }>)
-      .flatMap((a) => a.account_utxos)
-      .filter((u) => credentials.includes(u.payment_cred));
+    const byKey = [
+      ...Object.values(koiosPreprod.accounts as Record<string, { account_utxos: Array<{ payment_cred: string }> }>).flatMap(
+        (a) => a.account_utxos,
+      ),
+      ...koios.addedToAccounts,
+    ].filter((u) => credentials.includes(u.payment_cred));
     const rows =
       path === "credential_utxos"
         ? credentials.includes(koiosPreprod.wallet_contract)
@@ -182,14 +203,59 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     });
   });
   // Nothing else leaves the browser.
-  await context.route(/^https?:\/\/(?!preprod\.koios\.rest|www\.giveme\.my\/preprod\/collateral\/$)/, (route) =>
-    route.abort(),
+  await context.route(
+    /^https?:\/\/(?!preprod\.koios\.rest|www\.giveme\.my\/preprod\/collateral\/$|aggr\.monorepo-testnet-preprod\.minswap\.org)/,
+    (route) => route.abort(),
   );
 }
 
-export const test = base.extend<{ scale: number; userDataDir: string; koios: KoiosFake; context: BrowserContext }>({
+async function fakeMinswap(context: BrowserContext, swaps: MinswapFake) {
+  await context.route("https://aggr.monorepo-testnet-preprod.minswap.org/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.split("/").pop()!;
+    const body = request.method() === "POST" ? request.postDataJSON() : null;
+    swaps.calls.push({ path, body });
+    const answer = (value: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
+    if (path === "tokens") {
+      const q = String(body.query).toLowerCase();
+      return answer({ tokens: swaps.tokens.filter((t) => String(t.ticker).toLowerCase().includes(q)), search_after: [] });
+    }
+    if (swaps.limited && (path === "estimate" || path === "build-tx")) {
+      return route.fulfill({ status: 429, body: "Rate limit exceeded, retry in 50 seconds" });
+    }
+    if (path === "estimate") return answer(swaps.estimate);
+    if (path === "build-tx") return answer({ cbor: swaps.swapCbor });
+    if (path === "pending-orders") return answer({ orders: swaps.orders, amount_in_decimal: false });
+    return route.fulfill({ status: 404, body: "" });
+  });
+}
+
+/**
+ * A copy of the build that Chrome lets onto sites from install: the dApp
+ * connector's optional host permissions made required. Chrome asks the user
+ * for them in a dialog of its own, which automation can't answer, so the
+ * connector's tests start past it; everything after it is the real build.
+ */
+function withSiteAccess(extension: string, into: string): string {
+  cpSync(extension, into, { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(into, "manifest.json"), "utf8"));
+  manifest.host_permissions = [...manifest.host_permissions, ...DAPP_ORIGINS];
+  writeFileSync(join(into, "manifest.json"), JSON.stringify(manifest, null, 2));
+  return into;
+}
+
+export const test = base.extend<{
+  scale: number;
+  siteAccess: boolean;
+  userDataDir: string;
+  koios: KoiosFake;
+  swaps: MinswapFake;
+  context: BrowserContext;
+}>({
   /** The device scale factor: 2 for the store images. */
   scale: [1, { option: true }],
+  /** Chrome's access to sites granted from install, for the dApp connector's tests. */
+  siteAccess: [false, { option: true }],
   userDataDir: async ({}, use) => {
     const dir = mkdtempSync(join(tmpdir(), "seedelf-e2e-"));
     await use(dir);
@@ -206,15 +272,52 @@ export const test = base.extend<{ scale: number; userDataDir: string; koios: Koi
       evaluation: mintPreprod.evaluation,
       nfts: new Map(),
       stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
+      addedToAccounts: [],
     });
   },
-  context: async ({ scale, userDataDir, koios }, use) => {
-    const context = await launch(userDataDir, { scale });
+  swaps: async ({}, use) => {
+    await use({
+      calls: [],
+      tokens: [
+        {
+          token_id: minswapEstimate.ask.tokenOut,
+          ticker: "MIN",
+          project_name: "Minswap",
+          decimals: 6,
+          is_verified: true,
+          logo: null,
+          price_by_ada: null,
+        },
+      ],
+      estimate: minswapEstimate.estimate,
+      swapCbor: sessionSwap.swapCbor,
+      orders: [],
+    });
+  },
+  context: async ({ scale, siteAccess, userDataDir, koios, swaps }, use) => {
+    const extension = siteAccess ? withSiteAccess(dist, `${userDataDir}-extension`) : dist;
+    const context = await launch(userDataDir, { scale, extension });
     await fakeKoios(context, koios);
+    await fakeMinswap(context, swaps);
     await use(context);
     await context.close();
+    if (siteAccess) rmSync(extension, { recursive: true, force: true });
   },
 });
+
+/** A dApp's page, served at https://dapp.example/ (the only site the tests reach). */
+export async function openDapp(context: BrowserContext): Promise<Page> {
+  await context.route("https://dapp.example/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!doctype html><title>Test dApp</title><p>A dApp</p>",
+    }),
+  );
+  const page = await context.newPage();
+  await page.goto("https://dapp.example/");
+  return page;
+}
 
 /** The app in a full tab, or narrow as the side panel shows it (360 px, Chrome's default width). */
 export async function openApp(context: BrowserContext, view: "panel" | "tab" = "tab"): Promise<Page> {

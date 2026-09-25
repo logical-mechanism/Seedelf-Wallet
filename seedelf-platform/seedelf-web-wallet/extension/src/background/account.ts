@@ -55,6 +55,8 @@ export interface Account {
   addresses: string[];
   /** How many of them have been used. */
   used: number;
+  /** The ones used, receive chain first (the dApp connector's `getUsedAddresses`). */
+  usedAddresses: string[];
 }
 
 /**
@@ -68,7 +70,8 @@ export function discoverAccount(keys: Keys, net: Wasm.Network, used: ReadonlySet
   const paths = new Map<string, KeyPath>();
   receive.addresses.forEach((_, index) => paths.set(keys.cardano.paymentKeyHash(0, index), { role: 0, index }));
   change.addresses.forEach((_, index) => paths.set(keys.cardano.paymentKeyHash(1, index), { role: 1, index }));
-  return { paths, addresses: [...receive.addresses, ...change.addresses], used: receive.used + change.used };
+  const addresses = [...receive.addresses, ...change.addresses];
+  return { paths, addresses, used: receive.used + change.used, usedAddresses: addresses.filter((a) => used.has(a)) };
 }
 
 /** The account's keys, and every unspent UTxO under them. */
