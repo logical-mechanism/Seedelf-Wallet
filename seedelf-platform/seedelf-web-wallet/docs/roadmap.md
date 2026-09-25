@@ -71,6 +71,8 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
       - Its preprod API rate-limits quickly, and Cloudflare refuses a non-browser user agent (error 1010).
     - **For the user:** approve a live swap on preprod; resubmit the store listing (Minswap is a new service: the description, the privacy policy and the data disclosure are updated).
     - **Next:** the restore scan, a live cancel, then private CIP-30 (step 4).
+  - **Then (2026-09-25): preprod MIN's decimals** (384ef7b). It isn't in the token registry, so `src/tokens/list.json` can now carry a hand-vetted test-network token as `unregistered`.
+  - **Next, in a new context on this branch: a swap that runs itself.** The plan is [plans/chunk-15b-swap-runner.md](plans/chunk-15b-swap-runner.md): one approval, a runner that takes the next step whenever it's called (the session's screen, a one-minute alarm, unlock and worker start), a timeline screen that turns the success colour when done, and resuming at any point. The user decided the polling, the pause and resume, and no notifications. Open: what an unfilled order does.
 
 - **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md), whose *Status* says where the build departed from it.
   - **What landed:**

@@ -177,6 +177,7 @@ A swap in a private session, end to end, as *A swap (A1), step by step* below sa
 - **Changed from the plan:**
   - **No auto-return:** each step is a button (Place the order, Cancel the order, Bring it back), and the wallet reads the chain only when the Swaps screen opens or is refreshed. Bring it back is refused while an order waits.
   - **The connector's `scripts` flag is redeemers only.** Minswap's order carries a script data hash for the datum in its witness set, and nothing runs.
+- **Next: a swap that runs itself,** after one approval, and picks up at any point: [chunk-15b-swap-runner.md](chunk-15b-swap-runner.md), in a new context on this branch.
 - **Not done:**
   - **A live swap on preprod.** It needs the user's go-ahead: fund a session from the private test wallet, place a small order (10 ₳ to MIN, as recorded), bring it back.
   - **The restore scan** (*Recovery*, *On a new device*), and Find leftovers.
