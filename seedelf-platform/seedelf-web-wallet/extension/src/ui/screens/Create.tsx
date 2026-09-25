@@ -112,7 +112,7 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
           )}
         </div>
         <Callout>
-          This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano
+          This phrase restores your Seedelfs only in Seedelf Wallet. Other Cardano wallets will show your Cardano
           account and nothing else.
         </Callout>
       </Screen>

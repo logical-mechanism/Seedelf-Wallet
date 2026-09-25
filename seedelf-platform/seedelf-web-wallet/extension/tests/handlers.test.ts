@@ -137,7 +137,7 @@ describe("handlers", () => {
     expect(isMessage({ type: "unlock", password: "x" })).toBe(true);
     expect(isMessage({ type: "mint-build", label: "" })).toBe(true);
     expect(isMessage({ type: "mint-submit", txHash: "ab" })).toBe(true);
-    expect(isMessage({ type: "transfer-lookup", to: "5eed0e1f" })).toBe(true);
+    expect(isMessage({ type: "seedelf-lookup", to: "5eed0e1f" })).toBe(true);
     expect(isMessage({ type: "transfer-build", to: "", lovelace: "1", tokens: [] })).toBe(true);
     expect(isMessage({ type: "transfer-submit", txHash: "ab" })).toBe(true);
     for (const type of [

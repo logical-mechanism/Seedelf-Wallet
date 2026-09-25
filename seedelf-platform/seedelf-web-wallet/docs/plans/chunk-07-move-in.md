@@ -59,7 +59,7 @@
 
 - **Move in**, from the Cardano account card:
   - An amount field with **Max**, and the list of the account's tokens to tick.
-  - A privacy note: round amounts, and the link this creates (the Cardano account → some contract UTxOs, never a seedelf name).
+  - A privacy note: round amounts, and the link this creates (the Cardano account → some contract UTxOs, never a Seedelf name).
 - **Review:** what moves, the fee, the change → **Confirm**.
 - **Pending:** the tx hash with a Cardanoscan link, a Pending → Confirmed status, then the refreshed balances.
 
@@ -80,4 +80,4 @@
 
 ## Out of scope
 
-Create a seedelf (chunk 8), transfer (chunk 9), withdraw (chunk 10), and moving the 5-ADA collateral UTxOs (use the other wallet for those).
+Create a Seedelf (chunk 8), transfer (chunk 9), withdraw (chunk 10), and moving the 5-ADA collateral UTxOs (use the other wallet for those).

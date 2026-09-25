@@ -30,7 +30,7 @@ export function Receive({ account, onBack }: { account: Account; onBack: () => v
       </p>
       <Callout tone="privacy">
         This is an ordinary Cardano address: anyone can see what it receives. To be paid privately, give out one of your
-        seedelfs' names instead.
+        Seedelfs' names instead.
       </Callout>
       <CopyField label="Stake address" value={account.stakeAddress} testId="stake-address" />
     </Screen>
@@ -63,12 +63,12 @@ export function ReceiveSeedelf({
         aside="Into your Seedelf balance"
         foot={
           <button type="button" className="primary" onClick={onCreate} disabled={!!createTitle} title={createTitle}>
-            Create a seedelf
+            Create a Seedelf
           </button>
         }
       >
         <p className="note" data-testid="receive-no-seedelf">
-          People pay a seedelf's name, and you don't have a seedelf yet. Create one first: your Cardano account pays for
+          People pay a Seedelf's name, and you don't have a Seedelf yet. Create one first: your Cardano account pays for
           it.
         </p>
       </Screen>
@@ -77,14 +77,14 @@ export function ReceiveSeedelf({
   return (
     <Screen title="Receive" titleId="receive-seedelf-title" onBack={onBack} aside="Into your Seedelf balance">
       <p className="note">
-        Give out a seedelf's whole name: tags aren't unique. Anyone with a Seedelf wallet can pay it, and nobody can tell
+        Give out a Seedelf's whole name: tags aren't unique. Anyone with Seedelf Wallet can pay it, and nobody can tell
         the payment is yours.
       </p>
       <section className="section" aria-labelledby="your-seedelfs">
-        <h2 id="your-seedelfs">Your seedelfs</h2>
+        <h2 id="your-seedelfs">Your Seedelfs</h2>
         <ul className="list" data-testid="seedelfs">
           {seedelfs.map((s) => {
-            const tag = s.label ?? "this seedelf";
+            const tag = s.label ?? "this Seedelf";
             return (
               <li key={s.assetName} className="list__row" title={s.assetName}>
                 {/* No tag, no stand-in: "Unnamed" could be someone's tag. */}
@@ -100,7 +100,7 @@ export function ReceiveSeedelf({
                     aria-label={`Remove ${tag}`}
                     onClick={() => onRemove(s)}
                     disabled={!!removeTitle}
-                    title={removeTitle ?? "Remove this seedelf"}
+                    title={removeTitle ?? "Remove this Seedelf"}
                   >
                     <TrashIcon size={14} />
                   </button>
@@ -114,7 +114,7 @@ export function ReceiveSeedelf({
         </ul>
       </section>
       <Callout tone="privacy">
-        A seedelf's name is public, and linked to whatever paid to create it. What's paid to it isn't.
+        A Seedelf's name is public, and linked to whatever paid to create it. What's paid to it isn't.
       </Callout>
     </Screen>
   );

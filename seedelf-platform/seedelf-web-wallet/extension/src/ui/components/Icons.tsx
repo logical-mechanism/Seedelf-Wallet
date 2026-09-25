@@ -176,6 +176,14 @@ export const ExternalIcon = icon(
 /** loader-circle: spun by CSS. */
 export const SpinnerIcon = icon(<path d="M21 12a9 9 0 1 1-6.219-8.56" />);
 
+/** plus */
+export const PlusIcon = icon(
+  <>
+    <path d="M5 12h14" />
+    <path d="M12 5v14" />
+  </>,
+);
+
 /** x */
 export const CloseIcon = icon(
   <>

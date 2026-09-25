@@ -62,7 +62,7 @@ export async function balances(page) {
   await page.getByRole("tab", { name: "Cardano", exact: true }).click();
   const cardano = await page.getByTestId("cardano-lovelace").textContent();
   await page.getByRole("tab", { name: "Seedelf" }).click();
-  return `Seedelf ${seedelf} | Cardano ${cardano} | seedelfs: ${seedelfs.replace(/\n/g, " ")}`;
+  return `Seedelf ${seedelf} | Cardano ${cardano} | Seedelfs: ${seedelfs.replace(/\n/g, " ")}`;
 }
 
 /** Opens the Seedelf tab's Receive, hands `read` its list of your seedelfs, then goes back to Home. */
@@ -80,7 +80,7 @@ export async function yourSeedelfs(page, read) {
 export async function seedelfName(page, tag) {
   return yourSeedelfs(page, async (list) => {
     const row = list.getByRole("listitem").filter({ has: page.getByText(tag, { exact: true }) });
-    if ((await row.count()) !== 1) throw new Error(`expected one seedelf tagged "${tag}", found ${await row.count()}`);
+    if ((await row.count()) !== 1) throw new Error(`expected one Seedelf tagged "${tag}", found ${await row.count()}`);
     return row.getAttribute("title");
   });
 }

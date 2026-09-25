@@ -85,7 +85,7 @@ const { answer: contract } = await post(`${KOIOS}/credential_utxos?limit=1000`, 
 });
 const seedelfs = contract.filter((u) => seedelfOf(u) && theirs(u));
 const recipient = seedelfs.find((u) => seedelfOf(u).startsWith(PREFERRED)) ?? seedelfs[0];
-if (!recipient) throw new Error("no live seedelf to pay on preprod");
+if (!recipient) throw new Error("no live Seedelf to pay on preprod");
 const to = seedelfOf(recipient);
 
 const request = { network: "preprod", params, utxos, to, recipient, lovelace: LOVELACE, tokens };

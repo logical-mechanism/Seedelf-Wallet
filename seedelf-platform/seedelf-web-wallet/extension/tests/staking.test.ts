@@ -238,12 +238,12 @@ describe("spending rewards", () => {
   it("rides along with a send when on, and waits when off", async () => {
     const t = await unlocked();
     expect(await t.preferences.get()).toEqual({ spendRewards: true });
-    const on = await t.send.build("preprod", THEIRS, "3000000", []);
+    const on = await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
     expect(on.withdrawal).toBe(REWARDS);
 
     expect(await t.preferences.set({ spendRewards: false })).toEqual({ spendRewards: false });
     t.koios.calls.length = 0;
-    const off = await t.send.build("preprod", THEIRS, "3000000", []);
+    const off = await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
     expect(off.withdrawal).toBe("0");
     // Off, the stake key isn't even read.
     expect(paths(t)).toEqual(["account_addresses", "credential_utxos", "epoch_params"]);

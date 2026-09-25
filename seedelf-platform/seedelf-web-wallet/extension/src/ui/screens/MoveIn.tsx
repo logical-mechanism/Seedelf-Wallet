@@ -170,7 +170,7 @@ export function MoveIn({
         legend="Bring tokens along (optional)"
       />
 
-      <Callout tone="privacy">Moving in links your Cardano account to the new Seedelf UTxOs, but not to any seedelf name.</Callout>
+      <Callout tone="privacy">Moving in links your Cardano account to the new Seedelf UTxOs, but not to any Seedelf name.</Callout>
     </Screen>
   );
 }

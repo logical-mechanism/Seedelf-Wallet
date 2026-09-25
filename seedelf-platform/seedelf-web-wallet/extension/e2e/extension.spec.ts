@@ -237,7 +237,7 @@ const ada = (lovelace: bigint) => {
   return fraction ? `${whole}.${fraction}` : whole;
 };
 
-test("home shows the Seedelf balance, seedelfs and the Cardano account", async ({ context, koios }) => {
+test("home shows the Seedelf balance, Seedelfs and the Cardano account", async ({ context, koios }) => {
   const v = vector(12);
   const page = await openApp(context);
   await restore(page, v.phrase);
@@ -314,14 +314,14 @@ test("home shows the Seedelf balance, seedelfs and the Cardano account", async (
   await expect(narrow.locator(".middle-ellipsis__tail")).toHaveText(mine.slice(-6));
 });
 
-test("receive into Seedelf without a seedelf says to create one first", async ({ context }) => {
+test("receive into Seedelf without a Seedelf says to create one first", async ({ context }) => {
   const page = await openApp(context);
   await restore(page, vector(15).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
   await page.getByRole("button", { name: "Receive into Seedelf" }).click();
-  await expect(page.getByTestId("receive-no-seedelf")).toContainText("you don't have a seedelf yet");
+  await expect(page.getByTestId("receive-no-seedelf")).toContainText("you don't have a Seedelf yet");
   // This account is empty, so it can't pay for one yet.
-  const create = page.getByRole("button", { name: "Create a seedelf" });
+  const create = page.getByRole("button", { name: "Create a Seedelf" });
   await expect(create).toBeDisabled();
   await expect(create).toHaveAttribute("title", /Fund your Cardano account first/);
 });
@@ -480,12 +480,12 @@ test("settings: the phrase behind the password, a new password, and removing the
   await expect(page.getByRole("button", { name: "Create new wallet" })).toBeVisible();
 });
 
-test("contacts: save a seedelf from Send, pick it again, and keep them in Settings", async ({ context, koios }) => {
+test("contacts: save a Seedelf from Send, pick it again, and keep them in Settings", async ({ context, koios }) => {
   const theirs: string = transferPreprod.to;
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
-  await page.getByRole("button", { name: "Send to a seedelf" }).click();
+  await page.getByRole("button", { name: "Send to a Seedelf" }).click();
 
   // Saved from the form once the seedelf is found.
   await expect(page.getByRole("button", { name: "Contacts", exact: true })).toHaveCount(0);
@@ -501,7 +501,7 @@ test("contacts: save a seedelf from Send, pick it again, and keep them in Settin
 
   // Picked the next time.
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await page.getByRole("button", { name: "Send to a seedelf" }).click();
+  await page.getByRole("button", { name: "Send to a Seedelf" }).click();
   await page.getByRole("button", { name: "Contacts", exact: true }).click();
   await page.getByRole("dialog", { name: "Contacts" }).getByRole("button", { name: "Test friend" }).click();
   await expect(page.getByLabel("Seedelf name")).toHaveValue(theirs);
@@ -518,7 +518,7 @@ test("contacts: save a seedelf from Send, pick it again, and keep them in Settin
   await add.getByLabel("Name", { exact: true }).fill("Alice");
   await add.getByLabel("Seedelf name, address or $handle").fill("nope");
   await add.getByRole("button", { name: "Save" }).click();
-  await expect(add.getByRole("alert")).toContainText("isn't a seedelf's full name");
+  await expect(add.getByRole("alert")).toContainText("isn't a Seedelf's full name");
   await add.getByLabel("Seedelf name, address or $handle").fill(vector(15).preprod.receive_0);
   await add.getByRole("button", { name: "Save" }).click();
   await expect(list).toContainText("Alice");
@@ -726,11 +726,11 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   await details.getByRole("button", { name: "Lock", exact: true }).click();
   await expect(details.getByTestId("utxo-state")).toHaveText("Locked: left out of every payment.");
   await details.getByRole("button", { name: "Close" }).click();
-  await expect(list.getByRole("button", { name: /^25 ₳, locked, a1a1/ })).toBeVisible();
+  await expect(list.getByRole("button", { name: /^25 ₳, Locked, a1a1/ })).toBeVisible();
   await expect(page.getByText("3 UTxOs · 1 locked")).toBeVisible();
   // A seedelf's UTxO only moves when the seedelf is removed: nothing to lock.
-  await list.getByRole("button", { name: /seedelf/ }).click();
-  await expect(page.getByRole("dialog", { name: "1.5 ₳" })).toContainText("Only removing the seedelf spends it");
+  await list.getByRole("button", { name: /Seedelf/ }).click();
+  await expect(page.getByRole("dialog", { name: "1.5 ₳" })).toContainText("Only removing the Seedelf spends it");
   // Its name is cut to fit, with Copy for all of it; nothing spills out of the modal.
   const holder: string = ownedUtxos[2].asset_list[0].asset_name;
   await expect(page.getByTestId("utxo-seedelf-name")).toHaveAttribute("data-value", holder);
@@ -843,7 +843,7 @@ test("collateral: the wallet takes a 5 ₳ UTxO the account holds; reclaimed, it
   await page.getByRole("button", { name: "Settings" }).click();
   await cardanoTab(page);
   await page.getByRole("button", { name: "UTxOs", exact: true }).click();
-  await page.getByTestId("utxos").getByRole("button", { name: /collateral/ }).click();
+  await page.getByTestId("utxos").getByRole("button", { name: /Collateral/ }).click();
   await expect(page.getByTestId("utxo-collateral")).toBeVisible();
   await expect(page.getByRole("dialog").getByRole("button", { name: "Lock", exact: true })).toHaveCount(0);
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
@@ -923,16 +923,160 @@ test("send from the Cardano account: a token with only the ADA it needs, review,
   await expect(popup.getByTestId("pending-tx")).toContainText("Payment confirmed");
 });
 
-test("create a seedelf from the Cardano account: review, send, then watch it confirm", async ({ context, koios }) => {
+test("send from the Cardano account to a Seedelf: paste its name, see it found, review, send", async ({ context, koios }) => {
+  const theirs: string = transferPreprod.to;
+  const mine: string = ownedUtxos[2].asset_list[0].asset_name;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Send from the Cardano account" }).click();
+
+  // A whole name only; your own seedelf is Move in's.
+  const to = page.getByLabel("To", { exact: true });
+  const note = page.getByTestId("send-to-note");
+  await expect(to).toHaveAttribute("placeholder", "addr_test1…, $handle or 5eed0e1f…");
+  await to.fill(theirs.slice(0, 40));
+  await expect(note).toContainText("64 hex characters starting 5eed0e1f");
+  await to.fill(mine);
+  await expect(note).toContainText("That Seedelf is yours. To put money into your Seedelf balance, use Move in.");
+  await to.fill(` ${theirs.slice(0, 32).toUpperCase()} ${theirs.slice(32)} `);
+  await expect(note).toContainText("Found: This is a test.");
+  await expect(page.getByText("went into Seedelf, though not whose Seedelf it is")).toBeVisible();
+  await page.getByLabel("Amount", { exact: true }).fill("5");
+  await snap(page, "send-seedelf-form");
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const review = page.getByTestId("send-review");
+  await expect(review).toContainText("ToThis is a test.");
+  await expect(review).toContainText(`Seedelf name${theirs.slice(0, 16)}`);
+  await expect(review).toContainText("Amount5 ₳");
+  await expect(review).toContainText("Back to your Cardano account");
+  await expect(page.getByText("Only the owner of this Seedelf can spend the payment")).toBeVisible();
+  // Found in the whole contract, never by asking Koios about the seedelf's token.
+  expect(koios.calls.filter((c) => c.startsWith("asset"))).toEqual([]);
+  await snap(page, "send-seedelf-review");
+
+  // Signed at review, like any send: no giveme.my.
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Payment sent. Waiting for the network");
+  expect(koios.submitted).toHaveLength(1);
+  expect(koios.collateralAsked).toBe(0);
+  // Both names were in the contract as Home's reading kept it: no requests. Review read what's new, and the account; then the submit.
+  const contract = "credential_utxos";
+  const account = ["account_addresses", "account_info", "credential_utxos", "epoch_params"];
+  const sent = koios.calls.slice(reads, koios.calls.indexOf("submittx") + 1);
+  expect(sent.sort()).toEqual([contract, ...account, "submittx"].sort());
+});
+
+test("several recipients: Send from the Cardano account pays a handle and a Seedelf at once", async ({ context, koios }) => {
+  const theirs = vector(15).preprod.receive_0;
+  koios.nfts.set(`f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a.${Buffer.from("bob").toString("hex")}`, theirs);
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await page.getByRole("button", { name: "Send from the Cardano account" }).click();
+
+  // One recipient looks as it always did, with Max; a second turns Max off and puts each in a card.
+  await page.getByLabel("To", { exact: true }).fill("$bob");
+  const max = page.getByRole("button", { name: "Max", exact: true });
+  await max.click();
+  await page.getByRole("button", { name: "Add recipient" }).click();
+  await expect(max).toHaveCount(0);
+  const first = page.getByRole("group", { name: "Recipient 1" });
+  const second = page.getByRole("group", { name: "Recipient 2" });
+  await expect(first.getByLabel("To", { exact: true })).toHaveValue("$bob");
+  await expect(second.getByLabel("To", { exact: true })).toBeFocused();
+
+  await first.getByLabel("Amount", { exact: true }).fill("3");
+  await addTokens(page, ["tUSDM"], first);
+  await first.getByLabel("Amount of tUSDM").fill("1000");
+  // The second recipient's tUSDM box offers only what the first left.
+  await addTokens(page, ["tUSDM"], second);
+  await expect(second.getByText("of 2,999,999,000", { exact: true })).toBeVisible();
+  await second.getByRole("button", { name: "Take tUSDM off" }).click();
+  await second.getByLabel("To", { exact: true }).fill(transferPreprod.to);
+  await expect(second.getByText("Found: This is a test.")).toBeVisible();
+  await second.getByLabel("Amount", { exact: true }).fill("5");
+  await expect(page.getByText("Paying several at once also shows they were paid together.")).toBeVisible();
+  await snap(page, "send-several-form");
+  await page.getByRole("button", { name: "Review" }).click();
+
+  await expect(page.getByTestId("send-review-1")).toContainText("To$bob");
+  await expect(page.getByTestId("send-review-1")).toContainText("Amount3 ₳");
+  await expect(page.getByTestId("send-review-1")).toContainText("1,000 tUSDM");
+  await expect(page.getByTestId("send-review-2")).toContainText("ToThis is a test.");
+  await expect(page.getByTestId("send-review-2")).toContainText("Amount5 ₳");
+  await expect(page.getByTestId("send-review")).toContainText("Total8 ₳ and 1 token");
+  await expect(page.getByText("Only the owner of each Seedelf can spend the payment")).toBeVisible();
+  await snap(page, "send-several-review");
+
+  // Back keeps both, without reading $bob again; × takes one off, and Max is back.
+  const handles = koios.calls.filter((c) => c === "asset_nft_address").length;
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(second.getByText("Found: This is a test.")).toBeVisible();
+  expect(koios.calls.filter((c) => c === "asset_nft_address").length).toBe(handles);
+  await page.getByRole("button", { name: "Review" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Payment sent. Waiting for the network");
+  expect(koios.submitted).toHaveLength(1);
+});
+
+test("several recipients: Send to a Seedelf pays two, and Withdraw two addresses", async ({ context, koios }) => {
+  koios.evaluation = transferPreprod.evaluation;
+  const theirs = vector(15).preprod.receive_0;
+  const mine: string = ownedUtxos[2].asset_list[0].asset_name;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+
+  await page.getByRole("button", { name: "Send to a Seedelf" }).click();
+  await page.getByLabel("Seedelf name").fill(transferPreprod.to);
+  await page.getByLabel("Amount", { exact: true }).fill("5");
+  await page.getByRole("button", { name: "Add recipient" }).click();
+  const second = page.getByRole("group", { name: "Recipient 2" });
+  await second.getByLabel("Seedelf name").fill(mine);
+  await expect(second.getByTestId("transfer-own")).toContainText("This Seedelf is yours");
+  await second.getByLabel("Amount", { exact: true }).fill("30");
+  await expect(page.getByTestId("transfer-too-much")).toContainText("Together that's 35 ₳, more than the 28 ₳");
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  await second.getByLabel("Amount", { exact: true }).fill("2");
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByTestId("transfer-review-1")).toContainText("ToThis is a test.");
+  await expect(page.getByTestId("transfer-review-2")).toContainText("Toweb-wallet");
+  await expect(page.getByTestId("transfer-review")).toContainText("Total7 ₳");
+  await expect(page.getByTestId("transfer-to-self")).toContainText("One of these Seedelfs is yours");
+  await snap(page, "transfer-several-review");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  koios.evaluation = withdrawPreprod.amount.evaluation;
+  await page.getByRole("button", { name: "Withdraw" }).click();
+  await page.getByLabel("To", { exact: true }).fill(theirs);
+  await page.getByLabel("Amount", { exact: true }).fill("5");
+  await page.getByRole("button", { name: "Add recipient" }).click();
+  await page.getByRole("group", { name: "Recipient 2" }).getByLabel("To", { exact: true }).fill(theirs);
+  await page.getByRole("group", { name: "Recipient 2" }).getByLabel("Amount", { exact: true }).fill("2");
+  await expect(page.getByText("Addresses paid in one withdrawal can be seen to be paid together.")).toBeVisible();
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByTestId("withdraw-review-1")).toContainText("Amount5 ₳");
+  await expect(page.getByTestId("withdraw-review-2")).toContainText("Amount2 ₳");
+  await expect(page.getByTestId("withdraw-review")).toContainText("Total7 ₳");
+  expect(koios.submitted).toHaveLength(0);
+});
+
+test("create a Seedelf from the Cardano account: review, send, then watch it confirm", async ({ context, koios }) => {
   koios.evaluation = accountMintPreprod.evaluation;
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
-  await page.getByRole("button", { name: "Create a seedelf" }).click();
+  await page.getByRole("button", { name: "Create a Seedelf" }).click();
 
   // The Cardano account pays by default, and says what that links.
   await expect(page.getByRole("button", { name: "Cardano account" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("mint-from-note")).toContainText("create your seedelf before moving money in");
+  await expect(page.getByTestId("mint-from-note")).toContainText("create your Seedelf before moving money in");
   await page.getByLabel("Personal tag (optional)").fill("first");
   await snap(page, "account-mint-form");
   await page.getByRole("button", { name: "Review" }).click();
@@ -951,17 +1095,17 @@ test("create a seedelf from the Cardano account: review, send, then watch it con
   await expect(banner).toContainText("Seedelf mint sent. Waiting for the network");
   expect(koios.submitted).toHaveLength(1);
   expect(koios.collateralAsked).toBe(0);
-  await expect(page.getByRole("button", { name: "Create a seedelf" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Create a Seedelf" })).toBeDisabled();
   koios.confirmations = 1;
   const popup = await openApp(context, "popup");
   await expect(popup.getByTestId("pending-tx")).toContainText("Seedelf created");
 });
 
-test("create a seedelf from the Seedelf balance: tag rules, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
+test("create a Seedelf from the Seedelf balance: tag rules, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
-  await page.getByRole("button", { name: "Create a seedelf" }).click();
+  await page.getByRole("button", { name: "Create a Seedelf" }).click();
   await page.getByRole("button", { name: "Seedelf balance" }).click();
   await expect(page.getByTestId("mint-from-note")).toContainText("A stealth mint");
 
@@ -1007,7 +1151,7 @@ test("create a seedelf from the Seedelf balance: tag rules, review, and nothing 
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
 });
 
-test("send to a seedelf: paste its name, see it found, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
+test("send to a Seedelf: paste its name, see it found, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
   koios.evaluation = transferPreprod.evaluation;
   const theirs: string = transferPreprod.to;
   const mine: string = ownedUtxos[2].asset_list[0].asset_name;
@@ -1024,7 +1168,7 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
   expect(await clipboard()).toBe(mine);
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await page.getByRole("button", { name: "Send to a seedelf" }).click();
+  await page.getByRole("button", { name: "Send to a Seedelf" }).click();
 
   // Only a whole name is looked up; pasted in capitals with spaces, it still is one.
   const name = page.getByLabel("Seedelf name");
@@ -1032,10 +1176,10 @@ test("send to a seedelf: paste its name, see it found, review, and nothing sent 
   await name.fill(theirs.slice(0, 40));
   await expect(note).toContainText("64 hex characters starting 5eed0e1f");
   await name.fill(`5eed0e1f${"00".repeat(28)}`);
-  await expect(note).toContainText("No seedelf with that name on preprod.");
+  await expect(note).toContainText("No Seedelf with that name on preprod.");
   await name.fill(await clipboard());
   await expect(note).toContainText("Found: web-wallet");
-  await expect(page.getByTestId("transfer-own")).toContainText("This seedelf is yours");
+  await expect(page.getByTestId("transfer-own")).toContainText("This Seedelf is yours");
   await name.fill(` ${theirs.slice(0, 32).toUpperCase()} ${theirs.slice(32)} `);
   await expect(note).toContainText("Found: This is a test.");
   await expect(page.getByTestId("transfer-own")).toHaveCount(0);
@@ -1130,7 +1274,7 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   expect(koios.submitted).toHaveLength(0);
 });
 
-test("remove a seedelf: where its ADA goes, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
+test("remove a Seedelf: where its ADA goes, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
   koios.evaluation = withdrawPreprod.remove.evaluation;
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
@@ -1146,7 +1290,7 @@ test("remove a seedelf: where its ADA goes, review, and nothing sent without giv
   const note = page.getByTestId("remove-to-note");
   await expect(note).toContainText("links nothing new");
   await page.getByRole("button", { name: "Seedelf balance" }).click();
-  await expect(note).toContainText("ties the seedelf's name to the new UTxO");
+  await expect(note).toContainText("ties the Seedelf's name to the new UTxO");
   await page.getByRole("button", { name: "Cardano account" }).click();
   await snap(page, "remove-form");
   await page.getByRole("button", { name: "Review" }).click();
@@ -1427,9 +1571,9 @@ test("every wallet screen in the popup, for the look", async ({ context, koios }
   await popup.getByRole("tab", { name: "Seedelf" }).click();
   for (const [button, name] of [
     ["Receive into Seedelf", "receive-seedelf"],
-    ["Send to a seedelf", "transfer"],
+    ["Send to a Seedelf", "transfer"],
     ["Withdraw", "withdraw"],
-    ["Create a seedelf", "create-seedelf"],
+    ["Create a Seedelf", "create-seedelf"],
   ] as const) {
     await popup.getByRole("button", { name: button }).click();
     await expect(popup.getByRole("heading", { level: 1 })).toBeVisible();

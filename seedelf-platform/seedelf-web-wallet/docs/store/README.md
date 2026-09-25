@@ -38,24 +38,24 @@ Seedelf Wallet is a Cardano wallet with private payments built in: Seedelf, the 
 
 This is a test build for early testers. It runs on Cardano's preprod test network, with test ADA only. Get test ADA from the Cardano testnet faucet.
 
-Seedelf hides who owns money. Each payment to a seedelf reaches its owner under a fresh copy of their key, so no UTxO says who owns it, and payments to the same seedelf can't be linked to each other. Spending is proven with a zero-knowledge proof and a one-time key, so it doesn't reveal the spender either.
+Seedelf hides who owns money. Each payment to a Seedelf reaches its owner under a fresh copy of their key, so no UTxO says who owns it, and payments to the same Seedelf can't be linked to each other. Spending is proven with a zero-knowledge proof and a one-time key, so it doesn't reveal the spender either.
 
 What you can do:
 • Create a wallet, or restore one from a 12, 15 or 24-word recovery phrase, and lock it with a password.
 • Use its Cardano account: a normal account that any wallet or faucet can pay, and that pays any address or ADA Handle. A phrase from Lace or Eternl opens that wallet's first account.
 • Stake the Cardano account with a pool, from a list of every live pool, and spend or withdraw the rewards.
 • Delegate its voting power: always abstain, always no confidence, or a DRep you find by name.
-• Create a seedelf: a name you give out so that anyone can pay you.
+• Create a Seedelf: a name you give out so that anyone can pay you.
 • Move ADA and tokens from the Cardano account into your Seedelf balance.
-• Send to any seedelf by its name.
-• Withdraw to any Cardano address or ADA Handle, or remove a seedelf.
+• Send to any Seedelf by its name.
+• Withdraw to any Cardano address or ADA Handle, or remove a Seedelf.
 
 What it doesn't hide:
 • Amounts, tokens, timing and which transactions spend which outputs are public, as with any Cardano wallet.
 • Moving money in, and withdrawing it, link your Cardano account to what you move. Each screen says what it links, and the wallet warns you before a step ties your accounts together.
 • Privacy grows with the number of people who use Seedelf, and today there are few.
 
-Seedelf money earns no staking rewards: it has no staking part, which is what keeps your seedelfs from being linked together. Money that sits can stay staked in the Cardano account, and move through Seedelf when it should move privately.
+Seedelf money earns no staking rewards: it has no staking part, which is what keeps your Seedelfs from being linked together. Money that sits can stay staked in the Cardano account, and move through Seedelf when it should move privately.
 
 How it works:
 • Everything is built and signed inside the extension. The cryptography and the transaction building are Rust, compiled to WebAssembly and shipped in the package.
@@ -91,7 +91,7 @@ Open source (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
 **Single purpose:**
 
 ```text
-Seedelf Wallet is a Cardano wallet with the Seedelf stealth wallet contract built in. It keeps the user's recovery phrase encrypted on their device, and lets them send and stake from their Cardano account, create a seedelf, move ADA into Seedelf, send it to other seedelfs, and withdraw it, while keeping who owns each UTxO private.
+Seedelf Wallet is a Cardano wallet with the Seedelf stealth wallet contract built in. It keeps the user's recovery phrase encrypted on their device, and lets them send and stake from their Cardano account, create a Seedelf, move ADA into Seedelf, send it to other Seedelfs, and withdraw it, while keeping who owns each UTxO private.
 ```
 
 **Permission justifications:**

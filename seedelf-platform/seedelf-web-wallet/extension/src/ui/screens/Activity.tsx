@@ -38,13 +38,13 @@ function title(e: ActivityEntry, of: Of): string {
     case "move-in":
       return of === "seedelf" ? "Moved in" : "Moved into Seedelf";
     case "mint":
-      return "Created a seedelf";
+      return "Created a Seedelf";
     case "transfer":
-      return "Sent to a seedelf";
+      return "Sent to a Seedelf";
     case "withdraw":
       return of === "seedelf" ? "Withdrew" : "Withdrawn from Seedelf";
     case "remove":
-      return "Removed a seedelf";
+      return "Removed a Seedelf";
     case "send":
       return "Sent";
     case "collateral":

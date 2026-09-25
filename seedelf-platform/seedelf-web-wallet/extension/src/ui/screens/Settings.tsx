@@ -107,7 +107,7 @@ function SpendRewards() {
           <span className="note" id="spend-rewards-note">
             {prefs?.spendRewards === false
               ? "Rewards wait until you withdraw them on the Staking page."
-              : "A send, a move-in or a seedelf paid by your Cardano account withdraws the rewards too."}
+              : "A send, a move-in or a Seedelf paid by your Cardano account withdraws the rewards too."}
           </span>
         </span>
         <button
@@ -309,7 +309,7 @@ function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (s
     >
       <p className="note">
         This deletes the wallet from this browser. Your funds stay on the chain: your recovery phrase brings them back,
-        here or in another Seedelf wallet.
+        here or in Seedelf Wallet on another device.
       </p>
       <Callout tone="warn">
         Make sure you have your recovery phrase first (Show recovery phrase). Without it, removing the wallet loses your

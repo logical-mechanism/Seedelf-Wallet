@@ -93,11 +93,11 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the pop
    - Receive: scan the QR code from a phone wallet;
    - Refresh, and a sent transaction's banner through to confirmed, then Dismiss.
 5. **Each flow once by hand:**
-   - create a seedelf, paid by the account;
+   - create a Seedelf, paid by the account;
    - move in;
-   - send to a seedelf, pasting a name someone else gave you;
+   - send to a Seedelf, pasting a name someone else gave you;
    - withdraw to an address and to a `$handle`;
-   - remove a seedelf;
+   - remove a Seedelf;
    - stake with a pool from the browser, change pool, delegate the vote to a DRep by its ID, withdraw rewards, and stop staking;
    - send with *Use staking rewards when spending* on, then off.
 
@@ -105,7 +105,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the pop
 6. **Mistakes and failures:**
    - Koios blocked (offline, or an ad blocker) says why, and recovers on Refresh;
    - amounts: more than the balance, seven decimals, letters;
-   - a mistyped seedelf name, and a `$handle` that doesn't exist.
+   - a mistyped Seedelf name, and a `$handle` that doesn't exist.
 7. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my`.
 
 ## Releasing to the Web Store

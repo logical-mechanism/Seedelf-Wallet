@@ -8,7 +8,8 @@ flowchart LR
   Dep -- "move in" --> S["Seedelf balance<br/>(wallet contract)"]
   Dep -- "send" --> Addr
   Dep -. "stake, vote" .-> Pool["A pool, a DRep"]
-  S -- "transfer" --> Other["Any seedelf"]
+  S -- "transfer" --> Other["Any Seedelf"]
+  Dep -- "send" --> Other
   S -- "withdraw" --> Addr["Any address"]
   S -- "out" --> OT["One-time account"]
   OT -- "CIP-30" --> D["dApp"]
@@ -16,7 +17,7 @@ flowchart LR
   OT -- "auto-return" --> S
 ```
 
-**Seedelf balance** means every UTxO at the wallet contract whose register this wallet owns. A **seedelf** is a named token (`5eed0e1f…`) sitting in one of those UTxOs. Its register is what other people use to pay you.
+**Seedelf balance** means every UTxO at the wallet contract whose register this wallet owns. A **Seedelf** is a named token (`5eed0e1f…`) sitting in one of those UTxOs. Its register is what other people use to pay you.
 
 ## Onboarding
 
@@ -40,22 +41,22 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 - **Password:** at least 12 characters, no composition rules, with a strength hint.
 - **Phrase warnings, shown during create:**
   - "Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website."
-  - "This phrase restores your seedelfs only in a Seedelf wallet. Other Cardano wallets will show your Cardano account and nothing else."
+  - "This phrase restores your Seedelfs only in Seedelf Wallet. Other Cardano wallets will show your Cardano account and nothing else."
 - **Home** has two tabs, and under them when the chain was last read, and **Refresh**.
   - **Seedelf:**
-    - the **Seedelf balance**: ADA in the contract UTxOs this wallet owns, with round **Receive** (your seedelfs), **Send** (to a seedelf), **Withdraw** and **Create** (a seedelf) actions;
+    - the **Seedelf balance**: ADA in the contract UTxOs this wallet owns, with round **Receive** (your Seedelfs), **Send** (to a Seedelf), **Withdraw** and **Create** (a Seedelf) actions;
     - its tokens: the first five (fungible first, by name, then NFTs) and **View all**. Tapping a token opens its details.
 
-    The base register's public value isn't shown: a seedelf's name is what people pay, and nothing else takes the public value.
-  - **Cardano account:** its ADA, how many addresses it has used, **Receive**, **Send** and **Move in**, and its tokens (as on the Seedelf tab). Until a seedelf exists, a note says to create one before moving money in.
+    The base register's public value isn't shown: a Seedelf's name is what people pay, and nothing else takes the public value.
+  - **Cardano account:** its ADA, how many addresses it has used, **Receive**, **Send** and **Move in**, and its tokens (as on the Seedelf tab). Until a Seedelf exists, a note says to create one before moving money in.
   - **While the first reading loads** (after an unlock, a restore or a create), a splash covers Home instead of empty balances: the emblem on navy with a teal arc circling it. It fades out into the wallet when the balances arrive. A cached reading shows Home at once, and the splash gives up after about 8 s, so a slow Koios can't hide Refresh or an error.
   - **Tokens** (from **View all**): one balance's tokens in two tabs, **Tokens** and **NFTs**, with a search (name, ticker, policy ID, fingerprint) and a sort (name or amount), 50 rows at a time.
     - **A token's details** open in a modal, centred and never taller than the window: the amount, the policy ID, the asset name and the fingerprint, each with Copy.
     - A token on the wallet's list shows its ticker and logo, and says it's on the list. Any other token goes by its own name, with its fingerprint under it and two letters for a logo, and the modal says its name is only what it calls itself.
     - NFTs are told apart without asking anyone: CIP-68 label 222 is an NFT, 333 and 444 are fungible, and otherwise a single unit with no decimals is an NFT.
-  - **Get started:** until the wallet has both a seedelf and a Seedelf balance, the Seedelf tab lists three steps, in the order that keeps them apart (see [Create a seedelf](#create-a-seedelf)):
+  - **Get started:** until the wallet has both a Seedelf and a Seedelf balance, the Seedelf tab lists three steps, in the order that keeps them apart (see [Create a Seedelf](#create-a-seedelf)):
     1. fund the Cardano account;
-    2. create the seedelf, paid by the account;
+    2. create the Seedelf, paid by the account;
     3. move ADA in.
 
     A step is ticked when it's done, and the next step has its button.
@@ -72,20 +73,20 @@ Onboarding runs in a full tab. From the popup, **Create** and **Restore** open o
 
 **Activity** (the row at the bottom of each Home tab), newest first and grouped by day, after Lace's Activity tab. Each entry opens its details, with the transaction on Cardanoscan.
 
-- **Seedelf:** what this wallet sent, written down at Send from the summary the user reviewed, and what arrived, noted from the balance reading (one entry per transaction; the wallet's own change and a UTxO holding a seedelf don't count). It asks Koios nothing, and never about one transaction. It's encrypted on the device, and starts from when this wallet first saw each payment.
+- **Seedelf:** what this wallet sent, written down at Send from the summary the user reviewed, and what arrived, noted from the balance reading (one entry per transaction; the wallet's own change and a UTxO holding a Seedelf don't count). It asks Koios nothing, and never about one transaction. It's encrypted on the device, and starts from when this wallet first saw each payment.
 - **Cardano account:** from Koios, which knows the account already: 20 transactions a page (`account_txs` and one `tx_info`), only while Activity is open, and **Load more** for the next 20. Opening it again, or **Refresh**, asks only for what's newer.
 - **Refresh** on the Seedelf side reads the balances again, as Home's does, since that's how arrivals are noted. Each entry is what the transaction did to the account's own addresses; a move-in or a mint this wallet made is named as such.
 
-**Contacts** name the seedelfs and addresses (or `$handles`) the user pays, after Lace's address book. They're managed in Settings, picked with **Contacts** above Send's seedelf name or Withdraw's destination, and saved from either form with **Save to contacts** once it's found. They're encrypted on the device (see [privacy.md](privacy.md#known-links)).
+**Contacts** name the Seedelfs and addresses (or `$handles`) the user pays, after Lace's address book. They're managed in Settings, picked with **Contacts** above Send's Seedelf name or Withdraw's destination, and saved from either form with **Save to contacts** once it's found. They're encrypted on the device (see [privacy.md](privacy.md#known-links)).
 
-**UTxOs** (the row under Activity on each Home tab, chunk 12) lists that balance's UTxOs from the last reading, asking Koios nothing (**Refresh** there is Home's, a new balance reading): the kept ones first (locked, the collateral, a seedelf's), then the largest. Each shows its ADA, how many tokens, and its outpoint, and opens its details: the tokens, the transaction (with Copy), the output and block, and on the Cardano side the address.
+**UTxOs** (the row under Activity on each Home tab, chunk 12) lists that balance's UTxOs from the last reading, asking Koios nothing (**Refresh** there is Home's, a new balance reading): the kept ones first (locked, the collateral, a Seedelf's), then the largest. Each shows its ADA, how many tokens, and its outpoint, and opens its details: the tokens, the transaction (with Copy), the output and block, and on the Cardano side the address.
 
 - **The lock at the end of a row** locks or unlocks it at once; **Lock** in its details does the same. A locked UTxO is kept out of every payment from that balance, Max included. The list keeps its order while you toggle; locked ones come first the next time it's read. Home still counts it, and says so under the balance ("2 UTxOs · 25 ₳ locked"). The forms offer only what's unlocked, their line under the title says what's locked, and with everything locked they say why they're disabled.
-- A seedelf's UTxO has no Lock: only removing the seedelf spends it. Its details name the seedelf by its tag, and show its token name cut to fit, with Copy. The collateral has no Lock either: it's reclaimed in Settings.
+- A Seedelf's UTxO has no Lock: only removing the Seedelf spends it. Its details name the Seedelf by its tag, and show its token name cut to fit, with Copy. The collateral has no Lock either: it's reclaimed in Settings.
 - A UTxO's details list its first five tokens, then **Show all**, a box of its own that scrolls (with a search from 10 tokens), so a UTxO holding hundreds doesn't stretch them.
 - The Seedelf side's privacy note: only this wallet can tell these are yours, and looking one up on an explorer tells that site. The choices are encrypted on the device, like Contacts.
 
-**Collateral** (Settings, chunk 12, after Lace's) is 5 ₳ of the Cardano account set aside for transactions that run a script: today, creating a seedelf from the account. It's only taken if the script fails, which the wallet checks before sending (Ogmios), and it's kept out of every payment.
+**Collateral** (Settings, chunk 12, after Lace's) is 5 ₳ of the Cardano account set aside for transactions that run a script: today, creating a Seedelf from the account. It's only taken if the script fails, which the wallet checks before sending (Ogmios), and it's kept out of every payment.
 
 - **Set by the wallet:** with none chosen, the wallet takes the oldest UTxO of exactly 5 ₳ and nothing else that the account holds, with no transaction. The page says so.
 - **Set collateral:** from such a UTxO, nothing is sent. With none, it pays 5 ₳ from the account to its own `0/0` (a review, then Send; only the fee leaves the account). A banner follows it to "Collateral set", and the page says it's waiting until then.
@@ -102,17 +103,17 @@ See [keys-and-accounts.md](keys-and-accounts.md#password-and-vault) for details.
 - the address, with a copy button;
 - the stake address.
 
-Anything that can pay a Cardano address can fund the wallet. The screen also says that this is an ordinary address, which anyone can watch: to be paid privately, give out a seedelf's name instead. For a restored wallet, the funds already in the account show up here too.
+Anything that can pay a Cardano address can fund the wallet. The screen also says that this is an ordinary address, which anyone can watch: to be paid privately, give out a Seedelf's name instead. For a restored wallet, the funds already in the account show up here too.
 
 ## Receive (Seedelf)
 
-**Receive** on the Seedelf tab (chunk 12) is where your seedelfs live: each by its tag, with the ADA locked with it, **Copy** for its whole name (to give to anyone who wants to pay you, or to paste into Send to a seedelf) and **Remove**. It asks Koios nothing: the list comes from the last balance reading.
+**Receive** on the Seedelf tab (chunk 12) is where your Seedelfs live: each by its tag, with the ADA locked with it, **Copy** for its whole name (to give to anyone who wants to pay you, or to paste into Send to a Seedelf) and **Remove**. It asks Koios nothing: the list comes from the last balance reading.
 
 - The whole name sits on one line under the tag. When it doesn't fit, as in the popup, it's cut in the middle (`5eed0e1f7765…ababab`), keeping the last six characters; the cut moves with the width (`MiddleEllipsis`, CSS only). Copy and the tooltip always give all of it.
 
 - It says to give out the whole name, since tags aren't unique, and that nobody can tell a payment to it is yours.
 - Its privacy note: the name is public, and linked to whatever paid to create it; what's paid to it isn't.
-- With no seedelf yet, it says to create one first, with **Create a seedelf** (disabled, with the reason, while the account can't pay for it).
+- With no Seedelf yet, it says to create one first, with **Create a Seedelf** (disabled, with the reason, while the account can't pay for it).
 - Home no longer lists them (it did until chunk 12). Back from a removal returns here.
 
 ## Move in (Cardano account → Seedelf)
@@ -143,20 +144,37 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
   - It asks Koios for its status every 15 s for up to 10 minutes, and reopening the wallet resumes the watch.
   - Once it's confirmed, the balances are read again.
 - **Signing:** only the Cardano account's payment keys sign, one signature per key, inside WebAssembly.
-- **No seedelf needed.** No script runs and no collateral is needed.
-- **Privacy:** it links the Cardano account to *some* register UTxOs, but not to any seedelf name. The form says so.
+- **No Seedelf needed.** No script runs and no collateral is needed.
+- **Privacy:** it links the Cardano account to *some* register UTxOs, but not to any Seedelf name. The form says so.
 
-## Send (Cardano account → any address)
+## Send (Cardano account → any addresses or Seedelfs)
 
-An ordinary Cardano payment from the account, so a user needn't open another wallet to pay from it. Built by `seedelf-core::build::account_send`, which shares the move-in's UTxO choice, change and signing. Added in chunk 12.
+An ordinary Cardano payment from the account, so a user needn't open another wallet to pay from it. Built by `seedelf-core::build::account_send_many`, which shares the move-in's UTxO choice, change and signing. Added in chunk 12; paying a Seedelf (the CLI's `fund`, from the account) and several recipients at once came in chunk 14.
 
 1. **Send** on the Cardano account tab, between Receive and Move in. It's disabled while the account is empty or a transaction is still confirming.
 2. **To:** an address or an ADA Handle, read and checked exactly as for a withdrawal, with Contacts. Your own account's address gets a note: the payment comes back, less the fee.
-3. **What's sent:** an ADA amount or Max, and tokens from the picker. The minimum ADA is worked out as for a move-in. **Max** is the move-in's: everything but the fee and what the tokens you keep need, and the collateral and locked UTxOs stay put. It pays one output; the change goes back to `0/0`.
-4. **Review:** where it goes, the amount and tokens, the fee, the change and how many UTxOs pay. The account's keys sign here, inside WebAssembly.
+   - **Or someone's Seedelf, by its whole name**, found as [Transfer](#transfer-seedelf--any-seedelf) finds it: "Found: *tag* · 5eed0e1f…". Koios is never asked about its token. Contacts offers Seedelfs and addresses both.
+   - It's paid like a move-in, but under a fresh re-randomization of the Seedelf's register instead of your own: WebAssembly checks the UTxO holding it and refuses an unsafe register, as for a transfer. Only its owner can spend the payment.
+   - **Your own Seedelf is refused**, pointing to Move in, which does the same thing.
+3. **What's sent:** an ADA amount or Max, and tokens from the picker. The minimum ADA is worked out as for a move-in. **Max** is the move-in's: everything but the fee and what the tokens you keep need, and the collateral and locked UTxOs stay put. Each address gets one output (a Seedelf, one per 20 tokens), in order; the change goes back to `0/0`.
+   - **Several recipients** (see [below](#several-recipients)): up to 20, each an address, a handle or a Seedelf, with its own amount and tokens.
+4. **Review:** where it goes (for a Seedelf, its tag and short name), the amount and tokens, the fee, the change and how many UTxOs pay; with several recipients, each under "Recipient N", then the total. The account's keys sign here, inside WebAssembly.
 5. **Send** submits exactly the reviewed transaction. No script runs, so no collateral and no giveme.my. A banner follows it to "Payment confirmed". It's listed in the Cardano account's Activity from Koios, not in the Seedelf history.
 
-**Privacy:** it's paid in the open, from the account. The form says so, and that paying from Seedelf instead avoids the link.
+**Privacy:** it's paid in the open, from the account. The form says so, and that paying from Seedelf instead avoids the link. For a Seedelf, it adds that anyone can see the money went into Seedelf, though not whose Seedelf it is; for several recipients, that they can be seen to be paid together.
+
+## Several recipients
+
+Send (from the Cardano account), Send to a Seedelf and Withdraw each pay up to 20 recipients in one transaction, as Eternl's multi-send does (chunk 14). Move in, Create and Remove pay one.
+
+- **One recipient looks as it always did.** **Add recipient** puts each in a card, "Recipient N", with its own To, amount and tokens; × takes one off.
+- **Max pays a single recipient.** Adding a second turns it off and hides it; each then needs an amount.
+- **Tokens:** a recipient's token boxes offer only what the others haven't taken. The builders refuse more of a token, all recipients together, than is held.
+- **"Together that's X ₳, more than the Y ₳ available"** stops Review early; the builder decides exactly.
+- **The review** shows each recipient's rows under its number, then the total, the fee and the change. The minimum ADA note names the recipient it was raised for.
+- **Limits:** 20 recipients (WebAssembly's `MAX_RECIPIENTS`), and core refuses a transaction over the network's 16 KiB (`build::MAX_TX_SIZE`) in words, whatever the count.
+- **Koios:** several recipients cost what one does, plus each `$handle`'s lookup. The account and the contract are read once for everyone. A Seedelf's lookup as it's pasted costs nothing when Home's last reading saw it (the kept contract view), and one request for what's new when it didn't.
+- **The Seedelf history** notes a transfer or withdrawal to several as its total, naming the first recipient "and N more".
 
 ## Staking and voting (Cardano account)
 
@@ -181,28 +199,28 @@ Stake the Cardano account with a pool, spend or withdraw its rewards, and delega
 
 **Privacy:** staking and voting are public and name the account. Every screen says so, and the Staking page says Seedelf money can't be staked.
 
-## Create a seedelf
+## Create a Seedelf
 
-**A mint links the seedelf to whatever pays for it** (see [privacy.md](privacy.md#known-links)), so the order matters: **mint first, then move in.**
+**A mint links the Seedelf to whatever pays for it** (see [privacy.md](privacy.md#known-links)), so the order matters: **mint first, then move in.**
 
-- **Paid by the Cardano account (the default, chunk 8b).** The seedelf is linked to the account openly, and to nothing else. Money moved in afterwards looks exactly like paying someone else's seedelf, so the Seedelf balance isn't tied to the name. This is the CLI's `create`, with the account's own keys.
-- **Paid by the Seedelf balance (a stealth mint, chunk 8).** The CLI's `util mint`. It only hides the payer when that balance came from other people's Seedelf payments: hidden money paying for a hidden seedelf.
+- **Paid by the Cardano account (the default, chunk 8b).** The Seedelf is linked to the account openly, and to nothing else. Money moved in afterwards looks exactly like paying someone else's Seedelf, so the Seedelf balance isn't tied to the name. This is the CLI's `create`, with the account's own keys.
+- **Paid by the Seedelf balance (a stealth mint, chunk 8).** The CLI's `util mint`. It only hides the payer when that balance came from other people's Seedelf payments: hidden money paying for a hidden Seedelf.
   - With money you moved in yourself, the mint spends that deposit, and its change sits in the same transaction. That ties the account, the name and the change together.
   - The first live preprod mint did exactly that.
 
 The steps:
 
-1. **Create a seedelf** on the Seedelf card. It's disabled while a transaction is still confirming, or when there's nothing to pay with. Until the wallet has a seedelf, the Cardano card says to create one before moving in.
+1. **Create a Seedelf** on the Seedelf card. It's disabled while a transaction is still confirming, or when there's nothing to pay with. Until the wallet has a Seedelf, the Cardano card says to create one before moving in.
 2. **An optional personal tag:** at most 15 characters of printable ASCII.
    - It's previewed as the wallet will list it, along with how the token name starts.
    - Anyone can read it on chain.
-   - Without one, the wallet shows the seedelf by its token name alone, never a stand-in such as "Unnamed", which could be someone's tag.
+   - Without one, the wallet shows the Seedelf by its token name alone, never a stand-in such as "Unnamed", which could be someone's tag.
 3. **Pay with:** Cardano account (the default) or Seedelf balance, each with a note on what it links.
 4. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
    - WebAssembly picks the UTxOs that pay (pure ADA first, as few as it can) and drafts the transaction. Ogmios, through Koios, measures the policy (and the spends, for a stealth mint), and WebAssembly finishes it.
    - **Account:** the account's collateral is put up (see *Collateral* above). Without one, one of its UTxOs is, as in the CLI: ADA-only if there is one, a 5 ₳ one first. A token UTxO also works, since the collateral return gives its tokens back. The account's keys sign here, as for a move-in. The fee is about 0.21 ₳, because only the policy runs.
    - **Stealth:** the inputs are proven under a new one-time key, and giveme.my will lend the collateral. The fee is about 0.26 ₳.
-   - The review shows the tag, the token name, what pays, the ADA locked with the seedelf (about 1.75 ₳, the minimum for its UTxO), the fee, and the change.
+   - The review shows the tag, the token name, what pays, the ADA locked with the Seedelf (about 1.75 ₳, the minimum for its UTxO), the fee, and the change.
 5. **Send.**
    - Account: submits the transaction signed at review.
    - Stealth: only now does giveme.my see it. WebAssembly checks giveme.my's signature and adds it with the one-time key's.
@@ -210,25 +228,25 @@ The steps:
 
 Details:
 
-- The seedelf sits under a fresh re-randomization of the user's own register. Minting to someone else's register (the CLI's `--generator` and `--public-value`) isn't offered.
+- The Seedelf sits under a fresh re-randomization of the user's own register. Minting to someone else's register (the CLI's `--generator` and `--public-value`) isn't offered.
 - The token is named after the smallest input spent (`5eed0e1f` ‖ tag ‖ its output index ‖ its tx id, cut to 32 bytes), because that's what the policy checks. So the name is only known once the UTxOs are picked.
-- Only removing the seedelf (chunk 10) gives back the ADA locked with it.
+- Only removing the Seedelf (chunk 10) gives back the ADA locked with it.
 - The wallet doesn't yet tell received Seedelf money from moved-in money. The choice and its note are the user's. The wallet could tell them apart by the transaction that created each UTxO (a spend of contract inputs, versus key inputs), but asking Koios about specific transactions would show it which UTxOs are ours.
 
-## Transfer (Seedelf → any seedelf)
+## Transfer (Seedelf → any Seedelf)
 
 This is the equivalent of the CLI's `transfer`, built by the same core code (`seedelf-core::build::transfer`). Built in chunk 9.
 
-1. **Send to a seedelf** on the Seedelf card. It's disabled while the Seedelf balance is empty or a transaction is still confirming.
-2. **The recipient: paste the seedelf's full name**, 64 hex characters starting `5eed0e1f`. Tags aren't unique (anyone can mint "alice"), so the name is what counts. Spaces and capitals are tidied away.
-   - The wallet looks the name up in the whole wallet contract, the query a balance reading already makes, and shows "Found: *tag* · 5eed0e1f…", or "No seedelf with that name on preprod."
+1. **Send to a Seedelf** on the Seedelf card. It's disabled while the Seedelf balance is empty or a transaction is still confirming.
+2. **The recipient: paste the Seedelf's full name**, 64 hex characters starting `5eed0e1f`. Tags aren't unique (anyone can mint "alice"), so the name is what counts. Spaces and capitals are tidied away.
+   - The wallet looks the name up in the whole wallet contract, the query a balance reading already makes, and shows "Found: *tag* · 5eed0e1f…", or "No Seedelf with that name on preprod."
    - Koios is never asked about the recipient's token (see [privacy.md](privacy.md#known-links)).
-   - **Your own seedelf** is allowed, with a warning: the payment comes back to your Seedelf balance, less the fee.
+   - **Your own Seedelf** is allowed, with a warning: the payment comes back to your Seedelf balance, less the fee.
 3. **What's sent:** an ADA amount (the move-in rules: 6 decimals, the supply cap, "more than you have", and the minimum worked out), and optionally part of any token in the Seedelf balance, each with its own amount.
-   - One recipient per transfer, and no Max: withdraw (chunk 10) is for sending everything.
+   - No Max: withdraw (chunk 10) is for sending everything. Up to 20 recipients at once (see [Several recipients](#several-recipients)): `build::transfer` pays them all.
    - The form nudges towards round amounts, and says that sending right after moving in is easy to match by timing.
 4. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
-   - WebAssembly checks the recipient's UTxO: it's in the wallet contract, holds that seedelf, and has a register as its datum. It refuses a register that a payment would be lost under: points that don't decode, points outside the prime-order subgroup, or the identity (anyone could spend a payment to that).
+   - WebAssembly checks the recipient's UTxO: it's in the wallet contract, holds that Seedelf, and has a register as its datum. It refuses a register that a payment would be lost under: points that don't decode, points outside the prime-order subgroup, or the identity (anyone could spend a payment to that).
    - The payment goes under a fresh re-randomization of the recipient's register, never the register as found. The change goes under fresh copies of your own.
    - It picks the Seedelf UTxOs that pay: first the ones holding the tokens being sent (the biggest holdings first), then pure ADA, largest first, as few as it can.
    - The inputs are proven under a new one-time key, and Ogmios, through Koios, measures the spends. Only the wallet script runs. The fee is about 0.23 ₳ for one input, and 0.27 ₳ for two.
@@ -237,8 +255,8 @@ This is the equivalent of the CLI's `transfer`, built by the same core code (`se
 
 Details:
 
-- If the recipient removes their seedelf between review and Send, the payment still reaches their register, so it's still theirs to spend; only the name is gone. The wallet doesn't look again at Send.
-- `build::transfer` pays several seedelfs at once (the CLI's repeated `--seedelfs`); the UI offers one.
+- If the recipient removes their Seedelf between review and Send, the payment still reaches their register, so it's still theirs to spend; only the name is gone. The wallet doesn't look again at Send.
+- `build::transfer` pays several Seedelfs at once (the CLI's repeated `--seedelfs`); the UI offers it since chunk 14.
 
 ## Withdraw (Seedelf → any address)
 
@@ -247,7 +265,7 @@ Built in chunk 10, by the same core code as the CLI's `sweep` and `remove` (`see
 ### Send to an address
 
 1. **Withdraw** on the Seedelf card. It's disabled while the Seedelf balance is empty or a transaction is still confirming.
-2. **To:** a Cardano address, or an ADA Handle like `$name`. What's typed is read after a short pause, and shown: "Sends to addr_test1…", or "$name is addr_test1…".
+2. **To:** a Cardano address, or an ADA Handle like `$name`; or several, up to 20 (see [Several recipients](#several-recipients), `build::sweep_many`). What's typed is read after a short pause, and shown: "Sends to addr_test1…", or "$name is addr_test1…".
    - A handle is looked up through Koios (`asset_nft_address`), the plain name first, then the CIP-68 one. Koios sees which handle is asked about.
    - Only a normal address on this network is accepted: not a script (its output would carry no datum), not a stake address, not the other network. The same goes for the address a handle resolves to.
    - **Your own Cardano account gets a warning:** withdrawing there links the money back to it, and to whoever paid it into Seedelf. The wallet recognizes any address carrying the account's staking key, as every address a normal wallet shows for the account does.
@@ -258,18 +276,18 @@ Built in chunk 10, by the same core code as the CLI's `sweep` and `remove` (`see
 4. **Review:** where it goes (the handle and its address, full on hover), the amount or "Everything", the tokens, the fee, the change, and how many UTxOs pay. The fee is about 0.27 ₳ for two inputs.
 5. **Send**, as for a transfer. A banner follows it to "Withdrawal confirmed".
 
-### Remove a seedelf
+### Remove a Seedelf
 
-1. **Remove** on a seedelf's row in the Seedelf tab's **Receive**.
+1. **Remove** on a Seedelf's row in the Seedelf tab's **Receive**.
 2. **Send what's freed to:**
-   - **Cardano account** (the default), its receive address `0/0`. A seedelf the account paid for (the default since chunk 8b) is linked to it anyway, so this links nothing new.
-   - **Seedelf balance**, under a fresh copy of your register. This is for a seedelf you minted from the Seedelf balance. For one the account paid for, it ties the seedelf's name to that new UTxO, and to whatever it's later spent with.
-3. **Review:** the seedelf, what comes back (the ADA locked with it, about 1.75 ₳, less a fee of about 0.24 ₳), and the fee. Both scripts run: the wallet's spend and the policy's burn.
+   - **Cardano account** (the default), its receive address `0/0`. A Seedelf the account paid for (the default since chunk 8b) is linked to it anyway, so this links nothing new.
+   - **Seedelf balance**, under a fresh copy of your register. This is for a Seedelf you minted from the Seedelf balance. For one the account paid for, it ties the Seedelf's name to that new UTxO, and to whatever it's later spent with.
+3. **Review:** the Seedelf, what comes back (the ADA locked with it, about 1.75 ₳, less a fee of about 0.24 ₳), and the fee. Both scripts run: the wallet's spend and the policy's burn.
 4. **Send.** The token is burned, and the banner follows it to "Seedelf removed".
 
 Details:
 
-- Payments already sent to a removed seedelf stay yours: they sit under copies of your register, not with the name. After the removal, nobody can pay the name.
+- Payments already sent to a removed Seedelf stay yours: they sit under copies of your register, not with the name. After the removal, nobody can pay the name.
 - The burn policy only checks the policy ID and the `5eed0e1f` prefix. The CLI's `remove` still pays any address (`--address`); the web wallet offers the account or the Seedelf balance.
 - The CLI's `sweep --all` takes the first 20 owned UTxOs, and the web wallet's Max takes the 20 largest.
 

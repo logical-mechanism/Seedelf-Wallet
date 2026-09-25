@@ -126,7 +126,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                     type="button"
                     className="token-row"
                     onClick={() => setOpen(ref(u))}
-                    aria-label={`${formatAda(u.lovelace)} ₳${tag(u) ? `, ${tag(u)!.toLowerCase()}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
+                    aria-label={`${formatAda(u.lovelace)} ₳${tag(u) ? `, ${tag(u)}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
                   >
                     <span className={`avatar activity__icon${tag(u) ? " utxo__icon--kept" : ""}`}>
                       <Icon u={u} />
@@ -212,12 +212,12 @@ function UtxoDetails({
             <Callout tone="info">
               {utxo.seedelf.label ? (
                 <>
-                  It holds your seedelf <strong>{utxo.seedelf.label}</strong>.
+                  It holds your Seedelf <strong>{utxo.seedelf.label}</strong>.
                 </>
               ) : (
-                "It holds one of your seedelfs."
+                "It holds one of your Seedelfs."
               )}{" "}
-              Only removing the seedelf spends it.
+              Only removing the Seedelf spends it.
             </Callout>
             <CopyField
               label="Seedelf name"

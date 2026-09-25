@@ -59,6 +59,8 @@ const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set(["move-in", "trans
 
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
 const shortHex = (hex: string) => (hex.length > 20 ? `${hex.slice(0, 12)}…${hex.slice(-6)}` : hex);
+/** Who was paid: the one, or the first and how many more. */
+const several = (names: string[]) => (names.length > 1 ? `${names[0]} and ${names.length - 1} more` : names[0]);
 const feeOf = (fee: unknown) => (typeof fee === "string" ? fee : (fee as { total?: string } | undefined)?.total);
 
 export interface ActivityDeps {
@@ -89,15 +91,23 @@ export class ActivityService {
     // A payment or a staking change on the Cardano account isn't Seedelf's: its Activity comes from Koios.
     if (!SEEDELF_KINDS.has(pending.kind)) return Promise.resolve();
     const s = summary as Record<string, any>;
-    const tokens = Array.isArray(s.tokens) ? s.tokens.length : 0;
-    const shared = { txHash: pending.txHash, at: pending.submittedAt, lovelace: String(s.lovelace ?? "0"), tokens, fee: feeOf(s.fee) };
+    // A transfer or a withdrawal pays one or more; the rest pay one amount.
+    const paid: Array<Record<string, any>> = Array.isArray(s.payments) ? s.payments : [s];
+    const lovelace = paid.reduce((sum, p) => sum + BigInt(p.lovelace ?? "0"), 0n).toString();
+    const kinds = new Set(paid.flatMap((p) => (Array.isArray(p.tokens) ? p.tokens : []).map((t: any) => `${t.policyId}.${t.assetName}`)));
+    const shared = { txHash: pending.txHash, at: pending.submittedAt, lovelace, tokens: kinds.size, fee: feeOf(s.fee) };
     const entry: ActivityEntry =
       pending.kind === "move-in"
         ? { ...shared, kind: "move-in", direction: "in" }
         : pending.kind === "transfer"
-          ? { ...shared, kind: "transfer", direction: "out", detail: s.label ?? shortHex(String(s.to)) }
+          ? { ...shared, kind: "transfer", direction: "out", detail: several(paid.map((p) => p.label ?? shortHex(String(p.to)))) }
           : pending.kind === "withdraw"
-            ? { ...shared, kind: "withdraw", direction: "out", detail: s.handle ? `$${s.handle}` : shortHex(String(s.address)) }
+            ? {
+                ...shared,
+                kind: "withdraw",
+                direction: "out",
+                detail: several(paid.map((p) => (p.handle ? `$${p.handle}` : shortHex(String(p.address))))),
+              }
             : pending.kind === "mint"
               ? { ...shared, kind: "mint", direction: "none", detail: s.label || undefined }
               : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };

@@ -139,7 +139,7 @@ Replace `preview` with:
   3. Ask for 3 randomly chosen word positions to confirm.
   4. Set the password (typed twice).
   5. Go to Home.
-  - Show the phrase warning from flows.md: "This phrase restores your seedelfs only in a Seedelf wallet…"
+  - Show the phrase warning from flows.md: "This phrase restores your Seedelfs only in Seedelf Wallet…"
 - **Restore:**
   - Choose the word count: 12, 15 or 24.
   - **One box per word, with BIP39 autocomplete.** Pasting a full phrase fills every box.

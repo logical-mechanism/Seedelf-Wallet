@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test as base, chromium, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
 import { txIdOf } from "../tests/fixtures/cbor";
 
@@ -254,8 +254,8 @@ export async function snap(page: Page, name: string) {
 }
 
 /** Picks tokens in a form's "Add tokens" picker: the ones named, or every one. */
-export async function addTokens(page: Page, names?: string[]) {
-  await page.getByRole("button", { name: /^Add (more )?tokens$/ }).click();
+export async function addTokens(page: Page, names?: string[], within: Page | Locator = page) {
+  await within.getByRole("button", { name: /^Add (more )?tokens$/ }).click();
   const picker = page.getByRole("dialog", { name: "Add tokens" });
   if (names) for (const name of names) await picker.getByRole("button", { name, exact: true }).click();
   else await picker.getByRole("button", { name: /^Select all/ }).click();

@@ -186,7 +186,7 @@ export function Home() {
     : balances && !canCreate
       ? balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
         ? ALL_LOCKED
-        : "Fund your Cardano account first: it pays for the seedelf"
+        : "Fund your Cardano account first: it pays for the Seedelf"
       : undefined;
   // Move in and Send both spend the account.
   const canMoveIn = !!free && free.cardano.utxos > 0 && !watching;
@@ -306,7 +306,7 @@ export function Home() {
                   primary
                   icon={<SendIcon />}
                   label="Send"
-                  name="Send to a seedelf"
+                  name="Send to a Seedelf"
                   onClick={() => setScreen("transfer")}
                   disabled={!canSpend}
                   title={spendTitle}
@@ -321,7 +321,7 @@ export function Home() {
                 <ActionButton
                   icon={<SproutIcon />}
                   label="Create"
-                  name="Create a seedelf"
+                  name="Create a Seedelf"
                   onClick={() => setScreen("create")}
                   disabled={!canCreate}
                   title={createTitle}
@@ -410,7 +410,7 @@ export function Home() {
 
             {balances && seedelfs.length === 0 && (
               <Callout tone="privacy" testId="mint-first">
-                Create your seedelf before moving money in: then what you move in isn't tied to it.
+                Create your Seedelf before moving money in: then what you move in isn't tied to it.
               </Callout>
             )}
 
@@ -526,7 +526,7 @@ function GettingStarted({
     },
     {
       done: created,
-      title: "Create your seedelf",
+      title: "Create your Seedelf",
       text: "Your Cardano account pays for it, before any money moves in.",
       action: "Create",
       onClick: onCreate,
@@ -535,7 +535,7 @@ function GettingStarted({
     {
       done: movedIn,
       title: "Move ADA in",
-      text: "What you move in afterwards isn't tied to your seedelf.",
+      text: "What you move in afterwards isn't tied to your Seedelf.",
       action: "Move in",
       onClick: onMoveIn,
       disabled: watching || balances.cardano.utxos === 0,

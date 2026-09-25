@@ -1,0 +1,31 @@
+# Chunk 14 plan: style and flow, second pass
+
+Chunk 13 made the wallet a full Cardano wallet with Seedelf built in. This chunk is the second pass over the user's own findings, as chunk 12 was ([plans/chunk-12-style-flow.md](chunk-12-style-flow.md)). Branch `web-wallet/style-flow-2`, one PR into `seedelf-web-wallet`.
+
+**How it runs:** the user tests the built extension and sends findings. Each finding goes in the list below with what was decided. Batches land with popup and tab screenshots for the user to check before they rebuild.
+
+## Start here
+
+1. `git fetch origin && git checkout web-wallet/style-flow-2`
+2. Read this plan and the newest roadmap handoff note.
+3. Build and test (from `seedelf-platform/seedelf-web-wallet/extension`): `npm run build && npm test && npm run e2e`.
+4. Ask the user for new findings; add them to the list.
+
+## Rules that still hold
+
+- Lace is inspiration for look and flow, not a brand to copy: no Lace purple, fonts or logos (plans/chunk-11-polish.md).
+- **Every privacy note stays.** A redesign can move or shorten one, never drop it.
+- Correctness UX is always in scope: clear errors, input limits.
+- Nothing new phones home. A new host or query needs its own decision, because of what it tells that host.
+- **Koios budget.** The wallet uses Koios's public tier: 5,000 requests a day, at most 1,000 rows a response, a 30 s timeout. Every feature states how many requests it costs, and anything paged must scale with the contract's size. The e2e tests assert the exact requests a screen makes.
+- The tests find things by role, label and test id. A renamed control means updating `e2e/extension.spec.ts` in the same commit.
+- **The name is Seedelf** (item 2): always capitalized, and Seedelf Wallet for the app. `tests/words.test.ts` checks it.
+
+## The list
+
+| # | Finding | Decision | Status |
+|---|---|---|---|
+| 1 | The Cardano side can't pay a Seedelf. Paste one into Send and pay it properly: a move-in, but into someone else's Seedelf. | **Send's To takes a Seedelf's whole name** as well as an address or `$handle`. It's found as Send to a Seedelf finds it, in the contract as the scan has it, and Koios is never asked about its token. Contacts offers both kinds. **Core:** `build::account_fund` (the CLI's `fund`, from the account) pays like a move-in, but under a fresh re-randomization of the recipient's register, and refuses an unsafe one (`is_payable`). **WebAssembly:** `buildAccountSend` takes the name with the contract UTxO holding it (`recipient`), checked as a transfer's is. **Your own Seedelf is refused, pointing to Move in,** which does the same thing (and a payment to yourself would show as "received" in the Seedelf history). The review shows the tag and short name, and says only its owner can spend it. The privacy note adds that anyone can see the money went into Seedelf, though not whose Seedelf it is. Withdraw, given a Seedelf's name, now says Send pays Seedelfs. Koios: a pasted name costs one request (what's new in the contract), and Review one more on top of an address send's four. | ✅ built; the user checks |
+| 2 | "seedelf" is written every which way. There should be one style: always Seedelf, or Seedelf Wallet where that fits. | **Seedelf, always; Seedelf Wallet for the app** ([architecture.md](../architecture.md#ui)). 55 strings on screen and from the worker, the top bar's wordmark (it said "seedelf"; the logo says Seedelf), 24 messages from core and WebAssembly (shared with the CLI), the store listing and its image captions, and every web wallet doc. "A Seedelf wallet" became "Seedelf Wallet" where the app is meant. A UTxO row's spoken name keeps its tag's case ("Seedelf", "Locked"). Code keeps lowercase: identifiers, storage keys, test ids, and the frozen derivation strings, which can never change. **`tests/words.test.ts`** parses every source file with Vite's parser and fails on a lowercase one in anything a person reads (JSX text, shown attributes, any string with a space); a probe file checks the check. No requests. | ✅ built; the user checks |
+| 3 | Several recipients when sending, on both sides, as Eternl has. | **Up to 20 in one transaction on Send (the Cardano account's), Send to a Seedelf and Withdraw**, which stay separate screens (the user's choice). One recipient looks as it always did; **Add recipient** puts each in a card with its own To, amount and tokens, × takes one off. **Max pays a single recipient** (the user's choice): a second turns it off. A recipient's token boxes offer only what the others haven't taken, and "Together that's X ₳, more than…" stops Review early. The review shows each under "Recipient N", then the total. **Core:** `account_send_many` (`AccountPay` each; `account_send` and `account_fund` are its one-recipient cases) and `sweep_many`; `build::transfer` already paid several. `settle` now refuses a transaction over 16 KiB in words (`MAX_TX_SIZE`). **WebAssembly:** the send, transfer and withdrawal requests take `payments` (one to 20) and answer per recipient. **Privacy:** the forms say recipients paid together can be seen to be; privacy.md's *Co-paying*. **Koios:** what one recipient costs, plus each `$handle`; and a Seedelf's lookup as it's pasted now tries the kept contract view first, so a name Home's reading saw costs nothing (Send to a Seedelf gains this too). The Seedelf history names "*first* and N more". | ✅ built; the user checks |
+| 4 | The tabs say Seedelf and Cardano, as if they were two chains (Lace's Cardano and Midnight). Both are Cardano: it's one wallet with a private side and a public side. | **Private and Public, all the way through** (the user's choice of the three offered): the tabs, the balances ("Seedelf balance" and "Cardano account" become the private balance and the public account), and the flows' names to match (Move in, Withdraw and the rest). Seedelf stays the technology's name and the named tokens'. The exact wording goes to the user before it's built. | decided; next |

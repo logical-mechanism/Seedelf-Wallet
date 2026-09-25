@@ -8,6 +8,7 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { WithdrawDestination } from "../shared/rpc";
+import { SEEDELF_NOT_AN_ADDRESS, seedelfName } from "../shared/seedelf-name";
 import type { Koios } from "./koios";
 import type { Wallet } from "./wallet";
 
@@ -35,6 +36,8 @@ export async function resolveDestination(
   const { wasm, wallet } = deps;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const text = to.trim();
+  // Send pays a seedelf before it gets here; Withdraw can't.
+  if (seedelfName(text)) throw new Error(SEEDELF_NOT_AN_ADDRESS);
   let address = text;
   let handle: string | undefined;
   if (text.startsWith("$")) {

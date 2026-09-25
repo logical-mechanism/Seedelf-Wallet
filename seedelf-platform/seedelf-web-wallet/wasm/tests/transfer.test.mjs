@@ -15,15 +15,10 @@ const phrase = json("../../../seedelf-crypto/tests/vectors/cardano_account.json"
 const params = json("../../../seedelf-core/tests/fixtures/epoch_params.json")[0];
 const recorded = json("../../extension/tests/fixtures/transfer-preprod.json");
 const owned = json("../../extension/tests/fixtures/owned-utxos.json").owned_utxos;
-const request = {
-  network: "preprod",
-  params,
-  utxos: owned.slice(0, 2),
-  to: recorded.to,
-  recipient: recorded.recipient,
-  lovelace: recorded.lovelace,
-  tokens: recorded.tokens,
-};
+const payment = { to: recorded.to, recipient: recorded.recipient, lovelace: recorded.lovelace, tokens: recorded.tokens };
+const request = { network: "preprod", params, utxos: owned.slice(0, 2), payments: [payment] };
+/** The request, paying one Seedelf with `changes` made. */
+const paying = (changes) => ({ ...request, payments: [{ ...payment, ...changes }] });
 
 test("drafts, finishes and prepares a transfer for signing", () => {
   const key = SeedelfKey.fromPhrase(phrase, 0);
@@ -36,10 +31,12 @@ test("drafts, finishes and prepares a transfer for signing", () => {
     finishTransfer(key, JSON.stringify({ ...request, seed: draft.seed, evaluation: recorded.evaluation })),
   );
   assert.equal(final.seed, draft.seed);
-  assert.equal(final.to, recorded.to);
-  assert.equal(final.toSelf, false);
-  assert.equal(final.lovelace, "5000000");
-  assert.deepEqual(final.tokens, recorded.tokens);
+  assert.equal(final.payments.length, 1);
+  const [paid] = final.payments;
+  assert.equal(paid.to, recorded.to);
+  assert.equal(paid.toSelf, false);
+  assert.equal(paid.lovelace, "5000000");
+  assert.deepEqual(paid.tokens, recorded.tokens);
   assert.equal(final.fee.total, recorded.final.fee.total);
   assert.equal(final.changeOutputs, 1);
   assert.equal(final.changeTokens, 1);
@@ -55,20 +52,20 @@ test("drafts, finishes and prepares a transfer for signing", () => {
 test("flags paying your own seedelf, and explains a bad transfer", () => {
   const key = SeedelfKey.fromPhrase(phrase, 0);
   const mine = owned[2];
-  const own = { ...request, to: mine.asset_list[0].asset_name, recipient: mine, tokens: [] };
+  const own = paying({ to: mine.asset_list[0].asset_name, recipient: mine, tokens: [] });
   const final = JSON.parse(finishTransfer(key, JSON.stringify({ ...own, seed: "42".repeat(32), evaluation: recorded.evaluation })));
-  assert.equal(final.toSelf, true);
+  assert.equal(final.payments[0].toSelf, true);
 
   // Too little ADA goes up to the least the payment needs.
   const short = JSON.parse(
-    finishTransfer(key, JSON.stringify({ ...request, lovelace: "0", seed: "42".repeat(32), evaluation: recorded.evaluation })),
-  );
+    finishTransfer(key, JSON.stringify({ ...paying({ lovelace: "0" }), seed: "42".repeat(32), evaluation: recorded.evaluation })),
+  ).payments[0];
   assert.equal(short.lovelace, short.minimum);
   assert.ok(Number(short.minimum) > 1_000_000 && Number(short.minimum) < 2_000_000, short.minimum);
 
   assert.throws(() => draftTransfer(key, "{}"), /bad transfer request/);
-  assert.throws(() => draftTransfer(key, JSON.stringify({ ...request, to: "5eed0e1f" })), /64 hex characters/);
-  assert.throws(() => draftTransfer(key, JSON.stringify({ ...request, utxos: owned })), /holds a seedelf/);
+  assert.throws(() => draftTransfer(key, JSON.stringify(paying({ to: "5eed0e1f" }))), /64 hex characters/);
+  assert.throws(() => draftTransfer(key, JSON.stringify({ ...request, utxos: owned })), /holds a Seedelf/);
   assert.throws(() => finishTransfer(key, JSON.stringify(request)), /seed/);
   key.free();
 });

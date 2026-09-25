@@ -805,7 +805,7 @@ fn explains_what_is_wrong() {
         .finalize(&Budgets::from_ogmios(&no_mint).unwrap())
         .err()
         .unwrap();
-    assert!(e.to_string().contains("seedelf policy"), "{e}");
+    assert!(e.to_string().contains("Seedelf policy"), "{e}");
     let too_much = json!({"result": [
         {"validator": {"index": 0, "purpose": "spend"}, "budget": {"memory": 17_000_000, "cpu": 1}},
         {"validator": {"index": 0, "purpose": "mint"}, "budget": {"memory": 1, "cpu": 1}},
@@ -1227,7 +1227,7 @@ mod account {
         };
         assert!(
             err(&[at(&p, 0x70, 0, 1_500_000, &[])])
-                .contains("Not enough ADA in the Cardano account for the seedelf")
+                .contains("Not enough ADA in the Cardano account for the Seedelf")
         );
         assert!(err(&[]).contains("nothing in the Cardano account"));
         // The collateral set aside is never spent, so alone it pays for nothing.
@@ -1279,7 +1279,7 @@ mod account {
                 .err()
                 .unwrap()
                 .to_string()
-                .contains("seedelf policy")
+                .contains("Seedelf policy")
         );
     }
 }
@@ -1420,7 +1420,7 @@ mod transfer {
             let register = o.register.as_ref().unwrap();
             assert!(
                 register.is_owned(*owner).unwrap(),
-                "payment {i} reaches its seedelf's owner"
+                "payment {i} reaches its Seedelf's owner"
             );
             assert_ne!(register, &payment.register, "payment {i} is re-randomized");
             assert_eq!(o.lovelace, payment.lovelace);
@@ -1750,7 +1750,7 @@ mod transfer {
         assert!(err(&[zero]).contains("none of a token"));
 
         // Nothing to pay, or not enough ADA.
-        assert!(err(&[]).contains("at least one seedelf"));
+        assert!(err(&[]).contains("at least one Seedelf"));
         let e = err(&[pay(&bob.found, 9_000_000, &[])]);
         assert!(e.contains("Not enough ADA in the Seedelf balance"), "{e}");
 
@@ -1967,6 +1967,67 @@ mod withdraw {
     }
 
     #[test]
+    fn pays_several_addresses_in_order_and_keeps_the_change() {
+        let w = world();
+        let first = key_address(Network::Testnet);
+        let second: Address = ShelleyAddress::new(
+            Network::Testnet,
+            ShelleyPaymentPart::Key(PaymentKeyHash::new([9; 28])),
+            ShelleyDelegationPart::Null,
+        )
+        .into();
+        let available = [
+            owned(&w, 0x01, 0, 20_000_000, &[]),
+            owned(&w, 0x02, 0, 3_000_000, &[("tok", 100)]),
+            owned(&w, 0x03, 0, 2_500_000, &[("other", 9)]),
+        ];
+        let payments = [
+            build::AddressPayment {
+                to: first.clone(),
+                lovelace: 5_000_000,
+                tokens: tokens(&[("tok", 40)]),
+            },
+            build::AddressPayment {
+                to: second.clone(),
+                lovelace: 2_000_000,
+                tokens: tokens(&[("tok", 25)]),
+            },
+        ];
+        let spend = build::sweep_many(&w.chain, &available, &payments, &w.owner, w.signer).unwrap();
+        let spent = spend.inputs();
+        assert_eq!(
+            spent.len(),
+            2,
+            "the token's UTxO and the largest pure-ADA one"
+        );
+        let built = finish(&w, spend, &spends_only(2));
+        let tx = assert_spend(&w, &spent, &built, 629);
+        // Each address as asked, in order; then the change, back into the contract.
+        assert_eq!(tx.outputs[0].address, first);
+        assert_eq!(tx.outputs[0].lovelace, 5_000_000);
+        assert_eq!(assets_of(&tx.outputs[0]), tokens(&[("tok", 40)]));
+        assert_eq!(tx.outputs[1].address, second);
+        assert_eq!(tx.outputs[1].lovelace, 2_000_000);
+        assert_eq!(assets_of(&tx.outputs[1]), tokens(&[("tok", 25)]));
+        assert!(tx.outputs[2..].iter().all(|o| o.address == w.wallet));
+        assert_eq!(built.change_tokens, tokens(&[("tok", 35)]));
+
+        // Together they can't take more of a token than there is.
+        let mut greedy = payments.clone();
+        greedy[1].tokens = tokens(&[("tok", 61)]);
+        let e = build::sweep_many(&w.chain, &available, &greedy, &w.owner, w.signer)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(e.contains("holds only 100"), "{e}");
+        let e = build::sweep_many(&w.chain, &available, &[], &w.owner, w.signer)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(e.contains("at least one address"), "{e}");
+    }
+
+    #[test]
     fn sends_everything_less_the_fee() {
         let w = world();
         let to = key_address(Network::Testnet);
@@ -2111,7 +2172,7 @@ mod withdraw {
         let e = build::remove(&w.chain, &plain, &w.owner, w.signer)
             .err()
             .unwrap();
-        assert!(e.to_string().contains("exactly one seedelf"), "{e}");
+        assert!(e.to_string().contains("exactly one Seedelf"), "{e}");
         let mut two = seedelf(&w, 0x03, &format!("5eed0e1f{}", "01".repeat(28)));
         let second = two.asset_list.as_ref().unwrap()[0].clone();
         two.asset_list.as_mut().unwrap().push(Asset {
@@ -2126,6 +2187,6 @@ mod withdraw {
             .proven(|r, vkh| create_proof(r.clone(), w.sk, vkh.to_string()))
             .unwrap();
         let e = spend.finalize(&spends_only(1)).err().unwrap();
-        assert!(e.to_string().contains("seedelf policy"), "{e}");
+        assert!(e.to_string().contains("Seedelf policy"), "{e}");
     }
 }

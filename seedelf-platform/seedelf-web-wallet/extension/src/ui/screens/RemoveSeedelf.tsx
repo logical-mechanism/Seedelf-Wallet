@@ -29,7 +29,7 @@ export function RemoveSeedelf({
   const [summary, setSummary] = useState<RemoveSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const name = seedelf.label ?? "a seedelf";
+  const name = seedelf.label ?? "a Seedelf";
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -101,7 +101,7 @@ export function RemoveSeedelf({
       }
     >
       <p className="note">
-        Removing burns the seedelf's token and frees the ADA locked with it, less the fee. Payments already sent to it
+        Removing burns the Seedelf's token and frees the ADA locked with it, less the fee. Payments already sent to it
         stay yours; after this, nobody can pay it by name.
       </p>
       <code className="copy-field__value" title={seedelf.assetName}>
@@ -117,8 +117,8 @@ export function RemoveSeedelf({
       />
       <Callout tone="privacy" testId="remove-to-note">
         {to === "account"
-          ? "Back where an account-paid seedelf's ADA came from, so it links nothing new."
-          : "For a seedelf you minted from your Seedelf balance. For one your Cardano account paid for, this ties the seedelf's name to the new UTxO, and to whatever it's later spent with."}
+          ? "Back where an account-paid Seedelf's ADA came from, so it links nothing new."
+          : "For a Seedelf you minted from your Seedelf balance. For one your Cardano account paid for, this ties the Seedelf's name to the new UTxO, and to whatever it's later spent with."}
       </Callout>
     </Screen>
   );

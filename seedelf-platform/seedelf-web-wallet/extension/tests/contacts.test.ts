@@ -46,17 +46,17 @@ describe("the private store", () => {
 describe("contacts", () => {
   const seedelf: string = transferPreprod.to;
 
-  it("saves a seedelf, a $handle and an address, checked without asking anyone", async () => {
+  it("saves a Seedelf, a $handle and an address, checked without asking anyone", async () => {
     const t = await unlocked();
     const pasted = ` ${seedelf.slice(0, 32).toUpperCase()} ${seedelf.slice(32)} `;
-    await t.contacts.save("preprod", { name: "Test seedelf", value: pasted });
+    await t.contacts.save("preprod", { name: "Test Seedelf", value: pasted });
     await t.contacts.save("preprod", { name: "bob", value: "$Bob" });
     const list = await t.contacts.save("preprod", { name: "Alice", value: phrase(15).preprod.receive_0 });
 
     expect(list.map((c) => [c.name, c.kind, c.value])).toEqual([
       ["Alice", "address", phrase(15).preprod.receive_0],
       ["bob", "address", "$bob"],
-      ["Test seedelf", "seedelf", seedelf],
+      ["Test Seedelf", "seedelf", seedelf],
     ]);
     expect(t.koios.calls).toHaveLength(0);
   });
@@ -65,11 +65,11 @@ describe("contacts", () => {
     const t = await unlocked();
     await expect(t.contacts.save("preprod", { name: " ", value: seedelf })).rejects.toThrow("Give the contact a name");
     await expect(t.contacts.save("preprod", { name: "x".repeat(41), value: seedelf })).rejects.toThrow("at most 40");
-    await expect(t.contacts.save("preprod", { name: "Nope", value: "hello" })).rejects.toThrow("isn't a seedelf's full name");
+    await expect(t.contacts.save("preprod", { name: "Nope", value: "hello" })).rejects.toThrow("isn't a Seedelf's full name");
     await expect(t.contacts.save("preprod", { name: "Nope", value: "$no spaces" })).rejects.toThrow("ADA Handle");
     // A preprod address isn't one a mainnet wallet can pay.
     await expect(t.contacts.save("mainnet", { name: "Alice", value: phrase(15).preprod.receive_0 })).rejects.toThrow(
-      "isn't a seedelf's full name",
+      "isn't a Seedelf's full name",
     );
     await t.contacts.save("preprod", { name: "Test", value: seedelf });
     await expect(t.contacts.save("preprod", { name: "Again", value: seedelf })).rejects.toThrow("already saved, as Test");

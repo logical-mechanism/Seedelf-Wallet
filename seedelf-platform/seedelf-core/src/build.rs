@@ -66,9 +66,14 @@ pub fn settle_fee(
     )
 }
 
+/// The largest transaction the ledger takes, signed: `max_tx_size`, 16 KiB on
+/// mainnet and preprod. A bigger one is refused at submit.
+pub const MAX_TX_SIZE: u64 = 16_384;
+
 /// [`settle_fee`] with any pricing: `price(size)` is the fee a transaction of
 /// `size` signed bytes needs. `staking` is patched into each draft before
 /// it's priced (see [`Staking::patch`]); `signers` doesn't count its stake key.
+/// A draft over [`MAX_TX_SIZE`] is refused here, in words.
 fn settle(
     signers: usize,
     staking: &Staking,
@@ -78,7 +83,13 @@ fn settle(
     let mut fee: u64 = 200_000;
     for _ in 0..5 {
         let staged = build(fee)?;
-        let needed = price(signed_size(&staged, signers, staking)?);
+        let size = signed_size(&staged, signers, staking)?;
+        if size > MAX_TX_SIZE {
+            bail!(
+                "This transaction would be {size} bytes, over the network's limit of {MAX_TX_SIZE}. Send fewer tokens, or pay fewer recipients, at once"
+            );
+        }
+        let needed = price(size);
         if needed <= fee && fee - needed < 1_000 {
             return Ok((fee, staged));
         }
@@ -264,7 +275,7 @@ const STAKE_SHORT: NotEnough =
 
 /// An account-paid mint's inputs can't pay for it.
 const ACCOUNT_MINT_SHORT: NotEnough =
-    NotEnough("Not enough ADA in the Cardano account for the seedelf, its fee and the change");
+    NotEnough("Not enough ADA in the Cardano account for the Seedelf, its fee and the change");
 
 /// A script spend's inputs can't pay for it.
 const SEEDELF_SHORT: NotEnough =
@@ -343,9 +354,10 @@ pub enum AccountAmount {
 /// Where the Cardano account pays.
 #[derive(Clone, Copy)]
 pub enum Payee<'a> {
-    /// Into the wallet contract, under fresh re-randomizations of `owner`
-    /// (the user's base register): a move-in. Tokens go
-    /// `MAXIMUM_TOKENS_PER_UTXO` to an output.
+    /// Into the wallet contract, under fresh re-randomizations of `owner`:
+    /// the user's base register (a move-in), or the register of someone's
+    /// seedelf ([`account_fund`]). Tokens go `MAXIMUM_TOKENS_PER_UTXO` to an
+    /// output.
     Seedelf {
         owner: &'a Register,
         wallet_addr: &'a Address,
@@ -384,6 +396,25 @@ impl Payee<'_> {
     }
 }
 
+/// One recipient of a payment from the Cardano account: where it goes, how
+/// much ADA, and which tokens, as `(policy, name, quantity)` in hex.
+#[derive(Clone)]
+pub struct AccountPay<'a> {
+    pub payee: Payee<'a>,
+    pub amount: AccountAmount,
+    pub picked: Vec<(String, String, u64)>,
+}
+
+impl<'a> AccountPay<'a> {
+    pub fn new(payee: Payee<'a>, amount: AccountAmount, picked: &[(String, String, u64)]) -> Self {
+        AccountPay {
+            payee,
+            amount,
+            picked: picked.to_vec(),
+        }
+    }
+}
+
 /// A built payment from the Cardano account (a move-in, a send, or a staking
 /// transaction): the unsigned transaction and what it does.
 pub struct AccountPayment {
@@ -393,9 +424,11 @@ pub struct AccountPayment {
     /// The spent UTxOs, in input order; each needs its payment key's signature.
     pub inputs: Vec<UtxoResponse>,
     pub fee: u64,
-    /// Lovelace and tokens paid.
+    /// Lovelace and tokens paid, all recipients together.
     pub lovelace: u64,
     pub tokens: Assets,
+    /// The lovelace each recipient got, in order.
+    pub paid: Vec<u64>,
     /// How many outputs hold them.
     pub outputs: usize,
     /// What goes back to the Cardano account.
@@ -433,9 +466,7 @@ pub fn move_in(
     account_payment(
         params,
         available,
-        amount,
-        picked,
-        payee,
+        &[AccountPay::new(payee, amount, picked)],
         staking,
         change_addr,
         MOVE_IN_SHORT,
@@ -456,14 +487,87 @@ pub fn account_send(
     change_addr: &Address,
     staking: &Staking,
 ) -> Result<AccountPayment> {
-    check_payable(to, network_flag)?;
     let payee = Payee::Address(to);
+    account_send_many(
+        params,
+        available,
+        &[AccountPay::new(payee, amount, picked)],
+        network_flag,
+        change_addr,
+        staking,
+    )
+}
+
+/// Send to several: the Cardano account pays each of `recipients`, in the
+/// order given, then the change. Each is a key address on this network or a
+/// Seedelf (see [`account_fund`]), with its own amount and tokens. Max pays a
+/// single recipient. The UTxOs are chosen, the change made, and `staking`
+/// carried, as for [`move_in`].
+pub fn account_send_many(
+    params: &ProtocolParameters,
+    available: &[UtxoResponse],
+    recipients: &[AccountPay],
+    network_flag: bool,
+    change_addr: &Address,
+    staking: &Staking,
+) -> Result<AccountPayment> {
+    if recipients.is_empty() {
+        bail!("A payment needs someone to pay");
+    }
+    for pay in recipients {
+        match pay.payee {
+            Payee::Address(to) => check_payable(to, network_flag)?,
+            Payee::Seedelf { owner, .. } => check_register(owner)?,
+            Payee::Nobody => bail!("A payment needs someone to pay"),
+        }
+    }
     account_payment(
         params,
         available,
-        amount,
-        picked,
-        payee,
+        recipients,
+        staking,
+        change_addr,
+        SEND_SHORT,
+    )
+}
+
+/// Refuses a register a payment would be lost under ([`is_payable`]).
+fn check_register(register: &Register) -> Result<()> {
+    if !is_payable(register) {
+        bail!(
+            "That Seedelf's register isn't valid: a payment to it could be locked for good, or taken by anyone"
+        );
+    }
+    Ok(())
+}
+
+/// Fund: the Cardano account pays someone's seedelf, as the CLI's `fund`
+/// does from an address. `recipient` is the register of the contract UTxO
+/// holding that seedelf; the payment goes into the wallet contract under
+/// fresh re-randomizations of it, as a move-in's does under the user's own,
+/// so only its owner can spend it and nothing on chain ties it to their
+/// seedelf. It must be [`is_payable`]. The UTxOs are chosen, the change made,
+/// and `staking` carried, as for [`move_in`].
+#[allow(clippy::too_many_arguments)]
+pub fn account_fund(
+    params: &ProtocolParameters,
+    available: &[UtxoResponse],
+    amount: AccountAmount,
+    picked: &[(String, String, u64)],
+    recipient: &Register,
+    wallet_addr: &Address,
+    change_addr: &Address,
+    staking: &Staking,
+) -> Result<AccountPayment> {
+    check_register(recipient)?;
+    let payee = Payee::Seedelf {
+        owner: recipient,
+        wallet_addr,
+    };
+    account_payment(
+        params,
+        available,
+        &[AccountPay::new(payee, amount, picked)],
         staking,
         change_addr,
         SEND_SHORT,
@@ -487,37 +591,47 @@ pub fn account_staking(
     account_payment(
         params,
         available,
-        AccountAmount::Lovelace(0),
-        &[],
-        Payee::Nobody,
+        &[AccountPay::new(
+            Payee::Nobody,
+            AccountAmount::Lovelace(0),
+            &[],
+        )],
         staking,
         change_addr,
         STAKE_SHORT,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn account_payment(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
-    amount: AccountAmount,
-    picked: &[(String, String, u64)],
-    payee: Payee,
+    pays: &[AccountPay],
     staking: &Staking,
     change_addr: &Address,
     short: NotEnough,
 ) -> Result<AccountPayment> {
+    let max = pays.iter().any(|p| p.amount == AccountAmount::Max);
+    if max && pays.len() > 1 {
+        bail!("Max pays a single recipient: give each of several an amount");
+    }
+    // Every recipient's tokens together: what the inputs must hold.
+    let mut picked: BTreeMap<(&str, &str), u64> = BTreeMap::new();
+    for (policy, name, quantity) in pays.iter().flat_map(|p| &p.picked) {
+        if *quantity == 0 {
+            bail!("Choose more than none of the token {policy}.{name}, or leave it out");
+        }
+        let total = picked.entry((policy, name)).or_default();
+        *total = total.saturating_add(*quantity);
+    }
     let eligible: Vec<UtxoResponse> = available.to_vec();
     let holds_picked = |u: &UtxoResponse| {
         u.asset_list.as_ref().is_some_and(|assets| {
-            assets.iter().any(|a| {
-                picked
-                    .iter()
-                    .any(|(p, n, _)| *p == a.policy_id && *n == a.asset_name)
-            })
+            assets
+                .iter()
+                .any(|a| picked.contains_key(&(a.policy_id.as_str(), a.asset_name.as_str())))
         })
     };
-    for (policy, name, quantity) in picked {
+    for ((policy, name), quantity) in &picked {
         let held: u64 = eligible
             .iter()
             .flat_map(|u| u.asset_list.iter().flatten())
@@ -526,9 +640,6 @@ fn account_payment(
             .sum();
         if held == 0 {
             bail!("The Cardano account doesn't hold the token {policy}.{name}");
-        }
-        if *quantity == 0 {
-            bail!("Choose more than none of the token {policy}.{name}, or leave it out");
         }
         if *quantity > held {
             bail!("The Cardano account holds only {held} of the token {policy}.{name}");
@@ -545,19 +656,10 @@ fn account_payment(
     });
 
     let attempt = |selected: &[UtxoResponse]| {
-        build_account_payment(
-            params,
-            selected,
-            amount,
-            picked,
-            payee,
-            staking,
-            change_addr,
-            short,
-        )
+        build_account_payment(params, selected, pays, staking, change_addr, short)
     };
 
-    if amount == AccountAmount::Max {
+    if max {
         let all: Vec<UtxoResponse> = mandatory.into_iter().chain(rest).collect();
         if all.is_empty() {
             bail!("There is nothing in the Cardano account to spend");
@@ -584,13 +686,10 @@ fn account_payment(
     Err(last_error.unwrap_or_else(|| short.into()))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_account_payment(
     params: &ProtocolParameters,
     selected: &[UtxoResponse],
-    amount: AccountAmount,
-    picked: &[(String, String, u64)],
-    payee: Payee,
+    pays: &[AccountPay],
     staking: &Staking,
     change_addr: &Address,
     short: NotEnough,
@@ -598,26 +697,32 @@ fn build_account_payment(
     let (inputs_total, all_tokens) = assets_of(selected.to_vec())?;
     // What pays: the inputs, plus rewards and a refund, less a deposit.
     let total = staking.net(inputs_total).ok_or(short)?;
-    // How much of each held token is paid (0 for tokens not picked).
-    let asked = |a: &Asset| {
+    // How much of a held token `picked` asks for (0 for tokens not picked).
+    let asked_in = |picked: &[(String, String, u64)], a: &Asset| -> u64 {
         let policy = hex::encode(a.policy_id);
         let name = hex::encode(&a.token_name);
         picked
             .iter()
-            .find(|(p, n, _)| *p == policy && *n == name)
-            .map_or(0, |(_, _, q)| (*q).min(a.amount))
+            .filter(|(p, n, _)| *p == policy && *n == name)
+            .map(|(_, _, q)| *q)
+            .fold(0u64, u64::saturating_add)
     };
-    let paying = Assets {
+    let tokens_for = |picked: &[(String, String, u64)]| Assets {
         items: all_tokens
             .items
             .iter()
-            .filter(|a| asked(a) > 0)
+            .filter(|a| asked_in(picked, a) > 0)
             .map(|a| Asset {
-                amount: asked(a),
+                amount: asked_in(picked, a).min(a.amount),
                 ..a.clone()
             })
             .collect(),
     };
+    let each_tokens: Vec<Assets> = pays.iter().map(|p| tokens_for(&p.picked)).collect();
+    let all_picked: Vec<(String, String, u64)> =
+        pays.iter().flat_map(|p| p.picked.iter().cloned()).collect();
+    let asked = |a: &Asset| asked_in(&all_picked, a).min(a.amount);
+    let paying = tokens_for(&all_picked);
     let staying = Assets {
         items: all_tokens
             .items
@@ -637,35 +742,45 @@ fn build_account_payment(
         .len();
     let change_floor = minimum_change(params, change_addr, &staying)?;
 
-    let mut paid = 0;
+    let mut paid: Vec<u64> = Vec::new();
     let mut change = 0;
     let mut outputs = 0;
     let price = |size| linear_fee(params, size);
     let (fee, staged) = settle(signers, staking, price, |fee| {
-        (paid, change) = match amount {
-            AccountAmount::Lovelace(lovelace) => {
-                let change = total
-                    .checked_sub(lovelace)
-                    .and_then(|rest| rest.checked_sub(fee))
-                    .ok_or(short)?;
-                (lovelace, change)
-            }
-            AccountAmount::Max => {
-                let paid = total
+        (paid, change) = match pays {
+            [only] if only.amount == AccountAmount::Max => {
+                let all = total
                     .checked_sub(fee)
                     .and_then(|rest| rest.checked_sub(change_floor))
                     .ok_or(short)?;
-                (paid, change_floor)
+                (vec![all], change_floor)
+            }
+            _ => {
+                let each: Vec<u64> = pays
+                    .iter()
+                    .map(|p| match p.amount {
+                        AccountAmount::Lovelace(lovelace) => lovelace,
+                        AccountAmount::Max => 0,
+                    })
+                    .collect();
+                let change = each
+                    .iter()
+                    .try_fold(total, |rest, l| rest.checked_sub(*l))
+                    .and_then(|rest| rest.checked_sub(fee))
+                    .ok_or(short)?;
+                (each, change)
             }
         };
-        let payments = payee.outputs(params, paid, &paying)?;
-        outputs = payments.len();
         let mut tx = StagingTransaction::new();
         for input in &inputs {
             tx = tx.input(input.clone());
         }
-        for output in payments {
-            tx = tx.output(output);
+        outputs = 0;
+        for ((pay, lovelace), tokens) in pays.iter().zip(&paid).zip(&each_tokens) {
+            for output in pay.payee.outputs(params, *lovelace, tokens)? {
+                outputs += 1;
+                tx = tx.output(output);
+            }
         }
         for output in change_outputs(params, change_addr, change, &staying, short)? {
             tx = tx.output(output);
@@ -677,8 +792,9 @@ fn build_account_payment(
         tx: built_with(staged, staking)?,
         inputs: selected.to_vec(),
         fee,
-        lovelace: paid,
+        lovelace: paid.iter().sum(),
         tokens: paying,
+        paid,
         outputs,
         change_lovelace: change,
         change_tokens: staying,
@@ -929,7 +1045,7 @@ fn ogmios_failure(error: &Value) -> String {
             let index = item.pointer("/validator/index").and_then(Value::as_u64)?;
             let what = match purpose {
                 "spend" => format!("spending input {index}"),
-                "mint" => "the seedelf policy".to_string(),
+                "mint" => "the Seedelf policy".to_string(),
                 other => format!("{other} {index}"),
             };
             let reason = item
@@ -1180,7 +1296,7 @@ impl ScriptSpend {
             used.push(
                 budgets
                     .mint(0)
-                    .context("Ogmios measured no budget for the seedelf policy")?,
+                    .context("Ogmios measured no budget for the Seedelf policy")?,
             );
         }
         let total = used
@@ -1340,9 +1456,9 @@ impl ScriptSpend {
 
 fn policy_hash(config: &Config) -> Result<Hash<28>> {
     let bytes: [u8; 28] = hex::decode(&config.contract.seedelf_policy_id)
-        .context("The seedelf policy id is not hex")?
+        .context("The Seedelf policy id is not hex")?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("The seedelf policy id is not 28 bytes"))?;
+        .map_err(|_| anyhow::anyhow!("The Seedelf policy id is not 28 bytes"))?;
     Ok(Hash::new(bytes))
 }
 
@@ -1475,7 +1591,7 @@ pub fn mint_from(
     // Points that don't decode, aren't in the prime-order subgroup, or are the
     // identity would lose the seedelf and anything sent to it.
     if !is_payable(seedelf) {
-        bail!("The seedelf's register isn't made of valid points");
+        bail!("The Seedelf's register isn't made of valid points");
     }
     let spend = ScriptSpend::new(chain, inputs, change_owner, signer)?;
     let Chain {
@@ -1593,7 +1709,7 @@ fn paying(
 /// recipient's register and above its minimum.
 fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, Assets)>> {
     if payments.is_empty() {
-        bail!("A transfer pays at least one seedelf");
+        bail!("A transfer pays at least one Seedelf");
     }
     let wallet_addr = wallet_contract(
         chain.network_flag,
@@ -1604,7 +1720,7 @@ fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, A
         .map(|payment| {
             if !is_payable(&payment.register) {
                 bail!(
-                    "That seedelf's register isn't valid: a payment to it could be locked for good, or taken by anyone"
+                    "That Seedelf's register isn't valid: a payment to it could be locked for good, or taken by anyone"
                 );
             }
             if payment.tokens.items.iter().any(|a| a.amount == 0) {
@@ -1613,7 +1729,7 @@ fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, A
             let minimum = minimum_seedelf_payment(&chain.params, &payment.tokens)?;
             if payment.lovelace < minimum {
                 bail!(
-                    "A payment to a seedelf{} needs at least {} ADA",
+                    "A payment to a Seedelf{} needs at least {} ADA",
                     if payment.tokens.is_empty() { "" } else { " with these tokens" },
                     ada(minimum)
                 );
@@ -1729,10 +1845,48 @@ pub fn sweep(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<ScriptSpend> {
-    let output = address_output(chain, to, lovelace, tokens)?;
-    select_script_inputs(available, tokens, |inputs| {
-        let spend = ScriptSpend::new(chain, inputs, change_owner, signer)?
-            .output(output.clone(), tokens)?;
+    let payment = AddressPayment {
+        to: to.clone(),
+        lovelace,
+        tokens: tokens.clone(),
+    };
+    sweep_many(chain, available, &[payment], change_owner, signer)
+}
+
+/// A payment to a key address from the Seedelf balance.
+#[derive(Debug, Clone)]
+pub struct AddressPayment {
+    pub to: Address,
+    pub lovelace: u64,
+    pub tokens: Assets,
+}
+
+/// [`sweep`] to several: pays each of `payments`, in the order given, from
+/// as few owned UTxOs as can pay them all. The change comes last.
+pub fn sweep_many(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    payments: &[AddressPayment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    if payments.is_empty() {
+        bail!("A withdrawal pays at least one address");
+    }
+    let outputs: Vec<(Output, Assets)> = payments
+        .iter()
+        .map(|p| {
+            Ok((
+                address_output(chain, &p.to, p.lovelace, &p.tokens)?,
+                p.tokens.clone(),
+            ))
+        })
+        .collect::<Result<_>>()?;
+    let needed = payments
+        .iter()
+        .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
+    select_script_inputs(available, &needed, |inputs| {
+        let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
         spend.estimate()?;
         Ok(spend)
     })
@@ -1776,10 +1930,10 @@ pub fn seedelf_in(chain: &Chain, utxo: &UtxoResponse) -> Result<Vec<u8>> {
         .collect();
     match held.as_slice() {
         [one] if one.quantity == "1" => {
-            hex::decode(&one.asset_name).context("The seedelf's name isn't hex")
+            hex::decode(&one.asset_name).context("The Seedelf's name isn't hex")
         }
         _ => bail!(
-            "UTxO {}#{} doesn't hold exactly one seedelf",
+            "UTxO {}#{} doesn't hold exactly one Seedelf",
             utxo.tx_hash,
             utxo.tx_index
         ),
@@ -1900,7 +2054,7 @@ impl AccountMint {
     fn settle(&self, budgets: &Budgets) -> Result<FinalAccountMint> {
         let budget = budgets
             .mint(0)
-            .context("Ogmios measured no budget for the seedelf policy")?;
+            .context("Ogmios measured no budget for the Seedelf policy")?;
         let compute = computation_fee(&self.chain.params, budget.mem, budget.steps);
         let script_reference =
             self.chain.config.contract.seedelf_contract_size * REFERENCE_SCRIPT_FEE_PER_BYTE;
@@ -2026,7 +2180,7 @@ pub fn account_mint(
     staking: &Staking,
 ) -> Result<AccountMint> {
     if !is_payable(seedelf) {
-        bail!("The seedelf's register isn't made of valid points");
+        bail!("The Seedelf's register isn't made of valid points");
     }
     let pure_ada = |u: &UtxoResponse| u.asset_list.as_ref().is_none_or(|a| a.is_empty());
     let lovelace_of = |u: &UtxoResponse| u.value.parse::<u64>().unwrap_or(0);
@@ -2039,7 +2193,7 @@ pub fn account_mint(
         .cloned()
         .collect();
     if spendable.is_empty() {
-        bail!("There is nothing in the Cardano account to pay for a seedelf");
+        bail!("There is nothing in the Cardano account to pay for a Seedelf");
     }
     spendable.sort_by_key(|u| (!pure_ada(u), std::cmp::Reverse(lovelace_of(u))));
 
@@ -2064,7 +2218,7 @@ pub fn account_mint(
             )
         });
         let Some(collateral) = collateral.or(candidates.first().copied()) else {
-            bail!("There is nothing in the Cardano account to pay for a seedelf");
+            bail!("There is nothing in the Cardano account to pay for a Seedelf");
         };
 
         let owned: Vec<Input> = inputs.iter().map(input_of).collect::<Result<_>>()?;

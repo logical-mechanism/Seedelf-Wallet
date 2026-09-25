@@ -1893,6 +1893,45 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+/* Several recipients: a card each (Send, Send to a Seedelf, Withdraw), and on the review */
+
+.recipient {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4) var(--s4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+}
+
+.recipient__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.recipient__head h3,
+.review__caption {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.add-recipient {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.review-recipient {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* Send to a seedelf, Withdraw */
 
 .seedelf-name {

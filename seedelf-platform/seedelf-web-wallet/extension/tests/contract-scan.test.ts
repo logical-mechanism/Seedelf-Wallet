@@ -90,7 +90,11 @@ describe("the contract scan", () => {
     const theirs = Object.keys((await readContractView(t.deps, "preprod")).seedelfs).find(
       (name) => !ownedUtxos.some((u) => u.asset_list?.some((a) => a.asset_name === name)),
     )!;
+    // A seedelf the last reading saw is found in the view it kept, with no request.
     await t.transfer.lookup("preprod", theirs);
+    expect(reads(t)).toEqual([null, `gt.${TOP - 2}`, `gt.${TOP - 2}`]);
+    // One it didn't see asks only for what's new.
+    await expect(t.transfer.lookup("preprod", `5eed0e1f${"00".repeat(28)}`)).rejects.toThrow("No Seedelf with that name");
     expect(reads(t)).toEqual([null, `gt.${TOP - 2}`, `gt.${TOP - 2}`, `gt.${TOP - 2}`]);
   });
 });

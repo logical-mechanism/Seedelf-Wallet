@@ -42,7 +42,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
 }
 
 describe("stealth mint (paid from the Seedelf balance)", () => {
-  it("builds a seedelf mint, measured by Ogmios, without sending anything", async () => {
+  it("builds a Seedelf mint, measured by Ogmios, without sending anything", async () => {
     const t = await unlocked();
     const summary = await t.mint.build("preprod", "web-wallet", "seedelf");
     expect(summary).toMatchObject({

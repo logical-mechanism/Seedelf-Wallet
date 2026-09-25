@@ -97,7 +97,7 @@ export function App() {
     <div className={`app app--${view}`}>
       <header className="topbar">
         <img className="topbar__mark" src="/icons/icon-48.png" alt="" width={28} height={28} />
-        <span className="wordmark">seedelf</span>
+        <span className="wordmark">Seedelf</span>
         {network && (
           <span className={`badge badge--${network.name}`} data-testid="network">
             {network.label.toUpperCase()}

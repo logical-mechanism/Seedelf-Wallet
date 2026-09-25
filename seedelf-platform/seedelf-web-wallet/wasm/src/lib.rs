@@ -35,7 +35,10 @@ pub mod api {
     use rand_core::{OsRng, RngCore};
     use seedelf_core::address::wallet_contract;
     use seedelf_core::assets::{Asset, Assets};
-    use seedelf_core::build::{self, AccountAmount, Budgets, Chain, Payee, Payment, ScriptSpend};
+    use seedelf_core::build::{
+        self, AccountAmount, AccountPay, AddressPayment, Budgets, Chain, Payee, Payment,
+        ScriptSpend,
+    };
     use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
     use seedelf_core::staking::{self, StakeAction, StakeKey, StakeState, Staking};
     use seedelf_crypto::cardano::{CardanoAccount, Role};
@@ -386,8 +389,22 @@ pub mod api {
         })
     }
 
-    /// Paying an address from the Cardano account, as JSON from the
-    /// extension. `utxos` are as for a move-in.
+    /// The most recipients one payment pays. The transaction must also fit
+    /// 16 KiB, which core checks (`build::MAX_TX_SIZE`).
+    pub const MAX_RECIPIENTS: usize = 20;
+
+    fn check_recipients(n: usize) -> Result<()> {
+        if n == 0 {
+            bail!("A payment needs someone to pay");
+        }
+        if n > MAX_RECIPIENTS {
+            bail!("A payment pays at most {MAX_RECIPIENTS} recipients at once, not {n}");
+        }
+        Ok(())
+    }
+
+    /// Paying addresses or Seedelfs from the Cardano account, as JSON from
+    /// the extension. `utxos` are as for a move-in.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct SendRequest {
@@ -395,16 +412,43 @@ pub mod api {
         /// One row of Koios's `epoch_params`.
         pub params: serde_json::Value,
         pub utxos: Vec<PathedUtxo>,
-        /// The destination: a bech32 key address on this network.
-        pub to: String,
-        /// Lovelace as a decimal string, raised to the least the payment
-        /// needs (so "0" sends only that); `null` sends the most possible.
-        pub lovelace: Option<String>,
-        /// Tokens to send, each with how much of it goes.
-        pub tokens: Vec<TokenAmount>,
+        /// Who's paid, in order: one to [`MAX_RECIPIENTS`].
+        pub payments: Vec<SendPayment>,
         /// The staking rewards to withdraw along with it: see [`withdrawing`].
         #[serde(default)]
         pub withdrawal: Option<String>,
+    }
+
+    /// One recipient of a send from the Cardano account.
+    #[derive(Deserialize, Clone)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SendPayment {
+        /// A bech32 key address on this network, or a Seedelf's full token
+        /// name, lowercase hex.
+        pub to: String,
+        /// For a Seedelf: the contract UTxO holding it, as Koios returns it.
+        /// Its register is the one paid; see [`recipient_register`].
+        #[serde(default)]
+        pub recipient: Option<UtxoResponse>,
+        /// Lovelace as a decimal string, raised to the least the payment
+        /// needs (so "0" sends only that); `null` sends the most possible,
+        /// for a single recipient only.
+        pub lovelace: Option<String>,
+        /// Tokens to send, each with how much of it goes.
+        pub tokens: Vec<TokenAmount>,
+    }
+
+    /// What one recipient of a send or a withdrawal receives. Amounts in
+    /// lovelace.
+    #[derive(Serialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Paid {
+        /// The address, or the Seedelf's name.
+        pub to: String,
+        pub lovelace: String,
+        /// The least the payment could carry; `null` for Max.
+        pub minimum: Option<String>,
+        pub tokens: Vec<TokenAmount>,
     }
 
     /// A signed payment from the Cardano account, ready to submit, and what
@@ -414,15 +458,11 @@ pub mod api {
     pub struct SendResult {
         pub tx_cbor: String,
         pub tx_hash: String,
-        pub to: String,
-        /// The most possible (Max), rather than an amount.
+        /// What each recipient receives, in order.
+        pub payments: Vec<Paid>,
+        /// The most possible (Max) to a single recipient, rather than amounts.
         pub max: bool,
         pub fee: String,
-        /// What the address receives.
-        pub lovelace: String,
-        /// The least the payment could carry; `null` for Max.
-        pub minimum: Option<String>,
-        pub tokens: Vec<TokenAmount>,
         /// Staking rewards withdrawn to pay for it ("0" for none).
         pub withdrawal: String,
         /// Back to the Cardano account's receive address `0/0`.
@@ -431,31 +471,82 @@ pub mod api {
         pub inputs: usize,
     }
 
-    /// Builds and signs a payment from the Cardano account to a key address.
-    /// The UTxOs are checked and signed for as for a move-in, inside this
-    /// module.
+    /// Where a send from the Cardano account goes.
+    enum SendTo {
+        Address(Address),
+        /// A Seedelf's register, paid in the wallet contract.
+        Seedelf {
+            register: Register,
+            wallet: Address,
+        },
+    }
+
+    impl SendTo {
+        /// A key address on this network, or (a Seedelf's name, with the
+        /// UTxO holding it) that Seedelf's register.
+        fn read(chain: &Chain, payment: &SendPayment) -> Result<SendTo> {
+            let to = payment.to.trim();
+            if !is_seedelf_name(to) {
+                return Ok(SendTo::Address(payable_address(chain.network_flag, to)?));
+            }
+            let recipient = payment
+                .recipient
+                .as_ref()
+                .ok_or_else(|| anyhow!("paying a Seedelf needs the contract UTxO holding it"))?;
+            Ok(SendTo::Seedelf {
+                register: recipient_register(chain, to, recipient)?,
+                wallet: wallet_contract(
+                    chain.network_flag,
+                    chain.config.contract.wallet_contract_hash,
+                ),
+            })
+        }
+
+        fn payee(&self) -> Payee<'_> {
+            match self {
+                SendTo::Address(to) => Payee::Address(to),
+                SendTo::Seedelf { register, wallet } => Payee::Seedelf {
+                    owner: register,
+                    wallet_addr: wallet,
+                },
+            }
+        }
+    }
+
+    /// Builds and signs a payment from the Cardano account to each of
+    /// `request.payments`: key addresses, or Seedelfs, each under a fresh
+    /// re-randomization of its register (`build::account_send_many`). The
+    /// UTxOs are checked and signed for as for a move-in, inside this module.
     pub fn account_send(account: &CardanoAccount, request: SendRequest) -> Result<SendResult> {
-        let network_flag = network_flag(&request.network)?;
-        let params = ProtocolParameters::from_koios(&request.params)?;
+        let chain = chain_of(&request.network, &request.params)?;
+        let network_flag = chain.network_flag;
         let paths = check_paths(account, network_flag, &request.utxos)?;
-        let to = payable_address(network_flag, &request.to)?;
-        let picked = picked_of(&request.tokens)?;
-        let (amount, minimum) = account_amount(
-            &params,
-            Payee::Address(&to),
-            &request.lovelace,
-            &request.tokens,
-        )?;
+        check_recipients(request.payments.len())?;
+        let sends: Vec<SendTo> = request
+            .payments
+            .iter()
+            .map(|p| SendTo::read(&chain, p))
+            .collect::<Result<_>>()?;
+        let mut pays = Vec::with_capacity(sends.len());
+        let mut minimums = Vec::with_capacity(sends.len());
+        for (send, p) in sends.iter().zip(&request.payments) {
+            let (amount, minimum) =
+                account_amount(&chain.params, send.payee(), &p.lovelace, &p.tokens)?;
+            pays.push(AccountPay::new(
+                send.payee(),
+                amount,
+                &picked_of(&p.tokens)?,
+            ));
+            minimums.push(minimum);
+        }
         let change = account.base_address(network_flag, Role::Receive, 0)?;
         let rewards = withdrawing(account, network_flag, request.withdrawal.as_deref())?;
         let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
 
-        let built = build::account_send(
-            &params,
+        let built = build::account_send_many(
+            &chain.params,
             &available,
-            amount,
-            &picked,
-            &to,
+            &pays,
             network_flag,
             &change,
             &rewards,
@@ -465,15 +556,24 @@ pub mod api {
         let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
         let signed = sign_staking(signed, account, &rewards)?;
 
+        let payments = request
+            .payments
+            .iter()
+            .zip(&built.paid)
+            .zip(minimums)
+            .map(|((p, lovelace), minimum)| Paid {
+                to: p.to.trim().to_string(),
+                lovelace: lovelace.to_string(),
+                minimum: minimum.map(|m| m.to_string()),
+                tokens: p.tokens.clone(),
+            })
+            .collect();
         Ok(SendResult {
             tx_cbor: hex::encode(&signed.tx_bytes.0),
             tx_hash: hex::encode(signed.tx_hash.0),
-            to: request.to.trim().to_string(),
-            max: request.lovelace.is_none(),
+            payments,
+            max: matches!(request.payments.as_slice(), [only] if only.lovelace.is_none()),
             fee: built.fee.to_string(),
-            lovelace: built.lovelace.to_string(),
-            minimum: minimum.map(|m| m.to_string()),
-            tokens: built.tokens.items.iter().map(token_amount).collect(),
             withdrawal: rewards.withdrawn().to_string(),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
@@ -768,7 +868,7 @@ pub mod api {
             }
             if contains_policy_id(&utxo.asset_list, policy) {
                 bail!(
-                    "UTxO {}#{} holds a seedelf; a Seedelf spend never pays with one",
+                    "UTxO {}#{} holds a Seedelf; a Seedelf spend never pays with one",
                     utxo.tx_hash,
                     utxo.tx_index
                 );
@@ -1030,30 +1130,51 @@ pub mod api {
         })
     }
 
-    /// Paying someone's seedelf from the Seedelf balance, as JSON from the
-    /// extension.
+    /// Paying Seedelfs from the Seedelf balance, as JSON from the extension.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct TransferRequest {
         pub network: String,
         /// One row of Koios's `epoch_params`.
         pub params: serde_json::Value,
-        /// The wallet's spendable contract UTxOs (owned, no seedelf), as Koios
+        /// The wallet's spendable contract UTxOs (owned, no Seedelf), as Koios
         /// returns them. Each is checked here.
         pub utxos: Vec<UtxoResponse>,
-        /// The seedelf being paid: its full token name, lowercase hex.
+        /// The Seedelfs paid, in order: one to [`MAX_RECIPIENTS`].
+        pub payments: Vec<SeedelfPayment>,
+        /// The one-time key's seed from the draft (hex). The draft draws it.
+        pub seed: Option<String>,
+        /// Ogmios's answer to evaluating the draft.
+        pub evaluation: Option<serde_json::Value>,
+    }
+
+    /// One Seedelf a transfer pays.
+    #[derive(Deserialize, Clone)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SeedelfPayment {
+        /// The Seedelf being paid: its full token name, lowercase hex.
         pub to: String,
-        /// The contract UTxO holding that seedelf, as Koios returns it. Its
+        /// The contract UTxO holding that Seedelf, as Koios returns it. Its
         /// register is the recipient's; see [`recipient_register`].
         pub recipient: UtxoResponse,
         /// Lovelace to send, as a decimal string, raised to the least the
         /// payment needs (so "0" sends only that).
         pub lovelace: String,
         pub tokens: Vec<TokenAmount>,
-        /// The one-time key's seed from the draft (hex). The draft draws it.
-        pub seed: Option<String>,
-        /// Ogmios's answer to evaluating the draft.
-        pub evaluation: Option<serde_json::Value>,
+    }
+
+    /// What one Seedelf of a transfer receives. Amounts in lovelace.
+    #[derive(Serialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SeedelfPaid {
+        /// The Seedelf paid.
+        pub to: String,
+        /// Whether that Seedelf is this wallet's own: the payment comes back.
+        pub to_self: bool,
+        pub lovelace: String,
+        /// The least the payment could carry.
+        pub minimum: String,
+        pub tokens: Vec<TokenAmount>,
     }
 
     /// A finished, unsigned transfer and what it does. Amounts in lovelace.
@@ -1064,14 +1185,8 @@ pub mod api {
         pub tx_cbor: String,
         pub tx_hash: String,
         pub seed: String,
-        /// The seedelf paid.
-        pub to: String,
-        /// Whether that seedelf is this wallet's own: the payment comes back.
-        pub to_self: bool,
-        pub lovelace: String,
-        /// The least the payment could carry.
-        pub minimum: String,
-        pub tokens: Vec<TokenAmount>,
+        /// What each Seedelf receives, in order.
+        pub payments: Vec<SeedelfPaid>,
         pub fee: FeeOut,
         /// Back into the Seedelf balance.
         pub change_lovelace: String,
@@ -1093,10 +1208,10 @@ pub mod api {
     /// Whether the register is safe to pay is `build::transfer`'s check.
     pub fn recipient_register(chain: &Chain, to: &str, utxo: &UtxoResponse) -> Result<Register> {
         if !is_seedelf_name(to) {
-            bail!("A seedelf's name is 64 hex characters starting 5eed0e1f");
+            bail!("A Seedelf's name is 64 hex characters starting 5eed0e1f");
         }
         if utxo.payment_cred != hex::encode(chain.config.contract.wallet_contract_hash) {
-            bail!("That seedelf isn't in the Seedelf wallet contract, so it can't be paid");
+            bail!("That Seedelf isn't in the Seedelf Wallet contract, so it can't be paid");
         }
         let policy = &chain.config.contract.seedelf_policy_id;
         let holds = utxo
@@ -1106,40 +1221,53 @@ pub mod api {
             .any(|a| &a.policy_id == policy && a.asset_name == to);
         if !holds {
             bail!(
-                "UTxO {}#{} doesn't hold the seedelf {to}",
+                "UTxO {}#{} doesn't hold the Seedelf {to}",
                 utxo.tx_hash,
                 utxo.tx_index
             );
         }
         extract_bytes_with_logging(&utxo.inline_datum)
-            .ok_or_else(|| anyhow!("That seedelf sits under no register, so it can't be paid"))
+            .ok_or_else(|| anyhow!("That Seedelf sits under no register, so it can't be paid"))
     }
 
     fn transfer_spend(
         sk: Scalar,
         request: &TransferRequest,
         seed: &[u8; 32],
-    ) -> Result<(ScriptSpend, Payment, bool, u64)> {
+    ) -> Result<(ScriptSpend, Vec<SeedelfPaid>)> {
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
-        let register = recipient_register(&chain, &request.to, &request.recipient)?;
-        let to_self = register.is_owned(sk).unwrap_or(false);
-        let tokens = assets_of(&request.tokens)?;
-        let minimum = build::minimum_seedelf_payment(&chain.params, &tokens)?;
-        let payment = Payment {
-            register,
-            lovelace: lovelace_of(&request.lovelace)?.max(minimum),
-            tokens,
-        };
+        check_recipients(request.payments.len())?;
+        let mut payments = Vec::with_capacity(request.payments.len());
+        let mut paid = Vec::with_capacity(request.payments.len());
+        for p in &request.payments {
+            let register = recipient_register(&chain, &p.to, &p.recipient)?;
+            let to_self = register.is_owned(sk).unwrap_or(false);
+            let tokens = assets_of(&p.tokens)?;
+            let minimum = build::minimum_seedelf_payment(&chain.params, &tokens)?;
+            let lovelace = lovelace_of(&p.lovelace)?.max(minimum);
+            paid.push(SeedelfPaid {
+                to: p.to.clone(),
+                to_self,
+                lovelace: lovelace.to_string(),
+                minimum: minimum.to_string(),
+                tokens: tokens.items.iter().map(token_amount).collect(),
+            });
+            payments.push(Payment {
+                register,
+                lovelace,
+                tokens,
+            });
+        }
         let signer = key_hash(&one_time_key(&sk, seed));
         let spend = build::transfer(
             &chain,
             &request.utxos,
-            std::slice::from_ref(&payment),
+            &payments,
             &Register::create(sk)?,
             signer,
         )?;
-        Ok((prove_with(sk, spend)?, payment, to_self, minimum))
+        Ok((prove_with(sk, spend)?, paid))
     }
 
     /// Step 1 of paying a seedelf: checks the recipient, picks the UTxOs,
@@ -1147,7 +1275,7 @@ pub mod api {
     /// one-time key.
     pub fn draft_transfer(sk: Scalar, request: TransferRequest) -> Result<SpendDraft> {
         let seed = new_seed();
-        let (spend, _, _, _) = transfer_spend(sk, &request, &seed)?;
+        let (spend, _) = transfer_spend(sk, &request, &seed)?;
         draft_of(&spend, &seed)
     }
 
@@ -1160,17 +1288,13 @@ pub mod api {
             request.seed.as_deref(),
             request.evaluation.as_ref(),
         )?;
-        let (spend, payment, to_self, minimum) = transfer_spend(sk, &request, &seed)?;
+        let (spend, payments) = transfer_spend(sk, &request, &seed)?;
         let built = spend.finalize(&budgets)?;
         Ok(TransferResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
-            to: request.to.clone(),
-            to_self,
-            lovelace: payment.lovelace.to_string(),
-            minimum: minimum.to_string(),
-            tokens: payment.tokens.items.iter().map(token_amount).collect(),
+            payments,
             fee: fee_out(&built.fee),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
@@ -1197,27 +1321,36 @@ pub mod api {
         Ok(addr)
     }
 
-    /// Paying an address from the Seedelf balance, as JSON from the extension.
+    /// Paying addresses from the Seedelf balance, as JSON from the extension.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct WithdrawRequest {
         pub network: String,
         /// One row of Koios's `epoch_params`.
         pub params: serde_json::Value,
-        /// The wallet's spendable contract UTxOs (owned, no seedelf), as Koios
+        /// The wallet's spendable contract UTxOs (owned, no Seedelf), as Koios
         /// returns them. Each is checked here.
         pub utxos: Vec<UtxoResponse>,
-        /// The destination: a bech32 key address on this network.
-        pub to: String,
-        /// Lovelace as a decimal string, raised to the least the payment
-        /// needs (so "0" sends only that); `null` sends everything (Max).
-        pub lovelace: Option<String>,
-        /// Tokens to send with an amount; Max sends every token instead.
-        pub tokens: Vec<TokenAmount>,
+        /// The addresses paid, in order: one to [`MAX_RECIPIENTS`].
+        pub payments: Vec<WithdrawPayment>,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
         pub evaluation: Option<serde_json::Value>,
+    }
+
+    /// One address a withdrawal pays.
+    #[derive(Deserialize, Clone)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WithdrawPayment {
+        /// A bech32 key address on this network.
+        pub to: String,
+        /// Lovelace as a decimal string, raised to the least the payment
+        /// needs (so "0" sends only that); `null` sends everything (Max), to
+        /// a single address only.
+        pub lovelace: Option<String>,
+        /// Tokens to send with an amount; Max sends every token instead.
+        pub tokens: Vec<TokenAmount>,
     }
 
     /// A finished, unsigned withdrawal and what it does. Amounts in lovelace.
@@ -1228,14 +1361,10 @@ pub mod api {
         pub tx_cbor: String,
         pub tx_hash: String,
         pub seed: String,
-        pub to: String,
-        /// Everything (Max), rather than an amount.
+        /// What each address receives, in order.
+        pub payments: Vec<Paid>,
+        /// Everything (Max) to a single address, rather than amounts.
         pub max: bool,
-        /// What the address receives.
-        pub lovelace: String,
-        /// The least the payment could carry; `null` for Max.
-        pub minimum: Option<String>,
-        pub tokens: Vec<TokenAmount>,
         pub fee: FeeOut,
         /// Back into the Seedelf balance (nothing, for Max).
         pub change_lovelace: String,
@@ -1246,48 +1375,23 @@ pub mod api {
         pub left: usize,
     }
 
-    /// An amount withdrawn: what the address receives, and the least it could.
-    struct Paid {
-        lovelace: u64,
-        minimum: u64,
-        tokens: Assets,
-    }
-
-    /// The withdrawal, proven; how many UTxOs Max left out; and, for an
-    /// amount, what's paid.
+    /// The withdrawal, proven; how many UTxOs Max left out; and, for
+    /// amounts, what each address is paid (Max's is known once it's
+    /// finished).
     fn withdraw_spend(
         sk: Scalar,
         request: &WithdrawRequest,
         seed: &[u8; 32],
-    ) -> Result<(ScriptSpend, usize, Option<Paid>)> {
+    ) -> Result<(ScriptSpend, usize, Option<Vec<Paid>>)> {
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
-        let to = payable_address(chain.network_flag, &request.to)?;
+        check_recipients(request.payments.len())?;
         let owner = Register::create(sk)?;
         let signer = key_hash(&one_time_key(&sk, seed));
-        let (spend, left, paid) = match &request.lovelace {
-            Some(l) => {
-                let tokens = assets_of(&request.tokens)?;
-                let minimum = build::minimum_address_payment(&chain.params, &to, &tokens)?;
-                let lovelace = lovelace_of(l)?.max(minimum);
-                let spend = build::sweep(
-                    &chain,
-                    &request.utxos,
-                    &to,
-                    lovelace,
-                    &tokens,
-                    &owner,
-                    signer,
-                )?;
-                let paid = Paid {
-                    lovelace,
-                    minimum,
-                    tokens,
-                };
-                (spend, 0, Some(paid))
-            }
-            None => {
-                if !request.tokens.is_empty() {
+        let (spend, left, paid) = match request.payments.as_slice() {
+            [only] if only.lovelace.is_none() => {
+                let to = payable_address(chain.network_flag, &only.to)?;
+                if !only.tokens.is_empty() {
                     bail!("Max sends every token, so it takes no token amounts");
                 }
                 if request.utxos.is_empty() {
@@ -1304,11 +1408,37 @@ pub mod api {
                     None,
                 )
             }
+            payments => {
+                let mut to_pay = Vec::with_capacity(payments.len());
+                let mut paid = Vec::with_capacity(payments.len());
+                for p in payments {
+                    let Some(l) = &p.lovelace else {
+                        bail!("Max pays a single recipient: give each of several an amount");
+                    };
+                    let to = payable_address(chain.network_flag, &p.to)?;
+                    let tokens = assets_of(&p.tokens)?;
+                    let minimum = build::minimum_address_payment(&chain.params, &to, &tokens)?;
+                    let lovelace = lovelace_of(l)?.max(minimum);
+                    paid.push(Paid {
+                        to: p.to.trim().to_string(),
+                        lovelace: lovelace.to_string(),
+                        minimum: Some(minimum.to_string()),
+                        tokens: tokens.items.iter().map(token_amount).collect(),
+                    });
+                    to_pay.push(AddressPayment {
+                        to,
+                        lovelace,
+                        tokens,
+                    });
+                }
+                let spend = build::sweep_many(&chain, &request.utxos, &to_pay, &owner, signer)?;
+                (spend, 0, Some(paid))
+            }
         };
         Ok((prove_with(sk, spend)?, left, paid))
     }
 
-    /// Step 1 of a withdrawal: checks the address, picks the UTxOs, proves
+    /// Step 1 of a withdrawal: checks the addresses, picks the UTxOs, proves
     /// them, and drafts the transaction for Ogmios, under a new one-time key.
     pub fn draft_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<SpendDraft> {
         let seed = new_seed();
@@ -1326,19 +1456,21 @@ pub mod api {
         let (spend, left, paid) = withdraw_spend(sk, &request, &seed)?;
         let built = spend.finalize(&budgets)?;
         let max = paid.is_none();
-        let (lovelace, minimum, tokens) = match paid {
-            None => (built.change_lovelace, None, built.change_tokens.clone()),
-            Some(p) => (p.lovelace, Some(p.minimum.to_string()), p.tokens),
-        };
+        // Max's one payment is everything the inputs held, less the fee.
+        let payments = paid.unwrap_or_else(|| {
+            vec![Paid {
+                to: request.payments[0].to.trim().to_string(),
+                lovelace: built.change_lovelace.to_string(),
+                minimum: None,
+                tokens: built.change_tokens.items.iter().map(token_amount).collect(),
+            }]
+        });
         Ok(WithdrawResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
-            to: request.to.trim().to_string(),
+            payments,
             max,
-            lovelace: lovelace.to_string(),
-            minimum,
-            tokens: tokens.items.iter().map(token_amount).collect(),
             fee: fee_out(&built.fee),
             change_lovelace: if max {
                 "0".into()
@@ -1401,7 +1533,7 @@ pub mod api {
         let owned = extract_bytes_with_logging(&utxo.inline_datum)
             .is_some_and(|register| register.is_owned(sk).unwrap_or(false));
         if !owned {
-            bail!("That seedelf isn't this wallet's");
+            bail!("That Seedelf isn't this wallet's");
         }
         let name = build::seedelf_in(&chain, utxo)?;
         let signer = key_hash(&one_time_key(&sk, seed));
@@ -1837,8 +1969,8 @@ pub fn build_move_in(
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Builds and signs a payment from the Cardano account to a key address.
-/// `request` is JSON (see `api::SendRequest`); the result is JSON
+/// Builds and signs a payment from the Cardano account to a key address or a
+/// seedelf. `request` is JSON (see `api::SendRequest`); the result is JSON
 /// (`api::SendResult`) holding the signed transaction and what it does. The
 /// payment keys never leave WebAssembly.
 #[wasm_bindgen(js_name = buildAccountSend)]

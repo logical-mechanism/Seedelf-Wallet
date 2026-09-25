@@ -127,7 +127,7 @@ pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Result<
     // after an output past #255; anything longer here would misalign the hex.
     if smallest_input.txo_index > 255 {
         anyhow::bail!(
-            "A seedelf can't be named after output #{} of a transaction (the contract takes a one-byte index)",
+            "A Seedelf can't be named after output #{} of a transaction (the contract takes a one-byte index)",
             smallest_input.txo_index
         );
     }

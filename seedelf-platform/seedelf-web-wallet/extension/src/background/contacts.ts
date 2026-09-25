@@ -73,7 +73,7 @@ export class ContactsService {
     try {
       wasm.checkPayableAddress(trimmed, network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod);
     } catch (e) {
-      throw new Error(`That isn't a seedelf's full name, a $handle, or an address you can pay. ${(e as Error).message}`);
+      throw new Error(`That isn't a Seedelf's full name, a $handle, or an address you can pay. ${(e as Error).message}`);
     }
     return { kind: "address", value: trimmed };
   }

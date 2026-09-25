@@ -16,7 +16,7 @@ const phrase = (words: number) =>
 const lovelaceOf = (utxos: Array<{ value: string }>) => utxos.reduce((n, u) => n + BigInt(u.value), 0n).toString();
 
 describe("balances", () => {
-  it("finds the 12-word phrase's contract UTxOs, seedelf and Cardano account", async () => {
+  it("finds the 12-word phrase's contract UTxOs, Seedelf and Cardano account", async () => {
     const v = phrase(12);
     const t = testBalances();
     await t.wallet.create(v.phrase, PASSWORD);

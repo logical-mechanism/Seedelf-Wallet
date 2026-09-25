@@ -18,9 +18,9 @@ const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export const FLOWS = {
   /** `mint [tag] [account|seedelf]`: create a seedelf, paid by the Cardano account (mint first) or the Seedelf balance (a stealth mint). */
   async mint({ page }, tag = "live-mint", from = "account") {
-    if (from !== "account" && from !== "seedelf") throw new Error("mint: pay with account or seedelf");
+    if (from !== "account" && from !== "seedelf") throw new Error("mint: pay with account or Seedelf");
     await home(page);
-    await page.getByRole("button", { name: "Create a seedelf" }).click();
+    await page.getByRole("button", { name: "Create a Seedelf" }).click();
     await page.getByLabel("Personal tag (optional)").fill(tag);
     await page.getByRole("button", { name: from === "account" ? "Cardano account" : "Seedelf balance" }).click();
     await reviewAndSend(page, "mint-review", `mint-${from}`);
@@ -50,7 +50,7 @@ export const FLOWS = {
   async transfer({ page }, ada = "3.3", to = "live-mint") {
     await home(page);
     const name = /^5eed0e1f[0-9a-f]{56}$/i.test(to) ? to : await seedelfName(page, to);
-    await page.getByRole("button", { name: "Send to a seedelf" }).click();
+    await page.getByRole("button", { name: "Send to a Seedelf" }).click();
     await page.getByLabel("Seedelf name").fill(name);
     const note = page.getByTestId("transfer-to-note");
     await note.filter({ hasText: "Found:" }).waitFor({ timeout: 60_000 }).catch(async () => {
@@ -139,7 +139,7 @@ export const FLOWS = {
 
   /** `remove [tag] [account|seedelf]`: burn a seedelf of the wallet's; its ADA goes to the Cardano account or the Seedelf balance. */
   async remove({ page }, tag = "live-mint", to = "account") {
-    if (to !== "account" && to !== "seedelf") throw new Error("remove: send the freed ADA to account or seedelf");
+    if (to !== "account" && to !== "seedelf") throw new Error("remove: send the freed ADA to account or Seedelf");
     await home(page);
     await page.getByRole("button", { name: "Receive into Seedelf" }).click();
     await page.getByRole("button", { name: `Remove ${tag}`, exact: true }).click();

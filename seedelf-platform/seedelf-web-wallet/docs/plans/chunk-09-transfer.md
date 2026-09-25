@@ -1,8 +1,8 @@
-# Chunk 9 plan: transfer (seedelf → seedelf)
+# Chunk 9 plan: transfer (Seedelf → Seedelf)
 
 **Branch:** `web-wallet/transfer`. It already exists: this plan is its first commit. It ends with a PR back into `seedelf-web-wallet`.
 
-A transfer pays someone's seedelf from the Seedelf balance. It's the CLI's `transfer`, and the second Seedelf script spend after the stealth mint. Most of the machinery exists already:
+A transfer pays someone's Seedelf from the Seedelf balance. It's the CLI's `transfer`, and the second Seedelf script spend after the stealth mint. Most of the machinery exists already:
 
 - `ScriptSpend` does the owned inputs, proofs, one-time key, giveme.my collateral, draft → Ogmios → finalize, and budgets by purpose and index.
 - `signScriptSpend` checks giveme.my's signature and signs at Send.
@@ -21,7 +21,7 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
 2. Read:
    - this plan
    - the chunk 8 and 8b entries in [roadmap.md](../roadmap.md#handoff-notes)
-   - [flows.md](../flows.md) *Transfer* and *Create a seedelf*
+   - [flows.md](../flows.md) *Transfer* and *Create a Seedelf*
    - [privacy.md](../privacy.md) *Rules the wallet enforces* and *Known links*
    - [architecture.md](../architecture.md) *Transaction building*
 3. Read the code this chunk extracts and copies:
@@ -39,7 +39,7 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
 
 1. **Arguments:** one or more `--seedelfs` (token names, hex), `--lovelaces` per recipient, optional `--asset` per recipient, and optional `--utxo`s to spend.
 2. **Minimums:** each recipient output needs `wallet_minimum_lovelace_with_assets(tokens)`, about 1.46 ADA with no tokens.
-3. **The recipient's register:** `find_seedelf_datum(name, policy, every contract UTxO)`, the datum of the UTxO holding that seedelf token, found in the same whole-contract scan the balance uses.
+3. **The recipient's register:** `find_seedelf_datum(name, policy, every contract UTxO)`, the datum of the UTxO holding that Seedelf token, found in the same whole-contract scan the balance uses.
 4. **Selection:** `utxos::select(params, owned, total lovelace, total tokens)`.
 5. **Outputs:**
    - For each recipient: `register.rerandomize()` (this refuses points outside the prime-order subgroup), at the contract with the lovelace and tokens.
@@ -50,14 +50,14 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
 
 ## Decisions
 
-Confirmed with the user on 2026-09-24: every suggestion stands except paying your own seedelf, which is allowed with a warning.
+Confirmed with the user on 2026-09-24: every suggestion stands except paying your own Seedelf, which is allowed with a warning.
 
 | Decision | Decided | Notes |
 |---|---|---|
 | How the recipient is given | **Paste the full token name** (`5eed0e1f…`, 64 hex characters). Show the tag it reads as, and whether it was found on chain. | Tags aren't unique: anyone can mint "alice". A tag search, like the CLI's `util find`, could come later, but it must always show the full name to pick. |
 | Recipients per transfer | **One** | The CLI allows several. One keeps the form and review simple, and a second transfer is cheap. |
 | What's sent | **An ADA amount** (the move-in `AdaInput` rules: 6 decimals, the supply cap, "more than you have"), **plus optional tokens, each with an amount** | Unlike move-in, a token doesn't move in full: people pay parts of a balance. |
-| Paying your own seedelf | **Allowed, with a warning** (the plan suggested refusing) | It moves money in a circle and costs a fee, but it's the user's call. The worker can tell (the recipient's register `isOwned`), so the summary says `toSelf` and the form and review warn. |
+| Paying your own Seedelf | **Allowed, with a warning** (the plan suggested refusing) | It moves money in a circle and costs a fee, but it's the user's call. The worker can tell (the recipient's register `isOwned`), so the summary says `toSelf` and the form and review warn. |
 | Max | **No Max in v1** | "Everything" is what withdraw (chunk 10) is for. |
 | Privacy nudges | **The round-amount nudge from move-in, plus one line**: sending right after moving in is easy to match by timing | See privacy.md *Known links*. |
 
@@ -90,10 +90,10 @@ Confirmed with the user on 2026-09-24: every suggestion stands except paying you
   - The request: `network`, the `epoch_params` row, the owned spendable `utxos`, `recipient`, `lovelace`, `tokens: [{ policyId, assetName, quantity }]`, then `seed` and `evaluation` for the finish.
   - `recipient` is **the recipient's UTxO row from Koios**.
 - **WASM checks the recipient itself:**
-  - That UTxO holds exactly one token of the seedelf policy, with the requested name.
+  - That UTxO holds exactly one token of the Seedelf policy, with the requested name.
   - Its inline datum parses as a `Register` (`extract_bytes_with_logging`) with valid points.
   - Whether the register is owned by this key: paying yourself is allowed, and the result says so (`toSelf`).
-- Owned-input checks as in `mint_spend`: every input owned, none holding a seedelf.
+- Owned-input checks as in `mint_spend`: every input owned, none holding a Seedelf.
 - `signScriptSpend` is reused unchanged.
 - Consider a shared internal helper for "check the owned inputs, derive the one-time key, prove", used by mint and transfer, before chunk 10 adds two more.
 
@@ -106,7 +106,7 @@ Confirmed with the user on 2026-09-24: every suggestion stands except paying you
 - **The lookup:** `credential_utxos` for the whole contract (the query the balance already makes), then pick the UTxO holding `(seedelfPolicyId, name)` locally.
   - **Never ask Koios by the recipient's token** (`asset_utxos` and the like): that tells Koios exactly who is being paid. Note it in privacy.md.
   - Validate the pasted name before any network call: 64 hex characters starting `5eed0e1f`.
-  - If it isn't found: "No seedelf with that name on <network>".
+  - If it isn't found: "No Seedelf with that name on <network>".
 - **RPC:**
   - `"transfer-build": { to, lovelace, tokens } → TransferSummary`: the recipient's name and tag, the amount, the tokens, the fee parts, the change, the inputs.
   - `"transfer-submit": { txHash } → PendingTx`.
@@ -129,11 +129,11 @@ Confirmed with the user on 2026-09-24: every suggestion stands except paying you
 
 - **Rust:** item 1's tests; the CLI's offline tests (`transfer` especially); `seedelf-wasm` native tests for the recipient checks, including paying yourself (allowed, flagged) and a recipient UTxO with the wrong token or no register.
 - **Recorded fixture:** a `record-transfer.mjs` like `record-mint.mjs`.
-  - Draft a transfer from the 12-word phrase's synthetic owned UTxOs (as `additionalUtxo`) to a real preprod seedelf. `TAK1` (`5eed0e1f54414b31009dda2589…`) is owned by that same public phrase, so either pay another phrase's seedelf, or point the recorder at any other live seedelf (`policy_asset_list` for the policy lists them).
+  - Draft a transfer from the 12-word phrase's synthetic owned UTxOs (as `additionalUtxo`) to a real preprod Seedelf. `TAK1` (`5eed0e1f54414b31009dda2589…`) is owned by that same public phrase, so either pay another phrase's Seedelf, or point the recorder at any other live Seedelf (`policy_asset_list` for the policy lists them).
   - Evaluate it on preprod Ogmios, and save the answer (and giveme.my's refusal) for the tests.
 - **Vitest:** the transfer service over fakes (lookup, refusals, and the build and Send paths with a stubbed signer, as mint.test.ts does), plus the shared script-spend helper.
 - **Playwright:** paste a name, see it found, amount, review, Send → a forged giveme.my witness is refused and nothing is submitted, as in the stealth-mint test. A real giveme.my signature only happens live.
-- **Live:** the user sends a transfer by hand from a funded Seedelf balance to another seedelf. Record the tx hash.
+- **Live:** the user sends a transfer by hand from a funded Seedelf balance to another Seedelf. Record the tx hash.
 
 ### 6. Docs
 
@@ -147,7 +147,7 @@ Confirmed with the user on 2026-09-24: every suggestion stands except paying you
 ## Risks and things to check
 
 - **A malformed recipient register locks the payment for good.** `rerandomize` refuses non-prime-order points. Keep an explicit test for it, and never skip it.
-- **The recipient's seedelf can be removed between review and Send.** The payment still reaches their register, so it's spendable by them; only the name is gone. That's acceptable. Don't re-check at Send.
+- **The recipient's Seedelf can be removed between review and Send.** The payment still reaches their register, so it's spendable by them; only the name is gone. That's acceptable. Don't re-check at Send.
 - **Budget:** each spend is about 338M steps, so about 29 inputs fill a transaction. `select_script_inputs` and `MAX_TX_BUDGET` already guard this.
 - **Fee:** about 0.24 ADA for one input (the wallet script only). Check it against the ledger's formula in tests, as chunk 8 does.
 - **Tokens in change:** 20 to an output, as everywhere.
@@ -156,4 +156,4 @@ Confirmed with the user on 2026-09-24: every suggestion stands except paying you
 
 - Several recipients in the UI, a tag search, and Max.
 - Sweep and remove (chunk 10).
-- Telling received Seedelf money from moved-in money (see flows.md *Create a seedelf*, Details).
+- Telling received Seedelf money from moved-in money (see flows.md *Create a Seedelf*, Details).

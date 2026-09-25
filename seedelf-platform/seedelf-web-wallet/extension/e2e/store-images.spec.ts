@@ -112,24 +112,24 @@ test("the Web Store listing's images", async ({ context }) => {
     "Your Seedelf balance sits in UTxOs that don't say who owns them.",
   ]);
 
-  await popup.getByRole("button", { name: "Send to a seedelf" }).click();
+  await popup.getByRole("button", { name: "Send to a Seedelf" }).click();
   await popup.getByLabel("Seedelf name").fill(transferPreprod.to);
   await expect(popup.getByTestId("transfer-to-note")).toContainText("Found: This is a test.");
   await popup.getByLabel("Amount", { exact: true }).fill("5");
   shots.push([
     await shoot(),
-    "Pay any seedelf by name",
-    "Paste the name and the wallet finds it. The payment can't be linked to the seedelf it pays.",
+    "Pay any Seedelf by name",
+    "Paste the name and the wallet finds it. The payment can't be linked to the Seedelf it pays.",
   ]);
   await back();
 
-  await popup.getByRole("button", { name: "Create a seedelf" }).click();
+  await popup.getByRole("button", { name: "Create a Seedelf" }).click();
   await expect(popup.getByTestId("mint-from-note")).toBeVisible();
   await popup.getByLabel("Personal tag (optional)").fill("alice");
   shots.push([
     await shoot(),
     "Get paid privately",
-    "Create a seedelf and share its name. Anyone can pay it, and no payment points back to it.",
+    "Create a Seedelf and share its name. Anyone can pay it, and no payment points back to it.",
   ]);
   await back();
 

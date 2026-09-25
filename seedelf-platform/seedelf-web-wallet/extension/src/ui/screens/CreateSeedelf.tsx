@@ -67,7 +67,7 @@ export function CreateSeedelf({
   if (summary) {
     return (
       <Screen
-        title="Review the new seedelf"
+        title="Review the new Seedelf"
         titleId="mint-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
@@ -92,7 +92,7 @@ export function CreateSeedelf({
           {summary.from === "seedelf"
             ? "Send asks giveme.my to lend the collateral, then submits. "
             : "Send submits it. "}
-          It takes about a minute for the network to confirm. Only removing the seedelf gives back the ADA locked with
+          It takes about a minute for the network to confirm. Only removing the Seedelf gives back the ADA locked with
           it.
         </p>
       </Screen>
@@ -102,7 +102,7 @@ export function CreateSeedelf({
   return (
     <Screen
       onSubmit={review}
-      title="Create a seedelf"
+      title="Create a Seedelf"
       titleId="mint-title"
       onBack={onCancel}
       aside={`${formatAda(from === "account" ? balances.cardano.lovelace : balances.seedelf.lovelace)} ₳ in your ${SOURCES[from]}`}
@@ -114,7 +114,7 @@ export function CreateSeedelf({
       }
     >
       <p className="note">
-        A seedelf is a name you can give out. Anyone can pay it, and each payment reaches you under a fresh copy of your
+        A Seedelf is a name you can give out. Anyone can pay it, and each payment reaches you under a fresh copy of your
         register, so payments can't be linked to each other or to you.
       </p>
 
@@ -162,11 +162,11 @@ export function CreateSeedelf({
       />
       <Callout tone="privacy" testId="mint-from-note">
         {from === "account"
-          ? "The seedelf is linked to your Cardano account openly. Money you move in afterwards isn't tied to it: a move-in looks the same as paying anyone's seedelf. So create your seedelf before moving money in."
-          : "A stealth mint. It only keeps the seedelf apart from your Cardano account when your Seedelf balance came from other people's Seedelf payments. Money you moved in yourself can be traced back to the account."}
+          ? "The Seedelf is linked to your Cardano account openly. Money you move in afterwards isn't tied to it: a move-in looks the same as paying anyone's Seedelf. So create your Seedelf before moving money in."
+          : "A stealth mint. It only keeps the Seedelf apart from your Cardano account when your Seedelf balance came from other people's Seedelf payments. Money you moved in yourself can be traced back to the account."}
       </Callout>
       <p className="note">
-        About 1.75 ₳ stays locked with the seedelf, and the network fee is about 0.25 ₳. The review shows the exact
+        About 1.75 ₳ stays locked with the Seedelf, and the network fee is about 0.25 ₳. The review shows the exact
         amounts.
       </p>
     </Screen>

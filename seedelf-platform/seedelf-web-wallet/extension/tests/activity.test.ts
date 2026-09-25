@@ -61,6 +61,22 @@ describe("Seedelf activity", () => {
     expect(entries).toHaveLength(3);
   });
 
+  it("names who a payment to several went to: the first, and how many more", async () => {
+    const t = await unlocked();
+    const pending = { kind: "transfer" as const, network: "preprod" as const, txHash: "ab".repeat(32), submittedAt: 1, confirmations: null };
+    const summary = {
+      fee: { total: "300000" },
+      payments: [
+        { to: "5eed0e1f" + "11".repeat(28), label: "alice", lovelace: "5000000", tokens: [{ ...TUSDM, quantity: "1" }] },
+        { to: "5eed0e1f" + "22".repeat(28), lovelace: "2000000", tokens: [{ ...TUSDM, quantity: "2" }] },
+        { to: "5eed0e1f" + "33".repeat(28), lovelace: "1000000", tokens: [] },
+      ],
+    };
+    await t.activity.sent("preprod", pending, summary);
+    const [entry] = await t.activity.seedelf("preprod");
+    expect(entry).toMatchObject({ kind: "transfer", direction: "out", lovelace: "8000000", tokens: 1, fee: "300000", detail: "alice and 2 more" });
+  });
+
   it("is sealed on the device, and can't be read while locked", async () => {
     const t = await unlocked();
     await t.balances.get("preprod");

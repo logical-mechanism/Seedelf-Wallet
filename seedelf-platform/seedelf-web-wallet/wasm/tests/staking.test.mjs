@@ -72,7 +72,13 @@ test("a send takes the rewards along when asked", () => {
     JSON.parse(
       buildAccountSend(
         account,
-        JSON.stringify({ network: "preprod", params, utxos: pathedUtxos(account), to, lovelace: "1000000", tokens: [], withdrawal }),
+        JSON.stringify({
+          network: "preprod",
+          params,
+          utxos: pathedUtxos(account),
+          payments: [{ to, lovelace: "1000000", tokens: [] }],
+          withdrawal,
+        }),
       ),
     );
   assert.equal(send(undefined).withdrawal, "0");
