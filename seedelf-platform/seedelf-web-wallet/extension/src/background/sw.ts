@@ -14,7 +14,7 @@ import { ContactsService } from "./contacts";
 import { DappError, DappService, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
-import { Koios } from "./koios";
+import { Koios, KOIOS_LIMIT } from "./koios";
 import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
@@ -99,7 +99,8 @@ function getContext(): Promise<Context> {
         if (sessions && lovejoin) void runSessions({ wallet, sessions, lovejoin, network }, true).catch(() => undefined);
       },
     });
-    const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
+    // Every request waits its turn under Koios's public-tier limit, whatever the network.
+    const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios, undefined, undefined, undefined, KOIOS_LIMIT);
     const store = new PrivateStore({ wallet, local });
     const prices = new PriceService({ local, preferences, now: Date.now });
     const activity = new ActivityService({ wallet, session, store, koios, local });

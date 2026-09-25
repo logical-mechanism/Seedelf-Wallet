@@ -64,7 +64,7 @@ import type {
 import { bodyOutpoints, txId } from "./cbor";
 import { SpentInputError, type KoiosUtxo } from "./koios";
 import type { Estimate, Minswap, PendingOrder } from "./minswap";
-import { CHAIN_RETRIES, CHAIN_RETRY_MS, checkBoxes, LovejoinSkipped, type LovejoinChain, type LovejoinService } from "./lovejoin";
+import { chainRetryMs, checkBoxes, LovejoinSkipped, type LovejoinChain, type LovejoinService } from "./lovejoin";
 import type { PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
 import { keep, measure, nothingToSpend, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
@@ -935,6 +935,11 @@ export class SessionService {
     if (!rows.length) return;
     // A mix: once funded, its boxes go through Lovejoin and the rest comes back, one chain.
     if (s.mix) return this.bringBack(network, s.index, rows);
+    // A return through Lovejoin that stopped partway (a transaction Koios
+    // never took, a closed browser): what's at the account now came from the
+    // chain itself, so nothing "arrives" from outside. What's left comes back
+    // (directly: its deposit is in), whatever Minswap lists.
+    if (kinds.has("deposit") || kinds.has("mix")) return this.bringBack(network, s.index, rows);
     const auto = s.auto!;
     // No order yet: place it, unless the user stopped, or brought the session back by hand.
     if (!kinds.has("swap")) {
@@ -1194,8 +1199,9 @@ export class SessionService {
           last = await this.sendRecorded(network, built.index, step.kind, step.txHash, bytes, kept);
           break;
         } catch (e) {
-          if (i === 0 || attempt >= CHAIN_RETRIES || !(e instanceof SpentInputError)) throw e;
-          await sleep(CHAIN_RETRY_MS * (attempt + 1));
+          const wait = chainRetryMs(i, attempt, e);
+          if (wait === undefined) throw e;
+          await sleep(wait);
         }
       }
       if (step.kind === "deposit" && built.lovejoin) {
@@ -1437,7 +1443,7 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
       ? "done"
       : stage === "funding" || stage === "failed"
         ? "funding"
-        : mix || has("back")
+        : mix || has("back") || has("deposit")
           ? "returning"
           : has("swap", true)
             ? auto.stopping || has("cancel")

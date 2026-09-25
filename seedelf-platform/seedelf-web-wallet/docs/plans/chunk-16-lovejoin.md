@@ -368,16 +368,66 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
   - Now the withdraw is the watched transaction, as every send the user makes is.
   - Home's banner is a shared component (`PendingBanner`), passed through the dApps page to Lovejoin's. A withdraw or mix sent from there shows *sent, waiting for the network*, then that it's back, and Home keeps asking while the page is open.
   - The withdraws due by themselves stay out of the banner: they show in the private Activity.
+- **A swap's return through Lovejoin stopped after its deposit and 6 of its 12 mixes, and the swap then waited for good.** The 7th mix's submit failed, most likely Koios not answering (a timeout the user also saw elsewhere at that moment).
+  - The runner only brought a swap back once something arrived from outside. After a chain, everything at the account came from the chain itself, so it waited, and Stop waited too.
+  - Now a return whose chain has started (a deposit or a mix recorded) brings what's left back directly, whatever Minswap lists.
+  - The timeline said *filled* all through the chain; it says *coming back* once the deposit is recorded.
+- **A chain's submit that Koios doesn't answer** (a timeout, a lost connection, 429, 5xx: `KoiosBusyError`) is sent again, up to 4 times, 10 s longer each time, as a submit Koios hasn't seen the parent of already was. Sending the same transaction again is safe.
+- **Koios's public tier allows 100 requests every 10 s per IP address** (and 5,000 a day). Every request the worker makes now waits its turn under a shared limit of 60 every 10 s (`RateLimit`, `KOIOS_LIMIT` in `koios.ts`), retries included, so no burst (a 132-transaction chain, several screens reading) can reach it.
 
-**Not done yet:**
+## Handoff to the third session (2026-09-25)
 
-1. **A live preprod run** (on the user's go-ahead):
-   - a session's return through Lovejoin, merged into its funding change
-   - a mix from each side
-   - the delayed withdraws
-   - the collateral as an input of the same transaction
-2. Forgetting a mix whose funding never landed (it stays in the page's list).
-3. The public Activity names a public mix's transactions as plain payments.
+**The branch.** `web-wallet/lovejoin`, pushed through `8e65bc0` (the second session `7db8117`, then the fixes `db35e24` and `8e65bc0`). No PR yet.
+
+- **Uncommitted at the handoff, all tests green:** the last three items of *Found in the user's first run* above (the stopped return, a submit Koios didn't answer, the rate limit). They're in `koios.ts`, `lovejoin.ts`, `sessions.ts`, `sw.ts`, their tests, this file and `architecture.md`.
+- **First thing:** ask the user whether to commit and push them. They've asked for each fix so far; commit only when asked.
+- **Suites:** Rust 322, WebAssembly (Node) 33, Vitest 286, Playwright 49. `extension/dist/` holds the dev build of the working tree, which the user loads directly.
+
+**The user's live testing on preprod, where it stood:**
+
+- **Worked:** a 3-box mix from the private balance, its return included (*Done*).
+  - Not checked yet: whether that return merged into the funding's change, the collateral's first use as an input of the same transaction. On Cardanoscan, the one-time account's last transaction would show a collateral input and a script redeemer.
+- **A MIN → ADA swap stopped partway:** its return deposited 3 boxes, then ran 6 of 12 mixes. The session account's payment key is `e39622e1…`; the order is `20aadac3…` and the deposit `952fd89f…`. The user pressed Stop.
+  - With the uncommitted fix, reloading and unlocking brings the 12.6 ₳ of change and the 5 ₳ collateral back directly. Confirm with the user that it did.
+- **Bring one back now:** it failed on the odd fee (fixed in `db35e24`), then once on a Koios timeout, which was transient. Confirm a withdraw landed.
+
+**Decided for next (the user, 2026-09-25):**
+
+1. **Mix my boxes again**, on the Lovejoin page: every box of the wallet's in the pool, fanned out again at the Settings depth.
+   - **Paid from the private balance through a fresh one-time account**, like *Mix from the private balance*: one review, then it runs by itself, and what's left merges back.
+   - The user chose this over the public account, which would tie it to boxes that may trace back to private sessions.
+   - A sketch:
+     - core: a chain that starts from the wallet's own `PoolBox`es, with no deposit;
+     - WebAssembly: a call for it;
+     - worker: a mix session that carries the boxes' outrefs, funded with their mixes' fees and the reserve, and whose runner builds that chain;
+     - keep the due withdraws off those boxes while it runs, or the chain meets a spent box.
+   - The user's reason: a chain cut short, or boxes someone else was mixing; a button to try again.
+2. **A warning before auto-lock: a countdown in the wallet only.** In the last 2 minutes, a banner on every screen ("Locking in 1:30") with **Stay unlocked**.
+   - The user turned down the toolbar badge, holding the lock while a chain is sent, and counting mouse movement as activity.
+   - The deadline is the last activity (`seedelf.lastActivity`) plus the lock time; the auto-lock alarm checks it every minute.
+
+**Offered, not decided (ask before building):**
+
+- Progress while a mix runs ("9 of 14 on chain"), each box's due time on the Lovejoin page, and a Cardanoscan link for each mix.
+- Bring one back now preferring a box someone else has mixed since, which is better hidden.
+- Saying when a chain was cut short, recording public mixes so they can be resumed, and finishing the mixing from where it stopped with fresh pool boxes (the design's original rebuild).
+- Home's banner for the withdraws that run by themselves.
+- A *Through Lovejoin* switch on Make private: the user said "maybe not".
+
+**Not done:**
+
+- Forgetting a mix whose funding never landed (it stays in the page's list).
+- The public Activity names a public mix's transactions as plain payments.
+- Still to see live: a mix from the public account, the timed withdraws, and the collateral as an input.
+- At the chunk's end: the roadmap tick, the handoff note, and the PR into `seedelf-web-wallet`.
+
+**Gotchas:**
+
+- A new request goes in `rpc.ts`'s `REQUEST_LIST` (a type error now), or the worker drops it without a word.
+- After a Rust or WebAssembly change: `wasm/build.sh`, then `npm run build:ext`, so `dist/` has it.
+- Every Koios request in the worker goes through `KOIOS_LIMIT` (60 every 10 s). Any `curl` checks from this machine use the user's IP allowance too.
+- In tests, the fake Koios's `evaluation` can be a function of the request: a chain's cross-check sends `additionalUtxo`, a Seedelf spend doesn't.
+- A merged return's proof is bound to a one-time key, never the session's.
 
 ## Out of scope
 
@@ -389,9 +439,9 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 
 ## Start here
 
-1. `git fetch origin && git checkout web-wallet/lovejoin`.
+1. `git fetch origin && git checkout web-wallet/lovejoin`. Check `git status`: the handoff above lists what was left uncommitted.
 2. Read, in order:
-   - this file
+   - this file, starting with *Handoff to the third session*
    - [architecture.md, *Private sessions*](../architecture.md#private-sessions)
    - [flows.md, *Contract round trip*](../flows.md#contract-round-trip)
    - [chunk-15b-swap-runner.md](chunk-15b-swap-runner.md), for how the runner records and resumes

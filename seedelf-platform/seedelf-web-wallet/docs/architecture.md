@@ -180,6 +180,8 @@ flowchart LR
 
 - **Paging:** 1000 rows a page, in a fixed order (`order=tx_hash.asc,tx_index.asc`), until a short page.
 - **Retries:** a rate limit (429), a server error (5xx) or a network failure is retried twice, after 1 s and 3 s. Anything else fails at once with Koios's status.
+- **Bursts:** every request the worker makes, each retry included, waits its turn under one shared limit of 60 every 10 s (`KOIOS_LIMIT` in `koios.ts`), under the public tier's 100. A long Lovejoin chain, or several screens reading at once, can't reach it.
+- **Submits:** a submit Koios doesn't answer (a timeout, a lost connection, 429, 5xx) throws `KoiosBusyError`, since the transaction may or may not have gone through. A Lovejoin chain sends it again later, which is safe: the ledger takes it once.
 - **Koios's public tier, with no API key (decided 2026-09-25).** Its limits are per IP address (5,000 requests a day, 100 every 10 s), so each user has their own, and there's no key to ship, leak or share.
   - A key in the extension would be anyone's: the extension's files are public. Every user would also share its one daily allowance (50,000 on the free tier), and Koios would tie every request to the key's account.
   - **Since 2026-09-25 the public tier sends browsers no CORS headers** (Koios's [tiers](https://koios.rest/tiers.html): CORS "Restricted" without a key, "Open" with one). A web page can't read it. The extension can: its requests to a host in its host permissions skip CORS. So the wallet reads Koios only through Chrome's grant for `preprod.koios.rest` (and `api.koios.rest` on mainnet).

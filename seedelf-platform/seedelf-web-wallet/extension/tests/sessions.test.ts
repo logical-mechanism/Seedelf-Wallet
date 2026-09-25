@@ -358,6 +358,44 @@ describe("a swap that runs itself", () => {
     t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
   }
 
+  it("brings back what's left when its return through Lovejoin stopped partway, whatever Minswap still lists", async () => {
+    // Found on preprod: a filled swap's return deposited its boxes and ran some
+    // mixes, then a submit failed. What's at the account came from the chain
+    // itself, so nothing "arrived" from outside, and the runner waited for good.
+    const t = await unlocked();
+    const sessions = signing(t);
+    const now = t.clock.now;
+    const done = (kind: string, txHash: string) => ({ kind, txHash, at: now, confirmed: true });
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [done("out", "01".repeat(32)), done("swap", "02".repeat(32)), done("deposit", "03".repeat(32)), done("mix", "04".repeat(32))],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } }, filled: now },
+        },
+      ],
+    });
+    // The collateral, and the last mix's change; Minswap still lists the order.
+    t.koios.addedToAccounts.push(atSession("01".repeat(32), 1, "5000000"), atSession("04".repeat(32), 3, "12619619"));
+    t.minswap.orders = [{ tx_in: `${"02".repeat(32)}#0`, protocol: "MinswapV2" } as never];
+    let [view] = await sessions.list("preprod");
+    // The timeline says it's coming back, not waiting for the fill.
+    expect(view!.auto!.step).toBe("returning");
+
+    view = await sessions.advance("preprod", 0, true);
+    // Directly: its deposit is in, so it doesn't go through Lovejoin again.
+    const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string; txHash: string }> }> }>("sessions.preprod"))!;
+    const back = book.sessions[0]!.txs.at(-1)!;
+    expect(back.kind).toBe("back");
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(back.txHash);
+    expect(view.auto?.retry).toBeUndefined();
+    expect(t.minswap.calls.some((c) => c.path === "pending-orders")).toBe(false);
+  });
+
   it("places the order once the funding lands, brings everything back once it's filled, and is done once that lands", async () => {
     const t = await unlocked();
     const runner = alarm();

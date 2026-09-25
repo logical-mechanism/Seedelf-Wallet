@@ -147,8 +147,50 @@ export const REFS_PER_REQUEST = 60;
 
 export class KoiosError extends Error {}
 
+/**
+ * Koios's public tier takes 100 requests every 10 seconds from an IP address
+ * (and 5,000 a day). Every request the worker makes waits its turn here, so a
+ * burst (a long Lovejoin chain, several screens reading at once) stays well
+ * under it, with room left for anything else on the same connection. Each
+ * attempt counts, retries too.
+ */
+export class RateLimit {
+  private starts: number[] = [];
+
+  constructor(
+    readonly max = 60,
+    readonly windowMs = 10_000,
+    private readonly now: () => number = () => Date.now(),
+    private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  ) {}
+
+  /** Waits until a request may start, and counts it. */
+  async take(): Promise<void> {
+    for (;;) {
+      const at = this.now();
+      this.starts = this.starts.filter((s) => at - s < this.windowMs);
+      if (this.starts.length < this.max) {
+        this.starts.push(at);
+        return;
+      }
+      await this.sleep(this.starts[0]! + this.windowMs - at);
+    }
+  }
+}
+
+/** The worker's one limit, shared by every Koios it makes, whatever the network. */
+export const KOIOS_LIMIT = new RateLimit();
+
 /** The network refused a transaction because an input it spends is already spent. */
 export class SpentInputError extends KoiosError {}
+
+/**
+ * Koios didn't answer a submit (a timeout, a lost connection), asked the
+ * wallet to slow down (429), or failed on its side (5xx). The transaction may
+ * or may not have gone through; sending the same one again later is safe
+ * (the ledger takes it once).
+ */
+export class KoiosBusyError extends KoiosError {}
 
 /**
  * Whether Chrome lets the wallet reach `url`'s host. Koios's public tier sends
@@ -214,6 +256,8 @@ export class Koios {
     private readonly fetchFn: FetchLike = (url, init) => fetch(url, init),
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
     private readonly allowed: HostCheck = chromeAllows,
+    /** The worker passes KOIOS_LIMIT; tests go unthrottled. */
+    private readonly limit?: RateLimit,
   ) {}
 
   /**
@@ -355,6 +399,7 @@ export class Koios {
     let response: Response;
     let text: string;
     for (let attempt = 0; ; attempt++) {
+      await this.limit?.take();
       try {
         response = await this.fetchFn(`${this.base}/submittx`, {
           method: "POST",
@@ -363,9 +408,11 @@ export class Koios {
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (e) {
-        throw new KoiosError((await this.allowed(this.base)) ? unreachable(e) : KOIOS_NOT_ALLOWED);
+        if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED);
+        throw new KoiosBusyError(unreachable(e));
       }
       text = await response.text();
+      if (response.status === 429 || response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
       // Found live: a Koios backend whose own node was down answered. The
       // transaction never reached the network, so it's safe to send again,
       // and the gateway likely picks another backend.
@@ -444,6 +491,7 @@ export class Koios {
     for (let attempt = 0; ; attempt++) {
       let response: Response | undefined;
       let failure: string;
+      await this.limit?.take();
       try {
         response = await this.fetchFn(url, {
           method,

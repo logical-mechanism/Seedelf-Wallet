@@ -1,7 +1,7 @@
 // The Koios client: request shape, paging and retries, with a fake fetch.
 import { describe, expect, it } from "vitest";
 
-import { Koios, KOIOS_NOT_ALLOWED, KoiosError, type FetchLike } from "../src/background/koios";
+import { Koios, KOIOS_NOT_ALLOWED, KoiosBusyError, KoiosError, RateLimit, type FetchLike } from "../src/background/koios";
 
 const BASE = "https://preprod.koios.rest/api/v1";
 
@@ -137,8 +137,15 @@ describe("Koios client: transactions", () => {
     let tries = 0;
     const rejected = new Koios(BASE, async () => (tries++, new Response("ValueNotConserved", { status: 400 })));
     await expect(rejected.submitTx(new Uint8Array([0x84]))).rejects.toThrow("The network rejected the transaction: ValueNotConserved");
+    // Koios failing on its side, or asking the wallet to slow down, didn't reject it: sending it again later is safe.
     const busy = new Koios(BASE, async () => (tries++, new Response("", { status: 503 })));
-    await expect(busy.submitTx(new Uint8Array([0x84]))).rejects.toThrow("rejected");
+    await expect(busy.submitTx(new Uint8Array([0x84]))).rejects.toThrow(KoiosBusyError);
+    const limited = new Koios(BASE, async () => new Response("", { status: 429 }));
+    await expect(limited.submitTx(new Uint8Array([0x84]))).rejects.toThrow("Koios is limiting requests");
+    const silent = new Koios(BASE, async () => {
+      throw new DOMException("signal timed out", "TimeoutError");
+    });
+    await expect(silent.submitTx(new Uint8Array([0x84]))).rejects.toThrow(KoiosBusyError);
     // Koios's answer, recorded live, when its node was unreachable: not sent, so Send again.
     const nodeDown = JSON.stringify({
       contents: { contents: "Network.Socket.connect: <socket: 14>: does not exist (No such file or directory)", tag: "TxCmdTxSubmitConnectionError" },
@@ -210,5 +217,45 @@ describe("Koios client: transactions", () => {
     await expect(refused("DelegateeDRepNotRegisteredDELEG")).rejects.toThrow("DRep isn't registered any more");
     await expect(refused("StakeKeyNotRegisteredDELEG")).rejects.toThrow("staking changed since you reviewed");
     await expect(refused("SomethingElse")).rejects.toThrow("The network rejected the transaction: SomethingElse");
+  });
+});
+
+describe("Koios's public-tier limit", () => {
+  function clock() {
+    const c = { now: 0, slept: [] as number[] };
+    const limit = new RateLimit(3, 1_000, () => c.now, async (ms) => {
+      c.slept.push(ms);
+      c.now += ms;
+    });
+    return { c, limit };
+  }
+
+  it("lets a burst through up to the limit, then waits for the oldest request to leave the window", async () => {
+    const { c, limit } = clock();
+    for (let i = 0; i < 3; i++) await limit.take();
+    expect(c.slept).toEqual([]);
+    c.now = 400;
+    await limit.take();
+    expect(c.slept).toEqual([600]);
+    expect(c.now).toBe(1_000);
+    // Spread out, nothing waits.
+    c.now = 5_000;
+    await limit.take();
+    expect(c.slept).toEqual([600]);
+  });
+
+  it("counts every attempt, retries included", async () => {
+    const { c, limit } = clock();
+    const answers = [new Response("", { status: 503 }), new Response("", { status: 503 }), Response.json([{ epoch_no: 1 }])];
+    const koios = new Koios(BASE, async () => answers.shift()!, async () => undefined, async () => true, limit);
+    await koios.epochParams();
+    await limit.take();
+    // Three attempts and this one: the fourth in the window waits.
+    expect(c.slept).toEqual([1_000]);
+  });
+
+  it("is 60 requests every 10 seconds in the wallet, well under the tier's 100", () => {
+    const limit = new RateLimit();
+    expect([limit.max, limit.windowMs]).toEqual([60, 10_000]);
   });
 });

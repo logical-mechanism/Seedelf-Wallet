@@ -119,6 +119,22 @@ describe("a session's return through Lovejoin", () => {
     expect(await t.lovejoin.held("mainnet")).toEqual({ boxes: 0, lovelace: "0", next: null });
   });
 
+  it("sends a transaction of the chain again when Koios didn't answer it, and finishes the chain", async () => {
+    const { t, sessions } = await withSession("40000000");
+    const review = await sessions.backBuild("preprod", 0);
+    // The third submit (a mix) gets a 503 once, as a busy Koios answers.
+    const fetch = t.koios.fetch;
+    let submits = 0;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx") && ++submits === 3) return new Response("", { status: 503 });
+      return fetch(url, init);
+    };
+    const before = t.koios.submitted.length;
+    await sessions.backSubmit("preprod", review.txHash);
+    expect(t.koios.submitted.slice(before)).toHaveLength(10);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(review.txHash);
+  });
+
   it("comes back directly when asked, or when the spare ADA doesn't pay for a box", async () => {
     const { t, sessions } = await withSession("40000000");
     const direct = await sessions.backBuild("preprod", 0, true);

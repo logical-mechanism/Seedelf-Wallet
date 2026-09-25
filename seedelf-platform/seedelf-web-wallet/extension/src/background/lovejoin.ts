@@ -34,7 +34,7 @@ import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
 import type { NetworkName } from "../networks";
 import type { LovejoinFunding, LovejoinHeld, LovejoinPublicSummary, LovejoinStatus, PendingTx, TokenQuantity } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
-import { SpentInputError, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, SpentInputError, type KoiosUtxo } from "./koios";
 import { SESSION_PENDING } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
@@ -51,6 +51,21 @@ const BUILT_TTL_MS = 10 * 60_000;
 /** A chained transaction Koios refuses as spending what it hasn't seen: tried again this many times, waiting this much longer each time. */
 export const CHAIN_RETRIES = 4;
 export const CHAIN_RETRY_MS = 2_000;
+/** A chained transaction Koios didn't answer, or asked to slow down for: tried again as many times, waiting this much longer each time. */
+export const CHAIN_BUSY_MS = 10_000;
+
+/**
+ * How long to wait before sending a chain's transaction `i` again after `e`,
+ * or undefined when sending it again can't help. Koios hasn't seen a parent
+ * yet (a spent input, past the first), or didn't answer: the same transaction
+ * again, a little later, is safe.
+ */
+export function chainRetryMs(i: number, attempt: number, e: unknown): number | undefined {
+  if (attempt >= CHAIN_RETRIES) return undefined;
+  if (e instanceof KoiosBusyError) return CHAIN_BUSY_MS * (attempt + 1);
+  if (i > 0 && e instanceof SpentInputError) return CHAIN_RETRY_MS * (attempt + 1);
+  return undefined;
+}
 
 /** The network measured a chain's scripts differently from the wallet: the chain doesn't start. */
 export class LovejoinSkipped extends Error {
@@ -326,8 +341,9 @@ export class LovejoinService {
           if (e instanceof SpentInputError && (await koios.txStatus([step.txHash]).catch(() => undefined))?.get(step.txHash) != null) {
             break;
           }
-          if (i === 0 || attempt >= CHAIN_RETRIES || !(e instanceof SpentInputError)) throw e;
-          await sleep(CHAIN_RETRY_MS * (attempt + 1));
+          const wait = chainRetryMs(i, attempt, e);
+          if (wait === undefined) throw e;
+          await sleep(wait);
         }
       }
       await wallet.withKeys(() => rememberSpent(session, bytes));

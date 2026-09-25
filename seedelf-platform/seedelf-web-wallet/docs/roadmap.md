@@ -54,9 +54,11 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Surprises:**
     - The merged return first bound its proof to the session's key. A site connected to a session can ask that key to sign, so a proof bound to it could be replayed in what the site builds. It now uses a one-time key, as every Seedelf spend does.
     - A request left out of `rpc.ts`'s list is dropped by the worker without a word. It's a type error now.
-  - **Next:**
-    - a live preprod run, on the user's go-ahead
-    - then the PR into `seedelf-web-wallet`
+  - **Then the user tested it live on preprod.**
+    - A 3-box mix went through.
+    - Four fixes came of it: a withdraw's odd fee short of collateral; no banner for Bring one back now; a swap whose return chain stopped partway and then waited for good; and chain submits Koios didn't answer.
+    - Koios requests are now held under the public tier's burst limit.
+  - **Next:** the plan's *Handoff to the third session*. It says what's uncommitted, where the user's live tests stood, and the two features the user decided next: *Mix my boxes again* from the private balance, and a countdown before auto-lock. Then the PR into `seedelf-web-wallet`.
 
 - **2026-09-25: chunk 16, Lovejoin (first session)** (`web-wallet/lovejoin`). Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md), whose *Built* lists everything. Chunk 15 merged as PR #262.
   - **What landed:**
