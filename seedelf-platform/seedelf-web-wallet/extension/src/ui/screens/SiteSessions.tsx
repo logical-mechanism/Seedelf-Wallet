@@ -12,7 +12,7 @@ import type { Balances, PendingTx, SessionBackSummary, SessionOutSummary, Sessio
 import { call } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
-import { LovejoinNote, LovejoinRows } from "../components/LovejoinReturn";
+import { IntoRow, LovejoinNote, LovejoinRows, ReturnLinks } from "../components/LovejoinReturn";
 import { CopyButton } from "../components/CopyButton";
 import { ExternalIcon, GlobeIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
@@ -148,6 +148,7 @@ export function SiteSession({
           ))}
           <Row label={back.lovejoin ? "Network fees" : "Network fee"} value={`${formatAda(back.fee)} ₳`} />
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at private session ${s.index + 1}`} />
+          <IntoRow back={back} />
         </ReviewRows>
         <LovejoinNote
           back={back}
@@ -155,9 +156,7 @@ export function SiteSession({
           onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
         />
         <p className="note">The site stays connected, to an empty account: Top up fills it again.</p>
-        <Callout tone="privacy">
-          This links the one-time account to the new private UTxOs, as Make private does.
-        </Callout>
+        <ReturnLinks back={back} />
       </Screen>
     );
   }

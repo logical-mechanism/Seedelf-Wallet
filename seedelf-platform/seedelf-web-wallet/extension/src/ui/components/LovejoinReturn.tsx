@@ -1,6 +1,7 @@
-// What a return's review says when the session's spare ADA goes through
-// Lovejoin first (roadmap chunk 16): the boxes, the fan-out, when each comes
-// back, and a way to bring this one back directly instead.
+// What a session return's review says about where its money goes (roadmap
+// chunk 16): into the private UTxO the session's funding made, or new ones;
+// and, when its spare ADA goes through Lovejoin first, the boxes, the
+// fan-out, when each comes back, and a way to bring this one back directly.
 import type { SessionBackSummary } from "../../shared/rpc";
 import { formatAda, plural } from "../format";
 import { Callout } from "./Callout";
@@ -25,9 +26,17 @@ export function LovejoinRows({ back }: { back: SessionBackSummary }) {
   );
 }
 
-/** Why, and the way out: `onDirect` rebuilds the return without Lovejoin. */
+/** Why, and the way out: `onDirect` rebuilds the return without Lovejoin. Or why Lovejoin was left out this time. */
 export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummary; busy: boolean; onDirect: () => void }) {
   const l = back.lovejoin;
+  if (back.lovejoinSkipped) {
+    return (
+      <Callout tone="warn" testId="lovejoin-skipped">
+        Lovejoin is left out of this return: {back.lovejoinSkipped}. So the chain doesn't start, and everything comes back
+        directly, as it would without Lovejoin.
+      </Callout>
+    );
+  }
   if (!l) return null;
   return (
     <>
@@ -41,5 +50,22 @@ export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummar
         Bring it back directly instead
       </button>
     </>
+  );
+}
+
+/** Where what comes back lands: the private UTxO the session's funding made, or new ones. */
+export function IntoRow({ back }: { back: SessionBackSummary }) {
+  return <Row label="Into" value={back.merged ? "The private UTxO its funding made" : "New private UTxOs"} />;
+}
+
+/** What the return ties to the session on chain. `after` follows it, for the page's own words. */
+export function ReturnLinks({ back, after }: { back: SessionBackSummary; after?: string }) {
+  return (
+    <Callout tone="privacy">
+      {back.merged
+        ? "What comes back joins the private UTxO this session's funding made, which is tied to the session on chain already, so no new private UTxO is."
+        : "This links the one-time account to the new private UTxOs, as Make private does."}
+      {after ? ` ${after}` : ""}
+    </Callout>
   );
 }

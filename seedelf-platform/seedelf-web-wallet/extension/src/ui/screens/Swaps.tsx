@@ -34,7 +34,7 @@ import type {
 import { call } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
-import { LovejoinNote, LovejoinRows } from "../components/LovejoinReturn";
+import { delayText, IntoRow, LovejoinNote, LovejoinRows, ReturnLinks } from "../components/LovejoinReturn";
 import {
   ArrowDownIcon,
   CheckIcon,
@@ -70,6 +70,7 @@ import {
   whenOf,
 } from "../format";
 import { useNetwork } from "../network";
+import { usePreferences } from "../preferences";
 import {
   adaShort,
   halfOf,
@@ -120,9 +121,9 @@ const STEP: Record<SessionAuto["step"], string> = {
 /** Back in the private balance, or never funded: nothing more happens. */
 const isOver = (s: SessionView) => s.stage === "closed" || s.stage === "failed";
 
-/** A swap that runs itself and isn't over: Home shows it. */
+/** A swap that runs itself and isn't over: Home shows it. A mix (Lovejoin's) isn't a swap. */
 export function isRunningSwap(s: SessionView): boolean {
-  return !!s.auto && !isOver(s);
+  return !!s.auto && !s.mix && !isOver(s);
 }
 
 /** How a swap is doing at a glance: running, waiting on the user, done, stopped, or failed. */
@@ -254,7 +255,7 @@ export function Swaps({
     setReading(true);
     try {
       // A site's private session (private CIP-30) is listed under the dApps page's Sites, not here.
-      setSessions((await call("sessions", { refresh })).filter((s) => !s.site));
+      setSessions((await call("sessions", { refresh })).filter((s) => !s.site && !s.mix));
       if (refresh) setUpdatedAt(Date.now());
       setError(undefined);
     } catch (e) {
@@ -475,6 +476,9 @@ function NewSwap({
   onStarted: (index: number, pending: PendingTx) => void;
 }) {
   const network = useNetwork();
+  const { prefs } = usePreferences();
+  // Where Lovejoin is deployed, a return's spare ADA goes through it (Settings, Lovejoin).
+  const lovejoin = network === "preprod";
   const [pay, setPay] = useState<Pick>(ADA_PICK);
   const [get, setGet] = useState<Pick>();
   const [amount, setAmount] = useState("");
@@ -651,7 +655,7 @@ function NewSwap({
           <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
         </ReviewRows>
         <h2>Then it runs by itself</h2>
-        <Plan least={amountOf(quote.minAmountOut, get.side)} />
+        <Plan least={amountOf(quote.minAmountOut, get.side)} lovejoin={lovejoin} />
         <p className="note">
           Send approves all of it: the wallet places the order and brings everything back without asking again, as long
           as the order gives at least {amountOf(quote.minAmountOut, get.side)}. If the price moves past that, it pauses and
@@ -661,6 +665,14 @@ function NewSwap({
           What the swap doesn't use, the collateral and the order's deposit come back with the proceeds. Three
           transactions, each with its network fee: that's the cost of keeping your public account out of it.
         </p>
+        {lovejoin && (
+          <p className="note" data-testid="swap-lovejoin">
+            On the way back, ADA to spare goes through Lovejoin first: as many boxes of 10 ₳ as it pays for, mixed with other
+            people's ({prefs.lovejoinDepth} {prefs.lovejoinDepth === 1 ? "wave" : "waves"} deep), the session paying every mix.
+            Each box comes back on its own after {delayText(prefs.lovejoinDelay)}, the first time the wallet is unlocked
+            after that. Less than a box's worth, and any tokens, come back at once. Settings, Lovejoin changes this.
+          </p>
+        )}
         <Callout tone="privacy">
           This payment links the private UTxOs it spends to the one-time account, as Make public does. The account then
           links to Minswap and back again.
@@ -920,12 +932,17 @@ function NewSwap({
 }
 
 /** What happens after Send, as the swap's own page then shows it: the timeline's four steps, none taken yet. */
-function Plan({ least }: { least: string }) {
+function Plan({ least, lovejoin }: { least: string; lovejoin: boolean }) {
   const steps = [
     ["Funded", "A one-time account, from your private balance"],
     ["Order placed", `Through Minswap, for at least ${least}`],
     ["Filled", "By a DEX's batcher, usually within a few blocks"],
-    ["Back in your private balance", "The proceeds and everything left, under fresh registers"],
+    [
+      "Back in your private balance",
+      lovejoin
+        ? "Spare ADA through Lovejoin first, in boxes that come back later; the proceeds and the rest at once"
+        : "The proceeds and everything left",
+    ],
   ];
   return (
     <div className="timeline" data-testid="swap-steps">
@@ -1321,15 +1338,14 @@ function Session({
           ))}
           <Row label={back.lovejoin ? "Network fees" : "Network fee"} value={`${formatAda(back.fee)} ₳`} />
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at session ${s.index + 1}`} />
+          <IntoRow back={back} />
         </ReviewRows>
         <LovejoinNote
           back={back}
           busy={busy}
           onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
         />
-        <Callout tone="privacy">
-          This links the one-time account to the new private UTxOs, as Make private does. The account is never used again.
-        </Callout>
+        <ReturnLinks back={back} after="The account is never used again." />
       </Screen>
     );
   }

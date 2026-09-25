@@ -5,11 +5,12 @@
 // Koios, giveme.my and Minswap's aggregator.
 import { describe, expect, it } from "vitest";
 
+import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
 import { SESSION_PENDING } from "../src/background/pending";
-import { checkAsk, SESSION_OUT, SessionService } from "../src/background/sessions";
+import { checkAsk, SESSION_BACK, SESSION_OUT, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
@@ -655,5 +656,58 @@ describe("bring everything back", () => {
     expect(views.find((v) => v.index === 3)!.stage).toBe("returning");
     // Sent once: asked again, there's nothing ready.
     await expect(t.sessions.claimSubmit("preprod", returns.map((r) => r.txHash))).rejects.toThrow("aren't ready to send");
+  });
+});
+
+describe("a session's return", () => {
+  /** Session 0, a site's, whose funding made `change` (a UTxO of the private balance), holding 12 ₳ and its 5 ₳ collateral. */
+  async function returning(change: string) {
+    const t = await unlocked();
+    const now = t.clock.now;
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [{ kind: "out", txHash: change, at: now, confirmed: true }],
+          site: { origin: "https://a.example" },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(atSession("a0".repeat(32), 0, "12000000"), atSession("a1".repeat(32), 1, "5000000"));
+    return t;
+  }
+  const hex = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
+
+  it("merges into the Seedelf UTxO its funding made, under the session's own collateral, signed by its key alone", async () => {
+    const change = ownedUtxos[0]!;
+    const t = await returning(change.tx_hash);
+    const back = await t.sessions.backBuild("preprod", 0);
+    expect(back).toMatchObject({ index: 0, inputs: 2, merged: 1 });
+    // What the private balance gains is the account's 17 ₳, less the fee.
+    expect(BigInt(back.lovelace) + BigInt(back.fee)).toBe(17_000_000n);
+
+    const kept = (await t.wallet.withKeys(() => t.session.get<{ txCbor: string }>(SESSION_BACK)))!;
+    const bytes = hex(kept.txCbor);
+    expect(bodyOutpoints(bytes, 0)!.sort()).toEqual(
+      [`${change.tx_hash}#${change.tx_index}`, `${"a0".repeat(32)}#0`, `${"a1".repeat(32)}#1`].sort(),
+    );
+    expect(bodyOutpoints(bytes, 13)).toEqual([`${"a1".repeat(32)}#1`]);
+    // No giveme.my: the session's collateral is enough, and nothing else signs.
+    expect(t.collateral.asked).toEqual([]);
+
+    await t.sessions.backSubmit("preprod", back.txHash);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(back.txHash);
+  });
+
+  it("makes new UTxOs when the funding's change isn't in the private balance anymore", async () => {
+    const t = await returning("0f".repeat(32));
+    const back = await t.sessions.backBuild("preprod", 0);
+    expect(back.merged).toBe(0);
+    const kept = (await t.wallet.withKeys(() => t.session.get<{ txCbor: string }>(SESSION_BACK)))!;
+    expect(bodyOutpoints(hex(kept.txCbor), 0)).toHaveLength(2);
+    expect(bodyOutpoints(hex(kept.txCbor), 13)).toBeUndefined();
   });
 });

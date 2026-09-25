@@ -14,6 +14,7 @@ import {
   extensionId,
   koiosPreprod,
   launch,
+  lovejoinPool,
   openApp,
   openDapp,
   openReceive,
@@ -1463,6 +1464,79 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   expect(paths).not.toContain("cancel-tx");
 });
 
+test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a public mix is sent, and Home shows the box on its way", async ({
+  context,
+  koios,
+}) => {
+  koios.addedToAccounts.push(...lovejoinPool);
+  // The network agrees with each chain's first mix; a Seedelf spend is measured as recorded.
+  const spend = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+  koios.evaluation = (body: { params: { additionalUtxo?: unknown[] } }) =>
+    body.params.additionalUtxo ? { jsonrpc: "2.0", method: "evaluateTransaction", result: [] } : spend;
+  // The public account: a collateral, and ADA alone to mix.
+  const [rich] = (Object.values(koiosPreprod.accounts)[0] as { account_utxos: Array<Record<string, any>> }).account_utxos.filter(
+    (u) => BigInt(u.value) > 1_000_000_000n,
+  );
+  const at = (tx: string, value: string) => ({ ...rich!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] }) as never;
+  koios.addedToAccounts.push(at("e5", "5000000"), at("e6", "30000000"));
+
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
+  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the poolNone");
+
+  // One box at depth 2 (the default): the box, four mixes, and the deposit's change, into a one-time account.
+  await expect(page.getByTestId("lovejoin-boxes")).toHaveText("1 box, 10 ₳");
+  const cost = page.getByTestId("lovejoin-mix-cost");
+  await expect(cost).toContainText("Mixed2 waves deep, 4 mixes");
+  await expect(cost).toContainText("Into a one-time account15.3 ₳, and 5 ₳ of collateral");
+  await page.getByRole("button", { name: "One box more" }).click();
+  await expect(page.getByTestId("lovejoin-boxes")).toHaveText("2 boxes, 20 ₳");
+  await expect(cost).toContainText("Mixed2 waves deep, 8 mixes");
+  await page.getByRole("button", { name: "One box fewer" }).click();
+  await snap(page, "lovejoin-mix");
+
+  // From the private balance: the one-time account's funding, then what runs by itself.
+  await page.getByTestId("lovejoin-mix").click();
+  const funding = page.getByTestId("lovejoin-private-review");
+  await expect(funding).toContainText("ToPrivate session 1");
+  await expect(funding).toContainText("For the boxes and their mixes15.3 ₳");
+  await expect(funding).toContainText("Its collateral5 ₳");
+  await expect(page.getByTestId("lovejoin-private-then")).toContainText("Into Lovejoin1 box of 10 ₳");
+  await snap(page, "lovejoin-private-review");
+  // giveme.my refuses (its recorded answer): nothing is sent, and the mix says its funding didn't go through.
+  await page.getByTestId("lovejoin-send").click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction");
+  expect(koios.submitted).toHaveLength(0);
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("lovejoin-mixes")).toContainText("1 box of 10 ₳Not fundedIts funding didn't go through");
+
+  // From the public account: the deposit and every mix, sent one after another.
+  await page.getByRole("tab", { name: "Public account" }).click();
+  await expect(cost).toContainText("From your public account15.3 ₳, its collateral backing the mixes");
+  await page.getByTestId("lovejoin-mix").click();
+  const review = page.getByTestId("lovejoin-public-review");
+  await expect(review).toContainText("Into Lovejoin1 box of 10 ₳");
+  await expect(review).toContainText("Transactions5");
+  await snap(page, "lovejoin-public-review");
+  await page.getByTestId("lovejoin-send").click();
+  await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();
+  await expect.poll(() => koios.submitted.length).toBe(5);
+
+  // Home shows the box on its way back, from the device's own schedule; its row opens Lovejoin's page.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  const held = page.getByTestId("in-lovejoin");
+  await expect(held).toContainText("1 box of 10 ₳");
+  await expect(held).toContainText("10 ₳");
+  await snap(page, "home-in-lovejoin");
+  await held.click();
+  await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();
+});
+
 test("a private swap paused by a price move, then stopped: everything comes back and nothing is ordered", async ({
   context,
   koios,
@@ -2277,6 +2351,73 @@ test.describe("the dApp connector", () => {
     await page.getByRole("button", { name: "Disconnect" }).click();
     await expect(page.getByTestId("dapp-sites")).toHaveCount(0);
     await expect(page.getByTestId("dapp-sites-hint")).toBeVisible();
+  });
+
+  test("a site's private session comes back through Lovejoin, or directly: the review says which, and a switch rebuilds it", async ({
+    context,
+    koios,
+  }) => {
+    // The funding is measured as recorded; the network agrees with the chain's first mix.
+    const spend = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+    koios.evaluation = (body: { params: { additionalUtxo?: unknown[] } }) =>
+      body.params.additionalUtxo ? { jsonrpc: "2.0", method: "evaluateTransaction", result: [] } : spend;
+    koios.addedToAccounts.push(...lovejoinPool);
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" }).click();
+    const dapp = await openDapp(context);
+    const opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => "connected", (e: { info?: string }) => e.info));
+    const connect = await opened;
+    await connect.getByRole("button", { name: "A private session" }).click();
+    await connect.getByLabel("What to put in it").fill("15");
+    await connect.getByRole("button", { name: "Review" }).click();
+    await connect.getByLabel("Your password, to send").fill(PASSWORD);
+    await connect.getByRole("button", { name: "Send" }).click();
+    await expect(connect.getByRole("alert")).toContainText("refused this transaction");
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Cancel" }).click();
+    expect(await enabling).toBe("The user declined.");
+    await closed;
+
+    // Say its account holds 40 ₳ and its 5 ₳ collateral anyway: its spare ADA pays for two boxes.
+    const held = (tx: string, index: number, value: string) => ({
+      ...sessionSwap.utxo,
+      tx_hash: tx.repeat(32),
+      tx_index: index,
+      value,
+      payment_cred: sessionSwap.keyHash,
+      stake_address: null,
+      epoch_no: 315,
+      block_height: 5_000_000,
+      block_time: 1_800_000_000,
+      datum_hash: null,
+      inline_datum: null,
+      reference_script: null,
+      asset_list: [],
+      is_spent: false,
+    });
+    koios.addedToAccounts.push(held("c1", 0, "40000000"), held("c2", 1, "5000000"));
+    await page.getByRole("button", { name: "Back" }).click();
+    await page.getByRole("button", { name: "dApps", exact: true }).click();
+    await page.getByTestId("dapp-sites").getByRole("button").click();
+    await page.getByRole("button", { name: "Bring it back" }).click();
+
+    // Through Lovejoin: two boxes, fanned out, back later; the rest now.
+    const review = page.getByTestId("site-back-review");
+    await expect(review).toContainText("Through Lovejoin2 boxes of 10 ₳");
+    await expect(review).toContainText("Mixed2 waves deep, 8 mixes");
+    await expect(review).toContainText("IntoNew private UTxOs");
+    await snap(page, "site-back-lovejoin");
+    // Directly instead: one transaction, everything now.
+    await page.getByTestId("lovejoin-direct").click();
+    await expect(review).not.toContainText("Through Lovejoin");
+    await expect(review).toContainText("Into your private balance");
+    await expect(page.getByTestId("lovejoin-direct")).toHaveCount(0);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => koios.submitted.length).toBe(1);
   });
 
   test("a locked wallet asks for the password in the connector's window first", async ({ context }) => {

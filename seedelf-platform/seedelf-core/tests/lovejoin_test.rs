@@ -98,6 +98,8 @@ fn funding(coins: &[Coin]) -> lovejoin::Funding {
         coins: coins.to_vec(),
         collateral: coin(0x22, 5_000_000),
         address: key_address(0x33),
+        deposit_signers: 1,
+        mix_signers: 1,
     }
 }
 
@@ -106,6 +108,7 @@ fn payer(fee: u64) -> Payer {
         fee: coin(0x11, fee),
         collateral: coin(0x22, 5_000_000),
         address: key_address(0x33),
+        signers: 1,
     }
 }
 
@@ -231,7 +234,7 @@ fn a_mix_needs_two_boxes_and_a_payer_who_can_pay() {
     let boxes = pool_boxes(&protocol);
     assert!(lovejoin::mix(&params(), &protocol, &boxes[..1], &payer(20_000_000)).is_err());
     let short = lovejoin::mix(&params(), &protocol, &boxes, &payer(300_000)).unwrap_err();
-    assert!(short.to_string().contains("can't pay"), "{short}");
+    assert!(short.to_string().contains("enough ADA left"), "{short}");
 }
 
 #[test]
@@ -252,6 +255,7 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
         &[coin(0x44, 40_000_000)],
         &owners,
         &key_address(0x33),
+        1,
     )
     .unwrap();
     assert_eq!(deposit.boxes.len(), 2);
@@ -269,6 +273,7 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
         fee: deposit.change.clone(),
         collateral: coin(0x22, 5_000_000),
         address: key_address(0x33),
+        signers: 1,
     };
     let mix = lovejoin::mix(&params, &protocol, &boxes, &payer).unwrap();
     let ours: Vec<&PoolBox> = mix.outputs.iter().filter(|b| b.is_owned(&sk)).collect();
@@ -440,4 +445,52 @@ fn boxes_are_planned_on_what_the_session_can_pay() {
     assert_eq!(lovejoin::mixes_per_box(1), 1);
     assert_eq!(lovejoin::mixes_per_box(2), 4);
     assert_eq!(lovejoin::mixes_per_box(3), 13);
+    // Funding for k boxes is the plan run backwards: it pays for exactly k.
+    for depth in 1..=3 {
+        for boxes in 1..=5 {
+            let funded = lovejoin::funding_for(boxes, depth, 10_000_000);
+            assert_eq!(lovejoin::boxes_affordable(funded, depth, 10_000_000), boxes);
+            assert_eq!(
+                lovejoin::boxes_affordable(funded - 1, depth, 10_000_000),
+                boxes - 1
+            );
+        }
+    }
+    assert_eq!(lovejoin::funding_for(1, 2, 10_000_000), 15_300_000);
+}
+
+#[test]
+fn a_chain_funded_for_its_boxes_goes_through_and_keeps_its_change() {
+    // Exactly what the tile funds a one-time account with for two boxes at depth 1.
+    let protocol = Protocol::of(true).unwrap();
+    let owner = Register::create(Scalar::from(42u64)).unwrap();
+    let owners = vec![
+        owner.clone().rerandomize().unwrap(),
+        owner.rerandomize().unwrap(),
+    ];
+    let funded = lovejoin::funding_for(2, 1, protocol.denom);
+    let built = lovejoin::chain(
+        &params(),
+        &protocol,
+        &funding(&[coin(0x44, funded)]),
+        &owners,
+        1,
+        &all_pool_boxes(&protocol),
+    )
+    .unwrap();
+    assert_eq!(built.txs.len(), 3);
+    // What the mixes didn't use comes back: more than an output's least.
+    assert!(
+        built.change.lovelace > 1_000_000,
+        "{}",
+        built.change.lovelace
+    );
+}
+
+#[test]
+fn a_mix_never_leaves_change_under_an_outputs_least() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    let err = lovejoin::mix(&params(), &protocol, &boxes, &payer(1_500_000)).unwrap_err();
+    assert!(err.to_string().contains("keep the change"), "{err}");
 }

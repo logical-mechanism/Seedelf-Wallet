@@ -75,6 +75,8 @@ export const stakingPreprod = fixture("staking-preprod.json");
 export const minswapEstimate = fixture("minswap-estimate-preprod.json");
 /** Session 0 of the 12-word phrase, its UTxO, and a swap from it (wasm/tests/session_test.rs). */
 export const sessionSwap = fixture("session-swap.json");
+/** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
+export const lovejoinPool = fixture("lovejoin-pool-preprod.json").pool;
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -93,7 +95,7 @@ export interface KoiosFake {
   collateral: { status: number; body: unknown };
   /** Transactions giveme.my was asked to witness. */
   collateralAsked: number;
-  /** What Ogmios answers every evaluation with. */
+  /** What Ogmios answers every evaluation with; or a function of the request. */
   evaluation: unknown;
   /** Who holds each NFT, by `policy.name`, for asset_nft_address (ADA Handles). */
   nfts: Map<string, string>;
@@ -135,7 +137,9 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     if (path === "ogmios") {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(koios.evaluation) });
+      const answer =
+        typeof koios.evaluation === "function" ? (koios.evaluation as (body: any) => unknown)(request.postDataJSON()) : koios.evaluation;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) });
     }
     if (path === "asset_nft_address") {
       const query = new URL(request.url()).searchParams;

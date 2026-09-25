@@ -239,6 +239,18 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.sessions.resume(ctx.network, message.index);
     case "lovejoin-status":
       return ctx.lovejoin.status(ctx.network);
+    case "lovejoin-held":
+      return ctx.lovejoin.held(ctx.network);
+    case "lovejoin-funding":
+      return ctx.lovejoin.funding(ctx.network, message.boxes);
+    case "lovejoin-mix-private-build":
+      return ctx.sessions.mixOutBuild(ctx.network, message.boxes);
+    case "lovejoin-mix-private-submit":
+      return ctx.sessions.mixOutSubmit(ctx.network, message.txHash);
+    case "lovejoin-mix-public-build":
+      return ctx.lovejoin.publicBuild(ctx.network, message.boxes);
+    case "lovejoin-mix-public-submit":
+      return ctx.lovejoin.publicSubmit(ctx.network, message.txHash);
     case "lovejoin-withdraw-now":
       return ctx.lovejoin.withdrawNow(ctx.network, message.box);
   }

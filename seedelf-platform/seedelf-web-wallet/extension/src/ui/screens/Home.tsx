@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { handlesIn } from "../../shared/handles";
-import type { Account, AdaPrice, Balances, PendingTx, SeedelfInfo, SessionView, StakeInfo } from "../../shared/rpc";
+import type { Account, AdaPrice, Balances, LovejoinHeld, PendingTx, SeedelfInfo, SessionView, StakeInfo } from "../../shared/rpc";
 import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
@@ -39,12 +39,13 @@ import {
   PieIcon,
   ReceiveIcon,
   SendIcon,
+  ShieldIcon,
   SproutIcon,
   WithdrawIcon,
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { formatFiat, plural, poolLabel, rewardsLocked, spentRewards, unlocked, withRewards } from "../format";
+import { formatFiat, plural, poolLabel, rewardsLocked, spentRewards, unlocked, whenOf, withRewards } from "../format";
 import { useAmounts, usePreferences } from "../preferences";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
@@ -78,6 +79,7 @@ const SENT: Record<PendingTx["kind"], string> = {
   "session-cancel": "Order cancel",
   "session-back": "Return from a private session",
   "lovejoin-withdraw": "A box back from Lovejoin",
+  "lovejoin-mix": "Mixes into Lovejoin",
 };
 const CONFIRMED: Record<PendingTx["kind"], string> = {
   "move-in": "Made private",
@@ -96,6 +98,7 @@ const CONFIRMED: Record<PendingTx["kind"], string> = {
   "session-cancel": "Order cancelled",
   "session-back": "Back in your private balance",
   "lovejoin-withdraw": "Back in your private balance",
+  "lovejoin-mix": "In Lovejoin, on their way to your private balance",
 };
 
 /** Read again on open when the last reading is older than this. */
@@ -139,6 +142,8 @@ export function Home() {
   const [dappStart, setDappStart] = useState<DappStart>();
   // Swaps that run themselves and aren't over, from the device's own record.
   const [swaps, setSwaps] = useState<SessionView[]>([]);
+  // Lovejoin boxes on their way back, from the device's own schedule.
+  const [held, setHeld] = useState<LovejoinHeld>();
 
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
@@ -184,11 +189,16 @@ export function Home() {
   useEffect(() => {
     if (screen !== "home") return;
     let live = true;
-    const read = () =>
-      call("sessions", {}).then(
+    const read = () => {
+      void call("sessions", {}).then(
         (all) => live && setSwaps(all.filter(isRunningSwap)),
         () => undefined,
       );
+      void call("lovejoin-held", {}).then(
+        (h) => live && setHeld(h),
+        () => undefined,
+      );
+    };
     void read();
     const timer = setInterval(() => void read(), 20_000);
     return () => {
@@ -432,6 +442,8 @@ export function Home() {
               <RunningSwaps swaps={swaps} onOpen={(index) => dapps({ dapp: "minswap", session: index })} />
             )}
 
+            {held && held.boxes > 0 && <InLovejoin held={held} now={now} onOpen={() => dapps({ dapp: "lovejoin" })} />}
+
             <Links
               onActivity={() => setActivityOf("seedelf")}
               onUtxos={() => setUtxosOf("seedelf")}
@@ -593,6 +605,28 @@ function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index:
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/**
+ * Lovejoin's boxes on their way back into the private balance, each after its
+ * own wait: not counted in the balance until they're here. Opens Lovejoin's page.
+ */
+function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
+  const amounts = useAmounts();
+  const next = held.next === null ? "" : held.next <= now ? "Next back at the next unlock" : `Next back ${whenOf(held.next, new Date(now))}`;
+  return (
+    <section className="section" aria-labelledby="in-lovejoin-title">
+      <h2 id="in-lovejoin-title">In Lovejoin</h2>
+      <button type="button" className="token-row" onClick={onOpen} data-testid="in-lovejoin">
+        <span className="avatar avatar--contact" aria-hidden="true">
+          <ShieldIcon size={16} />
+        </span>
+        <span className="token-row__label">{plural(held.boxes, "box", "boxes")} of 10 ₳</span>
+        <span className="token-row__amount">{amounts.ada(held.lovelace)} ₳</span>
+        <span className="token-row__sub">{next}</span>
+      </button>
     </section>
   );
 }

@@ -282,7 +282,7 @@ Totals: Rust 312, Vitest 273, Playwright 47 (unchanged).
 - **The return is still a key-signed sweep into new registers,** not merged into the funding change (below). So the question of the collateral as an input doesn't arise yet: the return spends it as an ordinary input, and no script runs.
 - **A chain that fails partway isn't rebuilt from where it stopped.** Its error shows. Boxes already deposited are the wallet's and are found by the scan, and bringing the session back again returns what's still at its account (plainly, or through a new chain).
 
-**Not done yet:**
+**Not done yet** (after the first session; the second session built items 1 to 6, below):
 
 1. The merge of the leftover and tokens into the session's funding change.
 2. The tile's own mixing, from the private balance through a one-time account and from the public account.
@@ -291,6 +291,84 @@ Totals: Rust 312, Vitest 273, Playwright 47 (unchanged).
 5. The Koios cross-check.
 6. End-to-end tests for the tile and the review.
 7. **A live preprod run** (on the user's go-ahead): a session through Lovejoin, then its withdraws.
+
+## Built (2026-09-25, second session)
+
+**The merge into the funding change.**
+
+- **Core:** `ScriptSpend::with_account(account, inputs, collateral)` makes a Seedelf spend also take a key account's UTxOs and put up that account's collateral instead of giveme.my's.
+  - The redeemers point into the ledger's order of all the inputs, the account's included.
+  - It refuses UTxOs under another key, a collateral holding tokens, and a UTxO spent twice.
+  - **The proofs stay bound to a new one-time key** (privacy rule 1), never the account's. A site connected to a private session can ask the session's key to sign. A proof bound to it could then be replayed in a transaction the site built, if the user approved it. So the merged return has two signatures: the one-time key's and the session's.
+  - `ScriptSpend::measure_locally(known)` drafts, measures in the wallet (`uplc`, with the bundled Seedelf references), finishes, and measures the finished transaction again.
+- **WebAssembly:** `api::merged_return` builds it. `buildSessionReturn` and the Lovejoin chain's last transaction take `merge`, the funding's change.
+  - The collateral is the session's 5 ₳ UTxO, which the return also spends. The ledger's rules don't forbid one UTxO as both; the live run confirms it.
+  - Without a funding change to merge into, the return is the plain sweep into new registers, as before.
+- **Worker:** `sessions.ts`'s `fundingChange` finds it: the private balance's UTxOs from the session's `out` transactions, not locked, up to four.
+  - A return refused for spending something already spent makes the next contract read a full one, so a change spent elsewhere isn't offered again.
+- **UI:** each return's review says *Into: The private UTxO its funding made* or *New private UTxOs*, and its privacy note follows.
+
+**Mixing from the tile.**
+
+- **From the private balance:** a mix session. Its funding is a one-time account paid what the boxes, their mixes and the deposit take (`lovejoin::funding_for`, which `boxes_affordable` gives back exactly), plus its 5 ₳ collateral.
+  - The record has `mix: { boxes }` and `auto`, so the swap runner takes it. Once funded, it's the session's return through Lovejoin with that many boxes.
+  - The leftover merges into the funding's change.
+  - The pool is checked before the funding: each box needs `2 × mixes` other boxes.
+- **From the public account:** `lovejoin::chain_from_account`.
+  - The deposit takes as few ADA-only UTxOs as pay for it (largest first), signed by their keys.
+  - Every mix pays from the change at `0/0` and puts up the account's collateral, signed by the change's key and the collateral's.
+  - The change stays in the account; there's no return.
+  - `Funding` and `Payer` now carry how many keys sign, so each fee covers the witnesses.
+  - The account needs a collateral set aside (Settings, *Collateral*); the page says so otherwise.
+- **The change floor:** a deposit or mix never leaves change under an output's least, so a chain can't be built to fail on chain.
+- **UI:** the Lovejoin page has *Mix*:
+  - from the private balance or the public account;
+  - a count of boxes, 1 to 10;
+  - what it takes (the mixes, their fees, the funding);
+  - a review for each side;
+  - the latest five mixes from the private balance, with how each is doing.
+
+**The Koios cross-check.** Before a chain is used, Koios's Ogmios measures its first mix, given the unsent deposit as `additionalUtxo`.
+
+- `eval::ogmios_utxos` writes the deposit's outputs. `eval::declared_covers` compares Ogmios's answer with the budgets the mix declares.
+- **If the network measures more, or refuses a script, the chain doesn't start.**
+  - A session's return comes back directly and says why (`lovejoinSkipped`, shown on its review; a mix session records it as `mix.skipped`).
+  - A public mix refuses, and nothing is sent.
+- A Koios error is thrown as it is, so the runner tries again later.
+- So is a pool too small for the boxes: the return comes back directly.
+
+**The swap approval** says that spare ADA goes through Lovejoin on the way back, with the depth and the wait from Settings.
+
+**Home's *In Lovejoin* row** (`lovejoin-held`) is read from this device's schedule alone, with no Koios request: the boxes on their way back, what they hold, and when the next is due. It opens Lovejoin's page.
+
+**A request left out of `rpc.ts`'s list is now a type error.** The worker drops an unlisted request as unknown, silently, which is how the first build of the funding preview failed.
+
+**Tests:**
+
+| Where | New |
+|---|---|
+| `seedelf-core` | `merge_test` 2 (the merged return passes the deployed wallet contract; the refusals), `eval_test` +2 (the cross-check on every recorded transaction; the Ogmios UTxOs), `lovejoin_test` +2 (funding for k boxes; the change floor) |
+| `seedelf-wasm` | `session_test` +1 (the merged return), `lovejoin_test` +3 (the merged chain; the funding call; the public account's chain, one and two signing keys) |
+| Vitest | `sessions.test.ts` +2 (merged, or new UTxOs when the change is gone); `lovejoin.test.ts` +5 (the cross-check's request, a disagreement, a refused script, a mix session end to end, the pool and box-count checks, a public mix) and `held` |
+| Playwright | the Lovejoin page (both sides, the cost, a public mix sent, Home's row); a site session's return through Lovejoin, then directly |
+
+Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module is 760 KB gzipped.
+
+**Departed from the design:**
+
+- **The merged return has two signers,** not one: the proofs stay on a one-time key (above).
+- **A chain that fails partway still isn't rebuilt from where it stopped.** Once a deposit is recorded, the session's next return comes back directly rather than deposit again.
+- **The tile's count is capped at 10 boxes,** and the pool must hold `2 × mixes` other boxes for each.
+
+**Not done yet:**
+
+1. **A live preprod run** (on the user's go-ahead):
+   - a session's return through Lovejoin, merged into its funding change
+   - a mix from each side
+   - the delayed withdraws
+   - the collateral as an input of the same transaction
+2. Forgetting a mix whose funding never landed (it stays in the page's list).
+3. The public Activity names a public mix's transactions as plain payments.
 
 ## Out of scope
 

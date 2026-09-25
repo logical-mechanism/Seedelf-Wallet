@@ -276,11 +276,19 @@ impl Coin {
 
 /// Who pays a deposit or a mix: its fee comes from `fee`, its collateral is
 /// `collateral` (left unspent), and the change goes back to `address`.
+/// `signers` is how many keys sign it (the fee's and the collateral's): a
+/// session's one key, or two of a public account's.
 #[derive(Debug, Clone)]
 pub struct Payer {
     pub fee: Coin,
     pub collateral: Coin,
     pub address: Address,
+    pub signers: usize,
+}
+
+/// The least an ADA-only output at `address` may hold.
+fn least_change(params: &ProtocolParameters, address: &Address) -> Result<u64> {
+    crate::transaction::calculate_min_required_utxo(Output::new(address.clone(), 1_000_000), params)
 }
 
 fn price(params: &ProtocolParameters, size: u64, budgets: &[Budget], script_bytes: u64) -> u64 {
@@ -330,13 +338,14 @@ pub struct Deposit {
 
 /// Locks one box per register in `owners` (each already re-randomized, so
 /// its `{a, b}` is fresh), paid from `inputs`, with the rest back to
-/// `change_address`. Key-signed, one signer.
+/// `change_address`. Key-signed, by `signers` keys.
 pub fn deposit(
     params: &ProtocolParameters,
     protocol: &Protocol,
     inputs: &[Coin],
     owners: &[Register],
     change_address: &Address,
+    signers: usize,
 ) -> Result<Deposit> {
     if owners.is_empty() {
         bail!("A deposit needs at least one box");
@@ -358,10 +367,12 @@ pub fn deposit(
         .collect::<Result<_>>()?;
     let total: u64 = inputs.iter().map(|c| c.lovelace).sum();
     let boxed = protocol.denom * owners.len() as u64;
-    let (fee, staged) = settle_fee(params, 1, |fee| {
+    let least = least_change(params, change_address)?;
+    let (fee, staged) = settle_fee(params, signers, |fee| {
         let change = total
             .checked_sub(boxed + fee)
-            .context("There isn't enough ADA for these boxes and the fee")?;
+            .filter(|c| *c >= least)
+            .context("There isn't enough ADA for these boxes, the fee and the change")?;
         let mut tx = StagingTransaction::new();
         for coin in inputs {
             tx = tx.input(coin.input());
@@ -521,12 +532,14 @@ pub fn mix(
     all_inputs.push(payer.fee.input());
     all_inputs.sort_by_key(|i| (i.tx_hash.0, i.txo_index));
 
+    let least = least_change(params, &payer.address)?;
     let stage = |fee: u64, budgets: Option<&Budgets>| -> Result<BuiltTransaction> {
         let change = payer
             .fee
             .lovelace
             .checked_sub(fee)
-            .context("The session can't pay this mix's fee")?;
+            .filter(|c| *c >= least)
+            .context("There isn't enough ADA left to pay this mix's fee and keep the change")?;
         let collateral_back = payer
             .collateral
             .lovelace
@@ -606,7 +619,12 @@ pub fn mix(
     let mut fee = 1_000_000;
     for _ in 0..5 {
         let tx = stage(fee, Some(&budgets))?;
-        let needed = price(params, signed_size(&tx, 1)?, &used, protocol.script_bytes);
+        let needed = price(
+            params,
+            signed_size(&tx, payer.signers)?,
+            &used,
+            protocol.script_bytes,
+        );
         if needed <= fee && fee - needed < 1_000 {
             break;
         }
@@ -840,20 +858,35 @@ pub const MIX_FEE_ESTIMATE: u64 = 950_000;
 /// What a deposit and the change it leaves are planned on.
 const DEPOSIT_RESERVE: u64 = 1_500_000;
 
+/// What a box costs at `depth`: the box, and every mix of its fan-out.
+fn per_box(depth: u32, denom: u64) -> u64 {
+    denom + mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
+}
+
 /// How many boxes `spare` lovelace pays for, with every mix of a `depth`-deep
 /// fan-out and the deposit: none if it can't pay for one.
 pub fn boxes_affordable(spare: u64, depth: u32, denom: u64) -> usize {
-    let per_box = denom + mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE;
-    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box) as usize
+    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box(depth, denom)) as usize
+}
+
+/// What pays for `boxes` boxes at `depth` ([`boxes_affordable`]'s plan run
+/// backwards): the boxes, every mix, and the deposit and its change. What
+/// the mixes don't use comes back with the change.
+pub fn funding_for(boxes: usize, depth: u32, denom: u64) -> u64 {
+    DEPOSIT_RESERVE + boxes as u64 * per_box(depth, denom)
 }
 
 /// What pays for a chain: the key account's ADA-only `coins`, its
 /// `collateral` (never spent by the chain), and its `address` for change.
+/// The deposit is signed by `deposit_signers` keys (the coins'), each mix by
+/// `mix_signers` (the change's and the collateral's).
 #[derive(Debug, Clone)]
 pub struct Funding {
     pub coins: Vec<Coin>,
     pub collateral: Coin,
     pub address: Address,
+    pub deposit_signers: usize,
+    pub mix_signers: usize,
 }
 
 /// A transaction of a chain, in the order it's sent.
@@ -892,6 +925,8 @@ pub fn chain(
         coins,
         collateral,
         address,
+        deposit_signers,
+        mix_signers,
     } = funding;
     if !(1..=3).contains(&depth) {
         bail!("The fan-out is 1 to 3 waves deep");
@@ -906,7 +941,7 @@ pub fn chain(
     let mut fresh: Vec<PoolBox> = pool.to_vec();
     shuffle(&mut fresh);
 
-    let deposit = deposit(params, protocol, coins, owners, address)?;
+    let deposit = deposit(params, protocol, coins, owners, address, *deposit_signers)?;
     let mut txs = vec![ChainTx {
         kind: "deposit",
         tx: deposit.tx.clone(),
@@ -930,6 +965,7 @@ pub fn chain(
                 fee: change.clone(),
                 collateral: collateral.clone(),
                 address: address.clone(),
+                signers: *mix_signers,
             };
             let mixed = mix(params, protocol, &inputs, &payer)?;
             if ours.contains(boxed) {

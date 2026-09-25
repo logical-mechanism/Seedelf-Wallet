@@ -279,3 +279,81 @@ fn ogmios_purpose(tag: &str) -> &'static str {
         _ => "propose",
     }
 }
+
+/// A built transaction's outputs as Ogmios v6 UTxOs, for
+/// `evaluateTransaction`'s `additionalUtxo`: with them the network's own
+/// evaluator can measure a transaction whose parents aren't on chain yet (a
+/// chain's first mix, on its unsent deposit). That's the check that the
+/// wallet's evaluator still costs scripts as the network does.
+pub fn ogmios_utxos(tx_cbor: &[u8]) -> Result<Value> {
+    let tx =
+        MultiEraTx::decode(tx_cbor).map_err(|e| anyhow!("The transaction can't be read: {e}"))?;
+    let id = hex::encode(tx.hash());
+    let mut rows = Vec::new();
+    for (index, output) in tx.outputs().iter().enumerate() {
+        let address = output
+            .address()
+            .map_err(|e| anyhow!("An output's address can't be read: {e}"))?
+            .to_bech32()
+            .map_err(|e| anyhow!("An output's address can't be written: {e}"))?;
+        let value = output.value();
+        let mut amounts = serde_json::Map::new();
+        amounts.insert("ada".into(), json!({ "lovelace": value.coin() }));
+        for policy in value.assets() {
+            let mut names = serde_json::Map::new();
+            for asset in policy.assets() {
+                names.insert(
+                    hex::encode(asset.name()),
+                    json!(asset.output_coin().unwrap_or(0)),
+                );
+            }
+            amounts.insert(hex::encode(policy.policy()), Value::Object(names));
+        }
+        let mut row = json!({
+            "transaction": { "id": id },
+            "index": index,
+            "address": address,
+            "value": amounts,
+        });
+        match output.datum() {
+            Some(pallas_primitives::conway::PseudoDatumOption::Data(data)) => {
+                row["datum"] = json!(hex::encode(data.raw_cbor()));
+            }
+            Some(pallas_primitives::conway::PseudoDatumOption::Hash(hash)) => {
+                row["datumHash"] = json!(hex::encode(hash));
+            }
+            None => {}
+        }
+        rows.push(row);
+    }
+    Ok(Value::Array(rows))
+}
+
+/// Whether the budgets `tx_cbor` declares cover what `answer` measured
+/// (Ogmios's `evaluateTransaction` answer, or [`evaluate`]'s), redeemer by
+/// redeemer; the reason when they don't, a failed script included.
+pub fn declared_covers(tx_cbor: &[u8], answer: &Value) -> Result<std::result::Result<(), String>> {
+    let measured = match crate::build::Budgets::from_ogmios(answer) {
+        Ok(budgets) => budgets,
+        Err(e) => return Ok(Err(e.to_string())),
+    };
+    let tx =
+        MultiEraTx::decode(tx_cbor).map_err(|e| anyhow!("The transaction can't be read: {e}"))?;
+    let rows: Vec<Value> = tx
+        .redeemers()
+        .iter()
+        .map(|r| {
+            let units = r.ex_units();
+            json!({
+                "validator": { "purpose": purpose(&r.tag()), "index": r.index() },
+                "budget": { "memory": units.mem, "cpu": units.steps },
+            })
+        })
+        .collect();
+    let declared = crate::build::Budgets::from_ogmios(&json!({ "result": rows }))?;
+    Ok(if declared.covers(&measured) {
+        Ok(())
+    } else {
+        Err("the network measures its scripts above what the wallet declared".to_string())
+    })
+}

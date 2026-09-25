@@ -380,7 +380,12 @@ flowchart LR
   - `signSessionTx` gives the vkey witness; `attachWitnesses` (`cip30::attach_witnesses`) splices it into Minswap's witness set, copying the body and the other entries byte for byte, so the id is unchanged and the order's datum still hashes to what the order names. Checked on a real preprod swap Minswap built (`wasm/tests/fixtures/minswap-swap-preprod.json`).
   - A connector summary's `scripts` is now redeemers only: a script data hash alone covers witness-set datums, as an order's, and runs nothing.
 - **The cancel** is the same with Minswap's `cancel-tx`: its inputs are the orders (read from Koios `utxo_info`) and the account's collateral.
-- **Back** is `buildSessionReturn`: every UTxO at the account into the contract under fresh registers (`build::external_sweep`, the CLI's external sweep), signed by the session's key. The worker refuses it while Minswap lists an order of a session that placed one.
+- **Back** is `buildSessionReturn`: every UTxO at the account into the contract, signed by the session's key. The worker refuses it while Minswap lists an order of a session that placed one.
+  - **Merged into the funding's change** (chunk 16) when that Seedelf UTxO is still in the private balance and not locked (`fundingChange`): one Seedelf spend (`ScriptSpend::with_account`) takes it and every UTxO at the account, under the session's own 5 ₳ collateral, which it also spends. What comes back joins a UTxO already tied to the session, so no new one is.
+    - Its proof is bound to a new one-time key, never the session's: a site connected to the session can ask the session's key to sign.
+    - It's measured in the wallet (`measure_locally`), not by Ogmios.
+  - **Otherwise** it's the CLI's external sweep (`build::external_sweep`): new registers, no script, no collateral.
+  - **On preprod, spare ADA goes through Lovejoin first** (below).
 - **The runner** (chunk 15b). Sending the funding is the one approval: the record gains `auto` (the approved `minAmountOut` and `fund`). `SessionService.advance` takes whatever step is next from the record and the chain, so it's safe to call any number of times:
   - **Who calls it:** the session's page every 20 s (and its Refresh, which skips the wait), the `seedelf.sessions` alarm every minute while a swap runs and the wallet is unlocked (`runAll`, which stops the alarm once nothing runs), and unlocking (the wallet's `changed`). Locked, it does nothing and the alarm stops until unlock. One promise queue in the service takes every step, the runner's and the user's, one at a time.
   - **The steps:** wait for what was sent to confirm (`tx_status`); then place the order, wait for the fill, and bring it all back. A fill is something arriving from a transaction the session didn't make while Minswap lists no order; an empty list alone can be Minswap lagging behind.
@@ -391,6 +396,35 @@ flowchart LR
 - **What each costs:** reading the sessions is one Koios `credential_utxos` for every open session's key hash, and one `tx_status` for the transactions waiting, only when Minswap's screen reads. A running swap reads its chain at most every 15 s unless the user refreshes: one `tx_status` while something waits to confirm, else one `credential_utxos`, plus Minswap's `pending-orders` once its order is on chain. About 10–20 requests a swap, and nothing while none runs. The form asks Minswap's `estimate` once typing pauses (0.6 s) after each change of the amount, the pair or the slippage, never on every key, and its token search asks `tokens` the same way (0.4 s); a quote over a minute old is asked for once more before the funding. Placing the order costs two Minswap requests (`estimate`, `build-tx`) and one Koios read of the account.
 - **Routing is through DEXes that take orders only.** Some DEXes on Minswap's routes swap straight against their pools in the same transaction: it spends the pools' UTxOs, runs their scripts, and uses someone else's collateral. A session signs only what spends nothing but its own UTxOs, so every `estimate` and `build-tx` asks Minswap to leave them out (`exclude_protocols`, `DIRECT_PROTOCOLS` in `minswap.ts`: DanogoCLMMV1, ChakraBondingCurve, OpenDjedV1). The session's check stays as the backstop: any other DEX that does it pauses the swap. Allowing such swaps (checking the pools' script inputs, the other collateral and the session's net change) is a later step.
 - **Minswap's aggregator** answers browsers with CORS headers, so the manifest only lists it in the pages' `connect-src` (`networks.ts` `corsOrigins`): no host permission, no new warning at install. If it ever stops, it'll need an optional host permission.
+
+## Lovejoin
+
+Chunk 16: [Lovejoin](https://github.com/logical-mechanism/Lovejoin), a mixer of fixed 10 ₳ boxes, deployed on preprod only. The plan has the protocol and the decisions: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md).
+
+```mermaid
+flowchart LR
+  R["a session's return<br/>(sessions.ts)"] -- "chain" --> L["lovejoin.ts"]
+  T["Lovejoin page<br/>(Lovejoin.tsx)"] -- "mix: private (a mix session),<br/>public, status, withdraw now" --> L
+  A["unlock, seedelf.sessions alarm"] -- "withdrawDue" --> L
+  L -- "credential_utxos (mix_box),<br/>ogmios (first mix), submittx" --> K["Koios"]
+  L -- "giveme.my (withdraws)" --> G["giveme.my"]
+  L -- "buildLovejoinChain, buildLovejoinFromAccount,<br/>lovejoinOwned, buildLovejoinWithdraw,<br/>ogmiosUtxos, declaredCovers" --> X["WebAssembly"]
+```
+
+- **Boxes are owned by the Seedelf key.** A box's datum `{a, b}` has a Seedelf register's shape, so the key's ownership check finds its boxes anywhere in the pool, after other people's mixes and after a restore. Boxes aren't remembered; only their due times are, sealed as `lovejoin.<network>`.
+- **A chain is built whole before any of it is sent,** in WebAssembly, each transaction measured against the deployed scripts (`seedelf_core::eval`, Aiken's `uplc`) on the outputs of the one before:
+  - the deposit;
+  - each box fanned out three wide, `depth` waves deep (a setting, 1 to 3, default 2), with fresh pool boxes drawn at random;
+  - for a session, the return last (merged, as above).
+
+  The session's one collateral backs every mix. The worker sends the chain in order, trying a child again a few times when Koios hasn't seen its parent yet.
+- **The network's check:** before a chain is used, Koios's Ogmios measures its first mix, given the unsent deposit as `additionalUtxo`. If it measures more than the mix declares, or refuses a script, the chain doesn't start: a return comes back directly and says why. That's what a hard fork the evaluator doesn't know looks like.
+- **Withdraws:** each box comes back on its own after a random wait (a setting, default 1 to 6 hours), at the first unlock after it or on the sessions alarm. It goes into a fresh register, paid from itself, with giveme.my's collateral: nothing ties it to where it came from.
+- **The tile mixes too:**
+  - **From the private balance:** a mix session, a one-time account funded for the boxes that then runs itself with the swap runner's machinery.
+  - **From the public account:** the deposit and every mix paid by the account and backed by its collateral; the change stays in it.
+- **Home's *In Lovejoin* row** is read from the schedule alone (`lovejoin-held`). The unlock scan reads the pool only on a wallet that has used Lovejoin on this device.
+- **What each costs:** a chain is one pool read, one evaluate, and one submit per transaction (a session at depth 2 with k boxes: 4k + 2). A withdraw is giveme.my and one submit, and the unlock scan one pool read.
 
 ## What we borrow from Lace
 

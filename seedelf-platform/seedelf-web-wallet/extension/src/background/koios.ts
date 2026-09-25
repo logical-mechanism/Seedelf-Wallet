@@ -393,10 +393,12 @@ export class Koios {
    * Returns Ogmios's JSON-RPC answer as is: `result` lists what each script
    * used, or `error` says why they refused (Koios passes that on with status
    * 400). WebAssembly reads either. Retried like a read: evaluating changes
-   * nothing.
+   * nothing. `additionalUtxo`: UTxOs it spends that aren't on chain yet, as
+   * Ogmios v6's (a chain's unsent parents, from WebAssembly's ogmiosUtxos).
    */
-  evaluate(txCborHex: string): Promise<unknown> {
-    const body = { jsonrpc: "2.0", method: "evaluateTransaction", params: { transaction: { cbor: txCborHex } } };
+  evaluate(txCborHex: string, additionalUtxo?: unknown[]): Promise<unknown> {
+    const params = { transaction: { cbor: txCborHex }, ...(additionalUtxo?.length ? { additionalUtxo } : {}) };
+    const body = { jsonrpc: "2.0", method: "evaluateTransaction", params };
     return this.send<unknown>("POST", "ogmios", body, "", { answer400: true });
   }
 

@@ -48,6 +48,8 @@ export function activityTitle(e: ActivityEntry): string {
       return "Back from a private session";
     case "lovejoin-withdraw":
       return "Back from Lovejoin";
+    case "lovejoin-mix":
+      return "Into Lovejoin";
   }
 }
 

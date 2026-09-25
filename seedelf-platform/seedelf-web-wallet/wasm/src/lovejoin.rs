@@ -11,11 +11,13 @@
 //! 2. the mixes: each box fanned out `depth` waves deep, three wide, with
 //!    fresh boxes from the pool;
 //! 3. the return: the last change, the collateral (spent here, last) and any
-//!    token UTxOs, into fresh registers.
+//!    token UTxOs, merged into the Seedelf UTxO the session's funding made
+//!    (`api::merged_return`), or into fresh registers when that's spent.
 //!
 //! The boxes come back later, each on its own ([`withdraw`]), paid from
 //! themselves with giveme.my's collateral: nothing ties them to the session.
 
+use crate::api;
 use anyhow::{Context, Result, anyhow, bail};
 use blstrs::Scalar;
 use pallas_addresses::{Address, ShelleyPaymentPart};
@@ -165,6 +167,10 @@ pub struct ChainRequest {
     pub depth: u32,
     /// How many boxes; the most the spare ADA pays for when absent.
     pub boxes: Option<usize>,
+    /// The funding's Seedelf change the return merges into
+    /// (`api::SessionReturnRequest::merge`).
+    #[serde(default)]
+    pub merge: Vec<UtxoResponse>,
 }
 
 #[derive(Serialize, Debug)]
@@ -185,8 +191,14 @@ pub struct ChainResult {
     pub boxes: usize,
     pub depth: u32,
     pub fees: String,
-    /// What the return brings back at once (the change and the collateral).
+    /// What the return brings back at once: the last change, the collateral
+    /// and the token UTxOs' ADA, less its fee. A public account's chain has no
+    /// return: this is the change that stays in the account.
     pub returned: String,
+    /// The tokens it brings back with them.
+    pub tokens: Vec<api::TokenAmount>,
+    /// How many of the funding's Seedelf UTxOs the return merged into.
+    pub merged: usize,
     /// Where our boxes end up, to be withdrawn later.
     pub leaves: Vec<OutRef>,
 }
@@ -230,11 +242,15 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
         coins: held.coins.clone(),
         collateral: collateral.clone(),
         address,
+        deposit_signers: 1,
+        mix_signers: 1,
     };
     let built = lovejoin::chain(&params, &protocol, &funding, &owners, request.depth, &pool)?;
 
     // The return, last: the chain's change (not on chain yet), the
-    // collateral, and any token UTxOs the chain left alone.
+    // collateral, and any token UTxOs the chain left alone. Merged into the
+    // funding's change when it's still there, under the collateral it spends
+    // too; into new registers otherwise.
     let mut rows = vec![UtxoResponse {
         tx_hash: hex::encode(built.change.utxo.tx_hash),
         tx_index: built.change.utxo.index,
@@ -244,11 +260,32 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
     }];
     rows.push(held.collateral.clone());
     rows.extend(held.kept.iter().cloned());
-    let key = accounts.key_hash(Role::Receive, request.index)?;
-    let config = get_config(VARIANT, network_flag)?;
-    let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
-    let (back, back_fee) = build::external_sweep(&params, &rows, &base, &wallet, key)?;
-    let returned: u64 = built.change.lovelace + collateral.lovelace - back_fee;
+    let (total, tokens) = seedelf_core::utxos::assets_of(rows.clone())?;
+    let (back, back_fee) = if request.merge.is_empty() {
+        let key = accounts.key_hash(Role::Receive, request.index)?;
+        let config = get_config(VARIANT, network_flag)?;
+        let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
+        let (tx, fee) = build::external_sweep(&params, &rows, &base, &wallet, key)?;
+        (sign(tx, accounts, request.index)?, fee)
+    } else {
+        let chain = build::Chain {
+            params: params.clone(),
+            network_flag,
+            config: get_config(VARIANT, network_flag)?,
+        };
+        let (signed, spend) = api::merged_return(
+            accounts,
+            sk,
+            &chain,
+            request.index,
+            &rows,
+            &held.collateral,
+            &request.merge,
+            std::slice::from_ref(&built.change.utxo),
+        )?;
+        (signed, spend.fee.total)
+    };
+    let returned: u64 = total - back_fee;
 
     let mut txs = Vec::with_capacity(built.txs.len() + 1);
     let mut fees = back_fee;
@@ -262,7 +299,6 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
             fee: step.fee.to_string(),
         });
     }
-    let back = sign(back, accounts, request.index)?;
     txs.push(ChainTxOut {
         kind: "back".to_string(),
         tx_cbor: hex::encode(&back.tx_bytes.0),
@@ -275,6 +311,204 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
         depth: request.depth,
         fees: fees.to_string(),
         returned: returned.to_string(),
+        tokens: tokens
+            .items
+            .iter()
+            .map(|a| api::TokenAmount {
+                policy_id: hex::encode(a.policy_id),
+                asset_name: hex::encode(&a.token_name),
+                quantity: a.amount.to_string(),
+            })
+            .collect(),
+        merged: request.merge.len(),
+        leaves: built.leaves.iter().map(OutRef::of_box).collect(),
+    })
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FundingRequest {
+    pub network: String,
+    pub boxes: usize,
+    pub depth: u32,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FundingResult {
+    /// What pays for the boxes and their chain: a one-time account is
+    /// funded with this (and its own collateral besides).
+    pub lovelace: String,
+    pub mixes: usize,
+    /// About what the mixes cost, all boxes together.
+    pub mix_fees: String,
+}
+
+fn check_mix(boxes: usize, depth: u32) -> Result<()> {
+    if boxes == 0 {
+        bail!("Mix at least one box");
+    }
+    if !(1..=3).contains(&depth) {
+        bail!("The fan-out is 1 to 3 waves deep");
+    }
+    Ok(())
+}
+
+/// What mixing `boxes` boxes at `depth` takes, before anything is built:
+/// the boxes, every mix of their fan-out, and the deposit and its change.
+/// What the mixes don't use comes back.
+pub fn funding(request: FundingRequest) -> Result<FundingResult> {
+    let protocol = Protocol::of(network_flag(&request.network)?)?;
+    check_mix(request.boxes, request.depth)?;
+    let mixes = request.boxes * lovejoin::mixes_per_box(request.depth);
+    Ok(FundingResult {
+        lovelace: lovejoin::funding_for(request.boxes, request.depth, protocol.denom).to_string(),
+        mixes,
+        mix_fees: (mixes as u64 * lovejoin::MIX_FEE_ESTIMATE).to_string(),
+    })
+}
+
+/// A chain paid by the public account (the Lovejoin tile's "from your public
+/// account"), as JSON from the extension.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountChainRequest {
+    pub network: String,
+    /// One row of Koios's `epoch_params`.
+    pub params: serde_json::Value,
+    /// The public account's spendable UTxOs, each with its key's path.
+    pub utxos: Vec<api::PathedUtxo>,
+    /// Its collateral, with its path: every mix puts it up.
+    pub collateral: api::PathedUtxo,
+    /// The boxes at `mix_box`, less any a sent transaction of ours spends.
+    pub pool: Vec<UtxoResponse>,
+    pub depth: u32,
+    pub boxes: usize,
+}
+
+/// `boxes` boxes from the public account straight into Lovejoin: the
+/// deposit from as few of its ADA-only UTxOs as pay for them (largest first),
+/// then each box fanned out, every mix paid from the one before's change at
+/// the account's `0/0` and put up against its collateral. The last change
+/// stays in the public account (`returned`); there's no return. Signed here:
+/// the deposit by its inputs' keys, each mix by the change's and the
+/// collateral's.
+pub fn chain_from_account(
+    account: &CardanoAccount,
+    sk: Scalar,
+    request: AccountChainRequest,
+) -> Result<ChainResult> {
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    let protocol = Protocol::of(network_flag)?;
+    check_mix(request.boxes, request.depth)?;
+    let mut every = request.utxos.clone();
+    every.push(request.collateral.clone());
+    let paths = api::check_paths(account, network_flag, &every)?;
+    let collateral_ref = (
+        request.collateral.utxo.tx_hash.clone(),
+        request.collateral.utxo.tx_index,
+    );
+    let collateral = Coin::from_row(&request.collateral.utxo)?;
+
+    // As few ADA-only UTxOs as pay for the boxes, the largest first.
+    let needed = lovejoin::funding_for(request.boxes, request.depth, protocol.denom);
+    let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
+    let mut ada: Vec<&api::PathedUtxo> = request
+        .utxos
+        .iter()
+        .filter(|p| p.utxo.asset_list.as_ref().is_none_or(|a| a.is_empty()))
+        .filter(|p| (p.utxo.tx_hash.clone(), p.utxo.tx_index) != collateral_ref)
+        .collect();
+    ada.sort_by_key(|p| std::cmp::Reverse(lovelace(p)));
+    let mut picked: Vec<&UtxoResponse> = Vec::new();
+    let mut total = 0u64;
+    for p in ada {
+        if total >= needed {
+            break;
+        }
+        total += lovelace(p);
+        picked.push(&p.utxo);
+    }
+    if total < needed {
+        bail!(
+            "Your public account's ADA doesn't pay for {}: that takes {} ₳ in UTxOs of ADA alone, besides the collateral",
+            if request.boxes == 1 {
+                "a box of 10 ₳ and its mixes".to_string()
+            } else {
+                format!("{} boxes of 10 ₳ and their mixes", request.boxes)
+            },
+            needed.div_ceil(1_000_000)
+        );
+    }
+    let coins = picked
+        .iter()
+        .map(|u| Coin::from_row(u))
+        .collect::<Result<Vec<_>>>()?;
+    let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
+    let mut deposit_keys: Vec<(Role, u32)> = picked.iter().map(|u| path_of(u)).collect();
+    deposit_keys.sort_by_key(|(role, index)| (*role as u32, *index));
+    deposit_keys.dedup();
+    let change_key = (Role::Receive, 0);
+    let collateral_key = path_of(&request.collateral.utxo);
+    let mut mix_keys = vec![change_key];
+    if collateral_key != change_key {
+        mix_keys.push(collateral_key);
+    }
+
+    let base = Register::create(sk)?;
+    let owners = (0..request.boxes)
+        .map(|_| base.clone().rerandomize())
+        .collect::<Result<Vec<_>>>()?;
+    let pool: Vec<PoolBox> = request
+        .pool
+        .iter()
+        .filter_map(|row| PoolBox::from_row(row, &protocol))
+        .filter(|b| !b.is_owned(&sk))
+        .collect();
+    let funding = lovejoin::Funding {
+        coins,
+        collateral,
+        address: account.base_address(network_flag, Role::Receive, 0)?,
+        deposit_signers: deposit_keys.len(),
+        mix_signers: mix_keys.len(),
+    };
+    let built = lovejoin::chain(&params, &protocol, &funding, &owners, request.depth, &pool)?;
+
+    let sign_with = |tx: BuiltTransaction, keys: &[(Role, u32)]| -> Result<BuiltTransaction> {
+        let mut signed = tx;
+        for (role, index) in keys {
+            signed = signed
+                .sign(account.private_key(*role, *index)?.to_ed25519_private_key())
+                .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
+        }
+        Ok(signed)
+    };
+    let mut txs = Vec::with_capacity(built.txs.len());
+    let mut fees = 0u64;
+    for step in built.txs {
+        fees += step.fee;
+        let keys = if step.kind == "deposit" {
+            &deposit_keys
+        } else {
+            &mix_keys
+        };
+        let signed = sign_with(step.tx, keys)?;
+        txs.push(ChainTxOut {
+            kind: step.kind.to_string(),
+            tx_cbor: hex::encode(&signed.tx_bytes.0),
+            tx_hash: hex::encode(signed.tx_hash.0),
+            fee: step.fee.to_string(),
+        });
+    }
+    Ok(ChainResult {
+        txs,
+        boxes: request.boxes,
+        depth: request.depth,
+        fees: fees.to_string(),
+        returned: built.change.lovelace.to_string(),
+        tokens: Vec::new(),
+        merged: 0,
         leaves: built.leaves.iter().map(OutRef::of_box).collect(),
     })
 }

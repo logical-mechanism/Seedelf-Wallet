@@ -44,6 +44,20 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-25: chunk 16, Lovejoin (second session)** (`web-wallet/lovejoin`). The plan's *Built (second session)* lists everything.
+  - **What landed:**
+    - A session's return merges into the Seedelf UTxO its funding made: one Seedelf spend under the session's own collateral, measured in the wallet.
+    - The Lovejoin tile mixes from the private balance (a mix session that runs itself) or from the public account (its collateral backing every mix).
+    - Koios's Ogmios checks each chain's first mix before it's used.
+    - The swap approval's words, and Home's *In Lovejoin* row.
+    - End-to-end tests for the tile and a return's review.
+  - **Surprises:**
+    - The merged return first bound its proof to the session's key. A site connected to a session can ask that key to sign, so a proof bound to it could be replayed in what the site builds. It now uses a one-time key, as every Seedelf spend does.
+    - A request left out of `rpc.ts`'s list is dropped by the worker without a word. It's a type error now.
+  - **Next:**
+    - a live preprod run, on the user's go-ahead
+    - then the PR into `seedelf-web-wallet`
+
 - **2026-09-25: chunk 16, Lovejoin (first session)** (`web-wallet/lovejoin`). Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md), whose *Built* lists everything. Chunk 15 merged as PR #262.
   - **What landed:**
     - Pallas 0.35.

@@ -157,3 +157,61 @@ fn the_bundled_references_are_the_ones_on_chain() {
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
+
+#[test]
+fn the_networks_measure_is_checked_against_what_a_transaction_declares() {
+    for case in cases() {
+        let name = case["name"].as_str().unwrap();
+        let tx = hex::decode(case["tx"].as_str().unwrap()).unwrap();
+        // Recorded transactions declare exactly what they use.
+        let answer = eval::evaluate(&tx, &resolved(&case), &cost_model(&case), true).unwrap();
+        assert_eq!(
+            eval::declared_covers(&tx, &answer).unwrap(),
+            Ok(()),
+            "{name}"
+        );
+        // A network that measures more, or refuses a script, isn't covered.
+        let mut more = answer.clone();
+        let first = &mut more["result"][0]["budget"]["cpu"];
+        *first = serde_json::json!(first.as_u64().unwrap() + 1);
+        assert!(
+            eval::declared_covers(&tx, &more).unwrap().is_err(),
+            "{name}"
+        );
+        let refused = serde_json::json!({ "error": { "code": 3010, "message": "Some scripts of the transaction terminated with error(s).", "data": [] } });
+        assert!(
+            eval::declared_covers(&tx, &refused).unwrap().is_err(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn outputs_go_to_ogmios_as_its_utxos() {
+    let case = cases()
+        .into_iter()
+        .find(|c| {
+            c["name"]
+                .as_str()
+                .unwrap()
+                .starts_with("lovejoin mix N=3 wallet")
+        })
+        .unwrap();
+    let tx = hex::decode(case["tx"].as_str().unwrap()).unwrap();
+    let utxos = eval::ogmios_utxos(&tx).unwrap();
+    let rows = utxos.as_array().unwrap();
+    let decoded = pallas_traverse::MultiEraTx::decode(&tx).unwrap();
+    assert_eq!(rows.len(), decoded.outputs().len());
+    // A box: 10 ₳ at mix_box, its datum inline.
+    let first = &rows[0];
+    assert_eq!(first["transaction"]["id"], hex::encode(decoded.hash()));
+    assert_eq!(first["index"], 0);
+    assert_eq!(first["value"]["ada"]["lovelace"], 10_000_000);
+    assert!(
+        first["address"]
+            .as_str()
+            .unwrap()
+            .starts_with("addr_test1w")
+    );
+    assert!(first["datum"].as_str().unwrap().starts_with("d879"));
+}

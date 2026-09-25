@@ -373,6 +373,29 @@ label,
   gap: 6px;
 }
 
+/* A count stepped one at a time: Lovejoin's boxes. */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+
+.stepper .icon-button {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.stepper__value {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .field-row {
   display: flex;
   align-items: center;
