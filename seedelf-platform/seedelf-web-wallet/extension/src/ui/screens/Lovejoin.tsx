@@ -12,6 +12,12 @@
 //                              and put up against its collateral; the change
 //                              stays in it.
 // Either way, each box comes back into the private balance on its own, later.
+//
+// Mix my boxes again fans every box of the wallet's in the pool out once
+// more (a chain cut short, or boxes nobody has mixed since), paid from the
+// private balance through a one-time account, as a mix from it is, with no
+// deposit. Its boxes wait again, a fresh delay each; none comes back while
+// it runs.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import type { LovejoinFunding, LovejoinPublicSummary, LovejoinStatus, PendingTx, SessionOutSummary, SessionView } from "../../shared/rpc";
@@ -36,10 +42,14 @@ type Review =
   | { source: "private"; summary: SessionOutSummary & { mix: LovejoinFunding } }
   | { source: "public"; summary: LovejoinPublicSummary };
 
+
 const waves = (depth: number) => `${depth} ${depth === 1 ? "wave" : "waves"} deep`;
 
 /** A mix that's over: back, or never funded. */
 const isOver = (s: SessionView) => s.stage === "closed" || s.stage === "failed";
+
+/** A mix of the wallet's boxes again that may still spend them: no box comes back meanwhile. */
+const isMixingAgain = (s: SessionView) => !!s.mix?.again && !isOver(s) && !s.txs.some((t) => t.kind === "back");
 
 /** A mix's tag. */
 function tagOf(s: SessionView): { tone: SwapTone; label: string } {
@@ -56,7 +66,7 @@ function subOf(s: SessionView, now: number): string {
   if (s.mix?.skipped) return `Lovejoin was left out: ${s.mix.skipped}`;
   if (s.stage === "closed") return `In Lovejoin since ${whenOf(s.createdAt, new Date(now))}`;
   if (s.auto?.retry) return `Trying again: ${s.auto.retry.error}`;
-  return s.txs.some((t) => t.kind === "deposit") ? "Mixing, then the rest comes back" : "Funded: mixing next";
+  return s.txs.some((t) => t.kind === "deposit" || t.kind === "mix") ? "Mixing, then the rest comes back" : "Funded: mixing next";
 }
 
 export function Lovejoin({
@@ -74,6 +84,8 @@ export function Lovejoin({
   const [reading, setReading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [busy, setBusy] = useState(false);
+  /** Which of the page's buttons is working. */
+  const [pressed, setPressed] = useState<"now" | "again">();
   const [error, setError] = useState<string>();
   const [source, setSource] = useState<Source>("private");
   const [boxes, setBoxes] = useState(1);
@@ -125,8 +137,9 @@ export function Lovejoin({
     };
   }, [boxes]);
 
-  async function act(task: () => Promise<void>) {
+  async function act(task: () => Promise<void>, button?: "now" | "again") {
     setBusy(true);
+    setPressed(button);
     setError(undefined);
     try {
       await task();
@@ -134,6 +147,7 @@ export function Lovejoin({
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setPressed(undefined);
     }
   }
 
@@ -141,7 +155,12 @@ export function Lovejoin({
     act(async () => {
       onPending(await call("lovejoin-withdraw-now", {}));
       await load();
-    });
+    }, "now");
+
+  const again = () =>
+    act(async () => {
+      setReview({ source: "private", summary: await call("lovejoin-again-build", {}) });
+    }, "again");
 
   const build = () =>
     act(async () => {
@@ -168,7 +187,7 @@ export function Lovejoin({
   if (review) {
     return (
       <Screen
-        title="Review the mix"
+        title={review.source === "private" && review.summary.mix.again ? "Review mixing again" : "Review the mix"}
         titleId="lovejoin-review-title"
         onBack={() => setReview(undefined)}
         backDisabled={busy}
@@ -187,6 +206,7 @@ export function Lovejoin({
 
   const owned = status?.boxes.length ?? 0;
   const next = status?.due[0];
+  const mixingAgain = mixes.some(isMixingAgain);
   const shown = [...mixes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   return (
     <Screen title="Lovejoin" titleId="lovejoin-title" onBack={onBack} backDisabled={busy} aside="A mixer for ADA, in 10 ₳ boxes" error={error}>
@@ -202,9 +222,19 @@ export function Lovejoin({
         </ReviewRows>
       )}
       {owned > 0 && (
-        <button type="button" className="secondary" disabled={busy} onClick={() => void now()} data-testid="lovejoin-now">
-          {busy ? "Working…" : "Bring one back now"}
-        </button>
+        <div className="stack">
+          <button type="button" className="secondary" disabled={busy || mixingAgain} onClick={() => void again()} data-testid="lovejoin-again">
+            {pressed === "again" ? "Building…" : "Mix my boxes again"}
+          </button>
+          <button type="button" className="secondary" disabled={busy || mixingAgain} onClick={() => void now()} data-testid="lovejoin-now">
+            {pressed === "now" ? "Working…" : "Bring one back now"}
+          </button>
+          {mixingAgain && (
+            <p className="note" data-testid="lovejoin-again-running">
+              Your boxes are being mixed again. None comes back until that's sent; then each waits again.
+            </p>
+          )}
+        </div>
       )}
 
       {status?.available && (
@@ -265,7 +295,9 @@ export function Lovejoin({
                 <span className="avatar avatar--contact" aria-hidden="true">
                   <ShieldIcon size={16} />
                 </span>
-                <span className="token-row__label">{plural(m.mix!.boxes, "box", "boxes")} of 10 ₳</span>
+                <span className="token-row__label">
+                  {plural(m.mix!.boxes, "box", "boxes")} {m.mix!.again ? "mixed again" : "of 10 ₳"}
+                </span>
                 <SwapTag {...tagOf(m)} />
                 <span className="token-row__sub">{subOf(m, Date.now())}</span>
               </li>
@@ -287,6 +319,7 @@ export function Lovejoin({
 function PrivateReview({ summary }: { summary: SessionOutSummary & { mix: LovejoinFunding } }) {
   const [boxesPart, collateral] = summary.payments;
   const { mix } = summary;
+  if (mix.again) return <AgainReview summary={summary} />;
   return (
     <>
       <h2>First, a one-time account is funded</h2>
@@ -312,6 +345,42 @@ function PrivateReview({ summary }: { summary: SessionOutSummary & { mix: Lovejo
       <Callout tone="privacy">
         This payment links the private UTxOs it spends to the one-time account, and the account to the boxes going in. The
         mixes hide which boxes coming out are yours: each comes back into a new private UTxO of its own.
+      </Callout>
+      <p className="note">Send asks giveme.my to lend the funding's collateral, then submits.</p>
+    </>
+  );
+}
+
+/** Mix my boxes again: the one-time account's funding, then the fan-out of the boxes in the pool. */
+function AgainReview({ summary }: { summary: SessionOutSummary & { mix: LovejoinFunding } }) {
+  const [mixesPart, collateral] = summary.payments;
+  const { mix } = summary;
+  return (
+    <>
+      <h2>First, a one-time account is funded</h2>
+      <ReviewRows testId="lovejoin-again-review">
+        <Row label="To" value={`Private session ${summary.index + 1}`} strong />
+        <Row label="Account" value={shortHex(summary.address, 16, 8)} title={summary.address} />
+        <Row label="For the mixes" value={`${formatAda(mixesPart!.lovelace)} ₳`} strong />
+        <Row label="Its collateral" value={`${formatAda(collateral!.lovelace)} ₳`} />
+        <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
+        <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
+      </ReviewRows>
+      <h2>Then it runs by itself</h2>
+      <ReviewRows testId="lovejoin-again-then">
+        <Row label="Mixed again" value={`${plural(mix.boxes, "box", "boxes")} of yours in the pool`} strong />
+        <Row label="Mixed" value={`${waves(mix.depth)}, ${plural(mix.mixes, "mix", "mixes")}, about ${formatAda(mix.mixFees)} ₳`} />
+        <Row label="Back later" value={`Each box on its own, after ${delayText(mix.delay)} from the mixes`} />
+      </ReviewRows>
+      <p className="note">
+        Once the funding lands, the account pays for every mix, all in one go: each box of yours is mixed with two others,
+        and every box coming out is mixed again, as deep as Settings says. What the mixes don't use comes back with the
+        collateral into the private UTxO this payment leaves. Until then no box comes back; after, each waits again.
+      </p>
+      <Callout tone="privacy">
+        This payment links the private UTxOs it spends to the one-time account, and the account to the mixes it pays for:
+        one of the three boxes going into each first mix is likely yours. The mixes after hide which boxes coming out are
+        yours, and each still comes back into a new private UTxO of its own.
       </Callout>
       <p className="note">Send asks giveme.my to lend the funding's collateral, then submits.</p>
     </>

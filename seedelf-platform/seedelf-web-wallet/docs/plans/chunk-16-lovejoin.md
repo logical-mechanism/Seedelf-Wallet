@@ -389,7 +389,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
   - With `18b4847`, reloading and unlocking brings the 12.6 ₳ of change and the 5 ₳ collateral back directly. Confirm with the user that it did.
 - **Bring one back now:** it failed on the odd fee (fixed in `db35e24`), then once on a Koios timeout, which was transient. Confirm a withdraw landed.
 
-**Decided for next (the user, 2026-09-25):**
+**Decided for next (the user, 2026-09-25).** Both built in the third session (below).
 
 1. **Mix my boxes again**, on the Lovejoin page: every box of the wallet's in the pool, fanned out again at the Settings depth.
    - **Paid from the private balance through a fresh one-time account**, like *Mix from the private balance*: one review, then it runs by itself, and what's left merges back.
@@ -427,6 +427,57 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 - In tests, the fake Koios's `evaluation` can be a function of the request: a chain's cross-check sends `additionalUtxo`, a Seedelf spend doesn't.
 - A merged return's proof is bound to a one-time key, never the session's.
 
+## Built (2026-09-25, third session)
+
+**Mix my boxes again** (the Lovejoin page, beside *Bring one back now*): every box of the wallet's in the pool, 10 at most, fanned out again at the Settings depth, paid from the private balance through a fresh one-time account.
+
+- **Core:** `lovejoin::again`, a chain with no deposit. `chain`'s fan-out is now its own function (`fan_out`, with `fresh_for` drawing the pool's boxes, the wallet's own left out), and `again` starts it from boxes already in the pool.
+  - `again_funding` and `again_affordable` plan the mixes alone, with the same reserve for the change. At depth 2, two boxes take 9.1 ₳.
+- **WebAssembly:** `ChainRequest`, `PlanRequest` and `FundingRequest` take `again`.
+  - An again chain pays its first mix from the session's largest ADA UTxO. Its other ADA UTxOs come back with the return, which merges into the funding's change as before.
+- **Worker:**
+  - `SessionService.againBuild` (request `lovejoin-again-build`) checks the pool first, then builds the funding, sent with `lovejoin-mix-private-submit`.
+  - The record is a mix session with `mix: { boxes, again }`. The runner builds its chain with no deposit.
+  - The network's check measures the first mix with nothing extra, since all its inputs are on chain.
+  - **While one runs, no box is withdrawn:** `SessionService.mixingAgain`, from the funding until the return is sent. Lovejoin asks it before `withdrawDue`, and *Bring one back now* refuses meanwhile. A second one is refused too, since it would spend the same boxes.
+  - **Once its first mix is in, the boxes wait again** (`LovejoinService.reschedule`): the earliest due times go, and each box gets a fresh delay, as a deposit's boxes do.
+  - Boxes that have left the pool by the time the funding lands: the chain is skipped, and it all comes back directly (`mix.skipped`).
+- **UI:**
+  - The review says what the funding pays for, the fan-out, and that each box waits again. Its privacy note says one of the three boxes going into each first mix is likely yours.
+  - The page's list shows *2 boxes mixed again*.
+  - While one runs, both buttons wait, and a note says why.
+
+**The countdown before auto-lock.** In the last 2 minutes before the lock, every screen shows a banner, *Locking in 1:30*, with **Stay unlocked** (`LockCountdown.tsx`, in the app shell).
+
+- **Where the deadline comes from:** the page asks the worker when it locks (`lock-deadline`: the last activity plus the lock time), and asking isn't activity.
+  - It asks every 15 s, every 5 s while the countdown shows, and when the page comes back into view (the side panel and a tab put each other off).
+  - At 0:00 it asks again, and asking past the deadline locks, rather than waiting up to a minute for the alarm.
+- **What counts as activity:** while the countdown shows, a click or a key anywhere puts the lock off at once, as Stay unlocked does. Mouse movement doesn't count (the user's choice). There's no badge and no lock hold.
+- **Mine, for the user to overrule:** with the 1-minute lock, the countdown shows for the last 30 s, not the whole minute.
+
+**Also fixed:** the pool counts that `fits` and a return's chain checked against included the wallet's own boxes, which a mix never takes. They're counted out now. A return that stopped partway also counts a recorded mix, not only a deposit, as the chain having started.
+
+**Tests:**
+
+| Where | New |
+|---|---|
+| `seedelf-core` | `lovejoin_test` +3 (our boxes fanned out again, measured against the scripts; the refusals; the funding for the mixes alone) |
+| `seedelf-wasm` | `lovejoin_test` +2 (a mix session's again chain, signed, its return taking the ADA it left alone; its funding) |
+| Vitest | `lovejoin.test.ts` +3 (mixing again end to end, with the withdraws held and the due times drawn again; boxes gone before the funding landed; no box to mix); `wallet.test.ts` +1 (the deadline, and locking when asked past it) |
+| Playwright | mixing again's review, and the mix listed; the countdown on Settings, Stay unlocked, then the lock at 0:00 |
+
+Totals: Rust 327, WebAssembly (Node) 33, Vitest 290, Playwright 51. The module is 762 KB gzipped.
+
+## Handoff to the fourth session (2026-09-25)
+
+- **Built and tested offline, not live:** *Mix my boxes again* and the countdown. Neither has run on preprod yet.
+- **Still to confirm with the user,** from the third session's handoff:
+  - the stopped MIN → ADA swap came back after `18b4847`;
+  - a withdraw landed;
+  - the merged return used the collateral as an input of the same transaction.
+- **Offered, not decided:** the third session's list stands. Ask before building any of it.
+- **At the chunk's end:** the roadmap tick, the handoff note, and the PR into `seedelf-web-wallet`.
+
 ## Out of scope
 
 - Tokens through Lovejoin.
@@ -439,7 +490,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 
 1. `git fetch origin && git checkout web-wallet/lovejoin`.
 2. Read, in order:
-   - this file, starting with *Handoff to the third session*
+   - this file, starting with the latest *Handoff*
    - [architecture.md, *Private sessions*](../architecture.md#private-sessions)
    - [flows.md, *Contract round trip*](../flows.md#contract-round-trip)
    - [chunk-15b-swap-runner.md](chunk-15b-swap-runner.md), for how the runner records and resumes

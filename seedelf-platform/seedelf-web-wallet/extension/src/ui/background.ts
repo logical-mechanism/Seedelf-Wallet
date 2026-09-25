@@ -53,3 +53,9 @@ export function reportActivity(): void {
   lastActivity = now;
   call("activity", {}).catch(() => undefined);
 }
+
+/** Tells the worker now, however recently it was told: Stay unlocked, as auto-lock counts down. */
+export async function stayUnlocked(): Promise<void> {
+  lastActivity = Date.now();
+  await call("activity", {});
+}

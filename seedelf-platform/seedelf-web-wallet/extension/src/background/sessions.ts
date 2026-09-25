@@ -145,9 +145,10 @@ interface SessionRecord {
   /**
    * A mix from the Lovejoin tile, rather than a swap: once funded, its boxes
    * go through Lovejoin and the rest comes back, one chain, run by itself.
+   * `again`: the wallet's boxes in the pool, mixed again with no deposit.
    * `skipped`: why Lovejoin was left out, when it was.
    */
-  mix?: { boxes: number; skipped?: string };
+  mix?: { boxes: number; again?: boolean; skipped?: string };
   closedAt?: number;
 }
 
@@ -302,6 +303,20 @@ function running(s: SessionRecord): boolean {
   return !!s.auto && !s.closedAt && !s.auto.paused && !s.auto.failed;
 }
 
+/**
+ * A mix of the wallet's boxes again whose chain may still spend them: from
+ * its funding on (unless that never went) until its return is sent.
+ */
+function mixingAgain(s: SessionRecord): boolean {
+  return (
+    !!s.mix?.again &&
+    !s.closedAt &&
+    !s.auto?.failed &&
+    !s.txs[0]?.unsent &&
+    !s.txs.some((t) => t.kind === "back" && !t.unsent)
+  );
+}
+
 /** A step's transaction that's gone: Koios never took it, or the chain never saw it. */
 function lost(t: RecordedTx, now: number): boolean {
   return ((t.unsent || t.sending) && now - t.at >= RESEND_AFTER_MS) || now - t.at >= LOST_AFTER_MS;
@@ -453,7 +468,30 @@ export class SessionService {
     if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
     checkBoxes(boxes);
     await lovejoin.fits(network, boxes);
-    const mix = await lovejoin.funding(network, boxes);
+    return this.mixFunding(network, await lovejoin.funding(network, boxes));
+  }
+
+  /**
+   * Mix my boxes again: the funding of a new one-time account that pays for
+   * every box of the wallet's in the pool (10 at most) to be fanned out
+   * again, with no deposit, and its own collateral. One at a time: two would
+   * spend the same boxes.
+   */
+  async againBuild(network: NetworkName): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+    const lovejoin = this.deps.lovejoin;
+    if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
+    if (await this.mixingAgain(network)) throw new Error("Your boxes are being mixed again already.");
+    const boxes = await lovejoin.againBoxes(network);
+    return this.mixFunding(network, await lovejoin.funding(network, boxes, true));
+  }
+
+  /** Whether a mix of the wallet's boxes again may still spend them: Lovejoin withdraws none meanwhile. */
+  async mixingAgain(network: NetworkName): Promise<boolean> {
+    return (await this.book(network)).sessions.some(mixingAgain);
+  }
+
+  /** A mix session's funding, built and kept for Send. */
+  private async mixFunding(network: NetworkName, mix: LovejoinFunding): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const index = (await this.book(network)).next;
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     const { summary, txCbor, seed } = await this.buildFunding(
@@ -464,7 +502,7 @@ export class SessionService {
         { to: address, lovelace: mix.lovelace, tokens: [] },
         { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
       ],
-      "Your private balance is empty, so there's nothing to mix.",
+      mix.again ? "Your private balance is empty, so there's nothing to pay for the mixes with." : "Your private balance is empty, so there's nothing to mix.",
     );
     const kept: Omit<KeptMix, "builtAt"> = { ...summary, txCbor, seed, mix };
     await keep(this.deps, SESSION_MIX_OUT, kept);
@@ -482,13 +520,14 @@ export class SessionService {
       if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
       const book = await this.book(network);
       if (built.index < book.next) throw new Error("That mix was started already. Start a new one.");
+      if (built.mix.again && book.sessions.some(mixingAgain)) throw new Error("Your boxes are being mixed again already.");
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
         index: built.index,
         ownStake: true,
         createdAt: now(),
         txs: [{ kind: "out", txHash, at: now() }],
-        mix: { boxes: built.mix.boxes },
+        mix: { boxes: built.mix.boxes, ...(built.mix.again ? { again: true } : {}) },
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
       };
       await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
@@ -1095,14 +1134,14 @@ export class SessionService {
     const merge = await this.fundingChange(network, index);
     const record = (await this.book(network)).sessions.find((r) => r.index === index);
     // A chain that went in partly already: what's left comes back directly, rather than go in again.
-    const deposited = record?.txs.some((t) => t.kind === "deposit" && !t.unsent);
+    const started = record?.txs.some((t) => (t.kind === "deposit" || t.kind === "mix") && !t.unsent);
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
-    if (!direct && !deposited && lovejoin?.available(network)) {
+    if (!direct && !started && lovejoin?.available(network)) {
       const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length);
       let chain: LovejoinChain | undefined;
       try {
-        chain = await lovejoin.chain(network, index, rows, collateral, params, merge, record?.mix?.boxes);
+        chain = await lovejoin.chain(network, index, rows, collateral, params, merge, record?.mix?.boxes, record?.mix?.again);
       } catch (e) {
         if (!(e instanceof LovejoinSkipped)) throw e;
         skipped = e.reason;
@@ -1135,6 +1174,7 @@ export class SessionService {
             fees: chain.fees,
             txs: chain.txs.length,
             delay,
+            ...(record?.mix?.again ? { again: true } : {}),
           },
           chain: chain.txs,
           builtAt: now(),
@@ -1186,7 +1226,8 @@ export class SessionService {
    * before's outputs before any is on chain. Koios spreads submits over its
    * nodes, so a child can reach one that hasn't seen its parent yet: it's
    * tried again, a few times, a little later. The boxes' withdraws are set
-   * once the deposit is in.
+   * once the deposit is in; boxes mixed again wait afresh once their first
+   * mix is in.
    */
   private async sendChain(network: NetworkName, built: KeptBack, kept: string): Promise<PendingTx> {
     const chain = built.chain!;
@@ -1206,6 +1247,9 @@ export class SessionService {
       }
       if (step.kind === "deposit" && built.lovejoin) {
         await this.deps.lovejoin?.schedule(network, built.lovejoin.boxes);
+      }
+      if (i === 0 && step.kind === "mix" && built.lovejoin?.again) {
+        await this.deps.lovejoin?.reschedule(network, built.lovejoin.boxes);
       }
     }
     await this.deps.activity?.sent(network, last!, built).catch(() => undefined);

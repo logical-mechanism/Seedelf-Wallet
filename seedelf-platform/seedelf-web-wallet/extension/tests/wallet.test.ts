@@ -169,6 +169,26 @@ describe("wallet", () => {
     expect(events).toEqual({ changed: 2, alarm: "stopped" });
   });
 
+  it("says when it locks, without counting the question as activity, and locks when asked past it", async () => {
+    const { wallet, clock, events } = testWallet();
+    expect(await wallet.lockDeadline()).toEqual({ at: null, lockAfterMs: AUTO_LOCK_MS });
+    await wallet.create(cardano[0]!.phrase, PASSWORD);
+    const start = clock.now;
+    expect(await wallet.lockDeadline()).toEqual({ at: start + AUTO_LOCK_MS, lockAfterMs: AUTO_LOCK_MS });
+
+    // Asking again later moves nothing; activity does.
+    clock.now += AUTO_LOCK_MS - 90_000;
+    expect((await wallet.lockDeadline()).at).toBe(start + AUTO_LOCK_MS);
+    await wallet.touch();
+    expect((await wallet.lockDeadline()).at).toBe(clock.now + AUTO_LOCK_MS);
+
+    // Past it, asking locks, as the alarm would.
+    clock.now += AUTO_LOCK_MS;
+    expect(await wallet.lockDeadline()).toEqual({ at: null, lockAfterMs: AUTO_LOCK_MS });
+    expect(await wallet.state()).toBe("locked");
+    expect(events.alarm).toBe("stopped");
+  });
+
   it("locks after the time the settings give, whatever it is", async () => {
     const clock = { now: 1_800_000_000_000 };
     let minutes = 5;

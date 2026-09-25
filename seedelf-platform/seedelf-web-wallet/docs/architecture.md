@@ -256,6 +256,7 @@ flowchart LR
 - **Auto-lock** after 15 minutes without activity, or the time chosen in Settings (chunk 14): 1, 5, 15, 30 or 60 minutes, Lace's choices less "never". The wallet reads the setting (`lockAfterMinutes`) on every check, so a change applies at once.
   - While unlocked, the UI reports activity (a key press or a click) to the worker, at most every 30 seconds.
   - A `chrome.alarms` alarm checks once a minute, and every request checks too.
+  - **A countdown in its last 2 minutes** (chunk 16), or the last half of a 1-minute lock: a banner on every screen, "Locking in 1:30", with **Stay unlocked** (`LockCountdown.tsx`). The page asks the worker when it locks (`lock-deadline`, the last activity plus the lock time), which isn't activity: every 15 seconds, every 5 while the countdown shows, and when the page comes back into view. While it shows, any click or key puts the lock off at once, as Stay unlocked does; mouse movement doesn't count. At 0:00 the page asks again, and asking past the deadline locks.
 - **Failed unlocks** trigger an exponential back-off: 1 s, 2 s, 4 s and so on, capped at 60 s (Lace's values).
   - Unlike Lace, the worker enforces it: an attempt that comes too early is refused before the password is even tried.
   - The count is kept in `chrome.storage.local`, so restarting the worker or the browser doesn't reset it. The right password resets it.
@@ -406,7 +407,7 @@ Chunk 16: [Lovejoin](https://github.com/logical-mechanism/Lovejoin), a mixer of 
 ```mermaid
 flowchart LR
   R["a session's return<br/>(sessions.ts)"] -- "chain" --> L["lovejoin.ts"]
-  T["Lovejoin page<br/>(Lovejoin.tsx)"] -- "mix: private (a mix session),<br/>public, status, withdraw now" --> L
+  T["Lovejoin page<br/>(Lovejoin.tsx)"] -- "mix: private (a mix session),<br/>public, again, status, withdraw now" --> L
   A["unlock, seedelf.sessions alarm"] -- "withdrawDue" --> L
   L -- "credential_utxos (mix_box),<br/>ogmios (first mix), submittx" --> K["Koios"]
   L -- "giveme.my (withdraws)" --> G["giveme.my"]
@@ -425,8 +426,11 @@ flowchart LR
 - **The tile mixes too:**
   - **From the private balance:** a mix session, a one-time account funded for the boxes that then runs itself with the swap runner's machinery.
   - **From the public account:** the deposit and every mix paid by the account and backed by its collateral; the change stays in it.
+  - **Mix my boxes again:** every box of the wallet's in the pool (10 at most) fanned out once more, for a chain cut short or boxes nobody has mixed since. It's a mix session with `again`: its one-time account is funded for the mixes alone (`again_funding`), and its chain has no deposit (`lovejoin::again`), the first mix paying from the funding. Its first mix is checked by the network with nothing extra, since all its inputs are on chain.
+    - **While one runs, no box is withdrawn** (`SessionService.mixingAgain`, which Lovejoin asks before `withdrawDue` and Bring one back now): from its funding until its return is sent, since its chain spends the boxes. There's one at a time.
+    - **Once its first mix is in, the boxes wait again:** the earliest due times go, and each gets a fresh delay, as a deposit's boxes do.
 - **Home's *In Lovejoin* row** is read from the schedule alone (`lovejoin-held`). The unlock scan reads the pool only on a wallet that has used Lovejoin on this device.
-- **What each costs:** a chain is one pool read, one evaluate, and one submit per transaction (a session at depth 2 with k boxes: 4k + 2). A withdraw is giveme.my and one submit, and the unlock scan one pool read.
+- **What each costs:** a chain is one pool read, one evaluate, and one submit per transaction (a session at depth 2 with k boxes: 4k + 2; mixing k boxes again, 4k + 1). A withdraw is giveme.my and one submit, and the unlock scan one pool read.
 
 ## What we borrow from Lace
 

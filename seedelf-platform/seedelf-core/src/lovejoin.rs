@@ -15,6 +15,9 @@
 //!   per box binds every output and input, so the fee is settled by building,
 //!   proving and measuring until it stops moving.
 //!
+//! A [`chain`] is a deposit and each of its boxes fanned out; [`again`] fans
+//! out boxes of ours already in the pool, with no deposit.
+//!
 //! Every transaction here is measured in the wallet ([`crate::eval`]) against
 //! the deployed scripts, bundled with their reference UTxOs
 //! ([`crate::references`]), so a chain of them can be built before any is on
@@ -858,12 +861,19 @@ pub fn mixes_per_box(depth: u32) -> usize {
 /// cost 0.877 ₳, rounded up.
 pub const MIX_FEE_ESTIMATE: u64 = 950_000;
 
-/// What a deposit and the change it leaves are planned on.
+/// What a deposit (when the chain has one) and the change the chain leaves
+/// are planned on.
 const DEPOSIT_RESERVE: u64 = 1_500_000;
 
 /// What a box costs at `depth`: the box, and every mix of its fan-out.
 fn per_box(depth: u32, denom: u64) -> u64 {
     denom + mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
+}
+
+/// What mixing one of the wallet's boxes again costs at `depth`: every mix of
+/// its fan-out. It's in the pool already, so there's no box to pay for.
+fn per_box_again(depth: u32) -> u64 {
+    mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
 }
 
 /// How many boxes `spare` lovelace pays for, with every mix of a `depth`-deep
@@ -877,6 +887,19 @@ pub fn boxes_affordable(spare: u64, depth: u32, denom: u64) -> usize {
 /// the mixes don't use comes back with the change.
 pub fn funding_for(boxes: usize, depth: u32, denom: u64) -> u64 {
     DEPOSIT_RESERVE + boxes as u64 * per_box(depth, denom)
+}
+
+/// How many of the wallet's boxes `spare` lovelace mixes again at `depth`
+/// ([`again`]): none if it can't pay for one's mixes.
+pub fn again_affordable(spare: u64, depth: u32) -> usize {
+    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box_again(depth)) as usize
+}
+
+/// What pays for mixing `boxes` of the wallet's boxes again at `depth`
+/// ([`again_affordable`]'s plan run backwards): every mix, and the change the
+/// last one leaves, which comes back.
+pub fn again_funding(boxes: usize, depth: u32) -> u64 {
+    DEPOSIT_RESERVE + boxes as u64 * per_box_again(depth)
 }
 
 /// What pays for a chain: the key account's ADA-only `coins`, its
@@ -931,46 +954,101 @@ pub fn chain(
         deposit_signers,
         mix_signers,
     } = funding;
+    let fresh = fresh_for(owners.len(), depth, pool, &[])?;
+    let deposit = deposit(params, protocol, coins, owners, address, *deposit_signers)?;
+    let payer = Payer {
+        fee: deposit.change.clone(),
+        collateral: collateral.clone(),
+        address: address.clone(),
+        signers: *mix_signers,
+    };
+    let mut fanned = fan_out(params, protocol, deposit.boxes, &payer, depth, fresh)?;
+    fanned.txs.insert(
+        0,
+        ChainTx {
+            kind: "deposit",
+            tx: deposit.tx,
+            fee: deposit.fee,
+        },
+    );
+    Ok(fanned)
+}
+
+/// The wallet's own `boxes`, in the pool already, fanned out again `depth`
+/// waves deep with fresh boxes from `pool`, as [`chain`] fans out a
+/// deposit's: every output of each wave mixed again in the next, in a random
+/// order. There's no deposit: the first mix pays from `payer.fee`, and each
+/// after from the one before's change; the collateral is never spent. For a
+/// chain cut short, or boxes that haven't moved since.
+pub fn again(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    payer: &Payer,
+    boxes: &[PoolBox],
+    depth: u32,
+    pool: &[PoolBox],
+) -> Result<Chain> {
+    if boxes.is_empty() {
+        bail!("There's no box to mix again");
+    }
+    let fresh = fresh_for(boxes.len(), depth, pool, boxes)?;
+    fan_out(params, protocol, boxes.to_vec(), payer, depth, fresh)
+}
+
+/// The pool's boxes a fan-out of `trees` boxes at `depth` draws from, in a
+/// random order, `ours` left out: two for every mix, never one twice.
+fn fresh_for(trees: usize, depth: u32, pool: &[PoolBox], ours: &[PoolBox]) -> Result<Vec<PoolBox>> {
     if !(1..=3).contains(&depth) {
         bail!("The fan-out is 1 to 3 waves deep");
     }
-    let needed = owners.len() * mixes_per_box(depth) * 2;
-    if pool.len() < needed {
+    let mut fresh: Vec<PoolBox> = pool
+        .iter()
+        .filter(|b| !ours.iter().any(|o| o.utxo == b.utxo))
+        .cloned()
+        .collect();
+    let needed = trees * mixes_per_box(depth) * 2;
+    if fresh.len() < needed {
         bail!(
             "Lovejoin's pool has {} boxes to mix with, and this needs {needed}",
-            pool.len()
+            fresh.len()
         );
     }
-    let mut fresh: Vec<PoolBox> = pool.to_vec();
     shuffle(&mut fresh);
+    Ok(fresh)
+}
 
-    let deposit = deposit(params, protocol, coins, owners, address, *deposit_signers)?;
-    let mut txs = vec![ChainTx {
-        kind: "deposit",
-        tx: deposit.tx.clone(),
-        fee: deposit.fee,
-    }];
-    let mut change = deposit.change.clone();
-    let mut ours: Vec<PoolBox> = deposit.boxes.clone();
+/// Fans each of `start` (all ours) out `depth` waves deep, three wide, with
+/// boxes from `fresh`, each wave's mixes in a random order so the order
+/// doesn't point at our branch. The first mix pays from `payer.fee`; each
+/// after from the one before's change.
+fn fan_out(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    start: Vec<PoolBox>,
+    payer: &Payer,
+    depth: u32,
+    mut fresh: Vec<PoolBox>,
+) -> Result<Chain> {
+    let mut txs = Vec::new();
+    let mut change = payer.fee.clone();
+    let mut ours: Vec<PoolBox> = start.clone();
     // Every box of every tree in this wave; ours are among them.
-    let mut wave: Vec<PoolBox> = deposit.boxes;
+    let mut wave: Vec<PoolBox> = start;
     for _ in 0..depth {
         shuffle(&mut wave);
         let mut next = Vec::with_capacity(wave.len() * 3);
         let mut ours_next = Vec::new();
         for boxed in &wave {
             let others = [
-                fresh.pop().expect("counted above"),
-                fresh.pop().expect("counted above"),
+                fresh.pop().expect("counted by fresh_for"),
+                fresh.pop().expect("counted by fresh_for"),
             ];
             let inputs = vec![boxed.clone(), others[0].clone(), others[1].clone()];
-            let payer = Payer {
+            let paying = Payer {
                 fee: change.clone(),
-                collateral: collateral.clone(),
-                address: address.clone(),
-                signers: *mix_signers,
+                ..payer.clone()
             };
-            let mixed = mix(params, protocol, &inputs, &payer)?;
+            let mixed = mix(params, protocol, &inputs, &paying)?;
             if ours.contains(boxed) {
                 ours_next.push(mixed.outputs[mixed.moved_to[0]].clone());
             }

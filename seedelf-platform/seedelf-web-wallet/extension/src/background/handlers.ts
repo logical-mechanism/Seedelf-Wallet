@@ -73,6 +73,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "activity":
       await wallet.touch();
       return null;
+    case "lock-deadline":
+      return wallet.lockDeadline();
     case "account":
       return wallet.account(ctx.network);
     case "balances":
@@ -245,6 +247,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.lovejoin.funding(ctx.network, message.boxes);
     case "lovejoin-mix-private-build":
       return ctx.sessions.mixOutBuild(ctx.network, message.boxes);
+    case "lovejoin-again-build":
+      return ctx.sessions.againBuild(ctx.network);
     case "lovejoin-mix-private-submit":
       return ctx.sessions.mixOutSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-build":

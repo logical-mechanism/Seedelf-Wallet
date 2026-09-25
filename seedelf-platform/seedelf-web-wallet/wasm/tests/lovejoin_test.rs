@@ -145,6 +145,7 @@ fn a_session_plans_its_boxes_on_its_spare_ada() {
                 utxos: holdings(),
                 collateral: collateral(),
                 depth,
+                again: false,
             },
         )
         .unwrap()
@@ -176,6 +177,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             depth: 1,
             boxes: None,
             merge: vec![],
+            again: false,
         },
     )
     .unwrap();
@@ -249,6 +251,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             depth: 1,
             boxes: Some(1),
             merge: vec![funding_change(sk)],
+            again: false,
         },
     )
     .unwrap();
@@ -308,6 +311,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             depth: 1,
             boxes: Some(1),
             merge: vec![],
+            again: false,
         },
     )
     .unwrap();
@@ -424,6 +428,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             depth: 2,
             boxes: None,
             merge: vec![],
+            again: false,
         },
     )
     .unwrap_err();
@@ -454,6 +459,7 @@ fn the_tile_funds_exactly_the_boxes_asked_for() {
         network: "preprod".into(),
         boxes: 2,
         depth: 2,
+        again: false,
     })
     .unwrap();
     assert_eq!((funded.lovelace.as_str(), funded.mixes), ("29100000", 8));
@@ -461,7 +467,8 @@ fn the_tile_funds_exactly_the_boxes_asked_for() {
         lovejoin::funding(FundingRequest {
             network: "preprod".into(),
             boxes: 0,
-            depth: 2
+            depth: 2,
+            again: false,
         })
         .is_err()
     );
@@ -469,7 +476,8 @@ fn the_tile_funds_exactly_the_boxes_asked_for() {
         lovejoin::funding(FundingRequest {
             network: "mainnet".into(),
             boxes: 1,
-            depth: 2
+            depth: 2,
+            again: false,
         })
         .is_err()
     );
@@ -572,4 +580,159 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("doesn't pay for 2 boxes"), "{err}");
+}
+
+/// `count` boxes of `sk`'s in the pool, as Koios lists them (a deposit's,
+/// not on chain: the evaluator reads them from their rows).
+fn our_box_rows(sk: Scalar, count: usize, protocol: &Protocol) -> Vec<UtxoResponse> {
+    let params = seedelf_koios::koios::ProtocolParameters::from_koios(&params()).unwrap();
+    let base = Register::create(sk).unwrap();
+    let owners: Vec<Register> = (0..count)
+        .map(|_| base.clone().rerandomize().unwrap())
+        .collect();
+    let at = Address::from_bech32(&session()).unwrap();
+    let paying =
+        seedelf_core::lovejoin::Coin::from_row(&row(7, 0, &session(), 50_000_000, &[])).unwrap();
+    seedelf_core::lovejoin::deposit(&params, protocol, &[paying], &owners, &at, 1)
+        .unwrap()
+        .boxes
+        .iter()
+        .map(|b| box_row(b, protocol))
+        .collect()
+}
+
+#[test]
+fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(2468u64);
+    let ours = our_box_rows(sk, 3, &protocol);
+    let mut every = pool(&protocol);
+    every.extend(ours.iter().cloned());
+    let at = session();
+    // The funding for two boxes at depth 1, a small ADA UTxO sent to the
+    // account since, the collateral, and a token UTxO.
+    let funded = seedelf_core::lovejoin::again_funding(2, 1);
+    let utxos = vec![
+        row(1, 0, &at, funded, &[]),
+        row(4, 0, &at, 1_500_000, &[]),
+        row(2, 1, &at, 5_000_000, &[]),
+        row(3, 0, &at, 2_000_000, &[(MIN_POLICY, "4d494e", 500)]),
+    ];
+    let plan = lovejoin::plan(
+        &accounts(),
+        PlanRequest {
+            network: "preprod".into(),
+            index: 0,
+            utxos: utxos.clone(),
+            collateral: collateral(),
+            depth: 1,
+            again: true,
+        },
+    )
+    .unwrap();
+    // The mixes alone, paid from the largest UTxO: the funding.
+    assert_eq!((plan.boxes, plan.mixes), (2, 2));
+
+    let result = lovejoin::chain(
+        &accounts(),
+        sk,
+        ChainRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 0,
+            utxos,
+            collateral: collateral(),
+            pool: every,
+            depth: 1,
+            boxes: Some(2),
+            merge: vec![],
+            again: true,
+        },
+    )
+    .unwrap();
+    let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["mix", "mix", "back"]);
+    assert_eq!((result.boxes, result.leaves.len()), (2, 2));
+
+    let key = accounts().key_hash(Role::Receive, 0).unwrap();
+    let bytes: Vec<Vec<u8>> = result
+        .txs
+        .iter()
+        .map(|t| hex::decode(&t.tx_cbor).unwrap())
+        .collect();
+    let txs: Vec<MultiEraTx> = bytes
+        .iter()
+        .map(|b| MultiEraTx::decode(b).unwrap())
+        .collect();
+    for tx in &txs {
+        let witnesses = tx.vkey_witnesses();
+        assert_eq!(witnesses.len(), 1);
+        assert_eq!(
+            pallas_crypto::hash::Hasher::<224>::hash(&witnesses[0].vkey),
+            key
+        );
+    }
+    // The first mix pays from the funding and takes a box of ours; nothing
+    // else of ours is spent twice, and the third box is left alone.
+    assert!(spends(&txs[0], [1; 32], 0));
+    let ours_spent = |tx: &MultiEraTx| {
+        ours.iter()
+            .filter(|r| {
+                spends(
+                    tx,
+                    hex::decode(&r.tx_hash).unwrap().try_into().unwrap(),
+                    r.tx_index,
+                )
+            })
+            .count()
+    };
+    assert_eq!(ours_spent(&txs[0]), 1);
+    assert_eq!(ours_spent(&txs[1]), 1);
+    // The return takes the chain's change, the collateral, the ADA the chain
+    // left alone and the token UTxO, all into the wallet contract.
+    let back = &txs[2];
+    assert!(spends(back, *txs[1].hash(), 3), "the last mix's change");
+    assert!(spends(back, [2; 32], 1));
+    assert!(spends(back, [4; 32], 0));
+    assert!(spends(back, [3; 32], 0));
+    for output in back.outputs() {
+        let address = Address::from_bytes(&output.address().unwrap().to_vec()).unwrap();
+        assert!(address.has_script(), "into the wallet contract");
+    }
+    assert_eq!(result.tokens.len(), 1);
+
+    // None of the wallet's boxes in the pool: nothing to mix again.
+    let err = lovejoin::chain(
+        &accounts(),
+        sk,
+        ChainRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 0,
+            utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
+            collateral: collateral(),
+            pool: pool(&protocol),
+            depth: 1,
+            boxes: Some(2),
+            merge: vec![],
+            again: true,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("None of this wallet's boxes"),
+        "{err}"
+    );
+}
+
+#[test]
+fn mixing_again_is_funded_for_the_mixes_alone() {
+    let funded = lovejoin::funding(FundingRequest {
+        network: "preprod".into(),
+        boxes: 2,
+        depth: 2,
+        again: true,
+    })
+    .unwrap();
+    assert_eq!((funded.lovelace.as_str(), funded.mixes), ("9100000", 8));
 }

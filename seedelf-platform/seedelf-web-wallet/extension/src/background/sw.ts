@@ -118,7 +118,8 @@ function getContext(): Promise<Context> {
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
-    lovejoin = new LovejoinService({ ...spends, store, preferences });
+    // No box is withdrawn while a chain mixing them again may still spend it.
+    lovejoin = new LovejoinService({ ...spends, store, preferences, mixingAgain: (n) => sessions!.mixingAgain(n) });
     sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
     dapp = new DappService({
       ...spends,

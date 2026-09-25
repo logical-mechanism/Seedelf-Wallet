@@ -15,6 +15,7 @@ import {
   koiosPreprod,
   launch,
   lovejoinPool,
+  ownedLovejoinBox,
   openApp,
   openDapp,
   openReceive,
@@ -1539,6 +1540,80 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await snap(page, "home-in-lovejoin");
   await held.click();
   await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();
+});
+
+test("Lovejoin: mix my boxes again, paid from the private balance: the review says what it takes, and the mix shows as mixed again", async ({
+  context,
+  koios,
+}) => {
+  const phrase = vector(12).phrase;
+  koios.addedToAccounts.push(...lovejoinPool, ownedLovejoinBox(phrase, "d6"), ownedLovejoinBox(phrase, "d7"));
+  koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+  const page = await openApp(context);
+  await restore(page, phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
+  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the pool2 boxes, 20 ₳");
+
+  // Both boxes, two waves deep: eight mixes and the change they leave, into a one-time account. No box to pay for.
+  await page.getByTestId("lovejoin-again").click();
+  await expect(page.getByRole("heading", { name: "Review mixing again" })).toBeVisible();
+  const funding = page.getByTestId("lovejoin-again-review");
+  await expect(funding).toContainText("ToPrivate session 1");
+  await expect(funding).toContainText("For the mixes9.1 ₳");
+  await expect(funding).toContainText("Its collateral5 ₳");
+  const then = page.getByTestId("lovejoin-again-then");
+  await expect(then).toContainText("Mixed again2 boxes of yours in the pool");
+  await expect(then).toContainText("Mixed2 waves deep, 8 mixes, about 7.6 ₳");
+  await expect(then).toContainText("Back laterEach box on its own, after 1 to 6 hours from the mixes");
+  await snap(page, "lovejoin-again-review");
+
+  // giveme.my refuses (its recorded answer): nothing is sent, and the mix says its funding didn't go through.
+  await page.getByTestId("lovejoin-send").click();
+  await expect(page.getByRole("alert")).toContainText("refused this transaction");
+  expect(koios.submitted).toHaveLength(0);
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("lovejoin-mixes")).toContainText("2 boxes mixed againNot fundedIts funding didn't go through");
+  // Nothing is mixing them: both buttons stay.
+  await expect(page.getByTestId("lovejoin-again")).toBeEnabled();
+  await expect(page.getByTestId("lovejoin-now")).toBeEnabled();
+  await expect(page.getByTestId("lovejoin-again-running")).toHaveCount(0);
+});
+
+test("auto-lock counts down its last minutes on any screen: Stay unlocked puts it off, and at 0:00 the wallet locks", async ({
+  context,
+}) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Settings" }).click();
+  const countdown = page.getByTestId("lock-countdown");
+  await expect(countdown).toHaveCount(0);
+
+  // The last activity was 13 minutes and 20 seconds ago (the lock is 15 minutes): asking, the page shows the countdown.
+  const idle = (ms: number) =>
+    page.evaluate(async (at) => {
+      await chrome.storage.session.set({ "seedelf.lastActivity": at });
+      window.dispatchEvent(new Event("focus"));
+    }, Date.now() - ms);
+  await idle(15 * 60_000 - 100_000);
+  await expect(countdown).toContainText(/Locking in 1:[34]\d/);
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await snap(page, "lock-countdown");
+
+  // Stay unlocked is activity: the lock is 15 minutes off again.
+  await page.getByTestId("lock-stay").click();
+  await expect(countdown).toHaveCount(0);
+  const last = await page.evaluate(async () => (await chrome.storage.session.get("seedelf.lastActivity"))["seedelf.lastActivity"] as number);
+  expect(Date.now() - last).toBeLessThan(10_000);
+
+  // Left alone to 0:00, the wallet locks.
+  await idle(15 * 60_000 - 3_000);
+  await expect(countdown).toContainText(/Locking in 0:0\d/);
+  await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible({ timeout: 10_000 });
+  await expect(countdown).toHaveCount(0);
 });
 
 test("a private swap paused by a price move, then stopped: everything comes back and nothing is ordered", async ({

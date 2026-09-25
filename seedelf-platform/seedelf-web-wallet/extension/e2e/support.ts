@@ -2,6 +2,7 @@
 // with the built extension, a fake Koios and giveme.my over the recorded
 // preprod fixtures, and the steps most tests start with.
 
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,6 +78,27 @@ export const minswapEstimate = fixture("minswap-estimate-preprod.json");
 export const sessionSwap = fixture("session-swap.json");
 /** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
 export const lovejoinPool = fixture("lovejoin-pool-preprod.json").pool;
+
+/**
+ * A Lovejoin box of `phrase`'s Seedelf key in the pool, as Koios lists it: a
+ * fresh copy of its register. The WebAssembly module makes it in a Node of
+ * its own, since Playwright's loader can't load the module's ES code.
+ */
+export function ownedLovejoinBox(phrase: string, tx: string): { payment_cred: string } & Record<string, unknown> {
+  const pkg = new URL("../../wasm/pkg/", import.meta.url);
+  const script = `
+    import { readFileSync } from "node:fs";
+    const wasm = await import(${JSON.stringify(new URL("seedelf_wasm.js", pkg).href)});
+    wasm.initSync({ module: readFileSync(new URL(${JSON.stringify(new URL("seedelf_wasm_bg.wasm", pkg).href)})) });
+    const key = wasm.SeedelfKey.fromEntropy(wasm.phraseToEntropy(process.argv[1]), 0);
+    process.stdout.write(Buffer.from(wasm.registerToDatum(wasm.rerandomize(key.baseRegister()))).toString("hex"));
+  `;
+  const datum = execFileSync(process.execPath, ["--input-type=module", "-e", script, phrase], {
+    env: { ...process.env, NODE_OPTIONS: "" },
+    encoding: "utf8",
+  });
+  return { ...lovejoinPool[0], tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: datum, value: {} } };
+}
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );

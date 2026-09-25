@@ -170,14 +170,14 @@ describe("the network's check", () => {
   });
 });
 
-describe("the boxes' withdraws", () => {
-  /** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */
-  async function ownedBox(t: Awaited<ReturnType<typeof withSession>>["t"], tx: string): Promise<KoiosUtxo> {
-    const wasm = loadTestWasm();
-    const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
-    return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
-  }
+/** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */
+async function ownedBox(t: ReturnType<typeof testBalances>, tx: string): Promise<KoiosUtxo> {
+  const wasm = loadTestWasm();
+  const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+  return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
+}
 
+describe("the boxes' withdraws", () => {
   it("finds ours in the pool, wherever mixes moved them", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "d1"));
@@ -311,6 +311,108 @@ describe("mixing from the tile", () => {
     [view] = await sessions.list("preprod", true);
     expect(view).toMatchObject({ stage: "closed", mix: { boxes: 1 } });
     expect(view!.mix!.skipped).toBeUndefined();
+  });
+
+  /**
+   * The runner for mixes from the private balance, with its own Lovejoin
+   * wired to it, as the worker wires them: no box is withdrawn while a chain
+   * mixing them again may spend it.
+   */
+  function mixRunner(t: ReturnType<typeof testBalances>) {
+    const wasm = loadTestWasm();
+    const collateral = () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch);
+    const lovejoin: LovejoinService = new LovejoinService({
+      ...t.deps,
+      collateral,
+      store: t.store,
+      mixingAgain: (network) => sessions.mixingAgain(network),
+    });
+    const sessions: SessionService = new SessionService({
+      ...t.deps,
+      // giveme.my's witness and the one-time key's signature stood in for, as sessions.test.ts does.
+      wasm: {
+        ...wasm,
+        signScriptSpend: (_key: unknown, request: string) => {
+          const { txCbor } = JSON.parse(request) as { txCbor: string };
+          return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+        },
+      } as typeof wasm,
+      collateral,
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin,
+      sleep: async () => undefined,
+    });
+    return { lovejoin, sessions };
+  }
+
+  it("mixes the wallet's boxes again, with no deposit, and withdraws none of them until the chain is sent", async () => {
+    const t = await wallet();
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    t.koios.addedToAccounts.push(await ownedBox(t, "d6"), await ownedBox(t, "d7"));
+    // One box was due a minute ago, the other in half an hour.
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now - 60_000, t.clock.now + 30 * 60_000] });
+    const { lovejoin, sessions } = mixRunner(t);
+
+    // Both boxes at depth 2: eight mixes and the change they leave, and 5 ₳ of collateral. No box to pay for.
+    const out = await sessions.againBuild("preprod");
+    expect(out.mix).toMatchObject({ boxes: 2, again: true, depth: 2, mixes: 8, lovelace: "9100000" });
+    expect(out.payments.map((p) => p.lovelace)).toEqual(["9100000", "5000000"]);
+    expect(await sessions.mixingAgain("preprod")).toBe(false);
+    await sessions.mixOutSubmit("preprod", out.txHash);
+
+    // Until its chain is sent, no box is withdrawn, not even the due one, and there's no second mix of them.
+    expect(await sessions.mixingAgain("preprod")).toBe(true);
+    const calls = t.koios.calls.length;
+    expect(await lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect(t.koios.calls.length).toBe(calls);
+    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("Your boxes are being mixed again");
+    await expect(sessions.againBuild("preprod")).rejects.toThrow("being mixed again already");
+
+    // The funding lands; the runner fans both boxes out again, and the rest comes back.
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, "9100000"), atSession(out.txHash, 1, "5000000"));
+    t.koios.confirmations = 1;
+    t.koios.evaluation = AGREES;
+    const before = t.koios.submitted.length;
+    const view = await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted.slice(before)).toHaveLength(9);
+    const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }> }> }>("sessions.preprod"))!;
+    expect(book.sessions[0]!.txs.map((x) => x.kind)).toEqual(["out", ...Array(8).fill("mix"), "back"]);
+    // The network measured the first mix with nothing extra: its inputs are all on chain.
+    const check = t.koios.calls.filter((c) => c.path === "ogmios").at(-1)!;
+    expect(check.body.params.additionalUtxo).toBeUndefined();
+    // Both boxes wait again, each a fresh delay: the one that was due isn't anymore.
+    const due = (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due;
+    expect(due).toHaveLength(2);
+    for (const d of due) expect(d).toBeGreaterThanOrEqual(t.clock.now + HOUR);
+    expect(view).toMatchObject({ mix: { boxes: 2, again: true }, auto: { step: "returning" } });
+    // Sent: the boxes may be withdrawn again, when they're due.
+    expect(await sessions.mixingAgain("preprod")).toBe(false);
+  });
+
+  it("brings a mix-again back directly when its boxes have left the pool since", async () => {
+    const t = await wallet();
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    t.koios.addedToAccounts.push(await ownedBox(t, "d8"));
+    const { sessions } = mixRunner(t);
+    const out = await sessions.againBuild("preprod");
+    expect(out.mix).toMatchObject({ boxes: 1, again: true, mixes: 4 });
+    await sessions.mixOutSubmit("preprod", out.txHash);
+    // Withdrawn from another device before the funding landed.
+    t.koios.spent.add(`${"d8".repeat(32)}#0`);
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace), atSession(out.txHash, 1, "5000000"));
+    t.koios.confirmations = 1;
+    const before = t.koios.submitted.length;
+    const view = await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted.slice(before)).toHaveLength(1);
+    expect(view.mix).toEqual({ boxes: 1, again: true, skipped: "none of your boxes is in Lovejoin's pool anymore" });
+    expect(await sessions.mixingAgain("preprod")).toBe(false);
+  });
+
+  it("won't mix again with no box of the wallet's in the pool", async () => {
+    const t = await wallet();
+    const { sessions } = mixRunner(t);
+    await expect(sessions.againBuild("preprod")).rejects.toThrow("None of your boxes is in Lovejoin's pool");
   });
 
   it("won't fund a mix the pool can't take, or more boxes than it mixes at once", async () => {

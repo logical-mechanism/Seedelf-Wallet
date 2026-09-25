@@ -2252,7 +2252,8 @@ pub fn plan_lovejoin(accounts: &WasmOneTimeAccounts, request: &str) -> Result<St
 
 /// A session's whole chain through Lovejoin, built, measured against the
 /// scripts and signed with its key: the deposit, the mixes, then the return
-/// (`lovejoin::ChainRequest` → `lovejoin::ChainResult`). The worker sends
+/// (`lovejoin::ChainRequest` → `lovejoin::ChainResult`); with `again`, the
+/// wallet's boxes in the pool mixed again, with no deposit. The worker sends
 /// them in order.
 #[wasm_bindgen(js_name = buildLovejoinChain)]
 pub fn build_lovejoin_chain(

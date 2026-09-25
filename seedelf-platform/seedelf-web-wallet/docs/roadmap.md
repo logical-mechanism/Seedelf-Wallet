@@ -44,6 +44,12 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-25: chunk 16, Lovejoin (third session)** (`web-wallet/lovejoin`). The plan's *Built (third session)* lists everything.
+  - **What landed:** the two features the user decided at the end of the second session.
+    - *Mix my boxes again* on the Lovejoin page: every box of the wallet's in the pool fanned out again, paid from the private balance through a one-time account, with no deposit. No box is withdrawn while it runs, and each waits a fresh delay after.
+    - A countdown in the last 2 minutes before auto-lock, on every screen, with Stay unlocked.
+  - **Next:** the plan's *Handoff to the fourth session*: a live preprod run of both, the live checks still open from the second session, then the PR into `seedelf-web-wallet`.
+
 - **2026-09-25: chunk 16, Lovejoin (second session)** (`web-wallet/lovejoin`). The plan's *Built (second session)* lists everything.
   - **What landed:**
     - A session's return merges into the Seedelf UTxO its funding made: one Seedelf spend under the session's own collateral, measured in the wallet.

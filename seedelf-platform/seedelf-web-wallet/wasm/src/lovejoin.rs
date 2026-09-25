@@ -14,6 +14,10 @@
 //!    token UTxOs, merged into the Seedelf UTxO the session's funding made
 //!    (`api::merged_return`), or into fresh registers when that's spent.
 //!
+//! Mixing the wallet's boxes again (`again`) is the same chain with no
+//! deposit: the session's ADA pays for the mixes of boxes that are in the
+//! pool already.
+//!
 //! The boxes come back later, each on its own ([`withdraw`]), paid from
 //! themselves with giveme.my's collateral: nothing ties them to the session.
 
@@ -74,7 +78,8 @@ impl OutRef {
 /// What a session holds, split for its chain.
 struct Holdings {
     address: String,
-    coins: Vec<Coin>,
+    /// Its ADA-only UTxOs, the collateral aside, and their rows.
+    coins: Vec<(Coin, UtxoResponse)>,
     collateral: UtxoResponse,
     kept: Vec<UtxoResponse>,
 }
@@ -100,7 +105,7 @@ fn holdings(
         if collateral.is(row) {
             found = Some(row.clone());
         } else if row.asset_list.as_ref().is_none_or(|a| a.is_empty()) {
-            coins.push(Coin::from_row(row)?);
+            coins.push((Coin::from_row(row)?, row.clone()));
         } else {
             kept.push(row.clone());
         }
@@ -123,6 +128,9 @@ pub struct PlanRequest {
     pub utxos: Vec<UtxoResponse>,
     pub collateral: OutRef,
     pub depth: u32,
+    /// Mixing the wallet's boxes again: no deposit, so no box to pay for.
+    #[serde(default)]
+    pub again: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -140,8 +148,14 @@ pub struct PlanResult {
 pub fn plan(accounts: &CardanoAccount, request: PlanRequest) -> Result<PlanResult> {
     let protocol = Protocol::of(network_flag(&request.network)?)?;
     let held = holdings(accounts, request.index, &request.utxos, &request.collateral)?;
-    let spare: u64 = held.coins.iter().map(|c| c.lovelace).sum();
-    let boxes = lovejoin::boxes_affordable(spare, request.depth, protocol.denom);
+    let spare: u64 = held.coins.iter().map(|(c, _)| c.lovelace).sum();
+    let boxes = if request.again {
+        // The mixes pay from one UTxO, the largest ([`chain`]).
+        let largest = held.coins.iter().map(|(c, _)| c.lovelace).max();
+        lovejoin::again_affordable(largest.unwrap_or(0), request.depth)
+    } else {
+        lovejoin::boxes_affordable(spare, request.depth, protocol.denom)
+    };
     let mixes = boxes * lovejoin::mixes_per_box(request.depth);
     Ok(PlanResult {
         boxes,
@@ -171,6 +185,11 @@ pub struct ChainRequest {
     /// (`api::SessionReturnRequest::merge`).
     #[serde(default)]
     pub merge: Vec<UtxoResponse>,
+    /// Mix the wallet's own boxes in `pool` again (at most `boxes` of them)
+    /// rather than deposit new ones: the session's largest ADA UTxO pays the
+    /// first mix, and its other ADA UTxOs come back with the return.
+    #[serde(default)]
+    pub again: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -217,40 +236,74 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = Protocol::of(network_flag)?;
     let held = holdings(accounts, request.index, &request.utxos, &request.collateral)?;
-    let spare: u64 = held.coins.iter().map(|c| c.lovelace).sum();
-    let boxes = request
-        .boxes
-        .unwrap_or_else(|| lovejoin::boxes_affordable(spare, request.depth, protocol.denom));
-    if boxes == 0 {
-        bail!("The session's spare ADA doesn't pay for a Lovejoin box");
-    }
-    let base = Register::create(sk)?;
-    let owners = (0..boxes)
-        .map(|_| base.clone().rerandomize())
-        .collect::<Result<Vec<_>>>()?;
-    let pool: Vec<PoolBox> = request
+    let spare: u64 = held.coins.iter().map(|(c, _)| c.lovelace).sum();
+    let (ours, pool): (Vec<PoolBox>, Vec<PoolBox>) = request
         .pool
         .iter()
         .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .filter(|b| !b.is_owned(&sk))
-        .collect();
+        .partition(|b| b.is_owned(&sk));
     let address = Address::from_bech32(&held.address)
         .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
     let collateral = Coin::from_row(&held.collateral)?;
 
-    let funding = lovejoin::Funding {
-        coins: held.coins.clone(),
-        collateral: collateral.clone(),
-        address,
-        deposit_signers: 1,
-        mix_signers: 1,
+    // The ADA-only UTxOs the chain doesn't spend: they come back with the return.
+    let mut unused: Vec<UtxoResponse> = Vec::new();
+    let (built, boxes) = if request.again {
+        let mut coins = held.coins.clone();
+        coins.sort_by_key(|(c, _)| std::cmp::Reverse(c.lovelace));
+        let mut coins = coins.into_iter();
+        let (fee, _) = coins
+            .next()
+            .context("The session holds no ADA to pay for the mixes")?;
+        unused.extend(coins.map(|(_, row)| row));
+        let boxes = request
+            .boxes
+            .unwrap_or_else(|| lovejoin::again_affordable(fee.lovelace, request.depth))
+            .min(ours.len());
+        if boxes == 0 {
+            bail!("None of this wallet's boxes is in Lovejoin's pool to mix again");
+        }
+        let payer = lovejoin::Payer {
+            fee,
+            collateral,
+            address,
+            signers: 1,
+        };
+        let built = lovejoin::again(
+            &params,
+            &protocol,
+            &payer,
+            &ours[..boxes],
+            request.depth,
+            &pool,
+        )?;
+        (built, boxes)
+    } else {
+        let boxes = request
+            .boxes
+            .unwrap_or_else(|| lovejoin::boxes_affordable(spare, request.depth, protocol.denom));
+        if boxes == 0 {
+            bail!("The session's spare ADA doesn't pay for a Lovejoin box");
+        }
+        let base = Register::create(sk)?;
+        let owners = (0..boxes)
+            .map(|_| base.clone().rerandomize())
+            .collect::<Result<Vec<_>>>()?;
+        let funding = lovejoin::Funding {
+            coins: held.coins.iter().map(|(c, _)| c.clone()).collect(),
+            collateral,
+            address,
+            deposit_signers: 1,
+            mix_signers: 1,
+        };
+        let built = lovejoin::chain(&params, &protocol, &funding, &owners, request.depth, &pool)?;
+        (built, boxes)
     };
-    let built = lovejoin::chain(&params, &protocol, &funding, &owners, request.depth, &pool)?;
 
     // The return, last: the chain's change (not on chain yet), the
-    // collateral, and any token UTxOs the chain left alone. Merged into the
-    // funding's change when it's still there, under the collateral it spends
-    // too; into new registers otherwise.
+    // collateral, any ADA UTxOs the chain left alone and any token UTxOs.
+    // Merged into the funding's change when it's still there, under the
+    // collateral it spends too; into new registers otherwise.
     let mut rows = vec![UtxoResponse {
         tx_hash: hex::encode(built.change.utxo.tx_hash),
         tx_index: built.change.utxo.index,
@@ -259,12 +312,14 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
         ..Default::default()
     }];
     rows.push(held.collateral.clone());
+    rows.extend(unused);
     rows.extend(held.kept.iter().cloned());
     let (total, tokens) = seedelf_core::utxos::assets_of(rows.clone())?;
     let (back, back_fee) = if request.merge.is_empty() {
         let key = accounts.key_hash(Role::Receive, request.index)?;
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
+        let base = Register::create(sk)?;
         let (tx, fee) = build::external_sweep(&params, &rows, &base, &wallet, key)?;
         (sign(tx, accounts, request.index)?, fee)
     } else {
@@ -331,6 +386,9 @@ pub struct FundingRequest {
     pub network: String,
     pub boxes: usize,
     pub depth: u32,
+    /// Mixing the wallet's boxes again: the mixes alone, no box to pay for.
+    #[serde(default)]
+    pub again: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -355,14 +413,19 @@ fn check_mix(boxes: usize, depth: u32) -> Result<()> {
 }
 
 /// What mixing `boxes` boxes at `depth` takes, before anything is built:
-/// the boxes, every mix of their fan-out, and the deposit and its change.
-/// What the mixes don't use comes back.
+/// the boxes, every mix of their fan-out, and the deposit and its change; or,
+/// `again`, every mix alone. What the mixes don't use comes back.
 pub fn funding(request: FundingRequest) -> Result<FundingResult> {
     let protocol = Protocol::of(network_flag(&request.network)?)?;
     check_mix(request.boxes, request.depth)?;
     let mixes = request.boxes * lovejoin::mixes_per_box(request.depth);
+    let lovelace = if request.again {
+        lovejoin::again_funding(request.boxes, request.depth)
+    } else {
+        lovejoin::funding_for(request.boxes, request.depth, protocol.denom)
+    };
     Ok(FundingResult {
-        lovelace: lovejoin::funding_for(request.boxes, request.depth, protocol.denom).to_string(),
+        lovelace: lovelace.to_string(),
         mixes,
         mix_fees: (mixes as u64 * lovejoin::MIX_FEE_ESTIMATE).to_string(),
     })

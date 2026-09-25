@@ -528,3 +528,119 @@ fn a_mix_never_leaves_change_under_an_outputs_least() {
     let err = lovejoin::mix(&params(), &protocol, &boxes, &payer(1_500_000)).unwrap_err();
     assert!(err.to_string().contains("keep the change"), "{err}");
 }
+
+/// `count` boxes of `sk`'s, as a deposit (not on chain) leaves them in the pool.
+fn our_boxes(sk: Scalar, count: usize) -> Vec<PoolBox> {
+    let protocol = Protocol::of(true).unwrap();
+    let base = Register::create(sk).unwrap();
+    let owners: Vec<Register> = (0..count)
+        .map(|_| base.clone().rerandomize().unwrap())
+        .collect();
+    lovejoin::deposit(
+        &params(),
+        &protocol,
+        &[coin(0x55, 50_000_000)],
+        &owners,
+        &key_address(0x55),
+        1,
+    )
+    .unwrap()
+    .boxes
+}
+
+#[test]
+fn boxes_of_ours_in_the_pool_fan_out_again_with_no_deposit() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(42u64);
+    let ours = our_boxes(sk, 2);
+    // The pool as Koios lists it: ours among the others, left out of the draw.
+    let mut pool = all_pool_boxes(&protocol);
+    pool.extend(ours.iter().cloned());
+
+    let funded = lovejoin::again_funding(2, 1);
+    let paying = Payer {
+        fee: coin(0x44, funded),
+        ..payer(0)
+    };
+    let chain = lovejoin::again(&params(), &protocol, &paying, &ours, 1, &pool).unwrap();
+    // One wave: a mix for each box, and nothing else.
+    assert_eq!(chain.txs.len(), 2);
+    assert!(chain.txs.iter().all(|t| t.kind == "mix"));
+    assert_eq!(chain.leaves.len(), 2);
+    assert!(chain.leaves.iter().all(|b| b.is_owned(&sk)));
+    assert!(chain.leaves.iter().all(|b| !ours.contains(b)), "moved");
+    // Each of our boxes is in a mix with two boxes that aren't ours.
+    let spent: Vec<(Vec<u8>, u64)> = chain
+        .txs
+        .iter()
+        .flat_map(|t| {
+            MultiEraTx::decode(&t.tx.tx_bytes.0)
+                .unwrap()
+                .inputs()
+                .iter()
+                .map(|i| (i.hash().to_vec(), i.index()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for b in &ours {
+        let count = spent
+            .iter()
+            .filter(|(h, i)| *h == b.utxo.tx_hash.to_vec() && *i == b.utxo.index)
+            .count();
+        assert_eq!(count, 1, "each of ours mixed once");
+    }
+    // The first mix pays from the funding; each after from the one before's change.
+    let first = MultiEraTx::decode(&chain.txs[0].tx.tx_bytes.0).unwrap();
+    assert!(first.inputs().iter().any(|i| **i.hash() == [0x44; 32]));
+    let second = MultiEraTx::decode(&chain.txs[1].tx.tx_bytes.0).unwrap();
+    assert!(second.inputs().iter().any(|i| *i.hash() == first.hash()));
+    let fees: u64 = chain.txs.iter().map(|t| t.fee).sum();
+    assert_eq!(chain.change.lovelace, funded - fees);
+    // What the mixes didn't use comes back: more than an output's least.
+    assert!(
+        chain.change.lovelace > 1_000_000,
+        "{}",
+        chain.change.lovelace
+    );
+    for t in &chain.txs {
+        collateral_is_enough(&t.tx.tx_bytes.0, 5_000_000);
+    }
+}
+
+#[test]
+fn mixing_again_needs_a_box_and_enough_others() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(42u64);
+    let ours = our_boxes(sk, 1);
+    let err = lovejoin::again(
+        &params(),
+        &protocol,
+        &payer(20_000_000),
+        &[],
+        1,
+        &all_pool_boxes(&protocol),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("no box to mix again"), "{err}");
+    // Ours don't count among the boxes to mix with.
+    let mut pool = vec![all_pool_boxes(&protocol)[0].clone()];
+    pool.extend(ours.iter().cloned());
+    let err =
+        lovejoin::again(&params(), &protocol, &payer(20_000_000), &ours, 1, &pool).unwrap_err();
+    assert!(err.to_string().contains("pool has 1 boxes"), "{err}");
+}
+
+#[test]
+fn mixing_again_is_planned_on_the_mixes_alone() {
+    // Depth 2: four mixes a box, about 3.8 ₳, and no box to pay for.
+    assert_eq!(lovejoin::again_affordable(4_000_000, 2), 0);
+    assert_eq!(lovejoin::again_affordable(5_300_000, 2), 1);
+    for depth in 1..=3 {
+        for boxes in 1..=5 {
+            let funded = lovejoin::again_funding(boxes, depth);
+            assert_eq!(lovejoin::again_affordable(funded, depth), boxes);
+            assert_eq!(lovejoin::again_affordable(funded - 1, depth), boxes - 1);
+        }
+    }
+    assert_eq!(lovejoin::again_funding(1, 2), 5_300_000);
+}

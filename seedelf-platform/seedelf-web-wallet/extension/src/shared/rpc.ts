@@ -692,10 +692,11 @@ export interface SessionView {
   site?: { origin: string };
   /**
    * A mix from the Lovejoin tile, rather than a swap: the boxes it puts
-   * through Lovejoin once funded, then everything else comes back. `skipped`:
+   * through Lovejoin once funded, then everything else comes back. `again`:
+   * the wallet's boxes in the pool mixed again, with no deposit. `skipped`:
    * why Lovejoin was left out, when it was.
    */
-  mix?: { boxes: number; skipped?: string };
+  mix?: { boxes: number; again?: boolean; skipped?: string };
 }
 
 /** A funding payment into a new session, built and waiting for Send. */
@@ -739,7 +740,7 @@ export interface SessionBackSummary {
    * back at once; each box comes back later, after a random wait in `delay`
    * (hours, "1-6").
    */
-  lovejoin?: { boxes: number; depth: number; mixes: number; fees: string; txs: number; delay: string };
+  lovejoin?: { boxes: number; depth: number; mixes: number; fees: string; txs: number; delay: string; again?: boolean };
   /**
    * Why the spare ADA doesn't go through Lovejoin this time, though it would
    * pay for a box: the network measured its scripts differently from the
@@ -751,6 +752,8 @@ export interface SessionBackSummary {
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */
 export interface LovejoinFunding {
   boxes: number;
+  /** The wallet's boxes in the pool, mixed again: no deposit, and no box to pay for. */
+  again?: boolean;
   /** What pays for the boxes, every mix, and the deposit and its change: what the mixes don't use comes back. */
   lovelace: string;
   mixes: number;
@@ -818,6 +821,12 @@ export interface Requests {
   unlock: { payload: { password: string }; result: UnlockResult };
   lock: { payload: None; result: Status };
   activity: { payload: None; result: null };
+  /**
+   * When auto-lock locks the wallet (ms since the epoch), null when it isn't
+   * unlocked, and how long it waits without activity. Asking isn't activity:
+   * past the deadline, asking locks it.
+   */
+  "lock-deadline": { payload: None; result: { at: number | null; lockAfterMs: number } };
   account: { payload: None; result: Account };
   /** The last reading, or a new one if there is none or `refresh` is set. */
   balances: { payload: { refresh?: boolean }; result: Balances };
@@ -973,6 +982,12 @@ export interface Requests {
   "lovejoin-funding": { payload: { boxes: number }; result: LovejoinFunding };
   /** Builds the funding of a new one-time account that mixes `boxes` boxes from the private balance, and runs itself once sent. */
   "lovejoin-mix-private-build": { payload: { boxes: number }; result: SessionOutSummary & { mix: LovejoinFunding } };
+  /**
+   * Builds the funding of a new one-time account that mixes every box of the
+   * wallet's in the pool again (10 at most), with no deposit, and runs itself
+   * once sent. Sent with lovejoin-mix-private-submit.
+   */
+  "lovejoin-again-build": { payload: None; result: SessionOutSummary & { mix: LovejoinFunding } };
   /** Records the mix session, then sends its funding. */
   "lovejoin-mix-private-submit": { payload: { txHash: string }; result: { index: number; pending: PendingTx } };
   /** Builds `boxes` boxes from the public account straight into Lovejoin: the deposit and every mix. */
@@ -1008,6 +1023,7 @@ const REQUEST_LIST = [
   "unlock",
   "lock",
   "activity",
+  "lock-deadline",
   "account",
   "balances",
   "wordlist",
@@ -1080,6 +1096,7 @@ const REQUEST_LIST = [
   "lovejoin-held",
   "lovejoin-funding",
   "lovejoin-mix-private-build",
+  "lovejoin-again-build",
   "lovejoin-mix-private-submit",
   "lovejoin-mix-public-build",
   "lovejoin-mix-public-submit",

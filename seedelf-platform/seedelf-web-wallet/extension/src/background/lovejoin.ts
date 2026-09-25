@@ -25,6 +25,12 @@
 // the public account straight in (here): its deposit and mixes, paid by the
 // account and put up against its collateral, the change left in it.
 //
+// Mix my boxes again fans the wallet's boxes in the pool out once more (a
+// chain cut short, or boxes nobody has mixed since), with no deposit, paid
+// from the private balance through a mix session. While one runs, no box is
+// withdrawn: its chain spends them. Once its first mix is in, those boxes
+// wait again, each a fresh delay.
+//
 // Koios requests: one pool read and one evaluate for a chain; one pool read
 // at each unlock, only on a wallet that has used Lovejoin here (a restored
 // wallet finds its boxes when the Lovejoin tile opens); a withdraw is
@@ -125,6 +131,8 @@ export interface LovejoinDeps extends ScriptSpendDeps {
   preferences: PreferencesService;
   /** In [0, 1): the delays' draw. Tests pin it. */
   random?: () => number;
+  /** Whether the wallet's boxes are being mixed again (sessions.ts): no box is withdrawn meanwhile. */
+  mixingAgain?: (network: NetworkName) => Promise<boolean>;
 }
 
 const HOUR = 3_600_000;
@@ -174,10 +182,10 @@ export class LovejoinService {
     return unspent(rows, spent);
   }
 
-  /** How many boxes session `index`'s `rows` pay for at the set depth. */
-  async plan(network: NetworkName, index: number, rows: KoiosUtxo[], collateral: KoiosUtxo): Promise<LovejoinPlan> {
+  /** How many boxes session `index`'s `rows` pay for at the set depth (`again`: the mixes alone). */
+  async plan(network: NetworkName, index: number, rows: KoiosUtxo[], collateral: KoiosUtxo, again = false): Promise<LovejoinPlan> {
     const { depth } = await this.settings();
-    const request = { network, index, utxos: rows, collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index }, depth };
+    const request = { network, index, utxos: rows, collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index }, depth, again };
     return this.deps.wallet.withKeys(
       (keys) => JSON.parse(this.deps.wasm.planLovejoin(keys.oneTime, JSON.stringify(request))) as LovejoinPlan,
     );
@@ -186,26 +194,44 @@ export class LovejoinService {
   /**
    * Whether the pool has enough other boxes to mix `boxes` boxes at the set
    * depth with (a pool read), or why not: checked before a mix is funded.
+   * The wallet's own boxes don't count: a mix never takes two of them.
    */
   async fits(network: NetworkName, boxes: number): Promise<void> {
+    const { pool, owned } = await this.split(network);
+    await this.enough(pool.length - owned.length, boxes);
+  }
+
+  /**
+   * How many of the wallet's boxes Mix my boxes again takes (a pool read):
+   * every one, MAX_MIX_BOXES at most, checked against the pool.
+   */
+  async againBoxes(network: NetworkName): Promise<number> {
+    const { pool, owned } = await this.split(network);
+    if (!owned.length) throw new Error("None of your boxes is in Lovejoin's pool, so there's nothing to mix again.");
+    const boxes = Math.min(owned.length, MAX_MIX_BOXES);
+    await this.enough(pool.length - owned.length, boxes);
+    return boxes;
+  }
+
+  /** Whether `others` boxes in the pool mix `boxes` boxes at the set depth, or why not. */
+  private async enough(others: number, boxes: number): Promise<void> {
     const { depth } = await this.settings();
     const needed = boxes * mixesPerBox(depth) * 2;
-    const pool = (await this.pool(network)).length;
-    if (pool < needed) {
+    if (others < needed) {
       throw new Error(
-        `Lovejoin's pool has ${pool} boxes to mix with, and ${boxes === 1 ? "a box" : `${boxes} boxes`} ${depth} ${depth === 1 ? "wave" : "waves"} deep ${boxes === 1 ? "needs" : "need"} ${needed}. Mix fewer, or less deep (Settings, Lovejoin).`,
+        `Lovejoin's pool has ${others} boxes to mix with, and ${boxes === 1 ? "a box" : `${boxes} boxes`} ${depth} ${depth === 1 ? "wave" : "waves"} deep ${boxes === 1 ? "needs" : "need"} ${needed}. Mix fewer, or less deep (Settings, Lovejoin).`,
       );
     }
   }
 
-  /** What mixing `boxes` boxes at the set depth takes, before anything is built. */
-  async funding(network: NetworkName, boxes: number): Promise<LovejoinFunding> {
+  /** What mixing `boxes` boxes at the set depth takes, before anything is built (`again`: the mixes alone). */
+  async funding(network: NetworkName, boxes: number, again = false): Promise<LovejoinFunding> {
     const { depth, delay } = await this.settings();
-    const found = JSON.parse(this.deps.wasm.lovejoinFunding(JSON.stringify({ network, boxes, depth }))) as Omit<
+    const found = JSON.parse(this.deps.wasm.lovejoinFunding(JSON.stringify({ network, boxes, depth, again }))) as Omit<
       LovejoinFunding,
-      "depth" | "delay" | "boxes"
+      "depth" | "delay" | "boxes" | "again"
     >;
-    return { ...found, boxes, depth, delay };
+    return { ...found, boxes, depth, delay, ...(again ? { again } : {}) };
   }
 
   /**
@@ -213,6 +239,7 @@ export class LovejoinService {
    * isn't here or its spare ADA doesn't pay for a box (the return is plain).
    * The return at its end merges into `merge`, the funding's change. `boxes`:
    * at most this many (a mix session's), else all the spare ADA pays for.
+   * `again`: the wallet's boxes in the pool mixed again, with no deposit.
    * Throws LovejoinSkipped when the network measures its first mix
    * differently.
    */
@@ -224,15 +251,20 @@ export class LovejoinService {
     params: unknown,
     merge: KoiosUtxo[] = [],
     boxes?: number,
+    again = false,
   ): Promise<LovejoinChain | undefined> {
     if (!this.available(network) || !collateral) return undefined;
-    const plan = await this.plan(network, index, rows, collateral);
+    const plan = await this.plan(network, index, rows, collateral, again);
     let count = Math.min(plan.boxes, boxes ?? plan.boxes);
     if (count < 1) return undefined;
     const { depth } = await this.settings();
-    const pool = await this.pool(network);
-    // Each mix takes two boxes from the pool, never one twice.
-    count = Math.min(count, Math.floor(pool.length / (mixesPerBox(depth) * 2)));
+    const { pool, owned } = await this.split(network);
+    if (again) {
+      if (!owned.length) throw new LovejoinSkipped("none of your boxes is in Lovejoin's pool anymore");
+      count = Math.min(count, owned.length);
+    }
+    // Each mix takes two boxes from the pool, never one twice, and never one of ours.
+    count = Math.min(count, Math.floor((pool.length - owned.length) / (mixesPerBox(depth) * 2)));
     if (count < 1) throw new LovejoinSkipped("Lovejoin's pool has too few boxes to mix with right now");
     const request = {
       network,
@@ -244,6 +276,7 @@ export class LovejoinService {
       depth,
       boxes: count,
       merge,
+      again,
     };
     const chain = await this.deps.wallet.withKeys(
       (keys) =>
@@ -256,17 +289,19 @@ export class LovejoinService {
   /**
    * Has Koios's Ogmios measure the chain's first mix, with the deposit it
    * spends (not on chain yet) as extra UTxOs, and compares that with what the
-   * mix declares, which the wallet measured. Throws LovejoinSkipped when the
-   * network measures more or refuses a script: then the wallet's evaluator
-   * is behind the network (a hard fork), and sending would risk the
-   * collateral. A Koios error is thrown as it is, to be tried again.
+   * mix declares, which the wallet measured. A chain with no deposit (mixing
+   * again) starts with a mix whose inputs are all on chain. Throws
+   * LovejoinSkipped when the network measures more or refuses a script: then
+   * the wallet's evaluator is behind the network (a hard fork), and sending
+   * would risk the collateral. A Koios error is thrown as it is, to be tried
+   * again.
    */
   private async crossCheck(network: NetworkName, chain: LovejoinChain): Promise<void> {
     const { wasm } = this.deps;
     const first = chain.txs.find((t) => t.kind === "mix");
     const deposit = chain.txs.find((t) => t.kind === "deposit");
-    if (!first || !deposit) return;
-    const additional = JSON.parse(wasm.ogmiosUtxos(deposit.txCbor)) as unknown[];
+    if (!first) return;
+    const additional = deposit ? (JSON.parse(wasm.ogmiosUtxos(deposit.txCbor)) as unknown[]) : [];
     const answer = await this.deps.koios(network).evaluate(first.txCbor, additional);
     const checked = JSON.parse(wasm.declaredCovers(first.txCbor, JSON.stringify(answer))) as { covers: boolean; reason?: string };
     if (!checked.covers) throw new LovejoinSkipped(checked.reason ?? "the network measured its scripts differently");
@@ -358,6 +393,18 @@ export class LovejoinService {
     return pending;
   }
 
+  /**
+   * `boxes` boxes were mixed again: the earliest due times go, and each box
+   * waits again, a fresh delay from now, as a deposit's boxes do.
+   */
+  async reschedule(network: NetworkName, boxes: number): Promise<void> {
+    await this.update(network, (s) => {
+      s.due.sort((a, b) => a - b);
+      s.due.splice(0, boxes);
+    });
+    await this.schedule(network, boxes);
+  }
+
   /** Sets `boxes` withdraws to come, each after its own random delay. */
   async schedule(network: NetworkName, boxes: number): Promise<void> {
     const { delay } = await this.settings();
@@ -403,6 +450,8 @@ export class LovejoinService {
    */
   async withdrawDue(network: NetworkName, scan = false): Promise<PendingTx[]> {
     if (!this.available(network)) return [];
+    // A chain mixing them again spends them: they wait until it's sent.
+    if (await this.deps.mixingAgain?.(network)) return [];
     const used = (await this.deps.store.get<Schedule>(`lovejoin.${network}` as const)) !== undefined;
     const { due } = await this.read(network);
     const now = this.deps.now();
@@ -436,6 +485,9 @@ export class LovejoinService {
 
   /** Withdraws one of our boxes now, whatever its delay (`box`, or any). */
   async withdrawNow(network: NetworkName, box?: { txHash: string; txIndex: number }): Promise<PendingTx> {
+    if (await this.deps.mixingAgain?.(network)) {
+      throw new Error("Your boxes are being mixed again. Bring one back once that's done.");
+    }
     const pool = await this.pool(network);
     const owned = await this.owned(network, pool);
     const chosen = box ? owned.find((b) => b.txHash === box.txHash && b.txIndex === box.txIndex) : owned[0];
@@ -449,6 +501,12 @@ export class LovejoinService {
     // Home's banner watches it, as it does every send the user makes; the ones due by themselves stay out of it.
     await this.deps.wallet.withKeys(() => this.deps.session.set(SESSION_PENDING, pending));
     return pending;
+  }
+
+  /** The pool (a read), and the wallet's boxes in it. */
+  private async split(network: NetworkName): Promise<{ pool: KoiosUtxo[]; owned: Array<{ txHash: string; txIndex: number }> }> {
+    const pool = await this.pool(network);
+    return { pool, owned: await this.owned(network, pool) };
   }
 
   private async owned(network: NetworkName, pool: KoiosUtxo[]): Promise<Array<{ txHash: string; txIndex: number }>> {
