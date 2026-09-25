@@ -386,7 +386,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 - **Worked:** a 3-box mix from the private balance, its return included (*Done*).
   - Not checked yet: whether that return merged into the funding's change, the collateral's first use as an input of the same transaction. On Cardanoscan, the one-time account's last transaction would show a collateral input and a script redeemer.
 - **A MIN → ADA swap stopped partway:** its return deposited 3 boxes, then ran 6 of 12 mixes. The session account's payment key is `e39622e1…`; the order is `20aadac3…` and the deposit `952fd89f…`. The user pressed Stop.
-  - With the uncommitted fix, reloading and unlocking brings the 12.6 ₳ of change and the 5 ₳ collateral back directly. Confirm with the user that it did.
+  - With `18b4847`, reloading and unlocking brings the 12.6 ₳ of change and the 5 ₳ collateral back directly. Confirm with the user that it did.
 - **Bring one back now:** it failed on the odd fee (fixed in `db35e24`), then once on a Koios timeout, which was transient. Confirm a withdraw landed.
 
 **Decided for next (the user, 2026-09-25):**
