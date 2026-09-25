@@ -2,8 +2,14 @@
 // registered only while the user has it on and Chrome allows the wallet on
 // sites (the optional host permissions in the manifest, asked for from the
 // Settings switch, where the user's click lets Chrome ask). Off, they're
-// unregistered and the access to sites is given back, so nothing is added to
-// any page. Lace adds its scripts to every page, always; this wallet doesn't.
+// unregistered, so nothing is added to any page. Lace adds its scripts to
+// every page, always; this wallet doesn't.
+//
+// Off never hands Chrome's access to sites back (`permissions.remove`):
+// removing `https://*/*` takes every https host under it too, Koios and
+// giveme.my included, found on 2026-09-25. Koios's public tier sends
+// browsers no CORS headers, so without that grant the wallet can't read the
+// chain.
 //
 // It's applied again whenever the extension starts, and when the user takes
 // the access away in Chrome's own settings.
@@ -33,8 +39,6 @@ export async function applyConnector(on: boolean): Promise<boolean> {
     );
     return true;
   }
-  // Turned off: give Chrome's access to sites back too.
-  if (!on) await chrome.permissions.remove({ origins: DAPP_ORIGINS }).catch(() => false);
   return false;
 }
 

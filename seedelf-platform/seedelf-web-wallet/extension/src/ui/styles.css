@@ -1773,6 +1773,12 @@ main {
   font-size: var(--text-sm);
 }
 
+/* Chrome took the wallet's access to Koios away (App.tsx's ServiceAccess) */
+
+.service-access {
+  margin-bottom: var(--s4);
+}
+
 /* The sent transaction */
 
 .banner {

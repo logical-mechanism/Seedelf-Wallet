@@ -24,7 +24,7 @@ flowchart LR
 - **UI:** renders state and sends the user's actions to the service worker. It never holds keys. The only secret it ever sees is the recovery phrase, while the user writes it down or types it in during onboarding.
 - **Content scripts (chunk 15):** none until the user turns on the [dApp connector](#dapp-connector).
   - This matters for security: until then, the wallet adds nothing to web pages.
-  - Its install-time host permissions are only Koios and giveme.my. The sites are an optional permission, asked for when the connector is turned on.
+  - Its install-time host permissions are only Koios and giveme.my. The sites are an optional permission, asked for when the connector is turned on, and kept when it's turned off (see [dApp connector](#dapp-connector)).
 
 ## Service worker
 
@@ -180,6 +180,11 @@ flowchart LR
 
 - **Paging:** 1000 rows a page, in a fixed order (`order=tx_hash.asc,tx_index.asc`), until a short page.
 - **Retries:** a rate limit (429), a server error (5xx) or a network failure is retried twice, after 1 s and 3 s. Anything else fails at once with Koios's status.
+- **Koios's public tier, with no API key (decided 2026-09-25).** Its limits are per IP address (5,000 requests a day, 100 every 10 s), so each user has their own, and there's no key to ship, leak or share.
+  - A key in the extension would be anyone's: the extension's files are public. Every user would also share its one daily allowance (50,000 on the free tier), and Koios would tie every request to the key's account.
+  - **Since 2026-09-25 the public tier sends browsers no CORS headers** (Koios's [tiers](https://koios.rest/tiers.html): CORS "Restricted" without a key, "Open" with one). A web page can't read it. The extension can: its requests to a host in its host permissions skip CORS. So the wallet reads Koios only through Chrome's grant for `preprod.koios.rest` (and `api.koios.rest` on mainnet).
+  - If the user limits the wallet's site access in Chrome, that grant goes with it. A failed request then says so (`KOIOS_NOT_ALLOWED` in `koios.ts`, not retried), and the wallet's page shows a notice with **Ask Chrome again** (`ServiceAccess` in `App.tsx`), which asks Chrome for the hosts from the click.
+  - giveme.my still answers with `Access-Control-Allow-Origin: *`.
 - **Finding owned UTxOs:** keep the contract UTxOs whose inline datum is a register (constructor 0, two 48-byte fields) with `generator^x == public_value`. This is `is_owned`, the same method the CLI's `balance` uses, run in WebAssembly. Points that don't decode or aren't torsion-free count as not owned.
   - As in the CLI, a UTxO holding a Seedelf isn't counted in the balance. It's listed as a Seedelf, with the ADA locked with it.
   - The query goes by payment credential, so it finds contract UTxOs with and without a staking part. Older outputs on preprod carry the shared Seedelf stake key; the current CLI writes none.
@@ -221,7 +226,7 @@ flowchart LR
 
 ## Storage
 
-**Permissions:** `storage`, `alarms`, `sidePanel` and `scripting`, plus the host permissions for the enabled network's Koios and giveme.my. The sites (`https://*/*`, `http://localhost/*`, `http://127.0.0.1/*`) are optional host permissions, granted only while the dApp connector is on.
+**Permissions:** `storage`, `alarms`, `sidePanel` and `scripting`, plus the host permissions for the enabled network's Koios and giveme.my. The sites (`https://*/*`, `http://localhost/*`, `http://127.0.0.1/*`) are optional host permissions, asked for when the dApp connector is first turned on and kept after (see [dApp connector](#dapp-connector)).
 
 | Where | Key | What |
 |---|---|---|
@@ -322,7 +327,7 @@ flowchart LR
 
 - **The switch** (`dappConnector` in the settings) is off by default.
   - Settings asks Chrome for the sites from the switch's click, because Chrome only asks then. The worker then registers the two content scripts (`connector.ts`).
-  - Off, they're unregistered and the access is given back. Chrome's own settings taking it away turns the connector off too.
+  - Off, they're unregistered. **Chrome's access to sites is kept:** `chrome.permissions.remove` of `https://*/*` also takes every https host under it, Koios's and giveme.my's included (found on 2026-09-25), and the wallet can't read Koios without that grant (see *Koios's public tier* above). Chrome's own settings taking it away turns the connector off too.
   - The worker applies it again whenever the extension starts.
 - **Content scripts** (`src/content/`): each is one file with nothing imported at run time, built as an IIFE by a plugin in `vite.config.ts`, because Chrome runs content scripts as classic scripts.
   - `cip30-page.js` defines only `window.cardano.seedelf`, and never replaces an existing entry.

@@ -79,6 +79,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - Any rewards on that credential go to whoever holds it, not to the user. That's fine for money passing through, but the UI should say so.
 - **Crowd size:** privacy grows with the number of honest users (the flood-attack section of the root README). With few users, timing and amounts carry most of the risk. The wallet should say that plainly and not overpromise.
 - **Network:** Koios and giveme.my see the user's IP address, and Koios has no Tor access. A VPN helps; see the root README's IP-tracking section.
+  - **No Koios API key** (decided 2026-09-25): the wallet uses Koios's public tier, so Koios sees an IP address and nothing that names an account. A key would tie every request to whoever registered it.
   - A balance reading asks Koios about the Cardano account and the whole wallet contract at the same moment (between full reads, the part of it after the last block seen). Koios can tell that the account's owner uses Seedelf, though not which contract UTxOs are theirs: the ownership check runs in the extension, on every row.
   - The wallet only reads the chain when Home opens (at most once a minute) or on Refresh. It never polls in the background.
   - **Hiding the balances** (chunk 14) only changes what's drawn: the wallet reads the same and asks no one anything more.

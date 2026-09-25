@@ -43,3 +43,13 @@ export function networkOrigins(networks: NetworkName[]): string[] {
   const origins = networks.flatMap((n) => [NETWORKS[n].koios, NETWORKS[n].collateral, NETWORKS[n].prices ?? []].flat());
   return [...new Set(origins.map((url) => new URL(url).origin))];
 }
+
+/**
+ * The manifest's host permissions: the wallet's own services. Chrome's grant
+ * is what lets the wallet read Koios at all: its public tier sends browsers
+ * no CORS headers (since 2026-09-25), and an extension's requests to a host
+ * it holds skip CORS.
+ */
+export function serviceHosts(networks: NetworkName[]): string[] {
+  return networkOrigins(networks).map((o) => `${o}/*`);
+}

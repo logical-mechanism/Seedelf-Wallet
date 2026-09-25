@@ -1793,6 +1793,35 @@ test("a worker that lost its WASM file explains itself and recovers", async ({ u
   }
 });
 
+test("the connector off keeps Chrome's access to Koios; without it, the wallet says so and asks Chrome again", async ({
+  context,
+}) => {
+  // Koios's public tier sends browsers no CORS headers (since 2026-09-25):
+  // the wallet reads it only through Chrome's grant for its host.
+  const page = await openApp(context);
+  const services = ["https://preprod.koios.rest/*", "https://www.giveme.my/*"];
+  const granted = () => page.evaluate(async () => (await chrome.permissions.getAll()).origins ?? []);
+  expect(await granted()).toEqual(expect.arrayContaining(services));
+
+  // Off, as at every start: the scripts go, Chrome's access stays. Taking
+  // back the optional https://*/* would take Koios's host with it.
+  const reply = await page.evaluate(() => chrome.runtime.sendMessage({ type: "preferences-set", dappConnector: false }));
+  expect(reply).toMatchObject({ ok: true });
+  expect(await granted()).toEqual(expect.arrayContaining(services));
+  await expect(page.getByTestId("service-access")).toHaveCount(0);
+
+  // The user limits the wallet's site access in Chrome. Here that's Chrome's
+  // own rule: taking back https://*/* takes every https host under it.
+  await page.evaluate(() => chrome.permissions.remove({ origins: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"] }));
+  expect(await granted()).toEqual([]);
+  const notice = page.getByTestId("service-access");
+  await expect(notice).toContainText("Chrome isn't letting Seedelf Wallet reach Koios");
+  await snap(page, "service-access");
+  // It asks Chrome from the click; Chrome's dialog can't be answered from here.
+  await notice.getByRole("button", { name: "Ask Chrome again" }).click();
+  await expect(notice.locator(".error")).toHaveCount(0);
+});
+
 test.describe("the dApp connector", () => {
   // Chrome's own dialog for the access to sites can't be answered here, so
   // this build has it from install (support.ts `withSiteAccess`).

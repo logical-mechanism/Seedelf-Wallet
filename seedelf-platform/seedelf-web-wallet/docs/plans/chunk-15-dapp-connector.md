@@ -4,7 +4,7 @@
 
 ## Status (2026-09-25)
 
-**Built:** the public connector, the whole of *This chunk* below. Rust, worker, content scripts, the connector's window and Settings, with Rust, Vitest and Playwright tests. **Not done:** a live run against a real dApp. On preprod, a site that lists wallets from `window.cardano` will offer Seedelf Wallet. Minswap won't (see *Minswap*).
+**Built:** the public connector, the whole of *This chunk* below. Rust, worker, content scripts, the connector's window and Settings, with Rust, Vitest and Playwright tests. Committed as fe8b774; the user chose to keep building on this branch (private sessions next) and open one PR at the end. **Fixed after:** the connector's off state took the wallet's own Koios access with it, which Koios's CORS change on 2026-09-25 made fatal (*Koios and CORS*). **Not done:** a live run against a real dApp. On preprod, a site that lists wallets from `window.cardano` will offer Seedelf Wallet. Minswap won't (see *Minswap*).
 
 ## Start here
 
@@ -34,7 +34,8 @@
   - Here, the sites are an **optional** host permission (`https://*/*`, and `http://localhost` and `127.0.0.1` for dApps in development).
   - Settings asks Chrome for them from the switch's click, the only moment Chrome lets an extension ask.
   - Only then does the worker register the two content scripts (`chrome.scripting.registerContentScripts`).
-  - Turning it off unregisters them and gives the access back. So does taking the access away in Chrome's own settings (`permissions.onRemoved`).
+  - Turning it off unregisters them. So does taking the access away in Chrome's own settings (`permissions.onRemoved`).
+  - **Changed on 2026-09-25: off keeps Chrome's access to sites.** The first build gave it back (`chrome.permissions.remove`), at every start while off. Chrome's remove of `https://*/*` also removes every https host under it, the required Koios and giveme.my grants included. Once Koios stopped sending CORS headers to its public tier the same day, every Koios POST failed with a CORS error. See *Koios and CORS* below.
   - The install-time permissions only gain `scripting`, which shows no warning, so an update doesn't disable the extension.
 - **Two content scripts, built as self-contained IIFEs** (`src/content/`, the `seedelf-content-scripts` plugin in `vite.config.ts`):
   - `cip30-page.js` runs in the page's world and defines only `window.cardano.seedelf`.
@@ -72,6 +73,17 @@
 - Reads: two requests at most every 30 s while a site is connected and asking.
 - `signTx`: none when the account holds every input; one `utxo_info` for inputs it doesn't hold. An input it can't find makes it read the account again first.
 - `submitTx`: one; two if Koios refuses it and the wallet checks whether it's already on chain.
+- **A dApp that polls all day** would reach Koios's public-tier allowance: two requests every 30 s is 5,760 a day, and the tier gives each IP address 5,000. The reads are kept 30 s; a longer keep, or a pause while the site's tab is hidden, is the lever if that shows up.
+
+### Koios and CORS (2026-09-25)
+
+- **What broke:** every Koios POST from the extension failed with "No 'Access-Control-Allow-Origin' header is present". GETs worked.
+- **Two causes together:**
+  - **Koios changed its public tier** that day: its answers carry no `Access-Control-Allow-Origin` any more, only its preflights do. Its [tiers page](https://koios.rest/tiers.html) now lists CORS as "Restricted" without an API key and "Open" with one. Checked with curl from several origins; none got the header.
+  - **The connector, off, removed `https://*/*`** at every start (`chrome.permissions.remove`), and **Chrome's remove takes every host under the pattern**, so the required Koios and giveme.my grants went with it. Checked with a two-line test extension: the grants are `[]` after the call. Without the grant, the extension's requests fall under CORS. Before Koios's change, Koios's own CORS header had hidden this.
+- **Fixed:** off unregisters the scripts and keeps Chrome's access (`connector.ts`). A browser restart, or reloading the unpacked extension, gives an affected profile its grants back.
+- **The case left, a user limiting the wallet's site access in Chrome,** takes the Koios grant too. The Koios client then says so instead of blaming the connection (`KOIOS_NOT_ALLOWED`, not retried), and the wallet's page shows **Ask Chrome again** (`ServiceAccess` in `App.tsx`). Chrome accepts `permissions.request` for a required host it no longer grants, and shows its dialog.
+- **No API key (the user, 2026-09-25):** the wallet stays on the public tier, whose limits are per IP address, so each user is on their own. A key shipped in the extension would leak, and every user would share its one allowance; a server holding the key is the only way around that, which the user would rather not run. See [architecture.md](../architecture.md), *Koios's public tier*.
 
 ### Tests
 
@@ -83,11 +95,13 @@
   - Staking certificates, required signers and a legacy registration.
   - The collateral rules, the other network, and Seedelf payments.
   - COSE rebuilt and verified.
-- **Vitest:** `tests/dapp.test.ts`, 10 tests, on the recorded preprod account with the real WebAssembly.
-- **Playwright:** 2 tests in `e2e/extension.spec.ts`, against a dApp page at `https://dapp.example/`.
-  - Off, then on. Connect, read, sign, decline, sign a message, submit, disconnect, and off again.
-  - A locked wallet unlocking in the window.
-  - Chrome's own permission dialog can't be answered from automation, so those tests load a copy of the build whose manifest grants the sites from install (`withSiteAccess` in `e2e/support.ts`). Everything after the dialog is the real build.
+- **Vitest:** `tests/dapp.test.ts`, 10 tests, on the recorded preprod account with the real WebAssembly. `tests/koios.test.ts` gained one: Chrome withholding Koios's host gives `KOIOS_NOT_ALLOWED`, with no retries.
+- **Playwright:** 3 tests in `e2e/extension.spec.ts`.
+  - Two against a dApp page at `https://dapp.example/`:
+    - Off, then on. Connect, read, sign, decline, sign a message, submit, disconnect, and off again.
+    - A locked wallet unlocking in the window.
+    - Chrome's own permission dialog can't be answered from automation, so these load a copy of the build whose manifest grants the sites from install (`withSiteAccess` in `e2e/support.ts`). Everything after the dialog is the real build.
+  - One on the plain build, where the sites are optional as shipped: turning the connector off keeps the Koios and giveme.my grants, and with them gone, the notice and **Ask Chrome again** show. It fails on the first build's `connector.ts`.
 
 ### For the user
 
@@ -127,6 +141,14 @@ Checked on 2026-09-25 against the preprod site (`testnet-preprod.minswap.org`) a
 - **Inside a frame, it offers only Eternl,** through Eternl's `cardano-dapp-connector-bridge` (a `postMessage` handshake with the parent page). That's how Eternl runs Minswap inside its wallet, and it connects only when the bridge says `name === "eternl"`.
 - **It can be framed by an extension:** its CSP's `frame-ancestors` includes `chrome-extension:` (next to Eternl's sites and localhost).
 - **It has an aggregator API,** on preprod too: `https://aggr.monorepo-testnet-preprod.minswap.org` (mainnet: `agg-api.minswap.org/aggregator`). `estimate`, `build-tx` (an unsigned transaction for a sender's address), `pending-orders` and `cancel-tx`. This is how wallets build swaps into themselves.
+
+**Checked when working out (a)'s steps (2026-09-25):**
+
+- **The aggregator's `build-tx` takes only a `sender`** (with `min_amount_out` and the estimate). It chooses the sender's UTxOs from its own view of the chain, and the proceeds and any refund go back to the sender: there's no receiver, datum, change address or input list ([docs](https://docs.minswap.org/developer/aggregator-api)). So a swap through it needs a key address to be the sender: a one-time account (design 1), funded and confirmed before `build-tx`. It can't spend from Seedelf, or pay into it.
+- **Minswap V2's own orders can pay a contract** (`minswap-dex-v2`, `lib/amm_dex_v2/order_validation.ak`, `validate_order_receiver`): the success and refund receivers can be script addresses, with `EODInlineDatum { hash }`, and the batcher must pay them with exactly that inline datum. So an order built by the wallet could send its proceeds straight into Seedelf's contract under a fresh register, with no return step. Minswap's SDK (`dex-v2.ts`) puts the datum itself on chain in an extra output, for the batcher to look up by hash.
+  - Cancelling: the order's `canceller` signs (`OAMSignature`), or, with an expiry set, anyone may cancel it after that for a tip (the SDK's default is 0.3 ₳) and the funds go to the refund receiver. The order deposit is 2 ₳.
+  - This covers only Minswap V2's own pools, not the aggregator's routing.
+  - **Not tried:** whether Minswap's batcher fills an order whose receiver is a contract. Only a preprod swap can show it.
 
 **The choice for the next chunk (the user's):**
 

@@ -233,7 +233,8 @@ function LockAfter() {
 /**
  * Whether sites can find the wallet (CIP-30) and connect to the public
  * account. Turning it on asks Chrome to let the wallet onto sites, from the
- * click itself (Chrome asks only then); off gives that back.
+ * click itself (Chrome asks only then); off removes the scripts but keeps
+ * Chrome's access (background/connector.ts says why).
  */
 function DappConnector({ onSites }: { onSites: () => void }) {
   const { prefs, loaded, set } = usePreferences();

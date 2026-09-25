@@ -1,7 +1,7 @@
 // The Koios client: request shape, paging and retries, with a fake fetch.
 import { describe, expect, it } from "vitest";
 
-import { Koios, KoiosError, type FetchLike } from "../src/background/koios";
+import { Koios, KOIOS_NOT_ALLOWED, KoiosError, type FetchLike } from "../src/background/koios";
 
 const BASE = "https://preprod.koios.rest/api/v1";
 
@@ -74,6 +74,25 @@ describe("Koios client", () => {
     );
     const limited = scripted([429, 429, 429].map((status) => new Response("", { status })));
     await expect(limited.koios.credentialUtxos(["x"])).rejects.toThrow("Koios is limiting requests from your connection");
+  });
+
+  it("says when Chrome won't let the wallet reach Koios, and doesn't retry", async () => {
+    // Koios's public tier sends browsers no CORS headers: without Chrome's
+    // grant for its host, every request fails like a lost connection.
+    let tries = 0;
+    const blocked = (): FetchLike => async () => {
+      tries++;
+      throw new TypeError("Failed to fetch");
+    };
+    const asked: string[] = [];
+    const withheld = new Koios(BASE, blocked(), async () => undefined, async (url) => (asked.push(url), false));
+    await expect(withheld.credentialUtxos(["x"])).rejects.toThrow(KOIOS_NOT_ALLOWED);
+    await expect(withheld.submitTx(new Uint8Array([0x84]))).rejects.toThrow(KOIOS_NOT_ALLOWED);
+    expect(tries).toBe(2);
+    expect(asked.map((u) => new URL(u).origin)).toEqual(["https://preprod.koios.rest", "https://preprod.koios.rest"]);
+
+    const granted = new Koios(BASE, blocked(), async () => undefined, async () => true);
+    await expect(granted.credentialUtxos(["x"])).rejects.toThrow("Couldn't reach Koios");
   });
 
   it("retries rate limits, server errors and network failures, then succeeds", async () => {

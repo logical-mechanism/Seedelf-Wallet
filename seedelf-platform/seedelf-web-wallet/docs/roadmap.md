@@ -57,6 +57,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **The connector's window reuses itself.** A request within 800 ms of the last answer goes to the open window, so the tests wait for it to close.
     - **The WebAssembly module grew** from 439 to 474 KB gzipped: Pallas's Conway decoding of whole transactions.
     - **Minswap lists a fixed set of wallets**, and inside a frame it offers only Eternl, through Eternl's iframe bridge. See the plan's *Minswap*.
+    - **Koios's public tier stopped sending CORS headers** (2026-09-25; CORS is "Open" only with an API key now). The extension still reads it, because requests to a host in its host permissions skip CORS. But the connector's off state removed `https://*/*` at every start, and Chrome's remove takes Koios's and giveme.my's grants with it, so every Koios POST failed. Fixed: off keeps Chrome's access, and a withheld Koios grant shows **Ask Chrome again**. The user chose to stay on the public tier with no API key (limits per IP address, nothing to leak). See the plan's *Koios and CORS*.
   - **For the user:**
     - Resubmit the store listing: the new permissions, the privacy policy, and possibly *Web history* on the Privacy practices form.
     - Choose how Minswap comes in: (a) in-wallet swaps through its aggregator, (b) framed as Eternl does it (needs Minswap), or (c) a tab with a private session.
