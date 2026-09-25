@@ -14,6 +14,7 @@ import { Row } from "./ReviewRows";
 /** How far a return's chain through Lovejoin has got, in words. */
 export function chainText(c: NonNullable<SessionView["chain"]>): string {
   if (c.cut) return `Stopped after ${c.sent} of ${c.total} transactions; what was left came back directly`;
+  if (c.stopped) return `Stopped after ${c.sent} of ${c.total} transactions; once those are on chain, what's left comes back directly`;
   if (c.sent < c.total) return `Sending ${c.sent} of ${c.total} transactions`;
   if (c.confirmed < c.total) return `${c.confirmed} of ${c.total} transactions on chain`;
   return `All ${c.total} transactions on chain`;

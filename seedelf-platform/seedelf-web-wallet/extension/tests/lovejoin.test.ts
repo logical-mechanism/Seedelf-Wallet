@@ -139,6 +139,40 @@ describe("a session's return through Lovejoin", () => {
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(review.txHash);
   });
 
+  it("carries on when a transaction Koios didn't answer went in anyway: its resends are refused as spent until it's on chain", async () => {
+    const { t, sessions } = await withSession("40000000");
+    const review = await sessions.backBuild("preprod", 0);
+    // Found on preprod: the third goes in, but Koios's answer is lost (a 503 here, a 20 s timeout there). Sent
+    // again, it's refused as spending what's spent: it's in the mempool. Six refusals later (a minute) it's in a block.
+    const fetch = t.koios.fetch;
+    let submits = 0;
+    let third: string | undefined;
+    let refused = 0;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx")) {
+        const id = txIdOf(init!.body as Uint8Array);
+        if (++submits === 3) {
+          third = id;
+          await fetch(url, init);
+          return new Response("", { status: 503 });
+        }
+        if (id === third && t.koios.confirmations === null) {
+          if (++refused === 6) t.koios.confirmations = 1;
+          return new Response("TxValidationErrorInCardanoMode (BadInputsUTxO)", { status: 400 });
+        }
+      }
+      return fetch(url, init);
+    };
+    const before = t.koios.submitted.length;
+    await sessions.backSubmit("preprod", review.txHash);
+    expect(refused).toBe(6);
+    expect(t.koios.submitted.slice(before)).toHaveLength(10);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(review.txHash);
+    const chain = (await sessions.list("preprod"))[0]!.chain!;
+    expect(chain).toMatchObject({ total: 10, sent: 10, cut: false });
+    expect(chain.stopped).toBeUndefined();
+  });
+
   it("counts a chain that stopped partway, whose rest came back directly; a finished one lets the next return through Lovejoin", async () => {
     const { t, sessions } = await withSession("40000000");
     const review = await sessions.backBuild("preprod", 0);
@@ -150,12 +184,19 @@ describe("a session's return through Lovejoin", () => {
       return fetch(url, init);
     };
     await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow();
-    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 3, confirmed: 0, cut: false });
+    // It says why, on the session, in full.
+    expect((await sessions.list("preprod"))[0]!.chain).toEqual({
+      total: 10,
+      sent: 3,
+      confirmed: 0,
+      cut: false,
+      stopped: "The network rejected the transaction: ValueNotConservedUTxO",
+    });
     // Brought back again: what's left comes back directly, and the chain says it stopped.
     const direct = await sessions.backBuild("preprod", 0);
     expect(direct.lovejoin).toBeUndefined();
     await sessions.backSubmit("preprod", direct.txHash);
-    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 3, confirmed: 0, cut: true });
+    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 10, sent: 3, confirmed: 0, cut: true });
 
     // Another session's chain goes through whole; paid again later, its next return goes through Lovejoin too.
     const whole = await withSession("40000000");

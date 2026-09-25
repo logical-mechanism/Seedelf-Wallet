@@ -467,6 +467,12 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
   - Every return's Send button while its chain goes: *Sending 7 of 10…*. The public account's mix too (`lovejoin-mix-public-progress`, kept in the worker's memory while it sends).
 - **Fixed with it:** a session whose chain finished (its return sent) held every later return back from Lovejoin, since the rule was "a deposit is recorded". A site's session paid again later now goes through Lovejoin again. Only a chain that stopped partway sends the rest back directly.
 
+**Found in the user's preprod run (2026-09-25): a 49-transaction chain stopped at its 7th, which had gone in.** It was Mix my boxes again with 12 boxes at depth 2 (47.1 ₳ of funding). On chain, all 7 of its first mixes landed, the 7th 15 s after the 6th's block, yet the wallet counted 6 and stopped.
+
+- **What happened:** Koios didn't answer the 7th's submit (its timeout is 20 s). Sent again, it was refused as spending what's spent, since it was in the mempool, and `tx_status` didn't list it before the four tries (about 30 s) ran out.
+- **Now:** a transaction refused that way, after a try Koios didn't answer or anywhere past a chain's first, is sent again and looked for on chain every 10 s, 18 times (about three minutes, several blocks). `lovejoin.test.ts` sends a chain whose third transaction is refused six times while in the mempool; the old code stopped there with the message the user couldn't read.
+- **The message:** it was cut off in the mix's row, and shown nowhere else. A chain that stops now records why on the session (`chain.stopped`). The Lovejoin page shows it in full under the row, and a mix that's trying again shows its error in full, with *Try now*. The row says *Stopped after 7 of 49 transactions; once those are on chain, what's left comes back directly*, not *Sending 6 of 49*.
+
 **Also fixed:** the pool counts that `fits` and a return's chain checked against included the wallet's own boxes, which a mix never takes. They're counted out now. A return that stopped partway also counts a recorded mix, not only a deposit, as the chain having started.
 
 **Tests:**
@@ -478,7 +484,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 | Vitest | `lovejoin.test.ts` +5 (mixing again end to end, with the withdraws held and the due times drawn again; boxes gone before the funding landed; no box to mix; past ten boxes, as the pool allows; a chain's progress, one that stopped partway, and a finished one letting the next return through; the public mix's count); `wallet.test.ts` +1 (the deadline, and locking when asked past it) |
 | Playwright | mixing again's review (2 of 3 boxes), and the mix listed; the countdown on Settings, Stay unlocked, then the lock at 0:00; a site session's return counting its chain on Send, then how much is on chain |
 
-Totals: Rust 327, WebAssembly (Node) 33, Vitest 292, Playwright 52. The module is 762 KB gzipped.
+Totals: Rust 327, WebAssembly (Node) 33, Vitest 293, Playwright 52. The module is 762 KB gzipped.
 
 ## Handoff to the fourth session (2026-09-25)
 

@@ -2872,3 +2872,17 @@ button.dapp-tile:hover {
 .lock-countdown__stay {
   flex: none;
 }
+
+/* A reason in full under a row (a Lovejoin mix that stopped, or that tries
+   again): it wraps, where the row's one line would cut it off. */
+
+.token-row__detail {
+  grid-column: 2 / -1;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--warn);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+}

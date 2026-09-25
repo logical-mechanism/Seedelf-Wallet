@@ -701,9 +701,9 @@ export interface SessionView {
    * A return through Lovejoin: its chain's transactions (the return last),
    * how many are sent and how many are on chain, as the runner last read
    * them, and `cut`: it stopped partway, and what was left came back
-   * directly.
+   * directly. `stopped`: why a transaction of it couldn't be sent.
    */
-  chain?: { total: number; sent: number; confirmed: number; cut: boolean };
+  chain?: { total: number; sent: number; confirmed: number; cut: boolean; stopped?: string };
 }
 
 /** A funding payment into a new session, built and waiting for Send. */

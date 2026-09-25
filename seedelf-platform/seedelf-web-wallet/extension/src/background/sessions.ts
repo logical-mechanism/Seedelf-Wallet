@@ -153,9 +153,10 @@ interface SessionRecord {
    * The latest return through Lovejoin: how many transactions its chain has,
    * the return last (`last`), and when it began to be sent (`at`), recorded
    * before the first is sent, so its progress shows as they're sent and
-   * confirmed.
+   * confirmed. `stopped`: why a transaction of it couldn't be sent, when one
+   * couldn't.
    */
-  chain?: { total: number; last: string; at: number };
+  chain?: { total: number; last: string; at: number; stopped?: string };
   closedAt?: number;
 }
 
@@ -1247,13 +1248,21 @@ export class SessionService {
     let last: PendingTx | undefined;
     for (const [i, step] of chain.entries()) {
       const bytes = hexBytes(step.txCbor);
-      for (let attempt = 0; ; attempt++) {
+      const tries = { busy: 0, spent: 0 };
+      for (;;) {
         try {
           last = await this.sendRecorded(network, built.index, step.kind, step.txHash, bytes, kept);
           break;
         } catch (e) {
-          const wait = chainRetryMs(i, attempt, e);
-          if (wait === undefined) throw e;
+          const wait = chainRetryMs(i, tries, e);
+          if (wait === undefined) {
+            // Said on the session, where its page shows it in full.
+            const why = e instanceof Error ? e.message : String(e);
+            await this.update(network, built.index, (s) => {
+              if (s.chain) s.chain.stopped = why;
+            }).catch(() => undefined);
+            throw e;
+          }
           await sleep(wait);
         }
       }
@@ -1505,6 +1514,7 @@ function chainView(chain: NonNullable<SessionRecord["chain"]>, txs: RecordedTx[]
     sent: own.length,
     confirmed: own.filter((t) => t.confirmed).length,
     cut: !own.some((t) => t.txHash === chain.last) && since.some((t) => t.kind === "back"),
+    ...(chain.stopped ? { stopped: chain.stopped } : {}),
   };
 }
 

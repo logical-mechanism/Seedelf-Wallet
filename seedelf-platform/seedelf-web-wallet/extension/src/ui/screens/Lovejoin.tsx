@@ -59,16 +59,25 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
   return { tone: "live", label: "Running" };
 }
 
-/** What a mix is doing, in a line: its chain sent, then on chain. */
+/** What a mix is doing, in a line: its chain sent, then on chain. A reason in full goes under it (detailOf). */
 function subOf(s: SessionView, now: number): string {
   if (s.stage === "failed") return "Its funding didn't go through";
   if (s.stage === "funding") return "Its one-time account is being funded";
   if (s.mix?.skipped) return `Lovejoin was left out: ${s.mix.skipped}`;
-  if (s.chain?.cut) return chainText(s.chain);
+  if (s.chain?.cut || s.chain?.stopped) return chainText(s.chain);
   if (s.stage === "closed") return `In Lovejoin since ${whenOf(s.createdAt, new Date(now))}`;
-  if (s.auto?.retry) return `Trying again: ${s.auto.retry.error}`;
   if (s.chain) return chainText(s.chain);
+  if (s.auto?.retry) return "Something went wrong: it tries again by itself";
   return "Funded: the mixes are built and sent next";
+}
+
+/** Why a mix stopped, or what went wrong and is tried again: in full, under its row. */
+function detailOf(s: SessionView): string | undefined {
+  if (s.chain?.stopped) return `Why it stopped: ${s.chain.stopped}`;
+  if (s.auto?.retry && !isOver(s)) {
+    return `It tries again at ${new Date(s.auto.retry.at).toLocaleTimeString()}. What went wrong: ${s.auto.retry.error}`;
+  }
+  return undefined;
 }
 
 export function Lovejoin({
@@ -183,6 +192,13 @@ export function Lovejoin({
     act(async () => {
       setReview({ source: "private", summary: await call("lovejoin-again-build", {}) });
     }, "again");
+
+  /** A mix waiting to try again: now. */
+  const retry = (index: number) =>
+    act(async () => {
+      const moved = await call("session-resume", { index });
+      setMixes((was) => was.map((m) => (m.index === index ? moved : m)));
+    });
 
   const build = () =>
     act(async () => {
@@ -322,6 +338,19 @@ export function Lovejoin({
                 </span>
                 <SwapTag {...tagOf(m)} />
                 <span className="token-row__sub">{subOf(m, Date.now())}</span>
+                {detailOf(m) && (
+                  <p className="token-row__detail" data-testid="lovejoin-mix-detail">
+                    {detailOf(m)}
+                    {m.auto?.retry && !isOver(m) && !m.chain?.stopped && (
+                      <>
+                        {" "}
+                        <button type="button" className="link" disabled={busy} onClick={() => void retry(m.index)}>
+                          Try now
+                        </button>
+                      </>
+                    )}
+                  </p>
+                )}
               </li>
             ))}
           </ul>

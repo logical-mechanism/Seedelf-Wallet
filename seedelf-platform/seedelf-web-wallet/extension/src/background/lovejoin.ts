@@ -54,22 +54,48 @@ export const SESSION_LOVEJOIN_PUBLIC = "seedelf.lovejoin.public";
 /** A built mix is only sent within this long; after that, build again. */
 const BUILT_TTL_MS = 10 * 60_000;
 
-/** A chained transaction Koios refuses as spending what it hasn't seen: tried again this many times, waiting this much longer each time. */
+/** A chained transaction Koios didn't answer, or asked to slow down for: tried again this many times, waiting CHAIN_BUSY_MS longer each time. */
 export const CHAIN_RETRIES = 4;
-export const CHAIN_RETRY_MS = 2_000;
-/** A chained transaction Koios didn't answer, or asked to slow down for: tried again as many times, waiting this much longer each time. */
 export const CHAIN_BUSY_MS = 10_000;
+/**
+ * A chained transaction refused as spending what's already spent: tried
+ * again (and looked for on chain) every CHAIN_SPENT_MS, CHAIN_SPENT_TRIES
+ * times, about three minutes, several blocks. Either Koios hasn't seen its
+ * parent yet, or it's this very transaction, sent by a try Koios never
+ * answered and waiting in the mempool for a block (found on preprod: a
+ * 49-transaction chain stopped at its 7th, which landed 15 s later).
+ */
+export const CHAIN_SPENT_MS = 10_000;
+export const CHAIN_SPENT_TRIES = 18;
+
+/** How one chained transaction's tries have gone so far. */
+export interface ChainTries {
+  /** Koios didn't answer, or asked to slow down: the transaction may have gone in. */
+  busy: number;
+  /** Refused as spending what's spent. */
+  spent: number;
+}
 
 /**
- * How long to wait before sending a chain's transaction `i` again after `e`,
- * or undefined when sending it again can't help. Koios hasn't seen a parent
- * yet (a spent input, past the first), or didn't answer: the same transaction
- * again, a little later, is safe.
+ * How long to wait before sending a chain's transaction `i` again after `e`
+ * (counting it in `tries`), or undefined when sending it again can't help.
+ * Koios didn't answer, or hasn't seen a parent yet, or the transaction went
+ * in already: the same transaction again, a little later, is safe, and the
+ * sender looks for it on chain each time. The first transaction's inputs are
+ * all on chain, so a spent one is spent, unless a try Koios didn't answer
+ * sent it.
  */
-export function chainRetryMs(i: number, attempt: number, e: unknown): number | undefined {
-  if (attempt >= CHAIN_RETRIES) return undefined;
-  if (e instanceof KoiosBusyError) return CHAIN_BUSY_MS * (attempt + 1);
-  if (i > 0 && e instanceof SpentInputError) return CHAIN_RETRY_MS * (attempt + 1);
+export function chainRetryMs(i: number, tries: ChainTries, e: unknown): number | undefined {
+  if (e instanceof KoiosBusyError) {
+    if (tries.busy >= CHAIN_RETRIES) return undefined;
+    tries.busy++;
+    return CHAIN_BUSY_MS * tries.busy;
+  }
+  if (e instanceof SpentInputError && (i > 0 || tries.busy > 0)) {
+    if (tries.spent >= CHAIN_SPENT_TRIES) return undefined;
+    tries.spent++;
+    return CHAIN_SPENT_MS;
+  }
   return undefined;
 }
 
@@ -390,7 +416,8 @@ export class LovejoinService {
     try {
       for (const [i, step] of built.chain.entries()) {
         const bytes = hexBytes(step.txCbor);
-        for (let attempt = 0; ; attempt++) {
+        const tries = { busy: 0, spent: 0 };
+        for (;;) {
           try {
             const submitted = await koios.submitTx(bytes);
             if (submitted !== step.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
@@ -400,7 +427,7 @@ export class LovejoinService {
             if (e instanceof SpentInputError && (await koios.txStatus([step.txHash]).catch(() => undefined))?.get(step.txHash) != null) {
               break;
             }
-            const wait = chainRetryMs(i, attempt, e);
+            const wait = chainRetryMs(i, tries, e);
             if (wait === undefined) throw e;
             await sleep(wait);
           }
