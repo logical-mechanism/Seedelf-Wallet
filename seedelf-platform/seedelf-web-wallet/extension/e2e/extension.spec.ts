@@ -1525,6 +1525,10 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await page.getByTestId("lovejoin-send").click();
   await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();
   await expect.poll(() => koios.submitted.length).toBe(5);
+  // The page shows it on its way, as Home does, until the network has it.
+  await expect(page.getByTestId("pending-tx")).toContainText("Mixes into Lovejoin sent. Waiting for the network…");
+  koios.confirmations = 1;
+  await expect(page.getByTestId("pending-tx")).toContainText("In Lovejoin, on their way to your private balance", { timeout: 20_000 });
 
   // Home shows the box on its way back, from the device's own schedule; its row opens Lovejoin's page.
   await page.getByRole("button", { name: "Back", exact: true }).click();

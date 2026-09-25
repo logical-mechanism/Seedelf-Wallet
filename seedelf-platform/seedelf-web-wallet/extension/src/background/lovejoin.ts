@@ -430,6 +430,8 @@ export class LovejoinService {
       s.due.sort((a, b) => a - b);
       s.due.shift();
     });
+    // Home's banner watches it, as it does every send the user makes; the ones due by themselves stay out of it.
+    await this.deps.wallet.withKeys(() => this.deps.session.set(SESSION_PENDING, pending));
     return pending;
   }
 

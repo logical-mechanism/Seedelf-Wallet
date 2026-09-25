@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { LOVEJOIN_MIX_BOX } from "../src/background/lovejoin";
+import { LOVEJOIN_MIX_BOX, LovejoinService } from "../src/background/lovejoin";
+import { SESSION_PENDING } from "../src/background/pending";
 import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
@@ -185,6 +186,33 @@ describe("the boxes' withdraws", () => {
     expect(await t.lovejoin.withdrawDue("preprod")).toEqual([]);
     expect(t.collateral.asked).toHaveLength(1);
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
+  });
+
+  it("watches a box brought back now in Home's banner, as every send the user makes", async () => {
+    const { t } = await withSession("40000000");
+    t.koios.addedToAccounts.push(await ownedBox(t, "d5"));
+    await t.lovejoin.schedule("preprod", 1);
+    // giveme.my's witness stood in for: its recorded answer is another transaction's.
+    const wasm = loadTestWasm();
+    const lovejoin = new LovejoinService({
+      ...t.deps,
+      wasm: {
+        ...wasm,
+        finishLovejoinWithdraw: (request: string) => {
+          const { txCbor } = JSON.parse(request) as { txCbor: string };
+          return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+        },
+      } as typeof wasm,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+    });
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const pending = await lovejoin.withdrawNow("preprod");
+    expect(pending).toMatchObject({ kind: "lovejoin-withdraw", confirmations: null });
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(pending.txHash);
+    expect(await t.wallet.withKeys(() => t.session.get(SESSION_PENDING))).toEqual(pending);
+    // Its due time went with it.
+    expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(0);
   });
 
   it("reads the pool at unlock only on a wallet that has used Lovejoin here", async () => {

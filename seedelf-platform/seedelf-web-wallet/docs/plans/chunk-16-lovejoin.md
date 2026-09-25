@@ -364,6 +364,10 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 
 - A 3-box mix from the private balance went through, return included.
 - **Bring one back now failed with `InsufficientCollateral (DeltaCoin 434416) (Coin 434417)`.** The withdraw's fee was odd (289,611), and giveme.my's collateral return, 5 ₳ − 3/2 × fee rounded down, left half a lovelace less than the ledger's 150%, which it rounds up. The withdraw's fee is now rounded up to even, as every Seedelf spend's is. `lovejoin_test` checks the ledger's rule on a mix and on seven withdraws; on the old code it fails with those exact numbers. Mixes were never affected: their collateral return adds 1.
+- **Bring one back now showed nothing but one box fewer.** The withdraw wasn't the watched transaction, and a dApp's page never showed Home's banner.
+  - Now the withdraw is the watched transaction, as every send the user makes is.
+  - Home's banner is a shared component (`PendingBanner`), passed through the dApps page to Lovejoin's. A withdraw or mix sent from there shows *sent, waiting for the network*, then that it's back, and Home keeps asking while the page is open.
+  - The withdraws due by themselves stay out of the banner: they show in the private Activity.
 
 **Not done yet:**
 

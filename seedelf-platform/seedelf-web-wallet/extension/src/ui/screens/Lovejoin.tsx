@@ -12,7 +12,7 @@
 //                              and put up against its collateral; the change
 //                              stays in it.
 // Either way, each box comes back into the private balance on its own, later.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import type { LovejoinFunding, LovejoinPublicSummary, LovejoinStatus, PendingTx, SessionOutSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
@@ -59,7 +59,16 @@ function subOf(s: SessionView, now: number): string {
   return s.txs.some((t) => t.kind === "deposit") ? "Mixing, then the rest comes back" : "Funded: mixing next";
 }
 
-export function Lovejoin({ onBack, onPending }: { onBack: () => void; onPending: (pending: PendingTx) => void }) {
+export function Lovejoin({
+  banner,
+  onBack,
+  onPending,
+}: {
+  /** Home's banner for the transaction it's watching: a withdraw or a mix sent from here shows in it. */
+  banner?: ReactNode;
+  onBack: () => void;
+  onPending: (pending: PendingTx) => void;
+}) {
   const [status, setStatus] = useState<LovejoinStatus>();
   const [mixes, setMixes] = useState<SessionView[]>([]);
   const [reading, setReading] = useState(false);
@@ -181,6 +190,7 @@ export function Lovejoin({ onBack, onPending }: { onBack: () => void; onPending:
   const shown = [...mixes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   return (
     <Screen title="Lovejoin" titleId="lovejoin-title" onBack={onBack} backDisabled={busy} aside="A mixer for ADA, in 10 ₳ boxes" error={error}>
+      {banner}
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load()} />
       {status && !status.available && <p className="note">Lovejoin isn't on this network yet.</p>}
       {status?.available && (

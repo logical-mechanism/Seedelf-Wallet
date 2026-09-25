@@ -49,6 +49,7 @@ export function Dapps({
   seedelf,
   blocked,
   start,
+  banner,
   onBack,
   onPending,
 }: {
@@ -56,6 +57,8 @@ export function Dapps({
   /** Why a dApp can't start something now: a transaction still waiting, say. */
   blocked?: string;
   start?: DappStart;
+  /** Home's banner for the transaction it's watching, shown on a dApp's page too. */
+  banner?: ReactNode;
   onBack: () => void;
   onPending: (pending: PendingTx) => void;
 }) {
@@ -94,7 +97,7 @@ export function Dapps({
   }, [site, load]);
 
   if (open === "lovejoin") {
-    return <Lovejoin onBack={() => setOpen(undefined)} onPending={onPending} />;
+    return <Lovejoin banner={banner} onBack={() => setOpen(undefined)} onPending={onPending} />;
   }
 
   if (open === "minswap") {
