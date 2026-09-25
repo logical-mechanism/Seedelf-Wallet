@@ -50,7 +50,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - A countdown in the last 2 minutes before auto-lock, on every screen, with Stay unlocked.
     - Then, as the user asked: progress while a chain goes (sent, then on chain, or where it stopped) wherever a return shows, and mixing again past 10 boxes, as far as the pool allows.
   - **Chunk 16 ends here,** with its PR into `seedelf-web-wallet` (the user, 2026-09-25: "we are at a really nice spot").
-  - **Still owed, live on preprod** (the plan's *Handoff to the fourth session*): Mix my boxes again, the progress, and the countdown; a mix from the public account and the timed withdraws; and the second session's open checks (the stopped swap came back, a withdraw landed, the collateral as an input of the merged return). Watch a long chain against the node's mempool.
+  - **Live on preprod:** the user tests the built wallet there themselves, and reported their runs working (2026-09-25). The wallet's own tests run offline only. Worth watching in later runs: a long chain against the node's mempool (the plan's *Handoff to the fourth session*).
 
 - **2026-09-25: chunk 16, Lovejoin (second session)** (`web-wallet/lovejoin`). The plan's *Built (second session)* lists everything.
   - **What landed:**

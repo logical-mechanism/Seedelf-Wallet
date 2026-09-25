@@ -482,14 +482,14 @@ Totals: Rust 327, WebAssembly (Node) 33, Vitest 292, Playwright 52. The module i
 
 ## Handoff to the fourth session (2026-09-25)
 
-- **Built and tested offline, not live:** *Mix my boxes again* (any number of boxes, as the pool allows), the chain progress, and the countdown. None has run on preprod yet.
+- **Tested offline by the wallet's suites; live on preprod by the user,** who reported their runs working (2026-09-25): *Mix my boxes again* (any number of boxes, as the pool allows), the chain progress, and the countdown. "Live preprod run" in this plan always means the user's own testing of the built wallet.
 - **A risk to watch live:** a long chain sits in the mempool all at once. A node's mempool holds about two blocks' worth (my understanding, not checked), about 65 mixes of 2.7 KB, so a chain past that may find submits waiting or refused until a block clears. The busy retries (10 to 40 s) should ride it out; if a chain stops there, the rest comes back directly and the progress says where it stopped. If it happens, the fix is sending a long chain in windows.
 - **Still to confirm with the user,** from the third session's handoff:
   - the stopped MIN → ADA swap came back after `18b4847`;
   - a withdraw landed;
   - the merged return used the collateral as an input of the same transaction.
 - **Offered, not decided:** the third session's list stands. Ask before building any of it.
-- **The chunk ended here** (2026-09-25): the roadmap is ticked, and the PR into `seedelf-web-wallet` is open. The live runs above are what's left, in whichever session comes next.
+- **The chunk ended here** (2026-09-25): the roadmap is ticked, and the PR into `seedelf-web-wallet` is open.
 
 ## Out of scope
 
