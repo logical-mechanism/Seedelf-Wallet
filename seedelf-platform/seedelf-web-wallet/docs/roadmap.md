@@ -78,6 +78,9 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **What landed:** the runner in `sessions.ts` (one approval, then `advance` from the page, a one-minute alarm and unlock), a timeline page with Stop, pauses that say why, Home's running rows, and `screens/Dapps.tsx`.
     - **Tests:** Vitest 9, Playwright 2.
     - **Surprises:** the plan's pause rule (any fresh minimum under the approved one) would have paused about half of mainnet swaps, so the order asks for the approved minimum and pauses only when it couldn't fill. An empty Minswap order list isn't a fill: it can lag the chain.
+    - **The user's first try, MIN to ADA, paused:** Minswap routed it through DanogoCLMMV1, which swaps against its pools and spends UTxOs that aren't the session's. The user chose orders only for now: routing leaves the DEXes that do this out (`exclude_protocols`). See the 15b plan's *Found on the user's first try*.
+    - **The user's second try sat on "Order placed"** (the order never reached the chain; the retry line under the timeline was missed). A failure now shows in the timeline itself, and retries start at 30 s.
+    - **Each session gets its own stake key** (the user, on learning all one-time accounts shared one): `24301'/2/i`, pinned against `cardano-address`. Older sessions keep their shared-stake address.
     - **For the user:** approve a live swap on preprod (fund, fill, back), and one Stop against a real order.
     - **Next:** the restore scan, then private CIP-30 (step 4), then the PR for chunk 15.
 

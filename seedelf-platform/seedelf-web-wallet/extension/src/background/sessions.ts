@@ -26,8 +26,10 @@
 // waits is cancelled, then everything comes back. Every transaction is
 // recorded before it's submitted.
 //
-// The accounts are account 24301', payment key 0/index, at an address with
-// the shared Seedelf staking part (WebAssembly's OneTimeAccounts). The list
+// The accounts are account 24301', payment key 0/index and stake key 2/index,
+// both the session's own, so no two sessions share a key (WebAssembly's
+// OneTimeAccounts). Sessions recorded before that have the shared Seedelf
+// staking part, and keep it: that's where their money is. The list
 // of sessions is a sealed private record per network. The wallet reads a
 // session's account only while a swap runs or when asked: one Koios request
 // for all the open ones, and one tx_status for what's waiting.
@@ -81,8 +83,12 @@ const LOST_AFTER_MS = 15 * 60_000;
 /** The runner reads a session's chain at most this often, unless the user asks. */
 export const READ_EVERY_MS = 15_000;
 
-/** How long to wait after `tries` failures in a row: a minute, doubling, and never more than ten. */
-export const retryAfterMs = (tries: number) => Math.min(60_000 * 2 ** (tries - 1), 10 * 60_000);
+/**
+ * How long to wait after `tries` failures in a row: 30 s, doubling, and never
+ * more than five minutes. Minswap's rate limit clears within a minute, and a
+ * funding Minswap hasn't seen yet shows up within a block or two.
+ */
+export const retryAfterMs = (tries: number) => Math.min(30_000 * 2 ** (tries - 1), 5 * 60_000);
 
 type RecordedTx = SessionTx & {
   /** Koios never took it. */
@@ -106,6 +112,11 @@ interface AutoRecord {
 
 interface SessionRecord {
   index: number;
+  /**
+   * Its address has its own stake key, `2/index` (chunk 15b). Sessions from
+   * before have the shared Seedelf staking part, and keep it.
+   */
+  ownStake?: boolean;
   createdAt: number;
   txs: RecordedTx[];
   swap?: SessionView["swap"];
@@ -301,7 +312,7 @@ export class SessionService {
     const { wasm } = this.deps;
     const ask = checkAsk(quote.ask);
     const index = (await this.book(network)).next;
-    const address = (await this.accounts(network, [index])).get(index)!.address;
+    const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     const { view, utxos, params } = await readContract(this.deps, network);
     if (!utxos.length) {
       throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to swap from.");
@@ -361,6 +372,7 @@ export class SessionService {
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
         index: built.index,
+        ownStake: true,
         createdAt: now(),
         txs: [{ kind: "out", txHash, at: now() }],
         swap: built.swap,
@@ -386,7 +398,7 @@ export class SessionService {
     const s = await this.live(network, index);
     if (!s.swap) throw new Error("This session isn't for a swap.");
     if (s.txs.some((t) => t.kind === "swap" && !t.unsent)) throw new Error("This session's swap was sent already.");
-    const { address, keyHash } = (await this.accounts(network, [index])).get(index)!;
+    const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     const rows = await this.utxosOf(network, keyHash);
     if (!rows.length) throw new Error("The session's account holds nothing yet: wait for its funding to confirm.");
     const minswap = this.deps.minswap(network);
@@ -398,7 +410,9 @@ export class SessionService {
 
   /** The session's orders that aren't filled yet. */
   async orders(network: NetworkName, index: number): Promise<SessionOrder[]> {
-    const { address } = (await this.accounts(network, [index])).get(index)!;
+    const s = (await this.book(network)).sessions.find((r) => r.index === index);
+    if (!s) throw new Error("There's no such session.");
+    const { address } = (await this.accounts(network, [s])).get(index)!;
     const orders = await this.deps.minswap(network).pendingOrders(address);
     return orders.map((o) => ({
       protocol: o.protocol,
@@ -411,8 +425,8 @@ export class SessionService {
 
   /** Has Minswap build a cancel of the session's open orders (six at most), and reads it. */
   async cancelBuild(network: NetworkName, index: number): Promise<SessionTxReview> {
-    await this.live(network, index);
-    const { address, keyHash } = (await this.accounts(network, [index])).get(index)!;
+    const s = await this.live(network, index);
+    const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     const minswap = this.deps.minswap(network);
     const orders = (await minswap.pendingOrders(address)).slice(0, 6);
     if (!orders.length) throw new Error("No order of this session is waiting: it was filled, or cancelled already.");
@@ -441,7 +455,7 @@ export class SessionService {
   async backBuild(network: NetworkName, index: number): Promise<SessionBackSummary> {
     const { wallet, session } = this.deps;
     const s = await this.live(network, index);
-    const { address, keyHash } = (await this.accounts(network, [index])).get(index)!;
+    const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     // Money that arrives after the return would need another one.
     if (s.txs.some((t) => t.kind === "swap") && (await this.deps.minswap(network).pendingOrders(address)).length) {
       throw new Error("An order of this session is still waiting. Cancel it, or wait for it to fill, then bring the session back.");
@@ -582,7 +596,7 @@ export class SessionService {
       if (s.txs.some((t) => !t.confirmed)) return;
     }
 
-    const { address, keyHash } = (await this.accounts(network, [s.index])).get(s.index)!;
+    const { address, keyHash } = (await this.accounts(network, [s])).get(s.index)!;
     const rows = await this.utxosOf(network, keyHash);
     this.seen.set(`${network}:${s.index}`, rows);
     const kinds = new Set(s.txs.map((t) => t.kind));
@@ -810,7 +824,7 @@ export class SessionService {
     const { wallet, session, now } = this.deps;
     const book = await this.book(network);
     const live = book.sessions.filter((s) => !s.closedAt);
-    const keys = await this.accounts(network, book.sessions.map((s) => s.index));
+    const keys = await this.accounts(network, book.sessions);
     let holdings: Map<number, KoiosUtxo[]> | undefined;
     if (refresh && live.length) {
       const koios = this.deps.koios(network);
@@ -856,7 +870,7 @@ export class SessionService {
   private async one(network: NetworkName, index: number): Promise<SessionView> {
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
     if (!s) throw new Error("There's no such session.");
-    const { address } = (await this.accounts(network, [index])).get(index)!;
+    const { address } = (await this.accounts(network, [s])).get(index)!;
     return this.view(network, s, address, this.seen.get(`${network}:${index}`));
   }
 
@@ -912,13 +926,28 @@ export class SessionService {
     return unspent(await readFresh(spent, () => koios.credentialUtxos([keyHash]), (r) => r, this.deps.sleep), spent);
   }
 
-  /** Each index's address and payment key hash. */
-  private accounts(network: NetworkName, indexes: number[]): Promise<Map<number, { address: string; keyHash: string }>> {
+  /**
+   * Each session's address and payment key hash: its own stake key's address,
+   * or, for a session from before, the shared staking part's. Koios is asked
+   * by the payment key hash, which finds both.
+   */
+  private accounts(
+    network: NetworkName,
+    sessions: Array<Pick<SessionRecord, "index" | "ownStake">>,
+  ): Promise<Map<number, { address: string; keyHash: string }>> {
     const { wasm, wallet } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     return wallet.withKeys(
       (keys) =>
-        new Map(indexes.map((i) => [i, { address: keys.oneTime.address(net, i), keyHash: keys.oneTime.keyHash(i) }])),
+        new Map(
+          sessions.map(({ index, ownStake }) => [
+            index,
+            {
+              address: ownStake ? keys.oneTime.address(net, index) : keys.oneTime.sharedStakeAddress(net, index),
+              keyHash: keys.oneTime.keyHash(index),
+            },
+          ]),
+        ),
     );
   }
 

@@ -82,6 +82,17 @@ export interface SwapToken {
 
 export class MinswapError extends Error {}
 
+/**
+ * DEXes that swap straight against their pools in the same transaction,
+ * rather than taking an order for a batcher to fill: the transaction spends
+ * the pools' UTxOs, runs their scripts, and brings someone else's collateral.
+ * A session signs only transactions that spend nothing but its own UTxOs
+ * (sessions.ts), so routing leaves these out. DanogoCLMMV1 was seen doing it
+ * on preprod (2026-09-25); a bonding curve and Djed's minting work the same
+ * way. The session's check stays: any other DEX that does it pauses the swap.
+ */
+export const DIRECT_PROTOCOLS = ["DanogoCLMMV1", "ChakraBondingCurve", "OpenDjedV1"];
+
 const TIMEOUT_MS = 20_000;
 
 export class Minswap {
@@ -90,15 +101,9 @@ export class Minswap {
     private readonly fetchFn: FetchLike = (url, init) => fetch(url, init),
   ) {}
 
-  /** The best route for `ask`, and what it's expected to give. */
+  /** The best route for `ask` through DEXes that take orders, and what it's expected to give. */
   estimate(ask: SwapAsk): Promise<Estimate> {
-    return this.post<Estimate>("estimate", {
-      amount: ask.amount,
-      token_in: ask.tokenIn,
-      token_out: ask.tokenOut,
-      slippage: ask.slippage,
-      amount_in_decimal: false,
-    });
+    return this.post<Estimate>("estimate", { ...routed(ask), amount_in_decimal: false });
   }
 
   /** An unsigned swap from `sender`, for the ask quoted; it gives at least `minAmountOut` or is refunded. */
@@ -106,7 +111,7 @@ export class Minswap {
     const { cbor } = await this.post<{ cbor: string }>("build-tx", {
       sender,
       min_amount_out: minAmountOut,
-      estimate: { amount: ask.amount, token_in: ask.tokenIn, token_out: ask.tokenOut, slippage: ask.slippage },
+      estimate: routed(ask),
       amount_in_decimal: false,
     });
     return cbor;
@@ -165,4 +170,15 @@ export class Minswap {
     }
     throw new MinswapError(`Minswap refused it (${response.status}): ${message}`);
   }
+}
+
+/** An ask as Minswap's estimate takes it: the route through DEXes that take orders only. */
+function routed(ask: SwapAsk) {
+  return {
+    amount: ask.amount,
+    token_in: ask.tokenIn,
+    token_out: ask.tokenOut,
+    slippage: ask.slippage,
+    exclude_protocols: DIRECT_PROTOCOLS,
+  };
 }

@@ -120,7 +120,7 @@ The user's two designs (2026-09-25):
 
 **What design 1 needs** (docs: [flows.md](../flows.md#contract-round-trip), [keys-and-accounts.md](../keys-and-accounts.md)):
 
-- The one-time accounts are already specified: the reserved account `24301'`, a fresh index per session, and the shared Seedelf staking part.
+- The one-time accounts are already specified: the reserved account `24301'`, a fresh index per session, and (since 15b) each session's own stake key `2/i` rather than the shared Seedelf staking part.
 - It's funded by a Make public (`sweep_many`) that pays two outputs to that account: the amount, and 5 ₳ as its own collateral. The collateral is its own because the dApp's script transactions spend that account's key UTxOs, and giveme.my can't back them.
 - The dApp sees an ordinary wallet. Because it's a normal key account, chaining works: the connector's signed-output memory from this chunk carries over.
 - The return is a move-in from the one-time account (key-signed, no giveme.my): the proceeds, the change and the collateral, all at once.
@@ -187,7 +187,7 @@ A swap in a private session, end to end, as *A swap (A1), step by step* below sa
 
 ### A private session
 
-- **Its account:** a one-time account, `24301'/0/i`, a base address with the shared Seedelf staking part (decided in [privacy.md](../privacy.md#known-links)).
+- **Its account:** a one-time account, `24301'/0/i`, a base address with its own stake key `24301'/2/i` since 15b (the shared Seedelf staking part before; see [privacy.md](../privacy.md#known-links)).
 - **Its stages:** funding, ready, in use (orders open, positions held), returning, closed.
 - **It lasts as long as what the dApp holds for it.** A swap closes in minutes. A lending or liquidity position keeps its account open until the position closes, across restarts and devices. That's why recovery matters.
 

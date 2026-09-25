@@ -18,6 +18,14 @@ A swap runs itself after one approval, from a dApp browser, as *The design* belo
   - **A live run on preprod,** and a cancel against a real order (Stop's cancel is tested only up to Minswap's request: there's no recorded cancel). Both need the user's go-ahead.
   - The restore scan (chunk 15's *Recovery*), and private CIP-30 (step 4).
 
+## Found on the user's first try (2026-09-25)
+
+- **MIN to ADA paused: "it spends something that isn't this session's."** Minswap had routed most of the 2,000 MIN through **DanogoCLMMV1**, a concentrated-liquidity DEX that swaps against its pools in the same transaction: four pool UTxOs, their scripts (redeemers, six reference inputs, a zero-ADA script withdrawal) and 3 ₳ of someone else's collateral. The check refused it, as it should; Stop brought everything back. ADA to MIN had gone through Minswap's own pools, which take orders.
+- **Decided (the user): orders only, for now.** `estimate` and `build-tx` pass `exclude_protocols` (`DIRECT_PROTOCOLS` in `minswap.ts`). The same swap then routes through Splash as an order. On preprod's thin pools that quoted 1,283 ₳ instead of 1,489 ₳.
+- **Each session gets its own stake key (the user).** Looking into it showed every one-time account carried the shared Seedelf stake key, which sits behind 385 UTxOs at 78 preprod addresses and ties all sessions together. Now session `i` is payment `24301'/0/i` with stake `24301'/2/i`, never registered; the record's `ownStake` marks the new ones, and older sessions keep their shared-stake address, where their money is. Pinned against `cardano-address` in `session_test.rs`; the extension's swap fixture was recorded again for it.
+- **A failure is shown in the timeline** (it was a grey line under it, easy to miss): the step turns amber, the line under the steps says what's wrong in plain words ("Minswap is limiting requests from this connection", "Minswap hasn't seen the funding yet") and when it tries again, with **Try now** and the raw error under it. Retries start at 30 s and double to at most 5 minutes (they were a minute, doubling to ten). The user's second try, 50 MIN to ADA, sat on "Order placed": the order never reached the chain and the retry line was missed; the cause isn't known, and the next one will say.
+- **Later, maybe:** allowing direct swaps, with the pools' script inputs, a collateral already signed by its owner, zero-ADA script withdrawals, a limit on the session's net change instead of what's paid out, and proceeds paid in the swap itself counted as filled.
+
 ## Start here
 
 1. `git fetch origin && git checkout web-wallet/dapp-connector`. The branch is at 384ef7b or later: the connector (fe8b774), the Koios CORS fix (9d96bcd), private swaps (b858d22), preprod MIN's decimals (384ef7b).

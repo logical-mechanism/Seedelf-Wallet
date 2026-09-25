@@ -394,12 +394,34 @@ pub mod api {
         })
     }
 
-    /// Session `index`'s one-time account: payment key `0/index` of account
-    /// `24301'` (`accounts`), at a base address with the shared Seedelf
-    /// staking part, as the CLI's External Wallet (`address::dapp_address`).
-    /// A dApp sees an ordinary address whose staking part names no one. The
-    /// account's own stake key is never used.
+    /// Session `index`'s one-time account: a base address with payment key
+    /// `0/index` and stake key `2/index` of account `24301'` (`accounts`),
+    /// both the session's own. No two sessions share a key, so nothing on
+    /// chain ties one session's address to another's, or to anyone else's.
+    /// The stake key is never registered.
     pub fn one_time_address(
+        accounts: &CardanoAccount,
+        network_flag: bool,
+        index: u32,
+    ) -> Result<Address> {
+        let network = if network_flag {
+            AddressNetwork::Testnet
+        } else {
+            AddressNetwork::Mainnet
+        };
+        Ok(Address::Shelley(pallas_addresses::ShelleyAddress::new(
+            network,
+            ShelleyPaymentPart::key_hash(accounts.key_hash(Role::Receive, index)?),
+            ShelleyDelegationPart::key_hash(accounts.key_hash(Role::Staking, index)?),
+        )))
+    }
+
+    /// Session `index`'s address as sessions started before chunk 15b's fix
+    /// had it: payment key `0/index` with the shared Seedelf staking part,
+    /// the CLI's External Wallet's (`address::dapp_address`). That staking
+    /// part is behind many other addresses, so a session no longer uses it;
+    /// the ones recorded with it keep it, for what's still at them.
+    pub fn shared_stake_address(
         accounts: &CardanoAccount,
         network_flag: bool,
         index: u32,
@@ -2028,8 +2050,8 @@ impl WasmCardanoAccount {
 }
 
 /// The one-time accounts of private sessions: CIP-1852 account `24301'`
-/// (`cardano::ONE_TIME_ACCOUNT`), payment key `0/i` for session `i`, each at
-/// an address with the shared Seedelf staking part. A separate type from the
+/// (`cardano::ONE_TIME_ACCOUNT`), payment key `0/i` and stake key `2/i` for
+/// session `i`, both its own. A separate type from the
 /// public account's, so nothing that pays or shows the public account can be
 /// handed these keys. They never leave WebAssembly; call `free()` to drop them.
 #[wasm_bindgen(js_name = OneTimeAccounts)]
@@ -2057,9 +2079,18 @@ impl WasmOneTimeAccounts {
         .map_err(js_error)
     }
 
-    /// Session `index`'s address (bech32).
+    /// Session `index`'s address (bech32): its own payment and stake keys.
     pub fn address(&self, network: Network, index: u32) -> Result<String, JsError> {
         api::one_time_address(&self.inner, network.flag(), index)
+            .and_then(|a| a.to_bech32().map_err(anyhow::Error::from))
+            .map_err(js_error)
+    }
+
+    /// Session `index`'s address with the shared Seedelf staking part, as
+    /// sessions started before chunk 15b's fix have it (bech32).
+    #[wasm_bindgen(js_name = sharedStakeAddress)]
+    pub fn shared_stake_address(&self, network: Network, index: u32) -> Result<String, JsError> {
+        api::shared_stake_address(&self.inner, network.flag(), index)
             .and_then(|a| a.to_bech32().map_err(anyhow::Error::from))
             .map_err(js_error)
     }

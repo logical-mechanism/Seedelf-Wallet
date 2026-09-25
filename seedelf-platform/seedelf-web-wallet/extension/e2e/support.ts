@@ -111,6 +111,8 @@ export interface MinswapFake {
   estimate: unknown;
   swapCbor: string;
   orders: unknown[];
+  /** While set, quotes and builds answer 429, as Minswap's rate limit does. */
+  limited?: boolean;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
@@ -217,6 +219,9 @@ async function fakeMinswap(context: BrowserContext, swaps: MinswapFake) {
     if (path === "tokens") {
       const q = String(body.query).toLowerCase();
       return answer({ tokens: swaps.tokens.filter((t) => String(t.ticker).toLowerCase().includes(q)), search_after: [] });
+    }
+    if (swaps.limited && (path === "estimate" || path === "build-tx")) {
+      return route.fulfill({ status: 429, body: "Rate limit exceeded, retry in 50 seconds" });
     }
     if (path === "estimate") return answer(swaps.estimate);
     if (path === "build-tx") return answer({ cbor: swaps.swapCbor });

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { Minswap } from "../src/background/minswap";
+import { DIRECT_PROTOCOLS, Minswap } from "../src/background/minswap";
 import { SESSION_PENDING } from "../src/background/pending";
 import { checkAsk, SESSION_OUT, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
@@ -111,7 +111,13 @@ describe("a swap's quote", () => {
       collateral: "5000000",
     });
     expect(t.minswap.calls.map((c) => c.path)).toEqual(["estimate"]);
-    expect(t.minswap.calls[0]!.body).toMatchObject({ amount: "10000000", token_in: "lovelace", token_out: MIN });
+    // Routed through DEXes that take orders only: one that swaps against its pools spends UTxOs that aren't the session's.
+    expect(t.minswap.calls[0]!.body).toMatchObject({
+      amount: "10000000",
+      token_in: "lovelace",
+      token_out: MIN,
+      exclude_protocols: ["DanogoCLMMV1", "ChakraBondingCurve", "OpenDjedV1"],
+    });
     // Selling a token: the session carries it, and ADA for the costs.
     const selling = await t.sessions.quote("preprod", { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500" });
     expect(selling.fund).toEqual({
@@ -271,6 +277,28 @@ describe("a private session", () => {
     await expect(sessions.backBuild("preprod", 0)).rejects.toThrow("still waiting");
   });
 
+  it("gives each session an address with its own stake key, and keeps a session from before at its shared one", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await sessions.outBuild("preprod", await sessions.quote("preprod", ASK));
+    // Payment key 0/0 and stake key 2/0 of account 24301' (pinned against cardano-address in session_test.rs).
+    expect(out.address).toBe(sessionSwap.address);
+    await sessions.outSubmit("preprod", out.txHash);
+
+    // A session recorded before the fix has no `ownStake`: it keeps the shared Seedelf staking part, where its money is.
+    const book = (await t.store.get<{ sessions: Array<{ ownStake?: boolean }> }>("sessions.preprod"))!;
+    expect(book.sessions[0]!.ownStake).toBe(true);
+    delete book.sessions[0]!.ownStake;
+    await t.store.set("sessions.preprod", book);
+    const wasm = loadTestWasm();
+    const accounts = wasm.OneTimeAccounts.fromPhrase(account(12).phrase);
+    const shared = accounts.sharedStakeAddress(wasm.Network.Preprod, 0);
+    accounts.free();
+    expect(shared).not.toBe(sessionSwap.address);
+    const [view] = await sessions.list("preprod");
+    expect(view!.address).toBe(shared);
+  });
+
   it("asks Koios once for every open session's account, and once about what's waiting", async () => {
     const t = await unlocked();
     moreFunds(t, 2);
@@ -347,7 +375,11 @@ describe("a swap that runs itself", () => {
     t.clock.now += 15_000;
     view = await sessions.advance("preprod", 0);
     expect(t.minswap.calls.map((c) => c.path)).toEqual(["estimate", "estimate", "build-tx"]);
-    expect(t.minswap.calls.at(-1)!.body).toMatchObject({ sender: sessionSwap.address, min_amount_out: "902083681" });
+    expect(t.minswap.calls.at(-1)!.body).toMatchObject({
+      sender: sessionSwap.address,
+      min_amount_out: "902083681",
+      estimate: { exclude_protocols: DIRECT_PROTOCOLS },
+    });
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(SWAP_TX);
     expect(view.txs.map((x) => [x.kind, !!x.confirmed])).toEqual([
       ["out", true],
@@ -429,6 +461,18 @@ describe("a swap that runs itself", () => {
     expect(t.koios.submitted).toHaveLength(1);
   });
 
+  it("pauses rather than sign a swap that spends UTxOs that aren't the session's, as a DEX swapping against its pools does", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    // The account holds another UTxO than the one Minswap's swap spends.
+    t.koios.confirmations = 1;
+    t.koios.addedToAccounts.push(atSession("bb".repeat(32), 0, "30000000"));
+    const view = await sessions.advance("preprod", 0);
+    expect(view.auto!.paused).toMatchObject({ why: "refused", detail: "it spends something that isn't this session's." });
+    expect(t.koios.submitted).toHaveLength(1);
+  });
+
   it("carries on in a restarted worker, from what's stored and on chain", async () => {
     const t = await unlocked();
     await started(signing(t));
@@ -460,18 +504,18 @@ describe("a swap that runs itself", () => {
     t.minswap.fetch = async (url, init) =>
       url.endsWith("/estimate") ? new Response("Rate limit exceeded, retry in 50 seconds", { status: 429 }) : real(url, init);
     let view = await sessions.advance("preprod", 0);
-    expect(view.auto!.retry).toEqual({ at: t.clock.now + 60_000, error: expect.stringContaining("limiting requests") });
+    expect(view.auto!.retry).toEqual({ at: t.clock.now + 30_000, error: expect.stringContaining("limiting requests") });
 
-    // Not before the minute's up.
-    t.clock.now += 30_000;
+    // Not before the 30 s are up.
+    t.clock.now += 20_000;
     const calls = t.koios.calls.length;
     await sessions.advance("preprod", 0);
     expect(t.koios.calls).toHaveLength(calls);
 
-    // Then again, and after a second failure, two minutes.
-    t.clock.now += 30_000;
+    // Then again, and after a second failure, a minute.
+    t.clock.now += 10_000;
     view = await sessions.advance("preprod", 0);
-    expect(view.auto!.retry!.at).toBe(t.clock.now + 120_000);
+    expect(view.auto!.retry!.at).toBe(t.clock.now + 60_000);
 
     // Try again, now: it goes on.
     t.minswap.fetch = real;

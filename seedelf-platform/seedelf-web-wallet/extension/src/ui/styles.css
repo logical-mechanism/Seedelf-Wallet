@@ -2261,6 +2261,24 @@ output.swap-card__amount {
   color: var(--text-2);
 }
 
+/* A step failed and is tried again: why, and when. */
+.timeline__now--retry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  color: var(--warn);
+}
+
+.timeline__now--retry p {
+  margin: 0;
+}
+
+.timeline__error {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .timeline--done .timeline__now {
   border-color: var(--accent-line);
   color: var(--accent);

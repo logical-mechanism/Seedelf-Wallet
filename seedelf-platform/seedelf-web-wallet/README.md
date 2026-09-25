@@ -91,6 +91,6 @@ Every Lace path in these docs is relative to that checkout.
   - So the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every restart.
   - See [architecture.md](docs/architecture.md#service-worker).
 - **Cardano account:** CIP-1852 account `0'` for v1. Every function takes the account index, so more accounts can come later. See [keys-and-accounts.md](docs/keys-and-accounts.md#the-cardano-account).
-- **One-time accounts:** a reserved account index that real wallets never reach, with base addresses using the shared Seedelf staking part like the CLI's External Wallet. See [privacy.md](docs/privacy.md#known-links).
+- **One-time accounts:** a reserved account index that real wallets never reach. Each session's base address has its own payment and stake keys, shared with no other session. See [privacy.md](docs/privacy.md#known-links).
 - **Transaction building:** the CLI's Rust (Pallas) builders, separated from network calls and compiled to WebAssembly. See [architecture.md](docs/architecture.md#transaction-building).
 - **UI stack:** React + TypeScript + Vite, with plain CSS.

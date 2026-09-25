@@ -327,7 +327,7 @@ The account's own outputs of a transaction it signed are kept, so a site can bui
 
 ## Contract round trip
 
-Money leaves Seedelf to use a contract, then comes back: a **private session** on a one-time account (account `24301'`, key `0/i`, the shared Seedelf staking part). The plan is [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md), with the user's two designs (a round trip through a new account, or straight from Seedelf with giveme.my's collateral) and when each fits. The first built use is a swap through Minswap's aggregator (route A1).
+Money leaves Seedelf to use a contract, then comes back: a **private session** on a one-time account (account `24301'`, payment key `0/i` and its own stake key `2/i`). The plan is [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md), with the user's two designs (a round trip through a new account, or straight from Seedelf with giveme.my's collateral) and when each fits. The first built use is a swap through Minswap's aggregator (route A1).
 
 ### A private swap (built in chunk 15, runs itself since 15b)
 
@@ -336,7 +336,7 @@ Home's Private tab → **dApps**, a grid of the dApps the wallet uses privately 
 1. **New swap**, in Minswap's shape: a **You pay** card over a **You receive** card, each a big amount beside its token, with a round **Switch** between them that swaps the two sides.
    - **You pay:** ADA or a token in the private balance, with what's held under it, and **Half** and **Max**. ADA's Max leaves the swap's costs, the collateral and 1 ₳ for the fee.
    - **You receive:** any token Minswap lists, picked from what's held or searched on Minswap's list (which then knows what was searched for).
-   - **The quote:** it comes in as you type, asked once typing pauses for 0.6 s, since Minswap limits how often it's asked. What you receive fills in, with the rate under the cards; tap the rate to turn it round. Its details show the minimum received, the price impact (amber from 3%, red from 5%, with a warning), the slippage, the route, the DEX's fee, and the order's deposit (back with the proceeds). The refresh button asks again.
+   - **The quote:** it comes in as you type, asked once typing pauses for 0.6 s, since Minswap limits how often it's asked. What you receive fills in, with the rate under the cards; tap the rate to turn it round. Its details show the minimum received, the price impact (amber from 3%, red from 5%, with a warning), the slippage, the route (through DEXes that take orders only: one that swaps against its pools would spend UTxOs that aren't the session's), the DEX's fee, and the order's deposit (back with the proceeds). The refresh button asks again.
    - **Slippage:** the sliders button at the top. It offers 0.5, 1 or 3%, or your own from 0.1% to 20%, with a warning from 5%.
    - **The button** says what's missing (Select a token, Enter an amount, Not enough ADA), then **Review swap**. A quote over a minute old is asked for again before the funding is built on it.
 2. **Review the swap:** what you pay and receive about, at least, the price impact and the route. Then the funding, the three transactions, each with its fee, and Send.
@@ -347,7 +347,7 @@ Home's Private tab → **dApps**, a grid of the dApps the wallet uses privately 
    - **Back:** everything at the account into the private balance, under fresh registers, signed by the session's key, with no script and no collateral. Once it's on chain and the account is empty, the swap is done, and **the whole card turns the success colour**. The account is never used again.
 5. **Stop**, there the whole time a swap runs, is always the user's: one confirmation, then an order that waits is cancelled (built by Minswap, read and signed the same way; the refund comes back to the account) and everything comes back. Before any order, everything just comes back.
 
-**Pause and resume at any point:** locked, the swap waits, and unlocking carries on. A closed browser, a restarted worker, or a wallet opened hours later all carry on from what's stored and on chain. A failure (Koios down, Minswap's rate limit) says "Trying again in a minute" and does. The auto-lock setting doesn't change for a swap.
+**Pause and resume at any point:** locked, the swap waits, and unlocking carries on. A closed browser, a restarted worker, or a wallet opened hours later all carry on from what's stored and on chain. A failure (Koios down, Minswap's rate limit) turns the step amber and says what's wrong and when it tries again (30 s, doubling to five minutes), with **Try now**. The auto-lock setting doesn't change for a swap.
 
 **If a session stalls,** everything is recoverable from the phrase: money left in the account comes back; an order that never fills is stopped, then brought back. A session whose funding never reached the chain shows so, and can be forgotten (its index isn't reused). Sessions from before swaps ran themselves keep their buttons (Place the order, Cancel the order, Bring it back). After a restore on another device, a scan of the one-time accounts (not built yet) finds what's left: see the plan's *Recovery*.
 

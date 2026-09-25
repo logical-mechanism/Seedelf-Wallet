@@ -73,10 +73,9 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - Coin selection should spend as few inputs as it can.
   - It should avoid mixing funds with different histories, such as round-trip returns and fresh deposits, when it doesn't need to.
   - **Locking a UTxO** (chunk 12) keeps it out of every spend, Max included, so a user can keep such funds apart by hand.
-- **The one-time account's staking part (decided): the shared Seedelf staking hash,** the same as the CLI's External Wallet (`seedelf-core/src/address.rs`, `dapp_address`).
-  - dApps see a normal base address, and the staking part doesn't identify the user.
-  - The trade-off is that it marks the address as a Seedelf address.
-  - Any rewards on that credential go to whoever holds it, not to the user. That's fine for money passing through, but the UI should say so.
+- **The one-time account's staking part (decided 2026-09-25, chunk 15b): each session's own stake key,** `24301'/2/i` beside its payment key `24301'/0/i`, never registered.
+  - No two sessions share a key, so nothing in the address ties one session to another, or to anyone else.
+  - **Before, it was the shared Seedelf staking hash** (the CLI's External Wallet's, `dapp_address`). On preprod that one stake key sat behind 385 UTxOs at 78 addresses, many of them other contracts', and it tied every user's sessions together. The user ruled it out. Sessions recorded before keep that address, since that's where their money is.
 - **Crowd size:** privacy grows with the number of honest users (the flood-attack section of the root README). With few users, timing and amounts carry most of the risk. The wallet should say that plainly and not overpromise.
 - **Network:** Koios and giveme.my see the user's IP address, and Koios has no Tor access. A VPN helps; see the root README's IP-tracking section.
   - **No Koios API key** (decided 2026-09-25): the wallet uses Koios's public tier, so Koios sees an IP address and nothing that names an account. A key would tie every request to whoever registered it.
@@ -106,7 +105,7 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **Turning it on** asks Chrome to let the wallet onto every https site, which is what adds `window.cardano.seedelf`. The wallet doesn't read or change the pages beyond that one entry.
 - **A private swap** (chunk 15, a private session): a one-time account (`24301'/0/i`) is funded from the private balance, Minswap's aggregator builds the swap for it, and everything comes back into the private balance.
   - **What links, on chain:** the funding spend's private UTxOs and change to the one-time account, as Make public does; the account to the order and the proceeds; the return to new private UTxOs, as Make private does. Anyone can follow the whole path. What's hidden is who: the public account never appears.
-  - The amounts and the times tie the two ends together, as the path does anyway. The account's shared Seedelf staking part marks it as a Seedelf one.
+  - The amounts and the times tie the two ends together, as the path does anyway. The account's stake key is its own, used once, so it ties the session to nothing else.
   - **Minswap** sees the account's address, the tokens and amounts, what's searched for in its token list, and the IP address. Its note on the order (CIP-20 metadata, which anyone can read) names the account's address too.
   - **Koios** is asked about every open session's account together (one request, only when the Swaps screen reads the chain), so it can tie them to each other and to the IP address.
   - **On this device:** the list of sessions (their indexes, stages and transactions) is a sealed private record, like Contacts.

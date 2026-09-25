@@ -1386,10 +1386,19 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   });
   for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("swaps")).toContainText("10 ₳ → MIN");
+  // Minswap's rate limit, first: the timeline says so in plain words, and when it tries again.
+  swaps.limited = true;
   await page.getByTestId("swaps").getByRole("button").first().click();
-
-  // Its page takes the next step: the order, from a fresh quote, for at least what was approved, signed by the session's key alone.
   const timeline = page.getByTestId("session-timeline");
+  const retry = page.getByTestId("session-retry");
+  await expect(retry).toContainText("Minswap is limiting requests from this connection for a minute. Trying again in under a minute.");
+  await expect(retry).toContainText("Minswap is limiting requests from your connection");
+  await expect(timeline.locator('[data-state="paused"]')).toHaveCount(1);
+  await snap(page, "swap-retry");
+
+  // Try now: the order, from a fresh quote, for at least what was approved, signed by the session's key alone.
+  swaps.limited = false;
+  await retry.getByRole("button", { name: "Try now" }).click();
   await expect(page.getByTestId("session-now")).toContainText("The order is on its way");
   expect(swaps.calls.find((c) => c.path === "build-tx")?.body).toMatchObject({
     sender: sessionSwap.address,
@@ -1441,9 +1450,9 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await snap(page, "swap-done");
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await expect(page.getByTestId("swaps")).toContainText("Session 1 · Done");
-  // One quote for 30 ₳, one for 10 ₳, one at 2% slippage, then the order's fresh one; never a cancel.
+  // One quote for 30 ₳, one for 10 ₳, one at 2% slippage, the order's fresh one refused by the rate limit, then again; never a cancel.
   const paths = swaps.calls.map((c) => c.path);
-  expect(paths.slice(0, 7)).toEqual(["tokens", "estimate", "estimate", "estimate", "estimate", "build-tx", "pending-orders"]);
+  expect(paths.slice(0, 8)).toEqual(["tokens", "estimate", "estimate", "estimate", "estimate", "estimate", "build-tx", "pending-orders"]);
   expect(paths).not.toContain("cancel-tx");
 });
 

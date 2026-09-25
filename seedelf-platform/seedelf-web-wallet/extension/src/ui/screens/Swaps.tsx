@@ -1257,7 +1257,11 @@ function Session({
         }
       >
         {runs && <RefreshRow reading={checking} updatedAt={checkedAt} onRefresh={() => void advance(true)} />}
-        <Timeline s={s} />
+        <Timeline
+          s={s}
+          busy={busy}
+          onRetry={() => void act(async () => setS(await call("session-resume", { index: s.index })))}
+        />
         {auto.paused && (
           <Callout tone="warn" testId="session-paused">
             <div className="stack-tight">
@@ -1285,19 +1289,6 @@ function Session({
               </span>
             </div>
           </Callout>
-        )}
-        {auto.retry && !auto.paused && (
-          <p className="note" data-testid="session-retry">
-            {retryText(auto.retry.at)}: {auto.retry.error}{" "}
-            <button
-              type="button"
-              className="link"
-              disabled={busy}
-              onClick={() => void act(async () => setS(await call("session-resume", { index: s.index })))}
-            >
-              Try now
-            </button>
-          </p>
         )}
         {rows}
         {stopping && (
@@ -1387,6 +1378,15 @@ function retryText(at: number): string {
   return ms <= 0 ? "Trying again now" : ms < 60_000 ? "Trying again in under a minute" : `Trying again in ${Math.ceil(ms / 60_000)} minutes`;
 }
 
+/** Why a step failed, in plain words, when the error is one that's known; else the error itself. */
+function retryReason(error: string): string {
+  if (/limiting requests/i.test(error)) return "Minswap is limiting requests from this connection for a minute.";
+  if (/no wallet utxos|insufficient balance/i.test(error)) return "Minswap hasn't seen the funding yet.";
+  if (/couldn't reach minswap/i.test(error)) return "Minswap didn't answer.";
+  if (/koios/i.test(error)) return "Koios didn't answer.";
+  return error;
+}
+
 type StepState = "done" | "now" | "paused" | "todo" | "skipped";
 
 /**
@@ -1395,7 +1395,7 @@ type StepState = "done" | "now" | "paused" | "todo" | "skipped";
  * (with its transaction), or paused; the whole card turns the success colour
  * once it's over.
  */
-function Timeline({ s }: { s: SessionView }) {
+function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry: () => void }) {
   const network = useNetwork();
   const auto = s.auto!;
   const d = s.swap?.display;
@@ -1409,7 +1409,7 @@ function Timeline({ s }: { s: SessionView }) {
     if ((i === 1 || i === 2) && unordered) return "skipped";
     if (i < at) return "done";
     if (i > at) return "todo";
-    return auto.paused || failed ? "paused" : "now";
+    return auto.paused || failed || auto.retry ? "paused" : "now";
   };
   const least = d ? amountOf(auto.approvedMinOut, d.out) : undefined;
   const steps: Array<{ title: string; sub: string; tx?: SessionTx }> = [
@@ -1471,9 +1471,21 @@ function Timeline({ s }: { s: SessionView }) {
           );
         })}
       </ol>
-      <p className="timeline__now" data-testid="session-now" aria-live="polite">
-        {nowLine(s)}
-      </p>
+      {auto.retry && !auto.paused ? (
+        <div className="timeline__now timeline__now--retry" data-testid="session-retry" aria-live="polite">
+          <p>
+            {retryReason(auto.retry.error)} {retryText(auto.retry.at)}.{" "}
+            <button type="button" className="link" disabled={busy} onClick={onRetry}>
+              Try now
+            </button>
+          </p>
+          {retryReason(auto.retry.error) !== auto.retry.error && <p className="timeline__error">{auto.retry.error}</p>}
+        </div>
+      ) : (
+        <p className="timeline__now" data-testid="session-now" aria-live="polite">
+          {nowLine(s)}
+        </p>
+      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 //! Private sessions' Cardano side: the one-time accounts (account `24301'`,
-//! the shared Seedelf staking part), bringing one back into Seedelf, and the
+//! each session with its own payment and stake keys), bringing one back into Seedelf, and the
 //! connector's reading and signing of a transaction built for one (a swap).
 
 use pallas_addresses::{Address, ShelleyDelegationPart, ShelleyPaymentPart};
@@ -87,12 +87,12 @@ fn register_of(datum: &PlutusData) -> Register {
 }
 
 #[test]
-fn one_time_accounts_are_account_24301_with_the_shared_seedelf_staking_part() {
+fn one_time_accounts_are_account_24301_each_with_its_own_payment_and_stake_keys() {
     let accounts = accounts();
     let Address::Shelley(first) = session(0) else {
         panic!("a Shelley address")
     };
-    // Payment key 0/0 of m/1852'/1815'/24301', pinned: the derivation is frozen.
+    // Payment key 0/0 and stake key 2/0 of m/1852'/1815'/24301', pinned: the derivation is frozen.
     assert_eq!(
         *first.payment(),
         ShelleyPaymentPart::Key(accounts.key_hash(Role::Receive, 0).unwrap())
@@ -103,30 +103,58 @@ fn one_time_accounts_are_account_24301_with_the_shared_seedelf_staking_part() {
     );
     assert_eq!(
         *first.delegation(),
-        ShelleyDelegationPart::Key(Hash::new(PREPROD_STAKE_HASH))
+        ShelleyDelegationPart::Key(accounts.key_hash(Role::Staking, 0).unwrap())
+    );
+    assert_eq!(session(0).to_bech32().unwrap(), PINNED_SESSION_0_PREPROD);
+    assert_eq!(
+        api::one_time_address(&accounts, false, 0).unwrap().to_bech32().unwrap(),
+        PINNED_SESSION_0_MAINNET
     );
 
-    // Each session has its own key; none is the public account's.
+    // Each session has its own payment and stake keys, shared with no other
+    // session, and none is the public account's.
     let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let public_stake = public.key_hash(Role::Staking, 0).unwrap();
     let mut seen = std::collections::HashSet::new();
     for index in 0..20 {
-        let key = accounts.key_hash(Role::Receive, index).unwrap();
-        assert!(seen.insert(key), "session {index} repeats a key");
-        assert_ne!(key, public.key_hash(Role::Receive, index).unwrap());
+        let Address::Shelley(at) = session(index) else {
+            panic!("a Shelley address")
+        };
+        let payment = *at.payment().as_hash();
+        let stake = *at.delegation().as_hash().expect("a staking part");
+        assert!(seen.insert(payment), "session {index} repeats a payment key");
+        assert!(seen.insert(stake), "session {index} repeats a stake key");
+        assert_ne!(payment, public.key_hash(Role::Receive, index).unwrap());
+        assert_ne!(stake, public_stake);
+        assert_ne!(stake, Hash::new(PREPROD_STAKE_HASH));
     }
 
-    let Address::Shelley(mainnet) = api::one_time_address(&accounts, false, 0).unwrap() else {
+    // Sessions recorded before keep the shared staking part they were funded at.
+    let Address::Shelley(before) = api::shared_stake_address(&accounts, true, 0).unwrap() else {
+        panic!("a Shelley address")
+    };
+    assert_eq!(before.payment(), first.payment());
+    assert_eq!(
+        *before.delegation(),
+        ShelleyDelegationPart::Key(Hash::new(PREPROD_STAKE_HASH))
+    );
+    let Address::Shelley(before) = api::shared_stake_address(&accounts, false, 0).unwrap() else {
         panic!("a Shelley address")
     };
     assert_eq!(
-        *mainnet.delegation(),
+        *before.delegation(),
         ShelleyDelegationPart::Key(Hash::new(MAINNET_STAKE_HASH))
     );
-    assert_eq!(mainnet.payment(), first.payment());
 }
 
 /// 24301'/0/0 of the all-"abandon" 12-word phrase, as `cardano-address key child 1852H/1815H/24301H/0/0` derives it.
 const PINNED_SESSION_0_KEY_HASH: &str = "e264f7d08781fc73dfd84d1b32b074c6a24291ebab8035841a0b5984";
+
+/// Session 0's address, payment key 24301'/0/0 and stake key 24301'/2/0, as
+/// `cardano-address address payment --network-tag testnet | cardano-address
+/// address delegation` builds it from those two keys.
+const PINNED_SESSION_0_PREPROD: &str = "addr_test1qr3xfa7ss7qlcu7lmpx3kv4swnr2ys53aw4cqdvyrg94npxw22u923w7cyxhs2hrz2navj50pvqc7msf04kgpqf4hlcs00h9ax";
+const PINNED_SESSION_0_MAINNET: &str = "addr1q83xfa7ss7qlcu7lmpx3kv4swnr2ys53aw4cqdvyrg94npxw22u923w7cyxhs2hrz2navj50pvqc7msf04kgpqf4hlcsve293e";
 
 #[test]
 fn a_session_comes_back_whole_into_seedelf_signed_by_its_key() {
@@ -260,10 +288,13 @@ fn a_return_takes_only_the_sessions_own_utxos() {
 fn swap_tx(index: u32) -> (String, Vec<KoiosRow>) {
     let at = session(index);
     // An order contract's address, with the sender's staking part, as a V1 order's is.
+    let Address::Shelley(sender) = &at else {
+        panic!("a Shelley address")
+    };
     let order = Address::Shelley(pallas_addresses::ShelleyAddress::new(
         pallas_addresses::Network::Testnet,
         ShelleyPaymentPart::Script(Hash::new([0xa6; 28])),
-        ShelleyDelegationPart::Key(Hash::new(PREPROD_STAKE_HASH)),
+        sender.delegation().clone(),
     ));
     let input = TransactionInput {
         transaction_id: Hash::new([7; 32]),
