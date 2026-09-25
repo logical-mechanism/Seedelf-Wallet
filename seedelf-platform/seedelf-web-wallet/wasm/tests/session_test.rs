@@ -107,7 +107,10 @@ fn one_time_accounts_are_account_24301_each_with_its_own_payment_and_stake_keys(
     );
     assert_eq!(session(0).to_bech32().unwrap(), PINNED_SESSION_0_PREPROD);
     assert_eq!(
-        api::one_time_address(&accounts, false, 0).unwrap().to_bech32().unwrap(),
+        api::one_time_address(&accounts, false, 0)
+            .unwrap()
+            .to_bech32()
+            .unwrap(),
         PINNED_SESSION_0_MAINNET
     );
 
@@ -122,7 +125,10 @@ fn one_time_accounts_are_account_24301_each_with_its_own_payment_and_stake_keys(
         };
         let payment = *at.payment().as_hash();
         let stake = *at.delegation().as_hash().expect("a staking part");
-        assert!(seen.insert(payment), "session {index} repeats a payment key");
+        assert!(
+            seen.insert(payment),
+            "session {index} repeats a payment key"
+        );
         assert!(seen.insert(stake), "session {index} repeats a stake key");
         assert_ne!(payment, public.key_hash(Role::Receive, index).unwrap());
         assert_ne!(stake, public_stake);
