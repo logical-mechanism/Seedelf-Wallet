@@ -178,10 +178,12 @@ describe("withdraw", () => {
 describe("removing a Seedelf", () => {
   it("burns it and sends its ADA to the Cardano account", async () => {
     const t = await unlocked();
-    t.koios.evaluation = withdrawPreprod.remove.evaluation;
     const summary = await t.withdraw.buildRemove("preprod", MINE, "account");
     expect(summary).toMatchObject({ network: "preprod", name: MINE, label: "web-wallet", to: "account" });
-    expect(summary.fee.total).toBe(withdrawPreprod.remove.final.fee.total);
+    // Measured in the wallet: within a hair of the recorded fee (a random
+    // one-time key's hash may sort before giveme.my's among the signers).
+    const recorded = Number(withdrawPreprod.remove.final.fee.total);
+    expect(Math.abs(Number(summary.fee.total) - recorded)).toBeLessThan(recorded / 100);
     expect(BigInt(summary.lovelace)).toBe(1_500_000n - BigInt(summary.fee.total));
     // Both scripts run: the wallet's spend and the seedelf policy's burn.
     expect(Number(summary.fee.scriptReference)).toBe((629 + 519) * 15);

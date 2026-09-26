@@ -1223,8 +1223,10 @@ test("send to a Seedelf: paste its name, see it found, review, and nothing sent 
   await expect(review).toContainText("ToThis is a test.");
   await expect(review).toContainText("Amount5 ₳");
   await expect(review).toContainText("1 tUSDM");
-  await expect(review).toContainText("Network fee0.273922 ₳");
-  await expect(review).toContainText("Back to your private balance22.726078 ₳ and 1 token");
+  // About 0.2739 ₳, measured in the wallet (a hair less when the new one-time
+  // key's hash sorts before giveme.my's among the signers the script searches).
+  await expect(review).toContainText("Network fee0.273");
+  await expect(review).toContainText(/Back to your private balance22\.72[67]\d* ₳ and 1 token/);
   await expect(review).toContainText("Private UTxOs spent2");
   // Measured in the wallet, to the recorded fee: no draft went to Ogmios.
   expect(koios.calls).not.toContain("ogmios");
@@ -1280,7 +1282,9 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   await expect(review).toContainText("To$bob");
   await expect(review).toContainText("Amount5 ₳");
   await expect(review).toContainText("1 tUSDM");
-  await expect(review).toContainText(`Network fee${Number(withdrawPreprod.amount.final.fee.total) / 1e6} ₳`);
+  // The recorded fee (0.27027 ₳), or 602 lovelace less when the new one-time
+  // key's hash sorts before giveme.my's among the signers the script searches.
+  await expect(review).toContainText(/Network fee0\.(27027|269668) ₳/);
   await expect(review).toContainText("Private UTxOs spent2");
   expect(koios.collateralAsked).toBe(0);
   await snap(page, "withdraw-review");
@@ -1717,10 +1721,15 @@ test("remove a Seedelf: where its ADA goes, review, and nothing sent without giv
   await page.getByRole("button", { name: "Review" }).click();
 
   const review = page.getByTestId("remove-review");
-  const fee = Number(withdrawPreprod.remove.final.fee.total);
   await expect(review).toContainText("Seedelfweb-wallet");
+  // Measured in the wallet: the recorded fee, or a hair less when the new
+  // one-time key's hash sorts before giveme.my's among the signers the scripts search.
+  const shown = /Network fee(0\.\d+) ₳/.exec((await review.textContent()) ?? "");
+  const fee = Math.round(Number(shown![1]) * 1e6);
+  const short = Number(withdrawPreprod.remove.final.fee.total) - fee;
+  expect(short).toBeGreaterThanOrEqual(0);
+  expect(short).toBeLessThan(1_000);
   await expect(review).toContainText(`Back to your public account${(1_500_000 - fee) / 1e6} ₳`);
-  await expect(review).toContainText(`Network fee${fee / 1e6} ₳`);
   await snap(page, "remove-review");
 
   koios.collateral = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };

@@ -31,8 +31,11 @@ test("builds a transfer, measured in the wallet, and prepares it for signing", (
   assert.equal(paid.toSelf, false);
   assert.equal(paid.lovelace, "5000000");
   assert.deepEqual(paid.tokens, recorded.tokens);
-  // The wallet's own evaluator prices it as the chain did.
-  assert.equal(final.fee.total, recorded.final.fee.total);
+  // The wallet's own evaluator prices it as the chain did: the recorded fee,
+  // or a hair less when the new one-time key's hash sorts before giveme.my's
+  // among the signers the script searches (the recorded one didn't).
+  const short = Number(recorded.final.fee.total) - Number(final.fee.total);
+  assert.ok(short >= 0 && short < 1_000, final.fee.total);
   assert.equal(final.changeOutputs, 1);
   assert.equal(final.changeTokens, 1);
 

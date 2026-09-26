@@ -85,7 +85,11 @@ describe("transfer", () => {
       inputs: 2,
     });
     const fee = summary.fee;
-    expect(fee.total).toBe(transferPreprod.final.fee.total);
+    // The recorded fee, or a hair less when the new one-time key's hash sorts
+    // before giveme.my's among the signers the script searches (the recorded one didn't).
+    const short = Number(transferPreprod.final.fee.total) - Number(fee.total);
+    expect(short).toBeGreaterThanOrEqual(0);
+    expect(short).toBeLessThan(1_000);
     expect(Number(fee.total)).toBe(Number(fee.size) + Number(fee.compute) + Number(fee.scriptReference));
     expect(Number(fee.scriptReference)).toBe(629 * 15); // the wallet script only
     expect(BigInt(summary.changeLovelace)).toBe(28_000_000n - 5_000_000n - BigInt(fee.total));

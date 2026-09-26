@@ -1369,8 +1369,26 @@ mod transfer {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let result = api::build_transfer(sk, request()).unwrap();
         // The recorded preprod transfer's fee: the wallet's evaluator costs
-        // its scripts as the network's did.
-        assert_eq!(result.fee.total, recorded()["final"]["fee"]["total"]);
+        // its scripts as the network's did. The scripts see the signers sorted
+        // by hash, and the wallet script looks for the one-time key's among
+        // them: when that random hash sorts before giveme.my's, as the recorded
+        // one didn't, it's found a step sooner and costs a little less.
+        let seed: [u8; 32] = hex::decode(&result.seed).unwrap().try_into().unwrap();
+        let one_time = Hasher::<224>::hash(api::one_time_key(&sk, &seed).public_key().as_ref());
+        let fee: u64 = result.fee.total.parse().unwrap();
+        let recorded_fee: u64 = recorded()["final"]["fee"]["total"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        if *one_time > COLLATERAL_HASH {
+            assert_eq!(fee, recorded_fee);
+        } else {
+            assert!(
+                fee < recorded_fee && recorded_fee - fee < 1_000,
+                "fee {fee}"
+            );
+        }
         assert!(crate::covers(&result.tx_cbor, &request().utxos, &params()));
     }
 
