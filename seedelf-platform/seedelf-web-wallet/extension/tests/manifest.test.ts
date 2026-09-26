@@ -6,7 +6,7 @@ import { buildManifest, DEV_KEY } from "../src/manifest";
 
 describe("manifest", () => {
   it("defaults to a preprod-only build", () => {
-    const m = buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: false });
+    const m = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: false });
     expect(m.manifest_version).toBe(3);
     expect(m.name).toBe("Seedelf Wallet (preprod)");
     expect(m.background).toEqual({ service_worker: "sw.js", type: "module" });
@@ -37,7 +37,7 @@ describe("manifest", () => {
   });
 
   it("adds mainnet hosts only behind the flag", () => {
-    const m = buildManifest({ version: "0.1.0", mainnetEnabled: true, storeBuild: false });
+    const m = buildManifest({ version: "1.0.0", mainnetEnabled: true, storeBuild: false });
     expect(m.name).toBe("Seedelf Wallet");
     // CoinGecko for ADA's price: mainnet only.
     expect(m.host_permissions).toEqual([
@@ -52,12 +52,12 @@ describe("manifest", () => {
   });
 
   it("pins the dev extension ID unless building for the Web Store", () => {
-    expect(buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: false }).key).toBe(DEV_KEY);
-    expect(buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: true })).not.toHaveProperty("key");
+    expect(buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: false }).key).toBe(DEV_KEY);
+    expect(buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: true })).not.toHaveProperty("key");
   });
 
   it("a store build: no key, the preprod hosts only, and the strict page CSP", () => {
-    const m = buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: true });
+    const m = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: true });
     expect(m).not.toHaveProperty("key");
     expect(m.name).toBe("Seedelf Wallet (preprod)");
     expect(m.permissions).toEqual(["storage", "alarms", "sidePanel", "scripting"]);
@@ -85,7 +85,7 @@ describe("manifest", () => {
   });
 
   it("ships every icon the manifest names", () => {
-    const m = buildManifest({ version: "0.1.0", mainnetEnabled: false, storeBuild: false });
+    const m = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: false });
     for (const path of Object.values(m.icons)) {
       expect(existsSync(new URL(`../public/${path}`, import.meta.url)), path).toBe(true);
     }

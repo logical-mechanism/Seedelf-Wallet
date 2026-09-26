@@ -445,7 +445,7 @@ test("settings: the phrase behind the password, a new password, and removing the
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  await expect(page.getByTestId("about")).toContainText("Version0.1.0");
+  await expect(page.getByTestId("about")).toContainText("Version1.0.0");
   await expect(page.getByTestId("about")).toContainText("NetworkPreprod");
   await snap(page, "settings");
 

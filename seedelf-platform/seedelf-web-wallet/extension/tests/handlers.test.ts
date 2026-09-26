@@ -33,7 +33,7 @@ function context(t = testBalances()): Context {
     sessions,
     lovejoin,
     connector: async (on) => on,
-    version: "0.1.0",
+    version: "1.0.0",
     network: "preprod",
     networks: ["preprod"],
   };
@@ -43,7 +43,7 @@ describe("handlers", () => {
   it("reports status", async () => {
     expect(await handle({ type: "status" }, context())).toEqual({
       state: "no-wallet",
-      version: "0.1.0",
+      version: "1.0.0",
       network: "preprod",
       networks: ["preprod"],
       retryAfterMs: 0,

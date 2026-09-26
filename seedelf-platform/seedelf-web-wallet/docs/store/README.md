@@ -16,7 +16,7 @@ Everything the unlisted preprod listing needs, laid out by the developer dashboa
 
 ## Package
 
-Upload `extension/release/seedelf-wallet-0.1.0.zip`.
+Upload `extension/release/seedelf-wallet-1.0.0.zip`.
 
 - The store reads the name, version, summary and permissions from its manifest.
 - Every later upload needs a higher `version` in `extension/package.json`.

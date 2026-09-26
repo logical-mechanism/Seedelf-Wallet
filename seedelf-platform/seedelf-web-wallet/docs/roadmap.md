@@ -209,7 +209,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The privacy policy is [store/privacy-policy.md](store/privacy-policy.md), linked on the `seedelf-web-wallet` branch.
     - The Privacy practices form declares *Authentication information* and *Financial and payment information*.
     - The screenshots are the popup at 2×, framed on navy with a caption.
-    - Taken as given: version 0.1.0, the category Tools (Lace's), and the store icon from the guardian artwork (`brand/README.md`).
+    - Taken as given: version 1.0.0, the category Tools (Lace's), and the store icon from the guardian artwork (`brand/README.md`).
   - **The store's rules, checked live on 2026-09-24:**
     - The icon is 128 px: 96 px of artwork in 16 px of padding.
     - 1 to 5 screenshots, at exactly 1280×800 or 640×400.
@@ -218,7 +218,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The Privacy practices tab wants a single purpose, a justification for each permission, a remote-code answer, the data categories with three certifications, and a policy URL. Google's FAQ counts data handled only on the device.
     - Nothing specific to wallets: crypto mining is banned, and crypto extensions aren't featured. The 1 August 2026 update tightened limited use and disclosure.
   - **What landed:**
-    - `npm run package`: a store build, `licenses/THIRD-PARTY.txt`, and `release/seedelf-wallet-0.1.0.zip`.
+    - `npm run package`: a store build, `licenses/THIRD-PARTY.txt`, and `release/seedelf-wallet-1.0.0.zip`.
       - The zip is 900 KB and 18 files, SHA-256 `8bf7dd79…fd14f53`. It's reproducible: a rebuild with the same toolchain gives the same bytes.
       - It refuses a `dist/` with the dev key.
     - The notices list 109 crates, 6 npm packages and SecretBox, with 90 distinct licence texts (295 KB, 24 KB gzipped).

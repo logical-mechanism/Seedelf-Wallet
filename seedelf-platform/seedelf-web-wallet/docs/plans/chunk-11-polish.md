@@ -179,7 +179,7 @@ The user owns the Chrome Web Store developer account and submits the listing. Th
 | Network | **Preprod only** for the first testers | Mainnet is "after v1" in the roadmap and needs its own review (the fees are real, and so are the risks). |
 | Visibility | **Unlisted:** anyone with the link | The alternative is private (named testers only). development.md recommends either. |
 | Where the privacy policy lives | **A page in the repo** (`seedelf-web-wallet/docs/store/privacy-policy.md`), linked by its GitHub URL | It says nothing is collected, and that the wallet talks to Koios and giveme.my, each of which sees the user's IP (privacy.md *Network*). |
-| Version | **0.1.0**, as `package.json` says today | Every new upload needs a higher version. |
+| Version | **1.0.0**, as `package.json` says today | Every new upload needs a higher version. |
 | Who submits | **The user, by hand** | This is outward-facing: prepare it, never submit it. |
 
 ### Work items
