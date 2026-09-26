@@ -8,7 +8,7 @@ describe("manifest", () => {
   it("defaults to a preprod-only build", () => {
     const m = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: false });
     expect(m.manifest_version).toBe(3);
-    expect(m.name).toBe("Seedelf Wallet (preprod)");
+    expect(m.name).toBe("Seedelf Wallet");
     expect(m.background).toEqual({ service_worker: "sw.js", type: "module" });
     // No popup: a click opens a tab, or the side panel the user chose.
     expect(m.action).not.toHaveProperty("default_popup");
@@ -59,7 +59,7 @@ describe("manifest", () => {
   it("a store build: no key, the preprod hosts only, and the strict page CSP", () => {
     const m = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: true });
     expect(m).not.toHaveProperty("key");
-    expect(m.name).toBe("Seedelf Wallet (preprod)");
+    expect(m.name).toBe("Seedelf Wallet");
     expect(m.permissions).toEqual(["storage", "alarms", "sidePanel", "scripting"]);
     expect(m.host_permissions).toEqual(["https://preprod.koios.rest/*", "https://www.giveme.my/*"]);
     expect(m.content_security_policy.extension_pages).toBe(

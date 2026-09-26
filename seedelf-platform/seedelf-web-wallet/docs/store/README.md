@@ -23,7 +23,7 @@ Upload `extension/release/seedelf-wallet-1.0.0.zip`.
 
 ## Store listing
 
-**Title** (from the manifest): `Seedelf Wallet (preprod)`
+**Title** (from the manifest): `Seedelf Wallet`
 
 **Summary** (from the manifest's `description`; the store allows 132 characters):
 
