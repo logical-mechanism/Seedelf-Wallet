@@ -1003,8 +1003,15 @@ export interface Requests {
   "lovejoin-mix-public-build": { payload: { boxes: number }; result: LovejoinPublicSummary };
   /** Sends the public mix built last, in order. */
   "lovejoin-mix-public-submit": { payload: { txHash: string }; result: PendingTx };
-  /** How far the public mix being sent has got (transactions sent of its total), or null when none is. */
-  "lovejoin-mix-public-progress": { payload: None; result: { total: number; sent: number } | null };
+  /**
+   * How far the public mix being sent has got (transactions sent of its
+   * total, and why it stopped, if it did), or null when none is. `advance`:
+   * send more of it first, if there's room (the Lovejoin page, while open).
+   */
+  "lovejoin-mix-public-progress": {
+    payload: { advance?: boolean };
+    result: { total: number; sent: number; stopped?: string } | null;
+  };
   /** Withdraws one of the wallet's boxes now, whatever its wait (`box`, or any). */
   "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number } }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */

@@ -473,6 +473,14 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 - **Now:** a transaction refused that way, after a try Koios didn't answer or anywhere past a chain's first, is sent again and looked for on chain every 10 s, 18 times (about three minutes, several blocks). `lovejoin.test.ts` sends a chain whose third transaction is refused six times while in the mempool; the old code stopped there with the message the user couldn't read.
 - **The message:** it was cut off in the mix's row, and shown nowhere else. A chain that stops now records why on the session (`chain.stopped`). The Lovejoin page shows it in full under the row, and a mix that's trying again shows its error in full, with *Try now*. The row says *Stopped after 7 of 49 transactions; once those are on chain, what's left comes back directly*, not *Sending 6 of 49*.
 
+**Then: "still getting random Koios timeouts" (the user, 2026-09-25).** Not the number of requests: a 49-transaction chain is about 50 submits and a few reads, under the wallet's 60 every 10 s. The chain was sent as fast as it could go, and the node couldn't take it that fast.
+
+- **Why:** a block may use 20 billion CPU steps in scripts and a mix uses 5.73 billion, so a block takes 3 mixes; preprod's pool blocks show exactly 3. A node's mempool holds about two blocks' worth, about 6 mixes (my understanding, not checked, but the first run stopped exactly at its 7th). A submit past that waits for a block (about 20 s on preprod), and Koios's answer gives up at 20 s.
+- **Now a chain is sent a window at a time** (`pumpChain`): at most 4 of its transactions wait in the mempool. The wallet looks for blocks every 5 s and sends more as they take some. A block takes 3 mixes whatever the wallet does, so the chain takes as long as before: 48 mixes are about 16 blocks.
+- **No request runs long:** each call sends for at most about a block (`CHAIN_PUMP_MS`), and the rest waits in `chrome.storage.session`. A Send sends the first window and returns. The runner's steps (every 20 s while a page is open), the alarm (every minute) and the open Lovejoin page send the rest: Chrome ends a worker whose one request runs five minutes.
+- **While it's sent, nothing else happens to the session:** its return is refused (*still being sent*), and a public mix waits for the one before.
+- **Locking wipes the rest** (session storage): what's left then comes back directly, and the session says the wallet locked while its chain was being sent.
+
 **Also fixed:** the pool counts that `fits` and a return's chain checked against included the wallet's own boxes, which a mix never takes. They're counted out now. A return that stopped partway also counts a recorded mix, not only a deposit, as the chain having started.
 
 **Tests:**
@@ -484,7 +492,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 | Vitest | `lovejoin.test.ts` +5 (mixing again end to end, with the withdraws held and the due times drawn again; boxes gone before the funding landed; no box to mix; past ten boxes, as the pool allows; a chain's progress, one that stopped partway, and a finished one letting the next return through; the public mix's count); `wallet.test.ts` +1 (the deadline, and locking when asked past it) |
 | Playwright | mixing again's review (2 of 3 boxes), and the mix listed; the countdown on Settings, Stay unlocked, then the lock at 0:00; a site session's return counting its chain on Send, then how much is on chain |
 
-Totals: Rust 327, WebAssembly (Node) 33, Vitest 293, Playwright 52. The module is 762 KB gzipped.
+Totals: Rust 327, WebAssembly (Node) 33, Vitest 294, Playwright 52. The module is 762 KB gzipped.
 
 ## Handoff to the fourth session (2026-09-25)
 

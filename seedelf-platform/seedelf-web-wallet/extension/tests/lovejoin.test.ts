@@ -8,7 +8,14 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { LOVEJOIN_MIX_BOX, LovejoinService } from "../src/background/lovejoin";
+import {
+  CHAIN_POLL_MS,
+  CHAIN_PUMP_MS,
+  CHAIN_WINDOW,
+  LOVEJOIN_MIX_BOX,
+  LovejoinService,
+  pumpChain,
+} from "../src/background/lovejoin";
 import { SESSION_PENDING } from "../src/background/pending";
 import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
@@ -78,6 +85,39 @@ async function withSession(lovelace: string) {
   return { t, sessions };
 }
 
+describe("sending a chain a window at a time", () => {
+  it("keeps at most four in the mempool, sends more as blocks take them, and leaves the rest for the next call", async () => {
+    const txs = Array.from({ length: 10 }, (_, i) => ({ kind: "mix" as const, txCbor: "", txHash: `t${i}`, fee: "0" }));
+    const chain = { txs, next: 0, flying: [] as string[] };
+    const landed = new Set<string>();
+    const sent: number[] = [];
+    let most = 0;
+    let sleeps = 0;
+    const io = {
+      send: async (i: number) => {
+        sent.push(i);
+        most = Math.max(most, chain.flying.length + 1);
+      },
+      onChain: async (hashes: string[]) => new Set(hashes.filter((h) => landed.has(h))),
+      save: async () => undefined,
+      sleep: async () => void sleeps++,
+    };
+    // Nothing lands: four go, and the call ends after about a block of looking.
+    expect(await pumpChain(chain, io, CHAIN_PUMP_MS)).toBe(false);
+    expect(sent).toEqual([0, 1, 2, 3]);
+    expect(sleeps).toBe(CHAIN_PUMP_MS / CHAIN_POLL_MS);
+    // A block takes three: three more go.
+    for (const h of ["t0", "t1", "t2"]) landed.add(h);
+    expect(await pumpChain(chain, io, 0)).toBe(false);
+    expect(sent).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    // They all land: the rest go, and it's done.
+    for (const t of txs) landed.add(t.txHash);
+    expect(await pumpChain(chain, io, CHAIN_PUMP_MS)).toBe(true);
+    expect(sent).toHaveLength(10);
+    expect(most).toBe(CHAIN_WINDOW);
+  });
+});
+
 describe("a session's return through Lovejoin", () => {
   it("sends the spare ADA through the mixer first, the whole chain in order, then sets the boxes' withdraws", async () => {
     const { t, sessions } = await withSession("40000000");
@@ -95,6 +135,13 @@ describe("a session's return through Lovejoin", () => {
     const submittedBefore = t.koios.submitted.length;
     const sent = await sessions.backSubmit("preprod", review.txHash);
     expect(sent).toMatchObject({ kind: "session-back", txHash: review.txHash });
+    // Paced: four wait in the mempool, and no more go until a block takes some.
+    expect(t.koios.submitted.length - submittedBefore).toBe(4);
+    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 4, confirmed: 0, cut: false });
+    await expect(sessions.backBuild("preprod", 0)).rejects.toThrow("still being sent");
+    // Blocks take them: the alarm's next run sends the rest, a window at a time.
+    t.koios.confirmations = 1;
+    await sessions.runAll("preprod");
     const chain = t.koios.submitted.slice(submittedBefore);
     expect(chain).toHaveLength(10);
     expect(txIdOf(chain.at(-1)!)).toBe(review.txHash);
@@ -104,9 +151,7 @@ describe("a session's return through Lovejoin", () => {
     const kinds = book.sessions[0]!.txs.slice(1).map((x) => x.kind);
     expect(kinds).toEqual(["deposit", ...Array(8).fill("mix"), "back"]);
     expect(book.sessions[0]!.txs.slice(1).map((x) => x.txHash)).toEqual(chain.map((bytes) => txIdOf(bytes)));
-    // Its progress: all ten sent, none on chain yet; then, read again, all on chain.
-    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 10, confirmed: 0, cut: false });
-    t.koios.confirmations = 1;
+    // Its progress: all ten sent and, read again, on chain.
     expect((await sessions.list("preprod", true))[0]!.chain).toEqual({ total: 10, sent: 10, confirmed: 10, cut: false });
 
     // Each box comes back on its own, 1 to 6 hours from now.
@@ -126,6 +171,8 @@ describe("a session's return through Lovejoin", () => {
   it("sends a transaction of the chain again when Koios didn't answer it, and finishes the chain", async () => {
     const { t, sessions } = await withSession("40000000");
     const review = await sessions.backBuild("preprod", 0);
+    // Blocks take each window as it goes.
+    t.koios.confirmations = 1;
     // The third submit (a mix) gets a 503 once, as a busy Koios answers.
     const fetch = t.koios.fetch;
     let submits = 0;
@@ -134,7 +181,9 @@ describe("a session's return through Lovejoin", () => {
       return fetch(url, init);
     };
     const before = t.koios.submitted.length;
+    // Send sends the first four; the alarm's next run the rest.
     await sessions.backSubmit("preprod", review.txHash);
+    await sessions.runAll("preprod");
     expect(t.koios.submitted.slice(before)).toHaveLength(10);
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(review.txHash);
   });
@@ -165,6 +214,7 @@ describe("a session's return through Lovejoin", () => {
     };
     const before = t.koios.submitted.length;
     await sessions.backSubmit("preprod", review.txHash);
+    await sessions.runAll("preprod");
     expect(refused).toBe(6);
     expect(t.koios.submitted.slice(before)).toHaveLength(10);
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(review.txHash);
@@ -201,7 +251,9 @@ describe("a session's return through Lovejoin", () => {
     // Another session's chain goes through whole; paid again later, its next return goes through Lovejoin too.
     const whole = await withSession("40000000");
     const first = await whole.sessions.backBuild("preprod", 0);
+    whole.t.koios.confirmations = 1;
     await whole.sessions.backSubmit("preprod", first.txHash);
+    await whole.sessions.runAll("preprod");
     whole.t.clock.now += 60_000;
     whole.t.koios.spent.add(`${"c1".repeat(32)}#0`).add(`${"c2".repeat(32)}#1`);
     whole.t.koios.addedToAccounts.push(atSession("c3".repeat(32), 0, "40000000"), atSession("c4".repeat(32), 1, "5000000"));
@@ -537,12 +589,17 @@ describe("mixing from the tile", () => {
     const counted: Array<{ total: number; sent: number } | null> = [];
     const fetch = t.koios.fetch;
     t.koios.fetch = async (url, init) => {
-      if (url.endsWith("/submittx")) counted.push(t.lovejoin.progress("preprod"));
+      if (url.endsWith("/submittx")) counted.push(await t.lovejoin.progress("preprod"));
       return fetch(url, init);
     };
+    // Paced: four go, then the fifth once a block has taken some.
     const pending = await t.lovejoin.publicSubmit("preprod", summary.txHash);
+    expect(t.koios.submitted.length - before).toBe(4);
+    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("still being sent");
+    t.koios.confirmations = 1;
+    expect(await t.lovejoin.pumpPublic("preprod")).toBe(false);
     expect(counted).toEqual([0, 1, 2, 3, 4].map((sent) => ({ total: 5, sent })));
-    expect(t.lovejoin.progress("preprod")).toBeNull();
+    expect(await t.lovejoin.progress("preprod")).toBeNull();
     expect(pending).toMatchObject({ kind: "lovejoin-mix", txHash: summary.txHash });
     const sent = t.koios.submitted.slice(before);
     expect(sent).toHaveLength(5);

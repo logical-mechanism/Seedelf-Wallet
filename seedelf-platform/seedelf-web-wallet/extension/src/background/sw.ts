@@ -68,6 +68,8 @@ async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin"
     return;
   }
   await ctx.sessions.runAll(ctx.network);
+  // A public mix still being sent keeps the alarm going too.
+  if (await ctx.lovejoin.pumpPublic(ctx.network).catch(() => false)) await sessionsAlarm.start();
   await ctx.lovejoin.withdrawDue(ctx.network, scan).catch(() => undefined);
 }
 
@@ -119,7 +121,13 @@ function getContext(): Promise<Context> {
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // No box is withdrawn while a chain mixing them again may still spend it.
-    lovejoin = new LovejoinService({ ...spends, store, preferences, mixingAgain: (n) => sessions!.mixingAgain(n) });
+    lovejoin = new LovejoinService({
+      ...spends,
+      store,
+      preferences,
+      mixingAgain: (n) => sessions!.mixingAgain(n),
+      alarm: sessionsAlarm,
+    });
     sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
     dapp = new DappService({
       ...spends,

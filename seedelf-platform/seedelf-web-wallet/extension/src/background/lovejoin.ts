@@ -50,6 +50,8 @@ import { SESSION_BALANCES_PREFIX } from "./wallet";
 
 /** chrome.storage.session: a mix from the public account, built and signed, waiting for Send. */
 export const SESSION_LOVEJOIN_PUBLIC = "seedelf.lovejoin.public";
+/** chrome.storage.session: a mix from the public account being sent, a window at a time, per network: `seedelf.lovejoin.sending.<network>`. */
+export const SESSION_LOVEJOIN_SENDING = "seedelf.lovejoin.sending.";
 
 /** A built mix is only sent within this long; after that, build again. */
 const BUILT_TTL_MS = 10 * 60_000;
@@ -97,6 +99,71 @@ export function chainRetryMs(i: number, tries: ChainTries, e: unknown): number |
     return CHAIN_SPENT_MS;
   }
   return undefined;
+}
+
+/**
+ * The most transactions of a chain waiting in the mempool at once. A block
+ * may use 20 billion CPU steps in scripts and a mix uses 5.73 billion, so a
+ * block takes 3 mixes, and a node's mempool holds about two blocks' worth. A
+ * submit past that waits for a block to make room, longer than Koios answers
+ * (found on preprod: a long chain's submits timed out from its 7th on). Four
+ * leaves room for other people's transactions.
+ */
+export const CHAIN_WINDOW = 4;
+/** How often a chain being sent looks for its transactions on chain. */
+export const CHAIN_POLL_MS = 5_000;
+/**
+ * The most one call sends a chain for: about a block. The rest goes on at
+ * the next call (the runner's step, the page, the alarm), so no request runs
+ * near Chrome's five minutes.
+ */
+export const CHAIN_PUMP_MS = 20_000;
+
+/** A chain being sent, kept in chrome.storage.session between calls. */
+export interface ChainProgress {
+  txs: LovejoinChain["txs"];
+  /** The next to send. */
+  next: number;
+  /** Sent, and not seen on chain yet. */
+  flying: string[];
+}
+
+/**
+ * Sends more of a chain, in order, with at most CHAIN_WINDOW of it waiting in
+ * the mempool: it sends while there's room, looks for what it sent on chain
+ * every CHAIN_POLL_MS, and returns true once all of it is sent, or false
+ * after about `budgetMs`, the rest for the next call. `send` sends transaction
+ * `i` (its retries included), `onChain` says which hashes are on chain, and
+ * `save` keeps the progress after each change.
+ */
+export async function pumpChain(
+  chain: ChainProgress,
+  io: {
+    send(i: number): Promise<void>;
+    onChain(hashes: string[]): Promise<Set<string>>;
+    save(): Promise<void>;
+    sleep(ms: number): Promise<void>;
+  },
+  budgetMs: number,
+): Promise<boolean> {
+  for (let polls = Math.ceil(budgetMs / CHAIN_POLL_MS); ; polls--) {
+    if (chain.flying.length >= CHAIN_WINDOW) {
+      const on = await io.onChain(chain.flying);
+      if (on.size) {
+        chain.flying = chain.flying.filter((h) => !on.has(h));
+        await io.save();
+      }
+    }
+    while (chain.next < chain.txs.length && chain.flying.length < CHAIN_WINDOW) {
+      await io.send(chain.next);
+      chain.flying.push(chain.txs[chain.next]!.txHash);
+      chain.next++;
+      await io.save();
+    }
+    if (chain.next >= chain.txs.length) return true;
+    if (polls <= 0) return false;
+    await io.sleep(CHAIN_POLL_MS);
+  }
 }
 
 /** The network measured a chain's scripts differently from the wallet: the chain doesn't start. */
@@ -152,6 +219,13 @@ interface KeptPublic extends LovejoinPublicSummary {
   builtAt: number;
 }
 
+/** A public mix being sent: its chain, how far it has got, and why it stopped, if it did. */
+interface SendingPublic extends ChainProgress {
+  network: NetworkName;
+  boxes: number;
+  stopped?: string;
+}
+
 export interface LovejoinDeps extends ScriptSpendDeps {
   store: PrivateStore;
   preferences: PreferencesService;
@@ -159,6 +233,8 @@ export interface LovejoinDeps extends ScriptSpendDeps {
   random?: () => number;
   /** Whether the wallet's boxes are being mixed again (sessions.ts): no box is withdrawn meanwhile. */
   mixingAgain?: (network: NetworkName) => Promise<boolean>;
+  /** The sessions alarm (chrome.alarms), which sends the rest of a public mix while the wallet is unlocked. */
+  alarm?: { start(): Promise<void> };
 }
 
 const HOUR = 3_600_000;
@@ -191,15 +267,20 @@ export function checkBoxes(boxes: number): void {
 }
 
 export class LovejoinService {
-  /** The public account's mix being sent, and how far it has got, for its Send button. */
-  private sending?: { network: NetworkName; total: number; sent: number };
+  /** A public mix is being sent right now: the Send, the page and the alarm never send it twice at once. */
+  private pumping = false;
 
   constructor(private readonly deps: LovejoinDeps) {}
 
-  /** How far the public account's mix being sent has got, if one is. */
-  progress(network: NetworkName): { total: number; sent: number } | null {
-    const s = this.sending;
-    return s && s.network === network ? { total: s.total, sent: s.sent } : null;
+  /**
+   * How far the public account's mix being sent has got, if one is: sent so
+   * far, of all, and why it stopped, if it did. `advance`: send more of it
+   * first, if there's room (the Lovejoin page, while it's open).
+   */
+  async progress(network: NetworkName, advance = false): Promise<{ total: number; sent: number; stopped?: string } | null> {
+    if (advance) await this.pumpPublic(network, 0).catch(() => undefined);
+    const s = await this.sendingOf(network);
+    return s ? { total: s.txs.length, sent: s.next, ...(s.stopped ? { stopped: s.stopped } : {}) } : null;
   }
 
   /** Whether Lovejoin is deployed on `network`. */
@@ -362,6 +443,8 @@ export class LovejoinService {
   async publicBuild(network: NetworkName, boxes: number): Promise<LovejoinPublicSummary> {
     if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
     checkBoxes(boxes);
+    const sending = await this.sendingOf(network);
+    if (sending && !sending.stopped) throw new Error("Your last mix from the public account is still being sent. Wait for it to finish.");
     const { wasm, wallet, session, now } = this.deps;
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     if (!collateral) {
@@ -409,43 +492,86 @@ export class LovejoinService {
       throw new Error("That mix isn't ready to send. Review it again.");
     }
     if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
-    const koios = this.deps.koios(network);
-    const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
-    const sending = { network, total: built.chain.length, sent: 0 };
-    this.sending = sending;
-    try {
-      for (const [i, step] of built.chain.entries()) {
-        const bytes = hexBytes(step.txCbor);
-        const tries = { busy: 0, spent: 0 };
-        for (;;) {
-          try {
-            const submitted = await koios.submitTx(bytes);
-            if (submitted !== step.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
-            break;
-          } catch (e) {
-            // Sent already (a Send pressed twice, or a retry that got through).
-            if (e instanceof SpentInputError && (await koios.txStatus([step.txHash]).catch(() => undefined))?.get(step.txHash) != null) {
-              break;
-            }
-            const wait = chainRetryMs(i, tries, e);
-            if (wait === undefined) throw e;
-            await sleep(wait);
-          }
-        }
-        await wallet.withKeys(() => rememberSpent(session, bytes));
-        if (step.kind === "deposit") await this.schedule(network, built.boxes);
-        sending.sent = i + 1;
-      }
-    } finally {
-      if (this.sending === sending) this.sending = undefined;
-    }
+    const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
+    await wallet.withKeys(async () => {
+      await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
+      await session.remove(SESSION_LOVEJOIN_PUBLIC);
+    });
+    await this.deps.alarm?.start();
+    // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
+    await this.pumpPublic(network, 0);
     const pending: PendingTx = { kind: "lovejoin-mix", network, txHash, submittedAt: now(), confirmations: null };
     await wallet.withKeys(async () => {
-      await session.remove(SESSION_LOVEJOIN_PUBLIC);
       await session.remove(SESSION_BALANCES_PREFIX + network);
       await session.set(SESSION_PENDING, pending);
     });
     return pending;
+  }
+
+  /**
+   * More of the public mix being sent, for about `budgetMs` (a block by
+   * default): a window at a time, so no more than a few of its mixes wait in
+   * the mempool (pumpChain). Its Send sends the first, and the alarm and the
+   * Lovejoin page the rest. Returns whether some is left to send. A
+   * transaction that can't be sent stops it, and says why (progress).
+   */
+  async pumpPublic(network: NetworkName, budgetMs = CHAIN_PUMP_MS): Promise<boolean> {
+    if (this.pumping) return true;
+    const sending = await this.sendingOf(network);
+    if (!sending || sending.stopped) return false;
+    this.pumping = true;
+    const { wallet, session } = this.deps;
+    const koios = this.deps.koios(network);
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const save = () => wallet.withKeys(() => session.set(SESSION_LOVEJOIN_SENDING + network, sending));
+    try {
+      const done = await pumpChain(
+        sending,
+        {
+          send: async (i) => {
+            const step = sending.txs[i]!;
+            const bytes = hexBytes(step.txCbor);
+            const tries = { busy: 0, spent: 0 };
+            for (;;) {
+              try {
+                const submitted = await koios.submitTx(bytes);
+                if (submitted !== step.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
+                break;
+              } catch (e) {
+                // Sent already (a Send pressed twice, or a retry that got through).
+                if (e instanceof SpentInputError && (await koios.txStatus([step.txHash]).catch(() => undefined))?.get(step.txHash) != null) {
+                  break;
+                }
+                const wait = chainRetryMs(i, tries, e);
+                if (wait === undefined) throw e;
+                await sleep(wait);
+              }
+            }
+            await wallet.withKeys(() => rememberSpent(session, bytes));
+            if (step.kind === "deposit") await this.schedule(network, sending.boxes);
+          },
+          onChain: async (hashes) => {
+            const statuses = await koios.txStatus(hashes);
+            return new Set(hashes.filter((h) => statuses.get(h) != null));
+          },
+          save,
+          sleep,
+        },
+        budgetMs,
+      );
+      if (done) await wallet.withKeys(() => session.remove(SESSION_LOVEJOIN_SENDING + network));
+      return !done;
+    } catch (e) {
+      sending.stopped = e instanceof Error ? e.message : String(e);
+      await save().catch(() => undefined);
+      throw e;
+    } finally {
+      this.pumping = false;
+    }
+  }
+
+  private sendingOf(network: NetworkName): Promise<SendingPublic | undefined> {
+    return this.deps.wallet.withKeys(() => this.deps.session.get<SendingPublic>(SESSION_LOVEJOIN_SENDING + network));
   }
 
   /**

@@ -142,19 +142,21 @@ export function Lovejoin({
     (all) => setMixes(all.filter((x) => x.mix)),
   );
 
-  // The public mix being sent: how many of its transactions are in so far.
-  const [sending, setSending] = useState<{ total: number; sent: number } | null>(null);
+  // The public mix being sent: how many of its transactions are in so far. Its Send sends the first few;
+  // while the page is open, it sends the rest as blocks make room (the alarm does too, once a minute).
+  const [sending, setSending] = useState<{ total: number; sent: number; stopped?: string } | null>(null);
   const sendingPublic = busy && review?.source === "public";
+  const publicRunning = !!sending && !sending.stopped;
   useEffect(() => {
-    if (!sendingPublic) {
-      setSending(null);
-      return;
-    }
+    void call("lovejoin-mix-public-progress", {}).then(setSending, () => undefined);
+  }, []);
+  useEffect(() => {
+    if (!sendingPublic && !publicRunning) return;
     const timer = setInterval(() => {
-      call("lovejoin-mix-public-progress", {}).then(setSending, () => undefined);
-    }, 1000);
+      call("lovejoin-mix-public-progress", { advance: !sendingPublic }).then(setSending, () => undefined);
+    }, sendingPublic ? 1000 : 5000);
     return () => clearInterval(timer);
-  }, [sendingPublic]);
+  }, [sendingPublic, publicRunning]);
 
   // What the chosen number of boxes takes: WebAssembly and the settings, no Koios.
   useEffect(() => {
@@ -217,6 +219,7 @@ export function Lovejoin({
         onPending(pending);
       } else {
         onPending(await call("lovejoin-mix-public-submit", { txHash: review.summary.txHash }));
+        setSending(await call("lovejoin-mix-public-progress", {}));
       }
       setReview(undefined);
       await load();
@@ -272,6 +275,18 @@ export function Lovejoin({
               Your boxes are being mixed again. None comes back until that's sent; then each waits again.
             </p>
           )}
+        </div>
+      )}
+
+      {sending && (
+        <div className="stack" data-testid="lovejoin-public-sending">
+          <p className="note">
+            Your mix from the public account:{" "}
+            {sending.stopped
+              ? `stopped after ${sending.sent} of ${sending.total} transactions.`
+              : `${sending.sent} of ${sending.total} transactions sent. The rest go as blocks make room.`}
+          </p>
+          {sending.stopped && <p className="token-row__detail">Why it stopped: {sending.stopped}</p>}
         </div>
       )}
 

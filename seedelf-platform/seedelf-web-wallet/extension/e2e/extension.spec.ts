@@ -1526,10 +1526,14 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await snap(page, "lovejoin-public-review");
   await page.getByTestId("lovejoin-send").click();
   await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();
-  await expect.poll(() => koios.submitted.length).toBe(5);
-  // The page shows it on its way, as Home does, until the network has it.
+  // Paced: four go now, and no more until a block takes some. The page shows it on its way, as Home does.
+  await expect.poll(() => koios.submitted.length).toBe(4);
+  await expect(page.getByTestId("lovejoin-public-sending")).toContainText("4 of 5 transactions sent");
   await expect(page.getByTestId("pending-tx")).toContainText("Mixes into Lovejoin sent. Waiting for the network…");
+  // A block takes them: the open page sends the last, and the banner sees it in.
   koios.confirmations = 1;
+  await expect.poll(() => koios.submitted.length, { timeout: 20_000 }).toBe(5);
+  await expect(page.getByTestId("lovejoin-public-sending")).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByTestId("pending-tx")).toContainText("In Lovejoin, on their way to your private balance", { timeout: 20_000 });
 
   // Home shows the box on its way back, from the device's own schedule; its row opens Lovejoin's page.
@@ -2513,23 +2517,22 @@ test.describe("the dApp connector", () => {
     await expect.poll(() => koios.submitted.length).toBe(1);
   });
 
-  test("a site session's return through Lovejoin counts its chain as it's sent, then how much is on chain", async ({ context, koios }) => {
+  test("a site session's return through Lovejoin counts its chain as it's sent, four at a time", async ({ context, koios }) => {
     const page = await siteSessionHolding40(context, koios);
     await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳");
-    // Each Koios answer waits a little, so the count shows as the ten go in.
-    koios.delayMs = 500;
+    // Each Koios answer waits a while, so the count shows as they go in.
+    koios.delayMs = 1500;
     const send = page.getByRole("button", { name: /^(Send|Sending)/ });
     await send.click();
-    await expect(send).toHaveText(/^Sending \d+ of 10…$/);
-    await expect.poll(() => koios.submitted.length, { timeout: 30_000 }).toBe(10);
+    await expect(send).toHaveText(/^Sending \d of 10…$/);
+    // Paced: Send sends the first four of the ten; the rest go as blocks take them.
+    await expect.poll(() => koios.submitted.length, { timeout: 30_000 }).toBe(4);
     koios.delayMs = 0;
-    // Back on the session's page: none of it on chain yet, then, read again, all of it. (The fake Koios
-    // still lists what the chain spent, so each reading waits out the wallet's stale-read tries first.)
+    // Back on the session's page, it says so. (The fake Koios still lists what the chain spent, so the
+    // page's reading waits out the wallet's stale-read tries first.)
     const rows = page.getByTestId("site-session-rows");
-    await expect(rows).toContainText("Through Lovejoin0 of 10 transactions on chain", { timeout: 20_000 });
-    koios.confirmations = 1;
-    await page.getByRole("button", { name: "Refresh" }).click();
-    await expect(rows).not.toContainText("Through Lovejoin", { timeout: 20_000 });
+    await expect(rows).toContainText("Through LovejoinSending 4 of 10 transactions", { timeout: 20_000 });
+    expect(koios.submitted).toHaveLength(4);
   });
 
   test("a locked wallet asks for the password in the connector's window first", async ({ context }) => {
