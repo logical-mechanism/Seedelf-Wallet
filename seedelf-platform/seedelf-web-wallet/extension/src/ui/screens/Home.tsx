@@ -20,13 +20,13 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { handlesIn } from "../../shared/handles";
-import type { Account, AdaPrice, Balances, PendingTx, SeedelfInfo, SessionView, StakeInfo } from "../../shared/rpc";
+import type { Account, AdaPrice, Balances, LovejoinHeld, PendingTx, SeedelfInfo, SessionView, StakeInfo } from "../../shared/rpc";
 import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
 import { RefreshRow } from "../components/RefreshRow";
 import { Splash, useSplash } from "../components/Splash";
-import { TxBanner } from "../components/TxBanner";
+import { PendingBanner } from "../components/PendingBanner";
 import {
   ChevronRightIcon,
   CoinsIcon,
@@ -39,12 +39,13 @@ import {
   PieIcon,
   ReceiveIcon,
   SendIcon,
+  ShieldIcon,
   SproutIcon,
   WithdrawIcon,
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { formatFiat, plural, poolLabel, rewardsLocked, spentRewards, unlocked, withRewards } from "../format";
+import { formatFiat, plural, poolLabel, rewardsLocked, spentRewards, unlocked, whenOf, withRewards } from "../format";
 import { useAmounts, usePreferences } from "../preferences";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
@@ -59,42 +60,6 @@ import { Transfer } from "./Transfer";
 import { Utxos } from "./Utxos";
 import { isRunningSwap, SwapRow } from "./Swaps";
 import { Withdraw } from "./Withdraw";
-
-/** How the banner names a sent transaction, and says it's confirmed. */
-const SENT: Record<PendingTx["kind"], string> = {
-  "move-in": "Payment into your private balance",
-  mint: "Seedelf mint",
-  transfer: "Private payment",
-  withdraw: "Payment from your private balance",
-  remove: "Seedelf removal",
-  send: "Payment",
-  collateral: "Collateral payment",
-  stake: "Delegation",
-  vote: "Vote delegation",
-  "withdraw-rewards": "Reward withdrawal",
-  unstake: "Stop staking",
-  "session-out": "Payment into a private session",
-  "session-swap": "Swap order",
-  "session-cancel": "Order cancel",
-  "session-back": "Return from a private session",
-};
-const CONFIRMED: Record<PendingTx["kind"], string> = {
-  "move-in": "Made private",
-  mint: "Seedelf created",
-  transfer: "Private payment confirmed",
-  withdraw: "Made public",
-  remove: "Seedelf removed",
-  send: "Payment confirmed",
-  collateral: "Collateral set",
-  stake: "Now staking",
-  vote: "Voting power delegated",
-  "withdraw-rewards": "Rewards withdrawn",
-  unstake: "Staking stopped",
-  "session-out": "Private session funded",
-  "session-swap": "Swap order placed",
-  "session-cancel": "Order cancelled",
-  "session-back": "Back in your private balance",
-};
 
 /** Read again on open when the last reading is older than this. */
 const STALE_MS = 60_000;
@@ -137,6 +102,8 @@ export function Home() {
   const [dappStart, setDappStart] = useState<DappStart>();
   // Swaps that run themselves and aren't over, from the device's own record.
   const [swaps, setSwaps] = useState<SessionView[]>([]);
+  // Lovejoin boxes on their way back, from the device's own schedule.
+  const [held, setHeld] = useState<LovejoinHeld>();
 
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
@@ -182,11 +149,16 @@ export function Home() {
   useEffect(() => {
     if (screen !== "home") return;
     let live = true;
-    const read = () =>
-      call("sessions", {}).then(
+    const read = () => {
+      void call("sessions", {}).then(
         (all) => live && setSwaps(all.filter(isRunningSwap)),
         () => undefined,
       );
+      void call("lovejoin-held", {}).then(
+        (h) => live && setHeld(h),
+        () => undefined,
+      );
+    };
     void read();
     const timer = setInterval(() => void read(), 20_000);
     return () => {
@@ -292,6 +264,7 @@ export function Home() {
         seedelf={free.seedelf}
         blocked={watching ? BUSY : undefined}
         start={dappStart}
+        banner={pending ? <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} /> : undefined}
         onBack={home}
         onPending={setPending}
       />
@@ -332,7 +305,7 @@ export function Home() {
             </div>
           </Callout>
         )}
-        {pending && <Pending pending={pending} watching={watching} onDismiss={() => setPending(null)} />}
+        {pending && <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} />}
 
         <Tabs
           label="Balances"
@@ -429,6 +402,8 @@ export function Home() {
             {swaps.length > 0 && (
               <RunningSwaps swaps={swaps} onOpen={(index) => dapps({ dapp: "minswap", session: index })} />
             )}
+
+            {held && held.boxes > 0 && <InLovejoin held={held} now={now} onOpen={() => dapps({ dapp: "lovejoin" })} />}
 
             <Links
               onActivity={() => setActivityOf("seedelf")}
@@ -595,6 +570,28 @@ function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index:
   );
 }
 
+/**
+ * Lovejoin's boxes on their way back into the private balance, each after its
+ * own wait: not counted in the balance until they're here. Opens Lovejoin's page.
+ */
+function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
+  const amounts = useAmounts();
+  const next = held.next === null ? "" : held.next <= now ? "Next back at the next unlock" : `Next back ${whenOf(held.next, new Date(now))}`;
+  return (
+    <section className="section" aria-labelledby="in-lovejoin-title">
+      <h2 id="in-lovejoin-title">In Lovejoin</h2>
+      <button type="button" className="token-row" onClick={onOpen} data-testid="in-lovejoin">
+        <span className="avatar avatar--contact" aria-hidden="true">
+          <ShieldIcon size={16} />
+        </span>
+        <span className="token-row__label">{plural(held.boxes, "box", "boxes")} of 10 ₳</span>
+        <span className="token-row__amount">{amounts.ada(held.lovelace)} ₳</span>
+        <span className="token-row__sub">{next}</span>
+      </button>
+    </section>
+  );
+}
+
 /** Opens this tab's Activity, or its UTxOs, and on the private tab the dApp browser. */
 function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtxos: () => void; onDapps?: () => void }) {
   return (
@@ -709,27 +706,6 @@ function GettingStarted({
         ))}
       </ol>
     </section>
-  );
-}
-
-function Pending({ pending, watching, onDismiss }: { pending: PendingTx; watching: boolean; onDismiss: () => void }) {
-  const confirmed = pending.confirmations !== null;
-  const what = SENT[pending.kind];
-  return (
-    <TxBanner
-      state={confirmed ? "done" : watching ? "waiting" : "stale"}
-      title={
-        confirmed
-          ? CONFIRMED[pending.kind]
-          : watching
-            ? `${what} sent. Waiting for the network…`
-            : `${what} not confirmed yet`
-      }
-      network={pending.network}
-      txHash={pending.txHash}
-      onDismiss={watching ? undefined : onDismiss}
-      testId="pending-tx"
-    />
   );
 }
 

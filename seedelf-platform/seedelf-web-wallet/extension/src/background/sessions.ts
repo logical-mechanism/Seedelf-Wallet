@@ -44,6 +44,7 @@
 import type { NetworkName } from "../networks";
 import type {
   DappTxSummary,
+  LovejoinFunding,
   Paid,
   PendingTx,
   SessionAuto,
@@ -63,8 +64,19 @@ import type {
 import { bodyOutpoints, txId } from "./cbor";
 import { SpentInputError, type KoiosUtxo } from "./koios";
 import type { Estimate, Minswap, PendingOrder } from "./minswap";
+import {
+  CHAIN_PUMP_MS,
+  chainRetryMs,
+  checkBoxes,
+  LovejoinSkipped,
+  pumpChain,
+  type ChainProgress,
+  type LovejoinChain,
+  type LovejoinService,
+} from "./lovejoin";
 import type { PrivateStore } from "./private-store";
-import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
+import { forgetContractView, readContractView } from "./contract-scan";
+import { keep, measure, nothingToSpend, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
 import { outpoint, readFresh, rememberSpent, spentSet, unspent } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 
@@ -80,6 +92,10 @@ export const SESSION_SITE_OUT = "seedelf.session.site-out";
 export const SESSION_TOP_UP = "seedelf.session.top-up";
 /** chrome.storage.session: Bring everything back's returns, one per session, built and waiting for Send. */
 export const SESSION_CLAIM = "seedelf.session.claim";
+/** chrome.storage.session: a mix session's funding (the Lovejoin tile, from the private balance), built and waiting for Send. */
+export const SESSION_MIX_OUT = "seedelf.session.mix-out";
+/** chrome.storage.session: a return's chain through Lovejoin still being sent, per session: `seedelf.session.chain.<network>.<index>`. */
+export const SESSION_CHAIN_PREFIX = "seedelf.session.chain.";
 
 /** Each session's own collateral, as the public account's. */
 export const SESSION_COLLATERAL = 5_000_000n;
@@ -137,6 +153,21 @@ interface SessionRecord {
   auto?: AutoRecord;
   /** A site's private session (private CIP-30), rather than a swap. */
   site?: { origin: string };
+  /**
+   * A mix from the Lovejoin tile, rather than a swap: once funded, its boxes
+   * go through Lovejoin and the rest comes back, one chain, run by itself.
+   * `again`: the wallet's boxes in the pool, mixed again with no deposit.
+   * `skipped`: why Lovejoin was left out, when it was.
+   */
+  mix?: { boxes: number; again?: boolean; skipped?: string };
+  /**
+   * The latest return through Lovejoin: how many transactions its chain has,
+   * the return last (`last`), and when it began to be sent (`at`), recorded
+   * before the first is sent, so its progress shows as they're sent and
+   * confirmed. `stopped`: why a transaction of it couldn't be sent, when one
+   * couldn't.
+   */
+  chain?: { total: number; last: string; at: number; stopped?: string };
   closedAt?: number;
 }
 
@@ -178,9 +209,28 @@ interface KeptTx {
   builtAt: number;
 }
 
+/** A mix session's funding. */
+interface KeptMix extends SessionOutSummary {
+  txCbor: string;
+  seed: string;
+  mix: LovejoinFunding;
+  builtAt: number;
+}
+
 interface KeptBack extends SessionBackSummary {
   txCbor: string;
   builtAt: number;
+  /** Through Lovejoin: the whole chain, in order, the return last (`txCbor`, `txHash`). */
+  chain?: LovejoinChain["txs"];
+}
+
+/** A return's chain through Lovejoin being sent, a window at a time, between the runner's steps. */
+interface PendingChain extends ChainProgress {
+  index: number;
+  /** Where the return was kept for Send, cleared once a transaction of it is sent. */
+  kept: string;
+  /** The return, for the private history once it's all sent. */
+  summary: SessionBackSummary;
 }
 
 export interface SessionDeps extends ScriptSpendDeps {
@@ -188,6 +238,8 @@ export interface SessionDeps extends ScriptSpendDeps {
   minswap: (network: NetworkName) => Minswap;
   /** Wakes the runner every minute while a swap runs (chrome.alarms). */
   alarm?: { start(): Promise<void>; stop(): Promise<void> };
+  /** Where a return's spare ADA goes first, when it pays for a box. */
+  lovejoin?: LovejoinService;
 }
 
 /** What Minswap built failed a check: the swap pauses for the user instead of trying again. */
@@ -209,7 +261,12 @@ const PENDING_KIND = {
   swap: "session-swap",
   cancel: "session-cancel",
   back: "session-back",
+  deposit: "session-back",
+  mix: "session-back",
 } as const satisfies Record<SessionTx["kind"], PendingTx["kind"]>;
+
+/** The most funding changes one return merges into (WebAssembly's MAX_MERGE). */
+const MAX_MERGE = 4;
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
@@ -272,6 +329,20 @@ function holdingOf(utxos: KoiosUtxo[]): NonNullable<SessionView["holding"]> {
 /** A swap that runs itself and has something left to do without the user. */
 function running(s: SessionRecord): boolean {
   return !!s.auto && !s.closedAt && !s.auto.paused && !s.auto.failed;
+}
+
+/**
+ * A mix of the wallet's boxes again whose chain may still spend them: from
+ * its funding on (unless that never went) until its return is sent.
+ */
+function mixingAgain(s: SessionRecord): boolean {
+  return (
+    !!s.mix?.again &&
+    !s.closedAt &&
+    !s.auto?.failed &&
+    !s.txs[0]?.unsent &&
+    !s.txs.some((t) => t.kind === "back" && !t.unsent)
+  );
 }
 
 /** A step's transaction that's gone: Koios never took it, or the chain never saw it. */
@@ -411,6 +482,94 @@ export class SessionService {
         });
         throw e;
       }
+    });
+  }
+
+  /**
+   * Builds the funding of a new one-time account that mixes `boxes` boxes
+   * (the Lovejoin tile, from the private balance): what the boxes and their
+   * chain take, and the account's own collateral. Checked against the pool
+   * first, so a mix that's sent can go through.
+   */
+  async mixOutBuild(network: NetworkName, boxes: number): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+    const lovejoin = this.deps.lovejoin;
+    if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
+    checkBoxes(boxes);
+    await lovejoin.fits(network, boxes);
+    return this.mixFunding(network, await lovejoin.funding(network, boxes));
+  }
+
+  /**
+   * Mix my boxes again: the funding of a new one-time account that pays for
+   * every box of the wallet's in the pool to be fanned out again (as many as
+   * the pool has others for), with no deposit, and its own collateral. One at
+   * a time: two would spend the same boxes.
+   */
+  async againBuild(network: NetworkName): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+    const lovejoin = this.deps.lovejoin;
+    if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
+    if (await this.mixingAgain(network)) throw new Error("Your boxes are being mixed again already.");
+    const { boxes, owned } = await lovejoin.againBoxes(network);
+    return this.mixFunding(network, { ...(await lovejoin.funding(network, boxes, true)), owned });
+  }
+
+  /** Whether a mix of the wallet's boxes again may still spend them: Lovejoin withdraws none meanwhile. */
+  async mixingAgain(network: NetworkName): Promise<boolean> {
+    return (await this.book(network)).sessions.some(mixingAgain);
+  }
+
+  /** A mix session's funding, built and kept for Send. */
+  private async mixFunding(network: NetworkName, mix: LovejoinFunding): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+    const index = (await this.book(network)).next;
+    const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
+    const { summary, txCbor, seed } = await this.buildFunding(
+      network,
+      index,
+      address,
+      [
+        { to: address, lovelace: mix.lovelace, tokens: [] },
+        { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
+      ],
+      mix.again ? "Your private balance is empty, so there's nothing to pay for the mixes with." : "Your private balance is empty, so there's nothing to mix.",
+    );
+    const kept: Omit<KeptMix, "builtAt"> = { ...summary, txCbor, seed, mix };
+    await keep(this.deps, SESSION_MIX_OUT, kept);
+    return { ...summary, mix };
+  }
+
+  /** Records the mix session, then sends its funding. From here it runs itself. */
+  mixOutSubmit(network: NetworkName, txHash: string): Promise<{ index: number; pending: PendingTx }> {
+    return this.serial(async () => {
+      const { wallet, session, now } = this.deps;
+      const built = await wallet.withKeys(() => session.get<KeptMix>(SESSION_MIX_OUT));
+      if (!built || built.txHash !== txHash || built.network !== network) {
+        throw new Error("That mix isn't ready to send. Review it again.");
+      }
+      if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
+      const book = await this.book(network);
+      if (built.index < book.next) throw new Error("That mix was started already. Start a new one.");
+      if (built.mix.again && book.sessions.some(mixingAgain)) throw new Error("Your boxes are being mixed again already.");
+      // Recorded before it's sent: whatever happens next, this index is never used again.
+      const record: SessionRecord = {
+        index: built.index,
+        ownStake: true,
+        createdAt: now(),
+        txs: [{ kind: "out", txHash, at: now() }],
+        mix: { boxes: built.mix.boxes, ...(built.mix.again ? { again: true } : {}) },
+        auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
+      };
+      await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
+      let pending: PendingTx;
+      try {
+        pending = await send(this.deps, network, txHash, SESSION_MIX_OUT, "session-out", "mix");
+      } catch (e) {
+        await this.update(network, built.index, (s) => {
+          s.txs[0]!.unsent = true;
+        });
+        throw e;
+      }
+      await this.deps.alarm?.start();
+      return { index: built.index, pending };
     });
   }
 
@@ -621,7 +780,7 @@ export class SessionService {
   }
 
   /** Builds and signs the return of everything at the session's account into the private balance. */
-  async backBuild(network: NetworkName, index: number): Promise<SessionBackSummary> {
+  async backBuild(network: NetworkName, index: number, direct = false): Promise<SessionBackSummary> {
     const { wallet, session } = this.deps;
     const s = await this.live(network, index);
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
@@ -631,9 +790,9 @@ export class SessionService {
     }
     const rows = await this.utxosOf(network, keyHash);
     if (!rows.length) throw new Error("The session's account is empty, so there's nothing to bring back.");
-    const built = await this.buildBack(network, index, rows);
+    const built = await this.buildBack(network, index, rows, undefined, direct);
     await wallet.withKeys(() => session.set(SESSION_BACK, built));
-    const { txCbor: _txCbor, builtAt: _builtAt, ...summary } = built;
+    const { txCbor: _txCbor, builtAt: _builtAt, chain: _chain, ...summary } = built;
     return summary;
   }
 
@@ -660,6 +819,7 @@ export class SessionService {
   async claimBuild(
     network: NetworkName,
     indexes: number[],
+    direct = false,
   ): Promise<{ returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> }> {
     const { wallet, session } = this.deps;
     const params = await this.deps.koios(network).epochParams();
@@ -668,20 +828,20 @@ export class SessionService {
     for (const index of [...new Set(indexes)]) {
       try {
         const s = await this.live(network, index);
-        if (s.auto) throw new Error("A swap that runs itself comes back by itself.");
+        if (s.auto) throw new Error(s.mix ? "A mix comes back by itself." : "A swap that runs itself comes back by itself.");
         const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
         if (s.txs.some((t) => t.kind === "swap") && (await this.deps.minswap(network).pendingOrders(address)).length) {
           throw new Error("An order of this session is still waiting.");
         }
         const rows = await this.utxosOf(network, keyHash);
         if (!rows.length) throw new Error("It holds nothing.");
-        returns.push(await this.buildBack(network, index, rows, params));
+        returns.push(await this.buildBack(network, index, rows, params, direct));
       } catch (e) {
         skipped.push({ index, reason: (e as Error).message });
       }
     }
     await wallet.withKeys(() => session.set(SESSION_CLAIM, returns));
-    return { returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, ...summary }) => summary), skipped };
+    return { returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, chain: _chain, ...summary }) => summary), skipped };
   }
 
   /** Sends the returns Bring everything back built, those chosen, one after another. One that fails doesn't stop the rest. */
@@ -752,11 +912,19 @@ export class SessionService {
     });
   }
 
-  /** Every running swap's next step, for the alarm and for unlocking. The alarm stops once none runs. */
+  /**
+   * Every running swap's next step, and more of every return's chain still
+   * being sent (a site's session, a hand-run swap), for the alarm and for
+   * unlocking. The alarm stops once nothing runs.
+   */
   async runAll(network: NetworkName): Promise<void> {
-    const due = (await this.book(network)).sessions.filter(running);
-    for (const s of due) await this.serial(() => this.step(network, s.index, false)).catch(() => undefined);
-    const still = (await this.book(network)).sessions.some(running);
+    const book = await this.book(network);
+    for (const s of book.sessions.filter(running)) await this.serial(() => this.step(network, s.index, false)).catch(() => undefined);
+    for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt)) {
+      if (await this.pendingChain(network, s.index)) await this.serial(() => this.pump(network, s.index)).catch(() => undefined);
+    }
+    let still = (await this.book(network)).sessions.some(running);
+    for (const s of book.sessions.filter((r) => !r.closedAt)) still ||= !!(await this.pendingChain(network, s.index));
     await (still ? this.deps.alarm?.start() : this.deps.alarm?.stop());
   }
 
@@ -795,6 +963,8 @@ export class SessionService {
   /** Whatever comes next for a swap that runs itself, from its record and the chain. */
   private async act(network: NetworkName, record: SessionRecord): Promise<void> {
     const { wallet, session, now } = this.deps;
+    // A return's chain still being sent: more of it, and nothing else meanwhile.
+    if (await this.pendingChain(network, record.index)) return this.pump(network, record.index);
     let s = record;
     // What was sent and isn't on chain yet: wait for it.
     const waiting = s.txs.filter((t) => !t.confirmed);
@@ -840,6 +1010,13 @@ export class SessionService {
     }
     // Koios doesn't list what's there yet.
     if (!rows.length) return;
+    // A mix: once funded, its boxes go through Lovejoin and the rest comes back, one chain.
+    if (s.mix) return this.bringBack(network, s.index, rows);
+    // A return through Lovejoin that stopped partway (a transaction Koios
+    // never took, a closed browser): what's at the account now came from the
+    // chain itself, so nothing "arrives" from outside. What's left comes back
+    // (directly: its deposit is in), whatever Minswap lists.
+    if (kinds.has("deposit") || kinds.has("mix")) return this.bringBack(network, s.index, rows);
     const auto = s.auto!;
     // No order yet: place it, unless the user stopped, or brought the session back by hand.
     if (!kinds.has("swap")) {
@@ -899,7 +1076,8 @@ export class SessionService {
 
   /** Brings everything at the session's account back into the private balance. */
   private async bringBack(network: NetworkName, index: number, rows: KoiosUtxo[]): Promise<void> {
-    await this.sendBack(network, await this.buildBack(network, index, rows));
+    // The runner's step sends the chain's first block's worth; its next steps the rest.
+    await this.sendBack(network, await this.buildBack(network, index, rows), SESSION_BACK, CHAIN_PUMP_MS);
   }
 
   // -------------------------------------------------------------------------
@@ -977,24 +1155,243 @@ export class SessionService {
     });
   }
 
-  /** The return of everything at the session's account, built and signed by the session's key. */
-  private async buildBack(network: NetworkName, index: number, rows: KoiosUtxo[], known?: unknown): Promise<KeptBack> {
+  /**
+   * The return of everything at the session's account, built and signed by
+   * the session's key. Unless `direct`, spare ADA that pays for a Lovejoin
+   * box goes through Lovejoin first: the whole chain is built here, the
+   * return last, and the boxes come back later, each on its own.
+   */
+  private async buildBack(
+    network: NetworkName,
+    index: number,
+    rows: KoiosUtxo[],
+    known?: unknown,
+    direct = false,
+  ): Promise<KeptBack> {
     const { wasm, wallet, now } = this.deps;
+    if (await this.pendingChain(network, index)) {
+      throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish.");
+    }
     const params = known ?? (await this.deps.koios(network).epochParams());
+    const merge = await this.fundingChange(network, index);
+    const record = (await this.book(network)).sessions.find((r) => r.index === index);
+    // A chain that went in partly already: what's left comes back directly, rather than go in again.
+    // One that finished (its return sent) doesn't hold a later return back (a site's session is paid again).
+    const finished = !!record?.chain && record.txs.some((t) => t.txHash === record.chain!.last && !t.unsent);
+    const started = !finished && record?.txs.some((t) => (t.kind === "deposit" || t.kind === "mix") && !t.unsent);
+    if (started && record?.chain && !record.chain.stopped) {
+      // Nothing is sending the rest: the wallet locked, or the browser closed, partway.
+      await this.update(network, index, (r) => {
+        r.chain!.stopped = "The wallet locked, or the browser closed, while its chain was being sent.";
+      });
+    }
+    const lovejoin = this.deps.lovejoin;
+    let skipped: string | undefined;
+    if (!direct && !started && lovejoin?.available(network)) {
+      const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length);
+      let chain: LovejoinChain | undefined;
+      try {
+        chain = await lovejoin.chain(network, index, rows, collateral, params, merge, record?.mix?.boxes, record?.mix?.again);
+      } catch (e) {
+        if (!(e instanceof LovejoinSkipped)) throw e;
+        skipped = e.reason;
+      }
+      // A mix that can't pay for its boxes anymore (the fees went up) says so too.
+      if (!chain && !skipped && record?.mix) skipped = "its ADA doesn't pay for a box and its mixes anymore";
+      if (skipped && record?.mix) {
+        await this.update(network, index, (r) => {
+          r.mix!.skipped = skipped;
+        });
+      }
+      if (chain) {
+        const back = chain.txs[chain.txs.length - 1]!;
+        const { delay } = await lovejoin.settings();
+        return {
+          network,
+          index,
+          txHash: back.txHash,
+          txCbor: back.txCbor,
+          fee: chain.fees,
+          lovelace: chain.returned,
+          tokens: chain.tokens,
+          depositOutputs: 1,
+          inputs: rows.length,
+          merged: chain.merged,
+          lovejoin: {
+            boxes: chain.boxes,
+            depth: chain.depth,
+            mixes: chain.txs.filter((t) => t.kind === "mix").length,
+            fees: chain.fees,
+            txs: chain.txs.length,
+            delay,
+            ...(record?.mix?.again ? { again: true } : {}),
+          },
+          chain: chain.txs,
+          builtAt: now(),
+        };
+      }
+    }
     const result = await wallet.withKeys(
       (keys) =>
         JSON.parse(
-          wasm.buildSessionReturn(keys.oneTime, keys.seedelf, JSON.stringify({ network, params, index, utxos: rows })),
+          wasm.buildSessionReturn(keys.oneTime, keys.seedelf, JSON.stringify({ network, params, index, utxos: rows, merge })),
         ) as Omit<SessionBackSummary, "network" | "index"> & { txCbor: string },
     );
-    return { ...result, network, index, builtAt: now() };
+    return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
   }
 
-  /** Sends a return, and puts it in the private history. `kept`: where it was kept for Send, cleared once it's sent. */
-  private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK): Promise<PendingTx> {
+  /**
+   * The Seedelf UTxOs session `index`'s funding made (its change), still in
+   * the private balance and not locked: a return merges into them rather
+   * than making new ones, since they're linked to the session on chain
+   * already. None when they've been spent (or the contract can't be read:
+   * the return then makes new ones, as it always did).
+   */
+  private async fundingChange(network: NetworkName, index: number): Promise<KoiosUtxo[]> {
+    const s = (await this.book(network)).sessions.find((r) => r.index === index);
+    const outs = new Set(s?.txs.filter((t) => t.kind === "out" && !t.unsent).map((t) => t.txHash) ?? []);
+    if (!outs.size) return [];
+    try {
+      const view = await readContractView(this.deps, network);
+      const mine = await this.deps.coins.seedelf(network, spendable(this.deps, view));
+      return mine
+        .filter((u) => outs.has(u.tx_hash))
+        .sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : -1))
+        .slice(0, MAX_MERGE);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Sends a return, and puts it in the private history. `kept`: where it was
+   * kept for Send, cleared once it's sent. A chain through Lovejoin sends its
+   * first window and looks for blocks for up to `budgetMs` (none for a Send
+   * the user waits on); the runner's steps and the alarm send the rest.
+   */
+  private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK, budgetMs = 0): Promise<PendingTx> {
+    if (built.chain) return this.sendChain(network, built, kept, budgetMs);
     const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), kept);
     await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
     return pending;
+  }
+
+  /**
+   * Sends a chain through Lovejoin in order, each transaction on the one
+   * before's outputs before any is on chain, a window at a time (pumpChain):
+   * no more than a few wait in the mempool, since a block takes only three
+   * mixes and a submit past what the mempool holds waits longer than Koios
+   * answers. This call sends for about a block; the runner's steps and the
+   * alarm send the rest (pump), and nothing else happens to the session
+   * meanwhile. The chain waits in chrome.storage.session between them.
+   * `budgetMs`: how long this call looks for blocks after the first window.
+   */
+  private async sendChain(network: NetworkName, built: KeptBack, kept: string, budgetMs: number): Promise<PendingTx> {
+    const { chain: txs, txCbor: _txCbor, builtAt: _builtAt, ...summary } = built;
+    await this.update(network, built.index, (s) => {
+      s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
+    });
+    await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
+    await this.deps.alarm?.start();
+    await this.pump(network, built.index, budgetMs);
+    return { kind: "session-back", network, txHash: built.txHash, submittedAt: this.deps.now(), confirmations: null };
+  }
+
+  /**
+   * More of session `index`'s chain, for about a block: sends while fewer
+   * than a few wait in the mempool, and marks what's on chain. Once all of it
+   * is sent, the return is in the private history. A transaction that can't
+   * be sent stops the chain, and says why on the session.
+   */
+  private async pump(network: NetworkName, index: number, budgetMs = CHAIN_PUMP_MS): Promise<void> {
+    const pending = await this.pendingChain(network, index);
+    if (!pending) return;
+    const koios = this.deps.koios(network);
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    let done: boolean;
+    try {
+      done = await pumpChain(
+        pending,
+        {
+          send: (i) => this.sendStep(network, pending, i),
+          onChain: async (hashes) => {
+            const statuses = await koios.txStatus(hashes);
+            const on = new Set(hashes.filter((h) => statuses.get(h) != null));
+            if (on.size) {
+              await this.update(network, index, (s) => {
+                for (const t of s.txs) {
+                  if (!on.has(t.txHash)) continue;
+                  t.confirmed = true;
+                  delete t.unsent;
+                  delete t.sending;
+                }
+              });
+            }
+            return on;
+          },
+          save: () => this.savePending(network, pending),
+          sleep,
+        },
+        budgetMs,
+      );
+    } catch (e) {
+      await this.dropPending(network, index);
+      throw e;
+    }
+    if (!done) return;
+    await this.dropPending(network, index);
+    const last: PendingTx = {
+      kind: "session-back",
+      network,
+      txHash: pending.txs.at(-1)!.txHash,
+      submittedAt: this.deps.now(),
+      confirmations: null,
+    };
+    await this.deps.activity?.sent(network, last, pending.summary).catch(() => undefined);
+  }
+
+  /**
+   * Sends a chain's transaction `i`, trying again when Koios didn't answer or
+   * hasn't caught up (chainRetryMs), and sets the boxes' withdraws once the
+   * deposit is in; boxes mixed again wait afresh once their first mix is in.
+   */
+  private async sendStep(network: NetworkName, pending: PendingChain, i: number): Promise<void> {
+    const step = pending.txs[i]!;
+    const bytes = hexBytes(step.txCbor);
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const tries = { busy: 0, spent: 0 };
+    for (;;) {
+      try {
+        await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept);
+        break;
+      } catch (e) {
+        const wait = chainRetryMs(i, tries, e);
+        if (wait === undefined) {
+          // Said on the session, where its page shows it in full.
+          const why = e instanceof Error ? e.message : String(e);
+          await this.update(network, pending.index, (s) => {
+            if (s.chain) s.chain.stopped = why;
+          }).catch(() => undefined);
+          throw e;
+        }
+        await sleep(wait);
+      }
+    }
+    const lovejoin = pending.summary.lovejoin;
+    if (step.kind === "deposit" && lovejoin) await this.deps.lovejoin?.schedule(network, lovejoin.boxes);
+    if (i === 0 && step.kind === "mix" && lovejoin?.again) await this.deps.lovejoin?.reschedule(network, lovejoin.boxes);
+  }
+
+  private pendingChain(network: NetworkName, index: number): Promise<PendingChain | undefined> {
+    return this.deps.wallet.withKeys(() => this.deps.session.get<PendingChain>(`${SESSION_CHAIN_PREFIX}${network}.${index}`));
+  }
+
+  private savePending(network: NetworkName, pending: PendingChain): Promise<void> {
+    return this.deps.wallet.withKeys(() => this.deps.session.set(`${SESSION_CHAIN_PREFIX}${network}.${pending.index}`, pending));
+  }
+
+  private dropPending(network: NetworkName, index: number): Promise<void> {
+    return this.deps.wallet.withKeys(() => this.deps.session.remove(`${SESSION_CHAIN_PREFIX}${network}.${index}`));
   }
 
   /**
@@ -1030,6 +1427,8 @@ export class SessionService {
         delete t.sending;
         t.unsent = true;
       });
+      // A return merged into the funding's change, which was spent elsewhere: the kept view of the contract is behind, so read it in full next time.
+      if (kind === "back" && e instanceof SpentInputError) await forgetContractView(this.deps, network).catch(() => undefined);
       throw e;
     }
     await this.update(network, index, (s) => {
@@ -1139,8 +1538,10 @@ export class SessionService {
       txs: txs.map(({ unsent: _unsent, sending: _sending, ...t }) => t),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(utxos) : null,
-      ...(s.auto ? { auto: autoView(s.auto, txs, stage) } : {}),
+      ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
       ...(s.site ? { site: s.site } : {}),
+      ...(s.mix ? { mix: s.mix } : {}),
+      ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
     };
   }
 
@@ -1217,15 +1618,32 @@ export class SessionService {
   }
 }
 
-/** Where a swap that runs itself is at, for its timeline. */
-function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage"]): SessionAuto {
+/**
+ * How far a return's chain through Lovejoin has got: its transactions sent
+ * and confirmed, and whether it stopped partway (what was left came back
+ * directly, in a return of its own).
+ */
+function chainView(chain: NonNullable<SessionRecord["chain"]>, txs: RecordedTx[]): NonNullable<SessionView["chain"]> {
+  const since = txs.filter((t) => t.at >= chain.at);
+  const own = since.filter((t) => t.kind === "deposit" || t.kind === "mix" || t.txHash === chain.last);
+  return {
+    total: chain.total,
+    sent: own.length,
+    confirmed: own.filter((t) => t.confirmed).length,
+    cut: !own.some((t) => t.txHash === chain.last) && since.some((t) => t.kind === "back"),
+    ...(chain.stopped ? { stopped: chain.stopped } : {}),
+  };
+}
+
+/** Where a swap or a mix that runs itself is at, for its timeline. A mix's chain is its return. */
+function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage"], mix: boolean): SessionAuto {
   const has = (kind: SessionTx["kind"], confirmed = false) => txs.some((t) => t.kind === kind && (!confirmed || t.confirmed));
   const step: SessionAuto["step"] =
     stage === "closed"
       ? "done"
       : stage === "funding" || stage === "failed"
         ? "funding"
-        : has("back")
+        : mix || has("back") || has("deposit")
           ? "returning"
           : has("swap", true)
             ? auto.stopping || has("cancel")

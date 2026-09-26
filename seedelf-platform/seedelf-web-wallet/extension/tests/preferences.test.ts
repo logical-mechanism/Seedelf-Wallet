@@ -22,6 +22,9 @@ describe("preferences", () => {
       dappConnector: false,
       // A site's signature needs the password until the user says otherwise.
       dappPassword: true,
+      // A session's spare ADA fans out two waves deep, and each box waits 1 to 6 hours.
+      lovejoinDepth: 2,
+      lovejoinDelay: "1-6",
     });
 
     expect(await prefs.set({ hideBalances: true, lockAfterMinutes: 60, currency: "eur" })).toEqual({
@@ -31,6 +34,8 @@ describe("preferences", () => {
       currency: "eur",
       dappConnector: false,
       dappPassword: true,
+      lovejoinDepth: 2,
+      lovejoinDelay: "1-6",
     });
     expect(await prefs.lockAfterMs()).toBe(60 * 60_000);
 
@@ -47,6 +52,11 @@ describe("preferences", () => {
     expect((await prefs.get()).dappPassword).toBe(true);
     await prefs.set({ dappPassword: false });
     expect((await prefs.get()).dappPassword).toBe(false);
+    // Lovejoin: 1 to 3 waves, and only the offered waits.
+    await prefs.set({ lovejoinDepth: 4 as never, lovejoinDelay: "1-2" as never });
+    expect(await prefs.get()).toMatchObject({ lovejoinDepth: 2, lovejoinDelay: "1-6" });
+    await prefs.set({ lovejoinDepth: 3, lovejoinDelay: "6-24" });
+    expect(await prefs.get()).toMatchObject({ lovejoinDepth: 3, lovejoinDelay: "6-24" });
   });
 
   it("read a kept value that's no longer allowed as the default", async () => {

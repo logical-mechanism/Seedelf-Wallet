@@ -31,7 +31,8 @@ The wallet is built in **chunks**, each about one working session.
 | 12 | Style and flow | ✅ | The user tested the built wallet and sent findings; 29 items, each decided with the user. Among them: a loading splash, a Tokens screen and a bundled token list, a token picker with any amount of each, Settings, Activity, Contacts, an incremental contract scan, Send from the Cardano account, the minimum ADA worked out, Receive on the Seedelf tab, spending everything under the account's payment keys, a UTxOs screen on both sides with locks, the Cardano account's collateral in Settings, and Refresh on UTxOs and Activity. **Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).** |
 | 13 | Staking and voting | ✅ | The wallet becomes a full Cardano wallet with Seedelf built in: a Staking page (one pool, rewards spent automatically or by hand), a pool browser, and voting delegation (Always abstain, No confidence, or a DRep). Certificates patched into Pallas's transactions. **Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md).** |
 | 14 | Style and flow, second pass | ✅ | The user's second round of findings, each decided with the user, as in chunk 12. So far: Send from the Cardano account pays a Seedelf, one way to write the name (Seedelf, and Seedelf Wallet for the app), several recipients in one payment on both sides, and Private and Public in place of Seedelf and Cardano. Then what Lace and Eternl had that the wallet didn't: a full tab by default or the side panel (no popup), hide balances, a note on a public send, the lock time, your handles on Receive (and a warning for a handle in Seedelf), a check of the written phrase, Activity as CSV, staking in the public Activity, and ADA's value in a currency on mainnet. Readable dropdowns, and a code review's fixes before the PR. **Plan: [plans/chunk-14-style-flow-2.md](plans/chunk-14-style-flow-2.md).** |
-| 15 | dApps: the public connector, and private swaps | 🚧 | The first steps towards using contracts privately. Private swaps: Minswap's aggregator swaps from a one-time account funded from the private balance, and everything comes back into it (step 2). CIP-30 for the public account, as Lace has it, behind a Settings switch that's off by default: Chrome is asked for access to sites only when it's turned on, and nothing is added to any page until then. A window to connect, sign transactions (what they do to the account, read in WebAssembly) and sign messages (CIP-8), connected sites to disconnect, and chaining on the account's own unconfirmed outputs. Then private sessions, a dApp browser, and Minswap. **Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md).** |
+| 15 | dApps: the public connector, and private swaps | ✅ | The first steps towards using contracts privately. Private swaps: Minswap's aggregator swaps from a one-time account funded from the private balance, and everything comes back into it (step 2). CIP-30 for the public account, as Lace has it, behind a Settings switch that's off by default: Chrome is asked for access to sites only when it's turned on, and nothing is added to any page until then. A window to connect, sign transactions (what they do to the account, read in WebAssembly) and sign messages (CIP-8), connected sites to disconnect, and chaining on the account's own unconfirmed outputs. Then private sessions, a dApp browser, and Minswap. **Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md).** |
+| 16 | Lovejoin | ✅ | The mixer in the wallet. A private session's spare ADA goes through Lovejoin on its way back: 10 ₳ boxes owned by the Seedelf key, a fan-out 3 wide (depth a setting, default 2) chained locally and paid by the session, then each box withdrawn into a fresh register after a random delay. The leftover and any tokens merge into the session's funding change. A Lovejoin tile mixes from the private balance or the public account. Scripts are evaluated in WebAssembly (`uplc`), after Pallas moves to 0.35. **Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md).** |
 
 ## After v1
 
@@ -42,6 +43,51 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-25: chunk 16, Lovejoin (third session)** (`web-wallet/lovejoin`). The plan's *Built (third session)* lists everything.
+  - **What landed:** the two features the user decided at the end of the second session.
+    - *Mix my boxes again* on the Lovejoin page: every box of the wallet's in the pool fanned out again, paid from the private balance through a one-time account, with no deposit. No box is withdrawn while it runs, and each waits a fresh delay after.
+    - A countdown in the last 2 minutes before auto-lock, on every screen, with Stay unlocked.
+    - Then, as the user asked: progress while a chain goes (sent, then on chain, or where it stopped) wherever a return shows, and mixing again past 10 boxes, as far as the pool allows.
+  - **Chunk 16 ends here,** with its PR into `seedelf-web-wallet` (the user, 2026-09-25: "we are at a really nice spot").
+  - **Live on preprod:** the user tests the built wallet there themselves, and reported their runs working (2026-09-25). The wallet's own tests run offline only. Worth watching in later runs: a long chain against the node's mempool (the plan's *Handoff to the fourth session*).
+
+- **2026-09-25: chunk 16, Lovejoin (second session)** (`web-wallet/lovejoin`). The plan's *Built (second session)* lists everything.
+  - **What landed:**
+    - A session's return merges into the Seedelf UTxO its funding made: one Seedelf spend under the session's own collateral, measured in the wallet.
+    - The Lovejoin tile mixes from the private balance (a mix session that runs itself) or from the public account (its collateral backing every mix).
+    - Koios's Ogmios checks each chain's first mix before it's used.
+    - The swap approval's words, and Home's *In Lovejoin* row.
+    - End-to-end tests for the tile and a return's review.
+  - **Surprises:**
+    - The merged return first bound its proof to the session's key. A site connected to a session can ask that key to sign, so a proof bound to it could be replayed in what the site builds. It now uses a one-time key, as every Seedelf spend does.
+    - A request left out of `rpc.ts`'s list is dropped by the worker without a word. It's a type error now.
+  - **Then the user tested it live on preprod.**
+    - A 3-box mix went through.
+    - Four fixes came of it: a withdraw's odd fee short of collateral; no banner for Bring one back now; a swap whose return chain stopped partway and then waited for good; and chain submits Koios didn't answer.
+    - Koios requests are now held under the public tier's burst limit.
+  - **Next:** the plan's *Handoff to the third session*. It says what's uncommitted, where the user's live tests stood, and the two features the user decided next: *Mix my boxes again* from the private balance, and a countdown before auto-lock. Then the PR into `seedelf-web-wallet`.
+
+- **2026-09-25: chunk 16, Lovejoin (first session)** (`web-wallet/lovejoin`). Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md), whose *Built* lists everything. Chunk 15 merged as PR #262.
+  - **What landed:**
+    - Pallas 0.35.
+    - Scripts evaluated in the wallet (`uplc` 1.1.23).
+    - The withdraw-zero patch.
+    - Lovejoin's provers.
+    - Deposit, mix, withdraw and whole chains, measured offline against the deployed scripts.
+    - The worker: a private session's spare ADA goes through Lovejoin on its way back, and the boxes come back later, each on its own, through giveme.my.
+    - Settings, the review lines, and a Lovejoin tile.
+  - **Surprises:**
+    - `uplc` 1.1.21 (on our old Pallas) mis-costs protocol 11's cost model, and it failed every mix. 1.1.23 matches the chain exactly.
+    - No Pallas version (to 1.4.0) stages withdrawals or a `Reward` redeemer.
+    - The module grew from 484 to 739 KB gzipped.
+  - **Next:**
+    - the merge into the funding change
+    - the tile's own mixing (from the private balance and from the public account)
+    - the swap approval's words
+    - Home's *In Lovejoin* row
+    - end-to-end tests
+    - a live preprod run, on the user's go-ahead
 
 - **2026-09-25: chunk 15, the public dApp connector** (`web-wallet/dapp-connector`). Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md). Chunk 14 merged as PR #261.
   - **What landed:**

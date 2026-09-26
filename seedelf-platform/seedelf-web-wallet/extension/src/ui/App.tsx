@@ -9,6 +9,7 @@ import type { Status } from "../shared/rpc";
 import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
 import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
+import { LockCountdown } from "./components/LockCountdown";
 import { DappApprovals } from "./screens/DappApprovals";
 import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
@@ -133,6 +134,7 @@ export function App() {
       </header>
 
       <main>
+        {unlocked && <LockCountdown />}
         {reachable === false && <ServiceAccess />}
         <NetworkContext.Provider value={status?.network ?? "preprod"}>
           <PreferencesProvider unlocked={unlocked}>{screen}</PreferencesProvider>

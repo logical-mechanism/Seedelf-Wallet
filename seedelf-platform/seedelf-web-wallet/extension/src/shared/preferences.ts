@@ -13,6 +13,14 @@ export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number];
 export const CURRENCIES = ["usd", "eur", "gbp", "jpy", "cad", "aud", "chf", "brl"] as const;
 export type Currency = (typeof CURRENCIES)[number] | "off";
 
+/** How deep a session's spare ADA fans out through Lovejoin: 4 mixes a box at 2 (about 3.5 ₳). */
+export const LOVEJOIN_DEPTHS = [1, 2, 3] as const;
+export type LovejoinDepth = (typeof LOVEJOIN_DEPTHS)[number];
+
+/** How long, in hours, a box waits in Lovejoin's pool before it comes back: a random time in the range. */
+export const LOVEJOIN_DELAYS = ["1-6", "2-12", "6-24"] as const;
+export type LovejoinDelay = (typeof LOVEJOIN_DELAYS)[number];
+
 export interface Preferences {
   /** Spend staking rewards whenever the Cardano account pays (a send, a move-in, a mint). */
   spendRewards: boolean;
@@ -33,6 +41,10 @@ export interface Preferences {
    * typed in the connector's window, even while the wallet is unlocked.
    */
   dappPassword: boolean;
+  /** Lovejoin's fan-out for a session's return: 1, 2 or 3 waves deep, three wide. */
+  lovejoinDepth: LovejoinDepth;
+  /** Lovejoin: the range each box's wait is drawn from. */
+  lovejoinDelay: LovejoinDelay;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -42,7 +54,15 @@ export const DEFAULT_PREFERENCES: Preferences = {
   currency: "usd",
   dappConnector: false,
   dappPassword: true,
+  lovejoinDepth: 2,
+  lovejoinDelay: "1-6",
 };
+
+export const isLovejoinDepth = (value: unknown): value is LovejoinDepth =>
+  (LOVEJOIN_DEPTHS as readonly unknown[]).includes(value);
+
+export const isLovejoinDelay = (value: unknown): value is LovejoinDelay =>
+  (LOVEJOIN_DELAYS as readonly unknown[]).includes(value);
 
 export const isLockAfter = (value: unknown): value is LockAfterMinutes =>
   (LOCK_AFTER_MINUTES as readonly unknown[]).includes(value);

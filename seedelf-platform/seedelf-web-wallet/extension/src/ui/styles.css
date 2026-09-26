@@ -373,6 +373,29 @@ label,
   gap: 6px;
 }
 
+/* A count stepped one at a time: Lovejoin's boxes. */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+
+.stepper .icon-button {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.stepper__value {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .field-row {
   display: flex;
   align-items: center;
@@ -2819,4 +2842,47 @@ button.dapp-tile:hover {
   align-items: flex-end;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+/* The countdown before auto-lock (components/LockCountdown.tsx): at the top
+   of every screen, and kept in view as the screen scrolls, so it sits on the
+   page's own background. */
+
+.lock-countdown {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  align-items: center;
+  margin-bottom: var(--s3);
+  background:
+    linear-gradient(var(--warn-soft), var(--warn-soft)),
+    var(--bg);
+}
+
+.lock-countdown .callout__icon {
+  margin-top: 0;
+  color: var(--warn);
+}
+
+.lock-countdown__time {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.lock-countdown__stay {
+  flex: none;
+}
+
+/* A reason in full under a row (a Lovejoin mix that stopped, or that tries
+   again): it wraps, where the row's one line would cut it off. */
+
+.token-row__detail {
+  grid-column: 2 / -1;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--warn);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
 }

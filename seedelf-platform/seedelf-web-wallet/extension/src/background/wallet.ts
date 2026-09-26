@@ -165,6 +165,20 @@ export class Wallet {
   }
 
   /**
+   * When auto-lock locks the wallet, null when it isn't unlocked, and how
+   * long it waits without activity: for the countdown in its last minutes.
+   * Asking isn't activity, and past the deadline it locks, as the alarm would.
+   */
+  lockDeadline(): Promise<{ at: number | null; lockAfterMs: number }> {
+    return this.serial(async () => {
+      const lockAfterMs = (await this.deps.lockAfterMs?.()) ?? AUTO_LOCK_MS;
+      if ((await this.load()) !== "unlocked") return { at: null, lockAfterMs };
+      const last = (await this.deps.session.get<number>(SESSION_ACTIVITY)) ?? 0;
+      return { at: last + lockAfterMs, lockAfterMs };
+    });
+  }
+
+  /**
    * The recovery phrase, for Settings: only with the password, even while
    * unlocked, and a wrong one counts towards the unlock back-off.
    */

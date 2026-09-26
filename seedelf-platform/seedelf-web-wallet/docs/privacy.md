@@ -27,6 +27,8 @@ These are not user settings:
    - The CLI draws it at random (`transfer.rs`, `sweep.rs`, `util/mint.rs`).
    - The web wallet derives it inside WebAssembly from the Seedelf key and a fresh random seed, so it survives a worker restart between review and Send without ever reaching JavaScript. A new seed gives a new key (see [architecture.md](architecture.md#transaction-building)).
 2. **Seedelf spends take their collateral from the shared giveme.my service,** never from a user UTxO. A user's own collateral would tag every private spend with their address.
+   - **The one exception is a private session's return merged into its funding change** (chunk 16). It puts up the session's own 5 ₳ collateral, which the same transaction spends. It tags nothing new: the transaction already spends the session's UTxOs.
+   - Its proof is still bound to a new one-time key (rule 1), never the session's key, which a connected site can ask to sign.
 3. **Re-randomization scalars (`d`) are toxic waste.**
    - They are full-size and come from a secure random source.
    - They are never stored or logged.
@@ -104,7 +106,8 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **What Koios learns:** reading the account for a site is the same query as a balance reading (at most every 30 s). Signing a site's transaction that spends UTxOs the account doesn't hold asks Koios about those (`utxo_info`); they're the site's, and the transaction names them anyway.
   - **Turning it on** asks Chrome to let the wallet onto every https site, which is what adds `window.cardano.seedelf`. The wallet doesn't read or change the pages beyond that one entry.
 - **A private swap** (chunk 15, a private session): a one-time account (`24301'/0/i`) is funded from the private balance, Minswap's aggregator builds the swap for it, and everything comes back into the private balance.
-  - **What links, on chain:** the funding spend's private UTxOs and change to the one-time account, as Make public does; the account to the order and the proceeds; the return to new private UTxOs, as Make private does. Anyone can follow the whole path. What's hidden is who: the public account never appears.
+  - **What links, on chain:** the funding spend's private UTxOs and change to the one-time account, as Make public does; the account to the order and the proceeds; the return to the private UTxO the funding left, as Make private does. Anyone can follow the whole path. What's hidden is who: the public account never appears.
+  - **The return merges into the funding's change** (chunk 16) while that's still in the private balance, so the session leaves one private UTxO tied to it, not two. When it's been spent, the return makes new ones, which are then tied to the session too.
   - The amounts and the times tie the two ends together, as the path does anyway. The account's stake key is its own, used once, so it ties the session to nothing else.
   - **Minswap** sees the account's address, the tokens and amounts, what's searched for in its token list, and the IP address. Its note on the order (CIP-20 metadata, which anyone can read) names the account's address too.
   - **Koios** is asked about every open session's account together (one request, only when the Swaps screen reads the chain), so it can tie them to each other and to the IP address.
@@ -114,6 +117,15 @@ The wallet can't prevent these, so it should make them visible to the user inste
   - **What links, on chain:** the funding to the account, as for a swap; whatever the site does with the account, in the open; each top-up; and the return to new private UTxOs. The public account never appears.
   - **The site** sees the account's address, its reward address (its own stake key, never registered), its UTxOs and collateral, and what the user signs for it. It sees the same account on every visit until the session ends, like a pen name: its visits link to each other, but to nothing else.
   - **On this device:** which site has which session is part of the sealed list of connected sites.
+- **Lovejoin** (chunk 16, preprod only): a mixer of 10 ₳ boxes. A box goes in from one place and comes out, after other people's mixes, as one of many boxes.
+  - **What it hides:** which box coming out is yours, among `3^depth` at the fan-out's leaves (9 at the default depth 2), and fewer when the pool is quiet. Each box comes back into a fresh private UTxO of its own, paid from itself with giveme.my's collateral, so nothing on the way out names a session or an account.
+  - **What still links:** the deposit, to whatever paid it (a session, or the public account in the open), and the boxes going in. The session, or the account, pays every mix and backs them with its collateral, in the open.
+  - **Tokens and less than 10 ₳ don't go in.** They come back with the rest, merged into the funding's change.
+  - **Timing and amounts:** each box waits a random while (1 to 6 hours by default) and comes back at the first unlock after it. Bringing one back early, or all at once, makes them easier to match. The boxes are all 10 ₳, so their amounts say nothing.
+  - **The public account's mix** (the tile) names the account as the depositor, as any payment of it does. Only the boxes' way back is hidden.
+  - **Mixing the boxes again** (the tile, from the private balance): a one-time account pays for mixes that each take one of your boxes and two others, so one of the three going into each first mix is likely yours, and the funding links the account to the private UTxOs it spends. The fan-out after hides which boxes coming out are yours, as before, and each waits a fresh delay before it comes back. The user chose the private balance over the public account, which would tie the boxes to it (2026-09-25).
+  - **What Koios learns:** a chain's pool read and its first mix, evaluated with the unsent deposit. At each unlock, a wallet that has used Lovejoin here reads the pool again. The ownership check runs in the extension, so Koios doesn't learn which boxes are yours, though it can guess that an IP address reading the pool uses Lovejoin.
+  - **On this device:** only the boxes' due times, sealed. The boxes themselves are found again by the Seedelf key.
 - **Bring everything back** returns each session in its own transaction, so no transaction ties two sessions together. They're sent one after another, though: returns into Seedelf that land within a block or two of each other hint that their one-time accounts are one person's. Spreading them out over time would weaken that; the user took sending them together, for now (2026-09-25).
 - **Save as CSV** (chunk 14) writes the listed Activity to a file on the device, unencrypted. For the private side that's the payments only this wallet can tell are yours, and the screen says so.
 

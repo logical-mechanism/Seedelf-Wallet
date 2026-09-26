@@ -27,6 +27,7 @@ import { PendingService } from "../src/background/pending";
 import { PreferencesService } from "../src/background/preferences";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
+import { LovejoinService } from "../src/background/lovejoin";
 import { SessionService } from "../src/background/sessions";
 import { StakingService } from "../src/background/staking";
 import { PrivateStore } from "../src/background/private-store";
@@ -170,7 +171,7 @@ export interface FakeKoios {
   confirmations: number | null;
   /** Transactions `tx_status` doesn't know, whatever `confirmations` says: never on chain. */
   missing: Set<string>;
-  /** Ogmios's answer to every evaluation: the recorded preprod mint's, unless replaced. */
+  /** Ogmios's answer to every evaluation: the recorded preprod mint's, unless replaced; or a function of the request. */
   evaluation: unknown;
   /** Who holds each NFT, by `policy.name`, for `asset_nft_address`. */
   nfts: Map<string, string>;
@@ -220,8 +221,9 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
       if (fake.hold) await fake.hold;
       let rows: unknown[];
       if (path === "ogmios") {
-        const failed = (fake.evaluation as { error?: unknown }).error !== undefined;
-        return Response.json(fake.evaluation, { status: failed ? 400 : 200 });
+        const answer = typeof fake.evaluation === "function" ? (fake.evaluation as (body: any) => unknown)(body) : fake.evaluation;
+        const failed = (answer as { error?: unknown }).error !== undefined;
+        return Response.json(answer, { status: failed ? 400 : 200 });
       }
       if (path === "asset_nft_address") {
         const holder = fake.nfts.get(`${searchParams.get("_asset_policy")}.${searchParams.get("_asset_name")}`);
@@ -382,11 +384,20 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     store,
     minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", minswap.fetch),
   });
+  // Lovejoin on its own: the default sessions above come back plainly, as
+  // their tests expect; lovejoin.test.ts wires one in.
+  const lovejoin = new LovejoinService({
+    ...deps,
+    collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    store,
+    preferences,
+  });
   return {
     ...t,
     koios,
     collateral,
     deps,
+    lovejoin,
     balances: new BalanceService(deps),
     moveIn: new MoveInService(deps),
     mint: new MintService({

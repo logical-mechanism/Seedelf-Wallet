@@ -950,11 +950,13 @@ pub fn required_signers(tx_cbor: &[u8]) -> Result<Vec<Hash<28>>> {
         .unwrap_or_default())
 }
 
-/// The execution budgets Ogmios measured, by redeemer.
+/// The execution budgets measured by redeemer, by Ogmios or in the wallet
+/// ([`crate::eval`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Budgets {
     spend: BTreeMap<u64, Budget>,
     mint: BTreeMap<u64, Budget>,
+    withdraw: BTreeMap<u64, Budget>,
 }
 
 impl Budgets {
@@ -985,6 +987,7 @@ impl Budgets {
             match purpose {
                 "spend" => budgets.spend.insert(index, budget),
                 "mint" => budgets.mint.insert(index, budget),
+                "withdraw" => budgets.withdraw.insert(index, budget),
                 other => {
                     bail!("Ogmios measured a {other} script, which this transaction doesn't have")
                 }
@@ -995,12 +998,11 @@ impl Budgets {
 
     /// A guess for `spends` wallet-contract inputs and `mints` seedelf
     /// policies, before Ogmios has measured anything.
-    fn guess(spends: usize, mints: usize) -> Self {
+    fn guess(spends: &[u64], mints: usize) -> Self {
         Budgets {
-            spend: (0..spends as u64)
-                .map(|i| (i, SPEND_BUDGET_GUESS))
-                .collect(),
+            spend: spends.iter().map(|i| (*i, SPEND_BUDGET_GUESS)).collect(),
             mint: (0..mints as u64).map(|i| (i, MINT_BUDGET_GUESS)).collect(),
+            withdraw: BTreeMap::new(),
         }
     }
 
@@ -1010,6 +1012,49 @@ impl Budgets {
 
     pub fn mint(&self, index: u64) -> Option<Budget> {
         self.mint.get(&index).copied()
+    }
+
+    /// A script withdrawal's budget (a withdraw-zero, such as Lovejoin's).
+    pub fn withdraw(&self, index: u64) -> Option<Budget> {
+        self.withdraw.get(&index).copied()
+    }
+
+    /// Every budget raised by `percent`, rounded up: what to declare when the
+    /// transaction measured will change a little before it's sent (a proof
+    /// bound to the fee costs a hair more or less each time it's made).
+    pub fn with_margin(&self, percent: u64) -> Self {
+        let raise = |m: &BTreeMap<u64, Budget>| {
+            m.iter()
+                .map(|(i, b)| {
+                    let up = |x: u64| x + (x * percent).div_ceil(100);
+                    (
+                        *i,
+                        Budget {
+                            mem: up(b.mem),
+                            steps: up(b.steps),
+                        },
+                    )
+                })
+                .collect()
+        };
+        Budgets {
+            spend: raise(&self.spend),
+            mint: raise(&self.mint),
+            withdraw: raise(&self.withdraw),
+        }
+    }
+
+    /// Whether every budget here is at least `used`'s, redeemer by redeemer.
+    pub fn covers(&self, used: &Budgets) -> bool {
+        let within = |ours: &BTreeMap<u64, Budget>, theirs: &BTreeMap<u64, Budget>| {
+            theirs.iter().all(|(i, b)| {
+                ours.get(i)
+                    .is_some_and(|o| o.mem >= b.mem && o.steps >= b.steps)
+            })
+        };
+        within(&self.spend, &used.spend)
+            && within(&self.mint, &used.mint)
+            && within(&self.withdraw, &used.withdraw)
     }
 }
 
@@ -1068,8 +1113,20 @@ fn ogmios_failure(error: &Value) -> String {
             })
         })
         .collect();
+    // Seedelf's scripts only spend and mint; a withdraw-zero is Lovejoin's.
+    let foreign = items.iter().any(|item| {
+        !matches!(
+            item.pointer("/validator/purpose").and_then(Value::as_str),
+            Some("spend" | "mint") | None
+        )
+    });
     if failures.is_empty() {
         format!("Ogmios couldn't evaluate the transaction: {message}")
+    } else if foreign {
+        format!(
+            "A script refused this transaction ({})",
+            failures.join("; ")
+        )
     } else {
         format!(
             "The Seedelf contract refused this transaction ({})",
@@ -1129,6 +1186,21 @@ struct PolicyMint {
     redeemer: Vec<u8>,
 }
 
+/// A key account whose UTxOs a Seedelf spend takes too, and whose own
+/// collateral it puts up instead of giveme.my's: a private session bringing
+/// its money back into the Seedelf UTxO its funding made. The account's key
+/// signs for its UTxOs; the proofs stay bound to the spend's own one-time key
+/// (privacy rule 1), which signs too. The account's key may sign what others
+/// build (a site's session does), so a proof bound to it could be replayed
+/// in a transaction someone else put in front of it.
+#[derive(Clone)]
+struct AccountPart {
+    inputs: Vec<(UtxoResponse, Input)>,
+    collateral: Input,
+    collateral_lovelace: u64,
+    collateral_addr: Address,
+}
+
 /// A Seedelf script spend, before its execution budgets are known. See the
 /// section comment above.
 #[derive(Clone)]
@@ -1145,6 +1217,8 @@ pub struct ScriptSpend {
     /// Where the change goes instead of the contract, if anywhere.
     change_addr: Option<Address>,
     signer: Hash<28>,
+    /// A key account spent alongside, with its collateral ([`Self::with_account`]).
+    account: Option<AccountPart>,
 }
 
 impl ScriptSpend {
@@ -1187,7 +1261,82 @@ impl ScriptSpend {
             change_owner: change_owner.clone(),
             change_addr: None,
             signer,
+            account: None,
         })
+    }
+
+    /// Spends `inputs` too, UTxOs under the key account's key `account`, and
+    /// puts up `collateral`, an ADA-only UTxO of the same account, in place of
+    /// giveme.my's (it may be one of `inputs`: the ledger takes a UTxO as
+    /// both). The account's key and the one-time key sign; giveme.my doesn't.
+    /// What the account holds goes with the change. `account` can't be the
+    /// one-time key: the proofs must stay bound to a key used once.
+    pub fn with_account(
+        mut self,
+        account: Hash<28>,
+        inputs: &[UtxoResponse],
+        collateral: &UtxoResponse,
+    ) -> Result<Self> {
+        if account == self.signer {
+            bail!("The account's key can't also be the spend's one-time key");
+        }
+        let network_flag = self.chain.network_flag;
+        let at_signer = |utxo: &UtxoResponse| -> Result<Address> {
+            let addr = Address::from_bech32(&utxo.address).with_context(|| {
+                format!(
+                    "UTxO {}#{} has an unreadable address",
+                    utxo.tx_hash, utxo.tx_index
+                )
+            })?;
+            let key = match &addr {
+                Address::Shelley(s) if is_on_correct_network(addr.clone(), network_flag) => {
+                    match s.payment() {
+                        pallas_addresses::ShelleyPaymentPart::Key(k) => Some(*k),
+                        pallas_addresses::ShelleyPaymentPart::Script(_) => None,
+                    }
+                }
+                _ => None,
+            };
+            if key != Some(account) {
+                bail!(
+                    "UTxO {}#{} isn't under the account's key",
+                    utxo.tx_hash,
+                    utxo.tx_index
+                );
+            }
+            Ok(addr)
+        };
+        let mut taken = Vec::with_capacity(inputs.len());
+        for utxo in inputs {
+            at_signer(utxo)?;
+            let input = input_of(utxo)?;
+            if self.inputs.iter().any(|o| o.input == input)
+                || taken
+                    .iter()
+                    .any(|(_, i): &(UtxoResponse, Input)| *i == input)
+            {
+                bail!("UTxO {}#{} is spent twice", utxo.tx_hash, utxo.tx_index);
+            }
+            taken.push((utxo.clone(), input));
+        }
+        let collateral_addr = at_signer(collateral)?;
+        if collateral
+            .asset_list
+            .as_ref()
+            .is_some_and(|a| !a.is_empty())
+        {
+            bail!("A collateral must hold ADA alone");
+        }
+        self.account = Some(AccountPart {
+            inputs: taken,
+            collateral: input_of(collateral)?,
+            collateral_lovelace: collateral
+                .value
+                .parse()
+                .context("The collateral's value isn't a number")?,
+            collateral_addr,
+        });
+        Ok(self)
     }
 
     /// Sends what's left after the outputs and the fee to `addr`, a key
@@ -1274,8 +1423,58 @@ impl ScriptSpend {
             hex::encode(self.signer),
         )?;
         let redeemers = vec![placeholder; self.inputs.len()];
-        let budgets = Budgets::guess(self.inputs.len(), usize::from(self.mint.is_some()));
+        let budgets = Budgets::guess(&self.positions()?, usize::from(self.mint.is_some()));
         self.settle(&budgets, &redeemers)
+    }
+
+    /// Measures the scripts in the wallet ([`crate::eval`]) rather than
+    /// through Ogmios, and finishes the spend: the draft, then the finished
+    /// transaction measured again as it will be sent. `known` are UTxOs it
+    /// spends that aren't on chain yet (a chain's own outputs); the rest
+    /// come from the rows given, and the Seedelf references are bundled.
+    pub fn measure_locally(&self, known: &[crate::eval::Resolved]) -> Result<FinalSpend> {
+        let Chain {
+            params,
+            network_flag,
+            ..
+        } = &self.chain;
+        let mut resolved: Vec<crate::eval::Resolved> = known.to_vec();
+        let rows = self.inputs.iter().map(|o| &o.utxo).chain(
+            self.account
+                .iter()
+                .flat_map(|a| a.inputs.iter().map(|(u, _)| u)),
+        );
+        for row in rows {
+            let hash = decode_tx_hash(&row.tx_hash)?;
+            if !resolved
+                .iter()
+                .any(|r| r.tx_hash == hash && r.index == row.tx_index)
+            {
+                resolved.push(crate::eval::resolve_row(row)?);
+            }
+        }
+        resolved.extend(crate::eval::seedelf_references(*network_flag)?);
+        let measure = |tx: &BuiltTransaction| -> Result<Budgets> {
+            let answer = crate::eval::evaluate(
+                &tx.tx_bytes.0,
+                &resolved,
+                &params.cost_model_v3,
+                *network_flag,
+            )?;
+            Budgets::from_ogmios(&answer)
+        };
+        let budgets = measure(&self.draft()?)?;
+        let finished = self.finalize(&budgets)?;
+        let again = measure(&finished.tx)?;
+        if budgets.covers(&again) {
+            return Ok(finished);
+        }
+        // The finished transaction's scripts used a hair more than the draft's.
+        let finished = self.finalize(&again.with_margin(1))?;
+        if !again.with_margin(1).covers(&measure(&finished.tx)?) {
+            bail!("The scripts' budgets did not settle");
+        }
+        Ok(finished)
     }
 
     fn proofs(&self) -> Result<&[Vec<u8>]> {
@@ -1284,10 +1483,45 @@ impl ScriptSpend {
             .context("The Seedelf spend isn't proven yet")
     }
 
+    /// Every input, the account's too, in the ledger's order: by
+    /// transaction id, then index. Redeemers point into it.
+    fn ledger_order(&self) -> Vec<Input> {
+        let mut order: Vec<Input> = self
+            .inputs
+            .iter()
+            .map(|o| o.input.clone())
+            .chain(
+                self.account
+                    .iter()
+                    .flat_map(|a| a.inputs.iter().map(|(_, i)| i.clone())),
+            )
+            .collect();
+        order.sort_by_key(|i| (i.tx_hash.0, i.txo_index));
+        order
+    }
+
+    /// Where each owned input sits in the ledger's order, in the order given:
+    /// the index its spend redeemer carries.
+    fn positions(&self) -> Result<Vec<u64>> {
+        let order = self.ledger_order();
+        self.inputs
+            .iter()
+            .map(|owned| {
+                order
+                    .iter()
+                    .position(|i| *i == owned.input)
+                    .map(|p| p as u64)
+                    .context("An input is missing from the transaction")
+            })
+            .collect()
+    }
+
     fn settle(&self, budgets: &Budgets, redeemers: &[Vec<u8>]) -> Result<FinalSpend> {
         // Every redeemer needs a budget, and together they must fit a transaction.
         let mut used = Vec::with_capacity(self.inputs.len() + 1);
-        for index in 0..self.inputs.len() as u64 {
+        let mut positions = self.positions()?;
+        positions.sort_unstable();
+        for index in positions {
             used.push(budgets.spend(index).with_context(|| {
                 format!("Ogmios measured no budget for spending input {index}")
             })?);
@@ -1323,7 +1557,8 @@ impl ScriptSpend {
         }
         let script_reference = script_bytes * REFERENCE_SCRIPT_FEE_PER_BYTE;
 
-        // Two signatures: the one-time key and giveme.my's collateral key.
+        // Two signatures: the one-time key and giveme.my's collateral key, or
+        // the account's key when an account puts up the collateral.
         let (fee, staged) = settle(
             2,
             Patches::staking(&Staking::none()),
@@ -1350,7 +1585,11 @@ impl ScriptSpend {
 
     /// What goes back into the contract when the fee is `fee`.
     fn remainder(&self, fee: u64) -> Result<(u64, Assets)> {
-        let (total, mut tokens) = assets_of(self.inputs())?;
+        let mut spent = self.inputs();
+        if let Some(account) = &self.account {
+            spent.extend(account.inputs.iter().map(|(u, _)| u.clone()));
+        }
+        let (total, mut tokens) = assets_of(spent)?;
         if let Some(m) = &self.mint {
             let asset = Asset::new(
                 hex::encode(m.policy),
@@ -1409,21 +1648,36 @@ impl ScriptSpend {
         for owned in &self.inputs {
             tx = tx.input(owned.input.clone());
         }
+        for (_, input) in self.account.iter().flat_map(|a| &a.inputs) {
+            tx = tx.input(input.clone());
+        }
         for output in self.outputs.iter().cloned().chain(change) {
             tx = tx.output(output);
         }
+        tx = match &self.account {
+            None => tx
+                .collateral_input(collateral_input(*network_flag))
+                .collateral_output(collateral_output(collateral_address(*network_flag), fee)?)
+                .disclosed_signer(self.signer)
+                .disclosed_signer(Hash::new(COLLATERAL_HASH)),
+            Some(account) => {
+                // The fee is even, so 3/2 of it is whole.
+                let back = account
+                    .collateral_lovelace
+                    .checked_sub(fee * 3 / 2)
+                    .context("The collateral can't cover this transaction's fee")?;
+                tx.collateral_input(account.collateral.clone())
+                    .collateral_output(Output::new(account.collateral_addr.clone(), back))
+                    .disclosed_signer(self.signer)
+            }
+        };
         tx = tx
-            .collateral_input(collateral_input(*network_flag))
-            .collateral_output(collateral_output(collateral_address(*network_flag), fee)?)
             .fee(fee)
             .reference_input(reference_utxo(config.reference.wallet_reference_utxo))
-            .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone())
-            .disclosed_signer(self.signer)
-            .disclosed_signer(Hash::new(COLLATERAL_HASH));
+            .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone());
 
         // Redeemers point at inputs in the ledger's order: sorted by tx id, then index.
-        let mut order: Vec<&Input> = self.inputs.iter().map(|o| &o.input).collect();
-        order.sort_by_key(|i| (i.tx_hash.0, i.txo_index));
+        let order = self.ledger_order();
         let units = |budget: Option<Budget>| {
             let b = budget.unwrap_or(DRAFT_BUDGET);
             ExUnits {
@@ -1434,7 +1688,7 @@ impl ScriptSpend {
         for (owned, redeemer) in self.inputs.iter().zip(redeemers) {
             let index = order
                 .iter()
-                .position(|i| **i == owned.input)
+                .position(|i| *i == owned.input)
                 .context("An input is missing from the transaction")?;
             let budget = budgets.and_then(|b| b.spend(index as u64));
             tx = tx.add_spend_redeemer(owned.input.clone(), redeemer.clone(), Some(units(budget)));
@@ -2037,7 +2291,7 @@ impl AccountMint {
 
     /// [`Self::finalize`] with a guessed budget: whether these inputs pay.
     fn estimate(&self) -> Result<FinalAccountMint> {
-        self.settle(&Budgets::guess(0, 1))
+        self.settle(&Budgets::guess(&[], 1))
     }
 
     /// How many payment keys sign: each distinct one among the inputs and

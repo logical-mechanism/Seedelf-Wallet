@@ -181,6 +181,7 @@ fn a_session_comes_back_whole_into_seedelf_signed_by_its_key() {
             params: params(),
             index: 3,
             utxos: utxos.clone(),
+            merge: vec![],
         },
     )
     .unwrap();
@@ -241,6 +242,115 @@ fn a_session_comes_back_whole_into_seedelf_signed_by_its_key() {
     );
 }
 
+/// A Seedelf UTxO under a fresh copy of `sk`'s register, as Koios lists it:
+/// the change a session's funding made.
+fn funding_change(tx: u8, index: u64, sk: blstrs::Scalar, lovelace: u64) -> UtxoResponse {
+    let wallet = wallet_contract(
+        true,
+        get_config(VARIANT, true)
+            .unwrap()
+            .contract
+            .wallet_contract_hash,
+    );
+    let register = Register::create(sk).unwrap().rerandomize().unwrap();
+    let mut row = utxo(tx, index, &wallet, lovelace, &[]);
+    row.inline_datum = serde_json::from_value(json!({
+        "bytes": hex::encode(register.to_vec().unwrap()),
+        "value": { "constructor": 0, "fields": [
+            { "bytes": register.generator }, { "bytes": register.public_value },
+        ]},
+    }))
+    .unwrap();
+    row
+}
+
+#[test]
+fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
+    let accounts = accounts();
+    let at = session(3);
+    let utxos = vec![
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(2, 1, &at, 2_500_000, &[(POLICY, MIN, 906_594_100)]),
+        utxo(3, 0, &at, 5_000_000, &[]),
+    ];
+    let sk = random_scalar();
+    let change = funding_change(9, 2, sk, 40_000_000);
+    let result = api::session_return(
+        &accounts,
+        sk,
+        SessionReturnRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 3,
+            utxos: utxos.clone(),
+            merge: vec![change.clone()],
+        },
+    )
+    .unwrap();
+    assert_eq!(result.merged, 1);
+
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    let fee = tx.fee().unwrap();
+    assert_eq!(fee.to_string(), result.fee);
+    // The funding's change and everything at the account, the 5 ₳ collateral
+    // too, which is also the collateral.
+    assert_eq!(tx.inputs().len(), 4);
+    let collateral: Vec<_> = tx
+        .collateral()
+        .iter()
+        .map(|i| (**i.hash(), i.index()))
+        .collect();
+    assert_eq!(collateral, vec![([3; 32], 0)]);
+    // What the private balance gains is what the account held, less the fee.
+    assert_eq!(result.lovelace, (27_500_000 - fee).to_string());
+    let into: u64 = tx.outputs().iter().map(|o| o.value().coin()).sum();
+    assert_eq!(into, 40_000_000 + 27_500_000 - fee);
+    for out in tx.outputs() {
+        let datum = match out.datum().unwrap() {
+            pallas_primitives::conway::PseudoDatumOption::Data(d) => d.0.clone(),
+            _ => panic!("an inline register"),
+        };
+        assert!(register_of(&datum).is_owned(sk).unwrap());
+    }
+    // The session's key signs for its UTxOs; the proof is bound to a one-time
+    // key of its own, which signs too: never the session's, which a site can
+    // ask to sign.
+    let signers: Vec<Hash<28>> = tx
+        .vkey_witnesses()
+        .iter()
+        .map(|w| Hasher::<224>::hash(&w.vkey))
+        .collect();
+    let session_key = accounts.key_hash(Role::Receive, 3).unwrap();
+    assert_eq!(signers.len(), 2);
+    assert!(signers.contains(&session_key));
+    let required = seedelf_core::build::required_signers(&bytes).unwrap();
+    assert_eq!(required.len(), 1);
+    assert_ne!(required[0], session_key);
+    assert!(signers.contains(&required[0]));
+    for w in tx.vkey_witnesses() {
+        let key: [u8; 32] = w.vkey.to_vec().try_into().unwrap();
+        let sig: [u8; 64] = w.signature.to_vec().try_into().unwrap();
+        assert!(PublicKey::from(key).verify(tx.hash(), &Signature::from(sig)));
+    }
+
+    // Someone else's Seedelf UTxO isn't merged into.
+    let foreign = funding_change(9, 3, random_scalar(), 40_000_000);
+    let err = api::session_return(
+        &accounts,
+        sk,
+        SessionReturnRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 3,
+            utxos,
+            merge: vec![foreign],
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("isn't this wallet's"), "{err}");
+}
+
 #[test]
 fn a_return_takes_only_the_sessions_own_utxos() {
     let accounts = accounts();
@@ -249,6 +359,7 @@ fn a_return_takes_only_the_sessions_own_utxos() {
         params: params(),
         index,
         utxos,
+        merge: vec![],
     };
     let sk = random_scalar();
     let err = api::session_return(

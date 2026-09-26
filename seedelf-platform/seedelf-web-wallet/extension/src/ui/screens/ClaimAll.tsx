@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
+import { delayText } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
@@ -122,6 +123,9 @@ export function ClaimAll({
   const total = picked.reduce((sum, r) => sum + BigInt(r.lovelace), 0n);
   const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
   const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
+  const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
+  const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
+  const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
   const toggle = (index: number) =>
     setChosen((was) => {
       const next = new Set(was);
@@ -166,6 +170,7 @@ export function ClaimAll({
                     <span className="token-row__sub">
                       Private session {r.index + 1}
                       {r.tokens.length ? ` · and ${plural(r.tokens.length, "token")}` : ""}
+                      {r.lovejoin ? ` · and ${plural(r.lovejoin.boxes, "box", "boxes")} of 10 ₳ through Lovejoin` : ""}
                     </span>
                   </button>
                 </li>
@@ -191,15 +196,20 @@ export function ClaimAll({
       )}
       {built && (
         <ReviewRows testId="claim-total">
-          <Row label="Into your private balance" value={`${formatAda(total.toString())} ₳`} strong />
+          <Row label={boxes ? "Back now" : "Into your private balance"} value={`${formatAda(total.toString())} ₳`} strong />
           {tokens > 0 && <Row label="" value={`and ${plural(tokens, "token")}`} />}
+          {boxes > 0 && delay && (
+            <Row label="Through Lovejoin" value={`${plural(boxes, "box", "boxes")} of 10 ₳, each back after ${delayText(delay)}`} />
+          )}
           <Row label="Network fees" value={`${formatAda(fees.toString())} ₳`} />
-          <Row label="Transactions" value={String(picked.length)} />
+          <Row label="Transactions" value={String(txs)} />
         </ReviewRows>
       )}
       <Callout tone="privacy">
         Each session comes back in its own transaction, so nothing in them ties the sessions together. They're sent one
         after another, though, and returns that land together hint that they're one person's.
+        {boxes > 0 &&
+          " A session's spare ADA goes through Lovejoin first, paid by that session, and each box comes back on its own, later, so those don't land together."}
       </Callout>
     </Screen>
   );

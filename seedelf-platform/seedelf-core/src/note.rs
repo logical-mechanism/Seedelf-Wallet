@@ -2,7 +2,7 @@
 //! message, metadata label 674 holding `{ "msg": [lines] }`, which wallets
 //! and explorers show with the transaction. Anyone can read it, for good.
 //!
-//! Pallas's builder can't stage metadata (`pallas-txbuilder` 0.33 writes
+//! Pallas's builder can't stage metadata (`pallas-txbuilder` 0.35 writes
 //! `None` for the auxiliary data), so, as with [`crate::staking`], a built
 //! transaction is decoded, given the note and the hash of it that its body
 //! must carry, and encoded again with its new hash: patched first, signed

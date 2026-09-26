@@ -480,7 +480,9 @@ export interface PendingTx {
     | "session-out"
     | "session-swap"
     | "session-cancel"
-    | "session-back";
+    | "session-back"
+    | "lovejoin-withdraw"
+    | "lovejoin-mix";
   network: NetworkName;
   txHash: string;
   submittedAt: number;
@@ -640,7 +642,7 @@ export interface SwapQuote {
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
 export interface SessionTx {
-  kind: "out" | "swap" | "cancel" | "back";
+  kind: "out" | "swap" | "cancel" | "back" | "deposit" | "mix";
   txHash: string;
   at: number;
   confirmed?: boolean;
@@ -688,6 +690,20 @@ export interface SessionView {
   auto?: SessionAuto;
   /** A site's private session (private CIP-30): the site it's connected to, rather than a swap. */
   site?: { origin: string };
+  /**
+   * A mix from the Lovejoin tile, rather than a swap: the boxes it puts
+   * through Lovejoin once funded, then everything else comes back. `again`:
+   * the wallet's boxes in the pool mixed again, with no deposit. `skipped`:
+   * why Lovejoin was left out, when it was.
+   */
+  mix?: { boxes: number; again?: boolean; skipped?: string };
+  /**
+   * A return through Lovejoin: its chain's transactions (the return last),
+   * how many are sent and how many are on chain, as the runner last read
+   * them, and `cut`: it stopped partway, and what was left came back
+   * directly. `stopped`: why a transaction of it couldn't be sent.
+   */
+  chain?: { total: number; sent: number; confirmed: number; cut: boolean; stopped?: string };
 }
 
 /** A funding payment into a new session, built and waiting for Send. */
@@ -719,6 +735,76 @@ export interface SessionBackSummary {
   tokens: TokenQuantity[];
   depositOutputs: number;
   inputs: number;
+  /**
+   * How many of the Seedelf UTxOs the session's funding made (its change)
+   * the return merges into: what comes back joins them rather than making
+   * new ones. 0 when they've been spent.
+   */
+  merged?: number;
+  /**
+   * When the spare ADA goes through Lovejoin first: its boxes (10 ₳ each),
+   * the fan-out, and every fee of the chain. `lovelace` is then what comes
+   * back at once; each box comes back later, after a random wait in `delay`
+   * (hours, "1-6").
+   */
+  lovejoin?: { boxes: number; depth: number; mixes: number; fees: string; txs: number; delay: string; again?: boolean };
+  /**
+   * Why the spare ADA doesn't go through Lovejoin this time, though it would
+   * pay for a box: the network measured its scripts differently from the
+   * wallet, so the chain doesn't start, and it all comes back directly.
+   */
+  lovejoinSkipped?: string;
+}
+
+/** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */
+export interface LovejoinFunding {
+  boxes: number;
+  /** The wallet's boxes in the pool, mixed again: no deposit, and no box to pay for. */
+  again?: boolean;
+  /** Mixing again: how many boxes the wallet has in the pool (`boxes` is how many go this time). */
+  owned?: number;
+  /** What pays for the boxes, every mix, and the deposit and its change: what the mixes don't use comes back. */
+  lovelace: string;
+  mixes: number;
+  /** About what the mixes cost, all together. */
+  mixFees: string;
+  depth: number;
+  /** Each box's wait before it comes back, in hours ("1-6"). */
+  delay: string;
+}
+
+/** A mix from the public account, built and signed, waiting for Send. Amounts in lovelace. */
+export interface LovejoinPublicSummary {
+  network: NetworkName;
+  /** The last mix's: Send names it, and Home's banner watches it. */
+  txHash: string;
+  boxes: number;
+  depth: number;
+  delay: string;
+  mixes: number;
+  txs: number;
+  /** Every fee of the chain. */
+  fees: string;
+  /** What stays in the public account after the last mix. */
+  change: string;
+}
+
+/** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
+export interface LovejoinStatus {
+  available: boolean;
+  boxes: Array<{ txHash: string; txIndex: number }>;
+  lovelace: string;
+  due: number[];
+}
+
+/**
+ * The boxes on their way back, as this device's schedule has them (no pool
+ * read): how many, what they hold, and when the next is due (ms), for Home.
+ */
+export interface LovejoinHeld {
+  boxes: number;
+  lovelace: string;
+  next: number | null;
 }
 
 /** A session's order not filled yet, from Minswap. */
@@ -744,6 +830,12 @@ export interface Requests {
   unlock: { payload: { password: string }; result: UnlockResult };
   lock: { payload: None; result: Status };
   activity: { payload: None; result: null };
+  /**
+   * When auto-lock locks the wallet (ms since the epoch), null when it isn't
+   * unlocked, and how long it waits without activity. Asking isn't activity:
+   * past the deadline, asking locks it.
+   */
+  "lock-deadline": { payload: None; result: { at: number | null; lockAfterMs: number } };
   account: { payload: None; result: Account };
   /** The last reading, or a new one if there is none or `refresh` is set. */
   balances: { payload: { refresh?: boolean }; result: Balances };
@@ -869,7 +961,8 @@ export interface Requests {
   "session-cancel-build": { payload: { index: number }; result: SessionTxReview };
   "session-cancel-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds and signs the return of everything at the session's account into the private balance. */
-  "session-back-build": { payload: { index: number }; result: SessionBackSummary };
+  /** `direct`: straight back, not through Lovejoin. */
+  "session-back-build": { payload: { index: number; direct?: boolean }; result: SessionBackSummary };
   "session-back-submit": { payload: { txHash: string }; result: PendingTx };
   /** Forgets a session whose funding never reached the chain. */
   "session-forget": { payload: { index: number }; result: SessionView[] };
@@ -882,7 +975,7 @@ export interface Requests {
    * something, each its own transaction; `skipped` says why a session wasn't.
    */
   "session-claim-build": {
-    payload: { indexes: number[] };
+    payload: { indexes: number[]; direct?: boolean };
     result: { returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> };
   };
   /** Sends the chosen returns Bring everything back built, one after another. */
@@ -890,6 +983,37 @@ export interface Requests {
     payload: { txHashes: string[] };
     result: { sent: Array<{ index: number; txHash: string }>; failed: Array<{ index: number; error: string }> };
   };
+  /** The wallet's boxes in Lovejoin's pool (a pool read), and when they're due back. */
+  "lovejoin-status": { payload: Record<string, never>; result: LovejoinStatus };
+  /** The boxes on their way back, from this device's schedule alone: no Koios request. */
+  "lovejoin-held": { payload: Record<string, never>; result: LovejoinHeld };
+  /** What mixing `boxes` boxes at the set depth takes. */
+  "lovejoin-funding": { payload: { boxes: number }; result: LovejoinFunding };
+  /** Builds the funding of a new one-time account that mixes `boxes` boxes from the private balance, and runs itself once sent. */
+  "lovejoin-mix-private-build": { payload: { boxes: number }; result: SessionOutSummary & { mix: LovejoinFunding } };
+  /**
+   * Builds the funding of a new one-time account that mixes every box of the
+   * wallet's in the pool again (as many as the pool has others for), with no
+   * deposit, and runs itself once sent. Sent with lovejoin-mix-private-submit.
+   */
+  "lovejoin-again-build": { payload: None; result: SessionOutSummary & { mix: LovejoinFunding } };
+  /** Records the mix session, then sends its funding. */
+  "lovejoin-mix-private-submit": { payload: { txHash: string }; result: { index: number; pending: PendingTx } };
+  /** Builds `boxes` boxes from the public account straight into Lovejoin: the deposit and every mix. */
+  "lovejoin-mix-public-build": { payload: { boxes: number }; result: LovejoinPublicSummary };
+  /** Sends the public mix built last, in order. */
+  "lovejoin-mix-public-submit": { payload: { txHash: string }; result: PendingTx };
+  /**
+   * How far the public mix being sent has got (transactions sent of its
+   * total, and why it stopped, if it did), or null when none is. `advance`:
+   * send more of it first, if there's room (the Lovejoin page, while open).
+   */
+  "lovejoin-mix-public-progress": {
+    payload: { advance?: boolean };
+    result: { total: number; sent: number; stopped?: string } | null;
+  };
+  /** Withdraws one of the wallet's boxes now, whatever its wait (`box`, or any). */
+  "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number } }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
   "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
   /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */
@@ -908,7 +1032,7 @@ export type Reply<K extends RequestName> =
   | { ok: true; value: Requests[K]["result"] }
   | { ok: false; error: string };
 
-const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
+const REQUEST_LIST = [
   "status",
   "generate-phrase",
   "validate-phrase",
@@ -917,6 +1041,7 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "unlock",
   "lock",
   "activity",
+  "lock-deadline",
   "account",
   "balances",
   "wordlist",
@@ -984,7 +1109,24 @@ const REQUESTS: ReadonlySet<string> = new Set<RequestName>([
   "session-advance",
   "session-stop",
   "session-resume",
-]);
+  "lovejoin-status",
+  "lovejoin-withdraw-now",
+  "lovejoin-held",
+  "lovejoin-funding",
+  "lovejoin-mix-private-build",
+  "lovejoin-again-build",
+  "lovejoin-mix-private-submit",
+  "lovejoin-mix-public-build",
+  "lovejoin-mix-public-submit",
+  "lovejoin-mix-public-progress",
+] as const satisfies readonly RequestName[];
+
+/** Every request is listed: one left out would be dropped as unknown. A missing name fails the typecheck here. */
+type Unlisted = Exclude<RequestName, (typeof REQUEST_LIST)[number]>;
+const everyRequestListed: [Unlisted] extends [never] ? true : Unlisted = true;
+void everyRequestListed;
+
+const REQUESTS: ReadonlySet<string> = new Set(REQUEST_LIST);
 
 export function isMessage(value: unknown): value is Message {
   const type = (value as { type?: unknown } | null)?.type;

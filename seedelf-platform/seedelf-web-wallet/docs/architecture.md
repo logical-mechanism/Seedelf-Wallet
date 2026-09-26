@@ -67,7 +67,7 @@ flowchart LR
 
 ## Transaction building
 
-**Decided: Rust (Pallas 0.33), compiled to WebAssembly.**
+**Decided: Rust (Pallas 0.35, 0.33 until chunk 16), compiled to WebAssembly.**
 
 - **One implementation.** The CLI already builds every Seedelf transaction with Pallas: registers, reference-script spends, the fee and ex-unit loop, and the collateral-service witness. Offline integration tests cover it. Reusing it gives the same single implementation as the crypto.
 - **The rejected option was a TypeScript library.** Lace's `TransactionBuilder` has no reference inputs, so we would have had to port the Seedelf logic by hand.
@@ -94,7 +94,7 @@ flowchart LR
     - The collateral is the web wallet's set-aside one when it has one (never an input), otherwise one of the account's own UTxOs. If it holds tokens, the collateral return gives them back.
     - It's drafted and finalized like a script spend, but only the policy runs: no proofs, no one-time key, no giveme.my.
   - `account_staking` (chunk 13): a staking transaction from the Cardano account, an account payment to `Payee::Nobody`: its inputs pay the fee and any deposit, and everything else is change to `0/0`.
-  - **Certificates and withdrawals are patched in** ([`seedelf-core/src/staking.rs`](../../seedelf-core/src/staking.rs), chunk 13). `pallas-txbuilder` can stage neither (0.33 and 1.4 both write `None` for them), so the transaction is built as usual, then `Staking::patch` decodes the body, sets them, encodes it again, and puts the new body hash into the `BuiltTransaction`. Signing always comes after the patch, so `BuiltTransaction::sign` signs the right hash; a patch after signing is refused. Pricing patches each draft too, and counts the stake key's witness.
+  - **Certificates and withdrawals are patched in** ([`seedelf-core/src/staking.rs`](../../seedelf-core/src/staking.rs), chunk 13). `pallas-txbuilder` can stage neither (0.33, 0.35 and 1.4 all write `None` for them), so the transaction is built as usual, then `Staking::patch` decodes the body, sets them, encodes it again, and puts the new body hash into the `BuiltTransaction`. Signing always comes after the patch, so `BuiltTransaction::sign` signs the right hash; a patch after signing is refused. Pricing patches each draft too, and counts the stake key's witness.
     - `Staking::of(key, action, state, key_deposit)` gives the certificates an action needs: `StakeRegDeleg` or `VoteRegDeleg` (register and delegate in one certificate) for an unregistered key, `StakeDelegation` or `VoteDeleg` for a registered one, `UnReg` with the deposit paid to stop. A withdrawal takes the whole reward balance; it's refused while the vote isn't delegated (Conway's rule since its second phase).
     - `Staking::withdraw` rides along with `move_in`, `account_send` and `account_mint`: the rewards count towards what the inputs pay, value being inputs + withdrawal + refund = outputs + fee + deposit.
     - Pool IDs (bech32 or hex) and DRep IDs (CIP-129 as Koios gives them, or CIP-105's `drep1…` and `drep_script1…`) are read there too, and written back the way Koios names them.
@@ -180,6 +180,10 @@ flowchart LR
 
 - **Paging:** 1000 rows a page, in a fixed order (`order=tx_hash.asc,tx_index.asc`), until a short page.
 - **Retries:** a rate limit (429), a server error (5xx) or a network failure is retried twice, after 1 s and 3 s. Anything else fails at once with Koios's status.
+- **Bursts:** every request the worker makes, each retry included, waits its turn under one shared limit of 60 every 10 s (`KOIOS_LIMIT` in `koios.ts`), under the public tier's 100. A long Lovejoin chain, or several screens reading at once, can't reach it.
+- **Submits:** a submit Koios doesn't answer (a timeout, a lost connection, 429, 5xx) throws `KoiosBusyError`, since the transaction may or may not have gone through. A Lovejoin chain sends it again later, which is safe: the ledger takes it once.
+  - **A chain is sent a window at a time** (`pumpChain`): at most 4 of its transactions wait in the mempool. A block may use 20 billion CPU steps in scripts and a mix uses 5.73 billion, so a block takes only 3 mixes, and a node's mempool holds about two blocks' worth; a submit past that waits for a block, longer than Koios answers (20 s). So the wallet sends while there's room, looks for blocks every 5 s, and each call sends for at most about a block: a Send sends the first window, and the runner's steps, the alarm and the open Lovejoin page the rest. The chain waits in `chrome.storage.session` meanwhile (`seedelf.session.chain.<network>.<index>`, `seedelf.lovejoin.sending.<network>`), so no request runs near Chrome's five minutes. Locking wipes it: the rest then comes back directly, and the session says why.
+  - **Sent again, it can be refused as spending what's spent,** because it's waiting in the mempool already. So a chain's transaction refused that way, after a try Koios didn't answer or anywhere past the first, is sent again and looked for on chain every 10 s for about three minutes (`chainRetryMs`) before the chain stops. When it does stop, the session records why, and the Lovejoin page shows it in full.
 - **Koios's public tier, with no API key (decided 2026-09-25).** Its limits are per IP address (5,000 requests a day, 100 every 10 s), so each user has their own, and there's no key to ship, leak or share.
   - A key in the extension would be anyone's: the extension's files are public. Every user would also share its one daily allowance (50,000 on the free tier), and Koios would tie every request to the key's account.
   - **Since 2026-09-25 the public tier sends browsers no CORS headers** (Koios's [tiers](https://koios.rest/tiers.html): CORS "Restricted" without a key, "Open" with one). A web page can't read it. The extension can: its requests to a host in its host permissions skip CORS. So the wallet reads Koios only through Chrome's grant for `preprod.koios.rest` (and `api.koios.rest` on mainnet).
@@ -254,6 +258,7 @@ flowchart LR
 - **Auto-lock** after 15 minutes without activity, or the time chosen in Settings (chunk 14): 1, 5, 15, 30 or 60 minutes, Lace's choices less "never". The wallet reads the setting (`lockAfterMinutes`) on every check, so a change applies at once.
   - While unlocked, the UI reports activity (a key press or a click) to the worker, at most every 30 seconds.
   - A `chrome.alarms` alarm checks once a minute, and every request checks too.
+  - **A countdown in its last 2 minutes** (chunk 16), or the last half of a 1-minute lock: a banner on every screen, "Locking in 1:30", with **Stay unlocked** (`LockCountdown.tsx`). The page asks the worker when it locks (`lock-deadline`, the last activity plus the lock time), which isn't activity: every 15 seconds, every 5 while the countdown shows, and when the page comes back into view. While it shows, any click or key puts the lock off at once, as Stay unlocked does; mouse movement doesn't count. At 0:00 the page asks again, and asking past the deadline locks.
 - **Failed unlocks** trigger an exponential back-off: 1 s, 2 s, 4 s and so on, capped at 60 s (Lace's values).
   - Unlike Lace, the worker enforces it: an attempt that comes too early is refused before the password is even tried.
   - The count is kept in `chrome.storage.local`, so restarting the worker or the browser doesn't reset it. The right password resets it.
@@ -380,7 +385,12 @@ flowchart LR
   - `signSessionTx` gives the vkey witness; `attachWitnesses` (`cip30::attach_witnesses`) splices it into Minswap's witness set, copying the body and the other entries byte for byte, so the id is unchanged and the order's datum still hashes to what the order names. Checked on a real preprod swap Minswap built (`wasm/tests/fixtures/minswap-swap-preprod.json`).
   - A connector summary's `scripts` is now redeemers only: a script data hash alone covers witness-set datums, as an order's, and runs nothing.
 - **The cancel** is the same with Minswap's `cancel-tx`: its inputs are the orders (read from Koios `utxo_info`) and the account's collateral.
-- **Back** is `buildSessionReturn`: every UTxO at the account into the contract under fresh registers (`build::external_sweep`, the CLI's external sweep), signed by the session's key. The worker refuses it while Minswap lists an order of a session that placed one.
+- **Back** is `buildSessionReturn`: every UTxO at the account into the contract, signed by the session's key. The worker refuses it while Minswap lists an order of a session that placed one.
+  - **Merged into the funding's change** (chunk 16) when that Seedelf UTxO is still in the private balance and not locked (`fundingChange`): one Seedelf spend (`ScriptSpend::with_account`) takes it and every UTxO at the account, under the session's own 5 ₳ collateral, which it also spends. What comes back joins a UTxO already tied to the session, so no new one is.
+    - Its proof is bound to a new one-time key, never the session's: a site connected to the session can ask the session's key to sign.
+    - It's measured in the wallet (`measure_locally`), not by Ogmios.
+  - **Otherwise** it's the CLI's external sweep (`build::external_sweep`): new registers, no script, no collateral.
+  - **On preprod, spare ADA goes through Lovejoin first** (below).
 - **The runner** (chunk 15b). Sending the funding is the one approval: the record gains `auto` (the approved `minAmountOut` and `fund`). `SessionService.advance` takes whatever step is next from the record and the chain, so it's safe to call any number of times:
   - **Who calls it:** the session's page every 20 s (and its Refresh, which skips the wait), the `seedelf.sessions` alarm every minute while a swap runs and the wallet is unlocked (`runAll`, which stops the alarm once nothing runs), and unlocking (the wallet's `changed`). Locked, it does nothing and the alarm stops until unlock. One promise queue in the service takes every step, the runner's and the user's, one at a time.
   - **The steps:** wait for what was sent to confirm (`tx_status`); then place the order, wait for the fill, and bring it all back. A fill is something arriving from a transaction the session didn't make while Minswap lists no order; an empty list alone can be Minswap lagging behind.
@@ -391,6 +401,39 @@ flowchart LR
 - **What each costs:** reading the sessions is one Koios `credential_utxos` for every open session's key hash, and one `tx_status` for the transactions waiting, only when Minswap's screen reads. A running swap reads its chain at most every 15 s unless the user refreshes: one `tx_status` while something waits to confirm, else one `credential_utxos`, plus Minswap's `pending-orders` once its order is on chain. About 10–20 requests a swap, and nothing while none runs. The form asks Minswap's `estimate` once typing pauses (0.6 s) after each change of the amount, the pair or the slippage, never on every key, and its token search asks `tokens` the same way (0.4 s); a quote over a minute old is asked for once more before the funding. Placing the order costs two Minswap requests (`estimate`, `build-tx`) and one Koios read of the account.
 - **Routing is through DEXes that take orders only.** Some DEXes on Minswap's routes swap straight against their pools in the same transaction: it spends the pools' UTxOs, runs their scripts, and uses someone else's collateral. A session signs only what spends nothing but its own UTxOs, so every `estimate` and `build-tx` asks Minswap to leave them out (`exclude_protocols`, `DIRECT_PROTOCOLS` in `minswap.ts`: DanogoCLMMV1, ChakraBondingCurve, OpenDjedV1). The session's check stays as the backstop: any other DEX that does it pauses the swap. Allowing such swaps (checking the pools' script inputs, the other collateral and the session's net change) is a later step.
 - **Minswap's aggregator** answers browsers with CORS headers, so the manifest only lists it in the pages' `connect-src` (`networks.ts` `corsOrigins`): no host permission, no new warning at install. If it ever stops, it'll need an optional host permission.
+
+## Lovejoin
+
+Chunk 16: [Lovejoin](https://github.com/logical-mechanism/Lovejoin), a mixer of fixed 10 ₳ boxes, deployed on preprod only. The plan has the protocol and the decisions: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md).
+
+```mermaid
+flowchart LR
+  R["a session's return<br/>(sessions.ts)"] -- "chain" --> L["lovejoin.ts"]
+  T["Lovejoin page<br/>(Lovejoin.tsx)"] -- "mix: private (a mix session),<br/>public, again, status, withdraw now" --> L
+  A["unlock, seedelf.sessions alarm"] -- "withdrawDue" --> L
+  L -- "credential_utxos (mix_box),<br/>ogmios (first mix), submittx" --> K["Koios"]
+  L -- "giveme.my (withdraws)" --> G["giveme.my"]
+  L -- "buildLovejoinChain, buildLovejoinFromAccount,<br/>lovejoinOwned, buildLovejoinWithdraw,<br/>ogmiosUtxos, declaredCovers" --> X["WebAssembly"]
+```
+
+- **Boxes are owned by the Seedelf key.** A box's datum `{a, b}` has a Seedelf register's shape, so the key's ownership check finds its boxes anywhere in the pool, after other people's mixes and after a restore. Boxes aren't remembered; only their due times are, sealed as `lovejoin.<network>`.
+- **A chain is built whole before any of it is sent,** in WebAssembly, each transaction measured against the deployed scripts (`seedelf_core::eval`, Aiken's `uplc`) on the outputs of the one before:
+  - the deposit;
+  - each box fanned out three wide, `depth` waves deep (a setting, 1 to 3, default 2), with fresh pool boxes drawn at random;
+  - for a session, the return last (merged, as above).
+
+  The session's one collateral backs every mix. The worker sends the chain in order, trying a child again a few times when Koios hasn't seen its parent yet.
+- **The network's check:** before a chain is used, Koios's Ogmios measures its first mix, given the unsent deposit as `additionalUtxo`. If it measures more than the mix declares, or refuses a script, the chain doesn't start: a return comes back directly and says why. That's what a hard fork the evaluator doesn't know looks like.
+- **Withdraws:** each box comes back on its own after a random wait (a setting, default 1 to 6 hours), at the first unlock after it or on the sessions alarm. It goes into a fresh register, paid from itself, with giveme.my's collateral: nothing ties it to where it came from.
+- **The tile mixes too:**
+  - **From the private balance:** a mix session, a one-time account funded for the boxes that then runs itself with the swap runner's machinery.
+  - **From the public account:** the deposit and every mix paid by the account and backed by its collateral; the change stays in it.
+  - **Mix my boxes again:** every box of the wallet's in the pool fanned out once more (as many as the pool has other boxes for, and one chain of at most 130 mixes), for a chain cut short or boxes nobody has mixed since. It's a mix session with `again`: its one-time account is funded for the mixes alone (`again_funding`), and its chain has no deposit (`lovejoin::again`), the first mix paying from the funding. Its first mix is checked by the network with nothing extra, since all its inputs are on chain.
+    - **While one runs, no box is withdrawn** (`SessionService.mixingAgain`, which Lovejoin asks before `withdrawDue` and Bring one back now): from its funding until its return is sent, since its chain spends the boxes. There's one at a time.
+    - **Once its first mix is in, the boxes wait again:** the earliest due times go, and each gets a fresh delay, as a deposit's boxes do.
+- **Progress:** a return's chain is recorded before it's sent (`chain: { total, last, at }` on the session), so its view counts the transactions sent and those on chain, and says if it stopped partway. The Lovejoin page, a swap's timeline, a site session's page and every return's Send button show it, reading the record every 2 s while a chain goes (no Koios); the on-chain count moves as the runner reads `tx_status`. A public mix's Send counts from the worker's memory (`lovejoin-mix-public-progress`). A chain that finished doesn't hold a later return of the same session back from Lovejoin; one that stopped partway sends the rest back directly.
+- **Home's *In Lovejoin* row** is read from the schedule alone (`lovejoin-held`). The unlock scan reads the pool only on a wallet that has used Lovejoin on this device.
+- **What each costs:** a chain is one pool read, one evaluate, and one submit per transaction (a session at depth 2 with k boxes: 4k + 2; mixing k boxes again, 4k + 1). A withdraw is giveme.my and one submit, and the unlock scan one pool read.
 
 ## What we borrow from Lace
 

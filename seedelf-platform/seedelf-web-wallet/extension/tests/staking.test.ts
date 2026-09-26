@@ -268,6 +268,8 @@ describe("spending rewards", () => {
       currency: "usd",
       dappConnector: false,
       dappPassword: true,
+      lovejoinDepth: 2,
+      lovejoinDelay: "1-6",
     });
     await t.wallet.reset();
     expect(await t.preferences.get()).toMatchObject({ spendRewards: true });

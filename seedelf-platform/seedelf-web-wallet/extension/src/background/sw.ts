@@ -14,7 +14,7 @@ import { ContactsService } from "./contacts";
 import { DappError, DappService, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
-import { Koios } from "./koios";
+import { Koios, KOIOS_LIMIT } from "./koios";
 import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
@@ -27,6 +27,7 @@ import { SessionService } from "./sessions";
 import { StakingService } from "./staking";
 import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
+import { LovejoinService } from "./lovejoin";
 import { chromeArea } from "./storage";
 import { Wallet } from "./wallet";
 import { loadWasm } from "./wasm";
@@ -56,13 +57,20 @@ const sessionsAlarm = {
   },
 };
 
-/** The next step of every swap that runs itself, while the wallet is unlocked; locked, the alarm stops until unlock. */
-async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "network">): Promise<void> {
+/**
+ * The next step of every swap that runs itself, and Lovejoin's boxes that are
+ * due back, while the wallet is unlocked; locked, the alarm stops until
+ * unlock. `scan`: read Lovejoin's pool even with nothing due (at unlock).
+ */
+async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "network">, scan = false): Promise<void> {
   if ((await ctx.wallet.state()) !== "unlocked") {
     await sessionsAlarm.stop();
     return;
   }
   await ctx.sessions.runAll(ctx.network);
+  // A public mix still being sent keeps the alarm going too.
+  if (await ctx.lovejoin.pumpPublic(ctx.network).catch(() => false)) await sessionsAlarm.start();
+  await ctx.lovejoin.withdrawDue(ctx.network, scan).catch(() => undefined);
 }
 
 let context: Promise<Context> | undefined;
@@ -78,6 +86,7 @@ function getContext(): Promise<Context> {
     const broadcast = (message: object) => void chrome.runtime.sendMessage(message).catch(() => undefined);
     let dapp: DappService | undefined;
     let sessions: SessionService | undefined;
+    let lovejoin: LovejoinService | undefined;
     const wallet = new Wallet({
       wasm,
       local,
@@ -89,10 +98,11 @@ function getContext(): Promise<Context> {
         broadcast(STATE_CHANGED);
         // Sites waiting for an unlock go on, and so does a swap that runs itself.
         void dapp?.stateChanged();
-        if (sessions) void runSessions({ wallet, sessions, network }).catch(() => undefined);
+        if (sessions && lovejoin) void runSessions({ wallet, sessions, lovejoin, network }, true).catch(() => undefined);
       },
     });
-    const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios);
+    // Every request waits its turn under Koios's public-tier limit, whatever the network.
+    const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios, undefined, undefined, undefined, KOIOS_LIMIT);
     const store = new PrivateStore({ wallet, local });
     const prices = new PriceService({ local, preferences, now: Date.now });
     const activity = new ActivityService({ wallet, session, store, koios, local });
@@ -110,7 +120,15 @@ function getContext(): Promise<Context> {
     const pending = new PendingService({ wallet, session, koios, now: Date.now });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
-    sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm });
+    // No box is withdrawn while a chain mixing them again may still spend it.
+    lovejoin = new LovejoinService({
+      ...spends,
+      store,
+      preferences,
+      mixingAgain: (n) => sessions!.mixingAgain(n),
+      alarm: sessionsAlarm,
+    });
+    sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
     dapp = new DappService({
       ...spends,
       preferences,
@@ -138,6 +156,7 @@ function getContext(): Promise<Context> {
       prices,
       dapp,
       sessions,
+      lovejoin,
       connector: applyConnector,
       version: __VERSION__,
       network,

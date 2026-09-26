@@ -17,6 +17,7 @@ use seedelf_crypto::{cardano, derivation, register, schnorr};
 use wasm_bindgen::prelude::*;
 
 pub mod cip30;
+pub mod lovejoin;
 
 /// Plain-Rust implementations behind the exports, testable off-wasm.
 pub mod api {
@@ -235,7 +236,7 @@ pub mod api {
     /// network, whatever its staking part: a base address, an enterprise
     /// address (none), or our key with someone else's stake key. It's our
     /// money either way.
-    type Paths = HashMap<(String, u64), (Role, u32)>;
+    pub(crate) type Paths = HashMap<(String, u64), (Role, u32)>;
 
     /// The payment key hash of a Shelley address on this network; `None`
     /// for a script, a Byron address, or the other network.
@@ -254,7 +255,7 @@ pub mod api {
         }
     }
 
-    fn check_paths(
+    pub(crate) fn check_paths(
         account: &CardanoAccount,
         network_flag: bool,
         utxos: &[PathedUtxo],
@@ -278,7 +279,7 @@ pub mod api {
     }
 
     /// Signs `tx` once per distinct payment key among `spent`, inside this module.
-    fn sign_with_paths(
+    pub(crate) fn sign_with_paths(
         tx: &BuiltTransaction,
         account: &CardanoAccount,
         paths: &Paths,
@@ -458,6 +459,11 @@ pub mod api {
         pub index: u32,
         /// Every UTxO at the session's account, as Koios returns them.
         pub utxos: Vec<UtxoResponse>,
+        /// The Seedelf UTxOs the session's funding made (its change), still
+        /// in the private balance: the return merges into them. None: the
+        /// return makes new ones.
+        #[serde(default)]
+        pub merge: Vec<UtxoResponse>,
     }
 
     /// A signed return, ready to submit, and what it moves.
@@ -467,19 +473,88 @@ pub mod api {
         pub tx_cbor: String,
         pub tx_hash: String,
         pub fee: String,
-        /// Into the wallet contract: everything the account held, less the fee.
+        /// What the private balance gains: everything the account held, less the fee.
         pub lovelace: String,
         pub tokens: Vec<TokenAmount>,
         /// The contract outputs holding it (tokens go a limited number to one).
         pub deposit_outputs: usize,
         pub inputs: usize,
+        /// How many of the funding's Seedelf UTxOs it merged into (0: new ones).
+        pub merged: usize,
+    }
+
+    /// The most funding changes one return merges into.
+    pub const MAX_MERGE: usize = 4;
+
+    /// The session's own collateral among its UTxOs: its 5 ₳ ADA-only one,
+    /// or else the largest ADA-only one that covers a script's collateral
+    /// and leaves its return a valid output.
+    pub(crate) fn session_collateral(utxos: &[UtxoResponse]) -> Option<&UtxoResponse> {
+        let ada_only = utxos
+            .iter()
+            .filter(|u| u.asset_list.as_ref().is_none_or(|a| a.is_empty()));
+        let lovelace = |u: &UtxoResponse| u.value.parse::<u64>().unwrap_or(0);
+        ada_only
+            .clone()
+            .find(|u| lovelace(u) == build::COLLATERAL_LOVELACE)
+            .or_else(|| {
+                ada_only
+                    .filter(|u| lovelace(u) >= 2_000_000)
+                    .max_by_key(|u| lovelace(u))
+            })
+    }
+
+    /// The return of `rows`, UTxOs under session `index`'s key, merged into
+    /// `merge` (the funding's Seedelf change, checked here to be this
+    /// wallet's): one Seedelf spend proven with `sk`, with `collateral` (one
+    /// of `rows`) as its collateral. The proofs are bound to a new one-time
+    /// key, as every Seedelf spend's (privacy rule 1), never the session's:
+    /// a site connected to the session can ask its key to sign, so a proof
+    /// bound to it could be replayed in what the site builds. Measured in the
+    /// wallet; `known` are UTxOs among `rows` that aren't on chain yet.
+    /// Signed by the one-time key and the session's, here.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn merged_return(
+        accounts: &CardanoAccount,
+        sk: Scalar,
+        chain: &Chain,
+        index: u32,
+        rows: &[UtxoResponse],
+        collateral: &UtxoResponse,
+        merge: &[UtxoResponse],
+        known: &[seedelf_core::eval::Resolved],
+    ) -> Result<(BuiltTransaction, build::FinalSpend)> {
+        check_spendable(sk, chain, merge)?;
+        if merge.len() > MAX_MERGE {
+            bail!("A return merges into at most {MAX_MERGE} of the funding's UTxOs");
+        }
+        let key = accounts.key_hash(Role::Receive, index)?;
+        let owner = Register::create(sk)?;
+        let one_time = one_time_key(&sk, &new_seed());
+        let spend = ScriptSpend::new(chain, merge, &owner, key_hash(&one_time))?
+            .with_account(key, rows, collateral)?;
+        let built = prove_with(sk, spend)?.measure_locally(known)?;
+        let session_key = accounts
+            .private_key(Role::Receive, index)?
+            .to_ed25519_private_key();
+        let signed = built
+            .tx
+            .clone()
+            .sign(one_time)
+            .and_then(|tx| tx.sign(session_key))
+            .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
+        Ok((signed, built))
     }
 
     /// Builds and signs a session's return: every UTxO at its one-time
     /// account into the wallet contract, under fresh re-randomizations of
-    /// `sk`'s base register (the CLI's `external sweep`, `build::external_sweep`).
+    /// `sk`'s base register. With `merge`, one Seedelf spend takes the
+    /// funding's change too, so what comes back joins the UTxO already
+    /// linked to the session instead of making another ([`merged_return`]),
+    /// with the session's own collateral. Without, it's the CLI's `external
+    /// sweep` (`build::external_sweep`): no script runs, and no collateral.
     /// Each UTxO must be under the session's payment key; it signs inside
-    /// this module. No script runs, so there's no collateral.
+    /// this module.
     pub fn session_return(
         accounts: &CardanoAccount,
         sk: Scalar,
@@ -501,6 +576,31 @@ pub mod api {
                 );
             }
         }
+        let (total, tokens) = utxo_assets(request.utxos.clone())?;
+        let collateral = session_collateral(&request.utxos);
+        if let (false, Some(collateral)) = (request.merge.is_empty(), collateral) {
+            let chain = chain_of(&request.network, &request.params)?;
+            let (signed, built) = merged_return(
+                accounts,
+                sk,
+                &chain,
+                request.index,
+                &request.utxos,
+                collateral,
+                &request.merge,
+                &[],
+            )?;
+            return Ok(SessionReturnResult {
+                tx_cbor: hex::encode(&signed.tx_bytes.0),
+                tx_hash: hex::encode(signed.tx_hash.0),
+                fee: built.fee.total.to_string(),
+                lovelace: (total - built.fee.total).to_string(),
+                tokens: tokens.items.iter().map(token_amount).collect(),
+                deposit_outputs: built.change_outputs,
+                inputs: request.utxos.len(),
+                merged: request.merge.len(),
+            });
+        }
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
         let owner = Register::create(sk)?;
@@ -513,7 +613,6 @@ pub mod api {
             )
             .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
 
-        let (total, tokens) = utxo_assets(request.utxos.clone())?;
         // Every output is a deposit into the contract.
         let deposit_outputs = pallas_primitives::conway::Tx::decode_fragment(&signed.tx_bytes.0)
             .map_err(|e| anyhow!("the return doesn't decode: {e}"))?
@@ -528,6 +627,7 @@ pub mod api {
             tokens: tokens.items.iter().map(token_amount).collect(),
             deposit_outputs,
             inputs: request.utxos.len(),
+            merged: 0,
         })
     }
 
@@ -2141,6 +2241,94 @@ pub fn build_session_return(
 ) -> Result<String, JsError> {
     let request: api::SessionReturnRequest = from_json(request)?;
     to_json(&api::session_return(&accounts.inner, key.sk, request).map_err(js_error)?)
+}
+
+/// How many Lovejoin boxes a session's spare ADA pays for at `depth`, before
+/// anything is built (`lovejoin::PlanRequest` → `lovejoin::PlanResult`).
+#[wasm_bindgen(js_name = planLovejoin)]
+pub fn plan_lovejoin(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::plan(&accounts.inner, from_json(request)?).map_err(js_error)?)
+}
+
+/// A session's whole chain through Lovejoin, built, measured against the
+/// scripts and signed with its key: the deposit, the mixes, then the return
+/// (`lovejoin::ChainRequest` → `lovejoin::ChainResult`); with `again`, the
+/// wallet's boxes in the pool mixed again, with no deposit. The worker sends
+/// them in order.
+#[wasm_bindgen(js_name = buildLovejoinChain)]
+pub fn build_lovejoin_chain(
+    accounts: &WasmOneTimeAccounts,
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<String, JsError> {
+    to_json(&lovejoin::chain(&accounts.inner, key.sk, from_json(request)?).map_err(js_error)?)
+}
+
+/// What mixing a number of boxes takes, before anything is built
+/// (`lovejoin::FundingRequest` → `lovejoin::FundingResult`).
+#[wasm_bindgen(js_name = lovejoinFunding)]
+pub fn lovejoin_funding(request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::funding(from_json(request)?).map_err(js_error)?)
+}
+
+/// Boxes from the public account straight into Lovejoin: the deposit and
+/// every mix, built, measured and signed with the account's keys
+/// (`lovejoin::AccountChainRequest` → `lovejoin::ChainResult`).
+#[wasm_bindgen(js_name = buildLovejoinFromAccount)]
+pub fn build_lovejoin_from_account(
+    account: &WasmCardanoAccount,
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<String, JsError> {
+    to_json(
+        &lovejoin::chain_from_account(&account.inner, key.sk, from_json(request)?)
+            .map_err(js_error)?,
+    )
+}
+
+/// A transaction's outputs as Ogmios v6 UTxOs (JSON), for `evaluateTransaction`'s
+/// `additionalUtxo`: the network can then measure a child of it before it's on chain.
+#[wasm_bindgen(js_name = ogmiosUtxos)]
+pub fn ogmios_utxos(tx_cbor: &str) -> Result<String, JsError> {
+    let bytes = hex::decode(tx_cbor)
+        .map_err(|e| JsError::new(&format!("the transaction isn't hex: {e}")))?;
+    to_json(&seedelf_core::eval::ogmios_utxos(&bytes).map_err(js_error)?)
+}
+
+/// Whether the budgets a transaction declares cover what the network
+/// measured (`answer`, Ogmios's `evaluateTransaction` answer as JSON): JSON
+/// `{ covers, reason }`, the reason when they don't.
+#[wasm_bindgen(js_name = declaredCovers)]
+pub fn declared_covers(tx_cbor: &str, answer: &str) -> Result<String, JsError> {
+    let bytes = hex::decode(tx_cbor)
+        .map_err(|e| JsError::new(&format!("the transaction isn't hex: {e}")))?;
+    let answer: serde_json::Value = from_json(answer)?;
+    let checked = seedelf_core::eval::declared_covers(&bytes, &answer).map_err(js_error)?;
+    to_json(&match checked {
+        Ok(()) => serde_json::json!({ "covers": true }),
+        Err(reason) => serde_json::json!({ "covers": false, "reason": reason }),
+    })
+}
+
+/// The wallet's boxes among the pool's rows (`lovejoin::OwnedRequest` →
+/// `lovejoin::OwnedResult`).
+#[wasm_bindgen(js_name = lovejoinOwned)]
+pub fn lovejoin_owned(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::owned(key.sk, from_json(request)?).map_err(js_error)?)
+}
+
+/// One of the wallet's boxes into a fresh register, unsigned, for giveme.my
+/// (`lovejoin::WithdrawRequest` → `lovejoin::WithdrawResult`).
+#[wasm_bindgen(js_name = buildLovejoinWithdraw)]
+pub fn build_lovejoin_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::withdraw(key.sk, from_json(request)?).map_err(js_error)?)
+}
+
+/// A withdraw with giveme.my's checked signature, ready to submit
+/// (`lovejoin::FinishRequest` → `lovejoin::FinishResult`).
+#[wasm_bindgen(js_name = finishLovejoinWithdraw)]
+pub fn finish_lovejoin_withdraw(request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::finish_withdraw(from_json(request)?).map_err(js_error)?)
 }
 
 /// What a transaction built for a session (a swap, a cancel) does to its
