@@ -32,6 +32,13 @@ const POOL = (
   JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
 ).pool;
 
+/**
+ * Each test builds and measures real transactions in WebAssembly (proofs and
+ * script runs, about 110 ms a mix): a few seconds each here, and more than
+ * twice that on CI's runners, past Vitest's 5 s.
+ */
+const CHAINS = { timeout: 30_000 };
+
 /** Ogmios's answer when the network measures no more than a transaction declares. */
 const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
 
@@ -118,7 +125,7 @@ describe("sending a chain a window at a time", () => {
   });
 });
 
-describe("a session's return through Lovejoin", () => {
+describe("a session's return through Lovejoin", CHAINS, () => {
   it("sends the spare ADA through the mixer first, the whole chain in order, then sets the boxes' withdraws", async () => {
     const { t, sessions } = await withSession("40000000");
     const review = await sessions.backBuild("preprod", 0);
@@ -223,7 +230,7 @@ describe("a session's return through Lovejoin", () => {
     expect(chain.stopped).toBeUndefined();
   });
 
-  it("counts a chain that stopped partway, whose rest came back directly; a finished one lets the next return through Lovejoin", async () => {
+  it("counts a chain that stopped partway, says why, and brings the rest back directly", async () => {
     const { t, sessions } = await withSession("40000000");
     const review = await sessions.backBuild("preprod", 0);
     // The fourth transaction is refused for good: the chain stops there.
@@ -247,8 +254,9 @@ describe("a session's return through Lovejoin", () => {
     expect(direct.lovejoin).toBeUndefined();
     await sessions.backSubmit("preprod", direct.txHash);
     expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 10, sent: 3, confirmed: 0, cut: true });
+  });
 
-    // Another session's chain goes through whole; paid again later, its next return goes through Lovejoin too.
+  it("lets a session whose chain went through whole, paid again later, come back through Lovejoin again", async () => {
     const whole = await withSession("40000000");
     const first = await whole.sessions.backBuild("preprod", 0);
     whole.t.koios.confirmations = 1;
@@ -278,7 +286,7 @@ describe("a session's return through Lovejoin", () => {
   });
 });
 
-describe("the network's check", () => {
+describe("the network's check", CHAINS, () => {
   it("leaves Lovejoin out, and brings it back directly, when the network measures the first mix above what it declares", async () => {
     const { t, sessions } = await withSession("40000000");
     t.koios.evaluation = {
@@ -305,7 +313,7 @@ async function ownedBox(t: ReturnType<typeof testBalances>, tx: string): Promise
   return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
 }
 
-describe("the boxes' withdraws", () => {
+describe("the boxes' withdraws", CHAINS, () => {
   it("finds ours in the pool, wherever mixes moved them", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "d1"));
@@ -376,7 +384,7 @@ describe("the boxes' withdraws", () => {
   });
 });
 
-describe("mixing from the tile", () => {
+describe("mixing from the tile", CHAINS, () => {
   /** An unlocked wallet whose network agrees with every chain's first mix, and measures a Seedelf spend as recorded. */
   async function wallet() {
     const t = testBalances();

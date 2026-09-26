@@ -492,7 +492,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 | Vitest | `lovejoin.test.ts` +5 (mixing again end to end, with the withdraws held and the due times drawn again; boxes gone before the funding landed; no box to mix; past ten boxes, as the pool allows; a chain's progress, one that stopped partway, and a finished one letting the next return through; the public mix's count); `wallet.test.ts` +1 (the deadline, and locking when asked past it) |
 | Playwright | mixing again's review (2 of 3 boxes), and the mix listed; the countdown on Settings, Stay unlocked, then the lock at 0:00; a site session's return counting its chain on Send, then how much is on chain |
 
-Totals: Rust 327, WebAssembly (Node) 33, Vitest 294, Playwright 52. The module is 762 KB gzipped.
+Totals: Rust 327, WebAssembly (Node) 33, Vitest 295, Playwright 52. The module is 762 KB gzipped.
 
 ## Handoff to the fourth session (2026-09-25)
 
