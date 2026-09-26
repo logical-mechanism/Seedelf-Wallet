@@ -41,13 +41,16 @@ export function PreferencesProvider({ unlocked, children }: { unlocked: boolean;
       );
     void read();
     // Another page (the side panel beside a tab) may change them: follow it.
-    const changed = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === "local" && LOCAL_PREFERENCES in changes) void read();
+    // Local storage's own event, never chrome.storage.onChanged: that one
+    // carries session storage's changes too, the vault's entropy among them
+    // at every unlock and lock, into this page.
+    const changed = (changes: Record<string, chrome.storage.StorageChange>) => {
+      if (LOCAL_PREFERENCES in changes) void read();
     };
-    chrome.storage.onChanged.addListener(changed);
+    chrome.storage.local.onChanged.addListener(changed);
     return () => {
       live = false;
-      chrome.storage.onChanged.removeListener(changed);
+      chrome.storage.local.onChanged.removeListener(changed);
     };
   }, [unlocked]);
 

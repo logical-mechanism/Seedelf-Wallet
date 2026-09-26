@@ -55,6 +55,7 @@ pub mod api {
         ProtocolParameters, UtxoResponse, contains_policy_id, extract_bytes_with_logging,
     };
     use serde::{Deserialize, Serialize};
+    use zeroize::Zeroize;
 
     /// Parses a secret scalar from 32 big-endian bytes in hex. Rejects
     /// non-canonical values (`>= r`) and zero.
@@ -77,9 +78,7 @@ pub mod api {
     pub fn with_phrase<T>(entropy: &[u8], f: impl FnOnce(&str) -> Result<T>) -> Result<T> {
         let phrase = derivation::entropy_to_phrase(entropy)?;
         let result = f(&phrase);
-        let mut bytes = phrase.into_bytes();
-        bytes.fill(0);
-        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+        phrase.into_bytes().zeroize();
         result
     }
 
@@ -990,9 +989,9 @@ pub mod api {
         let mut okm = [0u8; 32];
         hkdf_expand(Sha256::new(), &prk, seed, &mut okm);
         let key = PrivateKey::from(SecretKey::from(okm));
-        ikm.fill(0);
-        prk.fill(0);
-        okm.fill(0);
+        ikm.zeroize();
+        prk.zeroize();
+        okm.zeroize();
         key
     }
 
@@ -1141,6 +1140,15 @@ pub mod api {
         })
     }
 
+    /// A Seedelf spend measured in the wallet (`eval`, Aiken's `uplc`) and
+    /// finished, rather than drafted for Ogmios: a draft carries valid proofs,
+    /// so sending one to Koios would tell it which contract UTxOs are this
+    /// wallet's, even for a review that's never sent. It saves the request
+    /// too. The finished transaction is measured again as it will be sent.
+    fn measured(spend: &ScriptSpend) -> Result<build::FinalSpend> {
+        spend.measure_locally(&[])
+    }
+
     /// A new one-time key's seed, for a draft.
     fn new_seed() -> [u8; 32] {
         let mut seed = [0u8; 32];
@@ -1220,8 +1228,28 @@ pub mod api {
         let (seed, budgets) =
             finishing("mint", request.seed.as_deref(), request.evaluation.as_ref())?;
         let (spend, minted) = mint_spend(sk, &request, &seed)?;
-        let built = spend.finalize(&budgets)?;
-        Ok(MintResult {
+        Ok(mint_result(
+            &spend,
+            &minted,
+            &spend.finalize(&budgets)?,
+            &seed,
+        ))
+    }
+
+    /// Creating a seedelf in one step, measured in the wallet ([`measured`]).
+    pub fn build_mint(sk: Scalar, request: MintRequest) -> Result<MintResult> {
+        let seed = new_seed();
+        let (spend, minted) = mint_spend(sk, &request, &seed)?;
+        Ok(mint_result(&spend, &minted, &measured(&spend)?, &seed))
+    }
+
+    fn mint_result(
+        spend: &ScriptSpend,
+        minted: &build::SeedelfMint,
+        built: &build::FinalSpend,
+        seed: &[u8; 32],
+    ) -> MintResult {
+        MintResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
@@ -1231,8 +1259,8 @@ pub mod api {
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
-            inputs: out_refs(&spend),
-        })
+            inputs: out_refs(spend),
+        }
     }
 
     /// Creating a seedelf paid by the Cardano account, as JSON from the
@@ -1541,7 +1569,24 @@ pub mod api {
         )?;
         let (spend, payments) = transfer_spend(sk, &request, &seed)?;
         let built = spend.finalize(&budgets)?;
-        Ok(TransferResult {
+        Ok(transfer_result(&spend, payments, &built, &seed))
+    }
+
+    /// Paying Seedelfs in one step, measured in the wallet ([`measured`]).
+    pub fn build_transfer(sk: Scalar, request: TransferRequest) -> Result<TransferResult> {
+        let seed = new_seed();
+        let (spend, payments) = transfer_spend(sk, &request, &seed)?;
+        let built = measured(&spend)?;
+        Ok(transfer_result(&spend, payments, &built, &seed))
+    }
+
+    fn transfer_result(
+        spend: &ScriptSpend,
+        payments: Vec<SeedelfPaid>,
+        built: &build::FinalSpend,
+        seed: &[u8; 32],
+    ) -> TransferResult {
+        TransferResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
@@ -1550,8 +1595,8 @@ pub mod api {
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
-            inputs: out_refs(&spend),
-        })
+            inputs: out_refs(spend),
+        }
     }
 
     /// The most UTxOs Max spends at once: the CLI's `MAXIMUM_WALLET_UTXOS`.
@@ -1706,6 +1751,26 @@ pub mod api {
         )?;
         let (spend, left, paid) = withdraw_spend(sk, &request, &seed)?;
         let built = spend.finalize(&budgets)?;
+        Ok(withdraw_result(&request, &spend, left, paid, &built, &seed))
+    }
+
+    /// Paying addresses from the Seedelf balance in one step, measured in the
+    /// wallet ([`measured`]).
+    pub fn build_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
+        let seed = new_seed();
+        let (spend, left, paid) = withdraw_spend(sk, &request, &seed)?;
+        let built = measured(&spend)?;
+        Ok(withdraw_result(&request, &spend, left, paid, &built, &seed))
+    }
+
+    fn withdraw_result(
+        request: &WithdrawRequest,
+        spend: &ScriptSpend,
+        left: usize,
+        paid: Option<Vec<Paid>>,
+        built: &build::FinalSpend,
+        seed: &[u8; 32],
+    ) -> WithdrawResult {
         let max = paid.is_none();
         // Max's one payment is everything the inputs held, less the fee.
         let payments = paid.unwrap_or_else(|| {
@@ -1716,7 +1781,7 @@ pub mod api {
                 tokens: built.change_tokens.items.iter().map(token_amount).collect(),
             }]
         });
-        Ok(WithdrawResult {
+        WithdrawResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
@@ -1734,9 +1799,9 @@ pub mod api {
                 built.change_tokens.items.len()
             },
             change_outputs: if max { 0 } else { built.change_outputs },
-            inputs: out_refs(&spend),
+            inputs: out_refs(spend),
             left,
-        })
+        }
     }
 
     /// Removing one of this wallet's seedelfs, as JSON from the extension.
@@ -1812,7 +1877,25 @@ pub mod api {
         )?;
         let (spend, name) = remove_spend(sk, &request, &seed)?;
         let built = spend.finalize(&budgets)?;
-        Ok(RemoveResult {
+        Ok(remove_result(&request, &spend, &name, &built, &seed))
+    }
+
+    /// Removing a seedelf in one step, measured in the wallet ([`measured`]).
+    pub fn build_remove(sk: Scalar, request: RemoveRequest) -> Result<RemoveResult> {
+        let seed = new_seed();
+        let (spend, name) = remove_spend(sk, &request, &seed)?;
+        let built = measured(&spend)?;
+        Ok(remove_result(&request, &spend, &name, &built, &seed))
+    }
+
+    fn remove_result(
+        request: &RemoveRequest,
+        spend: &ScriptSpend,
+        name: &[u8],
+        built: &build::FinalSpend,
+        seed: &[u8; 32],
+    ) -> RemoveResult {
+        RemoveResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
@@ -1820,8 +1903,8 @@ pub mod api {
             to: request.to.as_ref().map(|t| t.trim().to_string()),
             lovelace: built.change_lovelace.to_string(),
             fee: fee_out(&built.fee),
-            inputs: out_refs(&spend),
-        })
+            inputs: out_refs(spend),
+        }
     }
 
     /// Whether `address` carries this account's staking key: every address a
@@ -2045,8 +2128,11 @@ impl SeedelfKey {
 
 impl Drop for SeedelfKey {
     fn drop(&mut self) {
-        // Best effort: overwrite the scalar before the memory is released.
-        self.sk = Scalar::ZERO;
+        // Overwrite the scalar before the memory is released. A volatile
+        // write, as `zeroize` makes, so the compiler can't drop it as a
+        // store nobody reads.
+        // SAFETY: `self.sk` is a valid, aligned `Scalar` we own.
+        unsafe { std::ptr::write_volatile(&mut self.sk, Scalar::ZERO) };
         std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -2474,50 +2560,29 @@ pub fn drep_id(id: &str) -> Result<String, JsError> {
     api::drep_id(id).map_err(js_error)
 }
 
-/// Creating a seedelf, step 1: picks the Seedelf UTxOs that pay, proves them
-/// under a new one-time key, and drafts the transaction. `request` is JSON
-/// (`api::MintRequest`); the result is JSON (`api::SpendDraft`): the draft for
-/// Ogmios to evaluate, and the seed that `finishMint` and `signScriptSpend`
-/// re-derive the one-time key from.
-#[wasm_bindgen(js_name = draftMint)]
-pub fn draft_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+/// Creating a seedelf from the Seedelf balance: picks the Seedelf UTxOs that
+/// pay, proves them under a new one-time key, measures the scripts in the
+/// wallet and finishes the transaction; no draft leaves it. `request` is JSON
+/// (`api::MintRequest`); the result is JSON (`api::MintResult`): the unsigned
+/// transaction with its real budgets and fee, and the seed `signScriptSpend`
+/// re-derives the one-time key from.
+#[wasm_bindgen(js_name = buildMint)]
+pub fn build_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::MintRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
-    let result = api::draft_mint(key.sk, request).map_err(js_error)?;
+    let result = api::build_mint(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Creating a seedelf, step 2: the draft's request plus its `seed` and
-/// Ogmios's `evaluation`. Returns JSON (`api::MintResult`): the unsigned
-/// transaction with its real budgets and fee, and what it does.
-#[wasm_bindgen(js_name = finishMint)]
-pub fn finish_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
-    let request: api::MintRequest = serde_json::from_str(request)
-        .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
-    let result = api::finish_mint(key.sk, request).map_err(js_error)?;
-    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
-}
-
-/// Paying a seedelf, step 1: checks the recipient's seedelf UTxO, picks the
-/// Seedelf UTxOs that pay, proves them under a new one-time key, and drafts
-/// the transaction. `request` is JSON (`api::TransferRequest`); the result is
-/// JSON (`api::SpendDraft`): the draft for Ogmios, and the one-time key's seed.
-#[wasm_bindgen(js_name = draftTransfer)]
-pub fn draft_transfer(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+/// Paying seedelfs: checks each recipient's seedelf UTxO, picks the Seedelf
+/// UTxOs that pay, proves them under a new one-time key, and measures and
+/// finishes the transaction in the wallet. `request` is JSON
+/// (`api::TransferRequest`); the result is JSON (`api::TransferResult`).
+#[wasm_bindgen(js_name = buildTransfer)]
+pub fn build_transfer(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::TransferRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad transfer request: {e}")))?;
-    let result = api::draft_transfer(key.sk, request).map_err(js_error)?;
-    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
-}
-
-/// Paying a seedelf, step 2: the draft's request plus its `seed` and Ogmios's
-/// `evaluation`. Returns JSON (`api::TransferResult`): the unsigned
-/// transaction with its real budgets and fee, and what it does.
-#[wasm_bindgen(js_name = finishTransfer)]
-pub fn finish_transfer(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
-    let request: api::TransferRequest = serde_json::from_str(request)
-        .map_err(|e| JsError::new(&format!("bad transfer request: {e}")))?;
-    let result = api::finish_transfer(key.sk, request).map_err(js_error)?;
+    let result = api::build_transfer(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -2552,25 +2617,15 @@ pub fn finish_account_mint(
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// A withdrawal, step 1: checks the address, picks the Seedelf UTxOs (or up
-/// to 20 for Max), proves them under a new one-time key, and drafts the
-/// transaction. `request` is JSON (`api::WithdrawRequest`); the result is
-/// JSON (`api::SpendDraft`).
-#[wasm_bindgen(js_name = draftWithdraw)]
-pub fn draft_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+/// A withdrawal: checks the addresses, picks the Seedelf UTxOs (or up to 20
+/// for Max), proves them under a new one-time key, and measures and finishes
+/// the transaction in the wallet. `request` is JSON (`api::WithdrawRequest`);
+/// the result is JSON (`api::WithdrawResult`).
+#[wasm_bindgen(js_name = buildWithdraw)]
+pub fn build_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::WithdrawRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
-    let result = api::draft_withdraw(key.sk, request).map_err(js_error)?;
-    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
-}
-
-/// A withdrawal, step 2: the draft's request plus its `seed` and Ogmios's
-/// `evaluation`. Returns JSON (`api::WithdrawResult`).
-#[wasm_bindgen(js_name = finishWithdraw)]
-pub fn finish_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
-    let request: api::WithdrawRequest = serde_json::from_str(request)
-        .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
-    let result = api::finish_withdraw(key.sk, request).map_err(js_error)?;
+    let result = api::build_withdraw(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -2583,24 +2638,15 @@ pub fn check_payable_address(address: &str, network: Network) -> Result<(), JsEr
         .map_err(js_error)
 }
 
-/// Removing a seedelf, step 1: checks the UTxO is this wallet's and holds
-/// one seedelf, proves it, and drafts the burn. `request` is JSON
-/// (`api::RemoveRequest`); the result is JSON (`api::SpendDraft`).
-#[wasm_bindgen(js_name = draftRemove)]
-pub fn draft_remove(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+/// Removing a seedelf: checks the UTxO is this wallet's and holds one
+/// seedelf, proves it, and measures and finishes the burn in the wallet.
+/// `request` is JSON (`api::RemoveRequest`); the result is JSON
+/// (`api::RemoveResult`).
+#[wasm_bindgen(js_name = buildRemove)]
+pub fn build_remove(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::RemoveRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad removal request: {e}")))?;
-    let result = api::draft_remove(key.sk, request).map_err(js_error)?;
-    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
-}
-
-/// Removing a seedelf, step 2: the draft's request plus its `seed` and
-/// Ogmios's `evaluation`. Returns JSON (`api::RemoveResult`).
-#[wasm_bindgen(js_name = finishRemove)]
-pub fn finish_remove(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
-    let request: api::RemoveRequest = serde_json::from_str(request)
-        .map_err(|e| JsError::new(&format!("bad removal request: {e}")))?;
-    let result = api::finish_remove(key.sk, request).map_err(js_error)?;
+    let result = api::build_remove(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 

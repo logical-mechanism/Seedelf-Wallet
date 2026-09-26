@@ -33,8 +33,24 @@ import { Wallet } from "./wallet";
 import { loadWasm } from "./wasm";
 
 const extensionOrigin = chrome.runtime.getURL("");
+
+// Storage is the extension's own pages' and this worker's, never a content
+// script's. The dApp connector's bridge runs in every site's renderer and
+// never reads storage, so a renderer a site took over can't read the sealed
+// vault (to guess its password offline) or change the settings through it.
+// Session storage is this way already; local storage isn't by default. Set at
+// every start, as the level doesn't outlive the browser; a Chrome that can't
+// set it keeps the default.
+for (const area of [chrome.storage.local, chrome.storage.session]) {
+  try {
+    area.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => undefined);
+  } catch {
+    // Never in the way of the listeners below.
+  }
+}
+
 const AUTO_LOCK_ALARM = "seedelf.auto-lock";
-/** Wakes a swap that runs itself (sessions.ts) every minute while one runs and the wallet is unlocked. */
+/** Wakes a swap that runs itself (sessions.ts), a chain being sent, and Lovejoin boxes waiting to come back, every minute while the wallet is unlocked. */
 const SESSIONS_ALARM = "seedelf.sessions";
 
 // Worker timers don't survive restarts, so auto-lock runs off an alarm that
@@ -71,6 +87,10 @@ async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin"
   // A public mix still being sent keeps the alarm going too.
   if (await ctx.lovejoin.pumpPublic(ctx.network).catch(() => false)) await sessionsAlarm.start();
   await ctx.lovejoin.withdrawDue(ctx.network, scan).catch(() => undefined);
+  // So do Lovejoin's boxes on their way back: each comes back within a minute
+  // of its own due time while the wallet is unlocked, rather than all of them
+  // at the next unlock. A minute with nothing due asks Koios nothing.
+  if ((await ctx.lovejoin.held(ctx.network).catch(() => undefined))?.boxes) await sessionsAlarm.start();
 }
 
 let context: Promise<Context> | undefined;

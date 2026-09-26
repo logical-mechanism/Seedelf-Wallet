@@ -15,6 +15,8 @@ import {
   LOVEJOIN_MIX_BOX,
   LovejoinService,
   pumpChain,
+  secureRandom,
+  WITHDRAW_SPREAD_MS,
 } from "../src/background/lovejoin";
 import { SESSION_PENDING } from "../src/background/pending";
 import { Minswap } from "../src/background/minswap";
@@ -91,6 +93,18 @@ async function withSession(lovelace: string) {
   });
   return { t, sessions };
 }
+
+describe("a box's delay", () => {
+  it("is drawn from the secure random source, uniformly in [0, 1)", () => {
+    const draws = Array.from({ length: 2000 }, secureRandom);
+    expect(draws.every((d) => d >= 0 && d < 1)).toBe(true);
+    expect(new Set(draws).size).toBe(draws.length);
+    // Both halves of the range turn up about equally.
+    const low = draws.filter((d) => d < 0.5).length;
+    expect(low).toBeGreaterThan(800);
+    expect(low).toBeLessThan(1200);
+  });
+});
 
 describe("sending a chain a window at a time", () => {
   it("keeps at most four in the mempool, sends more as blocks take them, and leaves the rest for the next call", async () => {
@@ -338,6 +352,34 @@ describe("the boxes' withdraws", CHAINS, () => {
     expect(await t.lovejoin.withdrawDue("preprod")).toEqual([]);
     expect(t.collateral.asked).toHaveLength(1);
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
+  });
+
+  it("brings boxes due together back one a run, the others each a fresh delay later", async () => {
+    const { t } = await withSession("40000000");
+    t.koios.addedToAccounts.push(await ownedBox(t, "e1"), await ownedBox(t, "e2"), await ownedBox(t, "e3"));
+    await t.lovejoin.schedule("preprod", 3);
+    // Locked through all three delays: at unlock, one is tried (giveme.my's
+    // recorded answer is another transaction's, so it isn't sent), not three.
+    t.clock.now += 7 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    const now = t.clock.now;
+    expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect(t.collateral.asked).toHaveLength(1);
+    const due = (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due.sort((a, b) => a - b);
+    expect(due).toHaveLength(3);
+    // The one tried stays due; the other two each wait again, apart.
+    const [low, high] = WITHDRAW_SPREAD_MS;
+    expect(due[0]).toBeLessThanOrEqual(now);
+    for (const d of due.slice(1)) {
+      expect(d).toBeGreaterThanOrEqual(now + low);
+      expect(d).toBeLessThanOrEqual(now + high);
+    }
+    expect(due[1]).not.toBe(due[2]);
+
+    // The next minute's alarm tries the one still due, and nothing else.
+    t.clock.now += 60_000;
+    await t.lovejoin.withdrawDue("preprod");
+    expect(t.collateral.asked).toHaveLength(2);
   });
 
   it("watches a box brought back now in Home's banner, as every send the user makes", async () => {

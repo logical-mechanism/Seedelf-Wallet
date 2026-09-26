@@ -14,15 +14,29 @@ interface Head {
   indefinite: boolean;
 }
 
+// A dApp hands the worker bytes of its choosing (submitTx, signTx), so every
+// read is checked against the end: bytes that run out, or a length or count
+// longer than what's left, throw rather than read past it, where a missing
+// byte would look like a 0 and a loop would never end.
+
+const tooShort = () => new Error("the transaction's CBOR ends too soon");
+
 function head(b: Uint8Array, pos: number): Head {
+  if (pos >= b.length) throw tooShort();
   const major = b[pos]! >> 5;
   const info = b[pos]! & 0x1f;
   let p = pos + 1;
   let n = info;
-  if (info === 24) n = b[p++]!;
-  else if (info === 25) (n = (b[p]! << 8) | b[p + 1]!), (p += 2);
-  else if (info === 26) (n = new DataView(b.buffer, b.byteOffset + p, 4).getUint32(0)), (p += 4);
-  else if (info === 27) (n = Number(new DataView(b.buffer, b.byteOffset + p, 8).getBigUint64(0))), (p += 8);
+  const size = info === 24 ? 1 : info === 25 ? 2 : info === 26 ? 4 : info === 27 ? 8 : 0;
+  if (info > 27 && info < 31) throw new Error("the transaction's CBOR isn't well formed");
+  if (p + size > b.length) throw tooShort();
+  if (info === 24) n = b[p]!;
+  else if (info === 25) n = (b[p]! << 8) | b[p + 1]!;
+  else if (info === 26) n = new DataView(b.buffer, b.byteOffset + p, 4).getUint32(0);
+  else if (info === 27) n = Number(new DataView(b.buffer, b.byteOffset + p, 8).getBigUint64(0));
+  p += size;
+  // Every item takes a byte at least, and a string its length.
+  if ((major >= 2 && major <= 5 && info !== 31 && n > b.length - p)) throw tooShort();
   return { major, n, p, indefinite: info === 31 };
 }
 

@@ -185,6 +185,8 @@ export interface FakeKoios {
   stakes: Map<string, KoiosAccountInfo>;
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
+  /** Stake addresses some address has used, as far as `account_addresses` goes: one-time accounts used before, say. */
+  usedStakes: Set<string>;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -206,6 +208,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     addedToAccounts: [],
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     txExtras: new Map(),
+    usedStakes: new Set(),
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -267,7 +270,11 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         ];
         rows = every.filter((u) => refs.includes(`${u.tx_hash}#${u.tx_index}`));
       } else if (path === "account_addresses") {
-        rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_addresses ?? [];
+        const asked: string[] = body._stake_addresses;
+        rows = [
+          ...(koiosPreprod.accounts[asked[0]!]?.account_addresses ?? []),
+          ...asked.filter((a) => fake.usedStakes.has(a)).map((stake_address) => ({ stake_address, addresses: [`addr_of_${stake_address}`] })),
+        ];
       } else if (path === "account_utxos") {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_utxos ?? [];
       } else if (path === "account_info") {

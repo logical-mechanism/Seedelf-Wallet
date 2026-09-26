@@ -77,7 +77,7 @@ describe("reading a destination", () => {
 });
 
 describe("withdraw", () => {
-  it("builds an amount with a token, measured by Ogmios, without sending anything", async () => {
+  it("builds an amount with a token, measured in the wallet, without sending anything", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.amount.evaluation;
     const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: TUSDM }]);
@@ -90,9 +90,13 @@ describe("withdraw", () => {
       inputs: 2,
       left: 0,
     });
-    expect(summary.fee.total).toBe(withdrawPreprod.amount.final.fee.total);
+    // Measured in the wallet, on the finished transaction itself, so within a
+    // hair of what Ogmios's measure of a draft priced it at; no draft went to Ogmios.
+    const recorded = Number(withdrawPreprod.amount.final.fee.total);
+    expect(Math.abs(Number(summary.fee.total) - recorded)).toBeLessThan(recorded / 100);
+    expect(Number(summary.fee.total)).toBe(Number(summary.fee.size) + Number(summary.fee.compute) + Number(summary.fee.scriptReference));
     expect(Number(summary.fee.scriptReference)).toBe(629 * 15);
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
     expect(t.collateral.asked).toHaveLength(0);
     const built = (await t.session.get<Stored>(SESSION_WITHDRAW))!;
     expect(txIdOf(Uint8Array.from(Buffer.from(built.txCbor, "hex")))).toBe(summary.txHash);

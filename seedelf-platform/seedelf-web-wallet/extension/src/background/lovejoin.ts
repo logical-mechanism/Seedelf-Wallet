@@ -10,7 +10,9 @@
 // settings' range). At the first unlock after it (or the next minute's alarm
 // while unlocked), a box of ours in the pool is withdrawn into a fresh
 // register, paid from itself, with giveme.my's collateral: nothing ties it to
-// the session. Boxes aren't remembered, they're found: other people's mixes
+// the session. One box a run: others due at the same time wait a fresh short
+// delay each (WITHDRAW_SPREAD_MS), so a wallet locked for hours doesn't send
+// them all in one burst at unlock. Boxes aren't remembered, they're found: other people's mixes
 // move them, and the Seedelf key's check finds them wherever they are, after a
 // restore too. Only the due times are kept, sealed (`lovejoin.<network>`).
 //
@@ -229,7 +231,7 @@ interface SendingPublic extends ChainProgress {
 export interface LovejoinDeps extends ScriptSpendDeps {
   store: PrivateStore;
   preferences: PreferencesService;
-  /** In [0, 1): the delays' draw. Tests pin it. */
+  /** In [0, 1): the delays' draw, secureRandom unless a test pins it. */
   random?: () => number;
   /** Whether the wallet's boxes are being mixed again (sessions.ts): no box is withdrawn meanwhile. */
   mixingAgain?: (network: NetworkName) => Promise<boolean>;
@@ -238,10 +240,27 @@ export interface LovejoinDeps extends ScriptSpendDeps {
 }
 
 const HOUR = 3_600_000;
+
+/**
+ * Boxes due at once come back one a run; each of the others waits again,
+ * somewhere in this range from then (ms), so no two go out together.
+ */
+export const WITHDRAW_SPREAD_MS: [number, number] = [5 * 60_000, 60 * 60_000];
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
 /** The mixes one box goes through, `depth` waves deep and three wide. */
 export const mixesPerBox = (depth: number) => (3 ** depth - 1) / 2;
+
+/**
+ * A uniform draw in [0, 1) from the browser's secure random source, with a
+ * double's whole 53 bits. A box's delay is what keeps its withdraw from being
+ * matched to its deposit by time, so it isn't drawn with Math.random, whose
+ * generator can be worked out from a few of its outputs.
+ */
+export function secureRandom(): number {
+  const [high, low] = crypto.getRandomValues(new Uint32Array(2));
+  return ((high! >>> 5) * 2 ** 26 + (low! >>> 6)) / 2 ** 53;
+}
 
 /** A delay range's bounds, in hours. */
 export function delayHours(delay: LovejoinDelay): [number, number] {
@@ -590,7 +609,7 @@ export class LovejoinService {
   async schedule(network: NetworkName, boxes: number): Promise<void> {
     const { delay } = await this.settings();
     const [low, high] = delayHours(delay);
-    const random = this.deps.random ?? Math.random;
+    const random = this.deps.random ?? secureRandom;
     const now = this.deps.now();
     const due = Array.from({ length: boxes }, () => now + Math.round((low + (high - low) * random()) * HOUR));
     await this.update(network, (s) => s.due.push(...due));
@@ -625,7 +644,7 @@ export class LovejoinService {
   }
 
   /**
-   * Withdraws every box that's due. `scan` (at unlock) reads the pool even
+   * Withdraws a box that's due, one a run. `scan` (at unlock) reads the pool even
    * when nothing is due yet, on a wallet that has used Lovejoin here, so its
    * boxes' due times follow the pool.
    */
@@ -646,22 +665,33 @@ export class LovejoinService {
     const kept = [...schedule.due].sort((a, b) => a - b).slice(0, owned.length);
     await this.update(network, (s) => (s.due = kept));
 
-    const sent: PendingTx[] = [];
-    for (const time of kept.filter((t) => t <= now)) {
-      const box = owned.shift();
-      if (!box) break;
-      try {
-        sent.push(await this.withdrawOne(network, pool, box));
-        await this.update(network, (s) => {
-          const at = s.due.indexOf(time);
-          if (at >= 0) s.due.splice(at, 1);
-        });
-      } catch {
-        // Tried again at the next unlock or alarm.
-        break;
-      }
+    // One box a run. Boxes due together (the wallet stayed locked through
+    // their delays) would otherwise go back to back, and a burst of withdraws
+    // says they're one owner's: the others each wait a fresh delay of
+    // WITHDRAW_SPREAD_MS from now, drawn on its own, and the alarm takes them
+    // as they come due while the wallet is unlocked.
+    const ready = kept.filter((t) => t <= now);
+    const [time] = ready;
+    const box = owned[0];
+    if (time === undefined || !box) return [];
+    if (ready.length > 1) {
+      const random = this.deps.random ?? secureRandom;
+      const [low, high] = WITHDRAW_SPREAD_MS;
+      await this.update(network, (s) => {
+        s.due = [time, ...s.due.filter((t) => t > now), ...ready.slice(1).map(() => now + Math.round(low + (high - low) * random()))];
+      });
     }
-    return sent;
+    try {
+      const pending = await this.withdrawOne(network, pool, box);
+      await this.update(network, (s) => {
+        const at = s.due.indexOf(time);
+        if (at >= 0) s.due.splice(at, 1);
+      });
+      return [pending];
+    } catch {
+      // Tried again at the next unlock or alarm.
+      return [];
+    }
   }
 
   /** Withdraws one of our boxes now, whatever its delay (`box`, or any). */

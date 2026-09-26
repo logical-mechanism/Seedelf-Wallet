@@ -67,6 +67,17 @@ describe("Koios client", () => {
     expect(await koios.accountAddresses("stake_test1never")).toEqual([]);
   });
 
+  it("says which of several stake addresses were ever used, in one request", async () => {
+    const { koios, calls } = scripted([
+      Response.json([
+        { stake_address: "stake_test1a", addresses: ["addr_test1a"] },
+        { stake_address: "stake_test1b", addresses: [] },
+      ]),
+    ]);
+    expect(await koios.usedStakeAddresses(["stake_test1a", "stake_test1b", "stake_test1c"])).toEqual(new Set(["stake_test1a"]));
+    expect(calls.map((c) => c.body)).toEqual([{ _stake_addresses: ["stake_test1a", "stake_test1b", "stake_test1c"], _empty: true }]);
+  });
+
   it("explains a connection that fails, and a rate limit", async () => {
     const offline = scripted([new TypeError("Failed to fetch"), new TypeError("Failed to fetch"), new TypeError("Failed to fetch")]);
     await expect(offline.koios.credentialUtxos(["x"])).rejects.toThrow(

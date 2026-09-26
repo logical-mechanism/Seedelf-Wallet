@@ -3,10 +3,11 @@
 //
 // build  reads the wallet contract (contract-scan.ts: in full when due,
 //        otherwise only what's new) and the protocol parameters; the caller
-//        makes the WebAssembly request from them. WebAssembly drafts
-//        it under a new one-time key, Ogmios (through Koios) measures the
-//        scripts, and WebAssembly finishes it. The unsigned transaction waits
-//        in session storage, with its one-time key's seed, until Send.
+//        makes the WebAssembly request from them. WebAssembly builds it
+//        under a new one-time key and measures its scripts itself (uplc):
+//        no draft goes to Koios, whose Ogmios would learn from its proofs
+//        which contract UTxOs are this wallet's. The unsigned transaction
+//        waits in session storage, with its one-time key's seed, until Send.
 // send   giveme.my witnesses the collateral; WebAssembly checks that
 //        signature and adds it with the one-time key's, re-derived from the
 //        seed, so a restarted worker still signs. Koios submits exactly that
@@ -95,7 +96,21 @@ export function spendable(deps: Pick<ScriptSpendDeps, "contract">, view: Contrac
 }
 
 /**
- * Drafts with WebAssembly, has Ogmios measure the draft, and finishes it.
+ * Builds a Seedelf spend with WebAssembly in one call: it proves the spend
+ * and measures its scripts in the wallet, so nothing is sent before Send.
+ * `build` is the WebAssembly call: JSON in, JSON out.
+ */
+export function measureLocally<F>(
+  deps: Pick<ScriptSpendDeps, "wallet">,
+  request: object,
+  build: (keys: Keys, request: string) => string,
+): Promise<F> {
+  return deps.wallet.withKeys((keys) => JSON.parse(build(keys, JSON.stringify(request))) as F);
+}
+
+/**
+ * Drafts with WebAssembly, has Ogmios measure the draft, and finishes it:
+ * the account-paid mint, whose draft holds nothing private.
  * `draft` and `finish` are the WebAssembly calls: JSON in, JSON out. The
  * finish gets the request plus the draft's seed and Ogmios's evaluation.
  */

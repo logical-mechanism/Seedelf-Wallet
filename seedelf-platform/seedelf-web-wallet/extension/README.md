@@ -62,7 +62,7 @@ After a rebuild, press the reload arrow on the extension's card.
 | `npm run package` | A store build, plus `licenses/THIRD-PARTY.txt`, zipped reproducibly into `release/seedelf-wallet-<version>.zip` for the Web Store (`scripts/package.mjs`, `scripts/third-party.mjs`) |
 | `npm run dev` | Rebuilds the extension into `dist/` on change (development mode, with source maps) |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios and giveme.my clients, the balance scan over recorded preprod responses, move-in, mint, transfer and withdraw (on real preprod Ogmios evaluations), the handlers (all with the real WASM and the shared vectors), and formatting |
+| `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios and giveme.my clients, the balance scan over recorded preprod responses, move-in, mint, transfer and withdraw (measured in the wallet, against real preprod fees), the handlers (all with the real WASM and the shared vectors), and formatting |
 | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts` | Optional: the balance scan against the real preprod Koios. Skipped otherwise, so CI stays offline. |
 | `npm run e2e` | Playwright: loads `dist/` into Chromium and drives onboarding, lock and unlock, the back-off, reset, a browser restart, balances, move-in, creating a Seedelf, sending to one, withdrawing, and removing one. Koios, Ogmios and giveme.my answer from the recorded fixtures and every other host is blocked. Since only giveme.my's real key can sign, the Seedelf-spend tests (stealth mint, transfer, withdraw, remove) stop at Send: it checks that a forged witness is refused and nothing is submitted. Screenshots of every screen land in `test-results/`, the side panel's as `panel-*.png`. The tests read the extension's ID from its worker, so they run on a dev or a store build. Run `npm run build` first. The first time, run `npx playwright install chromium`. |
 | `npm run store:images` | The Web Store's five screenshots, small promo tile and store icon, into `../docs/store/images/`. It uses the fixtures and the public 12-word test phrase (`e2e/store-images.spec.ts`). Run a build first. |
@@ -83,7 +83,7 @@ src/
     wallet.ts           wallet state, lock, auto-lock and unlock back-off
     balances.ts         the balance reading: contract scan, account discovery, session cache
     move-in.ts          build (in WASM), hold and submit a move-in
-    script-spend.ts     the flow every Seedelf spend shares: draft → Ogmios → finish, keep until Send, giveme.my, sign, submit
+    script-spend.ts     the flow every Seedelf spend shares: build and measure in WebAssembly, keep until Send, giveme.my, sign, submit
     mint.ts             create a Seedelf, paid by the account (signed at review) or stealth (giveme.my and sign at Send)
     transfer.ts         find a Seedelf by its full name, then build and send a payment to it
     withdraw.ts         read a destination (address or ADA Handle), withdraw, and remove a Seedelf

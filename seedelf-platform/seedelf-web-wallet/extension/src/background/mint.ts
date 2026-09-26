@@ -18,7 +18,7 @@
 import type { NetworkName } from "../networks";
 import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
-import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
+import { keep, measure, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the mint built last, until it's sent or replaced. */
 export const SESSION_MINT = "seedelf.mint.built";
@@ -65,13 +65,7 @@ export class MintService {
       throw nothingToSpend(this.deps, view, "Your private balance is empty. Make some ADA private first; the Seedelf is paid from there.");
     }
 
-    const finished = await measure<MintResult>(
-      this.deps,
-      network,
-      request,
-      (keys, r) => wasm.draftMint(keys.seedelf, r),
-      (keys, r) => wasm.finishMint(keys.seedelf, r),
-    );
+    const finished = await measureLocally<MintResult>(this.deps, request, (keys, r) => wasm.buildMint(keys.seedelf, r));
     return this.keep(network, label, "seedelf", finished);
   }
 

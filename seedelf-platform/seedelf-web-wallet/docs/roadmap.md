@@ -44,6 +44,19 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-25: crypto review** (`web-wallet/crypto-review`, from `web-wallet/lovejoin`). The findings, what's fixed, and what's left to decide are in [plans/crypto-review.md](plans/crypto-review.md).
+  - **What landed:**
+    - A one-time session account is never reused: the chain is asked first.
+    - The entropy no longer reaches UI pages through `storage.onChanged`.
+    - Hedged Seedelf proof nonces.
+    - Lovejoin boxes due together come back one at a time, with secure delays.
+    - Private spends are measured in the wallet: no draft goes to Ogmios.
+    - Storage is closed to content scripts.
+    - A CBOR reader a site can't hang.
+    - Random dApp approval ids.
+  - **Kept, at the user's call:** the vault's KDF, which matches Lace's.
+  - **Next:** its *Not fixed: for later* list.
+
 - **2026-09-25: chunk 16, Lovejoin (third session)** (`web-wallet/lovejoin`). The plan's *Built (third session)* lists everything.
   - **What landed:** the two features the user decided at the end of the second session.
     - *Mix my boxes again* on the Lovejoin page: every box of the wallet's in the pool fanned out again, paid from the private balance through a one-time account, with no deposit. No box is withdrawn while it runs, and each waits a fresh delay after.

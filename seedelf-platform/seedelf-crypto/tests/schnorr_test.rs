@@ -88,3 +88,19 @@ fn create_proof_rejects_non_vkh_bound() {
     assert!(create_proof(datum.clone(), sk, "acab".to_string()).is_err());
     assert!(create_proof(datum, sk, "nothex".to_string()).is_err());
 }
+
+#[test]
+fn create_proof_draws_a_new_nonce_each_time() {
+    // The nonce is hedged with the key and the statement, and still takes fresh
+    // randomness: the same register proven twice gives two different proofs,
+    // each valid, and never a repeated commitment.
+    let sk: Scalar = random_scalar();
+    let datum: Register = Register::create(sk).unwrap().rerandomize().unwrap();
+    let vkh = "00112233445566778899aabbccddeeff00112233445566778899aabb";
+    let (z1, g_r1) = create_proof(datum.clone(), sk, vkh.to_string()).unwrap();
+    let (z2, g_r2) = create_proof(datum.clone(), sk, vkh.to_string()).unwrap();
+    assert_ne!(g_r1, g_r2);
+    assert_ne!(z1, z2);
+    assert!(prove(&datum.generator, &datum.public_value, &z1, &g_r1, vkh).unwrap());
+    assert!(prove(&datum.generator, &datum.public_value, &z2, &g_r2, vkh).unwrap());
+}

@@ -61,6 +61,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 - **The Cardano account is what exchanges and other wallets pay.** It is linked to the user by definition, so it is never used as a one-time account.
 - **One-time accounts are how funds leave Seedelf to use a contract.** The wallet sweeps them back automatically (see [flows.md](flows.md#contract-round-trip)).
   - On restore, scan them with a gap limit so any leftovers are found.
+  - **A session's index is never reused** (the crypto review, 2026-09-25). The next index is kept in the sealed session record, which is only on this device: a restored wallet, one removed and restored, or the same phrase in another browser starts it at 0 again. So before a session is funded, the worker asks Koios which of the next 20 indexes' stake keys (`2/i`) any address has used (`account_addresses`, one request), and takes the first that none has. Every session since chunk 15b has its own stake key, so any payment to one shows there. The few sessions from before then, with the shared staking part, were on preprod only.
 - **The CLI has the same concept:** its External Wallet (`seedelf-cli/src/commands/external/`), a normal address tied to the Seedelf key. The web wallet reaches it through HD derivation instead.
 
 ## The Cardano account

@@ -798,11 +798,11 @@ pub fn withdraw(
         used.push(budgets.withdraw(0).context("No budget for mix_logic")?);
         Ok((budgets, used))
     };
-    // A placeholder with a real proof's size, for the first build.
+    // A placeholder with a real proof's size, for the first build: a proof is
+    // always a compressed point and 32 bytes, so no key is used on one that's
+    // thrown away.
     let placeholder = {
-        let (a, _) = sorted[0].points()?;
-        let proof = crypto::prove_schnorr(&a, owner, &[0u8; 32])?;
-        let one = constr(0, vec![bytes_data(&proof.t), bytes_data(&proof.z)]);
+        let one = constr(0, vec![bytes_data(&sorted[0].a), bytes_data(&[0u8; 32])]);
         constr(0, vec![list(vec![one; sorted.len()])])
             .encode_fragment()
             .map_err(|e| anyhow!("{e}"))?

@@ -40,6 +40,26 @@ fn rerandomized_register_stays_owned_and_proves() {
     assert!(!api::verify_proof(&register, &z, &g_r, &"cd".repeat(28)).unwrap());
 }
 
+/// Whether a Seedelf spend built in the wallet declares budgets that cover
+/// what its scripts use, as the ledger checks: measured again here, against
+/// `rows` (what it spends) and the bundled references.
+fn covers(
+    tx_cbor: &str,
+    rows: &[seedelf_koios::koios::UtxoResponse],
+    params: &serde_json::Value,
+) -> bool {
+    use seedelf_core::eval;
+    let bytes = hex::decode(tx_cbor).unwrap();
+    let mut known: Vec<eval::Resolved> =
+        rows.iter().map(|r| eval::resolve_row(r).unwrap()).collect();
+    known.extend(eval::seedelf_references(true).unwrap());
+    let cost_model = seedelf_koios::koios::ProtocolParameters::from_koios(params)
+        .unwrap()
+        .cost_model_v3;
+    let answer = eval::evaluate(&bytes, &known, &cost_model, true).unwrap();
+    eval::declared_covers(&bytes, &answer).unwrap().is_ok()
+}
+
 #[test]
 fn with_phrase_rebuilds_the_vault_phrase() {
     let entropy = [0u8; 32];
@@ -761,6 +781,22 @@ mod mint {
     }
 
     #[test]
+    fn builds_a_mint_measured_in_the_wallet_under_a_new_one_time_key() {
+        // No draft leaves the wallet: its own evaluator measures the scripts.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let result = api::build_mint(sk, request(spendable(), "web-wallet")).unwrap();
+        let one_time = hex::encode(signer_of(sk, &result.seed));
+        assert_eq!(
+            signers(&result.tx_cbor),
+            vec![one_time, hex::encode(COLLATERAL_HASH)]
+        );
+        assert!(crate::covers(&result.tx_cbor, &spendable(), &params()));
+        // Each build draws a new one-time key.
+        let again = api::build_mint(sk, request(spendable(), "web-wallet")).unwrap();
+        assert_ne!(again.seed, result.seed);
+    }
+
+    #[test]
     fn drafts_and_finishes_a_mint_under_one_one_time_key() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let draft = api::draft_mint(sk, request(spendable(), "web-wallet")).unwrap();
@@ -1329,6 +1365,16 @@ mod transfer {
     }
 
     #[test]
+    fn builds_a_transfer_measured_in_the_wallet_as_the_chain_did() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let result = api::build_transfer(sk, request()).unwrap();
+        // The recorded preprod transfer's fee: the wallet's evaluator costs
+        // its scripts as the network's did.
+        assert_eq!(result.fee.total, recorded()["final"]["fee"]["total"]);
+        assert!(crate::covers(&result.tx_cbor, &request().utxos, &params()));
+    }
+
+    #[test]
     fn drafts_and_finishes_a_transfer_to_a_real_seedelf() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let draft = api::draft_transfer(sk, request()).unwrap();
@@ -1743,6 +1789,24 @@ mod withdraw {
             .iter()
             .map(|o| (o.address().unwrap().to_bech32().unwrap(), o.value().coin()))
             .collect()
+    }
+
+    #[test]
+    fn builds_a_withdrawal_and_a_removal_measured_in_the_wallet() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let amount = api::build_withdraw(sk, request("amount")).unwrap();
+        assert!(!amount.max);
+        assert!(crate::covers(
+            &amount.tx_cbor,
+            &request("amount").utxos,
+            &params()
+        ));
+        let removed = api::build_remove(sk, removal(Some(theirs()))).unwrap();
+        assert!(crate::covers(
+            &removed.tx_cbor,
+            &[owned().pop().unwrap()],
+            &params()
+        ));
     }
 
     #[test]

@@ -459,6 +459,33 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect((await sessions.list("preprod"))[0]).toMatchObject({ index: 0, site: { origin: s.origin } });
   });
 
+  it("won't fund a private session for a site another of its requests connected meanwhile", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    // Two tabs, or enable() twice: two questions.
+    const first = dapp.call(site(), "enable", []);
+    const second = dapp.call(site(), "enable", []);
+    await until(() => dapp.approvals().length === 2);
+    const [a, b] = dapp.approvals();
+    // Their ids are random, never a count that starts again with the worker.
+    expect(a!.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(a!.id).not.toBe(b!.id);
+    const out = await dapp.privateBuild(b!.id, "15000000", []);
+
+    // The first is answered with the public account meanwhile.
+    expect(await dapp.answer(a!.id, true)).toEqual({});
+    expect(await first).toBe(true);
+    // So the second's session isn't funded: the site wouldn't talk to it.
+    expect(await dapp.answer(b!.id, true, PASSWORD, { txHash: out.txHash })).toEqual({
+      error: expect.stringContaining("connected meanwhile"),
+    });
+    expect(t.koios.submitted).toHaveLength(0);
+    await expect(dapp.privateBuild(b!.id, "15000000", [])).rejects.toThrow("connected meanwhile");
+    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number) }]);
+    await dapp.answer(b!.id, false);
+    await expect(second).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+  });
+
   it("gives the site the session's account alone: its address, its reward address, its money and its collateral", async () => {
     const t = await on();
     const { dapp } = privately(t);

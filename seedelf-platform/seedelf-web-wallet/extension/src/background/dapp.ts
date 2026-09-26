@@ -168,12 +168,13 @@ interface Unlocking {
 
 type SignedTx = { witnessSet: string; summary: DappTxSummary };
 
+const ALREADY_CONNECTED = "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session.";
+
 export class DappService {
   private readonly waiting: Waiting[] = [];
   private readonly unlocking: Unlocking[] = [];
   /** Sites whose reads are refused until then, after the user closed the window instead of unlocking. */
   private readonly refusedUntil = new Map<string, number>();
-  private next = 0;
 
   constructor(private readonly deps: DappDeps) {}
 
@@ -358,6 +359,7 @@ export class DappService {
     const w = this.waiting.find((x) => x.approval.id === id);
     if (!w || w.approval.kind !== "connect") throw new Error("The site stopped waiting for this.");
     if (w.approval.funding) throw new Error("Its private session is funded already.");
+    if (await this.connected(w.session.origin)) throw new Error(ALREADY_CONNECTED);
     return this.deps.sessions.siteOutBuild(this.deps.network, w.session.origin, lovelace, tokens);
   }
 
@@ -395,6 +397,9 @@ export class DappService {
    */
   private async fundPrivate(w: Waiting, txHash: string): Promise<{ error?: string }> {
     const network = this.deps.network;
+    // Another of its requests connected it meanwhile (two tabs, or enable() twice):
+    // the session wouldn't be the one the site talks to, so it isn't funded.
+    if (await this.connected(w.session.origin)) return { error: ALREADY_CONNECTED };
     let index: number;
     try {
       ({ index } = await this.deps.sessions.siteOutSubmit(network, txHash, w.session.origin));
@@ -462,7 +467,9 @@ export class DappService {
   /** Puts a request in front of the user; `approve` runs if they say yes. */
   private ask<T>(session: DappSession, request: DappAsk, declined: number, approve: () => Promise<T>): Promise<T> {
     if (this.waiting.length >= MAX_WAITING) throw refused("Seedelf Wallet is busy with this site's other requests.");
-    const approval = { ...request, id: `${++this.next}`, origin: session.origin, title: session.title } as DappApproval;
+    // Random, not a count: a count starts again when the worker restarts, and a
+    // window still showing an older request would then answer a new one.
+    const approval = { ...request, id: crypto.randomUUID(), origin: session.origin, title: session.title } as DappApproval;
     const failure: DappFailure = { code: declined, info: "The user declined." };
     const answered = new Promise<T>((resolve, reject) => {
       this.waiting.push({

@@ -42,7 +42,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
 }
 
 describe("stealth mint (paid from the Seedelf balance)", () => {
-  it("builds a Seedelf mint, measured by Ogmios, without sending anything", async () => {
+  it("builds a Seedelf mint, measured in the wallet, without sending anything", async () => {
     const t = await unlocked();
     const summary = await t.mint.build("preprod", "web-wallet", "seedelf");
     expect(summary).toMatchObject({
@@ -62,34 +62,22 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
     expect(Number(fee.total)).toBeGreaterThan(200_000);
     expect(BigInt(summary.changeLovelace)).toBe(25_000_000n - 1_749_860n - BigInt(fee.total));
 
-    // Koios was read and Ogmios measured a draft; nobody else heard of it.
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
-    const draft = t.koios.calls.find((c) => c.path === "ogmios")!.body.params.transaction.cbor as string;
+    // Koios was read, and nothing sent: the scripts were measured in the
+    // wallet, so no draft with its proofs went to Ogmios.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
     expect(t.collateral.asked).toHaveLength(0);
     expect(t.koios.submitted).toHaveLength(0);
 
-    // The unsigned transaction waits in session storage: the one summarized, not the draft.
+    // The unsigned transaction waits in session storage: the one summarized.
     const built = (await t.session.get<Stored>(SESSION_MINT))!;
     expect(built.txHash).toBe(summary.txHash);
     expect(txIdOf(bytes(built.txCbor))).toBe(summary.txHash);
-    expect(txIdOf(bytes(draft))).not.toBe(summary.txHash);
     expect(built.seed).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("explains what stops a mint", async () => {
     const t = await unlocked();
     await expect(t.mint.build("preprod", "sixteen chars!!!", "seedelf")).rejects.toThrow("at most 15");
-    t.koios.evaluation = {
-      jsonrpc: "2.0",
-      error: {
-        code: 3010,
-        message: "Some scripts of the transactions terminated with error(s).",
-        data: [{ validator: { index: 0, purpose: "spend" }, error: { code: 3012, data: { validationError: "boom\nCaused by: (error)" } } }],
-      },
-    };
-    await expect(t.mint.build("preprod", "", "seedelf")).rejects.toThrow(
-      "The Seedelf contract refused this transaction (spending input 0: Caused by: (error))",
-    );
 
     const empty = await unlocked({ owned: false });
     await expect(empty.mint.build("preprod", "", "seedelf")).rejects.toThrow("Your private balance is empty");

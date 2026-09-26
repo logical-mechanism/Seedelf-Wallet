@@ -40,6 +40,8 @@ flowchart LR
 - **The toolbar button (chunk 14).** There's no popup: the manifest's `action` has no `default_popup`. With the wallet set to open in a tab (the default), a click reaches the worker's `action.onClicked`, which brings back the wallet's open tab (`runtime.getContexts`) or opens one. Set to the side panel, Chrome opens the panel itself (`sidePanel.setPanelBehavior`), and the worker isn't asked. The choice is `seedelf.openIn` in `chrome.storage.local` (`shared/open-in.ts`), and it's applied again whenever the extension installs or starts.
 - **Staying unlocked across restarts (built in chunk 5).** A worker restart loses everything held in memory, including the unlocked keys. No page can hold the keys either: there may be several, and each closes when the user closes it.
   - On unlock, the vault's entropy goes into `chrome.storage.session` (`seedelf.entropy`), along with the time of the last activity (`seedelf.lastActivity`). That storage is in memory only, never written to disk, cleared when the browser closes, and not readable by content scripts.
+  - **It is readable by the extension's own pages**, as any extension storage is: there's no store only the worker can read. What keeps it from them is that they run only the extension's own code (the CSP allows no other script). Since the crypto review (2026-09-25), no page listens to `chrome.storage.onChanged`, whose events carry session storage's changes, the entropy among them at every unlock and lock: the UI follows `chrome.storage.local.onChanged` alone.
+  - **Content scripts can't read local storage either** (the crypto review): the worker sets both areas to `TRUSTED_CONTEXTS` at every start (`chrome.storage.<area>.setAccessLevel`; Chrome's default leaves local storage open to content scripts). The connector's bridge runs in every site's renderer and never reads storage, so a renderer a site took over can't take the sealed vault through it to guess the password offline, or change the unsealed settings.
   - A restarted worker re-derives the keys from there, unless the auto-lock deadline has passed, in which case it locks.
   - **Lock** (manual or auto-lock) clears the key from session storage as well as from memory.
   - The result: the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every idle restart.
@@ -50,12 +52,15 @@ flowchart LR
   - This is the same prover the CLI already runs against the on-chain verifier.
   - It covers register creation, re-randomization, the ownership check and Schnorr proofs.
   - One implementation, so there are no byte-for-byte parity problems.
+  - **A proof's nonce is hedged** (the crypto review, 2026-09-25): HMAC-SHA-512 keyed by the Seedelf scalar, over the register, the one-time key's hash and 32 fresh random bytes, reduced mod the group order. It's as random as before, but a random source that failed or repeated could never give two different statements one nonce, which would reveal the key. The verifier is unchanged. Lovejoin's proofs already use deterministic RFC 6979 nonces (`seedelf-crypto/src/lovejoin.rs`).
+  - **Randomness is drawn only where it protects something:** the recovery phrase, re-randomization scalars, proof nonces, one-time key seeds, and Lovejoin's mix scalars, orderings and delays. Sizing an output that doesn't exist yet uses a fixed register, and a Lovejoin withdraw's first, thrown-away build a fixed stand-in for its proof, never the key.
 - **One WebAssembly crate for the wallet:** [seedelf-web-wallet/wasm](../wasm/) (`seedelf-wasm`), a Cargo workspace member.
   - It exposes only what the extension needs, for both crypto and [transaction building](#transaction-building).
   - `build.sh` produces an ES module with the `wasm-release` cargo profile: about 1.2 MB, 419 KB gzipped (see [Transaction building](#transaction-building)).
   - Its tests check the output against native Rust byte for byte.
 - **Build settings:**
-  - `getrandom` 0.2 with the `js` feature, set in the wasm crate.
+  - `getrandom` 0.2 with the `js` feature, set in the wasm crate: `crypto.getRandomValues`. If it ever fails, the draw panics and the call throws; nothing goes on with zeros.
+  - Secrets in WebAssembly memory are wiped with `zeroize` (volatile writes the compiler can't drop): the Seedelf scalar on `free()`, the rebuilt phrase, the BIP39 seed and HKDF material, and the one-time key's. `bip39`'s `zeroize` feature wipes its mnemonics; the Cardano keys (`ed25519-bip32`'s `XPrv`) wipe themselves.
   - `CC_wasm32_unknown_unknown=clang`, because `blst` is C code.
   - `AR_wasm32_unknown_unknown=llvm-ar`, which is `llvm-ar-18` on Ubuntu.
   - `wasm-bindgen-cli` pinned to the crate's `wasm-bindgen` version.
@@ -125,7 +130,10 @@ flowchart LR
   - **Is it safe to store the seed?** The seed gives nothing without the Seedelf key, and session storage already holds the vault entropy while unlocked.
   - A new seed per spend means a new key per spend (privacy rule 1). The CLI still draws its one-time keys at random.
 
-- **In the worker, `script-spend.ts` holds the flow every Seedelf spend shares:** read the whole contract and the protocol parameters, draft → Ogmios → finish, keep the unsigned transaction and its seed in session storage until Send, then giveme.my → `signScriptSpend` → submit → the pending watch. `mint.ts`, `transfer.ts` and `withdraw.ts` use it.
+- **In the worker, `script-spend.ts` holds the flow every Seedelf spend shares:** read the whole contract and the protocol parameters, build in WebAssembly, keep the unsigned transaction and its seed in session storage until Send, then giveme.my → `signScriptSpend` → submit → the pending watch. `mint.ts`, `transfer.ts` and `withdraw.ts` use it, and so does a session's funding.
+  - **Measured in the wallet** (the crypto review, 2026-09-25): `buildMint`, `buildTransfer`, `buildWithdraw` and `buildRemove` prove the spend and measure its scripts with `ScriptSpend::measure_locally` (Aiken's `uplc`, as a Lovejoin chain is), in one call. A draft sent to Ogmios carried valid proofs, so Koios learned which contract UTxOs were the wallet's even for a review never sent; it cost a request too. The recorded preprod transfer's fee comes out the same to the lovelace.
+  - The account-paid mint still drafts for Ogmios (`measure`): its draft holds only the public account's UTxOs, and one of those may carry a reference script, which the wallet's evaluator doesn't take yet. The CLI keeps Ogmios for everything.
+  - A hard fork that changes script costs is what the local measure can't know; Lovejoin's check of each chain's first mix against Ogmios is the wallet's watch for it.
   - Transactions signed at review (an account-paid mint, a send, a staking transaction) are kept without a seed, and Send only submits them. `account.ts` reads the Cardano account for them and for a move-in: three requests (`account_addresses`, then `credential_utxos` for its payment keys, with `epoch_params` alongside), and `account_info` alongside too when the user spends rewards or it's a staking build. `destination.ts` reads a withdrawal's or a send's destination. `staking.ts` holds the staking reads and builds.
 
 **In the CLI,** every script spend ends in `seedelf-cli/src/commands/spend.rs`: prove, evaluate, finish, giveme.my, sign, submit. Only `create` and `fund` still build inside their `run()`s; the web wallet doesn't need them.
@@ -424,7 +432,8 @@ flowchart LR
 
   The session's one collateral backs every mix. The worker sends the chain in order, trying a child again a few times when Koios hasn't seen its parent yet.
 - **The network's check:** before a chain is used, Koios's Ogmios measures its first mix, given the unsent deposit as `additionalUtxo`. If it measures more than the mix declares, or refuses a script, the chain doesn't start: a return comes back directly and says why. That's what a hard fork the evaluator doesn't know looks like.
-- **Withdraws:** each box comes back on its own after a random wait (a setting, default 1 to 6 hours), at the first unlock after it or on the sessions alarm. It goes into a fresh register, paid from itself, with giveme.my's collateral: nothing ties it to where it came from.
+- **Withdraws:** each box comes back on its own after a random wait (a setting, default 1 to 6 hours, from `crypto.getRandomValues`), at the first unlock after it or on the sessions alarm, which keeps running while boxes wait and the wallet is unlocked. It goes into a fresh register, paid from itself, with giveme.my's collateral: nothing ties it to where it came from.
+  - **One box a run** (the crypto review): boxes due together, as after hours locked, would all go at the next unlock. So one goes, and each of the others waits a fresh delay of 5 to 60 minutes (`WITHDRAW_SPREAD_MS`), drawn on its own: they come back apart while the wallet stays unlocked, or one at the next unlock.
 - **The tile mixes too:**
   - **From the private balance:** a mix session, a one-time account funded for the boxes that then runs itself with the swap runner's machinery.
   - **From the public account:** the deposit and every mix paid by the account and backed by its collateral; the change stays in it.

@@ -22,6 +22,7 @@ use cryptoxide::hkdf::{hkdf_expand, hkdf_extract};
 use cryptoxide::sha2::Sha256;
 use ff::Field;
 use rand_core::{OsRng, RngCore};
+use zeroize::Zeroize;
 
 /// HKDF salt for v1.
 pub const SALT_V1: &[u8] = b"seedelf-wallet-v1";
@@ -43,7 +44,7 @@ pub fn generate_phrase() -> String {
     OsRng.fill_bytes(&mut entropy);
     let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy)
         .expect("32 bytes is valid BIP39 entropy");
-    entropy.fill(0);
+    entropy.zeroize();
     mnemonic.to_string()
 }
 
@@ -113,7 +114,7 @@ pub fn okm_v1(seed: &[u8; 64], account: u32) -> [u8; 64] {
     hkdf_extract(Sha256::new(), SALT_V1, seed, &mut prk);
     let mut okm = [0u8; 64];
     hkdf_expand(Sha256::new(), &prk, &info, &mut okm);
-    prk.fill(0);
+    prk.zeroize();
     okm
 }
 
@@ -137,8 +138,8 @@ pub fn seedelf_key_v1(phrase: &str, account: u32) -> Result<Scalar> {
     let mnemonic = parse_phrase(phrase)?;
     let mut seed = bip39_seed(&mnemonic);
     let mut okm = okm_v1(&seed, account);
-    seed.fill(0);
+    seed.zeroize();
     let x = scalar_from_okm(&okm);
-    okm.fill(0);
+    okm.zeroize();
     x
 }

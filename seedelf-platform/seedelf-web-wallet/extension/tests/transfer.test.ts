@@ -73,7 +73,7 @@ describe("finding a Seedelf", () => {
 });
 
 describe("transfer", () => {
-  it("builds a payment, measured by Ogmios, without sending anything", async () => {
+  it("builds a payment, measured in the wallet, without sending anything", async () => {
     const t = await unlocked();
     const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens }]);
     expect(summary).toMatchObject({
@@ -90,8 +90,9 @@ describe("transfer", () => {
     expect(Number(fee.scriptReference)).toBe(629 * 15); // the wallet script only
     expect(BigInt(summary.changeLovelace)).toBe(28_000_000n - 5_000_000n - BigInt(fee.total));
 
-    // Koios was read and Ogmios measured a draft; nobody else heard of it.
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
+    // Koios was read, and nobody heard of it: the wallet measured the scripts
+    // itself, as the chain did (the recorded fee), so no draft went to Ogmios.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
     expect(t.collateral.asked).toHaveLength(0);
     expect(t.koios.submitted).toHaveLength(0);
 
@@ -117,8 +118,8 @@ describe("transfer", () => {
       { to: THEIRS, label: "This is a test.", toSelf: false, lovelace: "5000000" },
       { to: MINE, label: "web-wallet", toSelf: true, lovelace: "2000000" },
     ]);
-    // The contract read once for both, and Ogmios once.
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
+    // The contract read once for both, and nothing more.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
     await expect(t.transfer.build("preprod", [])).rejects.toThrow("someone to pay");
   });
 

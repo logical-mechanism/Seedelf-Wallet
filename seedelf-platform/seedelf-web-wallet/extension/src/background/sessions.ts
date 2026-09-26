@@ -76,7 +76,7 @@ import {
 } from "./lovejoin";
 import type { PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
-import { keep, measure, nothingToSpend, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
+import { keep, measureLocally, nothingToSpend, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
 import { outpoint, readFresh, rememberSpent, spentSet, unspent } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 
@@ -117,6 +117,9 @@ export const READ_EVERY_MS = 15_000;
  * more than five minutes. Minswap's rate limit clears within a minute, and a
  * funding Minswap hasn't seen yet shows up within a block or two.
  */
+/** How many one-time accounts one probe for a new session's index asks Koios about (freshIndex). */
+export const INDEX_PROBE = 20;
+
 export const retryAfterMs = (tries: number) => Math.min(30_000 * 2 ** (tries - 1), 5 * 60_000);
 
 type RecordedTx = SessionTx & {
@@ -410,7 +413,7 @@ export class SessionService {
     display?: { in: SwapSide; out: SwapSide },
   ): Promise<SessionOutSummary> {
     const ask = checkAsk(quote.ask);
-    const index = (await this.book(network)).next;
+    const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     const { summary, txCbor, seed } = await this.buildFunding(
       network,
@@ -435,7 +438,7 @@ export class SessionService {
    * CIP-30): `lovelace` and `tokens` for it, and the account's own collateral.
    */
   async siteOutBuild(network: NetworkName, origin: string, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
-    const index = (await this.book(network)).next;
+    const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     const { summary, txCbor, seed } = await this.buildFunding(
       network,
@@ -520,7 +523,7 @@ export class SessionService {
 
   /** A mix session's funding, built and kept for Send. */
   private async mixFunding(network: NetworkName, mix: LovejoinFunding): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
-    const index = (await this.book(network)).next;
+    const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     const { summary, txCbor, seed } = await this.buildFunding(
       network,
@@ -665,12 +668,8 @@ export class SessionService {
       payments: Array<Paid & { to: string }>;
       inputs: unknown[];
     };
-    const finished = await measure<Finished>(
-      this.deps,
-      network,
-      { network, params, utxos, payments },
-      (keys, r) => wasm.draftWithdraw(keys.seedelf, r),
-      (keys, r) => wasm.finishWithdraw(keys.seedelf, r),
+    const finished = await measureLocally<Finished>(this.deps, { network, params, utxos, payments }, (keys, r) =>
+      wasm.buildWithdraw(keys.seedelf, r),
     );
     const { txCbor, seed, inputs, payments: paid, ...rest } = finished;
     const summary: SessionOutSummary = {
@@ -780,7 +779,13 @@ export class SessionService {
   }
 
   /** Builds and signs the return of everything at the session's account into the private balance. */
-  async backBuild(network: NetworkName, index: number, direct = false): Promise<SessionBackSummary> {
+  backBuild(network: NetworkName, index: number, direct = false): Promise<SessionBackSummary> {
+    // In turn with the sends and the runner: it may mark the session's record, and
+    // a save it overlapped would be lost.
+    return this.serial(() => this.backBuildNow(network, index, direct));
+  }
+
+  private async backBuildNow(network: NetworkName, index: number, direct: boolean): Promise<SessionBackSummary> {
     const { wallet, session } = this.deps;
     const s = await this.live(network, index);
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
@@ -816,10 +821,19 @@ export class SessionService {
    * would show on chain that they share an owner. A swap that runs itself
    * comes back by itself, so it's left out. Kept for Send.
    */
-  async claimBuild(
+  claimBuild(
     network: NetworkName,
     indexes: number[],
     direct = false,
+  ): Promise<{ returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> }> {
+    // In turn, as backBuild.
+    return this.serial(() => this.claimBuildNow(network, indexes, direct));
+  }
+
+  private async claimBuildNow(
+    network: NetworkName,
+    indexes: number[],
+    direct: boolean,
   ): Promise<{ returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> }> {
     const { wallet, session } = this.deps;
     const params = await this.deps.koios(network).epochParams();
@@ -1591,6 +1605,30 @@ export class SessionService {
           ]),
         ),
     );
+  }
+
+  /**
+   * The index for a new session: the book's next, moved past any the chain
+   * has seen used. The book is only on this device, so a restored wallet, one
+   * removed and restored, the same phrase in another browser, or a book that
+   * failed to open starts again at 0; taking its index blindly would put two
+   * sessions on one key and link them on chain. Every session since chunk 15b
+   * has its own stake key (2/i), and any payment to its address carries it,
+   * so one `account_addresses` request says which of INDEX_PROBE indexes were
+   * ever paid, and the first that wasn't is the one. (Sessions from before then used a shared stake part: a few on
+   * preprod, from before any release.)
+   */
+  private async freshIndex(network: NetworkName): Promise<number> {
+    const { wasm, wallet } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    for (let first = (await this.book(network)).next; ; first += INDEX_PROBE) {
+      const probe = await wallet.withKeys((keys) =>
+        Array.from({ length: INDEX_PROBE }, (_, i) => ({ index: first + i, reward: keys.oneTime.rewardAddress(net, first + i) })),
+      );
+      const used = await this.deps.koios(network).usedStakeAddresses(probe.map((p) => p.reward));
+      const fresh = probe.find((p) => !used.has(p.reward));
+      if (fresh) return fresh.index;
+    }
   }
 
   private async book(network: NetworkName): Promise<Book> {

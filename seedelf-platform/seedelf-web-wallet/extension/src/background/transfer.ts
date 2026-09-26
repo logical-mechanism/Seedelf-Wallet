@@ -23,7 +23,7 @@ import { SEEDELF_NAME_RULE, seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { keptContractView, readContractView, type ContractView } from "./contract-scan";
 import type { KoiosUtxo } from "./koios";
-import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
+import { keep, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 import { outpoint } from "./spent";
 
 /** chrome.storage.session: the transfer built last, until it's sent or replaced. */
@@ -73,13 +73,7 @@ export class TransferService {
       throw nothingToSpend(this.deps, view, "Your private balance is empty. Make some ADA private first: private payments are paid from there.");
     }
 
-    const finished = await measure<TransferResult>(
-      this.deps,
-      network,
-      request,
-      (keys, r) => wasm.draftTransfer(keys.seedelf, r),
-      (keys, r) => wasm.finishTransfer(keys.seedelf, r),
-    );
+    const finished = await measureLocally<TransferResult>(this.deps, request, (keys, r) => wasm.buildTransfer(keys.seedelf, r));
     const { txCbor, seed, inputs, payments: paid, ...rest } = finished;
     const summary: TransferSummary = {
       ...rest,

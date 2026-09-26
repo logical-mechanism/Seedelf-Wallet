@@ -27,7 +27,7 @@ import { checkRecipients } from "../shared/recipients";
 import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { destinationResolver, resolveDestination } from "./destination";
-import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
+import { keep, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the withdrawal built last, until it's sent or replaced. */
 export const SESSION_WITHDRAW = "seedelf.withdraw.built";
@@ -74,13 +74,7 @@ export class WithdrawService {
     if (request.utxos.length === 0) {
       throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to make public.");
     }
-    const finished = await measure<WithdrawResult>(
-      this.deps,
-      network,
-      request,
-      (keys, r) => wasm.draftWithdraw(keys.seedelf, r),
-      (keys, r) => wasm.finishWithdraw(keys.seedelf, r),
-    );
+    const finished = await measureLocally<WithdrawResult>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r));
     const { txCbor, seed, inputs, payments: paid, ...rest } = finished;
     const summary: WithdrawSummary = {
       ...rest,
@@ -112,13 +106,7 @@ export class WithdrawService {
       utxo,
       to: to === "account" ? keys.cardano.receiveAddress(net, 0) : null,
     }));
-    const finished = await measure<RemoveResult>(
-      this.deps,
-      network,
-      request,
-      (keys, r) => wasm.draftRemove(keys.seedelf, r),
-      (keys, r) => wasm.finishRemove(keys.seedelf, r),
-    );
+    const finished = await measureLocally<RemoveResult>(this.deps, request, (keys, r) => wasm.buildRemove(keys.seedelf, r));
     const { txCbor, seed, inputs: _inputs, to: _to, ...rest } = finished;
     const summary: RemoveSummary = { ...rest, network, label: seedelfLabel(seedelf), to };
     await keep(this.deps, SESSION_REMOVE, { ...summary, txCbor, seed });

@@ -298,6 +298,18 @@ export class Koios {
   }
 
   /**
+   * Which of `stakeAddresses` any address has ever used, empty ones included,
+   * registered or not: one request.
+   */
+  async usedStakeAddresses(stakeAddresses: string[]): Promise<Set<string>> {
+    const rows = await this.post<{ stake_address: string; addresses: string[] | null }>("account_addresses", {
+      _stake_addresses: stakeAddresses,
+      _empty: true,
+    });
+    return new Set(rows.filter((r) => r.addresses?.length).map((r) => r.stake_address));
+  }
+
+  /**
    * An account's transactions, newest first: `limit` of them from `offset`,
    * or with `after`, only those in blocks after it (one request, up to 1,000).
    */

@@ -1143,13 +1143,13 @@ test("create a Seedelf from the private balance: tag rules, review, and nothing 
   await snap(page, "mint-form");
   await page.getByRole("button", { name: "Review" }).click();
 
-  // Ogmios measured it; giveme.my hasn't heard of it yet.
+  // Measured in the wallet: neither Ogmios nor giveme.my has heard of it yet.
   const review = page.getByTestId("mint-review");
   await expect(review).toContainText("Seedelfmy tag");
   await expect(review).toContainText("Locked with it1.74986 ₳");
   await expect(review).toContainText("Network fee0.2");
   await expect(review).toContainText("Back to your private balance22.99");
-  expect(koios.calls).toContain("ogmios");
+  expect(koios.calls).not.toContain("ogmios");
   expect(koios.collateralAsked).toBe(0);
   await snap(page, "mint-review");
 
@@ -1226,7 +1226,8 @@ test("send to a Seedelf: paste its name, see it found, review, and nothing sent 
   await expect(review).toContainText("Network fee0.273922 ₳");
   await expect(review).toContainText("Back to your private balance22.726078 ₳ and 1 token");
   await expect(review).toContainText("Private UTxOs spent2");
-  expect(koios.calls).toContain("ogmios");
+  // Measured in the wallet, to the recorded fee: no draft went to Ogmios.
+  expect(koios.calls).not.toContain("ogmios");
   expect(koios.collateralAsked).toBe(0);
   // Koios was only ever asked about the whole contract, never the recipient's token.
   expect(koios.calls.filter((c) => c.startsWith("asset"))).toEqual([]);

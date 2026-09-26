@@ -235,8 +235,8 @@ The steps:
    - Anyone can read it on chain.
    - Without one, the wallet shows the Seedelf by its token name alone, never a stand-in such as "Unnamed", which could be someone's tag.
 3. **Pay with:** Cardano account (the default) or Seedelf balance, each with a note on what it links.
-4. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
-   - WebAssembly picks the UTxOs that pay (pure ADA first, as few as it can) and drafts the transaction. Ogmios, through Koios, measures the policy (and the spends, for a stealth mint), and WebAssembly finishes it.
+4. **Review.** Nothing leaves the wallet but chain reads, and for the account-paid mint one Ogmios evaluation.
+   - WebAssembly picks the UTxOs that pay (pure ADA first, as few as it can). For the account, it drafts the transaction, Ogmios (through Koios) measures the policy, and WebAssembly finishes it. For a stealth mint it measures the policy and the spends itself (since the crypto review, 2026-09-25): a draft's proofs would tell Koios which private UTxOs are yours, even for a review never sent.
    - **Account:** the account's collateral is put up (see *Collateral* above). Without one, one of its UTxOs is, as in the CLI: ADA-only if there is one, a 5 ₳ one first. A token UTxO also works, since the collateral return gives its tokens back. The account's keys sign here, as for a move-in. The fee is about 0.21 ₳, because only the policy runs.
    - **Stealth:** the inputs are proven under a new one-time key, and giveme.my will lend the collateral. The fee is about 0.26 ₳.
    - The review shows the tag, the token name, what pays, the ADA locked with the Seedelf (about 1.75 ₳, the minimum for its UTxO), the fee, and the change.
@@ -264,11 +264,11 @@ This is the equivalent of the CLI's `transfer`, built by the same core code (`se
 3. **What's sent:** an ADA amount (the move-in rules: 6 decimals, the supply cap, "more than you have", and the minimum worked out), and optionally part of any token in the Seedelf balance, each with its own amount.
    - No Max: withdraw (chunk 10) is for sending everything. Up to 20 recipients at once (see [Several recipients](#several-recipients)): `build::transfer` pays them all.
    - The form nudges towards round amounts, and says that sending right after moving in is easy to match by timing.
-4. **Review.** Nothing leaves the wallet but chain reads and one Ogmios evaluation.
+4. **Review.** Nothing leaves the wallet but chain reads.
    - WebAssembly checks the recipient's UTxO: it's in the wallet contract, holds that Seedelf, and has a register as its datum. It refuses a register that a payment would be lost under: points that don't decode, points outside the prime-order subgroup, or the identity (anyone could spend a payment to that).
    - The payment goes under a fresh re-randomization of the recipient's register, never the register as found. The change goes under fresh copies of your own.
    - It picks the Seedelf UTxOs that pay: first the ones holding the tokens being sent (the biggest holdings first), then pure ADA, largest first, as few as it can.
-   - The inputs are proven under a new one-time key, and Ogmios, through Koios, measures the spends. Only the wallet script runs. The fee is about 0.23 ₳ for one input, and 0.27 ₳ for two.
+   - The inputs are proven under a new one-time key, and WebAssembly measures the spends itself (`uplc`, as a Lovejoin chain is): no draft with its proofs goes to Koios's Ogmios. Only the wallet script runs. The fee is about 0.23 ₳ for one input, and 0.27 ₳ for two.
    - The review shows the recipient (tag and short name, full name on hover), the amount and tokens, the fee, the change back to the Seedelf balance, and how many UTxOs pay.
 5. **Send.** As for a stealth mint: only now does giveme.my see the transaction. WebAssembly checks its signature and adds it with the one-time key's, and exactly the reviewed transaction is submitted. A banner follows it to "Private payment confirmed".
 
@@ -279,7 +279,7 @@ Details:
 
 ## Make public (private balance → any address)
 
-Built in chunk 10, by the same core code as the CLI's `sweep` and `remove` (`seedelf-core::build`). Both are Seedelf script spends: proofs under a new one-time key, giveme.my's collateral at Send, and Ogmios measuring the scripts at review.
+Built in chunk 10, by the same core code as the CLI's `sweep` and `remove` (`seedelf-core::build`). Both are Seedelf script spends: proofs under a new one-time key, giveme.my's collateral at Send, and the scripts measured in the wallet at review (Ogmios until the crypto review).
 
 ### Send to an address
 

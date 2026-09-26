@@ -10,7 +10,7 @@ import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
 import { SESSION_PENDING } from "../src/background/pending";
-import { checkAsk, SESSION_BACK, SESSION_OUT, SessionService } from "../src/background/sessions";
+import { checkAsk, INDEX_PROBE, SESSION_BACK, SESSION_OUT, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
@@ -243,6 +243,27 @@ describe("a private session", () => {
     // A failed session can be forgotten; its index still isn't reused.
     expect(await t.sessions.forget("preprod", 0)).toEqual([]);
     expect((await t.sessions.outBuild("preprod", quote)).index).toBe(1);
+  });
+
+  it("never takes a one-time account the chain has seen used, whatever this device's record says", async () => {
+    // A restored wallet, one removed and restored, or the same phrase in
+    // another browser: the record starts at 0, but sessions 0, 1, 2 and 4 were paid.
+    const t = await unlocked();
+    const net = loadTestWasm().Network.Preprod;
+    const reward = (i: number) => t.wallet.withKeys((keys) => keys.oneTime.rewardAddress(net, i));
+    for (const i of [0, 1, 2, 4]) t.koios.usedStakes.add(await reward(i));
+    const quote = await t.sessions.quote("preprod", ASK);
+    const probes = () => t.koios.calls.filter((c) => c.path === "account_addresses");
+    expect((await t.sessions.outBuild("preprod", quote)).index).toBe(3);
+    // One request asks about INDEX_PROBE accounts at once: 0 to 19.
+    expect(probes().map((c) => c.body._stake_addresses.length)).toEqual([INDEX_PROBE]);
+    expect(probes()[0]!.body._stake_addresses[4]).toBe(await reward(4));
+
+    // A whole batch used: it asks about the next one.
+    for (let i = 0; i <= INDEX_PROBE; i++) t.koios.usedStakes.add(await reward(i));
+    expect((await t.sessions.outBuild("preprod", quote)).index).toBe(INDEX_PROBE + 1);
+    expect(probes()).toHaveLength(3);
+    expect(probes()[2]!.body._stake_addresses[0]).toBe(await reward(INDEX_PROBE));
   });
 
   it("won't sign a swap that spends anything but the session's, or bring a session back with an order waiting", async () => {
