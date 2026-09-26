@@ -108,6 +108,62 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - a mistyped Seedelf name, and a `$handle` that doesn't exist.
 7. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my`.
 
+## Web Store release: copy/paste procedure
+
+This is the repeatable release path for a new Web Store version. Run it from the release commit on the `seedelf-web-wallet` branch. Change `release_version` to the new, higher version for each later release.
+
+### 1. Set the version and run the checks
+
+From the repository root:
+
+```bash
+cd seedelf-platform
+cargo test --workspace
+cd seedelf-web-wallet/extension
+npm install
+release_version=1.0.0
+npm version "$release_version" --no-git-tag-version
+npm run tokens
+npm run dreps
+npm run build
+npm test
+npm run e2e
+LIVE_KOIOS=1 npx vitest run tests/live.test.ts
+node e2e/live/run.mjs all
+node e2e/live/run.mjs staking
+```
+
+Then complete the manual [preprod checklist](#preprod-checklist-before-a-release), including the dApp, private-session, swap, and Lovejoin flows.
+
+### 2. Build and test the store package
+
+```bash
+npm run package
+npm run e2e
+sha256sum "release/seedelf-wallet-$release_version.zip"
+```
+
+The package to upload is:
+
+```text
+seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version.zip
+```
+
+For the current release, that file is `extension/release/seedelf-wallet-1.0.0.zip`.
+
+The second `npm run e2e` runs against the store build created by `npm run package`. Keep the SHA-256 output for the release record.
+
+### 3. Upload and submit
+
+1. Open the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole).
+2. Choose **Add new item** for the first release, or open the existing item for an update. Upload `extension/release/seedelf-wallet-$release_version.zip`.
+3. Complete the **Store Listing**, **Privacy**, **Distribution**, and **Test instructions** tabs using [store/README.md](store/README.md).
+4. Set visibility to **Unlisted**, keep the listing **preprod-only**, and verify the privacy-policy URL resolves.
+5. Submit for review.
+6. After approval, record the version, ZIP SHA-256, submission date, and approval date in the roadmap, then share the store link with the intended users.
+
+The official Chrome upload flow is also described in [Publish in the Chrome Web Store](https://developer.chrome.com/docs/webstore/publish/).
+
 ## Releasing to the Web Store
 
 The listing's text, its images and the privacy policy are in [store/](store/README.md), laid out by the dashboard's tabs. The owner of the developer account uploads the package by hand.
