@@ -45,6 +45,7 @@ import { call } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
+import { HistoriesNote } from "../components/HistoriesNote";
 import {
   chainText,
   delayText,
@@ -1063,6 +1064,7 @@ export function SwapApproval({
         This payment links the private UTxOs it spends to the one-time account, as Make public does. The account then links
         to Minswap and back again.
       </Callout>
+      <HistoriesNote histories={summary.histories} session={summary.index} testId="swap-histories" />
       <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
     </>
   );

@@ -20,8 +20,22 @@
 //
 // Each entry keeps the tokens that moved, with signed quantities, for its
 // details and the CSV export (older Seedelf entries have only a count).
+//
+// The Seedelf history also says where each private UTxO's money came from
+// (`classes`, privacy review §2.3): a Seedelf entry keeps the history of what
+// its transaction left in the private balance (`origin`), and coin selection
+// keeps different ones apart. It's read from the device alone.
 
 import type { NetworkName } from "../networks";
+import {
+  boxFrom,
+  isHistoryClass,
+  MADE_PRIVATE,
+  receivedIn,
+  sessionClass,
+  UNKNOWN,
+  type HistoryClass,
+} from "../shared/histories";
 import type { ActivityEntry, ActivityStaking, PendingTx, TokenQuantity } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
@@ -161,6 +175,13 @@ export class ActivityService {
     };
     // A session is shown by its number, from 1; its address says nothing to the user.
     const session = typeof s.index === "number" ? `Private session ${s.index + 1}` : undefined;
+    // What it leaves in the private balance: the history its review worked out (the inputs' own), or a
+    // session's funding change and return, which are that session's.
+    const origin: HistoryClass | undefined = isHistoryClass(s.origin)
+      ? { id: s.origin.id, origin: s.origin.origin }
+      : (pending.kind === "session-out" || pending.kind === "session-back") && typeof s.index === "number"
+        ? sessionClass(s.index)
+        : undefined;
     const entry: ActivityEntry =
       pending.kind === "move-in"
         ? { ...shared, kind: "move-in", direction: "in" }
@@ -182,7 +203,19 @@ export class ActivityService {
                 : pending.kind === "mint"
                   ? { ...shared, kind: "mint", direction: "none", detail: s.label || undefined }
                   : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };
+    if (origin) entry.origin = origin;
     return this.update(network, (h) => ({ ...h, entries: [...h.entries.filter((e) => e.txHash !== entry.txHash), entry] }));
+  }
+
+  /**
+   * Where each of `utxos` came from, by outpoint (privacy review §2.3): read
+   * from the sealed history alone, matched by the transaction that made it.
+   * A UTxO it has nothing on is Unknown.
+   */
+  async classes(network: NetworkName, utxos: KoiosUtxo[]): Promise<Map<string, HistoryClass>> {
+    const history = await this.deps.store.get<History>(`history.${network}`);
+    const byTx = new Map((history?.entries ?? []).map((e) => [e.txHash, e]));
+    return new Map(utxos.map((u) => [outpoint(u), classOf(byTx.get(u.tx_hash), u)]));
   }
 
   /**
@@ -292,6 +325,29 @@ export class ActivityService {
     });
     this.queue = run.catch(() => undefined);
     return run;
+  }
+}
+
+/** The history of `u`, made by the transaction `entry` records, if any. */
+function classOf(entry: ActivityEntry | undefined, u: KoiosUtxo): HistoryClass {
+  if (!entry) return UNKNOWN;
+  if (entry.origin && isHistoryClass(entry.origin)) return entry.origin;
+  switch (entry.kind) {
+    case "move-in":
+      return MADE_PRIVATE;
+    case "received":
+      return receivedIn(u.tx_hash);
+    case "lovejoin-withdraw":
+      return boxFrom(u.tx_hash);
+    case "session-out":
+    case "session-back": {
+      // Written before `origin` was: the session is in its detail.
+      const n = /^Private session (\d+)$/.exec(entry.detail ?? "")?.[1];
+      return n ? sessionClass(Number(n) - 1) : UNKNOWN;
+    }
+    default:
+      // A payment's change from before the history kept where money came from: its inputs aren't known.
+      return UNKNOWN;
   }
 }
 

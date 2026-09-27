@@ -22,6 +22,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
+import { merged, UNKNOWN, type HistoryClass } from "../shared/histories";
 import type { PendingTx } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
@@ -73,6 +74,40 @@ export interface Kept {
   invalidHereafter?: number;
   /** Signed as sent, once a submit went unanswered: Send sends it again as it is (pending.ts). */
   sentCbor?: string;
+  /** The history of what it leaves in the private balance, for the Seedelf history once it's sent (activity.ts). */
+  origin?: HistoryClass;
+}
+
+/**
+ * Each private UTxO's history (activity.ts `classes`), as WebAssembly takes
+ * it: by outpoint, the known ones only. Coin selection keeps different ones
+ * apart where it can (privacy review §2.3); with none, it picks as the CLI
+ * does.
+ */
+export type Classes = Record<string, HistoryClass>;
+
+/** An input a WebAssembly spend reports. */
+export interface OutRef {
+  txHash: string;
+  txIndex: number;
+}
+
+const classOf = (classes: Classes, i: OutRef) => classes[`${i.txHash}#${i.txIndex}`] ?? UNKNOWN;
+
+/** The history of what a spend of `inputs` leaves in the private balance, its change: theirs, merged. */
+export function changeHistory(classes: Classes, inputs: OutRef[]): HistoryClass {
+  return merged(inputs.map((i) => classOf(classes, i)));
+}
+
+/**
+ * The histories a spend's `inputs` have, each once, for its review: the
+ * classes WebAssembly says it spent together (`mixed`), or the one they
+ * share. None when the wallet knows nothing of them.
+ */
+export function spentHistories(classes: Classes, inputs: OutRef[], mixed: string[] = []): HistoryClass[] | undefined {
+  const all = inputs.map((i) => classOf(classes, i));
+  const spent = mixed.length ? mixed.map((id) => all.find((c) => c.id === id) ?? UNKNOWN) : all.slice(0, 1);
+  return spent.some((c) => c.origin !== "unknown") ? spent : undefined;
 }
 
 /**
@@ -82,12 +117,20 @@ export interface Kept {
  * through Lovejoin being sent will spend, left out. A session's return ends
  * merged into its funding's change, many blocks after its chain starts, so
  * no other spend of the private balance takes that change meanwhile (final
- * review lovejoin-3). The view itself is left as it is.
+ * review lovejoin-3). The view itself is left as it is. `classes`: where
+ * each of `utxos` came from, from the sealed history alone (Koios is asked
+ * nothing), for coin selection.
  */
 export async function readContract(
   deps: ScriptSpendDeps,
   network: NetworkName,
-): Promise<{ view: ContractView; utxos: KoiosUtxo[]; params: Record<string, unknown>; returning: KoiosUtxo[] }> {
+): Promise<{
+  view: ContractView;
+  utxos: KoiosUtxo[];
+  params: Record<string, unknown>;
+  returning: KoiosUtxo[];
+  classes: Classes;
+}> {
   const [view, params, reserved] = await Promise.all([
     readContractView(deps, network),
     deps.koios(network).epochParams(),
@@ -96,7 +139,18 @@ export async function readContract(
   const all = spendable(deps, view);
   const returning = all.filter((u) => reserved.inputs.has(outpoint(u)));
   const free = all.filter((u) => !reserved.inputs.has(outpoint(u)));
-  return { view, utxos: await deps.coins.seedelf(network, free), params, returning };
+  const utxos = await deps.coins.seedelf(network, free);
+  return { view, utxos, params, returning, classes: await classesOf(deps, network, utxos) };
+}
+
+/** `readContract`'s `classes`. A history that won't open costs only the keeping apart: selection then picks as the CLI does. */
+export async function classesOf(
+  deps: Pick<ScriptSpendDeps, "activity">,
+  network: NetworkName,
+  utxos: KoiosUtxo[],
+): Promise<Classes> {
+  const found = (await deps.activity?.classes(network, utxos).catch(() => undefined)) ?? new Map<string, HistoryClass>();
+  return Object.fromEntries([...found].filter(([, c]) => c.origin !== "unknown"));
 }
 
 /**

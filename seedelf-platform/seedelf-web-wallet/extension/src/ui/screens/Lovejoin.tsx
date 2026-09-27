@@ -47,6 +47,7 @@ import type {
 } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
+import { HistoriesNote } from "../components/HistoriesNote";
 import { ShieldIcon } from "../components/Icons";
 import { chainText, delayText, LOVEJOIN_UNAUDITED, useSessionsWhile } from "../components/LovejoinReturn";
 import { Modal } from "../components/Modal";
@@ -708,6 +709,7 @@ export function PrivateReview({ summary }: { summary: SessionOutSummary & { mix:
         This payment links the private UTxOs it spends to the one-time account, and the account to the boxes going in. The
         mixes hide which boxes coming out are yours: each comes back into a new private UTxO of its own.
       </Callout>
+      <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
       <p className="note">Send asks giveme.my to lend the funding's collateral, then submits.</p>
     </>
   );
@@ -756,6 +758,7 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
         {mix.publicToo &&
           " Some of these boxes came from a mix from your public account: paying for their mixes from here ties the private UTxOs this payment spends to your public account."}
       </Callout>
+      <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-again-histories" />
       <p className="note">Send asks giveme.my to lend the funding's collateral, then submits.</p>
     </>
   );

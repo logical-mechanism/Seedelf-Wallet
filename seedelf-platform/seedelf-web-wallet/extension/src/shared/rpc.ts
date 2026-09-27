@@ -2,6 +2,7 @@
 // The service worker owns every secret; the UI only ever asks it to do work.
 
 import type { NetworkName } from "../networks";
+import type { HistoryClass } from "./histories";
 import type { Currency, Preferences } from "./preferences";
 
 export type { Preferences };
@@ -76,6 +77,12 @@ export interface ActivityEntry {
   note?: string;
   /** The Cardano account's only: what the transaction did with its stake key. */
   staking?: ActivityStaking;
+  /**
+   * The Seedelf history's only: the history of what the transaction left in
+   * the private balance, its change included, for coin selection and the
+   * UTxOs screen (shared/histories.ts). Absent, it's read from `kind`.
+   */
+  origin?: HistoryClass;
 }
 
 /** What a transaction in the Cardano account's Activity did with its stake key. Lovelace amounts are decimal strings. */
@@ -279,6 +286,8 @@ export interface UtxoInfo {
   collateral?: boolean;
   /** It holds one of your seedelfs: its full token name, and its tag when it reads as text. Only removing it spends the UTxO. */
   seedelf?: { name: string; label?: string };
+  /** A private one's: where its money came from, as the sealed history says (shared/histories.ts). */
+  history?: HistoryClass;
   /**
    * No transaction of this wallet can take it: `script`, it holds a
    * reference script. A private one: the wallet's script evaluator can't
@@ -357,6 +366,8 @@ export interface MintSummary {
   changeOutputs: number;
   /** How many UTxOs pay for it. */
   inputs: number;
+  /** A stealth mint's: the histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
+  histories?: HistoryClass[];
 }
 
 /** A token and an amount to send. `quantity` is the raw integer, as a decimal string. */
@@ -411,6 +422,8 @@ export interface TransferSummary {
   changeOutputs: number;
   /** How many Seedelf UTxOs pay for it. */
   inputs: number;
+  /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
+  histories?: HistoryClass[];
 }
 
 /** Where a withdrawal goes, as the wallet read it. */
@@ -446,6 +459,8 @@ export interface WithdrawSummary {
   left: number;
   /** Max's: private UTxOs no payment takes (a reference script), which the private balance leaves out, or one a return through Lovejoin being sent spends. */
   leftOut?: LeftOutUtxo[];
+  /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
+  histories?: HistoryClass[];
 }
 
 /** One recipient of a send from the Cardano account: an address (found by `$handle`, maybe), or someone's seedelf. */

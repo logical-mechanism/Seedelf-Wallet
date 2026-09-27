@@ -146,6 +146,28 @@ function signing(t: Awaited<ReturnType<typeof unlocked>>, runner = alarm()) {
   });
 }
 
+describe("a session's funding", () => {
+  it("takes received money before what another session left (privacy review §2.3)", async () => {
+    const t = await unlocked();
+    // Session 5's funding left 40 ₳, the largest: written down when it was sent.
+    const theirs = { ...ownedUtxos[0]!, tx_hash: "05".repeat(32), value: "40000000", block_height: 9_000_005 };
+    t.koios.added.push(theirs);
+    await t.activity.sent(
+      "preprod",
+      { kind: "session-out", network: "preprod", txHash: theirs.tx_hash, submittedAt: 1, confirmations: null },
+      { index: 5, payments: [] },
+    );
+    await t.balances.get("preprod");
+    const quote = await t.sessions.quote("preprod", ASK);
+    const out = await t.sessions.outBuild("preprod", quote);
+    // Not the largest, as before: the 25 ₳ someone paid, which pays alone.
+    expect(out.inputs).toBe(1);
+    expect(out.histories).toEqual([{ id: `received:${ownedUtxos[0]!.tx_hash}`, origin: "received" }]);
+    const built = (await t.session.get<{ txCbor: string }>(SESSION_OUT))!;
+    expect(bodyOutpoints(bytes(built.txCbor), 0)).toEqual([`${ownedUtxos[0]!.tx_hash}#0`]);
+  });
+});
+
 describe("the record of sessions", () => {
   it("is never written over when it won't open, so the sessions it lists aren't lost", async () => {
     const t = await unlocked();

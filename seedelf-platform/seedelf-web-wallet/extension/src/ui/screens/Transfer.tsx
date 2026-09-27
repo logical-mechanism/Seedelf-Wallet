@@ -27,6 +27,7 @@ import {
 import { Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { HandleWarning } from "../components/HandleWarning";
+import { HistoriesNote } from "../components/HistoriesNote";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
 import { adaWithTokens, formatAda, lockedAside, shortHex, tokenKey as key } from "../format";
@@ -129,6 +130,7 @@ export function Transfer({
           <Row label="Back to your private balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="Private UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
+        <HistoriesNote histories={summary.histories} testId="transfer-histories" />
         {summary.payments.map((p, i) => (
           <MinimumNote
             key={i}

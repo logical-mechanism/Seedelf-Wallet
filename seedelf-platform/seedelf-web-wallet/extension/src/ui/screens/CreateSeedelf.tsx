@@ -13,6 +13,7 @@ import type { Balances, MintSource, MintSummary, PendingTx } from "../../shared/
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
+import { HistoriesNote } from "../components/HistoriesNote";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { adaWithTokens, formatAda, shortHex } from "../format";
@@ -88,6 +89,7 @@ export function CreateSeedelf({
           <WithdrawalRow withdrawal={summary.withdrawal} />
           <Row label={`Back to your ${SOURCES[summary.from].toLowerCase()}`} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
         </ReviewRows>
+        <HistoriesNote histories={summary.histories} testId="mint-histories" />
         <p className="note">
           {summary.from === "seedelf"
             ? "Send asks giveme.my to lend the collateral, then submits. "

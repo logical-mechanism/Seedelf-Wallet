@@ -19,10 +19,15 @@
 // last balance reading and the contract scan, in session storage. A reading
 // too large for session storage to keep (balances.ts) sums what's locked from
 // its own UTxOs, and the lists then say why they can't be shown.
+//
+// Each private UTxO is listed with where its money came from, read from the
+// sealed Seedelf history (activity.ts `classes`), so a lock that keeps one
+// history apart is an informed choice (privacy review §2.3).
 
 import type { NetworkName } from "../networks";
 import type { Balances, CollateralStatus, Locked, UtxoInfo, UtxoLists, UtxoSide } from "../shared/rpc";
 import type { PathedUtxo } from "./account";
+import type { ActivityService } from "./activity";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { keptContractView } from "./contract-scan";
@@ -106,6 +111,8 @@ export interface CoinControlDeps {
   store: PrivateStore;
   now: () => number;
   contract?: ContractConfig;
+  /** Where each private UTxO came from, for the lists. */
+  activity?: Pick<ActivityService, "classes">;
 }
 
 export class CoinControlService {
@@ -139,7 +146,7 @@ export class CoinControlService {
 
   /** What's kept out of payments on each side, from the last reading, or `from` one too large to keep. */
   async locked(network: NetworkName, from?: ReadingUtxos): Promise<{ seedelf: Locked; cardano: Locked }> {
-    const lists = await this.lists(network, from);
+    const lists = await this.lists(network, from, false);
     const sum = (list: UtxoInfo[]): Locked => {
       const kept = list.filter((u) => u.locked && !u.seedelf);
       const { lovelace, tokens } = sumValue(kept.map(asKoios));
@@ -151,8 +158,9 @@ export class CoinControlService {
   /**
    * Both sides' UTxOs, from the last reading, or `from` one too large to
    * keep: largest first. Throws when the last reading was too large to keep.
+   * `histories`: each private UTxO's too, for the UTxOs screen.
    */
-  async lists(network: NetworkName, from?: ReadingUtxos): Promise<UtxoLists> {
+  async lists(network: NetworkName, from?: ReadingUtxos, histories = true): Promise<UtxoLists> {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
     const [owned, account, spent, updatedAt] = await wallet.withKeys(async () => {
       if (from) return [from.owned, from.account, await spentSet(session), from.updatedAt] as const;
@@ -173,10 +181,12 @@ export class CoinControlService {
     // A Seedelf spend can't take a UTxO holding a reference script yet (script-spend.ts `spendable`),
     // and the account can't price one whose script Koios doesn't give (`measurable`).
     const script = { unspendable: "script" } as const;
+    const classes = histories ? await this.deps.activity?.classes(network, owned).catch(() => undefined) : undefined;
     const seedelf = owned.map((u): UtxoInfo => {
       const name = seedelfTokenOf(u, contract.seedelfPolicyId);
       const unspendable = u.reference_script ? script : {};
-      if (!name) return { ...info(u), locked: lockedSeedelf.has(outpoint(u)), ...unspendable };
+      const history = classes?.get(outpoint(u));
+      if (!name) return { ...info(u), locked: lockedSeedelf.has(outpoint(u)), ...unspendable, ...(history ? { history } : {}) };
       // The seedelf is named, not counted among the tokens.
       const tokens = info(u).tokens.filter((t) => !(t.policyId === contract.seedelfPolicyId && t.assetName === name));
       const label = seedelfLabel(name);
@@ -222,7 +232,7 @@ export class CoinControlService {
   /** The collateral, from the last reading. */
   async collateral(network: NetworkName): Promise<CollateralStatus> {
     const choices = await this.choices(network);
-    const lists = await this.lists(network);
+    const lists = await this.lists(network, undefined, false);
     const set = lists.cardano.find((u) => u.collateral);
     if (set) {
       const by = choices.collateral === `${set.txHash}#${set.index}` ? "you" : "wallet";
@@ -238,7 +248,7 @@ export class CoinControlService {
   /** Makes a pure 5 ₳ UTxO the account already holds its collateral: no transaction. */
   use(network: NetworkName, utxo: string): Promise<CollateralStatus> {
     return this.serial(async () => {
-      const found = (await this.lists(network)).cardano.find((u) => `${u.txHash}#${u.index}` === utxo);
+      const found = (await this.lists(network, undefined, false)).cardano.find((u) => `${u.txHash}#${u.index}` === utxo);
       if (!found || !isCollateralShaped(asKoios(found))) {
         throw new Error("Only a UTxO of exactly 5 ₳ and nothing else can be the collateral.");
       }

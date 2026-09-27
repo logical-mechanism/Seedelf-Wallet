@@ -9,26 +9,42 @@
 //          move-in; Send only submits.
 // seedelf  A stealth mint from the Seedelf balance (the CLI's `util mint`,
 //          `build::mint`). It only hides the payer when that balance came
-//          from other people's Seedelf payments.
+//          from other people's Seedelf payments, so it takes received money
+//          first when the sealed history says which that is (privacy review
+//          §2.3).
 //
 // Both are built by script-spend.ts's draft → Ogmios → finish, and kept in
 // session storage until Send: signed for the account, unsigned with its
 // one-time key's seed for a stealth mint, which giveme.my witnesses at Send.
 
 import type { NetworkName } from "../networks";
+import { MADE_PRIVATE, type HistoryClass } from "../shared/histories";
 import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import { settleMaybeSent } from "./pending";
-import { keep, measure, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
+import {
+  changeHistory,
+  keep,
+  measure,
+  measureLocally,
+  nothingToSpend,
+  readContract,
+  send,
+  spentHistories,
+  type OutRef,
+  type ScriptSpendDeps,
+} from "./script-spend";
 
 /** chrome.storage.session: the mint built last, until it's sent or replaced. */
 export const SESSION_MINT = "seedelf.mint.built";
 
-type MintResult = Omit<MintSummary, "network" | "label" | "inputs" | "from"> & {
+type MintResult = Omit<MintSummary, "network" | "label" | "inputs" | "from" | "histories"> & {
   txCbor: string;
   seed?: string;
-  inputs: unknown[];
+  inputs: OutRef[];
   collateral?: unknown;
+  /** A stealth mint's: the classes it spends together. */
+  classesMixed?: string[];
 };
 
 export type MintDeps = ScriptSpendDeps;
@@ -60,13 +76,14 @@ export class MintService {
       (keys, r) => wasm.draftAccountMint(keys.cardano, keys.seedelf, r),
       (keys, r) => wasm.finishAccountMint(keys.cardano, keys.seedelf, r),
     );
-    return this.keep(network, label, "account", finished, request.invalidHereafter);
+    // Its Seedelf's ADA comes back into the private balance, when it's removed there, as money the account paid.
+    return this.keep(network, label, "account", finished, MADE_PRIVATE, undefined, request.invalidHereafter);
   }
 
   private async buildStealth(network: NetworkName, label: string): Promise<MintSummary> {
     const { wasm } = this.deps;
-    const { view, utxos, params, returning } = await readContract(this.deps, network);
-    const request = { network, params, label, utxos };
+    const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
+    const request = { network, params, label, utxos, classes };
     if (request.utxos.length === 0) {
       throw nothingToSpend(
         this.deps,
@@ -77,19 +94,23 @@ export class MintService {
     }
 
     const finished = await measureLocally<MintResult>(this.deps, request, (keys, r) => wasm.buildMint(keys.seedelf, r));
-    return this.keep(network, label, "seedelf", finished);
+    const histories = spentHistories(classes, finished.inputs, finished.classesMixed);
+    return this.keep(network, label, "seedelf", finished, changeHistory(classes, finished.inputs), histories);
   }
 
+  /** `origin`: the history of what it leaves in the private balance; `histories`: a stealth mint's inputs'. */
   private async keep(
     network: NetworkName,
     label: string,
     from: MintSource,
     finished: MintResult,
+    origin: HistoryClass,
+    histories?: HistoryClass[],
     invalidHereafter?: number,
   ): Promise<MintSummary> {
-    const { txCbor, seed, inputs, collateral: _collateral, ...rest } = finished;
-    const summary: MintSummary = { ...rest, network, label, from, inputs: inputs.length };
-    await keep(this.deps, SESSION_MINT, { ...summary, txCbor, seed, invalidHereafter });
+    const { txCbor, seed, inputs, collateral: _collateral, classesMixed: _mixed, ...rest } = finished;
+    const summary: MintSummary = { ...rest, network, label, from, inputs: inputs.length, ...(histories ? { histories } : {}) };
+    await keep(this.deps, SESSION_MINT, { ...summary, txCbor, seed, invalidHereafter, origin });
     return summary;
   }
 

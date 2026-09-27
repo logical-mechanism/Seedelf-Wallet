@@ -12,6 +12,7 @@ import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
 import { call } from "../background";
 import { AdaInput, MinimumHint, MinimumNote, RoundNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { HistoriesNote } from "../components/HistoriesNote";
 import { LeftOutNote } from "../components/LeftOut";
 import { DestinationInput, type DestinationRead, type KnownRead } from "../components/Destination";
 import {
@@ -132,6 +133,7 @@ export function Withdraw({
           )}
           <Row label="Private UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
+        <HistoriesNote histories={summary.histories} max={summary.max} testId="withdraw-histories" />
         {summary.payments.map((p, i) => (
           <MinimumNote
             key={i}

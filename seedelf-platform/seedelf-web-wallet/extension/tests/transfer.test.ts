@@ -108,6 +108,31 @@ describe("transfer", () => {
     expect(built.seed).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("says when it spends money with different histories together, and keeps what its change's is (privacy review §2.3)", async () => {
+    const t = await unlocked();
+    // The tUSDM UTxO is money the wallet made private; the 25 ₳ one arrived from someone.
+    const [ada, token] = [ownedUtxos[0]!, ownedUtxos[1]!];
+    await t.activity.sent(
+      "preprod",
+      { kind: "move-in", network: "preprod", txHash: token.tx_hash, submittedAt: 1, confirmations: null },
+      { lovelace: token.value },
+    );
+    await t.balances.get("preprod");
+    // Its token sits in one UTxO whose ADA can't pay: both go, and nothing asks.
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens }]);
+    const received = { id: `received:${ada.tx_hash}`, origin: "received" };
+    expect(summary.inputs).toBe(2);
+    expect(summary.histories).toEqual(expect.arrayContaining([{ id: "public", origin: "own" }, received]));
+    expect(summary.histories).toHaveLength(2);
+    // Its change has both histories from now on.
+    const built = (await t.session.get<Stored & { origin: unknown }>(SESSION_TRANSFER))!;
+    expect(built.origin).toEqual({ id: `public+received:${ada.tx_hash}`, origin: "own" });
+
+    // With one history, there's nothing to say.
+    const own = await t.transfer.build("preprod", [{ to: MINE, lovelace: "2000000", tokens: [] }]);
+    expect(own.histories).toEqual([received]);
+  });
+
   it("pays your own Seedelf, and says so", async () => {
     const t = await unlocked();
     const summary = await t.transfer.build("preprod", [{ to: MINE, lovelace: "2000000", tokens: [] }]);

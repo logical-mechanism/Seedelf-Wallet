@@ -6,9 +6,13 @@
 // account's collateral is listed too, and reclaimed in Settings; a seedelf's
 // UTxO only ever moves when the seedelf is removed. A UTxO no transaction of
 // the wallet can take (a reference script) is marked so, never offered.
+// Each private UTxO says where its money came from, as the sealed history
+// has it, so locking one to keep a history apart is an informed choice
+// (privacy review §2.3).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { historyTags } from "../../shared/histories";
 import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
@@ -34,6 +38,11 @@ export function utxoTag(u: UtxoInfo): string | undefined {
   return undefined;
 }
 const tag = utxoTag;
+
+/** Where a private UTxO's money came from: Back from Lovejoin, Received, Made private, Private session N, Unknown. */
+export function historyOf(u: UtxoInfo): string | undefined {
+  return u.history ? historyTags(u.history).join(", ") : undefined;
+}
 
 /** A seedelf's UTxO, the collateral and one no payment can take aren't locked or unlocked by hand. */
 const lockable = (u: UtxoInfo) => !u.seedelf && !u.collateral && !u.unspendable;
@@ -166,13 +175,14 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
           <ul className="list" data-testid="utxos">
             {list.map((u) => {
               const name = `${amounts.ada(u.lovelace)} ₳, ${shortHex(u.txHash)}#${u.index}`;
+              const history = historyOf(u);
               return (
                 <li key={ref(u)} className="utxo-row">
                   <button
                     type="button"
                     className="token-row"
                     onClick={() => setOpen(ref(u))}
-                    aria-label={`${amounts.ada(u.lovelace)} ₳${tag(u) ? `, ${tag(u)}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
+                    aria-label={`${amounts.ada(u.lovelace)} ₳${tag(u) ? `, ${tag(u)}` : ""}${history ? `, ${history}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
                   >
                     <span className={`avatar activity__icon${tag(u) ? " utxo__icon--kept" : ""}`}>
                       <Icon u={u} />
@@ -185,6 +195,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                     </span>
                     <span className="token-row__sub">
                       {shortHex(u.txHash, 8, 4)}#{u.index}
+                      {history && <span data-testid="utxo-history"> · {history}</span>}
                     </span>
                   </button>
                   {lockable(u) ? (
@@ -292,6 +303,12 @@ export function UtxoDetails({
         )}
         <UtxoTokens tokens={utxo.tokens} />
         <CopyField label="Transaction" value={utxo.txHash} display={shortHex(utxo.txHash, 14, 8)} testId="utxo-tx" />
+        {utxo.history && (
+          <p className="note" data-testid="utxo-history-note">
+            Came from: {historyOf(utxo)}. Payments keep money with different histories apart when something else pays,
+            since spending them together ties them to each other. Lock it to keep it out of payments altogether.
+          </p>
+        )}
         <ReviewRows testId="utxo-output">
           <Row label="Output" value={String(utxo.index)} />
           {utxo.blockHeight !== undefined && <Row label="Block" value={utxo.blockHeight.toLocaleString("en-GB")} />}

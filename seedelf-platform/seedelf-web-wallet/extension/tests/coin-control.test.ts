@@ -157,6 +157,27 @@ describe("locked UTxOs", () => {
     await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Every UTxO in your private balance is locked");
   });
 
+  it("say where each private UTxO's money came from, read from the sealed history alone (privacy review §2.3)", async () => {
+    const t = await unlocked(12);
+    // Money the wallet made private itself; the reading notes the rest as received.
+    const moved = ownedUtxos[0]!;
+    await t.activity.sent(
+      "preprod",
+      { kind: "move-in", network: "preprod", txHash: moved.tx_hash, submittedAt: 1, confirmations: null },
+      { lovelace: moved.value },
+    );
+    await t.balances.get("preprod");
+    const asked = t.koios.calls.length;
+    const { seedelf, cardano } = await t.coins.lists("preprod");
+    expect(t.koios.calls).toHaveLength(asked);
+    const of = (u: KoiosUtxo) => seedelf.find((x) => x.txHash === u.tx_hash)!;
+    expect(of(moved).history).toEqual({ id: "public", origin: "own" });
+    expect(of(ownedUtxos[1]!).history).toEqual({ id: `received:${ownedUtxos[1]!.tx_hash}`, origin: "received" });
+    // A Seedelf's own UTxO is never spent by a payment, and the public side has no such history.
+    expect(of(ownedUtxos[2]!)).not.toHaveProperty("history");
+    expect(cardano.some((u) => u.history)).toBe(false);
+  });
+
   it("aren't offered for a UTxO no payment can take: one holding a reference script Koios doesn't give (launch review #12)", async () => {
     const t = await unlocked(12);
     const template = koiosPreprod.accounts[phrase(12).preprod.stake]!.account_utxos[0]!;

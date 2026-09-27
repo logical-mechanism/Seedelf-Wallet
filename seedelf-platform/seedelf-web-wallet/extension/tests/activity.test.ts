@@ -11,7 +11,7 @@ import {
 } from "../src/background/activity";
 import type { KoiosTxInfo, KoiosUtxo } from "../src/background/koios";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
-import type { ActivityEntry } from "../src/shared/rpc";
+import type { ActivityEntry, PendingTx } from "../src/shared/rpc";
 import { activityCsv, csvCell, tokenMoved } from "../src/ui/activity";
 import { assetFingerprint } from "../src/ui/tokens";
 import { activityPreprod, koiosPreprod, ownedUtxos, testBalances, vectors } from "./fakes";
@@ -101,6 +101,40 @@ describe("Seedelf activity", () => {
     await t.moveIn.submit("preprod", summary.txHash);
     const [latest] = await t.activity.seedelf("preprod");
     expect(latest!.assets).toEqual([{ ...TUSDM, quantity: "1000" }]);
+  });
+
+  it("says where each private UTxO came from, by the transaction that made it (privacy review §2.3)", async () => {
+    const t = await unlocked();
+    const at = (hex: string, index = 0) => ({ ...ownedUtxos[0]!, tx_hash: hex.repeat(32), tx_index: index });
+    const sent = (kind: PendingTx["kind"], hex: string, summary: object) =>
+      t.activity.sent("preprod", { kind, network: "preprod", txHash: hex.repeat(32), submittedAt: 1, confirmations: null }, summary);
+    await sent("move-in", "01", { lovelace: "25000000" });
+    await sent("lovejoin-withdraw", "02", { lovelace: "9710000" });
+    await sent("session-out", "03", { index: 2, payments: [{ lovelace: "6000000" }] });
+    await sent("session-back", "04", { index: 2, lovelace: "4000000" });
+    // A payment's change has the history its review worked out from its inputs.
+    const mixed = { id: "box:02+public", origin: "own" };
+    await sent("transfer", "05", { payments: [{ to: "5eed0e1f", lovelace: "2000000" }], origin: mixed });
+    await sent("withdraw", "06", { payments: [{ address: "addr_test1", lovelace: "2000000" }] });
+    await t.activity.arrived("preprod", [at("07"), at("07", 1)]);
+
+    const asked = t.koios.calls.length;
+    const classes = await t.activity.classes("preprod", ["01", "02", "03", "04", "05", "06", "07", "08"].map((h) => at(h)).concat(at("07", 1)));
+    expect(t.koios.calls).toHaveLength(asked);
+    expect(Object.fromEntries([...classes].map(([k, c]) => [k.slice(0, 2) + k.slice(-2), c]))).toEqual({
+      "01#0": { id: "public", origin: "own" },
+      "02#0": { id: `box:${"02".repeat(32)}`, origin: "lovejoin" },
+      "03#0": { id: "session:2", origin: "session" },
+      "04#0": { id: "session:2", origin: "session" },
+      "05#0": mixed,
+      // A payment written down without it: its inputs aren't known.
+      "06#0": { id: "unknown", origin: "unknown" },
+      // Someone's payment is one history, whichever of its outputs.
+      "07#0": { id: `received:${"07".repeat(32)}`, origin: "received" },
+      "07#1": { id: `received:${"07".repeat(32)}`, origin: "received" },
+      // Nothing on the device about it.
+      "08#0": { id: "unknown", origin: "unknown" },
+    });
   });
 
   it("is sealed on the device, and can't be read while locked", async () => {

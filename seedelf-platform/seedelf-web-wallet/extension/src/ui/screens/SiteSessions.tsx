@@ -19,6 +19,7 @@ import { call } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
+import { HistoriesNote } from "../components/HistoriesNote";
 import {
   chainText,
   IntoRow,
@@ -449,6 +450,7 @@ function TopUp({
         <Callout tone="privacy">
           This payment links the private UTxOs it spends to the session's account, as its funding did.
         </Callout>
+        <HistoriesNote histories={review.histories} session={review.index} testId="top-up-histories" />
         <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
       </Screen>
     );
