@@ -137,7 +137,7 @@ export class BalanceService {
       // The UTxOs screen and what's locked read these.
       await session.set(SESSION_ACCOUNT_UTXOS_PREFIX + network, utxos);
       // Activity reads the account's transactions against these.
-      const addresses: AccountAddresses = { stake: account.stake, addresses: account.addresses };
+      const addresses: AccountAddresses = { stake: account.stake, addresses: account.addresses, keys: [...account.paths.keys()] };
       await session.set(SESSION_ACCOUNT_ADDRESSES_PREFIX + network, addresses);
       return balances;
     });

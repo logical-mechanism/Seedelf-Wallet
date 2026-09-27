@@ -2,12 +2,18 @@
 // Cardano account's pages from Koios (two requests a page, one to catch up).
 import { describe, expect, it } from "vitest";
 
-import { describe as describeTxs, noteOf, SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "../src/background/activity";
+import {
+  accountMatcher,
+  describe as describeTxs,
+  noteOf,
+  SESSION_ACCOUNT_ADDRESSES_PREFIX,
+  type AccountAddresses,
+} from "../src/background/activity";
 import type { KoiosTxInfo, KoiosUtxo } from "../src/background/koios";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
 import type { ActivityEntry } from "../src/shared/rpc";
 import { activityCsv, csvCell } from "../src/ui/activity";
-import { activityPreprod, ownedUtxos, testBalances, vectors } from "./fakes";
+import { activityPreprod, koiosPreprod, ownedUtxos, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const TUSDM = { policyId: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9", assetName: "0014df10745553444d" };
@@ -180,7 +186,7 @@ describe("the Cardano account's staking and notes", () => {
     outputs: [{ payment_addr: { bech32: outputsElsewhere ? "addr_test1_them" : ME }, value: "7800000", asset_list: [] }],
     ...extra,
   });
-  const read = (t: KoiosTxInfo) => describeTxs([t], new Set([ME]), new Map(), STAKE)[0]!;
+  const read = (t: KoiosTxInfo) => describeTxs([t], accountMatcher({ addresses: [ME], keys: [] }), new Map(), STAKE)[0]!;
   const cert = (type: string, info: Record<string, unknown>) => ({ index: 0, type, info: { stake_address: STAKE, ...info } });
 
   it("names a registration and delegation, a vote, stopping, and a withdrawal alone", () => {
@@ -258,6 +264,63 @@ describe("the Cardano account's staking and notes", () => {
       staking: { pool: "pool1logic", ticker: "LOGIC" },
     });
     expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info"]);
+  });
+});
+
+describe("what's the Cardano account's in its activity", () => {
+  const STAKE = activityPreprod.stake;
+  const MY_KEY = "11".repeat(28);
+  const THEIR_KEY = "22".repeat(28);
+  const mine = accountMatcher({ addresses: ["addr_test1_my_base"], keys: [MY_KEY] });
+  const out = (bech32: string, cred: string, value: string) => ({ payment_addr: { bech32, cred }, value, asset_list: [] });
+  const tx = (inputs: KoiosTxInfo["inputs"], outputs: KoiosTxInfo["outputs"], extra: Partial<KoiosTxInfo> = {}): KoiosTxInfo => ({
+    tx_hash: "ef".repeat(32),
+    block_height: 1,
+    tx_timestamp: 1_800_000_000,
+    fee: "200000",
+    inputs,
+    outputs,
+    ...extra,
+  });
+
+  it("is what's under its payment keys, whatever the staking part, as the balance counts it", () => {
+    // Paid to the account's own key at an address with no staking part: received.
+    const enterprise = tx(
+      [out("addr_test1_them", THEIR_KEY, "12000000")],
+      [out("addr_test1v_my_key", MY_KEY, "5000000"), out("addr_test1_them", THEIR_KEY, "6800000")],
+    );
+    expect(describeTxs([enterprise], mine, new Map(), STAKE)).toMatchObject([{ kind: "received", direction: "in", lovelace: "5000000" }]);
+  });
+
+  it("leaves out someone paying their own key under the account's stake key, and their note", () => {
+    const franken = tx(
+      [out("addr_test1_them", THEIR_KEY, "12000000")],
+      [out("addr_test1_their_key_our_stake", THEIR_KEY, "11800000")],
+      { metadata: { "674": { msg: ["Your wallet is at risk: visit evil.example"] } } },
+    );
+    expect(describeTxs([franken], mine, new Map(), STAKE)).toEqual([]);
+    // Staking the account's key is the account's, whatever the outputs.
+    const staked = { ...franken, certificates: [{ index: 0, type: "vote_delegation", info: { stake_address: STAKE, drep_id: "drep1xyz" } }] };
+    expect(describeTxs([staked], mine, new Map(), STAKE)).toMatchObject([{ kind: "vote" }]);
+  });
+
+  it("reads the account's keys from the balance reading", async () => {
+    const t = await unlocked();
+    await t.balances.get("preprod");
+    const account = (await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!;
+    const held = koiosPreprod.accounts[STAKE]!.account_utxos.map((u) => u.payment_cred).filter((c) => c !== null);
+    expect(held.length).toBeGreaterThan(0);
+    for (const key of held) expect(account.keys).toContain(key);
+
+    // The newest transaction, as someone paying their own key under our stake key would make it.
+    const [first] = activityPreprod.account_txs;
+    t.koios.txExtras.set(first!.tx_hash, {
+      inputs: [out("addr_test1_them", THEIR_KEY, "12000000")],
+      outputs: [out("addr_test1_their_key_our_stake", THEIR_KEY, "11800000")],
+    });
+    const { entries } = await t.activity.cardano("preprod");
+    expect(entries.map((e) => e.txHash)).not.toContain(first!.tx_hash);
+    expect(entries).toHaveLength(19);
   });
 });
 

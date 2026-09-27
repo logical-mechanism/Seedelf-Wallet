@@ -10,11 +10,13 @@
 // Cardano account: Koios knows the account already. `account_txs`, newest
 // first, and one batched `tx_info` per page of 20, only while Activity is
 // open. The pages are kept for the session, so opening it again asks only
-// for what's newer: one request. The account's addresses come from the last
-// balance reading. `tx_info` also says what each transaction did with the
-// stake key (its certificates and withdrawals) and carries its note
-// (CIP-20's message), at no extra request; a pool's ticker comes only from
-// what's on the device.
+// for what's newer: one request. The account's payment keys come from the
+// last balance reading, and what's the account's is matched by them, as the
+// balance counts it: `account_txs` also lists what anyone pays to their own
+// key paired with our stake key, which isn't ours and is left out.
+// `tx_info` also says what each transaction did with the stake key (its
+// certificates and withdrawals) and carries its note (CIP-20's message), at
+// no extra request; a pool's ticker comes only from what's on the device.
 //
 // Each entry keeps the tokens that moved, with signed quantities, for its
 // details and the CSV export (older Seedelf entries have only a count).
@@ -23,7 +25,7 @@ import type { NetworkName } from "../networks";
 import type { ActivityEntry, ActivityStaking, PendingTx, TokenQuantity } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
-import type { Koios, KoiosTxInfo, KoiosUtxo } from "./koios";
+import type { Koios, KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "./koios";
 import type { PrivateStore } from "./private-store";
 import { outpoint } from "./spent";
 import { knownPool } from "./staking";
@@ -49,7 +51,28 @@ interface History {
 
 export interface AccountAddresses {
   stake: string;
+  /** The base addresses in range: matched only for a row Koios gives no payment key for. */
   addresses: string[];
+  /** The account's payment key hashes in range (hex). */
+  keys: string[];
+}
+
+/** An input or output as `tx_info` lists it: `cred` is its payment key or script hash (hex), null for a Byron address. */
+type TxOut = KoiosTxOut & { payment_addr: { cred?: string | null } };
+
+/**
+ * Whether an input or output is the account's: under one of its payment
+ * keys, whatever its staking part, as the balance counts it (account.ts).
+ * Someone else's key paired with our stake key isn't: it proves nothing
+ * about us.
+ */
+export function accountMatcher(account: Pick<AccountAddresses, "addresses" | "keys">): (o: KoiosTxOut) => boolean {
+  const keys = new Set(account.keys ?? []);
+  const addresses = new Set(account.addresses);
+  return (o) => {
+    const cred = (o as TxOut).payment_addr.cred;
+    return cred ? keys.has(cred) : addresses.has(o.payment_addr.bech32);
+  };
 }
 
 interface AccountPages {
@@ -216,7 +239,7 @@ export class ActivityService {
     if (!account) throw new Error("Read the balances first: open Home, then Activity.");
     const { stake } = account;
     const koios = this.deps.koios(network);
-    const ours = new Set(account.addresses);
+    const ours = accountMatcher(account);
     const own = new Map((await this.seedelf(network)).map((e) => [e.txHash, e]));
     const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake));
 
@@ -337,25 +360,27 @@ export function stakingOf(tx: KoiosTxInfo, stake: string): ActivityStaking | und
 
 /**
  * What each transaction did to the account: its outputs to the account's
- * addresses less its inputs from them, in ADA, and which tokens changed.
+ * keys (`ours`) less its inputs from them, in ADA, and which tokens changed.
  * One of this wallet's own flows (a move-in, an account-paid mint, a
  * withdrawal to the account) is named as such; otherwise a transaction that
  * staked, delegated the vote, stopped staking, or only withdrew the rewards
  * is named for that, from its certificates and withdrawals (`stake`: the
  * account's stake address). A payment that also spent the rewards stays
- * "Sent", with the rewards in its `staking`.
+ * "Sent", with the rewards in its `staking`. A transaction with nothing of
+ * the account's in it (someone paying their own key under our stake key) is
+ * left out: it isn't the account's activity, and its note isn't to us.
  */
 export function describe(
   txs: KoiosTxInfo[],
-  ours: ReadonlySet<string>,
+  ours: (o: KoiosTxOut) => boolean,
   own: ReadonlyMap<string, ActivityEntry>,
   stake?: string,
 ): ActivityEntry[] {
-  return txs.map((tx) => {
+  return txs.flatMap((tx): ActivityEntry[] => {
     let net = 0n;
     const assets = new Map<string, bigint>();
-    const add = (o: KoiosTxInfo["outputs"][number], sign: 1n | -1n) => {
-      if (!ours.has(o.payment_addr.bech32)) return;
+    const add = (o: KoiosTxOut, sign: 1n | -1n) => {
+      if (!ours(o)) return;
       net += sign * BigInt(o.value);
       for (const a of o.asset_list ?? []) {
         const k = `${a.policy_id}.${a.asset_name}`;
@@ -364,11 +389,12 @@ export function describe(
     };
     for (const i of tx.inputs) add(i, -1n);
     for (const o of tx.outputs) add(o, 1n);
-    const spent = tx.inputs.some((i) => ours.has(i.payment_addr.bech32));
+    const spent = tx.inputs.some(ours);
     const mine = own.get(tx.tx_hash);
     const direction = net > 0n ? "in" : net < 0n ? "out" : "none";
     const staking = stake ? stakingOf(tx, stake) : undefined;
-    const paysOthers = tx.outputs.some((o) => !ours.has(o.payment_addr.bech32));
+    if (!spent && !tx.outputs.some(ours) && !staking && !mine) return [];
+    const paysOthers = tx.outputs.some((o) => !ours(o));
     const kind: ActivityEntry["kind"] = mine
       ? mine.kind
       : staking?.stopped
@@ -384,7 +410,7 @@ export function describe(
                 : "sent";
     const moved = [...assets].filter(([, q]) => q !== 0n);
     const note = noteOf(tx.metadata);
-    return {
+    const entry: ActivityEntry = {
       txHash: tx.tx_hash,
       at: tx.tx_timestamp * 1000,
       kind,
@@ -404,5 +430,6 @@ export function describe(
       ...(note ? { note } : {}),
       ...(staking ? { staking } : {}),
     };
+    return [entry];
   });
 }
