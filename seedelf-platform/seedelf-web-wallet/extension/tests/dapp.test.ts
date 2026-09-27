@@ -507,6 +507,16 @@ describe("the dApp connector", () => {
     await off;
   });
 
+  it("keeps every connection when several are answered at once", async () => {
+    const t = await on();
+    const origins = ["https://a.example", "https://b.example", "https://c.example"];
+    const enabling = origins.map((o) => t.dapp.call(site(o), "enable", []));
+    await until(() => t.dapp.approvals().length === 3);
+    await Promise.all(t.dapp.approvals().map((a) => t.dapp.answer(a.id, true)));
+    expect(await Promise.all(enabling)).toEqual([true, true, true]);
+    expect((await t.dapp.sites()).map((s) => s.origin)).toEqual(origins);
+  });
+
   it("waits for an unlock in its window, and refuses for a while once it's closed instead", async () => {
     const t = await on();
     const s = await connected(t);
@@ -683,6 +693,42 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number) }]);
     await dapp.answer(b!.id, false);
     await expect(second).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+  });
+
+  it("says so when another of the site's requests connected it while its session's funding was sent", async () => {
+    const t = await on();
+    const { dapp, sessions } = privately(t);
+    const first = dapp.call(site(), "enable", []);
+    const second = dapp.call(site(), "enable", []);
+    await until(() => dapp.approvals().length === 2);
+    const [a, b] = dapp.approvals();
+    const out = await dapp.privateBuild(b!.id, "15000000", []);
+
+    // giveme.my answers slowly, and meanwhile the other request is answered with the public account.
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    const fetch = t.collateral.fetch;
+    let asked = false;
+    t.collateral.fetch = async (url, init) => {
+      asked = true;
+      await answered;
+      return fetch(url, init);
+    };
+    const funding = dapp.answer(b!.id, true, PASSWORD, { txHash: out.txHash });
+    await until(() => asked);
+    expect(await dapp.answer(a!.id, true)).toEqual({});
+    answer();
+    expect(await funding).toEqual({
+      error: expect.stringContaining("Private session 1 is funded, but another of this site's requests connected it meanwhile"),
+    });
+
+    // The funding went out and the session holds it; the site talks to the public account, and nothing waits.
+    expect(t.koios.submitted.map((x) => txIdOf(x))).toEqual([out.txHash]);
+    expect((await sessions.list("preprod"))[0]).toMatchObject({ index: 0, site: { origin: site().origin } });
+    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number) }]);
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(dapp.approvals()).toEqual([]);
   });
 
   it("gives the site the session's account alone: its address, its reward address, its money and its collateral", async () => {

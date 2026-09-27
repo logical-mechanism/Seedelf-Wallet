@@ -215,6 +215,8 @@ export class DappService {
   private readonly asked = new Map<string, number[]>();
   /** Readings of an account under way, by its storage key: calls at the same time share one. */
   private readonly reading = new Map<string, Promise<View>>();
+  /** The last change to the `dapps` record, which the next waits for (`changeSites`). */
+  private sitesQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: DappDeps) {}
 
@@ -382,11 +384,7 @@ export class DappService {
   async forget(origin: string): Promise<DappSite[]> {
     const site = await this.site(origin);
     if (site?.session !== undefined) await this.deps.sessions.disconnect(this.deps.network, site.session);
-    const all = (await this.deps.store.get<Connected[]>("dapps")) ?? [];
-    await this.deps.store.set(
-      "dapps",
-      all.filter((s) => !(s.origin === origin && s.network === this.deps.network)),
-    );
+    await this.changeSites((all) => all.filter((s) => !(s.origin === origin && s.network === this.deps.network)));
     return this.sites();
   }
 
@@ -397,11 +395,7 @@ export class DappService {
    */
   async disconnectSession(index: number): Promise<void> {
     await this.deps.sessions.disconnect(this.deps.network, index);
-    const all = (await this.deps.store.get<Connected[]>("dapps")) ?? [];
-    await this.deps.store.set(
-      "dapps",
-      all.filter((s) => !(s.session === index && s.network === this.deps.network)),
-    );
+    await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === this.deps.network)));
   }
 
   /**
@@ -425,13 +419,30 @@ export class DappService {
     return (await this.site(origin)) !== undefined;
   }
 
-  private async connect(origin: string, session?: number): Promise<true> {
-    const all = (await this.deps.store.get<Connected[]>("dapps")) ?? [];
-    if (!all.some((s) => s.origin === origin && s.network === this.deps.network)) {
+  /** Records a site as connected, to `session` if given; false when it's connected already. */
+  private async connect(origin: string, session?: number): Promise<boolean> {
+    let added = false;
+    await this.changeSites((all) => {
+      if (all.some((s) => s.origin === origin && s.network === this.deps.network)) return all;
+      added = true;
       const site: Connected = { origin, network: this.deps.network, connectedAt: this.deps.now() };
-      await this.deps.store.set("dapps", [...all, session === undefined ? site : { ...site, session }]);
-    }
-    return true;
+      return [...all, session === undefined ? site : { ...site, session }];
+    });
+    return added;
+  }
+
+  /**
+   * Changes the `dapps` record after every change before it: a connect and a
+   * disconnect at once would otherwise each write over the other's.
+   */
+  private changeSites(change: (all: Connected[]) => Connected[]): Promise<void> {
+    const run = this.sitesQueue.then(async () => {
+      const all = (await this.deps.store.get<Connected[]>("dapps")) ?? [];
+      const next = change(all);
+      if (next !== all) await this.deps.store.set("dapps", next);
+    });
+    this.sitesQueue = run.catch(() => undefined);
+    return run;
   }
 
   /** Who a connected site talks to: its private session's account, or the public account. */
@@ -460,7 +471,16 @@ export class DappService {
     } catch (e) {
       return { error: (e as Error).message };
     }
-    await this.connect(w.session.origin, index);
+    if (!(await this.connect(w.session.origin, index))) {
+      // Connected while the funding was sent: the site talks to that, so its
+      // enable() has its answer, and the session's money waits on the dApps page.
+      remove(this.waiting, (x) => x === w);
+      w.resolve(true);
+      this.deps.changed();
+      return {
+        error: `Private session ${index + 1} is funded, but another of this site's requests connected it meanwhile, so the site won't use that session. Its money is on the dApps page, under Sites: bring it back from there.`,
+      };
+    }
     w.approval = { ...w.approval, funding: { index, txHash } } as DappApproval;
     this.deps.changed();
     void this.watchFunding(w, index);
