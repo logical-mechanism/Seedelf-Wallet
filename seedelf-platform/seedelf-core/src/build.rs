@@ -34,7 +34,7 @@ use crate::transaction::{
     decode_tx_hash, reference_utxo, seedelf_minimum_lovelace, seedelf_token_name,
     wallet_minimum_lovelace_with_assets,
 };
-use crate::utxos::{assets_of, fitting};
+use crate::utxos::{assets_of, fitting, reference_script_bytes, reference_script_size};
 
 /// A throwaway ed25519 key, used to sign a draft so its size includes a
 /// realistic witness. The signature is discarded.
@@ -402,8 +402,8 @@ impl std::error::Error for TooLittle {}
 
 /// `external sweep`: every UTxO at the CLI's dApp address back into the
 /// wallet contract, under fresh re-randomizations of `owner`. `signer` is the
-/// dApp key's hash, disclosed as a required signer. Returns the unsigned
-/// transaction and its fee.
+/// dApp key's hash, disclosed as a required signer. The fee pays for any
+/// reference script they hold. Returns the unsigned transaction and its fee.
 pub fn external_sweep(
     params: &ProtocolParameters,
     utxos: &[UtxoResponse],
@@ -416,7 +416,10 @@ pub fn external_sweep(
     }
     let (total, tokens) = assets_of(utxos.to_vec())?;
     let inputs: Vec<Input> = utxos.iter().map(input_of).collect::<Result<_>>()?;
-    let (fee, staged) = settle_fee(params, 1, |fee| {
+    // Conway charges for a reference script on a spent input too.
+    let script_fee = reference_script_fee(params, reference_script_bytes(utxos)?)?;
+    let price = |size| linear_fee(params, size).saturating_add(script_fee);
+    let (fee, staged) = settle(1, Patches::staking(&Staking::none()), price, |fee| {
         let lovelace = checked_lovelace(total, &[fee])?;
         let mut tx = StagingTransaction::new();
         for input in &inputs {
@@ -527,7 +530,7 @@ pub struct AccountPayment {
     pub change_lovelace: u64,
     pub change_tokens: Assets,
     /// What Max couldn't spend with the rest, in the order given: see
-    /// [`fitting`]. Empty for an amount.
+    /// [`fitting`] and [`reference_script_size`]. Empty for an amount.
     pub left_out: Vec<UtxoResponse>,
 }
 
@@ -544,7 +547,10 @@ pub struct AccountPayment {
 ///   token UTxOs, until the amount, the fee and valid change are covered.
 ///   Tokens that aren't picked go back with the change.
 /// - A UTxO whose tokens would push a total past what one output holds is
-///   never spent with the rest ([`fitting`]); Max says which it left out.
+///   never spent with the rest ([`fitting`]), nor is one holding a reference
+///   script that can't be measured ([`reference_script_size`]); Max says
+///   which it left out. The fee pays for every spent input's reference
+///   script, as Conway charges.
 /// - Change goes to `change_addr`. There is no change output when nothing is left.
 /// - `staking` rides along: a reward withdrawal adds to what pays
 ///   ([`Staking::withdraw`]), and it's patched into the transaction.
@@ -698,8 +704,20 @@ fn account_payment(
                 .any(|a| picked.contains_key(&(a.policy_id.as_str(), a.asset_name.as_str())))
         })
     };
-    // What one transaction can hold together, the UTxOs with picked tokens first.
-    let (eligible, overflowing) = fitting(available, &Assets::new(), holds_picked)?;
+    // A UTxO holding a reference script that can't be measured can't be
+    // priced, so it's never spent. Of the rest, what one transaction can hold
+    // together, the UTxOs with picked tokens first.
+    let priced: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| reference_script_size(u).is_ok())
+        .cloned()
+        .collect();
+    let (eligible, _) = fitting(&priced, &Assets::new(), holds_picked)?;
+    let left_out: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| !eligible.iter().any(|e| same_utxo(e, u)))
+        .cloned()
+        .collect();
     for ((policy, name), quantity) in &picked {
         let held: u64 = eligible
             .iter()
@@ -717,11 +735,17 @@ fn account_payment(
 
     let (mandatory, mut rest): (Vec<UtxoResponse>, Vec<UtxoResponse>) =
         eligible.into_iter().partition(|u| holds_picked(u));
-    // Pure ADA first, then token UTxOs; largest first within each.
+    // Pure ADA first, then token UTxOs; within each, those holding a
+    // reference script (which costs more to spend) after the rest, and the
+    // largest first.
     rest.sort_by_key(|u| {
         let tokens = u.asset_list.as_ref().is_some_and(|a| !a.is_empty());
         let lovelace = u.value.parse::<u64>().unwrap_or(0);
-        (tokens, std::cmp::Reverse(lovelace))
+        (
+            tokens,
+            u.reference_script.is_some(),
+            std::cmp::Reverse(lovelace),
+        )
     });
 
     let attempt = |selected: &[UtxoResponse]| {
@@ -734,7 +758,7 @@ fn account_payment(
             bail!("There is nothing in the Cardano account to spend");
         }
         let mut built = attempt(&all)?;
-        built.left_out = overflowing;
+        built.left_out = left_out;
         return Ok(built);
     }
 
@@ -812,11 +836,13 @@ fn build_account_payment(
         .collect::<BTreeSet<_>>()
         .len();
     let change_floor = minimum_change(params, change_addr, &staying)?;
+    // Conway charges for a reference script on a spent input too.
+    let script_fee = reference_script_fee(params, reference_script_bytes(selected)?)?;
 
     let mut paid: Vec<u64> = Vec::new();
     let mut change = 0;
     let mut outputs = 0;
-    let price = |size| linear_fee(params, size);
+    let price = |size| linear_fee(params, size).saturating_add(script_fee);
     let (fee, staged) = settle(signers, patches, price, |fee| {
         (paid, change) = match pays {
             [only] if only.amount == AccountAmount::Max => {
@@ -1211,7 +1237,8 @@ pub struct ScriptFee {
     pub size: u64,
     /// Execution units, at the protocol's prices.
     pub compute: u64,
-    /// The scripts read from reference inputs.
+    /// Reference scripts: those read from reference inputs, and any on a
+    /// spent input.
     pub script_reference: u64,
     pub total: u64,
 }
@@ -1618,11 +1645,18 @@ impl ScriptSpend {
             .iter()
             .map(|b| computation_fee(&self.chain.params, b.mem, b.steps))
             .sum();
+        // The Seedelf scripts, read from reference inputs, and any reference
+        // script on a spent input, which Conway charges for too.
         let contract = &self.chain.config.contract;
         let mut script_bytes = contract.wallet_contract_size;
         if self.mint.is_some() {
             script_bytes += contract.seedelf_contract_size;
         }
+        let mut spent = self.inputs();
+        if let Some(account) = &self.account {
+            spent.extend(account.inputs.iter().map(|(u, _)| u.clone()));
+        }
+        script_bytes += reference_script_bytes(&spent)?;
         let script_reference = reference_script_fee(&self.chain.params, script_bytes)?;
 
         // Two signatures: the one-time key and giveme.my's collateral key, or
@@ -2391,9 +2425,12 @@ impl AccountMint {
             .mint(0)
             .context("Ogmios measured no budget for the Seedelf policy")?;
         let compute = computation_fee(&self.chain.params, budget.mem, budget.steps);
+        // The policy, by reference, and any reference script on an input
+        // (never the collateral's: the ledger doesn't count it).
         let script_reference = reference_script_fee(
             &self.chain.params,
-            self.chain.config.contract.seedelf_contract_size,
+            self.chain.config.contract.seedelf_contract_size
+                + reference_script_bytes(&self.inputs)?,
         )?;
         let (fee, staged) = settle(
             self.signers(),
@@ -2524,16 +2561,26 @@ pub fn account_mint(
     let same =
         |a: &UtxoResponse, b: &UtxoResponse| a.tx_hash == b.tx_hash && a.tx_index == b.tx_index;
 
+    // Never one holding a reference script that can't be measured, so can't
+    // be priced.
     let spendable: Vec<UtxoResponse> = available
         .iter()
         .filter(|u| collateral.is_none_or(|c| !same(u, c)))
+        .filter(|u| reference_script_size(u).is_ok())
         .cloned()
         .collect();
     let (mut spendable, _) = fitting(&spendable, &Assets::new(), |_| false)?;
     if spendable.is_empty() {
         bail!("There is nothing in the Cardano account to pay for a Seedelf");
     }
-    spendable.sort_by_key(|u| (!pure_ada(u), std::cmp::Reverse(lovelace_of(u))));
+    // A reference script costs more to spend: those after the rest.
+    spendable.sort_by_key(|u| {
+        (
+            !pure_ada(u),
+            u.reference_script.is_some(),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
 
     let config = &chain.config;
     let policy = policy_hash(config)?;

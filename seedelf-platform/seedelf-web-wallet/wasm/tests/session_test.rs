@@ -451,6 +451,67 @@ fn a_return_leaves_out_what_would_overflow_a_token_and_brings_back_the_rest() {
     assert_eq!((next.inputs, next.left_out.len()), (1, 0));
 }
 
+/// The recorded Koios row's reference script: the Seedelf policy, 519 bytes.
+fn recorded_script() -> Option<seedelf_koios::koios::ReferenceScript> {
+    let rows: Vec<UtxoResponse> = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/reference_script_utxo.json"
+    ))
+    .unwrap();
+    rows[0].reference_script.clone()
+}
+
+#[test]
+fn a_return_pays_for_a_strangers_reference_script_or_leaves_one_it_cant_measure() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    // Anyone can send the session's address a UTxO carrying a reference script.
+    let scripted = UtxoResponse {
+        reference_script: recorded_script(),
+        ..utxo(8, 0, &at, 1_300_000, &[])
+    };
+    let mut unmeasured = utxo(9, 0, &at, 1_300_000, &[]);
+    unmeasured.reference_script = Some(seedelf_koios::koios::ReferenceScript {
+        kind: Some("timelock".into()),
+        ..Default::default()
+    });
+    let utxos = vec![
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(3, 0, &at, 5_000_000, &[]),
+        scripted,
+        unmeasured,
+    ];
+    let result = api::session_return(
+        &accounts,
+        sk,
+        SessionReturnRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 3,
+            utxos,
+            merge: vec![],
+            own: vec![],
+        },
+    )
+    .unwrap();
+    // Its 519 bytes are paid for, as Conway charges a spent input's script:
+    // 15 lovelace a byte on top of the size fee.
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let fee: u64 = result.fee.parse().unwrap();
+    let minimum = 44 * bytes.len() as u64 + 155_381 + 519 * 15;
+    assert!(
+        fee >= minimum && fee < minimum + 1_000,
+        "{fee} for {minimum}"
+    );
+    assert_eq!(result.inputs, 3);
+    // One whose script can't be measured can't be priced: it stays, and the
+    // return says so.
+    assert_eq!(result.left_out.len(), 1);
+    assert_eq!(result.left_out[0].tx_hash, hex::encode([9u8; 32]));
+    assert_eq!(result.left_out[0].reason, "script");
+    assert_eq!(result.lovelace, (26_300_000 - fee).to_string());
+}
+
 #[test]
 fn a_return_takes_only_the_sessions_own_utxos() {
     let accounts = accounts();

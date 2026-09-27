@@ -148,9 +148,13 @@ pub mod api {
     pub struct LeftOut {
         pub tx_hash: String,
         pub tx_index: u64,
-        /// Why: `tokens`, one of its tokens would total more with the rest
-        /// than an output can hold (`seedelf_core::utxos::fitting`), so it
-        /// waits for the next transaction, which can take it.
+        /// Why:
+        /// - `tokens`: one of its tokens would total more with the rest than
+        ///   an output can hold (`seedelf_core::utxos::fitting`), so it waits
+        ///   for the next transaction, which can take it;
+        /// - `script`: it holds a reference script the wallet can't measure
+        ///   (`seedelf_core::utxos::reference_script_size`), so it can't price
+        ///   spending it, and no transaction of this wallet takes it.
         pub reason: String,
     }
 
@@ -160,7 +164,11 @@ pub mod api {
             .map(|u| LeftOut {
                 tx_hash: u.tx_hash.clone(),
                 tx_index: u.tx_index,
-                reason: "tokens".to_string(),
+                reason: match seedelf_core::utxos::reference_script_size(u) {
+                    Ok(_) => "tokens",
+                    Err(_) => "script",
+                }
+                .to_string(),
             })
             .collect()
     }
@@ -540,7 +548,8 @@ pub mod api {
     /// can merge into `merge`: the funding's change, when it holds tokens,
     /// counts towards every token's total ([`seedelf_core::utxos::fitting`]).
     /// The rest waits for a later return. `own` are the session's own
-    /// transactions: what they left comes first.
+    /// transactions: what they left comes first. A UTxO holding a reference
+    /// script that can't be measured is never taken: its fee can't be priced.
     pub(crate) struct ReturnPlan {
         pub taken: Vec<UtxoResponse>,
         pub left_out: Vec<LeftOut>,
@@ -560,10 +569,24 @@ pub mod api {
             // added up, the return makes new UTxOs instead.
             utxo_assets(merge.to_vec()).ok().map(|(_, tokens)| tokens)
         };
-        let (taken, left) =
-            seedelf_core::utxos::fitting(rows, base.as_ref().unwrap_or(&Assets::new()), |u| {
+        let priced: Vec<UtxoResponse> = rows
+            .iter()
+            .filter(|u| seedelf_core::utxos::reference_script_size(u).is_ok())
+            .cloned()
+            .collect();
+        let (taken, _) =
+            seedelf_core::utxos::fitting(&priced, base.as_ref().unwrap_or(&Assets::new()), |u| {
                 own.contains(&u.tx_hash)
             })?;
+        let left: Vec<UtxoResponse> = rows
+            .iter()
+            .filter(|u| {
+                !taken
+                    .iter()
+                    .any(|t| t.tx_hash == u.tx_hash && t.tx_index == u.tx_index)
+            })
+            .cloned()
+            .collect();
         Ok(ReturnPlan {
             merged: base.is_some(),
             taken,

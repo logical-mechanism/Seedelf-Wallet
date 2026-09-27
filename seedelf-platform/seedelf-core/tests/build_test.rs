@@ -19,7 +19,7 @@ use seedelf_core::transaction::calculate_min_required_utxo;
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
-use seedelf_koios::koios::{Asset, ProtocolParameters, Ratio, UtxoResponse};
+use seedelf_koios::koios::{Asset, ProtocolParameters, Ratio, ReferenceScript, UtxoResponse};
 
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -215,10 +215,18 @@ fn assert_paid(
 
     // The fee covers the transaction once every input's key has signed, by
     // the ledger's own formula: 44 lovelace a byte plus 155,381 (the
-    // fixture's min_fee_a and min_fee_b).
+    // fixture's min_fee_a and min_fee_b), plus Conway's fee for any reference
+    // script on a spent input, at 15 lovelace a byte.
     assert_eq!(tx.fee, built.fee);
     assert_eq!((w.params.min_fee_a, w.params.min_fee_b), (44, 155_381));
-    let ledger_minimum = 44 * tx.size_signed + 155_381;
+    assert_eq!(w.params.min_fee_ref_script_cost_per_byte, Ratio::whole(15));
+    let script_bytes: u64 = spent
+        .iter()
+        .filter_map(|u| u.reference_script.as_ref())
+        .map(|s| s.bytes.as_ref().unwrap().len() as u64 / 2)
+        .sum();
+    let ledger_minimum =
+        44 * tx.size_signed + 155_381 + ledger_reference_script_fee((15, 1), script_bytes);
     assert!(
         tx.fee >= ledger_minimum,
         "fee {} < {ledger_minimum}",
@@ -831,6 +839,126 @@ fn max_leaves_out_a_utxo_whose_tokens_would_overflow_the_rest() {
     .unwrap();
     let tx = assert_sound(&w, &available, &moved);
     assert_eq!((tx.inputs.len(), moved.left_out.len()), (4, 1));
+}
+
+/// The recorded Koios row's reference script: the Seedelf policy, 519 bytes.
+fn recorded_script() -> Option<ReferenceScript> {
+    let rows: Vec<UtxoResponse> =
+        serde_json::from_str(include_str!("fixtures/reference_script_utxo.json")).unwrap();
+    rows[0].reference_script.clone()
+}
+
+/// An ADA-only UTxO at the account's receive address 0 that carries a
+/// reference script, as anyone can send one.
+fn with_script(w: &World, n: u8, lovelace: u64) -> UtxoResponse {
+    UtxoResponse {
+        reference_script: recorded_script(),
+        ..utxo(w, n, 0, lovelace, vec![])
+    }
+}
+
+#[test]
+fn spending_a_utxo_with_a_reference_script_pays_for_its_bytes() {
+    let w = world();
+    let to = elsewhere();
+    let send = |available: &[UtxoResponse], amount| {
+        build::account_send(
+            &w.params,
+            available,
+            amount,
+            &[],
+            &to,
+            true,
+            &w.change,
+            &Staking::none(),
+        )
+        .unwrap()
+    };
+    // Max spends it too, and the fee pays for its 519 bytes (assert_paid
+    // holds the fee to the ledger's minimum).
+    let available = vec![
+        utxo(&w, 1, 0, 10_000_000, vec![]),
+        with_script(&w, 2, 1_300_000),
+    ];
+    let max = send(&available, AccountAmount::Max);
+    let tx = assert_paid(&w, &available, &max, Some(&to));
+    assert_eq!(tx.inputs.len(), 2);
+    assert!(max.left_out.is_empty());
+    assert!(max.fee >= 44 * tx.size_signed + 155_381 + 519 * 15);
+
+    // It costs more to spend, so an amount takes plain ADA first, however large it is.
+    let available = vec![
+        with_script(&w, 2, 30_000_000),
+        utxo(&w, 1, 0, 10_000_000, vec![]),
+    ];
+    let small = send(&available, AccountAmount::Lovelace(2_000_000));
+    let tx = assert_paid(&w, &available, &small, Some(&to));
+    assert_eq!(tx.inputs, vec![hex::encode([1u8; 32])]);
+    // When it's needed, its script is paid for.
+    let large = send(&available, AccountAmount::Lovelace(20_000_000));
+    let tx = assert_paid(&w, &available, &large, Some(&to));
+    assert_eq!(tx.inputs.len(), 2);
+
+    // Make private prices it the same way.
+    let moved = build::move_in(
+        &w.params,
+        &available,
+        AccountAmount::Max,
+        &[],
+        &w.owner,
+        &w.wallet,
+        &w.change,
+        &Staking::none(),
+    )
+    .unwrap();
+    assert_sound(&w, &available, &moved);
+}
+
+#[test]
+fn a_reference_script_the_wallet_cant_measure_is_never_spent() {
+    let w = world();
+    let to = elsewhere();
+    // How Koios may list a native script: no bytes, no size.
+    let mut native = with_script(&w, 3, 5_000_000);
+    native.reference_script = Some(ReferenceScript {
+        kind: Some("timelock".into()),
+        ..Default::default()
+    });
+    let available = vec![utxo(&w, 1, 0, 10_000_000, vec![]), native];
+    let send = |amount| {
+        build::account_send(
+            &w.params,
+            &available,
+            amount,
+            &[],
+            &to,
+            true,
+            &w.change,
+            &Staking::none(),
+        )
+        .unwrap()
+    };
+    // Its fee can't be priced, so Max leaves it where it is, and says so.
+    let max = send(AccountAmount::Max);
+    let tx = assert_paid(&w, &available, &max, Some(&to));
+    assert_eq!(tx.inputs, vec![hex::encode([1u8; 32])]);
+    assert_eq!(max.left_out.len(), 1);
+    assert_eq!(max.left_out[0].tx_hash, hex::encode([3u8; 32]));
+    // An amount never reaches for it.
+    let err = build::account_send(
+        &w.params,
+        &available,
+        AccountAmount::Lovelace(12_000_000),
+        &[],
+        &to,
+        true,
+        &w.change,
+        &Staking::none(),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(err.contains("Not enough ADA"), "{err}");
 }
 
 #[test]

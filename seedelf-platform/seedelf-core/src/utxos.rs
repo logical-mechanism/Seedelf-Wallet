@@ -347,14 +347,45 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> Result<(u64, Assets)> {
     Ok((current_lovelace_sum, found_assets))
 }
 
+/// The size of a UTxO's reference script, as the ledger counts it for the
+/// reference-script fee (`build::reference_script_fee`): its bytes as Koios
+/// gives them, which must agree with Koios's `size` when it gives one. 0 when
+/// it holds none. One it holds but that can't be sized (no bytes, not hex, or
+/// a size that disagrees) is an error naming the UTxO, never 0: the fee
+/// would come out short, and the network would refuse the transaction.
+pub fn reference_script_size(utxo: &UtxoResponse) -> Result<u64> {
+    let Some(script) = &utxo.reference_script else {
+        return Ok(0);
+    };
+    let size = script
+        .bytes
+        .as_deref()
+        .and_then(|bytes| hex::decode(bytes).ok())
+        .map(|bytes| bytes.len() as u64)
+        .filter(|size| *size > 0 && script.size.is_none_or(|given| given == *size));
+    size.with_context(|| {
+        format!(
+            "UTxO {}#{} holds a reference script the wallet can't measure, so it can't price spending it",
+            utxo.tx_hash, utxo.tx_index
+        )
+    })
+}
+
+/// The reference-script bytes of `utxos` together (see [`reference_script_size`]).
+pub fn reference_script_bytes(utxos: &[UtxoResponse]) -> Result<u64> {
+    utxos.iter().try_fold(0u64, |total, utxo| {
+        Ok(total.saturating_add(reference_script_size(utxo)?))
+    })
+}
+
 /// Which of `utxos` one transaction can spend together (`taken`), and which
 /// it leaves out (`left`), each in the order given.
 ///
 /// - A UTxO is left out when its tokens, added to `base`'s and to those of
 ///   the UTxOs taken before it, would push a token's total past a u64. No
 ///   output can hold more of one token than that, so totalling in u128
-///   wouldn't help: anyone can send three UTxOs of 2^63 of one token to an
-///   address, and nothing holding all three could be built.
+///   wouldn't help: anyone can send three UTxOs of 2^63 − 1 of one token to
+///   an address, and nothing holding all three could be built.
 /// - The order they're taken in: ADA-only first (they never conflict), then
 ///   those `first` picks (a session's own), then the most lovelace first,
 ///   ties by outpoint, so the same UTxOs split the same way every time.

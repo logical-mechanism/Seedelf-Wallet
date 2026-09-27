@@ -273,6 +273,22 @@ fn ledger_minimum_fee(
     44 * size + 155_381 + units + 15 * script_bytes
 }
 
+/// The recorded Koios row's reference script: the Seedelf policy, 519 bytes.
+fn recorded_script() -> Option<seedelf_koios::koios::ReferenceScript> {
+    let rows: Vec<UtxoResponse> =
+        serde_json::from_str(include_str!("fixtures/reference_script_utxo.json")).unwrap();
+    rows[0].reference_script.clone()
+}
+
+/// The reference-script bytes on `utxos`, measured here from Koios's hex.
+fn script_bytes_of(utxos: &[UtxoResponse]) -> u64 {
+    utxos
+        .iter()
+        .filter_map(|u| u.reference_script.as_ref())
+        .map(|s| s.bytes.as_ref().unwrap().len() as u64 / 2)
+        .sum()
+}
+
 fn register_from(datum: DatumOption) -> Option<Register> {
     let DatumOption::Data(data) = datum else {
         return None;
@@ -1089,9 +1105,12 @@ mod account {
             .collect();
         assert_eq!(returned, tokens_of(&[collateral]));
 
-        // The fee: even, at least the ledger's minimum for this many signatures.
+        // The fee: even, at least the ledger's minimum for this many
+        // signatures, with the policy's 519 bytes and any reference script on
+        // an input (never the collateral's).
         let b = tx.redeemers[0].budget;
-        let needed = ledger_minimum_fee(params, tx.size_signed, b.mem, b.steps, 519);
+        let script_bytes = 519 + script_bytes_of(mint.inputs());
+        let needed = ledger_minimum_fee(params, tx.size_signed, b.mem, b.steps, script_bytes);
         assert_eq!(tx.fee % 2, 0);
         assert!(tx.fee >= needed, "fee {} covers {needed}", tx.fee);
         assert!(tx.fee - needed < 1_000);
@@ -1130,6 +1149,40 @@ mod account {
         let tx = assert_sound(&p, &mint, &built);
         assert_eq!(tx.outputs.len(), 2);
         assert_eq!(built.change_lovelace, 10_000_000 - 1_749_860 - tx.fee);
+    }
+
+    #[test]
+    fn an_input_with_a_reference_script_pays_for_it_and_is_spent_last() {
+        let p = payer();
+        let scripted = UtxoResponse {
+            reference_script: recorded_script(),
+            ..at(&p, 0x33, 0, 30_000_000, &[])
+        };
+        let plain = at(&p, 0x34, 1, 3_000_000, &[]);
+        let collateral = at(&p, 0x35, 2, 5_000_000, &[]);
+        let mint_from = |available: &[UtxoResponse]| {
+            build::account_mint(
+                &p.chain,
+                available,
+                Some(&collateral),
+                "account-mint",
+                &p.seedelf,
+                &p.change,
+                &Staking::none(),
+            )
+            .unwrap()
+        };
+        // Plain ADA pays first, even the smaller.
+        let mint = mint_from(&[scripted.clone(), plain.clone()]);
+        assert_eq!(
+            outpoints(mint.inputs()),
+            outpoints(std::slice::from_ref(&plain))
+        );
+        // Spent, its 519 bytes are paid for with the policy's.
+        let mint = mint_from(std::slice::from_ref(&scripted));
+        let built = mint.finalize(&recorded()).unwrap();
+        assert_eq!(built.fee.script_reference, (519 + 519) * 15);
+        assert_sound(&p, &mint, &built);
     }
 
     #[test]
@@ -2098,6 +2151,28 @@ mod withdraw {
             err.contains("Not enough ADA in the Seedelf balance"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_spent_input_with_a_reference_script_is_paid_for() {
+        let w = world();
+        let to = key_address(Network::Testnet);
+        let scripted = UtxoResponse {
+            reference_script: recorded_script(),
+            ..owned(&w, 0x01, 0, 8_000_000, &[])
+        };
+        // The CLI's sweep of exactly these, measured by Ogmios.
+        let spend = build::sweep_all(
+            &w.chain,
+            std::slice::from_ref(&scripted),
+            &to,
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let built = finish(&w, spend, &spends_only(1));
+        // The wallet script's 629 bytes and the input's 519.
+        assert_spend(&w, &[scripted], &built, 629 + 519);
     }
 
     #[test]

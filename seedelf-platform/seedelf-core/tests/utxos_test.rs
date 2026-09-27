@@ -393,3 +393,71 @@ fn fitting_takes_ada_only_then_its_own_then_the_most_lovelace() {
         (vec!["01".into()], 2)
     );
 }
+
+// ---------------------------------------------------------------------------
+// utxos::reference_script_size: what Conway charges a spent input's script for
+// ---------------------------------------------------------------------------
+
+/// A real Koios row holding a reference script: the Seedelf policy's mainnet
+/// reference UTxO, 519 bytes, as `utxo_info` listed it on 2026-09-26.
+fn recorded_script_row() -> UtxoResponse {
+    let rows: Vec<UtxoResponse> =
+        serde_json::from_str(include_str!("fixtures/reference_script_utxo.json")).unwrap();
+    rows.into_iter().next().unwrap()
+}
+
+#[test]
+fn a_reference_script_is_measured_from_its_bytes() {
+    let row = recorded_script_row();
+    assert_eq!(utxos::reference_script_size(&row).unwrap(), 519);
+    // Koios's bytes are the script the ledger hashes, and so measures.
+    let script = row.reference_script.as_ref().unwrap();
+    let mut tagged = vec![0x03];
+    tagged.extend(hex::decode(script.bytes.as_ref().unwrap()).unwrap());
+    assert_eq!(
+        hex::encode(pallas_crypto::hash::Hasher::<224>::hash(&tagged)),
+        script.hash.clone().unwrap()
+    );
+    // A size Koios leaves out isn't needed.
+    let mut unsized_row = row.clone();
+    unsized_row.reference_script.as_mut().unwrap().size = None;
+    assert_eq!(utxos::reference_script_size(&unsized_row).unwrap(), 519);
+    // None is none.
+    assert_eq!(utxos::reference_script_size(&ada_utxo(0x01, 1)).unwrap(), 0);
+    let two = vec![row.clone(), ada_utxo(0x01, 1), row.clone()];
+    assert_eq!(utxos::reference_script_bytes(&two).unwrap(), 1_038);
+}
+
+#[test]
+fn a_reference_script_that_cant_be_measured_is_never_taken_for_none() {
+    let row = recorded_script_row();
+    let broken = |change: fn(&mut seedelf_koios::koios::ReferenceScript)| {
+        let mut row = row.clone();
+        change(row.reference_script.as_mut().unwrap());
+        utxos::reference_script_size(&row).unwrap_err().to_string()
+    };
+    for err in [
+        // No bytes: how Koios may list a native script.
+        broken(|s| s.bytes = None),
+        broken(|s| s.bytes = Some("not hex".into())),
+        broken(|s| s.bytes = Some(String::new())),
+        // Bytes and size that disagree.
+        broken(|s| s.size = Some(518)),
+        // A shape Koios never sends still counts as a script.
+        broken(|s| *s = Default::default()),
+    ] {
+        assert!(
+            err.contains(&format!("UTxO {}#1 holds a reference script", row.tx_hash)),
+            "{err}"
+        );
+        assert!(err.contains("can't price spending it"), "{err}");
+    }
+    assert!(
+        utxos::reference_script_bytes(&[row.clone(), {
+            let mut r = row;
+            r.reference_script.as_mut().unwrap().bytes = None;
+            r
+        }])
+        .is_err()
+    );
+}
