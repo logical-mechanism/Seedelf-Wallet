@@ -412,7 +412,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 **Offered, not decided (ask before building):**
 
 - Each box's due time on the Lovejoin page, and a Cardanoscan link for each mix. (Progress while a mix runs was built in the third session.)
-- Bring one back now preferring a box someone else has mixed since, which is better hidden.
+- Bring one back now preferring a box someone else has mixed since, which is better hidden. **Built (the privacy review §3.6, 2026-09-27),** for the boxes that come back by themselves too: among those that have waited the delay's least, one that isn't a leaf the wallet's own chain left goes first. A chain's leaves are kept, sealed, while their boxes sit unmoved, after its record goes.
 - Recording public mixes so they can be resumed, and finishing the mixing from where it stopped with fresh pool boxes (the design's original rebuild). (Saying when a chain was cut short was built in the third session.)
 - Home's banner for the withdraws that run by themselves.
 - A *Through Lovejoin* switch on Make private: the user said "maybe not".

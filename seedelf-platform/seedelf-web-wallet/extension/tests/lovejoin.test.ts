@@ -1224,6 +1224,78 @@ describe("a chain's boxes", CHAINS, () => {
     expect(due).toBeLessThanOrEqual(t.clock.now - 600_000 + HOUR + high);
   });
 
+  it("brings back first a box someone else's mix has moved since, and keeps a chain's leaves once its record goes (privacy review §3.6)", async () => {
+    const { t } = await withSession("40000000");
+    const since = (hours: number) => t.clock.now / 1000 - hours * 3600;
+    // A mix from the public account that ended a day ago left a box at its
+    // last mix, five hours in the pool; another box of the wallet's, someone
+    // else's mix moved two hours ago.
+    const leaf = { txHash: "e7".repeat(32), txIndex: 0 };
+    const done = {
+      id: leaf.txHash,
+      progress: "seedelf.lovejoin.sending.preprod",
+      deposit: "d7".repeat(32),
+      mixes: [leaf.txHash],
+      leaves: [leaf],
+      boxes: 1,
+      total: 2,
+      sent: 2,
+      at: t.clock.now - 24 * HOUR,
+      scheduled: true,
+      done: true,
+      ended: t.clock.now - 24 * HOUR,
+    };
+    t.koios.addedToAccounts.push(await ownedBox(t, "e7", 0, since(5)), await ownedBox(t, "b7", 0, since(2)));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR, t.clock.now + 3 * HOUR], chains: [done] });
+    const lovejoin = witnessed(t);
+    // The chain's record goes; its leaf, still where the mix put it, is kept, and whose.
+    await lovejoin.status("preprod");
+    const kept = async () => (await t.store.get<{ chains: unknown[]; leaves?: Record<string, string> }>("lovejoin.preprod"))!;
+    expect((await kept()).chains).toEqual([]);
+    expect((await kept()).leaves).toEqual({ [`${leaf.txHash}#0`]: "public" });
+    // The box someone else moved goes first, though the leaf has waited longer.
+    await lovejoin.withdrawDue("preprod");
+    expect(withdrawn(t)).toEqual([`${"b7".repeat(32)}#0`]);
+    // Once someone else's mix moves the leaf too, it isn't kept anymore.
+    t.koios.spent.add(`${"b7".repeat(32)}#0`).add(`${leaf.txHash}#0`);
+    await lovejoin.status("preprod");
+    expect((await kept()).leaves).toBeUndefined();
+  });
+
+  it("brings one back now in the same turn: one that has waited the delay's least first, then one someone else has moved since", async () => {
+    const { t } = await withSession("40000000");
+    const since = (hours: number) => t.clock.now / 1000 - hours * 3600;
+    // A leaf of a chain still recorded, five hours in the pool; a box someone
+    // else's mix moved two hours ago; and one it moved ten minutes ago.
+    const leaf = { txHash: "e8".repeat(32), txIndex: 0 };
+    const done = {
+      id: leaf.txHash,
+      progress: "seedelf.lovejoin.sending.preprod",
+      deposit: "d8".repeat(32),
+      mixes: [leaf.txHash],
+      leaves: [leaf],
+      boxes: 1,
+      total: 2,
+      sent: 2,
+      at: t.clock.now - HOUR,
+      scheduled: true,
+      done: true,
+      ended: t.clock.now - HOUR,
+    };
+    t.koios.addedToAccounts.push(
+      await ownedBox(t, "e8", 0, since(5)),
+      await ownedBox(t, "c8", 0, since(2)),
+      await ownedBox(t, "b8", 0, since(0.2)),
+    );
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR, t.clock.now + 2 * HOUR, t.clock.now + 3 * HOUR], chains: [done] });
+    const lovejoin = witnessed(t);
+    // The one moved since that has waited, then the leaf, and the one moved minutes ago last.
+    await lovejoin.withdrawNow("preprod");
+    await lovejoin.withdrawNow("preprod");
+    await lovejoin.withdrawNow("preprod");
+    expect(withdrawn(t)).toEqual([`${"c8".repeat(32)}#0`, `${leaf.txHash}#0`, `${"b8".repeat(32)}#0`]);
+  });
+
   it("withdraws one box a run, however many runs overlap", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "d1"), await ownedBox(t, "d2"));

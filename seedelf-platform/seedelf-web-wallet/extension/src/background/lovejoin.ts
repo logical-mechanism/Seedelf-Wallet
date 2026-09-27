@@ -16,9 +16,10 @@
 // good. Nor in a run that sent anything else, nor right after the wallet's
 // own send (QUIET_AFTER_SEND_MS). One box a run: others due at the same time
 // wait a fresh short delay each (WITHDRAW_SPREAD_MS), so a wallet locked for
-// hours doesn't send them all in one burst. The box that goes is the one
-// that has waited longest in the pool, and only once it has waited the
-// delay's least.
+// hours doesn't send them all in one burst. The box that goes is one that
+// has waited the delay's least since a mix last moved it, one someone else's
+// mix has moved since the wallet's chain left it if there is one (§3.6),
+// and then the one that has waited longest in the pool.
 // Boxes aren't remembered, they're found: other people's mixes
 // move them, and the Seedelf key's check finds them wherever they are, after a
 // restore too. What's kept, sealed (`lovejoin.<network>`), is the due times
@@ -380,6 +381,13 @@ interface Schedule {
   withdrawing?: Withdrawing;
   /** What put a due time off, by the time (ms): so none is put off for good. */
   marks?: Record<string, DueMark>;
+  /**
+   * The leaves of chains whose records went (RECORD_KEEP_MS), `txhash#index`,
+   * and whose chain made each (chainOwner): kept while the box is still
+   * there, unmoved, so the box brought back is one someone else's mix has
+   * moved since (backOrder, privacy review §3.6).
+   */
+  leaves?: Record<string, string>;
 }
 
 /** Why a due time was drawn again. */
@@ -629,11 +637,24 @@ function unschedule(s: Schedule, c: ChainRecord, count: number, keep = 0): void 
 /** When box `b` will have waited the delay's least (`least`, in hours) since a mix last moved it (Koios's `block_time`, in seconds), in ms. */
 const waitedAt = (b: OutRef, rows: Map<string, KoiosUtxo>, least: number) => (rows.get(ref(b))?.block_time ?? 0) * 1000 + least * HOUR;
 
-/** `boxes` by how long they've sat in the pool, longest first (Koios's `block_time`, in seconds). */
-function longestFirst(boxes: OutRef[], rows: Map<string, KoiosUtxo>): OutRef[] {
+/**
+ * `boxes` in the order they're brought back. First those that have waited
+ * the delay's least since a mix last moved them: a box a mix moved minutes
+ * ago says which mix it came from. Then one someone else's mix has moved
+ * since a chain of the wallet's left it, not one of `leaves`: a box still
+ * where the wallet's own last mix put it points back at that chain, while
+ * one moved since hides among that mix's boxes too (privacy review §3.6).
+ * Then the one that has sat longest in the pool.
+ */
+function backOrder(boxes: OutRef[], rows: Map<string, KoiosUtxo>, leaves: Set<string>, least: number, now: number): OutRef[] {
   const since = (b: OutRef) => rows.get(ref(b))?.block_time ?? 0;
-  return [...boxes].sort((a, b) => since(a) - since(b) || ref(a).localeCompare(ref(b)));
+  const early = (b: OutRef) => (waitedAt(b, rows, least) > now ? 1 : 0);
+  const own = (b: OutRef) => (leaves.has(ref(b)) ? 1 : 0);
+  return [...boxes].sort((a, b) => early(a) - early(b) || own(a) - own(b) || since(a) - since(b) || ref(a).localeCompare(ref(b)));
 }
+
+/** Where the wallet's own chains left its boxes, mixed all the way: each recorded chain's leaves, and those kept after its record went. */
+const ownLeaves = (s: Schedule) => new Set([...s.chains.flatMap((c) => c.leaves.map(ref)), ...Object.keys(s.leaves ?? {})]);
 
 /** Moves due time `from` to `to`, with its marks, changed by `mark`. */
 function moveDue(s: Schedule, from: number, to: number, mark?: (m: DueMark) => void): void {
@@ -1273,7 +1294,9 @@ export class LovejoinService {
    * not mixed yet follows. A box only hidden by a spend that may never land
    * keeps its record (final review lovejoin-1). A box not mixed yet that no
    * record counted before (a mix of it a node dropped) loses its due time
-   * here, never one a box that can come back needs.
+   * here, never one a box that can come back needs. A record that goes
+   * leaves its leaves still listed behind, and each goes once its box has
+   * moved or come back (privacy review §3.6).
    */
   private async sortOut(network: NetworkName, owned: OutRef[], listed: OutRef[]): Promise<{ unmixed: OutRef[]; free: OutRef[] }> {
     const now = this.deps.now();
@@ -1281,11 +1304,17 @@ export class LovejoinService {
     const unmixed = unmixedOf(chains.filter((c) => c.ended), owned);
     const held = new Set(unmixedOf(chains, owned).map(ref));
     const free = owned.filter((b) => !held.has(ref(b)));
+    const there = new Set(listed.map(ref));
     await this.update(network, (s) => {
       for (const c of s.chains) {
         if (c.ended) unschedule(s, c, unmixedOf([c], owned).length - (c.unscheduled ?? 0), free.length);
       }
-      s.chains = s.chains.filter((c) => !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], listed).length > 0);
+      const keep = (c: ChainRecord) => !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], listed).length > 0;
+      const gone = s.chains.filter((c) => !keep(c)).flatMap((c) => c.leaves.map((l) => [ref(l), chainOwner(c.session)] as const));
+      const leaves = Object.entries({ ...s.leaves, ...Object.fromEntries(gone) }).filter(([r]) => there.has(r));
+      if (leaves.length) s.leaves = Object.fromEntries(leaves);
+      else delete s.leaves;
+      s.chains = s.chains.filter(keep);
       s.notMixed = unmixed.length;
     });
     return { unmixed, free };
@@ -1408,18 +1437,20 @@ export class LovejoinService {
     const ready = kept.filter((t) => t <= now);
     const [time] = ready;
     if (time === undefined) return [];
-    // The box that has waited longest, never one a chain of the wallet's will spend.
+    // Never a box a chain of the wallet's will spend, and in backOrder's turn.
     const reserved = await this.reservedBoxes(network);
     const rows = new Map(pool.map((u) => [outpoint(u), u]));
-    const [box] = longestFirst(free(back, reserved), rows);
-    if (!box) return [];
-    // And only once it has waited the delay's least since it came into the
-    // pool: a box a mix moved minutes ago would say which mix it came from.
-    // Until then, the due time waits past that, by a fresh draw, so it isn't
-    // the very moment either.
     const [least] = delayHours((await this.settings()).delay);
+    const candidates = free(back, reserved);
+    const [box] = backOrder(candidates, rows, ownLeaves(schedule), least, now);
+    if (!box) return [];
+    // And only once it has waited the delay's least since a mix last moved
+    // it: a box a mix moved minutes ago would say which mix it came from.
+    // Until one has, the due time waits past the first that will, by a fresh
+    // draw, so it isn't the very moment either.
     if (waitedAt(box, rows, least) > now) {
-      await this.update(network, (s) => moveDue(s, time, waitedAt(box, rows, least) + within(WITHDRAW_SPREAD_MS, random)));
+      const first = Math.min(...candidates.map((b) => waitedAt(b, rows, least)));
+      await this.update(network, (s) => moveDue(s, time, first + within(WITHDRAW_SPREAD_MS, random)));
       return [];
     }
     // Nor right after something else the wallet sent: in the same run (the
@@ -1492,7 +1523,9 @@ export class LovejoinService {
         );
       }
     } else {
-      [chosen] = longestFirst(free(back, reserved), new Map(pool.map((u) => [outpoint(u), u])));
+      const [least] = delayHours((await this.settings()).delay);
+      const rows = new Map(pool.map((u) => [outpoint(u), u]));
+      [chosen] = backOrder(free(back, reserved), rows, ownLeaves(await this.read(network)), least, this.deps.now());
       if (!chosen) {
         throw new Error(
           unmixed.length
@@ -1649,8 +1682,9 @@ export class LovejoinService {
       chains: Array.isArray(kept?.chains) ? kept.chains : [],
       ...(typeof kept?.notMixed === "number" ? { notMixed: kept.notMixed } : {}),
       ...(kept?.withdrawing ? { withdrawing: kept.withdrawing } : {}),
-      // Kept before due times were drawn again: none.
+      // Kept before due times were drawn again, or leaves kept: none.
       ...(record(kept?.marks) ? { marks: { ...kept!.marks } } : {}),
+      ...(record(kept?.leaves) ? { leaves: { ...kept!.leaves } } : {}),
     };
   }
 
