@@ -18,7 +18,7 @@
 import { blake2b } from "@noble/hashes/blake2.js";
 
 import { skip } from "./cbor";
-import type { FetchLike } from "./koios";
+import { SERVICE_FETCH, type FetchLike } from "./koios";
 
 /** "lovelace", or a token's policy ID and name in hex, run together. */
 export type TokenId = string;
@@ -221,6 +221,7 @@ export class Minswap {
     let response: Response;
     try {
       response = await this.fetchFn(`${this.base}/${path}`, {
+        ...SERVICE_FETCH,
         method,
         headers: method === "POST" ? { accept: "application/json", "content-type": "application/json" } : { accept: "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),

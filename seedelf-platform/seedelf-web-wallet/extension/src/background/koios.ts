@@ -185,6 +185,15 @@ export interface KoiosDrepName {
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * What every request to a service goes out with (Koios, giveme.my, CoinGecko,
+ * Minswap): no cookies, and no referrer. With a host permission, the
+ * worker's fetch would otherwise carry any cookie the browser holds for that
+ * host, and one of giveme.my's would tie every private payment to this
+ * browser (privacy review §2.14). No service needs one.
+ */
+export const SERVICE_FETCH = { credentials: "omit", referrerPolicy: "no-referrer" } as const satisfies RequestInit;
+
 const PAGE_SIZE = 1000;
 
 /** The columns each staking query asks for: what the wallet shows, nothing else. */
@@ -485,6 +494,7 @@ export class Koios {
       await this.limit?.take();
       try {
         response = await this.fetchFn(`${this.base}/submittx`, {
+          ...SERVICE_FETCH,
           method: "POST",
           headers: { "content-type": "application/cbor" },
           body: txCbor,
@@ -608,6 +618,7 @@ export class Koios {
       await this.limit?.take();
       try {
         response = await this.fetchFn(url, {
+          ...SERVICE_FETCH,
           method,
           headers:
             method === "POST"

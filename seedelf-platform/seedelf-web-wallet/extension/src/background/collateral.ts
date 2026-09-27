@@ -4,7 +4,7 @@
 // key's signature. WebAssembly checks that signature before adding it, so
 // this client only carries the request and explains failures.
 
-import type { FetchLike } from "./koios";
+import { SERVICE_FETCH, type FetchLike } from "./koios";
 
 const TIMEOUT_MS = 20_000;
 
@@ -27,6 +27,7 @@ export class Collateral {
     let response: Response;
     try {
       response = await this.fetchFn(this.url, {
+        ...SERVICE_FETCH,
         method: "POST",
         headers: { accept: "application/json", "content-type": "application/json" },
         body: JSON.stringify({ tx: txCborHex }),

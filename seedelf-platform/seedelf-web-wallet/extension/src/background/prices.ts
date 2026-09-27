@@ -10,6 +10,7 @@
 import { NETWORKS, type NetworkName } from "../networks";
 import { CURRENCIES, type Currency } from "../shared/preferences";
 import type { AdaPrice } from "../shared/rpc";
+import { SERVICE_FETCH } from "./koios";
 import type { PreferencesService } from "./preferences";
 import type { Area } from "./storage";
 
@@ -64,7 +65,11 @@ export class PriceService {
     const get = this.deps.fetch ?? fetch;
     try {
       const url = `${base}/simple/price?ids=cardano&vs_currencies=${CURRENCIES.join(",")}`;
-      const response = await get(url, { signal: AbortSignal.timeout(TIMEOUT_MS), headers: { accept: "application/json" } });
+      const response = await get(url, {
+        ...SERVICE_FETCH,
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        headers: { accept: "application/json" },
+      });
       if (!response.ok) return undefined;
       const body = (await response.json()) as { cardano?: Record<string, unknown> };
       const rates: Kept["rates"] = {};
