@@ -17,9 +17,10 @@ const VKH: &str = "00112233445566778899aabbccddeeff00112233445566778899aabb";
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
 
-    /// A register created from `sk` is owned by `sk`.
+    /// A register created from `sk` is owned by `sk`. Zero is left out: its
+    /// public value is the identity, which no key owns.
     #[test]
-    fn register_is_owned_by_its_scalar(sk in any::<u64>()) {
+    fn register_is_owned_by_its_scalar(sk in 1..=u64::MAX) {
         let scalar = Scalar::from(sk);
         let register = Register::create(scalar).unwrap();
         prop_assert!(register.is_owned(scalar).unwrap());
@@ -36,7 +37,7 @@ proptest! {
     /// Re-randomization preserves ownership: `(g^d, u^d)` is still spendable by
     /// the original `sk`. This is the load-bearing same-scalar invariant.
     #[test]
-    fn rerandomized_register_stays_owned_and_valid(sk in any::<u64>()) {
+    fn rerandomized_register_stays_owned_and_valid(sk in 1..=u64::MAX) {
         let scalar = Scalar::from(sk);
         let register = Register::create(scalar).unwrap().rerandomize().unwrap();
         prop_assert!(register.is_owned(scalar).unwrap());

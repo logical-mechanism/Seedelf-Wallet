@@ -1,6 +1,7 @@
 use crate::schnorr::random_scalar;
 use anyhow::{Context, Result, anyhow, bail};
 use blstrs::{G1Affine, G1Projective, Scalar};
+use group::prime::PrimeCurveAffine;
 use hex;
 use hex::FromHex;
 use pallas_primitives::{
@@ -171,7 +172,7 @@ impl Register {
     /// # Returns
     ///
     /// * `true` - If the scalar matches and proves ownership.
-    /// * `false` - Otherwise.
+    /// * `false` - Otherwise, and always when either point is the identity.
     pub fn is_owned(&self, sk: Scalar) -> Result<bool> {
         let g1: G1Affine = G1Affine::from_compressed(
             &hex::decode(&self.generator)
@@ -181,6 +182,14 @@ impl Register {
         )
         .into_option()
         .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+
+        // The identity times any key is the identity, so every key would
+        // own (identity, identity), and the validator lets anyone spend it.
+        // No register with an identity point is anyone's. `false`, not an
+        // error: anyone can post such a datum, and a scan stops at an error.
+        if bool::from(g1.is_identity()) || is_identity(&self.public_value) {
+            return Ok(false);
+        }
 
         let g_x: G1Projective = G1Projective::from(g1) * sk;
 
@@ -213,4 +222,10 @@ impl Register {
             && u.is_on_curve().into()
             && u.is_torsion_free().into())
     }
+}
+
+/// Whether `point` (compressed, hex) is the identity: `c0` then 47 zero bytes.
+fn is_identity(point: &str) -> bool {
+    hex::decode(point)
+        .is_ok_and(|b| b.len() == 48 && b[0] == 0xc0 && b[1..].iter().all(|&x| x == 0))
 }

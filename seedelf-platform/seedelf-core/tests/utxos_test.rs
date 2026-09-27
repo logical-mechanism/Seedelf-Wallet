@@ -1,6 +1,10 @@
 use seedelf_core::assets::{Asset, Assets, string_to_u64};
 use seedelf_core::utxos;
-use seedelf_koios::koios::{Asset as KoiosAsset, ProtocolParameters, Ratio, UtxoResponse};
+use seedelf_crypto::register::Register;
+use seedelf_crypto::schnorr::random_scalar;
+use seedelf_koios::koios::{
+    Asset as KoiosAsset, InlineDatum, ProtocolParameters, Ratio, UtxoResponse,
+};
 
 fn fixture_params() -> ProtocolParameters {
     ProtocolParameters {
@@ -460,4 +464,41 @@ fn a_reference_script_that_cant_be_measured_is_never_taken_for_none() {
         }])
         .is_err()
     );
+}
+
+/// A wallet-contract row under `register`'s inline datum, as Koios returns it.
+fn register_utxo(tx_hash_byte: u8, register: &Register) -> UtxoResponse {
+    UtxoResponse {
+        tx_hash: hex::encode([tx_hash_byte; 32]),
+        value: "5000000".to_string(),
+        inline_datum: Some(InlineDatum {
+            bytes: hex::encode(register.to_vec().unwrap()),
+            value: serde_json::json!({
+                "constructor": 0,
+                "fields": [{"bytes": register.generator}, {"bytes": register.public_value}]
+            }),
+        }),
+        asset_list: Some(vec![]),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn wallet_scans_skip_an_identity_register() {
+    // Anyone can pay the contract under (identity, identity), and anyone can
+    // spend it back. It isn't this key's, and it doesn't stop the scan.
+    let sk = random_scalar();
+    let identity = format!("c0{}", "00".repeat(47));
+    let rows = vec![
+        register_utxo(0x01, &Register::new(identity.clone(), identity)),
+        register_utxo(0x02, &Register::create(sk).unwrap().rerandomize().unwrap()),
+    ];
+    let hashes = |found: Vec<UtxoResponse>| -> Vec<String> {
+        found.into_iter().map(|u| u.tx_hash).collect()
+    };
+    let owned = vec![hex::encode([0x02; 32])];
+    let all = utxos::collect_all_wallet_utxos(sk, PID_EXTRA, rows.clone()).unwrap();
+    assert_eq!(hashes(all), owned);
+    let usable = utxos::collect_wallet_utxos(sk, PID_EXTRA, rows).unwrap();
+    assert_eq!(hashes(usable), owned);
 }
