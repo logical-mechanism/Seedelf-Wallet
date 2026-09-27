@@ -16,8 +16,9 @@ import { Row } from "./ReviewRows";
 
 /**
  * Lovejoin's standing, said wherever the user chooses it (the Lovejoin page,
- * a swap's approval, a return's review; Settings says it too): the
- * protocol's own review is the only one it has had.
+ * a swap's approval, a return's review, Settings), all from this one
+ * source: the protocol's own review is the only one it has had. Lovejoin's
+ * own words (its README and SECURITY.md); no copy may say otherwise.
  */
 export const LOVEJOIN_UNAUDITED =
   "Lovejoin hasn't had a third-party audit: its makers' own review is the only one it has had. Use it knowing that.";

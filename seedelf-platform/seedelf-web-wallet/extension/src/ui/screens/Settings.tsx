@@ -42,7 +42,7 @@ import {
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
-import { delayText } from "../components/LovejoinReturn";
+import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
@@ -305,10 +305,6 @@ export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
   const lovelace = mixes * (NETWORKS[network].lovejoin?.mixCost ?? 0);
   return `${mixes} ${mixes === 1 ? "mix" : "mixes"}, about ${(lovelace / 1_000_000).toFixed(1)} ₳`;
 }
-
-/** Lovejoin's own words on its review (its README and SECURITY.md): no copy may say otherwise. */
-export const LOVEJOIN_UNAUDITED =
-  "Lovejoin hasn't had a third-party audit: its makers' own review is the only one it has had. Use it knowing that.";
 
 /**
  * Lovejoin, for a private session's return: how deep each box fans out, and
