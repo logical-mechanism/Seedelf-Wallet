@@ -19,6 +19,9 @@
 // since locking a UTxO doesn't read the chain again.
 //
 // The reading is cached per network in chrome.storage.session and wiped on lock.
+// Session storage holds 10 MB for the whole extension, and anyone can pay
+// this wallet, on either side, UTxOs holding a thousand tokens each: a
+// reading too large to keep is used anyway, and read again next time.
 // A reading that still lists a UTxO this wallet has spent came from a Koios
 // backend that's behind (spent.ts): it's read again, a few times, and what's
 // spent is left out either way.
@@ -30,7 +33,12 @@ import type { Balances, Locked, SeedelfInfo, StakeInfo } from "../shared/rpc";
 import { readAccountUtxos, type Account, type PathedUtxo } from "./account";
 import { registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses, type ActivityService } from "./activity";
-import { SESSION_ACCOUNT_UTXOS_PREFIX, type CoinControlService } from "./coin-control";
+import {
+  SESSION_ACCOUNT_UTXOS_PREFIX,
+  SESSION_TOO_LARGE_PREFIX,
+  type CoinControlService,
+  type ReadingUtxos,
+} from "./coin-control";
 import { readContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
 import { spentSet } from "./spent";
@@ -69,14 +77,21 @@ export interface BalanceDeps {
 
 const NOTHING: Locked = { lovelace: "0", tokens: [], utxos: 0 };
 
+/** A reading, with its own UTxOs when it was too large to keep. */
+interface Reading {
+  balances: Balances;
+  unkept?: ReadingUtxos;
+}
+
 export class BalanceService {
-  private readonly inFlight = new Map<NetworkName, Promise<Balances>>();
+  private readonly inFlight = new Map<NetworkName, Promise<Reading>>();
 
   constructor(private readonly deps: BalanceDeps) {}
 
   /** The cached reading, or a new one when there's none or `refresh` is set. Throws if locked. */
   async get(network: NetworkName, refresh = false): Promise<Balances> {
-    return this.withLocked(network, await this.reading(network, refresh));
+    const { balances, unkept } = await this.reading(network, refresh);
+    return this.withLocked(network, balances, unkept);
   }
 
   /** When the kept reading was made, without reading anything; undefined when there's none. Throws if locked. */
@@ -87,12 +102,12 @@ export class BalanceService {
     return cached?.updatedAt;
   }
 
-  private async reading(network: NetworkName, refresh: boolean): Promise<Balances> {
+  private async reading(network: NetworkName, refresh: boolean): Promise<Reading> {
     if (!refresh) {
       const cached = await this.deps.wallet.withKeys(() =>
         this.deps.session.get<Balances>(SESSION_BALANCES_PREFIX + network),
       );
-      if (cached) return cached;
+      if (cached) return { balances: cached };
     }
     // Pages asking at the same time share one reading.
     let reading = this.inFlight.get(network);
@@ -103,13 +118,13 @@ export class BalanceService {
     return reading;
   }
 
-  /** The reading with what's locked on each side now. */
-  private async withLocked(network: NetworkName, b: Balances): Promise<Balances> {
-    const locked = await this.deps.coins.locked(network);
+  /** The reading with what's locked on each side now: from its own UTxOs, `unkept`, when it wasn't kept. */
+  private async withLocked(network: NetworkName, b: Balances, unkept?: ReadingUtxos): Promise<Balances> {
+    const locked = await this.deps.coins.locked(network, unkept);
     return { ...b, seedelf: { ...b.seedelf, locked: locked.seedelf }, cardano: { ...b.cardano, locked: locked.cardano } };
   }
 
-  private async read(network: NetworkName): Promise<Balances> {
+  private async read(network: NetworkName): Promise<Reading> {
     const { wasm, wallet, session, now, contract = CONTRACT_V1 } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
 
@@ -126,24 +141,21 @@ export class BalanceService {
     ]);
 
     // The result is cached only while still unlocked.
-    const balances = await wallet.withKeys(async () => {
+    const reading = await wallet.withKeys(async (): Promise<Reading> => {
       const balances: Balances = {
         network,
         updatedAt: now(),
         seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId),
         cardano: this.cardanoSide(account, utxos, staking),
       };
-      await session.set(SESSION_BALANCES_PREFIX + network, balances);
-      // The UTxOs screen and what's locked read these.
-      await session.set(SESSION_ACCOUNT_UTXOS_PREFIX + network, utxos);
       // Activity reads the account's transactions against these.
       const addresses: AccountAddresses = { stake: account.stake, addresses: account.addresses, keys: [...account.paths.keys()] };
-      await session.set(SESSION_ACCOUNT_ADDRESSES_PREFIX + network, addresses);
-      return balances;
+      if (await keep(session, network, balances, utxos, addresses)) return { balances };
+      return { balances, unkept: { owned: view.owned, account: utxos, updatedAt: balances.updatedAt } };
     });
     // The history never holds up, or breaks, a balance reading.
     await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
-    return balances;
+    return reading;
   }
 
   /** `owned`: this wallet's contract UTxOs. */
@@ -171,6 +183,36 @@ export class BalanceService {
       locked: NOTHING,
       staking,
     };
+  }
+}
+
+/**
+ * Keeps a reading for the next request, as contract-scan.ts keeps its view:
+ * a write session storage refuses (it's full) never fails the reading, and
+ * whether it was kept is returned. The addresses go first: they're small,
+ * and Activity reads them. Then the balances, and the account's UTxOs, which
+ * the UTxOs screen and what's locked read. If either can't be kept, neither
+ * is, so nothing older is served in their place: the next request reads
+ * again, and the lists say why they can't be shown (coin-control.ts).
+ */
+async function keep(
+  session: Area,
+  network: NetworkName,
+  balances: Balances,
+  utxos: PathedUtxo[],
+  addresses: AccountAddresses,
+): Promise<boolean> {
+  const tooLarge = SESSION_TOO_LARGE_PREFIX + network;
+  try {
+    await session.remove(tooLarge);
+    await session.set(SESSION_ACCOUNT_ADDRESSES_PREFIX + network, addresses);
+    await session.set(SESSION_BALANCES_PREFIX + network, balances);
+    await session.set(SESSION_ACCOUNT_UTXOS_PREFIX + network, utxos);
+    return true;
+  } catch {
+    await session.remove(SESSION_BALANCES_PREFIX + network, SESSION_ACCOUNT_UTXOS_PREFIX + network).catch(() => undefined);
+    await session.set(tooLarge, balances.updatedAt).catch(() => undefined);
+    return false;
   }
 }
 
