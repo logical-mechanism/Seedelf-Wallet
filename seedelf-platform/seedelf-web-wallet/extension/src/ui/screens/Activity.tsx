@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ActivityEntry } from "../../shared/rpc";
-import { activityCsv, activityTitle as title, poolOf, stakingLine, tokenMoved, voteOf } from "../activity";
+import { activityCsv, activityTitle as title, poolOf, signedQuantity, stakingLine, voteOf } from "../activity";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
@@ -29,6 +29,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TokenAmountRow } from "../components/TokenList";
 import { explorerUrl, formatAda, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
@@ -217,7 +218,12 @@ export function Activity({
           <ReviewRows testId="activity-details">
             <Row label="Amount" value={amount(open, amounts.ada)} strong />
             {open.assets?.map((t) => (
-              <Row key={`${t.policyId}.${t.assetName}`} label="" value={amounts.text(tokenMoved(network, t))} />
+              <TokenAmountRow
+                key={`${t.policyId}.${t.assetName}`}
+                label=""
+                token={t}
+                amount={amounts.text(signedQuantity(network, t))}
+              />
             ))}
             {open.fee && <Row label="Network fee" value={`${formatAda(open.fee)} ₳`} />}
             {open.detail && <Row label={open.kind === "withdraw" || open.kind === "transfer" ? "To" : "Seedelf"} value={open.detail} />}

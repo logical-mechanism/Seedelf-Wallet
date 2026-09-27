@@ -31,9 +31,10 @@ import {
 import { Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, lockedAside, rewardsAside, shortHex, tokenKey as key } from "../format";
+import { TokenAmountRow } from "../components/TokenList";
+import { adaWithTokens, formatAda, lockedAside, rewardsAside, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
-import { tokenLabel } from "../tokens";
+import { tokenQuantity } from "../tokens";
 
 /** The longest note: one of CIP-20's lines, as Lace allows (core's `MAX_NOTE_CHARS`). */
 const NOTE_MAX = 64;
@@ -62,7 +63,7 @@ export function CardanoSend({
 
   // Max pays a single recipient.
   const maxed = max && !list.several;
-  const amounts = recipientAmounts(cardano.tokens, list.drafts, maxed);
+  const amounts = recipientAmounts(network, cardano.tokens, list.drafts, maxed);
   // A field's read counts only for the text it read.
   const readOf = (d: Draft): DestinationRead =>
     reads[d.id]?.to === d.to.trim() ? reads[d.id]!.read : { state: "idle" };
@@ -112,9 +113,7 @@ export function CardanoSend({
           <Row label="Amount" value={`${formatAda(p.lovelace)} ₳`} strong />
           {p.tokens.map((t) => {
             const held = cardano.tokens.find((h) => key(h) === key(t));
-            return (
-              <Row key={key(t)} label="" value={`${formatQuantity(t.quantity, held?.decimals ?? 0)} ${tokenLabel(network, t)}`} />
-            );
+            return <TokenAmountRow key={key(t)} label="" token={held ?? t} amount={tokenQuantity(network, { ...held, ...t })} />;
           })}
         </>
       );
@@ -230,7 +229,7 @@ export function CardanoSend({
             )}
 
             <TokenAmounts
-              held={heldFor(cardano.tokens, list.drafts, d)}
+              held={heldFor(network, cardano.tokens, list.drafts, d)}
               typed={d.tokens}
               onChange={(tokens) => list.update(d.id, { tokens })}
             />

@@ -27,9 +27,10 @@ import {
 import { Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, lockedAside, plural, shortHex, tokenKey as key } from "../format";
+import { TokenAmountRow } from "../components/TokenList";
+import { adaWithTokens, formatAda, lockedAside, plural, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
-import { tokenLabel } from "../tokens";
+import { tokenQuantity } from "../tokens";
 
 export function Withdraw({
   seedelf,
@@ -50,7 +51,7 @@ export function Withdraw({
 
   // Max pays a single address.
   const maxed = max && !list.several;
-  const amounts = recipientAmounts(seedelf.tokens, list.drafts, maxed);
+  const amounts = recipientAmounts(network, seedelf.tokens, list.drafts, maxed);
   // A field's read counts only for the text it read.
   const readOf = (d: Draft): DestinationRead =>
     reads[d.id]?.to === d.to.trim() ? reads[d.id]!.read : { state: "idle" };
@@ -101,9 +102,7 @@ export function Withdraw({
           <Row label={summary.max ? "Everything" : "Amount"} value={`${formatAda(p.lovelace)} ₳`} strong />
           {p.tokens.map((t) => {
             const held = seedelf.tokens.find((h) => key(h) === key(t));
-            return (
-              <Row key={key(t)} label="" value={`${formatQuantity(t.quantity, held?.decimals ?? 0)} ${tokenLabel(network, t)}`} />
-            );
+            return <TokenAmountRow key={key(t)} label="" token={held ?? t} amount={tokenQuantity(network, { ...held, ...t })} />;
           })}
         </>
       );
@@ -230,7 +229,7 @@ export function Withdraw({
                   Round amounts, like 100 ₳, are harder to match to the payment that made them private.
                 </RoundNote>
                 <TokenAmounts
-                  held={heldFor(seedelf.tokens, list.drafts, d)}
+                  held={heldFor(network, seedelf.tokens, list.drafts, d)}
                   typed={d.tokens}
                   onChange={(tokens) => list.update(d.id, { tokens })}
                 />

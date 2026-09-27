@@ -46,6 +46,37 @@ export function tokenName(assetName: string): string {
   return shortHex(assetName);
 }
 
+/**
+ * Characters that look like a Latin letter once lower-cased: Cyrillic,
+ * Greek and IPA letters, digits, and the i, l and 1 of many fonts.
+ */
+const LOOKS_LIKE: Record<string, string> = {
+  а: "a", в: "b", г: "r", е: "e", з: "3", к: "k", м: "m", н: "h", о: "o", п: "n", р: "p", с: "c", т: "t", у: "y",
+  х: "x", ь: "b", ѕ: "s", і: "l", ј: "j", ԁ: "d", ԛ: "q", ԝ: "w", ү: "y", һ: "h", ӏ: "l",
+  α: "a", β: "b", γ: "y", ε: "e", ζ: "z", η: "n", ι: "l", κ: "k", μ: "u", ν: "v", ο: "o", ρ: "p", τ: "t", υ: "u",
+  χ: "x", ω: "w", ı: "l", ɑ: "a", ɡ: "g", ʏ: "y",
+  0: "o", 1: "l", 5: "s", i: "l", "|": "l",
+};
+
+/**
+ * A name reduced to how it looks, to tell apart names that only look the
+ * same: compatibility forms folded (NFKD: full-width, bold, ligatures),
+ * accents and invisible characters dropped, case folded, lookalike letters
+ * mapped to one Latin letter, and only letters, digits and "₳" kept. "S N E K",
+ * "Ｓnek", "ЅNЕK" and "5NEK" are all "snek"-alike; "8Ball" and "8 BALL" match.
+ */
+export function nameSkeleton(name: string): string {
+  return [...name.normalize("NFKD").replace(/[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").toLowerCase()]
+    .map((c) => LOOKS_LIKE[c] ?? c)
+    .join("")
+    .replace(/[^\p{L}\p{N}₳]/gu, "");
+}
+
+/** A name as a list shows it: without the invisible characters that could hide or reorder its letters. */
+export function plainName(name: string): string {
+  return name.replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").trim();
+}
+
 /** `5eed0e1f…9ff2` */
 export function shortHex(hex: string, head = 8, tail = 4): string {
   return hex.length <= head + tail + 1 ? hex : `${hex.slice(0, head)}…${hex.slice(-tail)}`;

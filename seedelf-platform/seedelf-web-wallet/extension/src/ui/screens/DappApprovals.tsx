@@ -24,10 +24,11 @@ import { PasswordField } from "../components/PasswordField";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
+import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
 import { certificateLine, paidTo, stakingComesBack, withdrawalLine } from "../dapp";
 import { explorerUrl, formatAda, formatQuantity, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
-import { tokenInfo, tokenLabel } from "../tokens";
+import { tokenDecimals, tokenText } from "../tokens";
 
 /** How long an empty list waits before the window closes: a site's next request may be on its way. */
 const CLOSE_AFTER_MS = 800;
@@ -317,7 +318,7 @@ function ConnectRequest({
     );
   }
 
-  const tokens = seedelf ? tokenChoices(seedelf.tokens, typed) : undefined;
+  const tokens = seedelf ? tokenChoices(network, seedelf.tokens, typed) : undefined;
   const withTokens = (tokens?.sent.length ?? 0) > 0;
   const lovelace = lovelaceToSend(amount, withTokens);
   const tooMuch = !!seedelf && !!lovelace && BigInt(lovelace) > BigInt(seedelf.lovelace);
@@ -493,7 +494,8 @@ function ConnectRequest({
   );
 }
 
-function SignTx({
+/** What a site's transaction does, as WebAssembly read it: exported for its tests. */
+export function SignTx({
   summary: s,
   partial,
   session,
@@ -506,11 +508,18 @@ function SignTx({
 }) {
   const network = useNetwork();
   const net = BigInt(s.netLovelace);
-  const token = (t: DappToken) => {
+  // A token's amount without its sign, in its units: the rows say which way it goes.
+  const amount = (t: DappToken) => {
     const q = BigInt(t.quantity);
-    const decimals = tokenInfo(network, t)?.decimals ?? 0;
-    return `${formatQuantity((q < 0n ? -q : q).toString(), decimals)} ${tokenLabel(network, t)}`;
+    return formatQuantity((q < 0n ? -q : q).toString(), tokenDecimals(network, t));
   };
+  // Tokens named like ADA or a listed token that aren't: each is shown by its fingerprint, and said here too.
+  const lookalikes = new Map<string, string>();
+  for (const t of [...s.netTokens, ...s.paid.flatMap((p) => p.tokens), ...s.mint]) {
+    const posesAs = tokenText(network, t).posesAs;
+    if (posesAs) lookalikes.set(`${t.policyId}.${t.assetName}`, posesAs);
+  }
+  const lookalikeNames = [...new Set(lookalikes.values())].join(" and ");
   const keys = s.signs.filter((k) => k !== "stake").length;
   const stake = s.signs.includes("stake");
   const signers = [keys ? plural(keys, "payment key") : "", stake ? "your stake key" : ""].filter(Boolean).join(" and ");
@@ -536,10 +545,11 @@ function SignTx({
           strong
         />
         {s.netTokens.map((t) => (
-          <Row
+          <TokenAmountRow
             key={`${t.policyId}.${t.assetName}`}
             label={BigInt(t.quantity) < 0n ? "Sends" : "Gets"}
-            value={token(t)}
+            token={t}
+            amount={amount(t)}
           />
         ))}
         {/* Rewards and a deposit back are the account's money too: counted above, and said so. */}
@@ -566,7 +576,7 @@ function SignTx({
                   {formatAda(p.lovelace)} ₳
                   {p.tokens.map((t) => (
                     <span key={`${t.policyId}.${t.assetName}`} className="note">
-                      {token(t)}
+                      <TokenAmountText token={t} amount={amount(t)} />
                     </span>
                   ))}
                 </span>
@@ -576,6 +586,14 @@ function SignTx({
         </section>
       )}
 
+      {lookalikes.size > 0 && (
+        <Callout tone="warn" testId="dapp-lookalike">
+          {lookalikes.size === 1
+            ? `A token here is named like ${lookalikeNames}, but it isn't ${lookalikeNames}: it's not on the wallet's list, so it's shown by its fingerprint.`
+            : `Tokens here are named like ${lookalikeNames}, but aren't: they're not on the wallet's list, so each is shown by its fingerprint.`}{" "}
+          Anyone can make a token with any name.
+        </Callout>
+      )}
       {ownKey > 0 && (
         <Callout tone="warn" testId="dapp-own-key">
           It pays {plural(ownKey, "output")} to your payment key with a stake part that isn't yours. That isn't change,
@@ -597,7 +615,12 @@ function SignTx({
       {s.mint.length > 0 && (
         <ReviewRows testId="dapp-mint">
           {s.mint.map((t) => (
-            <Row key={`${t.policyId}.${t.assetName}`} label={BigInt(t.quantity) < 0n ? "Burns" : "Mints"} value={token(t)} />
+            <TokenAmountRow
+              key={`${t.policyId}.${t.assetName}`}
+              label={BigInt(t.quantity) < 0n ? "Burns" : "Mints"}
+              token={t}
+              amount={amount(t)}
+            />
           ))}
         </ReviewRows>
       )}
@@ -669,7 +692,8 @@ function SignTx({
   );
 }
 
-function SignData({
+/** What a site asks the account's key to sign (CIP-8): exported for its tests. */
+export function SignData({
   address,
   signer,
   payload,

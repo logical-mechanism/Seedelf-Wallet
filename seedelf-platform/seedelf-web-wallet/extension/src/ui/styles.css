@@ -2907,3 +2907,21 @@ button.dapp-tile:hover {
   overflow-wrap: anywhere;
   user-select: text;
 }
+
+/* A token that isn't on the wallet's list, under its amount in a review or a
+   site's prompt: its own line, plain weight, and the warning's colour when
+   its name passes for ADA or a listed token (tokenText). */
+
+.token-mark {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.token-mark--warn {
+  color: var(--warn);
+}

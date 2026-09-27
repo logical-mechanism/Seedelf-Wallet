@@ -53,11 +53,11 @@ describe("the wallet's token registry", () => {
   });
 
   it("never gives a lookalike the listed token's logo", () => {
-    // Same name, another policy: its own name, the fingerprint under it, letters for a logo.
+    // Same name, another policy: named by its fingerprint, saying what it calls itself, letters for a logo (#18).
     const v = viewToken("preprod", token({ assetName: "0014df10745553444d", quantity: "5", decimals: 6 }));
     expect(v.info).toBeUndefined();
-    expect(v.label).toBe("tUSDM");
-    expect(v.sub).toBe("asset1qqqq…qqqqqq");
+    expect(v.label).toBe("asset1qqqq…qqqqqq");
+    expect(v.sub).toBe("Calls itself tUSDM, not on the wallet's list");
   });
 
   it("falls back on the fingerprint when a name isn't text, and on Koios's decimals", () => {

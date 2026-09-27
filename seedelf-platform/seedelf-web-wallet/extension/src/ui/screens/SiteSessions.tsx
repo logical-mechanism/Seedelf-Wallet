@@ -266,7 +266,7 @@ function TopUp({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
-  const tokens = tokenChoices(seedelf.tokens, typed);
+  const tokens = tokenChoices(useNetwork(), seedelf.tokens, typed);
   const withTokens = tokens.sent.length > 0;
   const lovelace = lovelaceToSend(amount, withTokens);
   const tooMuch = !!lovelace && BigInt(lovelace) > BigInt(seedelf.lovelace);

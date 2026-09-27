@@ -12,7 +12,8 @@ import {
 import type { KoiosTxInfo, KoiosUtxo } from "../src/background/koios";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
 import type { ActivityEntry } from "../src/shared/rpc";
-import { activityCsv, csvCell } from "../src/ui/activity";
+import { activityCsv, csvCell, tokenMoved } from "../src/ui/activity";
+import { assetFingerprint } from "../src/ui/tokens";
 import { activityPreprod, koiosPreprod, ownedUtxos, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -346,9 +347,23 @@ describe("the CSV export", () => {
     expect(head).toBe(
       "Date (UTC),Type,Direction,ADA,Network fee (ADA),Tokens,To or from,Note,Pool,Vote,Deposit (ADA),Deposit back (ADA),Rewards withdrawn (ADA),Transaction",
     );
-    expect(sent).toBe(`2026-09-25T12:30:00.000Z,Sent,out,-1234.56789,0.17,tUSDM: -1500000,,"rent, September",,,,,,${"cd".repeat(32)}`);
+    // TUSDM here is a stranger's token named like the listed tUSDM: its whole fingerprint names it, and says so.
+    const fake = assetFingerprint(TUSDM);
+    expect(sent).toBe(
+      `2026-09-25T12:30:00.000Z,Sent,out,-1234.56789,0.17,"${fake} (not on the wallet's list: it calls itself tUSDM, but it isn't the listed tUSDM): -1500000",,"rent, September",,,,,,${"cd".repeat(32)}`,
+    );
     expect(staked).toContain(",Staked,out,-2.17,,,,,LOGIC pool1x,,2,,,");
     expect(received).toContain(",Received,in,5,");
+  });
+
+  it("names a listed token by its ticker, in its units, and marks any other (launch review #18)", () => {
+    const listed = { policyId: "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde", assetName: "0014df10745553444d" };
+    const foo = { policyId: TUSDM.policyId, assetName: "464f4f" };
+    const csv = activityCsv("preprod", [entry({ assets: [{ ...listed, quantity: "-1500000" }, { ...foo, quantity: "7" }] })]);
+    expect(csv).toContain(`"tUSDM: -1.5; FOO (not on the wallet's list, ${assetFingerprint(foo)}): +7"`);
+    expect(tokenMoved("preprod", { ...listed, quantity: "2500000" })).toBe("+2.5 tUSDM");
+    expect(tokenMoved("preprod", { ...foo, quantity: "-3" })).toMatch(/^−3 FOO \(not on the wallet's list, asset1\w{4}…\w{6}\)$/);
+    expect(tokenMoved("preprod", { ...TUSDM, quantity: "5" })).toMatch(/^\+5 asset1\w{4}…\w{6} \(not on the wallet's list: it calls itself tUSDM, but it isn't the listed tUSDM\)$/);
   });
 
   it("never lets someone else's words run as a spreadsheet formula", () => {

@@ -7,7 +7,7 @@ import type { NetworkName } from "../networks";
 import type { ActivityEntry, ActivityStaking, TokenQuantity } from "../shared/rpc";
 import { drepList } from "./dreps";
 import { formatAda, formatQuantity, shortHex, voteLabel } from "./format";
-import { tokenInfo, tokenLabel } from "./tokens";
+import { tokenDecimals, tokenMark, tokenText } from "./tokens";
 
 /** What an entry is called. */
 export function activityTitle(e: ActivityEntry): string {
@@ -75,16 +75,29 @@ export function stakingLine(network: NetworkName, s: ActivityStaking | undefined
   return line || undefined;
 }
 
-/** A token amount with its sign, without its name: "+5", "−1". */
-function signedQuantity(network: NetworkName, t: TokenQuantity, minus = "−"): string {
+/** A token amount with its sign, without its name, in its units (`tokenDecimals`): "+5", "−1". */
+export function signedQuantity(network: NetworkName, t: TokenQuantity, minus = "−"): string {
   const q = BigInt(t.quantity);
-  const amount = formatQuantity((q < 0n ? -q : q).toString(), tokenInfo(network, t)?.decimals ?? 0);
+  const amount = formatQuantity((q < 0n ? -q : q).toString(), tokenDecimals(network, t));
   return `${q < 0n ? minus : "+"}${amount}`;
 }
 
-/** A token amount with its sign and name: "+5 tUSDM", "−1 abc…". */
+/**
+ * A token amount with its sign and name, named as every text view names a
+ * token (`tokenText`): "+5 tUSDM", or "−1 FOO (not on the wallet's list,
+ * asset1qz8h…x7k3pd)".
+ */
 export function tokenMoved(network: NetworkName, t: TokenQuantity): string {
-  return `${signedQuantity(network, t)} ${tokenLabel(network, t)}`;
+  const text = tokenText(network, t);
+  const mark = tokenMark(text);
+  return `${signedQuantity(network, t)} ${text.label}${mark ? ` (${mark})` : ""}`;
+}
+
+/** A token's name in the CSV: its ticker, or for one that isn't listed, its name or whole fingerprint, marked. */
+function csvName(network: NetworkName, t: TokenQuantity): string {
+  const text = tokenText(network, t);
+  if (text.listed) return text.label;
+  return `${text.label === text.id ? text.fingerprint : text.label} (${tokenMark(text, true)})`;
 }
 
 /** Why a CSV cell would run as a formula in a spreadsheet: someone else's note could start with one. */
@@ -125,7 +138,7 @@ export function activityCsv(network: NetworkName, entries: ActivityEntry[]): str
     const sign = e.direction === "in" ? "" : e.direction === "out" ? "-" : "";
     // Name first: a token's name is its own, and never a formula (csvCell).
     const tokens = (e.assets ?? [])
-      .map((t) => `${tokenLabel(network, t)}: ${signedQuantity(network, t, "-").replaceAll(",", "")}`)
+      .map((t) => `${csvName(network, t)}: ${signedQuantity(network, t, "-").replaceAll(",", "")}`)
       .join("; ");
     const s = e.staking ?? {};
     return [
