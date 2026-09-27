@@ -50,6 +50,13 @@ export interface Preferences {
    * typed in the connector's window, even while the wallet is unlocked.
    */
   dappPassword: boolean;
+  /**
+   * A private session's spare ADA goes through Lovejoin on its way back.
+   * Off, it comes back directly, tied on chain to the session and its
+   * funding; a swap's approval sets its own from this, and a mix from the
+   * Lovejoin tile mixes whatever it says (privacy review §4.1).
+   */
+  lovejoinReturns: boolean;
   /** Lovejoin's fan-out for a session's return: 1, 2 or 3 waves deep, three wide. */
   lovejoinDepth: LovejoinDepth;
   /** Lovejoin: the range each box's wait is drawn from. */
@@ -63,6 +70,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   currency: "usd",
   dappConnector: false,
   dappPassword: true,
+  lovejoinReturns: true,
   lovejoinDepth: 2,
   lovejoinDelay: "1-6",
 };

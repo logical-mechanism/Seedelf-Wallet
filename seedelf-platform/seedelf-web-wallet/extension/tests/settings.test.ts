@@ -7,8 +7,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { DappSite, SessionView, Status } from "../src/shared/rpc";
 import { NetworkBadge, TestNetworkStrip } from "../src/ui/components/NetworkBadge";
+import { PreferencesContext } from "../src/ui/preferences";
 
 let Settings: typeof import("../src/ui/screens/Settings");
 
@@ -100,6 +102,41 @@ describe("Settings' Lovejoin section", () => {
     expect(mainnet).toContain("about 3.3 ₳");
     expect(preprod).not.toContain("pool holds");
     expect(preprod).toContain("about 3.5 ₳");
+  });
+});
+
+describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
+  const section = (lovejoinReturns: boolean) =>
+    renderToStaticMarkup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: { ...DEFAULT_PREFERENCES, lovejoinReturns }, loaded: true, set: async () => undefined } },
+        createElement(Settings.LovejoinSettings, { network: "mainnet" }),
+      ),
+    );
+
+  it("is on by default, with depth and wait to choose, and says how far a box hides", () => {
+    expect(DEFAULT_PREFERENCES.lovejoinReturns).toBe(true);
+    const html = section(true);
+    expect(html).toMatch(/role="switch"[^>]*aria-checked="true"/);
+    expect(html).not.toMatch(/<select[^>]*disabled/);
+    const shown = text(html);
+    expect(shown).toContain("Bring private sessions back through Lovejoin");
+    expect(shown).toContain("each return you review can still bring that one back directly");
+    expect(shown).toContain("so what comes back is harder to tie to the session");
+    expect(shown).not.toContain("isn't tied");
+    expect(shown).toContain("(up to 1 in 9)");
+    expect(shown).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep), fewer while few people use Lovejoin");
+  });
+
+  it("off, disables depth and wait, and says what's lost and what's saved", () => {
+    const html = section(false);
+    expect(html).toMatch(/role="switch"[^>]*aria-checked="false"/);
+    expect(html.match(/<select[^>]*disabled=""/g)).toHaveLength(2);
+    const shown = text(html);
+    expect(shown).toContain("Off, a session's ADA comes back directly: anyone can tie it on chain to the session");
+    expect(shown).toContain("It saves each box's mixes (4 mixes, about 3.3 ₳)");
+    expect(shown).toContain("A mix from the Lovejoin tile still mixes");
   });
 });
 

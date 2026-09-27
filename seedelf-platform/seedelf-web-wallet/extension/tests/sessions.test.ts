@@ -269,6 +269,9 @@ describe("a swap's quote", () => {
     expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ boxes: MAX_DEPOSIT_BOXES, depth: 1, mixes: MAX_DEPOSIT_BOXES });
     // Where Lovejoin isn't, there's nothing to say.
     expect((await t.sessions.quote("preprod", selling)).lovejoin).toBeUndefined();
+    // Nor where Settings brings sessions back directly (privacy review §4.1).
+    await t.deps.preferences.set({ lovejoinReturns: false });
+    expect((await sessions.quote("preprod", selling)).lovejoin).toBeUndefined();
   });
 
   it("leaves Splash out of routing on preprod, where Minswap builds its orders with a mainnet address", () => {

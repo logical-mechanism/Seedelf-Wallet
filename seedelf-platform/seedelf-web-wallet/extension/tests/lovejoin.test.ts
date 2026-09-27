@@ -496,6 +496,24 @@ describe("a session's return through Lovejoin", CHAINS, () => {
   });
 });
 
+describe("returns with Lovejoin turned off in Settings (privacy review §4.1)", CHAINS, () => {
+  it("come back directly, without reading the pool or saying Lovejoin was left out", async () => {
+    const { t, sessions } = await withSession("40000000");
+    await t.deps.preferences.set({ lovejoinReturns: false });
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin).toBeUndefined();
+    expect(review.lovejoinSkipped).toBeUndefined();
+    expect(review.inputs).toBe(2);
+    expect(t.koios.calls.some((c) => c.path === "credential_utxos" && c.body._payment_credentials[0] === NETWORKS.preprod.lovejoin!.mixBox)).toBe(false);
+    // Bring everything back too.
+    const claimed = await sessions.claimBuild("preprod", [0]);
+    expect(claimed.returns[0]!.lovejoin).toBeUndefined();
+    // Turned on again, the same return goes through it.
+    await t.deps.preferences.set({ lovejoinReturns: true });
+    expect((await sessions.backBuild("preprod", 0)).lovejoin).toMatchObject({ boxes: 2 });
+  });
+});
+
 describe("the network's check", CHAINS, () => {
   it("leaves Lovejoin out, and brings it back directly, when the network measures the first mix above what it declares", async () => {
     const { t, sessions } = await withSession("40000000");
@@ -1865,6 +1883,20 @@ describe("mixing from the tile", CHAINS, () => {
     await sessions.mixOutSubmit("preprod", out.txHash);
     const book = (await t.store.get<{ sessions: Array<{ mix?: unknown }> }>("sessions.preprod"))!;
     expect(book.sessions[0]!.mix).toEqual({ boxes: 1, again: true, publicToo: true });
+  });
+
+  it("mixes whatever Settings says of a session's return: a mix is what was asked for (privacy review §4.1)", async () => {
+    const t = await wallet();
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    await t.deps.preferences.set({ lovejoinReturns: false });
+    const { sessions } = mixRunner(t);
+    const out = await sessions.mixOutBuild("preprod", 1);
+    await sessions.mixOutSubmit("preprod", out.txHash);
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace), atSession(out.txHash, 1, "5000000"));
+    t.koios.confirmations = 1;
+    await sessions.advance("preprod", 0, true);
+    const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }> }> }>("sessions.preprod"))!;
+    expect(book.sessions[0]!.txs.map((x) => x.kind)).toEqual(["out", "deposit", "mix", "mix", "mix", "mix", "back"]);
   });
 
   it("brings a mix back directly when it's stopped, the way out of one whose chain can't go", async () => {

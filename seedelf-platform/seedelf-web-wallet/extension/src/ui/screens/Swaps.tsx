@@ -1056,7 +1056,7 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: NonNullable<Sw
         {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳ in fees, which the session pays. Each box comes
         back on its own after {delayText(l.delay)}, a few minutes into the first time the wallet is unlocked after that, for about{" "}
         {formatAda(l.withdrawFees)} ₳ in fees all together. Less than a box's worth, and any tokens, come back at once.
-        Settings, Lovejoin changes this.
+        Settings, Lovejoin sets how deep and how long, or turns it off.
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED}

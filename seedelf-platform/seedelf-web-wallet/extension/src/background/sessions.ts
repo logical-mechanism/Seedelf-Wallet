@@ -595,7 +595,8 @@ export class SessionService {
 
   /**
    * What bringing a swap's session back through Lovejoin is expected to take,
-   * where Lovejoin is on: the boxes its spare ADA pays for at the set depth,
+   * where Lovejoin is on and Settings sends returns through it: the boxes its
+   * spare ADA pays for at the set depth,
    * the proceeds' too when they're ADA (with the deposit back, and the room
    * left over), their mixes (WebAssembly's MIX_FEE_ESTIMATE each) and their
    * withdraws. At most: the pool may take fewer, and one chain takes no
@@ -603,7 +604,7 @@ export class SessionService {
    */
   private async lovejoinCost(network: NetworkName, quote: SwapQuote): Promise<SwapQuote["lovejoin"]> {
     const lovejoin = this.deps.lovejoin;
-    if (!lovejoin?.available(network)) return undefined;
+    if (!lovejoin?.available(network) || !(await this.throughLovejoin())) return undefined;
     // What each box more takes, and what the chain takes besides: the deposit and its change.
     const [one, two] = await Promise.all([lovejoin.funding(network, 1), lovejoin.funding(network, 2)]);
     const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
@@ -1683,7 +1684,7 @@ export class SessionService {
     const own = record?.txs.map((t) => t.txHash) ?? [];
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
-    if (!direct && !started && lovejoin?.available(network)) {
+    if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Never a stranger's 5 ₳ carrying a reference script: the mixes can't put it up.
       const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script);
       let chain: LovejoinChain | undefined;
@@ -1766,6 +1767,17 @@ export class SessionService {
       throw new NothingComesBack("What's left at the session's account is too little to pay for its own way back, so it stays there.");
     }
     return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
+  }
+
+  /**
+   * Whether session `s`'s return goes through Lovejoin, as the user has it
+   * (privacy review §4.1): a mix from the Lovejoin tile always does; any
+   * other as Settings has it now (`lovejoinReturns`). Off, it comes back
+   * directly, and nothing says Lovejoin was left out: the user left it out.
+   */
+  private async throughLovejoin(s?: SessionRecord): Promise<boolean> {
+    if (s?.mix) return true;
+    return (await this.deps.preferences?.get())?.lovejoinReturns ?? DEFAULT_PREFERENCES.lovejoinReturns;
   }
 
   /** Records `rows` at session `index`'s account as left behind, for `reason`: no return takes them. */

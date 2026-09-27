@@ -23,6 +23,16 @@ import { Row } from "./ReviewRows";
 export const LOVEJOIN_UNAUDITED =
   "Lovejoin hasn't had a third-party audit: its makers' own review is the only one it has had. Use it knowing that.";
 
+/**
+ * How well Lovejoin hides a box at `depth`, said wherever the user chooses
+ * it (privacy review §2.6): at best one of the fan-out's 3^depth leaves, and
+ * fewer while few people bring boxes back into a Seedelf (§5.3). Spending
+ * returned boxes together, or with the session's funding change, narrows it.
+ */
+export function lovejoinHides(depth: number): string {
+  return `Which box coming out is yours stays one of up to ${3 ** depth} (at ${depth} ${depth === 1 ? "wave" : "waves"} deep), fewer while few people use Lovejoin. Spending boxes that came back together, or with the change the session's funding left, narrows it.`;
+}
+
 /** How far a return's chain through Lovejoin has got, in words. */
 export function chainText(c: NonNullable<SessionView["chain"]>): string {
   if (c.cut) return `Stopped after ${c.sent} of ${c.total} transactions; what was left came back directly`;

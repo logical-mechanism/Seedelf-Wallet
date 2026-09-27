@@ -18,6 +18,11 @@
 // dappPassword      A site's signature needs the password, typed in the
 //                   connector's window, even while unlocked (dapp.ts). On by
 //                   default.
+// lovejoinReturns   A private session's spare ADA goes through Lovejoin on
+//                   its way back (sessions.ts). On by default; off, it comes
+//                   back directly. A swap's approval records its own.
+// lovejoinDepth,    How deep each box fans out, and the range its wait is
+// lovejoinDelay     drawn from (lovejoin.ts).
 //
 // Where the toolbar button opens the wallet isn't one of these: it's the
 // browser's, not the wallet's (shared/open-in.ts). Nor is the network, which
@@ -95,6 +100,7 @@ export class PreferencesService {
       currency: isCurrency(kept.currency) ? kept.currency : DEFAULT_PREFERENCES.currency,
       dappConnector: typeof kept.dappConnector === "boolean" ? kept.dappConnector : DEFAULT_PREFERENCES.dappConnector,
       dappPassword: typeof kept.dappPassword === "boolean" ? kept.dappPassword : DEFAULT_PREFERENCES.dappPassword,
+      lovejoinReturns: typeof kept.lovejoinReturns === "boolean" ? kept.lovejoinReturns : DEFAULT_PREFERENCES.lovejoinReturns,
       lovejoinDepth: isLovejoinDepth(kept.lovejoinDepth) ? kept.lovejoinDepth : DEFAULT_PREFERENCES.lovejoinDepth,
       lovejoinDelay: isLovejoinDelay(kept.lovejoinDelay) ? kept.lovejoinDelay : DEFAULT_PREFERENCES.lovejoinDelay,
     };
@@ -109,6 +115,7 @@ export class PreferencesService {
     if (isCurrency(change.currency)) next.currency = change.currency;
     if (typeof change.dappConnector === "boolean") next.dappConnector = change.dappConnector;
     if (typeof change.dappPassword === "boolean") next.dappPassword = change.dappPassword;
+    if (typeof change.lovejoinReturns === "boolean") next.lovejoinReturns = change.lovejoinReturns;
     if (isLovejoinDepth(change.lovejoinDepth)) next.lovejoinDepth = change.lovejoinDepth;
     if (isLovejoinDelay(change.lovejoinDelay)) next.lovejoinDelay = change.lovejoinDelay;
     await this.local.set(LOCAL_PREFERENCES, next);

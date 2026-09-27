@@ -22,7 +22,8 @@ describe("preferences", () => {
       dappConnector: false,
       // A site's signature needs the password until the user says otherwise.
       dappPassword: true,
-      // A session's spare ADA fans out two waves deep, and each box waits 1 to 6 hours.
+      // A session's spare ADA comes back through Lovejoin, fanned out two waves deep, and each box waits 1 to 6 hours.
+      lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
     });
@@ -34,6 +35,7 @@ describe("preferences", () => {
       currency: "eur",
       dappConnector: false,
       dappPassword: true,
+      lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
     });
@@ -57,6 +59,11 @@ describe("preferences", () => {
     expect(await prefs.get()).toMatchObject({ lovejoinDepth: 2, lovejoinDelay: "1-6" });
     await prefs.set({ lovejoinDepth: 3, lovejoinDelay: "6-24" });
     expect(await prefs.get()).toMatchObject({ lovejoinDepth: 3, lovejoinDelay: "6-24" });
+    // Returns through Lovejoin: a switch, turned off only by false (privacy review §4.1).
+    await prefs.set({ lovejoinReturns: "off" as never });
+    expect((await prefs.get()).lovejoinReturns).toBe(true);
+    await prefs.set({ lovejoinReturns: false });
+    expect((await prefs.get()).lovejoinReturns).toBe(false);
   });
 
   it("read a kept value that's no longer allowed as the default", async () => {

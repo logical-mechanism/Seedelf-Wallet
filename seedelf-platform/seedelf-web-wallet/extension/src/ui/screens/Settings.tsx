@@ -44,7 +44,7 @@ import {
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
-import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
+import { delayText, LOVEJOIN_UNAUDITED, lovejoinHides } from "../components/LovejoinReturn";
 import { Modal } from "../components/Modal";
 import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -310,48 +310,74 @@ export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
 }
 
 /**
- * Lovejoin, for a private session's return: how deep each box fans out, and
- * how long each waits before it comes back (roadmap chunk 16). Shown where
- * Lovejoin is deployed (networks.ts), as the worker uses it.
+ * Lovejoin, for a private session's return: whether it goes through Lovejoin
+ * at all (on by default; off, the section says what's lost), how deep each
+ * box fans out, and how long each waits before it comes back (roadmap chunk
+ * 16, privacy review §4.1). Shown where Lovejoin is deployed (networks.ts),
+ * as the worker uses it.
  */
 export function LovejoinSettings({ network }: { network: NetworkName }) {
   const { prefs, loaded, set } = usePreferences();
   const [error, setError] = useState<string>();
   const fail = (err: Error) => setError(err.message);
   const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
+  const on = prefs.lovejoinReturns;
   return (
     <section className="section" aria-labelledby="lovejoin-settings-title">
       <h2 id="lovejoin-settings-title">Lovejoin</h2>
       <p className="note">
         When a private session comes back with ADA to spare, that ADA goes through Lovejoin first, in boxes of 10 ₳ mixed with
-        other people's, so what comes back isn't tied to the session. The session pays for the mixes.
+        other people's, so what comes back is harder to tie to the session. The session pays for the mixes.
         {floor > 0 &&
           ` The wallet mixes only once Lovejoin's pool holds ${floor} boxes that aren't yours; until then a return comes back directly, and says so.`}
       </p>
       <Callout tone="warn" testId="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED}
       </Callout>
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="lovejoin-returns-label">Bring private sessions back through Lovejoin</span>
+          <span className="note" id="lovejoin-returns-note" data-testid="lovejoin-returns-note">
+            {on
+              ? "A swap's approval, its Stop and each return you review can still bring that one back directly."
+              : `Off, a session's ADA comes back directly: anyone can tie it on chain to the session, and through its funding to the private UTxOs that paid for it. Your public account stays out either way. It saves each box's mixes (${depthCost(network, prefs.lovejoinDepth)}), about 0.3 ₳ to bring it back, and the hours of waiting. A mix from the Lovejoin tile still mixes.`}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={on}
+          aria-labelledby="lovejoin-returns-label"
+          aria-describedby="lovejoin-returns-note"
+          onClick={() => void set({ lovejoinReturns: !on }).catch(fail)}
+          disabled={!loaded}
+        />
+      </div>
       <div className="field">
         <label htmlFor="lovejoin-depth">Mixing, for each box</label>
         <select
           id="lovejoin-depth"
           value={prefs.lovejoinDepth}
-          disabled={!loaded}
+          disabled={!loaded || !on}
           onChange={(e) => void set({ lovejoinDepth: Number(e.target.value) as LovejoinDepth }).catch(fail)}
         >
           {LOVEJOIN_DEPTHS.map((d) => (
             <option key={d} value={d}>
-              {d} {d === 1 ? "wave" : "waves"} deep: {depthCost(network, d)} (1 in {3 ** d})
+              {d} {d === 1 ? "wave" : "waves"} deep: {depthCost(network, d)} (up to 1 in {3 ** d})
             </option>
           ))}
         </select>
+        <p className="note" data-testid="lovejoin-hides">
+          {lovejoinHides(prefs.lovejoinDepth)}
+        </p>
       </div>
       <div className="field">
         <label htmlFor="lovejoin-delay">Each box comes back after</label>
         <select
           id="lovejoin-delay"
           value={prefs.lovejoinDelay}
-          disabled={!loaded}
+          disabled={!loaded || !on}
           onChange={(e) => void set({ lovejoinDelay: e.target.value as LovejoinDelay }).catch(fail)}
         >
           {LOVEJOIN_DELAYS.map((d) => (
