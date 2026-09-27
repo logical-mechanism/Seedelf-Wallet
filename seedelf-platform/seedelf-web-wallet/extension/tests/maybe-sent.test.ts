@@ -411,6 +411,108 @@ describe("a private payment Koios didn't answer", () => {
   });
 });
 
+describe("a payment that may still go through, across a lock (final review money-submit-4)", () => {
+  const SEALED = "seedelf.private.maybeSent.preprod";
+  const again = (t: T) => t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+
+  it("is still watched after a lock, auto-lock or a closed browser: new payments wait, and its UTxOs stay held back", async () => {
+    const t = await unlocked();
+    const summary = await again(t);
+    unanswered(t);
+    await t.send.submit("preprod", summary.txHash);
+    const inputs = new Set(txInputs(t.koios.submitted[0]!));
+    // Sealed on the device: nothing of it reads without the phrase.
+    expect(JSON.stringify(t.local.data.get(SEALED))).not.toContain(summary.txHash);
+    // It went through, and waits in a mempool: sent again, it's refused as spent.
+    t.koios.rejectSubmit = SPENT;
+
+    const locks: Array<() => Promise<unknown>> = [
+      () => t.wallet.lock(),
+      async () => void (t.clock.now += 16 * 60_000),
+      () => t.session.clear(),
+    ];
+    for (const lock of locks) {
+      await lock();
+      await t.wallet.unlock(PASSWORD);
+      // The first thing asked after the unlock is a new payment: it waits.
+      await expect(again(t)).rejects.toThrow(MAYBE_SENT_WAIT);
+      expect(await spentSet(t.session)).toEqual(inputs);
+      expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
+    }
+
+    // It lands: settled, nothing is sealed any more, and a lock forgets it.
+    t.koios.confirmations = 1;
+    delete t.koios.rejectSubmit;
+    await expect(again(t)).resolves.toBeDefined();
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.pending.pending("preprod")).toBeNull();
+    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+  });
+
+  it("is sent again by the worker's run at unlock, the network shown or not", async () => {
+    const t = await unlocked();
+    const summary = await again(t);
+    unanswered(t);
+    await t.send.submit("preprod", summary.txHash);
+    await t.wallet.lock();
+    t.clock.now += 5 * 60_000;
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.pending.watch("preprod")).toBe(false);
+    expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
+    // Taken: an ordinary sent payment, which a lock may forget.
+    expect(await t.session.get(pendingKey("preprod"))).not.toHaveProperty("maybeSent");
+    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+  });
+
+  it("goes into the Seedelf history when a private one lands after the lock", async () => {
+    const t = await unlocked();
+    const withdraw = privately(t);
+    const summary = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
+    unanswered(t);
+    await withdraw.submit("preprod", summary.txHash);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    t.koios.confirmations = 1;
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: 1 });
+    expect(await t.activity.seedelf("preprod")).toMatchObject([{ kind: "withdraw", txHash: summary.txHash }]);
+  });
+
+  it("is let go at once when it can't land any more: past its slot, or a private one 20 minutes unseen", async () => {
+    const t = await unlocked();
+    const summary = await again(t);
+    unanswered(t, Infinity);
+    const { invalidHereafter } = await t.send.submit("preprod", summary.txHash);
+    await t.wallet.lock();
+    t.clock.now += 3 * 60 * 60_000;
+    t.koios.tip = invalidHereafter! + EXPIRED_AFTER_SLOTS + 1;
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "expired" });
+    expect(await spentSet(t.session)).toEqual(new Set());
+    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+
+    const withdraw = privately(t);
+    const privateOne = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
+    await withdraw.submit("preprod", privateOne.txHash);
+    await t.wallet.lock();
+    t.clock.now += UNSEEN_AFTER_MS + 60_000;
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: privateOne.txHash, dropped: "unseen" });
+    expect(await spentSet(t.session)).toEqual(new Set());
+    await expect(again(t)).resolves.toBeDefined();
+  });
+
+  it("is deleted with the wallet", async () => {
+    const t = await unlocked();
+    const summary = await again(t);
+    unanswered(t);
+    await t.send.submit("preprod", summary.txHash);
+    expect(t.local.data.has(SEALED)).toBe(true);
+    await t.wallet.reset();
+    expect(t.local.data.has(SEALED)).toBe(false);
+  });
+});
+
 describe("Home's banner", () => {
   const sent: PendingTx = { kind: "send", network: "preprod", txHash: "ab".repeat(32), submittedAt: 0, confirmations: null };
   const text = (pending: PendingTx, watching: boolean) =>

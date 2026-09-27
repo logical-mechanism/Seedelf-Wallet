@@ -32,6 +32,7 @@ import { forgetContractView, readContractView, type ContractView } from "./contr
 import type { Koios, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
 import { settleMaybeSent, submitWatched } from "./pending";
+import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
 import type { Keys, Wallet } from "./wallet";
 
@@ -54,6 +55,8 @@ export interface ScriptSpendDeps {
   coins: CoinControlService;
   /** Whether an account-paid spend (a mint, a send) spends staking rewards too. */
   preferences?: PreferencesService;
+  /** Where a send that may still go through is sealed (pending.ts). */
+  store: PrivateStore;
 }
 
 /** A built transaction waiting in session storage for Send. */

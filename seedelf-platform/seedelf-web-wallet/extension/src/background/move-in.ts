@@ -19,6 +19,7 @@ import type { CoinControlService } from "./coin-control";
 import type { Koios } from "./koios";
 import { settleMaybeSent, submitWatched } from "./pending";
 import type { PreferencesService } from "./preferences";
+import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
 
@@ -51,6 +52,8 @@ export interface MoveInDeps {
   coins: CoinControlService;
   /** Whether staking rewards are spent along with it. */
   preferences?: PreferencesService;
+  /** Where a move-in that may still go through is sealed (pending.ts). */
+  store: PrivateStore;
 }
 
 export class MoveInService {

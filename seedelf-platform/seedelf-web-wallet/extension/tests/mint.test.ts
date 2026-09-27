@@ -8,6 +8,7 @@ import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
 import { MintService, SESSION_MINT } from "../src/background/mint";
 import { pendingKey } from "../src/background/pending";
+import { PrivateStore } from "../src/background/private-store";
 import { Wallet } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
 import { accountMintPreprod, loadTestWasm, testBalances, vectors } from "./fakes";
@@ -37,6 +38,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     now: () => t.clock.now,
     coins: t.coins,
+    store: t.store,
   });
   return { service, calls };
 }
@@ -127,6 +129,7 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       now: () => t.clock.now,
       coins: t.coins,
+      store: new PrivateStore({ wallet, local: t.local }),
     });
     t.collateral.answer = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
     // It got past the one-time key (same key re-derived) to giveme.my's signature.

@@ -18,10 +18,17 @@
 // chain passes its slot, and a private one, which has no slot yet, after 20
 // minutes unseen.
 //
-// Every write of the watch goes through `put`: nothing replaces a
+// Every write of the watch goes through `take`: nothing replaces a
 // transaction that may still go through with another, not a Send checked
 // before it went maybe sent, nor Lovejoin's withdraw or mix (final review
 // money-submit-1). Its watch is what stops a second payment.
+//
+// A lock, a closed browser or an update clears session storage, and the
+// watch with it, while a maybe-sent payment can still land for hours. So
+// each is sealed on the device too (private-store.ts, `maybeSent.<network>`),
+// and put back, its UTxOs held back again, before the watch is next read: at
+// unlock, and before any build. Only its settling removes it (final review
+// money-submit-4).
 
 import type { NetworkName } from "../networks";
 import type { PendingTx } from "../shared/rpc";
@@ -30,6 +37,7 @@ import type { ActivityService } from "./activity";
 import { txInputs } from "./cbor";
 import { forgetContractView } from "./contract-scan";
 import { KoiosBusyError, SpentInputError, type Koios } from "./koios";
+import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetSpent, rememberSpent } from "./spent";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, type Wallet } from "./wallet";
@@ -79,6 +87,8 @@ interface Watched extends PendingTx {
 export interface PendingDeps {
   wallet: Wallet;
   session: Area;
+  /** Where a maybe-sent transaction is sealed, so a lock or a closed browser doesn't forget it. */
+  store: PrivateStore;
   koios: (network: NetworkName) => Koios;
   now: () => number;
   /** Writes a maybe-sent Seedelf spend into the history once it's seen. */
@@ -112,15 +122,95 @@ function unsettled(w: Watched | undefined): w is Watched {
 }
 
 /**
- * Puts `record` in its network's watch, unless another transaction there may
- * still go through: that one stays, until settle() settles it. Returns
- * whether `record` went in. Call it while unlocked.
+ * Each network's changes to the watch and to its sealed copy, one at a time.
+ * The sealed copy can't be written under the wallet's lock (PrivateStore
+ * takes it too), so the two are kept in step here. By the worker's session
+ * storage.
  */
-async function put(session: Area, record: Watched): Promise<boolean> {
-  const was = await session.get<Watched>(pendingKey(record.network));
-  if (unsettled(was) && was.txHash !== record.txHash) return false;
-  await session.set(pendingKey(record.network), record);
-  return true;
+const turns = new WeakMap<Area, Map<NetworkName, Promise<unknown>>>();
+
+function inTurn<T>(deps: PendingDeps, network: NetworkName, task: () => Promise<T>): Promise<T> {
+  let byNetwork = turns.get(deps.session);
+  if (!byNetwork) turns.set(deps.session, (byNetwork = new Map()));
+  const run = (byNetwork.get(network) ?? Promise.resolve()).then(task, task);
+  byNetwork.set(network, run.catch(() => undefined));
+  return run;
+}
+
+const sealedName = (network: NetworkName) => `maybeSent.${network}` as const;
+
+/** The sealed copy of the maybe-sent transaction on `network`, if there's one. Throws if locked. */
+async function sealed(deps: PendingDeps, network: NetworkName): Promise<Watched | undefined> {
+  try {
+    return (await deps.store.get<Watched | null>(sealedName(network))) ?? undefined;
+  } catch (e) {
+    // One that won't open can't be put back; the next is sealed over it.
+    if (e instanceof UnreadableRecordError) return undefined;
+    throw e;
+  }
+}
+
+/** Seals `w`, maybe sent. One that can't be sealed is still watched until a lock. */
+async function seal(deps: PendingDeps, w: Watched): Promise<void> {
+  await deps.store.set(sealedName(w.network), w).catch(() => undefined);
+}
+
+/** Drops the sealed copy of `w`, settled, if that's what's sealed. Call it in the network's turn. */
+async function unseal(deps: PendingDeps, w: Watched): Promise<void> {
+  const was = await sealed(deps, w.network).catch(() => undefined);
+  if (was?.txHash === w.txHash) await deps.store.set(sealedName(w.network), null).catch(() => undefined);
+}
+
+/**
+ * The watch on `network`. One a lock or a closed browser cleared is put
+ * back from its sealed copy first, if it may still go through, and its
+ * UTxOs held back again. Call it in the network's turn.
+ */
+async function restoreNow(deps: PendingDeps, network: NetworkName): Promise<Watched | undefined> {
+  const { wallet, session } = deps;
+  const key = pendingKey(network);
+  const watched = await wallet.withKeys(() => session.get<Watched>(key));
+  if (watched) return watched;
+  const w = await sealed(deps, network);
+  if (!unsettled(w) || w.network !== network || !w.txCbor) return undefined;
+  await wallet.withKeys(async () => {
+    await rememberSpent(session, hexBytes(w.txCbor!));
+    await session.set(key, w);
+  });
+  // What the kept view has of the contract is behind whatever happened meanwhile.
+  if (w.contract) await forgetContractView(deps, network);
+  return w;
+}
+
+/** The watch on `network`, put back first if a lock cleared it (restoreNow). */
+function watchedOn(deps: PendingDeps, network: NetworkName): Promise<Watched | undefined> {
+  return inTurn(deps, network, () => restoreNow(deps, network));
+}
+
+/**
+ * Puts `record` in its network's watch, unless another transaction there may
+ * still go through: that one stays, until settle() settles it. So does
+ * `record` itself, watched as maybe sent already, as it first was.
+ * `alongside` runs under the same lock first. A maybe-sent one is sealed;
+ * one it takes over from goes on as sent, and isn't any more. Returns what
+ * the watch holds after.
+ */
+async function take(deps: PendingDeps, record: Watched, alongside?: () => Promise<void>): Promise<Watched> {
+  const { wallet, session } = deps;
+  const key = pendingKey(record.network);
+  return inTurn(deps, record.network, async () => {
+    await restoreNow(deps, record.network);
+    const [was, watched] = await wallet.withKeys(async () => {
+      await alongside?.();
+      const was = await session.get<Watched>(key);
+      if (unsettled(was) && (was.txHash !== record.txHash || record.maybeSent)) return [was, was] as const;
+      await session.set(key, record);
+      return [was, record] as const;
+    });
+    if (watched === record && record.maybeSent) await seal(deps, record);
+    else if (watched === record && was?.maybeSent && was.txHash === record.txHash) await unseal(deps, was);
+    return watched;
+  });
 }
 
 /**
@@ -129,7 +219,7 @@ async function put(session: Area, record: Watched): Promise<boolean> {
  * payment on that network may still go through: that one's watch stays.
  */
 export async function watchSent(deps: PendingDeps, pending: PendingTx): Promise<void> {
-  await deps.wallet.withKeys(() => put(deps.session, pending));
+  await take(deps, pending);
 }
 
 /** The watched transaction as Home is shown it. */
@@ -145,7 +235,7 @@ function shown(watched: Watched): PendingTx {
  * Koios didn't answer, it's still maybe sent if the chain doesn't have it yet.
  */
 export async function submitWatched(deps: PendingDeps, s: Sending): Promise<PendingTx> {
-  const { wallet, session, now } = deps;
+  const { session, now } = deps;
   const koios = deps.koios(s.network);
   const bytes = hexBytes(s.txCbor);
   let confirmations: number | null = null;
@@ -169,10 +259,9 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   const pending: PendingTx = { kind: s.kind, network: s.network, txHash: s.txHash, submittedAt: now(), confirmations, ...slot(s) };
   // The inputs of one that can expire, to free them if it does.
   const watched: Watched = s.invalidHereafter === undefined ? pending : { ...pending, inputs: txInputs(bytes) };
-  await wallet.withKeys(async () => {
+  await take(deps, watched, async () => {
     await rememberSpent(session, bytes);
     await session.remove(s.key);
-    await put(session, watched);
   });
   await deps.activity?.sent(s.network, pending, s.summary).catch(() => undefined);
   return pending;
@@ -182,37 +271,33 @@ const slot = (s: { invalidHereafter?: number }) => (s.invalidHereafter === undef
 
 /** Watches `s` as maybe sent: its UTxOs held back, and kept to go again as it is. */
 async function maybeSent(deps: PendingDeps, s: Sending): Promise<PendingTx> {
-  const { wallet, session, now } = deps;
-  const watched = await wallet.withKeys(async () => {
-    const was = await session.get<Watched>(pendingKey(s.network));
-    if (was?.maybeSent && was.txHash === s.txHash) return was;
-    const bytes = hexBytes(s.txCbor);
-    const watched: Watched = {
-      kind: s.kind,
-      network: s.network,
-      txHash: s.txHash,
-      submittedAt: now(),
-      confirmations: null,
-      maybeSent: true,
-      ...slot(s),
-      txCbor: s.txCbor,
-      inputs: txInputs(bytes),
-      contract: s.contract,
-      summary: s.summary,
-      kept: s.key,
-    };
+  const { session, now } = deps;
+  const bytes = hexBytes(s.txCbor);
+  const record: Watched = {
+    kind: s.kind,
+    network: s.network,
+    txHash: s.txHash,
+    submittedAt: now(),
+    confirmations: null,
+    maybeSent: true,
+    ...slot(s),
+    txCbor: s.txCbor,
+    inputs: txInputs(bytes),
+    contract: s.contract,
+    summary: s.summary,
+    kept: s.key,
+  };
+  // Another that may still go through keeps the watch (both went out at
+  // once, from two windows): new payments wait for it, and this one is held
+  // back all the same.
+  const watched = await take(deps, record, async () => {
     await rememberSpent(session, bytes);
     // Send sends these very bytes again, and asks giveme.my nothing.
     await session.set(s.key, { ...s.kept, sentCbor: s.txCbor });
-    // Another that may still go through keeps the watch (both went out at
-    // once, from two windows): new payments wait for it, and this one is
-    // held back all the same.
-    await put(session, watched);
-    return watched;
   });
   // What the kept view has of the contract is behind whatever happened.
   if (s.contract) await forgetContractView(deps, s.network);
-  return shown(watched);
+  return shown(watched.txHash === s.txHash ? watched : record);
 }
 
 /**
@@ -241,8 +326,10 @@ async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undef
   const koios = deps.koios(w.network);
   // Koios is asked outside the lock, so the watch can change meanwhile (a
   // payment sent, another's settle): each change reads it again first, and
-  // is made only while it still holds `w` (final review money-submit-3).
+  // is made only while it still holds `w` (final review money-submit-3). Its
+  // sealed copy goes once it's settled: seen, let go, or taken.
   const key = pendingKey(w.network);
+  const turn = <T>(task: () => Promise<T>) => inTurn(deps, w.network, task);
   const ours = (cur: Watched | undefined): cur is Watched => cur?.txHash === w.txHash;
   const unchanged = (cur: Watched | undefined) =>
     ours(cur) && cur.maybeSent === w.maybeSent && cur.submittedAt === w.submittedAt && cur.resentAt === w.resentAt;
@@ -250,11 +337,14 @@ async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undef
   const confirmations = (await koios.txStatus([w.txHash])).get(w.txHash) ?? null;
   if (confirmations !== null) {
     const { maybeSent: _maybeSent, ...seen } = { ...w, confirmations };
-    await wallet.withKeys(async () => {
-      if (ours(await session.get<Watched>(key))) await session.remove(key);
-      // The next balance reading should see the new UTxOs.
-      await session.remove(SESSION_BALANCES_PREFIX + w.network);
-      await dropKept(session, w);
+    await turn(async () => {
+      await wallet.withKeys(async () => {
+        if (ours(await session.get<Watched>(key))) await session.remove(key);
+        // The next balance reading should see the new UTxOs.
+        await session.remove(SESSION_BALANCES_PREFIX + w.network);
+        await dropKept(session, w);
+      });
+      await unseal(deps, w);
     });
     if (w.summary) await deps.activity?.sent(w.network, shown(seen), w.summary).catch(() => undefined);
     return seen;
@@ -266,15 +356,19 @@ async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undef
     w.invalidHereafter !== undefined && age > VALID_FOR_MS && (await koios.tipSlot()) > w.invalidHereafter + EXPIRED_AFTER_SLOTS;
   const unseen = !expired && w.maybeSent && w.invalidHereafter === undefined && age > UNSEEN_AFTER_MS;
   if (expired || unseen) {
-    const held = await wallet.withKeys(async () => {
-      const cur = await session.get<Watched>(key);
-      // Past its slot, it can't land whatever happened meanwhile; one sent again and taken meanwhile isn't unseen.
-      if (expired ? !ours(cur) : !unchanged(cur)) return { cur };
-      if (w.inputs) await forgetSpent(session, w.inputs);
-      await session.remove(key);
-      await session.remove(SESSION_BALANCES_PREFIX + w.network);
-      await dropKept(session, w);
-      return undefined;
+    const held = await turn(async () => {
+      const held = await wallet.withKeys(async () => {
+        const cur = await session.get<Watched>(key);
+        // Past its slot, it can't land whatever happened meanwhile; one sent again and taken meanwhile isn't unseen.
+        if (expired ? !ours(cur) : !unchanged(cur)) return { cur };
+        if (w.inputs) await forgetSpent(session, w.inputs);
+        await session.remove(key);
+        await session.remove(SESSION_BALANCES_PREFIX + w.network);
+        await dropKept(session, w);
+        return undefined;
+      });
+      if (!held || expired) await unseal(deps, w);
+      return held;
     });
     if (held) return held.cur;
     if (w.contract) await forgetContractView(deps, w.network);
@@ -296,28 +390,34 @@ async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undef
     } catch {
       // Refused as spent (most likely this very one, on its way), or unanswered again: keep watching.
     }
-    return wallet.withKeys(async () => {
-      const cur = await session.get<Watched>(key);
-      if (unchanged(cur)) {
+    return turn(async () => {
+      const after = await wallet.withKeys(async () => {
+        const cur = await session.get<Watched>(key);
+        if (unchanged(cur)) {
+          await session.set(key, current);
+          return current;
+        }
+        if (!taken) return cur;
+        // Taken after the watch let it go (unseen meanwhile): on its way after
+        // all, so its UTxOs are held back again, and it's watched if nothing
+        // else is.
+        await rememberSpent(session, hexBytes(w.txCbor!));
+        if (cur && !ours(cur)) return cur;
         await session.set(key, current);
         return current;
-      }
-      if (!taken) return cur;
-      // Taken after the watch let it go (unseen meanwhile): on its way after
-      // all, so its UTxOs are held back again, and it's watched if nothing
-      // else is.
-      await rememberSpent(session, hexBytes(w.txCbor!));
-      if (cur && !ours(cur)) return cur;
-      await session.set(key, current);
-      return current;
+      });
+      if (taken) await unseal(deps, w);
+      return after;
     });
   }
 
   // A private one Koios took: watched for 10 minutes.
   if (!w.maybeSent && w.invalidHereafter === undefined && age > WATCH_MS) {
-    await wallet.withKeys(async () => {
-      if (unchanged(await session.get<Watched>(key))) await session.remove(key);
-    });
+    await turn(() =>
+      wallet.withKeys(async () => {
+        if (unchanged(await session.get<Watched>(key))) await session.remove(key);
+      }),
+    );
   }
   return w;
 }
@@ -336,12 +436,12 @@ async function dropKept(session: Area, w: Watched): Promise<void> {
  * Otherwise both could land, and pay twice.
  */
 export async function settleMaybeSent(deps: PendingDeps, network: NetworkName): Promise<void> {
-  const watched = () => deps.wallet.withKeys(() => deps.session.get<Watched>(pendingKey(network)));
-  const w = await watched();
+  // Put back first if a lock cleared it: nothing is built beside it after an unlock either.
+  const w = await watchedOn(deps, network);
   if (!unsettled(w) || w.network !== network) return;
   await settle(deps, w);
   // As the watch stands now: another may have gone maybe sent meanwhile.
-  if (unsettled(await watched())) throw new Error(MAYBE_SENT_WAIT);
+  if (unsettled(await deps.wallet.withKeys(() => deps.session.get<Watched>(pendingKey(network))))) throw new Error(MAYBE_SENT_WAIT);
 }
 
 export class PendingService {
@@ -349,7 +449,7 @@ export class PendingService {
 
   /** The watched transaction on `network` as it now stands, or null. Clears it once it's settled. */
   async pending(network: NetworkName): Promise<PendingTx | null> {
-    const watched = await this.deps.wallet.withKeys(() => this.deps.session.get<Watched>(pendingKey(network)));
+    const watched = await watchedOn(this.deps, network);
     const settled = watched && (await settle(this.deps, watched));
     return settled ? shown(settled) : null;
   }
@@ -361,7 +461,7 @@ export class PendingService {
    * took is left for Home, which asks when it opens.
    */
   async watch(network: NetworkName): Promise<boolean> {
-    const watched = await this.deps.wallet.withKeys(() => this.deps.session.get<Watched>(pendingKey(network)));
+    const watched = await watchedOn(this.deps, network);
     if (!watched?.maybeSent) return false;
     return unsettled(await settle(this.deps, watched));
   }

@@ -521,7 +521,8 @@ export interface PendingTx {
    * Koios didn't answer its submit, so it may or may not have gone through.
    * The wallet holds its UTxOs back, sends it again now and then (the network
    * takes it once), and watches until the chain shows it or it can't land;
-   * until then it builds nothing new on that network.
+   * until then it builds nothing new on that network. It's sealed on the
+   * device meanwhile, so a lock or a closed browser doesn't forget it.
    */
   maybeSent?: boolean;
   /** The slot it can't land after: the public account's transactions carry one (account.ts). */

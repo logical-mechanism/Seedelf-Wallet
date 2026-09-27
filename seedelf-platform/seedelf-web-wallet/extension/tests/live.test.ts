@@ -67,6 +67,7 @@ describe.skipIf(!process.env.LIVE_KOIOS)("live preprod Koios", () => {
       collateral: () => new Collateral(NETWORKS.preprod.collateral),
       now: Date.now,
       coins: coinsOf(t),
+      store: new PrivateStore({ wallet: t.wallet, local: t.local }),
     });
     // Both held by key addresses on 2026-09-24. Whoever holds them now is who they pay.
     for (const [handle, assetName] of [

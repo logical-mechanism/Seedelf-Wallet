@@ -44,6 +44,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     now: () => t.clock.now,
     coins: t.coins,
+    store: t.store,
   });
 }
 

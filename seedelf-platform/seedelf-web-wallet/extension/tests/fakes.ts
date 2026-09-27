@@ -431,6 +431,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     activity,
     coins,
     preferences,
+    store,
   };
   const sessions = new SessionService({
     ...deps,

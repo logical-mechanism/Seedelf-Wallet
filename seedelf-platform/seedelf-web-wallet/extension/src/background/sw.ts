@@ -147,15 +147,15 @@ function getContext(): Promise<Worker> {
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now });
     const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins });
-    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences });
+    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences, store });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
-    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins, preferences };
+    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins, preferences, store };
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
     const withdraw = new WithdrawService(spends);
     const send = new SendService(spends);
     const staking = new StakingService({ ...spends, local });
-    const pending = new PendingService({ wallet, session, koios, now: Date.now, activity });
+    const pending = new PendingService({ wallet, session, koios, now: Date.now, activity, store });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // No box is withdrawn while a chain mixing them again may still spend it.
