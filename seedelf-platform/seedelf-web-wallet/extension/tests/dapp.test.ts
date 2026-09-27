@@ -575,6 +575,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect(more.payments.map((p) => [p.address, p.lovelace])).toEqual([[sessionSwap.address, "3000000"]]);
     await sessions.topUpSubmit("preprod", more.txHash);
     expect((await sessions.list("preprod"))[0]!.txs.map((x) => x.kind)).toEqual(["out", "out"]);
+    t.koios.confirmations = 1;
 
     // The account holds something: disconnecting refuses, and the site stays connected.
     await expect(dapp.forget(s.origin)).rejects.toThrow("Bring it back first");

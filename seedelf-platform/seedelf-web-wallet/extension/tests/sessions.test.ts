@@ -14,7 +14,16 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
 import { SESSION_PENDING } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
-import { checkAsk, checkOrder, INDEX_PROBE, Refused, SESSION_BACK, SESSION_OUT, SessionService } from "../src/background/sessions";
+import {
+  checkAsk,
+  checkOrder,
+  INDEX_PROBE,
+  Refused,
+  SESSION_BACK,
+  SESSION_CHAIN_PREFIX,
+  SESSION_OUT,
+  SessionService,
+} from "../src/background/sessions";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
@@ -867,6 +876,45 @@ describe("a swap that runs itself", () => {
     ]);
   });
 
+  it("brings back in another return what one couldn't take, and closes without what can't come back", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    await sessions.stop("preprod", 0);
+    funded(t);
+    // A stranger's junk: three UTxOs of 2^63 − 1 of one token, more together than an output holds, on a
+    // little ADA each; and one holding a reference script Koios gives no bytes for, which no transaction takes.
+    const junk = `${"ab".repeat(28)}6a756e6b`;
+    const most = (2n ** 63n - 1n).toString();
+    t.koios.addedToAccounts.push(
+      ...["e1", "e2", "e3"].map((h) => atSession(h.repeat(32), 0, "1200000", [[junk, most]])),
+      { ...atSession("e4".repeat(32), 0, "3000000"), reference_script: { hash: "cd".repeat(28), size: 900, type: "plutusV3", bytes: null } },
+    );
+
+    // The return takes the funding and two of them; the third waits for the next.
+    let view = await sessions.advance("preprod", 0, true);
+    const first = t.koios.submitted.at(-1)!;
+    expect(bodyOutpoints(first, 0)!.sort()).toEqual(
+      [`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`, `${"e1".repeat(32)}#0`, `${"e2".repeat(32)}#0`].sort(),
+    );
+    expect(view.leftBehind).toEqual([{ txHash: "e4".repeat(32), txIndex: 0, reason: "script", lovelace: "3000000" }]);
+
+    // It lands. The next return is of the third alone: 1.2 ₳ can't pay for its own deposit and fee, so it stays.
+    for (const h of [`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`, `${"e1".repeat(32)}#0`, `${"e2".repeat(32)}#0`]) {
+      t.koios.spent.add(h);
+    }
+    view = await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(2);
+    expect(view.auto?.retry).toBeUndefined();
+    // Nothing else can come back: the session's over, and says what it left.
+    view = await sessions.advance("preprod", 0, true);
+    expect(view).toMatchObject({ stage: "closed", holding: { utxos: 0 } });
+    expect(view.leftBehind).toEqual([
+      { txHash: "e4".repeat(32), txIndex: 0, reason: "script", lovelace: "3000000" },
+      { txHash: "e3".repeat(32), txIndex: 0, reason: "fee", lovelace: "1200000" },
+    ]);
+  });
+
   it("pauses when the price moved past what was approved, and orders at least that when it's back within it", async () => {
     const t = await unlocked();
     const runner = alarm();
@@ -1214,6 +1262,65 @@ describe("bring everything back", () => {
   });
 });
 
+describe("disconnecting a site's session", () => {
+  const ORIGIN = "https://a.example";
+
+  it("waits for its funding, and its return, to reach the chain, and for the account to be empty as Koios lists it", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await sessions.siteOutBuild("preprod", ORIGIN, "15000000", []);
+    await sessions.siteOutSubmit("preprod", out.txHash, ORIGIN);
+    // Sent, and not on chain yet: the account reads empty, but the funding may land any moment.
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("hasn't reached the chain yet");
+
+    // It lands: the account holds it.
+    t.koios.confirmations = 1;
+    t.koios.addedToAccounts.push(atSession("a0".repeat(32), 0, "15000000"), atSession("a1".repeat(32), 1, "5000000"));
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Bring it back first");
+
+    // Brought back: the page shows it holding nothing, since the wallet spent it, but the return isn't on chain.
+    const back = await sessions.backBuild("preprod", 0);
+    await sessions.backSubmit("preprod", back.txHash);
+    t.koios.missing.add(back.txHash);
+    expect((await sessions.list("preprod", true))[0]).toMatchObject({ stage: "returning", holding: { utxos: 0 } });
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("hasn't reached the chain yet");
+    // Twenty minutes on it still isn't, and never will be: what it spent is still at the account.
+    await busy(t, FAILED_AFTER);
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Bring it back first");
+
+    // A return that lands empties it: disconnected, for good.
+    t.koios.missing.clear();
+    t.koios.addedToAccounts.splice(0);
+    await sessions.disconnect("preprod", 0);
+    expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
+  });
+
+  it("waits for its return's chain through Lovejoin, and doesn't wait for what no return takes", async () => {
+    const t = await returning("0f".repeat(32));
+    // The chain's rest is being sent between the runner's steps.
+    const chain = `${SESSION_CHAIN_PREFIX}preprod.0`;
+    await t.wallet.withKeys(() => t.session.set(chain, { txs: [], next: 0, flying: [], index: 0, kept: SESSION_BACK, summary: {} }));
+    await expect(t.sessions.disconnect("preprod", 0)).rejects.toThrow("still being sent");
+    await t.wallet.withKeys(() => t.session.remove(chain));
+
+    // Brought back, but for a stranger's UTxO holding a reference script no transaction of the wallet's takes.
+    t.koios.addedToAccounts.push({
+      ...atSession("e4".repeat(32), 0, "3000000"),
+      reference_script: { hash: "cd".repeat(28), size: 900, type: "plutusV3", bytes: null },
+    });
+    const back = await t.sessions.backBuild("preprod", 0);
+    expect(back.inputs).toBe(2);
+    await t.sessions.backSubmit("preprod", back.txHash);
+    t.koios.confirmations = 1;
+    t.koios.spent.add(`${"a0".repeat(32)}#0`).add(`${"a1".repeat(32)}#1`);
+    const [view] = await t.sessions.list("preprod", true);
+    expect(view).toMatchObject({ stage: "open", holding: { utxos: 0 } });
+    expect(view!.leftBehind).toEqual([{ txHash: "e4".repeat(32), txIndex: 0, reason: "script", lovelace: "3000000" }]);
+    await t.sessions.disconnect("preprod", 0);
+    expect((await t.sessions.list("preprod"))[0]!.stage).toBe("closed");
+  });
+});
+
 describe("a return kept for Send", () => {
   it("isn't cleared by the runner bringing another session back", async () => {
     const t = await unlocked();
@@ -1252,26 +1359,27 @@ describe("a return kept for Send", () => {
   });
 });
 
+/** Session 0, a site's, whose funding made `change` (a UTxO of the private balance), holding 12 ₳ and its 5 ₳ collateral. */
+async function returning(change: string) {
+  const t = await unlocked();
+  const now = t.clock.now;
+  await t.store.set("sessions.preprod", {
+    next: 1,
+    sessions: [
+      {
+        index: 0,
+        ownStake: true,
+        createdAt: now,
+        txs: [{ kind: "out", txHash: change, at: now, confirmed: true }],
+        site: { origin: "https://a.example" },
+      },
+    ],
+  });
+  t.koios.addedToAccounts.push(atSession("a0".repeat(32), 0, "12000000"), atSession("a1".repeat(32), 1, "5000000"));
+  return t;
+}
+
 describe("a session's return", () => {
-  /** Session 0, a site's, whose funding made `change` (a UTxO of the private balance), holding 12 ₳ and its 5 ₳ collateral. */
-  async function returning(change: string) {
-    const t = await unlocked();
-    const now = t.clock.now;
-    await t.store.set("sessions.preprod", {
-      next: 1,
-      sessions: [
-        {
-          index: 0,
-          ownStake: true,
-          createdAt: now,
-          txs: [{ kind: "out", txHash: change, at: now, confirmed: true }],
-          site: { origin: "https://a.example" },
-        },
-      ],
-    });
-    t.koios.addedToAccounts.push(atSession("a0".repeat(32), 0, "12000000"), atSession("a1".repeat(32), 1, "5000000"));
-    return t;
-  }
   const hex = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
 
   it("merges into the Seedelf UTxO its funding made, under the session's own collateral, signed by its key alone", async () => {

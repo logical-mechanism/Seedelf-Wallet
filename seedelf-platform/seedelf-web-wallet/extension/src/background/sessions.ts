@@ -46,6 +46,7 @@
 import type { NetworkName } from "../networks";
 import type {
   DappTxSummary,
+  LeftBehindUtxo,
   LovejoinFunding,
   Paid,
   PendingTx,
@@ -203,6 +204,8 @@ interface SessionRecord {
    * cleared when one goes through Lovejoin.
    */
   lovejoinSkipped?: string;
+  /** What's at its account that no return takes (SessionView's). It doesn't hold the session open. */
+  leftBehind?: LeftBehindUtxo[];
   closedAt?: number;
 }
 
@@ -287,6 +290,9 @@ export class Refused extends Error {
     super(`The wallet won't sign what Minswap built: ${detail}`);
   }
 }
+
+/** Nothing at a session's account can come back (its `leftBehind` says what's there), so no return is built. */
+export class NothingComesBack extends Error {}
 
 /** The fresh quote expects less than the least approved, so the order couldn't fill. */
 class PriceMoved extends Error {
@@ -377,6 +383,28 @@ function holdingOf(utxos: KoiosUtxo[]): NonNullable<SessionView["holding"]> {
     utxos: utxos.length,
   };
 }
+
+/** `rows` less what no return takes (the record's `leftBehind`): what can come back, and holds the session open. */
+function returnable(s: SessionRecord, rows: KoiosUtxo[]): KoiosUtxo[] {
+  const behind = new Set((s.leftBehind ?? []).map((b) => `${b.txHash}#${b.txIndex}`));
+  return behind.size ? rows.filter((u) => !behind.has(outpoint(u))) : rows;
+}
+
+/**
+ * Whether the wallet can price spending `u`: it holds no reference script,
+ * or one Koios gives the bytes of, as long as it says it is (core's
+ * `utxos::reference_script_size`). WebAssembly leaves the others out of
+ * anything it builds, for good.
+ */
+function measurable(u: KoiosUtxo): boolean {
+  const script = u.reference_script as { bytes?: unknown; size?: unknown } | null | undefined;
+  if (!script) return true;
+  const { bytes, size } = script;
+  return typeof bytes === "string" && /^([0-9a-fA-F]{2})+$/.test(bytes) && (size == null || size === bytes.length / 2);
+}
+
+/** WebAssembly couldn't build a return because what it takes doesn't pay for its own deposit and fee. */
+const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace|Not Enough Lovelace/i;
 
 /** A swap that runs itself and has something left to do without the user. */
 function running(s: SessionRecord): boolean {
@@ -764,17 +792,44 @@ export class SessionService {
     });
   }
 
-  /** Ends a site's private session, once its account is empty. Its index isn't used again. */
+  /**
+   * Ends a site's private session, once nothing more is on its way to its
+   * account or from it, and the account is empty. Nothing reads a closed
+   * session again, so it waits for its return's chain, and for every
+   * transaction of its that may still land (tx_status): a funding, a top-up,
+   * a return. One the chain hasn't shown in FAILED_AFTER_MS never reached it
+   * (a funding that never landed can be disconnected). The account is read
+   * as Koios lists it, what this wallet spent included: a return that never
+   * lands leaves its inputs there. What no return takes doesn't count. This
+   * is the check that matters: Settings disconnects a site with no other.
+   * Its index isn't used again.
+   */
   disconnect(network: NetworkName, index: number): Promise<void> {
     return this.serial(async () => {
-      const s = await this.live(network, index);
+      const { wallet, session, now } = this.deps;
+      let s = await this.live(network, index);
       if (!s.site) throw new Error("This session isn't a site's.");
+      if (await this.pendingChain(network, index)) {
+        throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish, then disconnect.");
+      }
+      const koios = this.deps.koios(network);
+      const waiting = s.txs.filter((t) => !t.confirmed && !t.unsent);
+      if (waiting.length) {
+        const statuses = await koios.txStatus(waiting.map((t) => t.txHash));
+        const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
+        if (on.size) s = await this.update(network, index, (r) => void settle(r, on));
+        if (s.txs.some((t) => !t.confirmed && !t.unsent && now() - t.at <= FAILED_AFTER_MS)) {
+          throw new Error("Its last transaction hasn't reached the chain yet. Wait for it, then disconnect.");
+        }
+      }
       const { keyHash } = (await this.accounts(network, [s])).get(index)!;
-      if ((await this.utxosOf(network, keyHash)).length) {
+      const spent = await wallet.withKeys(() => spentSet(session));
+      const rows = await readFresh(spent, () => koios.credentialUtxos([keyHash]), (r) => r, this.deps.sleep);
+      if (returnable(s, rows).length) {
         throw new Error("The session's account still holds something. Bring it back first, then disconnect.");
       }
       await this.update(network, index, (r) => {
-        r.closedAt = this.deps.now();
+        r.closedAt = now();
       });
     });
   }
@@ -1223,15 +1278,17 @@ export class SessionService {
     // A copy that went unseen isn't a step taken: its step is taken again.
     const taken = s.txs.filter((t) => !t.replaced);
     const kinds = new Set(taken.map((t) => t.kind));
+    // What no return takes stays, and holds nothing open.
+    const active = returnable(s, rows);
     // Brought back, and nothing has arrived since: it's over.
-    if (taken.at(-1)!.kind === "back" && !rows.length) {
+    if (taken.at(-1)!.kind === "back" && !active.length) {
       await this.update(network, s.index, (r) => {
         r.closedAt = now();
       });
       return;
     }
     // Koios doesn't list what's there yet.
-    if (!rows.length) return;
+    if (!active.length) return;
     // A mix: once funded, its boxes go through Lovejoin and the rest comes back, one chain.
     // Stopped, it comes back directly: the way out of a mix whose chain can't go.
     if (s.mix) return this.bringBack(network, s.index, rows, !!s.auto?.stopping);
@@ -1260,7 +1317,7 @@ export class SessionService {
     if (!kinds.has("cancel")) {
       const own = new Set(s.txs.map((t) => t.txHash));
       // Nothing's here yet: one of them is behind.
-      if (!rows.some((r) => !own.has(r.tx_hash))) return;
+      if (!active.some((r) => !own.has(r.tx_hash))) return;
       // Anyone can pay the account, and Minswap may not list a new order yet: what
       // arrived is the fill only once the order itself is spent.
       if (!(await this.ordersSpent(network, s))) return;
@@ -1319,10 +1376,21 @@ export class SessionService {
     await this.signAndSend(network, built);
   }
 
-  /** Brings everything at the session's account back into the private balance (`direct`: not through Lovejoin). */
+  /**
+   * Brings everything at the session's account back into the private
+   * balance (`direct`: not through Lovejoin). What can't come back stays,
+   * recorded as left behind, and the session closes without it.
+   */
   private async bringBack(network: NetworkName, index: number, rows: KoiosUtxo[], direct = false): Promise<void> {
+    let built: KeptBack;
+    try {
+      built = await this.buildBack(network, index, rows, undefined, direct);
+    } catch (e) {
+      if (e instanceof NothingComesBack) return;
+      throw e;
+    }
     // The runner's step sends the chain's first block's worth; its next steps the rest.
-    await this.sendBack(network, await this.buildBack(network, index, rows, undefined, direct), SESSION_BACK, CHAIN_PUMP_MS);
+    await this.sendBack(network, built, SESSION_BACK, CHAIN_PUMP_MS);
   }
 
   // -------------------------------------------------------------------------
@@ -1425,13 +1493,22 @@ export class SessionService {
   private async buildBack(
     network: NetworkName,
     index: number,
-    rows: KoiosUtxo[],
+    held: KoiosUtxo[],
     known?: unknown,
     direct = false,
   ): Promise<KeptBack> {
     const { wasm, wallet, now } = this.deps;
     if (await this.pendingChain(network, index)) {
       throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish.");
+    }
+    // A reference script the wallet can't measure: no transaction of its takes that UTxO, ever.
+    const unpriced = held.filter((u) => !measurable(u));
+    if (unpriced.length) await this.leaveBehind(network, index, unpriced, "script");
+    const rows = held.filter(measurable);
+    if (!rows.length) {
+      throw new NothingComesBack(
+        "What's at the session's account holds a reference script the wallet can't price, so no return can take it. It stays there.",
+      );
     }
     const params = known ?? (await this.deps.koios(network).epochParams());
     const merge = await this.fundingChange(network, index);
@@ -1478,7 +1555,8 @@ export class SessionService {
           lovelace: chain.returned,
           tokens: chain.tokens,
           depositOutputs: 1,
-          inputs: rows.length,
+          // The chain takes every UTxO at the account, its deposit or its return, but what it leaves out.
+          inputs: rows.length - chain.leftOut.length,
           merged: chain.merged,
           leftOut: chain.leftOut,
           lovejoin: {
@@ -1505,13 +1583,33 @@ export class SessionService {
     }
     // No chain this time: a chain built for it before won't be sent, so nothing stays reserved for it.
     await lovejoin?.release(network, chainOwner(index));
-    const result = await wallet.withKeys(
-      (keys) =>
-        JSON.parse(
-          wasm.buildSessionReturn(keys.oneTime, keys.seedelf, JSON.stringify({ network, params, index, utxos: rows, merge, own })),
-        ) as Omit<SessionBackSummary, "network" | "index"> & { txCbor: string },
-    );
+    let result: Omit<SessionBackSummary, "network" | "index"> & { txCbor: string };
+    try {
+      result = await wallet.withKeys(
+        (keys) =>
+          JSON.parse(
+            wasm.buildSessionReturn(keys.oneTime, keys.seedelf, JSON.stringify({ network, params, index, utxos: rows, merge, own })),
+          ) as typeof result,
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (/locked/i.test(message) || !TOO_LITTLE.test(message)) throw e;
+      // What's left (a stranger's token on a little ADA, say) doesn't pay its own way back: it stays, rather than be tried for ever.
+      await this.leaveBehind(network, index, rows, "fee");
+      throw new NothingComesBack("What's left at the session's account is too little to pay for its own way back, so it stays there.");
+    }
     return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
+  }
+
+  /** Records `rows` at session `index`'s account as left behind, for `reason`: no return takes them. */
+  private async leaveBehind(network: NetworkName, index: number, rows: KoiosUtxo[], reason: LeftBehindUtxo["reason"]): Promise<void> {
+    const found = new Set(rows.map(outpoint));
+    await this.update(network, index, (r) => {
+      r.leftBehind = [
+        ...(r.leftBehind ?? []).filter((b) => !found.has(`${b.txHash}#${b.txIndex}`)),
+        ...rows.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason, lovelace: u.value })),
+      ];
+    });
   }
 
   /**
@@ -1808,7 +1906,7 @@ export class SessionService {
         const last = s.txs.filter((t) => !t.replaced).at(-1)!;
         // Brought back, and nothing has arrived since: the session is over. A
         // site's goes on until it's disconnected: the site may pay it later.
-        if (!s.site && last.kind === "back" && last.confirmed && !held.length) {
+        if (!s.site && last.kind === "back" && last.confirmed && !returnable(s, held).length) {
           s.closedAt = now();
           changed = true;
         }
@@ -1856,12 +1954,13 @@ export class SessionService {
       stage,
       txs: txs.map(({ unsent: _unsent, sending: _sending, replaced: _replaced, ...t }) => t),
       ...(s.swap ? { swap: s.swap } : {}),
-      holding: utxos ? holdingOf(utxos) : null,
+      holding: utxos ? holdingOf(returnable(s, utxos)) : null,
       ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
       ...(s.site ? { site: s.site } : {}),
       ...(s.mix ? { mix: s.mix } : {}),
       ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
       ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}),
+      ...leftBehindView(s, utxos),
     };
   }
 
@@ -1998,6 +2097,13 @@ function leftOut(e: unknown): string {
   const message = e instanceof Error ? e.message : String(e);
   if (e instanceof KoiosError || /locked/i.test(message)) throw e;
   return `the wallet couldn't build its chain: ${message.charAt(0).toLowerCase()}${message.slice(1).replace(/\.$/, "")}`;
+}
+
+/** What's left behind at a session's account, as far as the last reading (`utxos`) still has it. */
+function leftBehindView(s: SessionRecord, utxos?: KoiosUtxo[]): Pick<SessionView, "leftBehind"> {
+  const there = utxos && new Set(utxos.map(outpoint));
+  const left = (s.leftBehind ?? []).filter((b) => !there || there.has(`${b.txHash}#${b.txIndex}`));
+  return left.length ? { leftBehind: left } : {};
 }
 
 /**

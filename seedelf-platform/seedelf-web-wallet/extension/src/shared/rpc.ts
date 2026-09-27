@@ -726,6 +726,26 @@ export interface SessionView {
    * here (a mix, in `mix.skipped`).
    */
   lovejoinSkipped?: string;
+  /**
+   * What's at its account that no return takes, as the last reading found
+   * it: it stays there, and doesn't hold the session open. `holding` leaves
+   * it out.
+   */
+  leftBehind?: LeftBehindUtxo[];
+}
+
+/**
+ * A UTxO at a session's account that no return of the wallet's takes:
+ * `script`, it holds a reference script the wallet can't measure, so it
+ * can't price spending it; `fee`, what's left there is too little, all
+ * together, to pay for its own way back into the private balance. Its
+ * `lovelace`, as it was found.
+ */
+export interface LeftBehindUtxo {
+  txHash: string;
+  txIndex: number;
+  reason: "script" | "fee";
+  lovelace: string;
 }
 
 /** A funding payment into a new session, built and waiting for Send. */
