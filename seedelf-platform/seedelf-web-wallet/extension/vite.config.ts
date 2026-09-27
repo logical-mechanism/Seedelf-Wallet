@@ -82,7 +82,9 @@ function contentScripts(mode: string): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
-  const mainnetEnabled = env.VITE_ENABLE_MAINNET === "true";
+  // Every build has both networks (mainnet first, preprod in Settings and on
+  // the welcome screen); VITE_ENABLE_MAINNET=false makes a preprod-only one.
+  const mainnetEnabled = env.VITE_ENABLE_MAINNET !== "false";
   const storeBuild = env.VITE_STORE_BUILD === "true";
 
   return {

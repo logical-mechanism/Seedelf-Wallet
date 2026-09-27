@@ -38,7 +38,7 @@ if (manifest.version !== pkg.version) {
 const hosts = manifest.host_permissions ?? [];
 if (network === "mainnet" && !hosts.includes(MAINNET_KOIOS)) {
   throw new Error(
-    `dist/ is a preprod-only build: its manifest doesn't ask for ${MAINNET_KOIOS}. Build the store's with \`npm run package\` (VITE_ENABLE_MAINNET=true).`,
+    `dist/ is a preprod-only build: its manifest doesn't ask for ${MAINNET_KOIOS}. Build the store's with \`npm run package\`.`,
   );
 }
 if (network === "preprod" && hosts.includes(MAINNET_KOIOS)) {

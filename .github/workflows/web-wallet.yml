@@ -69,10 +69,11 @@ jobs:
         run: npm test
 
       # Some of what's bundled depends on the build (mainnet's token list and
-      # DReps): the tests again, as the store's mainnet build sees it.
-      - name: Extension unit tests (mainnet build)
+      # DReps): every build has both networks, so the tests again as a
+      # preprod-only build (VITE_ENABLE_MAINNET=false) sees it.
+      - name: Extension unit tests (preprod-only build)
         working-directory: seedelf-platform/seedelf-web-wallet/extension
-        run: VITE_ENABLE_MAINNET=true npm test
+        run: VITE_ENABLE_MAINNET=false npm test
 
       - name: Extension build
         working-directory: seedelf-platform/seedelf-web-wallet/extension

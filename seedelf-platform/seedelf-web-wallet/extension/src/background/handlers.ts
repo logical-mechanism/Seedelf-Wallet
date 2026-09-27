@@ -69,6 +69,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return null;
     case "create-wallet":
     case "restore-wallet":
+      // The network it's made on (the welcome screen's choice) is kept first,
+      // so the new wallet is never taken for one from before the switch.
+      await ctx.networkChoice.keep(ctx.network);
       await wallet.create(message.phrase, message.password);
       return status(ctx);
     case "unlock":

@@ -35,6 +35,7 @@ import {
   type Preferences,
 } from "../shared/preferences";
 import type { Area } from "./storage";
+import { VAULT_KEY } from "./vault";
 
 export { LOCAL_NETWORK, LOCAL_PREFERENCES };
 
@@ -44,6 +45,11 @@ export { LOCAL_NETWORK, LOCAL_PREFERENCES };
  * build). The worker reads it at every request, so a switch needs no restart,
  * and every service takes the network it's asked about: what's kept per
  * network stays apart (docs/architecture.md, Networks).
+ *
+ * A wallet with no choice kept predates the switch, when every build was
+ * preprod only, so it stays on preprod: an update never moves a test wallet
+ * to mainnet. A new wallet keeps the network it's made on (`keep`, before the
+ * vault is written), so it's never taken for one of those.
  */
 export class NetworkChoice {
   constructor(
@@ -54,7 +60,15 @@ export class NetworkChoice {
 
   async get(): Promise<NetworkName> {
     const kept = await this.local.get<unknown>(LOCAL_NETWORK);
-    return isNetworkName(kept) && this.networks.includes(kept) ? kept : this.networks[0]!;
+    if (isNetworkName(kept) && this.networks.includes(kept)) return kept;
+    if (this.networks.includes("preprod") && (await this.local.get<unknown>(VAULT_KEY)) !== undefined) return "preprod";
+    return this.networks[0]!;
+  }
+
+  /** Keeps `network` as the choice if none is kept: a new wallet stays on the network it's made on. */
+  async keep(network: NetworkName): Promise<void> {
+    const kept = await this.local.get<unknown>(LOCAL_NETWORK);
+    if (!(isNetworkName(kept) && this.networks.includes(kept))) await this.set(network);
   }
 
   /** Puts the wallet on `network`; refused for a network this build doesn't have. */

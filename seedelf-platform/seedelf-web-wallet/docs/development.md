@@ -30,7 +30,7 @@ This is how we run and test the extension before it's in the Chrome Web Store. T
 
 Chrome runs an extension straight from a folder once developer mode is on. There is no store and no packaging.
 
-1. Build it: `cd seedelf-web-wallet/extension && npm install && npm run build`. This builds the Rust core to WebAssembly and then the extension into `dist/`. The default build is preprod only. `VITE_ENABLE_MAINNET=true npm run build` builds what the store ships: mainnet by default, and preprod in Settings (see [architecture.md](architecture.md#networks)).
+1. Build it: `cd seedelf-web-wallet/extension && npm install && npm run build`. This builds the Rust core to WebAssembly and then the extension into `dist/`. Every build has both networks: mainnet by default, with preprod on the welcome screen and in Settings (see [architecture.md](architecture.md#networks)). A wallet from before the switch stays on preprod. `VITE_ENABLE_MAINNET=false npm run build` makes a preprod-only build.
 2. Open `chrome://extensions` and turn on **Developer mode** (top right).
 3. Click **Load unpacked** and choose the `dist/` folder.
 4. Pin the extension, then click its icon: the wallet opens in a tab, or in the side panel once Settings says so.
@@ -133,7 +133,7 @@ npm run tokens
 npm run dreps
 npm run build
 npm test
-VITE_ENABLE_MAINNET=true npm test
+VITE_ENABLE_MAINNET=false npm test
 npm run e2e
 LIVE_KOIOS=1 npx vitest run tests/live.test.ts
 node e2e/live/run.mjs all

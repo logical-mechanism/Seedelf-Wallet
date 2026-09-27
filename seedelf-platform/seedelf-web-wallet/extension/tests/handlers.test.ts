@@ -140,6 +140,31 @@ describe("handlers", () => {
     expect(t.coingecko.state.urls).toEqual([]);
   });
 
+  it("keeps a wallet from before the switch on preprod, and a new one on the network it's made on", async () => {
+    // Every build was preprod only until the switch: a vault with no choice kept is a preprod wallet.
+    const old = testBalances();
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    await ask({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, context(old, ["preprod"]));
+    await old.local.remove("seedelf.network");
+    const updated = context(old, ["mainnet", "preprod"]);
+    expect(((await ask({ type: "status" }, updated)) as Status).network).toBe("preprod");
+    expect(((await ask({ type: "account" }, updated)) as Account).receiveAddress).toBe(v.preprod.receive_0);
+
+    // A fresh install starts on mainnet, and its wallet keeps mainnet once its vault exists.
+    const fresh = testBalances();
+    const ctx = context(fresh, ["mainnet", "preprod"]);
+    await ask({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    expect(await fresh.local.get("seedelf.network")).toBe("mainnet");
+    expect(((await ask({ type: "status" }, ctx)) as Status).network).toBe("mainnet");
+
+    // One restored after choosing preprod on the welcome screen stays there.
+    const chose = testBalances();
+    const picked = context(chose, ["mainnet", "preprod"]);
+    await ask({ type: "network-set", network: "preprod" }, picked);
+    await ask({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, picked);
+    expect(((await ask({ type: "account" }, picked)) as Account).receiveAddress).toBe(v.preprod.receive_0);
+  });
+
   it("switches networks in a mainnet build: mainnet first, every request on the one chosen, nothing kept sent on the other", async () => {
     const t = testBalances();
     const ctx = context(t, ["mainnet", "preprod"]);

@@ -49,15 +49,15 @@ After a rebuild, press the reload arrow on the extension's card.
 
 - **Stable ID:** the dev key in `src/manifest.ts` pins the ID to `jfekiogplaamnceifeehipmomhojngcb`, so the extension's storage survives moving the folder.
 - **Web Store builds** set `VITE_STORE_BUILD=true` to leave that key out. `npm run package` makes one and zips it (see [the release checklist](../docs/development.md#releasing-to-the-web-store)).
-- **Mainnet:** a build is preprod only unless `VITE_ENABLE_MAINNET=true`. With it (the store's build, `npm run package`), it has mainnet and preprod, mainnet by default, and Settings switches between them.
+- **Networks:** every build has mainnet and preprod, mainnet by default. The welcome screen asks which before a wallet is created or restored, and Settings switches between them. A wallet from before the switch stays on preprod. `VITE_ENABLE_MAINNET=false` makes a preprod-only build, for tests.
 
 ## Scripts
 
 | Script | What it does |
 |---|---|
 | `npm run build` | WASM plus the extension (`build:wasm`, then `build:ext`) |
-| `npm run build:store` | The store's build: `VITE_ENABLE_MAINNET=true` and `VITE_STORE_BUILD=true`, so mainnet with preprod in Settings, and no dev key (Chrome or the store picks the ID) |
-| `npm run build:store:preprod` | The same, preprod only, for tests |
+| `npm run build:store` | The store's build: both networks and `VITE_STORE_BUILD=true`, so no dev key (Chrome or the store picks the ID) |
+| `npm run build:store:preprod` | The same, preprod only (`VITE_ENABLE_MAINNET=false`), for tests |
 | `npm run tokens` | Rebuilds the wallet's token list (`src/tokens/registry.<network>.json`) from `src/tokens/list.json` and the Cardano token registry, through Koios. Run at each release. |
 | `npm run dreps` | Rebuilds the wallet's list of named DReps (`src/dreps/<network>.json`) from Koios, for the vote page's search. Run at each release. |
 | `npm run package` | The store's build (mainnet, with preprod in Settings), plus `licenses/THIRD-PARTY.txt`, zipped reproducibly into `release/seedelf-wallet-<version>-mainnet.zip` for the Web Store (`scripts/package.mjs`, `scripts/third-party.mjs`). It refuses a build without mainnet's hosts. |

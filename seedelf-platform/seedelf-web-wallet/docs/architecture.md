@@ -152,10 +152,11 @@ flowchart LR
 
 ## Networks
 
-**One build, both networks: mainnet by default, preprod for testing (the owner's call, 2026-09-26).** The build flag `VITE_ENABLE_MAINNET=true` decides which networks a build has (`enabledNetworks` in `networks.ts`):
+**One build, both networks: mainnet by default, preprod for testing (the owner's call, 2026-09-26).** Every build has both (`enabledNetworks` in `networks.ts`), the dev build included:
 
-- **The store's build sets it** (`npm run package`). It has mainnet and preprod, in that order: the hosts of both are in the manifest, mainnet is the default, and Settings has a switch.
-- **A dev build without it is preprod only,** with no switch: only the preprod hosts are in the manifest. `npm run build:store:preprod` is the same as a store package, for tests.
+- **Mainnet and preprod, in that order:** the hosts of both are in the manifest, mainnet is the default, the welcome screen asks which before a wallet exists, and Settings has a switch.
+- **`VITE_ENABLE_MAINNET=false` makes a preprod-only build,** with no switch and only the preprod hosts, for tests: `npm run build:store:preprod` is a store package of one.
+- **A wallet from before the switch stays on preprod.** Every build was preprod only until then, so a vault with no choice kept is a preprod wallet (`NetworkChoice`), and an update never moves a test wallet to mainnet. A new wallet keeps the network it's created or restored on before its vault is written.
 
 **The switch (launch review M3):**
 

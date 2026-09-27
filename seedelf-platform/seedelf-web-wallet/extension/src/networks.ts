@@ -1,6 +1,7 @@
-// Everything network-specific lives here. A dev build is preprod only; a
-// mainnet build (VITE_ENABLE_MAINNET=true, the store's) has both, mainnet
-// first, and Settings switches between them. See docs/architecture.md#networks.
+// Everything network-specific lives here. Every build has both networks,
+// mainnet first: the welcome screen asks which before a wallet exists, and
+// Settings switches between them. VITE_ENABLE_MAINNET=false makes a
+// preprod-only build, for tests. See docs/architecture.md#networks.
 
 export type NetworkName = "preprod" | "mainnet";
 
