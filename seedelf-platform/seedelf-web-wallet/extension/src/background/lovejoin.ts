@@ -227,9 +227,9 @@ export interface ChainProgress {
  * `i` (its retries included; `maybeSent`: it may be in the mempool already),
  * `onChain` says which hashes are on chain, and `save` keeps the progress
  * after each change. A read of what's on chain that Koios doesn't answer sees
- * nothing yet; the oldest in the mempool is sent again after CHAIN_RESEND_MS,
- * and a resend refused as spent while Koios still can't say is looked for
- * again, not a failure (`send` returns: mayBeIn).
+ * nothing yet; the oldest in the mempool is sent again after CHAIN_RESEND_MS.
+ * A resend refused as spent while Koios still can't say is no failure: `send`
+ * returns (mayBeIn), and it's looked for again.
  */
 export async function pumpChain(
   chain: ChainProgress,
