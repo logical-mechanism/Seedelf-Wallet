@@ -54,6 +54,14 @@ export const SESSION_ACTIVITY = "seedelf.lastActivity";
  * so it never goes to disk and it's wiped on lock.
  */
 export const SESSION_BALANCES_PREFIX = "seedelf.balances.";
+/**
+ * chrome.storage.session: set while only the kept reading's private side is
+ * behind, e.g. `seedelf.balancesPrivateStale.preprod`: a private spend
+ * landed. The next reading reads the contract alone and keeps the account's
+ * side (balances.ts), so Koios never sees the account read in the same
+ * second as a private transaction lands (privacy review §2.9).
+ */
+export const SESSION_PRIVATE_STALE_PREFIX = "seedelf.balancesPrivateStale.";
 /** chrome.storage.local: consecutive failed unlocks, kept across restarts. */
 export const UNLOCK_FAILURES = "seedelf.unlockFailures";
 

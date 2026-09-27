@@ -20,6 +20,11 @@
 // paid for it, when the device knows (minted-by.ts), for Remove's default.
 //
 // The reading is cached per network in chrome.storage.session and wiped on lock.
+// Once a private spend that pays nothing to the public account lands, only
+// its private side is behind (pending.ts): the next reading reads the
+// contract alone and keeps the account's side, so the account isn't read
+// in the same second as the private transaction lands, which would tie the
+// two by timing (privacy review §2.9). Refresh reads both.
 // Session storage holds 10 MB for the whole extension, and anyone can pay
 // this wallet, on either side, UTxOs holding a thousand tokens each: a
 // reading too large to keep is used anyway, and read again next time.
@@ -52,7 +57,7 @@ import type { PrivateStore } from "./private-store";
 import { spentSet } from "./spent";
 import { readStake } from "./staking";
 import type { Area } from "./storage";
-import { SESSION_BALANCES_PREFIX, type Keys, type Wallet } from "./wallet";
+import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Keys, type Wallet } from "./wallet";
 
 export interface ContractConfig {
   /** The wallet contract's script hash: its payment credential. */
@@ -98,6 +103,7 @@ interface Reading {
 
 export class BalanceService {
   private readonly inFlight = new Map<NetworkName, Promise<Reading>>();
+  private readonly inFlightPrivate = new Map<NetworkName, Promise<Reading>>();
 
   constructor(private readonly deps: BalanceDeps) {}
 
@@ -117,17 +123,71 @@ export class BalanceService {
 
   private async reading(network: NetworkName, refresh: boolean): Promise<Reading> {
     if (!refresh) {
-      const cached = await this.deps.wallet.withKeys(() =>
-        this.deps.session.get<Balances>(SESSION_BALANCES_PREFIX + network),
+      const { session } = this.deps;
+      const [cached, privateStale] = await this.deps.wallet.withKeys(
+        async () =>
+          [
+            await session.get<Balances>(SESSION_BALANCES_PREFIX + network),
+            (await session.get(SESSION_PRIVATE_STALE_PREFIX + network)) !== undefined,
+          ] as const,
       );
-      if (cached) return { balances: cached };
+      if (cached && !privateStale) return { balances: cached };
+      if (cached) return this.shared(this.inFlightPrivate, network, () => this.readPrivate(network, cached));
     }
-    // Pages asking at the same time share one reading.
-    let reading = this.inFlight.get(network);
+    return this.shared(this.inFlight, network, () => this.read(network));
+  }
+
+  /** Pages asking at the same time share one reading. */
+  private shared(inFlight: Map<NetworkName, Promise<Reading>>, network: NetworkName, read: () => Promise<Reading>): Promise<Reading> {
+    let reading = inFlight.get(network);
     if (!reading) {
-      reading = this.read(network).finally(() => this.inFlight.delete(network));
-      this.inFlight.set(network, reading);
+      reading = read().finally(() => inFlight.delete(network));
+      inFlight.set(network, reading);
     }
+    return reading;
+  }
+
+  /** What the device holds that says who paid for each Seedelf: read on the device alone, never asked of Koios. */
+  private async mintRecord(network: NetworkName): Promise<MintedBy> {
+    return this.deps.store ? await mintedBy(this.deps.store, network).catch(() => ({})) : {};
+  }
+
+  /** The rest of `Held`, from session storage. Call it while unlocked. */
+  private async held(network: NetworkName, recorded: MintedBy, account: KoiosUtxo[]): Promise<Held> {
+    const activity = await this.deps.session.get<{ entries: Array<{ txHash: string }> }>(SESSION_ACCOUNT_ACTIVITY_PREFIX + network);
+    return { recorded, account, accountTxs: new Set(activity?.entries.map((e) => e.txHash)) };
+  }
+
+  /**
+   * The private side read again, the account's side as `cached` has it:
+   * after a private spend landed (pending.ts). The contract is read from the
+   * last block seen, as any reading does; the account isn't asked about.
+   */
+  private async readPrivate(network: NetworkName, cached: Balances): Promise<Reading> {
+    const { wallet, session, contract = CONTRACT_V1 } = this.deps;
+    const view = await readContractView(this.deps, network);
+    const recorded = await this.mintRecord(network);
+    const reading = await wallet.withKeys(async (): Promise<Reading> => {
+      const utxos = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
+      const held = await this.held(
+        network,
+        recorded,
+        utxos.map((p) => p.utxo),
+      );
+      const balances: Balances = { ...cached, seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held) };
+      try {
+        await session.set(SESSION_BALANCES_PREFIX + network, balances);
+        await session.remove(SESSION_PRIVATE_STALE_PREFIX + network);
+        return { balances };
+      } catch {
+        // Too large to keep, as `keep` handles it: the next request reads it all again.
+        await session.remove(SESSION_BALANCES_PREFIX + network, SESSION_ACCOUNT_UTXOS_PREFIX + network).catch(() => undefined);
+        await session.set(SESSION_TOO_LARGE_PREFIX + network, balances.updatedAt).catch(() => undefined);
+        return { balances, unkept: { owned: view.owned, account: utxos, updatedAt: balances.updatedAt } };
+      }
+    });
+    // The history never holds up, or breaks, a balance reading.
+    await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
     return reading;
   }
 
@@ -152,17 +212,15 @@ export class BalanceService {
       readContractView(this.deps, network),
       readStake(this.deps, network, stake),
     ]);
-    // Read on the device alone, never asked of Koios.
-    const recorded: MintedBy = this.deps.store ? await mintedBy(this.deps.store, network).catch(() => ({})) : {};
+    const recorded = await this.mintRecord(network);
 
     // The result is cached only while still unlocked.
     const reading = await wallet.withKeys(async (): Promise<Reading> => {
-      const activity = await session.get<{ entries: Array<{ txHash: string }> }>(SESSION_ACCOUNT_ACTIVITY_PREFIX + network);
-      const held: Held = {
+      const held = await this.held(
+        network,
         recorded,
-        account: utxos.map((p) => p.utxo),
-        accountTxs: new Set(activity?.entries.map((e) => e.txHash)),
-      };
+        utxos.map((p) => p.utxo),
+      );
       const balances: Balances = {
         network,
         updatedAt: now(),
@@ -228,7 +286,8 @@ async function keep(
 ): Promise<boolean> {
   const tooLarge = SESSION_TOO_LARGE_PREFIX + network;
   try {
-    await session.remove(tooLarge);
+    // A whole reading: neither side is behind.
+    await session.remove(tooLarge, SESSION_PRIVATE_STALE_PREFIX + network);
     await session.set(SESSION_ACCOUNT_ADDRESSES_PREFIX + network, addresses);
     await session.set(SESSION_BALANCES_PREFIX + network, balances);
     await session.set(SESSION_ACCOUNT_UTXOS_PREFIX + network, utxos);

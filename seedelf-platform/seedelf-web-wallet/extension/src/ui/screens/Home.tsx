@@ -134,7 +134,10 @@ export function Home() {
   }, []);
 
   // Ask about the sent transaction; once it's confirmed, or let go (nothing
-  // was sent, and its UTxOs count again), read the balances again.
+  // was sent, and its UTxOs count again), read the balances again: what the
+  // worker marked as behind. After a private spend that's only the private
+  // side, so Koios doesn't see the public account read in the same second
+  // (privacy review §2.9).
   const watch = useCallback(async () => {
     try {
       const p = await call("pending-tx", {});
@@ -144,7 +147,7 @@ export function Home() {
         return;
       }
       setPending(p);
-      if (p.confirmations !== null || p.dropped) void load(true);
+      if (p.confirmations !== null || p.dropped) void load(false);
     } catch {
       // Koios hiccup: try again on the next tick.
     }
