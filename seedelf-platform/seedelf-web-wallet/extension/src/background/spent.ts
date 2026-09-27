@@ -9,26 +9,46 @@
 // chrome.storage.session (wiped on lock). An answer that lists one of them
 // came from a backend that's behind: it's read again, a few times, and what's
 // spent is left out either way, so nothing is ever built on it.
+//
+// Each is kept for SPENT_KEEP_MS from when it was spent, well past the 20
+// minutes a backend was seen behind: by time, not by count, so a long
+// Lovejoin chain (four inputs a mix, up to 130 mixes) can't push out what
+// another feature spent a minute before it.
 
 import { txInputs } from "./cbor";
 import type { KoiosUtxo } from "./koios";
 import type { Area } from "./storage";
 
-/** chrome.storage.session: `txhash#index` of every UTxO this wallet has spent this session. */
+/** chrome.storage.session: `txhash#index` of every UTxO this wallet has spent lately, and when (ms). */
 export const SESSION_SPENT = "seedelf.spent";
 
-/** A transaction spends a handful of UTxOs; this keeps the last few hundred. */
-const KEEP = 500;
+/** How long a spent UTxO is remembered. */
+export const SPENT_KEEP_MS = 2 * 60 * 60_000;
+/** Never more than this many, however many were spent within SPENT_KEEP_MS (about 1 MB). */
+const SPENT_MOST = 10_000;
 
-/** Remembers the inputs of a transaction about to be submitted. Call it while unlocked. */
-export async function rememberSpent(session: Area, tx: Uint8Array): Promise<void> {
-  const spent = (await session.get<string[]>(SESSION_SPENT)) ?? [];
-  await session.set(SESSION_SPENT, [...spent, ...txInputs(tx)].slice(-KEEP));
+/** The kept record; a list of outpoints from before times were kept counts as spent now. */
+async function kept(session: Area, now: number): Promise<Record<string, number>> {
+  const raw = await session.get<Record<string, number> | string[]>(SESSION_SPENT);
+  if (Array.isArray(raw)) return Object.fromEntries(raw.map((o) => [o, now]));
+  return raw ?? {};
 }
 
-/** The remembered outpoints. Call it while unlocked. */
-export async function spentSet(session: Area): Promise<Set<string>> {
-  return new Set((await session.get<string[]>(SESSION_SPENT)) ?? []);
+/** Remembers the inputs of a transaction about to be submitted. Call it while unlocked. */
+export async function rememberSpent(session: Area, tx: Uint8Array, now = Date.now()): Promise<void> {
+  const spent = await kept(session, now);
+  for (const o of txInputs(tx)) spent[o] = now;
+  const fresh = Object.entries(spent)
+    .filter(([, at]) => now - at < SPENT_KEEP_MS)
+    .sort(([, a], [, b]) => a - b)
+    .slice(-SPENT_MOST);
+  await session.set(SESSION_SPENT, Object.fromEntries(fresh));
+}
+
+/** The outpoints spent within SPENT_KEEP_MS. Call it while unlocked. */
+export async function spentSet(session: Area, now = Date.now()): Promise<Set<string>> {
+  const spent = await kept(session, now);
+  return new Set(Object.keys(spent).filter((o) => now - spent[o]! < SPENT_KEEP_MS));
 }
 
 export const outpoint = (u: KoiosUtxo) => `${u.tx_hash}#${u.tx_index}`;
