@@ -13,8 +13,8 @@
 2. **The chain is built locally and optimistically.** Each transaction is built on the outputs of the one before it, without waiting for the chain. **Script budgets come from an evaluator running in WebAssembly.** Build for a healthy pool of boxes.
 3. **Fan-out 3 wide.** Depth is a setting from 1 to 3, **default 2**.
    - Every output of each wave is mixed again in the next wave, as Lovejoin's own `strategy/fanout.ts` does. So which leaf is yours stays hidden whoever pays.
-   - Depth 2 is 4 mixes per box, about 3.5 ₳, and 9 leaves (a 1 in 9 chance of linking).
-4. **Each box is withdrawn on its own, after its own random delay.** The range is a setting, default **1–6 hours**.
+   - Depth 2 is 4 mixes per box, about 3.5 ₳, and 9 leaves (a 1 in 9 chance of linking, at best). That assumes the leaves' ways out look alike. The wallet's go into the Seedelf contract under a register, and Lovejoin's own app writes no datum, so a box hides only among the leaves whose owners also bring them back into a Seedelf, and fewer while few do (privacy review §2.6, §5.3). The review's issue for Lovejoin's app: write a fresh register when it withdraws to a Seedelf.
+4. **Each box is withdrawn on its own, after its own random delay.** The range is a setting, default **1–6 hours**. **Kept (the owner, 2026-09-27):** the privacy review (§3.5) proposed 2–12 hours by default; the owner kept 1–6.
    - The withdraw runs at the first unlock after the delay, since the proof needs the key.
    - **Changed (the user, 2026-09-27, the privacy review §3.1):** never the moment the wallet unlocks. A box that came due while it was locked waits a fresh draw inside the stretch the unlock keeps it open (2 minutes on, at most 2 before the auto-lock, never past 20), once; nor in a run that sent anything else, nor within 5 minutes of the wallet's own send (pushed 3 to 10 minutes, 3 times at most). A swap's step found at unlock waits the same way.
    - giveme.my's collateral, fee paid from the box, into a **fresh Seedelf register** for each box.
@@ -160,7 +160,7 @@
   - The withdraw schedule and its sealed due times.
   - It runs from the `seedelf.sessions` alarm and at unlock, like the swap runner.
 - **`sessions.ts`:** `buildBack`, `claimBuild` and the runner's `bringBack` go through `lovejoin.ts` when the session has at least one box's spare ADA. The record gains `lovejoin?: { boxes, depth, txs }`, and the return waits for its chain.
-- **Settings:** `lovejoin.depth` (1–3, default 2) and `lovejoin.delay` (a range in hours, default 1–6).
+- **Settings:** `lovejoin.depth` (1–3, default 2) and `lovejoin.delay` (a range in hours, default 1–6, kept by the owner in the privacy review, §3.5). Since the privacy review (§4.1), `lovejoinReturns` too (on by default): off, a session comes back directly.
 
 **UI**
 - **The dApps page gets a Lovejoin tile.** Its page shows:

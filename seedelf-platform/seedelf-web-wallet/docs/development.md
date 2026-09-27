@@ -37,6 +37,8 @@ Chrome runs an extension straight from a folder once developer mode is on. There
 
 After a rebuild, click the reload arrow on the extension's card. `npm run dev` rebuilds `dist/` on every change, but you still reload the extension by hand.
 
+- **After packaging, build again.** `npm run package` and `npm run package:preprod` write a store build into the same `dist/`: it has no dev key, so Chrome gives it another ID, with empty storage, and `package:preprod`'s has preprod alone, so the welcome screen has no network to choose and every wallet is a preprod one. Run `npm run build` before loading or reloading `dist/` for everyday use.
+
 - **If you forget:** Chrome keeps running the old service worker, which asks for the old WebAssembly file. Each build gives that file a new hashed name and deletes the previous one.
 - The wallet then shows **"The wallet couldn't start"** with **Reload the extension**, which does the same as the reload arrow.
 - The name is hashed on purpose. A stable name would let an old worker load a new module that its glue code doesn't match.

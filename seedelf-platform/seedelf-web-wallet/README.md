@@ -2,7 +2,7 @@
 
 A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardano stealth wallet.
 
-> **Status:** launch prep. The store's build runs on Cardano mainnet, with preprod in Settings for testing; a dev build is preprod only. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
+> **Status:** launch prep. Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
 
@@ -83,7 +83,7 @@ Every Lace path in these docs is relative to that checkout.
 
 ## Decisions
 
-- **Networks:** preprod first. Mainnet is a build flag. See [architecture.md](docs/architecture.md#networks).
+- **Networks:** mainnet and preprod in every build, mainnet by default; `VITE_ENABLE_MAINNET=false` makes a preprod-only build for tests. See [architecture.md](docs/architecture.md#networks).
 - **Seedelf key derivation:** domain-tagged HKDF over the BIP39 seed. It is permanent once shipped. See [keys-and-accounts.md](docs/keys-and-accounts.md#seedelf-key-derivation).
 - **UI:** the same app in a full tab (the default) or Chrome's side panel, the user's choice in Settings, as in Lace. No popup. See [architecture.md](docs/architecture.md#ui).
 - **Look:** the Seedelf logo set lives in [brand/](brand/). The UI's colours come from it.

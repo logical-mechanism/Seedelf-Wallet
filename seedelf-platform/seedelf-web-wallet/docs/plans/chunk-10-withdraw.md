@@ -63,7 +63,7 @@ What's new: change that goes to an **address** instead of back into the contract
   - Max takes the 20 largest spendable UTxOs.
 - **`draftRemove` / `finishRemove`:** the request is `network`, `params`, the Seedelf's `utxo`, and `to` (a bech32 address, or `null` for the Seedelf balance).
   - WASM checks that the UTxO is this wallet's and holds exactly one Seedelf token.
-- **`CardanoAccount.isOwnAddress(address)`:** whether an address carries the account's stake key, as every address a normal wallet shows does. It drives the own-account warning.
+- **`CardanoAccount.isOwnAddress(address)`:** whether an address carries the account's stake key, as every address a normal wallet shows does. It drives the own-account warning. Since the privacy review (§2.17) it also matches the account's payment keys (the first 20 of each chain, and those the last balance reading found), so an enterprise address under them is caught too.
 - `signScriptSpend` is reused unchanged.
 
 ### 3. Service worker

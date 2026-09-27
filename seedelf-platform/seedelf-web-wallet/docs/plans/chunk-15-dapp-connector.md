@@ -213,7 +213,7 @@ A swap in a private session, end to end, as *A swap (A1), step by step* below sa
 
 **What links:**
 - The whole path is public: Seedelf → the account → the order → the account → Seedelf.
-- Who it is isn't: the public account never appears.
+- Who it is isn't linked on chain: the public account isn't in its transactions. Money the user made private leads back to it through the funding, though (privacy review §2.12).
 - The amounts and the timing tie the two ends together, as the path does anyway.
 
 ### Recovery

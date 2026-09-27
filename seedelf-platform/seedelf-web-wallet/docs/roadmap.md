@@ -498,7 +498,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - A real owned contract UTxO (from a live move-in) would let chunk 8 test on-chain.
 
 - **2026-09-23: chunk 6 done** (`web-wallet/balances`).
-  - **Decided with the user:** the receive-address QR code is in (`uqr`, MIT, a port of Nayuki's generator). Balances are read when Home opens, if the last reading is over a minute old, and on Refresh; there's no background polling.
+  - **Decided with the user:** the receive-address QR code is in (`uqr`, MIT, a port of Nayuki's generator). Balances are read when Home opens, if the last reading is over a minute old, and on Refresh; there's no background polling. (Since then, while unlocked, a one-minute alarm reads what's running: swaps, Lovejoin chains and boxes due, a payment that may still go through. See [architecture.md](architecture.md#chain-data) and the privacy review's §6.)
   - **What landed:** `extension/src/background/koios.ts`, `chain.ts` and `balances.ts`, plus the new Home. See [architecture.md](architecture.md#chain-data).
     - One reading is three Koios requests: `credential_utxos` for the contract, and `account_addresses` plus `account_utxos` for the Cardano account's stake key.
     - Ownership runs in WebAssembly inside `wallet.withKeys`, which also writes the session cache, so a lock can't interleave. A reading that finishes after a lock is dropped.
