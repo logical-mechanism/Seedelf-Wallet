@@ -110,12 +110,24 @@ fn row_with_datum(datum: &[u8]) -> UtxoResponse {
 fn the_evaluator_is_never_handed_a_datum_too_deep_to_read() {
     let row = row_with_datum(&lists(MAX_DEPTH));
     assert!(eval::resolve_row(&row).is_ok());
+    assert_eq!(eval::refusal(&row), None);
     for datum in [lists(MAX_DEPTH + 1), lists(100_000), hex!("82 00").to_vec()] {
         let err = eval::resolve_row(&row_with_datum(&datum))
             .unwrap_err()
             .to_string();
         assert!(err.contains("holds a datum the wallet can't read"), "{err}");
+        // Which is what a Seedelf spend's selection and a session's return ask first.
+        assert_eq!(eval::refusal(&row_with_datum(&datum)), Some(err));
     }
+    // A reference script isn't carried over, so it's refused the same way.
+    let mut scripted = row;
+    scripted.reference_script = Some(Default::default());
+    let refused = eval::refusal(&scripted).unwrap();
+    assert!(refused.contains("holds a reference script"), "{refused}");
+    assert_eq!(
+        eval::resolve_row(&scripted).unwrap_err().to_string(),
+        refused
+    );
 }
 
 #[test]

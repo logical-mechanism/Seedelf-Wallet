@@ -112,6 +112,23 @@ describe("withdraw", () => {
     expect(summary.payments[0]!.tokens).toHaveLength(1);
   });
 
+  it("leaves a UTxO carrying a reference script out of the balance and of Max", async () => {
+    const t = await unlocked();
+    // Anyone can pay the Seedelf a UTxO with a reference script; the wallet's evaluator can't spend it yet.
+    const scripted = {
+      ...ownedUtxos[0]!,
+      tx_hash: "71".repeat(32),
+      value: "30000000",
+      reference_script: { hash: "84967d91".padEnd(56, "0"), size: 3, type: "timelock", bytes: "820080" },
+    };
+    t.koios.added.push(scripted);
+    const b = await t.balances.get("preprod");
+    expect(b.seedelf).toMatchObject({ lovelace: "28000000", utxos: 2 });
+    const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(summary).toMatchObject({ max: true, inputs: 2, left: 0 });
+    expect(BigInt(summary.payments[0]!.lovelace)).toBe(28_000_000n - BigInt(summary.fee.total));
+  });
+
   it("pays several addresses in one withdrawal; Max is for one", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.amount.evaluation;

@@ -46,21 +46,41 @@ impl Resolved {
     }
 }
 
-/// A Koios UTxO row as the evaluator needs it. A reference script on the row
-/// isn't carried over (the wallet's own UTxOs don't hold one), so such a row
-/// is refused rather than evaluated wrongly. So is a row whose datum is nested
-/// past [`cbor::MAX_DEPTH`]: the evaluator's decoder would overflow the stack
-/// on it.
+/// Why the evaluator can't take `row`, in words, or `None` when it can. A
+/// reference script on the row isn't carried over, so such a row is refused
+/// rather than evaluated wrongly; anyone can send one, to a Seedelf too. So is
+/// a row whose datum is nested past [`cbor::MAX_DEPTH`]: the evaluator's
+/// decoder would overflow the stack on it. Nothing measured in the wallet
+/// (a Seedelf spend, a session's merged return, Lovejoin) can spend such a
+/// UTxO.
+pub fn refusal(row: &UtxoResponse) -> Option<String> {
+    if row.reference_script.is_some() {
+        return Some(format!(
+            "UTxO {}#{} holds a reference script, which the wallet can't evaluate with yet",
+            row.tx_hash, row.tx_index
+        ));
+    }
+    let too_deep = row
+        .inline_datum
+        .as_ref()
+        .and_then(|d| hex::decode(&d.bytes).ok())
+        .is_some_and(|datum| !cbor::within_depth(&datum, cbor::MAX_DEPTH));
+    too_deep.then(|| {
+        format!(
+            "UTxO {}#{} holds a datum the wallet can't read",
+            row.tx_hash, row.tx_index
+        )
+    })
+}
+
+/// A Koios UTxO row as the evaluator needs it, unless it's one the evaluator
+/// can't take ([`refusal`]).
 pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
     let tx_hash: [u8; 32] = hex::decode(&row.tx_hash)?
         .try_into()
         .map_err(|_| anyhow!("UTxO {}#{} has a malformed hash", row.tx_hash, row.tx_index))?;
-    if row.reference_script.is_some() {
-        bail!(
-            "UTxO {}#{} holds a reference script, which the wallet can't evaluate with yet",
-            row.tx_hash,
-            row.tx_index
-        );
+    if let Some(why) = refusal(row) {
+        bail!(why);
     }
     let address = Address::from_bech32(&row.address)
         .map_err(|e| {
@@ -99,16 +119,6 @@ pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
         .as_ref()
         .map(|d| hex::decode(&d.bytes))
         .transpose()?;
-    if inline
-        .as_ref()
-        .is_some_and(|datum| !cbor::within_depth(datum, cbor::MAX_DEPTH))
-    {
-        bail!(
-            "UTxO {}#{} holds a datum the wallet can't read",
-            row.tx_hash,
-            row.tx_index
-        );
-    }
     let datum_hash = row.datum_hash.as_ref().map(hex::decode).transpose()?;
 
     let mut e = minicbor::Encoder::new(Vec::new());

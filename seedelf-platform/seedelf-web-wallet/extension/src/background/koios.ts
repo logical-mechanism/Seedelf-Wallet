@@ -26,6 +26,12 @@ export interface KoiosUtxo {
   /** A datum by hash (older outputs); only the dApp connector reads it. */
   datum_hash?: string | null;
   asset_list: KoiosAsset[] | null;
+  /**
+   * The reference script it carries, if any (Koios's `{ hash, size, type,
+   * bytes }`). Anyone can send one; the WebAssembly prices it, and a Seedelf
+   * spend can't take it yet.
+   */
+  reference_script?: unknown;
 }
 
 /** One of an account's transactions: `account_txs`. */

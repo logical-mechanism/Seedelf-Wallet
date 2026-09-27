@@ -1204,7 +1204,8 @@ export class SessionService {
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
     if (!direct && !started && lovejoin?.available(network)) {
-      const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length);
+      // Never a stranger's 5 ₳ carrying a reference script: the mixes can't put it up.
+      const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script);
       let chain: LovejoinChain | undefined;
       try {
         chain = await lovejoin.chain(network, index, rows, collateral, params, merge, record?.mix?.boxes, record?.mix?.again, own);

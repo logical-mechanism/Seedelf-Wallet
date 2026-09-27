@@ -1821,9 +1821,10 @@ fn policy_hash(config: &Config) -> Result<Hash<28>> {
 /// Picks as few of `available` as it can. First the UTxOs holding the tokens
 /// in `needed` (see [`holding`]), then pure-ADA UTxOs, largest first, then
 /// other token UTxOs, adding one at a time until `attempt` succeeds. Only
-/// "not enough" failures move on to more inputs. A UTxO whose tokens would
-/// push a total past what one output holds is never picked with the rest
-/// ([`fitting`]).
+/// "not enough" failures move on to more inputs. Never picked: a UTxO the
+/// wallet's evaluator can't take ([`crate::eval::refusal`]: one holding a
+/// reference script, which anyone can pay a Seedelf), and one whose tokens
+/// would push a total past what one output holds ([`fitting`]).
 fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
@@ -1838,7 +1839,12 @@ fn select_script_inputs<T>(
             ) > 0
         })
     };
-    let (available, _) = fitting(available, &Assets::new(), holds_needed)?;
+    let evaluable: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| crate::eval::refusal(u).is_none())
+        .cloned()
+        .collect();
+    let (available, _) = fitting(&evaluable, &Assets::new(), holds_needed)?;
     let available = available.as_slice();
     let mandatory = holding(available, needed)?;
     let mut rest: Vec<UtxoResponse> = available

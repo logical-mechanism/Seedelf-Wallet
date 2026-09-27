@@ -89,10 +89,14 @@ export function nothingToSpend(deps: Pick<ScriptSpendDeps, "contract">, view: Co
   );
 }
 
-/** What the Seedelf balance counts: owned UTxOs that don't hold a seedelf. */
+/**
+ * What the Seedelf balance counts: owned UTxOs that don't hold a seedelf, or a
+ * reference script. Anyone can pay a Seedelf one carrying a script, and the
+ * wallet's script evaluator can't spend it yet (`eval::refusal`).
+ */
 export function spendable(deps: Pick<ScriptSpendDeps, "contract">, view: ContractView): KoiosUtxo[] {
   const { contract = CONTRACT_V1 } = deps;
-  return view.owned.filter((u) => !seedelfTokenOf(u, contract.seedelfPolicyId));
+  return view.owned.filter((u) => !seedelfTokenOf(u, contract.seedelfPolicyId) && !u.reference_script);
 }
 
 /**

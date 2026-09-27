@@ -352,6 +352,68 @@ fn a_chains_return_leaves_out_what_would_overflow_a_token() {
     }
 }
 
+/// The recorded Koios row's reference script: the Seedelf policy, 519 bytes.
+fn recorded_script() -> Option<seedelf_koios::koios::ReferenceScript> {
+    let rows: Vec<UtxoResponse> = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/reference_script_utxo.json"
+    ))
+    .unwrap();
+    rows[0].reference_script.clone()
+}
+
+#[test]
+fn a_utxo_with_a_reference_script_pays_no_mix_and_comes_back_swept() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(4323u64);
+    // A stranger's ADA-only UTxO at the session, carrying a reference script:
+    // the wallet's evaluator can't take it.
+    let mut utxos = holdings();
+    utxos.push(UtxoResponse {
+        reference_script: recorded_script(),
+        ..row(8, 0, &session(), 40_000_000, &[])
+    });
+    let result = lovejoin::chain(
+        &accounts(),
+        sk,
+        ChainRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 0,
+            utxos,
+            collateral: collateral(),
+            pool: pool(&protocol),
+            depth: 1,
+            boxes: Some(1),
+            merge: vec![funding_change(sk)],
+            again: false,
+            own: vec![],
+        },
+    )
+    .unwrap();
+    let deposit = MultiEraTx::decode(&hex::decode(&result.txs[0].tx_cbor).unwrap())
+        .unwrap()
+        .inputs()
+        .iter()
+        .map(|i| **i.hash())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        deposit,
+        vec![[1; 32]],
+        "the deposit is paid from the session's own"
+    );
+    // The return takes it, swept into new registers: no script runs, and the
+    // fee pays for its 519 bytes.
+    assert_eq!(result.merged, 0);
+    let back = result.txs.last().unwrap();
+    let bytes = hex::decode(&back.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert!(spends(&tx, [8; 32], 0) && spends(&tx, [2; 32], 1) && spends(&tx, [3; 32], 0));
+    assert!(tx.redeemers().is_empty());
+    let fee: u64 = back.fee.parse().unwrap();
+    assert!(fee >= 44 * bytes.len() as u64 + 155_381 + 519 * 15);
+    assert!(result.left_out.is_empty());
+}
+
 #[test]
 fn the_boxes_come_back_one_by_one_through_giveme_my() {
     let protocol = Protocol::of(true).unwrap();
@@ -562,6 +624,14 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
                     public_utxo(0x51, Role::Receive, 1, 15_000_000),
                     public_utxo(0x52, Role::Change, 0, 12_000_000),
                     public_utxo(0x53, Role::Receive, 2, 3_000_000),
+                    // The largest, but carrying a reference script: never a coin.
+                    api::PathedUtxo {
+                        utxo: UtxoResponse {
+                            reference_script: recorded_script(),
+                            ..public_utxo(0x54, Role::Receive, 3, 50_000_000).utxo
+                        },
+                        ..public_utxo(0x54, Role::Receive, 3, 50_000_000)
+                    },
                 ],
                 collateral,
                 pool: pool(&protocol),

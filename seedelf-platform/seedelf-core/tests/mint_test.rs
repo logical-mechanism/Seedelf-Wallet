@@ -2154,6 +2154,45 @@ mod withdraw {
     }
 
     #[test]
+    fn never_picks_a_utxo_the_wallets_evaluator_cant_take() {
+        let w = world();
+        let to = key_address(Network::Testnet);
+        // The largest carries a reference script, which anyone can pay a Seedelf.
+        let scripted = UtxoResponse {
+            reference_script: recorded_script(),
+            ..owned(&w, 0x01, 0, 30_000_000, &[])
+        };
+        let available = [
+            scripted,
+            owned(&w, 0x02, 0, 4_000_000, &[]),
+            owned(&w, 0x03, 0, 3_000_000, &[]),
+        ];
+        let spend = build::sweep(
+            &w.chain,
+            &available,
+            &to,
+            5_000_000,
+            &Assets::new(),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let spent = spend.inputs();
+        assert_eq!(outpoints(&spent), outpoints(&available[1..]));
+        let built = finish(&w, spend, &spends_only(2));
+        assert_spend(&w, &spent, &built, 629);
+    }
+
+    fn outpoints(utxos: &[UtxoResponse]) -> Vec<(String, u64)> {
+        let mut o: Vec<(String, u64)> = utxos
+            .iter()
+            .map(|u| (u.tx_hash.clone(), u.tx_index))
+            .collect();
+        o.sort();
+        o
+    }
+
+    #[test]
     fn a_spent_input_with_a_reference_script_is_paid_for() {
         let w = world();
         let to = key_address(Network::Testnet);

@@ -153,7 +153,8 @@ export class BalanceService {
     for (const utxo of owned) {
       const name = seedelfTokenOf(utxo, policyId);
       if (name) seedelfs.push({ assetName: name, label: seedelfLabel(name), lovelace: utxo.value });
-      else spendable.push(utxo);
+      // One carrying a reference script can't be spent yet: see script-spend.ts's spendable.
+      else if (!utxo.reference_script) spendable.push(utxo);
     }
     seedelfs.sort((a, b) => (a.label ?? "￿").localeCompare(b.label ?? "￿") || a.assetName.localeCompare(b.assetName));
     const { lovelace, tokens } = sumValue(spendable);

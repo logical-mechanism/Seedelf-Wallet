@@ -513,6 +513,52 @@ fn a_return_pays_for_a_strangers_reference_script_or_leaves_one_it_cant_measure(
 }
 
 #[test]
+fn a_return_holding_a_reference_script_is_swept_not_merged() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    let change = funding_change(9, 2, sk, 40_000_000);
+    // A stranger's UTxO with a reference script, and one of 5 ₳ that looks
+    // like a collateral: the evaluator can take neither.
+    let scripted = |tx: u8, lovelace: u64| UtxoResponse {
+        reference_script: recorded_script(),
+        ..utxo(tx, 0, &at, lovelace, &[])
+    };
+    let utxos = vec![
+        scripted(7, 5_000_000),
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(3, 0, &at, 5_000_000, &[]),
+        scripted(8, 1_300_000),
+    ];
+    let result = api::session_return(
+        &accounts,
+        sk,
+        SessionReturnRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 3,
+            utxos,
+            merge: vec![change],
+            own: vec![],
+        },
+    )
+    .unwrap();
+    // Every UTxO comes back, into new registers, and the fee pays for both scripts.
+    assert_eq!((result.merged, result.inputs), (0, 4));
+    assert!(result.left_out.is_empty());
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert!(tx.redeemers().is_empty() && tx.collateral().is_empty());
+    let fee: u64 = result.fee.parse().unwrap();
+    let minimum = 44 * bytes.len() as u64 + 155_381 + 2 * 519 * 15;
+    assert!(
+        fee >= minimum && fee < minimum + 1_000,
+        "{fee} for {minimum}"
+    );
+    assert_eq!(result.lovelace, (31_300_000 - fee).to_string());
+}
+
+#[test]
 fn a_return_takes_only_the_sessions_own_utxos() {
     let accounts = accounts();
     let request = |index: u32, utxos: Vec<UtxoResponse>| SessionReturnRequest {
@@ -603,7 +649,7 @@ fn a_strangers_deep_utxo_at_the_session_is_brought_back_with_the_rest() {
 }
 
 #[test]
-fn a_return_merges_past_a_deep_datum_and_refuses_one_too_deep_to_read() {
+fn a_return_merges_past_a_deep_datum_and_sweeps_one_too_deep_to_read() {
     let accounts = accounts();
     let at = session(3);
     let sk = random_scalar();
@@ -634,11 +680,11 @@ fn a_return_merges_past_a_deep_datum_and_refuses_one_too_deep_to_read() {
     // Measured in the wallet with the stranger's datum in the script context.
     let merged = api::session_return(&accounts, sk, request(100)).unwrap();
     assert_eq!((merged.merged, merged.inputs), (1, 3));
-    // One the evaluator would overflow the stack on is refused, in words.
-    let err = api::session_return(&accounts, sk, request(100_000))
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("holds a datum the wallet can't read"), "{err}");
+    // One the evaluator would overflow the stack on can't be measured: the
+    // return is the plain sweep, which runs no script, and takes it all.
+    let plain = api::session_return(&accounts, sk, request(100_000)).unwrap();
+    assert_eq!((plain.merged, plain.inputs), (0, 3));
+    assert!(plain.left_out.is_empty());
 }
 
 /// A swap as Minswap's aggregator builds one for a session: its UTxO pays a

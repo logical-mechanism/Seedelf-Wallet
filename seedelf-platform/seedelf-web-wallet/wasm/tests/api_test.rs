@@ -2079,6 +2079,36 @@ mod withdraw {
     }
 
     #[test]
+    fn a_utxo_with_a_reference_script_is_refused_by_name_before_anything_is_proven() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let base = owned().into_iter().next().unwrap();
+        let rows: Vec<UtxoResponse> = serde_json::from_str(include_str!(
+            "../../../seedelf-core/tests/fixtures/reference_script_utxo.json"
+        ))
+        .unwrap();
+        // Paid into the Seedelf by anyone: the wallet's evaluator can't take it.
+        let scripted = UtxoResponse {
+            tx_hash: hex::encode([0x71u8; 32]),
+            reference_script: rows[0].reference_script.clone(),
+            ..base
+        };
+        for max in [true, false] {
+            let mut r = request(if max { "max" } else { "amount" });
+            r.utxos.push(scripted.clone());
+            let err = api::build_withdraw(sk, r).err().unwrap().to_string();
+            assert!(
+                err.contains(&format!("UTxO {}#", scripted.tx_hash))
+                    && err.contains("holds a reference script")
+                    && err.contains("so a Seedelf spend can't take it"),
+                "{err}"
+            );
+        }
+        // The worker leaves it out (script-spend.ts's spendable), and Max
+        // takes the rest.
+        assert!(api::build_withdraw(sk, request("max")).is_ok());
+    }
+
+    #[test]
     fn removes_its_own_seedelf_to_an_address_or_back_to_seedelf() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let rec = recorded();

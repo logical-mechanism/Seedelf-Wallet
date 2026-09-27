@@ -528,11 +528,13 @@ pub mod api {
 
     /// The session's own collateral among its UTxOs: its 5 ₳ ADA-only one,
     /// or else the largest ADA-only one that covers a script's collateral
-    /// and leaves its return a valid output.
+    /// and leaves its return a valid output. Never one the wallet's evaluator
+    /// can't take (`seedelf_core::eval::refusal`).
     pub(crate) fn session_collateral(utxos: &[UtxoResponse]) -> Option<&UtxoResponse> {
         let ada_only = utxos
             .iter()
-            .filter(|u| u.asset_list.as_ref().is_none_or(|a| a.is_empty()));
+            .filter(|u| u.asset_list.as_ref().is_none_or(|a| a.is_empty()))
+            .filter(|u| seedelf_core::eval::refusal(u).is_none());
         let lovelace = |u: &UtxoResponse| u.value.parse::<u64>().unwrap_or(0);
         ada_only
             .clone()
@@ -544,36 +546,48 @@ pub mod api {
             })
     }
 
+    /// What a session's return takes of its account's UTxOs ([`plan_return`]).
+    pub(crate) struct ReturnPlan {
+        pub taken: Vec<UtxoResponse>,
+        /// The rest, which stays at the account.
+        pub left_out: Vec<LeftOut>,
+        /// Whether the return merges into `merge` (see [`merged_return`]).
+        pub merged: bool,
+    }
+
     /// What a session's return takes of its account's `rows`, and whether it
     /// can merge into `merge`: the funding's change, when it holds tokens,
     /// counts towards every token's total ([`seedelf_core::utxos::fitting`]).
     /// The rest waits for a later return. `own` are the session's own
     /// transactions: what they left comes first. A UTxO holding a reference
     /// script that can't be measured is never taken: its fee can't be priced.
-    pub(crate) struct ReturnPlan {
-        pub taken: Vec<UtxoResponse>,
-        pub left_out: Vec<LeftOut>,
-        /// Whether the return merges into `merge` (see [`merged_return`]).
-        pub merged: bool,
-    }
-
+    ///
+    /// A merged return is measured in the wallet, and its evaluator can't take
+    /// a reference script, or a datum too deep to read
+    /// (`seedelf_core::eval::refusal`), which anyone can send the session's
+    /// address. With one, the return is the plain sweep instead, which runs no
+    /// script and pays for the reference script's bytes.
     pub(crate) fn plan_return(
         rows: &[UtxoResponse],
         merge: &[UtxoResponse],
         own: &[String],
     ) -> Result<ReturnPlan> {
-        let base = if merge.is_empty() || session_collateral(rows).is_none() {
+        let priced: Vec<UtxoResponse> = rows
+            .iter()
+            .filter(|u| seedelf_core::utxos::reference_script_size(u).is_ok())
+            .cloned()
+            .collect();
+        let evaluable = priced
+            .iter()
+            .chain(merge)
+            .all(|u| seedelf_core::eval::refusal(u).is_none());
+        let base = if merge.is_empty() || !evaluable || session_collateral(&priced).is_none() {
             None
         } else {
             // The funding's change is this wallet's own; if even it can't be
             // added up, the return makes new UTxOs instead.
             utxo_assets(merge.to_vec()).ok().map(|(_, tokens)| tokens)
         };
-        let priced: Vec<UtxoResponse> = rows
-            .iter()
-            .filter(|u| seedelf_core::utxos::reference_script_size(u).is_ok())
-            .cloned()
-            .collect();
         let (taken, _) =
             seedelf_core::utxos::fitting(&priced, base.as_ref().unwrap_or(&Assets::new()), |u| {
                 own.contains(&u.tx_hash)
@@ -641,10 +655,12 @@ pub mod api {
     /// `sk`'s base register. With `merge`, one Seedelf spend takes the
     /// funding's change too, so what comes back joins the UTxO already
     /// linked to the session instead of making another ([`merged_return`]),
-    /// with the session's own collateral. Without, it's the CLI's `external
-    /// sweep` (`build::external_sweep`): no script runs, and no collateral.
-    /// Each UTxO must be under the session's payment key; it signs inside
-    /// this module.
+    /// with the session's own collateral. Without, or when a UTxO there is
+    /// one the merge can't measure, it's the CLI's `external sweep`
+    /// (`build::external_sweep`): no script runs, and no collateral. What
+    /// one transaction can't take stays, and the result says so
+    /// ([`plan_return`]). Each UTxO must be under the session's payment key;
+    /// it signs inside this module.
     pub fn session_return(
         accounts: &CardanoAccount,
         sk: Scalar,
@@ -1198,7 +1214,10 @@ pub mod api {
     }
 
     /// Checks the UTxOs a Seedelf spend may pay with: every one is this
-    /// wallet's, and none holds a seedelf (it would go with the change).
+    /// wallet's, none holds a seedelf (it would go with the change), and the
+    /// wallet's evaluator can take each (`seedelf_core::eval::refusal`): not
+    /// one holding a reference script. The worker leaves those out of what a
+    /// spend may pay with, so the balance, Max and coin control agree.
     fn check_spendable(sk: Scalar, chain: &Chain, utxos: &[UtxoResponse]) -> Result<()> {
         let policy = &chain.config.contract.seedelf_policy_id;
         for utxo in utxos {
@@ -1218,6 +1237,10 @@ pub mod api {
                     utxo.tx_hash,
                     utxo.tx_index
                 );
+            }
+            // Anyone can pay a Seedelf a UTxO carrying a reference script.
+            if let Some(why) = seedelf_core::eval::refusal(utxo) {
+                bail!("{why}, so a Seedelf spend can't take it");
             }
         }
         Ok(())

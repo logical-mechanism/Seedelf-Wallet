@@ -81,6 +81,8 @@ struct Holdings {
     /// Its ADA-only UTxOs, the collateral aside, and their rows.
     coins: Vec<(Coin, UtxoResponse)>,
     collateral: UtxoResponse,
+    /// What comes back with the return: its token UTxOs, and any the
+    /// evaluator can't take.
     kept: Vec<UtxoResponse>,
 }
 
@@ -102,9 +104,13 @@ fn holdings(
                 row.tx_index
             );
         }
+        // An ADA-only UTxO the evaluator can't take (a stranger's, carrying
+        // a reference script) can't pay a mix: it comes back with the return.
         if collateral.is(row) {
             found = Some(row.clone());
-        } else if row.asset_list.as_ref().is_none_or(|a| a.is_empty()) {
+        } else if row.asset_list.as_ref().is_none_or(|a| a.is_empty())
+            && seedelf_core::eval::refusal(row).is_none()
+        {
             coins.push((Coin::from_row(row)?, row.clone()));
         } else {
             kept.push(row.clone());
@@ -487,10 +493,12 @@ pub fn chain_from_account(
     // As few ADA-only UTxOs as pay for the boxes, the largest first.
     let needed = lovejoin::funding_for(request.boxes, request.depth, protocol.denom);
     let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
+    // Never one the evaluator can't take: one carrying a reference script.
     let mut ada: Vec<&api::PathedUtxo> = request
         .utxos
         .iter()
         .filter(|p| p.utxo.asset_list.as_ref().is_none_or(|a| a.is_empty()))
+        .filter(|p| seedelf_core::eval::refusal(&p.utxo).is_none())
         .filter(|p| (p.utxo.tx_hash.clone(), p.utxo.tx_index) != collateral_ref)
         .collect();
     ada.sort_by_key(|p| std::cmp::Reverse(lovelace(p)));

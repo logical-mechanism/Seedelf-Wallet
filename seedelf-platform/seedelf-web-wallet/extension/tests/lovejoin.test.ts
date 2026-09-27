@@ -285,6 +285,19 @@ describe("a session's return through Lovejoin", CHAINS, () => {
     expect(again.lovejoin).toMatchObject({ boxes: 2, depth: 1 });
   });
 
+  it("never puts up a stranger's 5 ₳ carrying a reference script as the chain's collateral", async () => {
+    const { t, sessions } = await withSession("40000000");
+    // Listed first, it looks like the session's collateral; the wallet's evaluator can't take it.
+    t.koios.addedToAccounts.unshift({
+      ...atSession("c3".repeat(32), 0, "5000000"),
+      reference_script: { hash: "ab".repeat(28), size: 3, type: "timelock", bytes: "820080" },
+    });
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin).toMatchObject({ boxes: 2, depth: 2 });
+    // It comes back with the return, which pays for its script's bytes.
+    expect(review.leftOut).toEqual([]);
+  });
+
   it("comes back directly when asked, or when the spare ADA doesn't pay for a box", async () => {
     const { t, sessions } = await withSession("40000000");
     const direct = await sessions.backBuild("preprod", 0, true);
