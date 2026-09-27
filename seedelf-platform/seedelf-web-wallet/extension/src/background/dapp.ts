@@ -26,6 +26,11 @@
 //             they're on chain. `signData` is CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts).
+// Limits      What a site asks for without the user costs the wallet little:
+//             calls at the same time share one reading of the account; a
+//             site gets a few fresh readings, UTxO lookups and submits a
+//             minute (`PER_MINUTE`) and 32 calls running at once; and a
+//             transaction or data over 64 KiB is refused unread.
 // Private     A site can connect to a private session instead (chunk 15c,
 //             private CIP-30): a one-time account funded from the private
 //             balance (sessions.ts), chosen in the window. The funding is
@@ -85,6 +90,15 @@ const MAX_COLLATERAL = 5_000_000n;
  * raise, as the WebAssembly's own check.
  */
 const MAX_SITE_BYTES = 65_536;
+/** At most this many of one site's calls run at once, all its pages together; more are refused. */
+const MAX_SITE_CALLS = 32;
+/**
+ * What one site may make the worker ask Koios for, per minute, with nobody
+ * asked: a fresh reading of the account (a transaction spends a UTxO the kept
+ * one hasn't got), a lookup of UTxOs the account doesn't hold, a submit. A
+ * site asking for more would use up the wallet's own share of Koios.
+ */
+const PER_MINUTE = { fresh: 4, lookup: 6, submit: 10 } as const;
 
 /** A CIP-30 error, as the site sees it. */
 export class DappError extends Error {
@@ -181,11 +195,31 @@ export class DappService {
   private readonly unlocking: Unlocking[] = [];
   /** Sites whose reads are refused until then, after the user closed the window instead of unlocking. */
   private readonly refusedUntil = new Map<string, number>();
+  /** How many of each site's calls are running. */
+  private readonly running = new Map<string, number>();
+  /** When each site made the worker ask Koios, by what for (`PER_MINUTE`): the last minute's. */
+  private readonly asked = new Map<string, number[]>();
+  /** Readings of an account under way, by its storage key: calls at the same time share one. */
+  private readonly reading = new Map<string, Promise<View>>();
 
   constructor(private readonly deps: DappDeps) {}
 
   /** A site's call. Throws a `DappError` for the site. */
   async call(session: DappSession, method: DappMethod, args: unknown[]): Promise<unknown> {
+    const { origin } = session;
+    const running = this.running.get(origin) ?? 0;
+    if (running >= MAX_SITE_CALLS) throw refused("Seedelf Wallet is busy with this site's other requests.");
+    this.running.set(origin, running + 1);
+    try {
+      return await this.run(session, method, args);
+    } finally {
+      const left = (this.running.get(origin) ?? 1) - 1;
+      if (left > 0) this.running.set(origin, left);
+      else this.running.delete(origin);
+    }
+  }
+
+  private async run(session: DappSession, method: DappMethod, args: unknown[]): Promise<unknown> {
     const on = (await this.deps.preferences.get()).dappConnector;
     const { origin } = session;
     if (method === "isEnabled" && !on) return false;
@@ -230,7 +264,7 @@ export class DappService {
       case "signData":
         return this.signData(session, network, holder, args[0], args[1], await this.needsPassword());
       case "submitTx":
-        return this.submitTx(network, holder, args[0]);
+        return this.submitTx(origin, network, holder, args[0]);
     }
     throw invalid("Seedelf Wallet doesn't know that method.");
   }
@@ -498,7 +532,11 @@ export class DappService {
 
   // --- Reading ---------------------------------------------------------------
 
-  /** The account, read at most every 30 s (or now, with `fresh`), less what this wallet has spent since. */
+  /**
+   * The account, read at most every 30 s (or now, with `fresh`), less what
+   * this wallet has spent since. Calls while it's being read wait for that
+   * reading, so a site asking many things at once costs one.
+   */
   private async view(network: NetworkName, holder: Holder, fresh = false): Promise<View> {
     const { wallet, session, now } = this.deps;
     const key = SESSION_DAPP_VIEW + network + suffix(holder);
@@ -506,6 +544,16 @@ export class DappService {
     if (kept && !fresh && now() - kept.readAt < VIEW_MS) {
       return { ...kept, utxos: kept.utxos.filter((p) => !spent.has(outpoint(p.utxo))) };
     }
+    let reading = this.reading.get(key);
+    if (!reading) {
+      reading = this.read(network, holder, key, spent).finally(() => this.reading.delete(key));
+      this.reading.set(key, reading);
+    }
+    return reading;
+  }
+
+  private async read(network: NetworkName, holder: Holder, key: string, spent: ReadonlySet<string>): Promise<View> {
+    const { wallet, session, now } = this.deps;
     let view: View;
     if (holder) {
       // The session's one account: its one address, its key `0/i`, its own stake key.
@@ -641,9 +689,16 @@ export class DappService {
   /**
    * The UTxOs a transaction spends, as far as the wallet can find them: the
    * account's (read again if one is missing), its signed transactions'
-   * outputs, then Koios for the rest (one request).
+   * outputs, then Koios for the rest (one request). A site gets a few fresh
+   * readings and lookups a minute (`PER_MINUTE`): past them, the kept
+   * reading does, and a lookup is refused.
    */
-  private async resolve(network: NetworkName, holder: Holder, refs: string[]): Promise<{ view: View; rows: KoiosUtxo[] }> {
+  private async resolve(
+    network: NetworkName,
+    holder: Holder,
+    origin: string,
+    refs: string[],
+  ): Promise<{ view: View; rows: KoiosUtxo[] }> {
     const signed = (await this.signed(network, holder)).flatMap((s) => s.outputs);
     const find = (view: View) => {
       const known = new Map([...view.utxos, ...signed].map((p) => [outpoint(p.utxo), p.utxo]));
@@ -651,12 +706,26 @@ export class DappService {
     };
     let view = await this.view(network, holder);
     let { found, missing } = find(view);
-    if (missing.length) {
+    if (missing.length && this.allow(origin, "fresh")) {
       view = await this.view(network, holder, true);
       ({ found, missing } = find(view));
     }
+    if (missing.length && !this.allow(origin, "lookup")) {
+      throw refused("This site asks Seedelf Wallet to look up UTxOs too often. Try again in a minute.");
+    }
     const others = missing.length ? await this.deps.koios(network).utxoInfo(missing) : [];
     return { view, rows: [...found, ...others] };
+  }
+
+  /** Whether a site may make the worker ask Koios for `what` now, and counts it if so. */
+  private allow(origin: string, what: keyof typeof PER_MINUTE): boolean {
+    const key = `${what} ${origin}`;
+    const now = this.deps.now();
+    const recent = (this.asked.get(key) ?? []).filter((t) => now - t < 60_000);
+    const allowed = recent.length < PER_MINUTE[what];
+    if (allowed) recent.push(now);
+    this.asked.set(key, recent);
+    return allowed;
   }
 
   private async signTx(
@@ -674,7 +743,7 @@ export class DappService {
     } catch {
       throw invalid("The wallet can't read this transaction.");
     }
-    const { view, rows } = await this.resolve(network, holder, [...new Set(refs)]);
+    const { view, rows } = await this.resolve(network, holder, session.origin, [...new Set(refs)]);
     const request = JSON.stringify({
       network,
       txCbor: tx,
@@ -761,6 +830,9 @@ export class DappService {
     password: boolean,
   ): Promise<unknown> {
     if (typeof address !== "string") throw invalid("The address to sign with isn't a string.");
+    if (typeof payload === "string" && payload.length > 2 * MAX_SITE_BYTES) {
+      throw invalid("The data to sign is too long: Seedelf Wallet signs at most 64 KiB.");
+    }
     const hex = typeof payload === "string" ? payload.trim() : "";
     if (!/^([0-9a-fA-F]{2})*$/.test(hex)) throw invalid("The data to sign isn't hex.");
     const { wasm, wallet } = this.deps;
@@ -800,13 +872,19 @@ export class DappService {
     );
   }
 
-  private async submitTx(network: NetworkName, holder: Holder, tx: unknown): Promise<string> {
+  private async submitTx(origin: string, network: NetworkName, holder: Holder, tx: unknown): Promise<string> {
     const bytes = txBytes(tx);
     let id: string;
     try {
       id = txId(bytes);
     } catch {
       throw invalid("The wallet can't read this transaction.");
+    }
+    if (!this.allow(origin, "submit")) {
+      throw new DappError({
+        code: TxSendError.Refused,
+        info: "This site sends transactions through Seedelf Wallet too often. Try again in a minute.",
+      });
     }
     const koios = this.deps.koios(network);
     try {

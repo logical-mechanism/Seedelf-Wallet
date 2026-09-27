@@ -11,7 +11,7 @@ import { Minswap } from "../src/background/minswap";
 import { SESSION_SEND } from "../src/background/send";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
-import { APIError, DataSignError, TxSignError } from "../src/shared/dapp";
+import { APIError, DataSignError, TxSendError, TxSignError } from "../src/shared/dapp";
 import { txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, loadTestWasm, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
@@ -222,6 +222,79 @@ describe("the dApp connector", () => {
     expect(t.koios.calls.length).toBe(calls);
     expect(t.koios.submitted).toHaveLength(0);
     expect(t.dapp.approvals()).toEqual([]);
+  });
+
+  it("shares one reading of the account among the calls that ask at the same time", async () => {
+    const t = await on();
+    const s = await connected(t);
+    await t.dapp.call(s, "getBalance", []);
+    t.clock.now += 31_000;
+    const reads = () => t.koios.calls.filter((c) => c.path === "account_addresses").length;
+    const before = reads();
+    // Koios holds its answers while ten calls come in.
+    let release!: () => void;
+    t.koios.hold = new Promise((r) => (release = r));
+    const balances = Array.from({ length: 10 }, () => t.dapp.call(s, "getBalance", []));
+    await until(() => reads() > before);
+    for (let i = 0; i < 50; i++) await new Promise((r) => setTimeout(r, 0));
+    release();
+    t.koios.hold = undefined;
+    expect(new Set(await Promise.all(balances)).size).toBe(1);
+    expect(reads()).toBe(before + 1);
+  });
+
+  it("gives a site a few lookups and submits a minute, and a few calls at once", async () => {
+    const t = await on();
+    const s = await connected(t);
+    // It spends a UTxO nobody has: each try reads the account afresh (a few a minute) and looks it up.
+    const unknown = `84a30081825820${"cd".repeat(32)}0001800200a0f5f6`;
+    const lookups = () => t.koios.calls.filter((c) => c.path === "utxo_info").length;
+    const fresh = () => t.koios.calls.filter((c) => c.path === "account_addresses").length;
+    await t.dapp.call(s, "getBalance", []);
+    const [lookedUp, readFresh] = [lookups(), fresh()];
+    for (let i = 0; i < 6; i++) {
+      await expect(t.dapp.call(s, "signTx", [unknown, true])).rejects.toMatchObject({ failure: { code: TxSignError.ProofGeneration } });
+    }
+    expect(lookups()).toBe(lookedUp + 6);
+    expect(fresh()).toBe(readFresh + 4);
+    await expect(t.dapp.call(s, "signTx", [unknown, true])).rejects.toMatchObject({
+      failure: { code: APIError.Refused, info: expect.stringContaining("too often") },
+    });
+    expect(lookups()).toBe(lookedUp + 6);
+    // Another site has its own; a minute later this one does again.
+    const other = await connected(t, site("https://other.example"));
+    await expect(t.dapp.call(other, "signTx", [unknown, true])).rejects.toMatchObject({ failure: { code: TxSignError.ProofGeneration } });
+    t.clock.now += 60_000;
+    await expect(t.dapp.call(s, "signTx", [unknown, true])).rejects.toMatchObject({ failure: { code: TxSignError.ProofGeneration } });
+
+    // Ten submits a minute.
+    const { tx } = await built(t);
+    for (let i = 0; i < 10; i++) await t.dapp.call(s, "submitTx", [tx]);
+    await expect(t.dapp.call(s, "submitTx", [tx])).rejects.toMatchObject({
+      failure: { code: TxSendError.Refused, info: expect.stringContaining("too often") },
+    });
+    expect(t.koios.submitted).toHaveLength(10);
+
+    // Data to sign over 64 KiB is refused unread.
+    await expect(t.dapp.call(s, "signData", [OWN, "00".repeat(65_537)])).rejects.toMatchObject({
+      failure: { code: APIError.InvalidRequest, info: expect.stringContaining("at most 64 KiB") },
+    });
+    expect(t.dapp.approvals()).toEqual([]);
+
+    // 32 calls at once from one site; the next is refused, and once they're answered it's taken again.
+    t.clock.now += 31_000;
+    const before = fresh();
+    let release!: () => void;
+    t.koios.hold = new Promise((r) => (release = r));
+    const waiting = Array.from({ length: 32 }, () => t.dapp.call(s, "getBalance", []));
+    await until(() => fresh() > before);
+    await expect(t.dapp.call(s, "getBalance", [])).rejects.toMatchObject({
+      failure: { code: APIError.Refused, info: "Seedelf Wallet is busy with this site's other requests." },
+    });
+    release();
+    t.koios.hold = undefined;
+    await Promise.all(waiting);
+    expect(typeof (await t.dapp.call(s, "getBalance", []))).toBe("string");
   });
 
   it("sends through Koios, and counts what comes back until it's on chain", async () => {
