@@ -9,7 +9,9 @@
 // comes with the next return, a UTxO no return takes: launch review H6),
 // why a return leaves Lovejoin out (another's chain may have taken the
 // pool's boxes: #23), and warns before an ADA Handle comes into the private
-// balance (#57).
+// balance (#57). Returns that go through Lovejoin can all be built again to
+// come back directly instead, as a single return's review can (privacy
+// review §4.1).
 
 import { useEffect, useState } from "react";
 
@@ -18,7 +20,7 @@ import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
-import { delayText } from "../components/LovejoinReturn";
+import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
@@ -49,6 +51,8 @@ export function ClaimAll({
 }) {
   const [built, setBuilt] = useState<Built>();
   const [chosen, setChosen] = useState<Set<number>>(new Set());
+  // Built again to come back directly: none of them goes through Lovejoin.
+  const [direct, setDirect] = useState(false);
   const [result, setResult] = useState<Result>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -71,6 +75,23 @@ export function ClaimAll({
     };
     // Built once, for the list it opened with: building again would sign again.
   }, []);
+
+  /** Builds them all again, straight back: signed afresh, and any chain's boxes let go. */
+  async function bringDirectly() {
+    if (!built || busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const again = await call("session-claim-build", { indexes: sessions.map((s) => s.index), direct: true });
+      setBuilt(again);
+      setChosen(new Set(again.returns.map((r) => r.index).filter((i) => chosen.has(i))));
+      setDirect(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function send() {
     if (!built || busy) return;
@@ -131,12 +152,6 @@ export function ClaimAll({
   }
 
   const picked = built?.returns.filter((r) => chosen.has(r.index)) ?? [];
-  const total = picked.reduce((sum, r) => sum + BigInt(r.lovelace), 0n);
-  const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
-  const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
-  const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
-  const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
-  const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
   const toggle = (index: number) =>
     setChosen((was) => {
       const next = new Set(was);
@@ -159,7 +174,58 @@ export function ClaimAll({
       }
     >
       {!built && !error && <p className="note center empty">Building each session's return…</p>}
-      {built && built.returns.length > 0 && (
+      {built && (
+        <ClaimReview
+          built={built}
+          chosen={chosen}
+          sessions={sessions}
+          direct={direct}
+          busy={busy}
+          onToggle={toggle}
+          onDirect={() => void bringDirectly()}
+        />
+      )}
+    </Screen>
+  );
+}
+
+/**
+ * Bring everything back's review, once its returns are built: each return,
+ * which to leave out, why a session was left out, what each leaves behind,
+ * and the totals. Through Lovejoin, that it has had no audit, and the way to
+ * build them all again to come back directly (`onDirect`; `direct` once
+ * they were).
+ */
+export function ClaimReview({
+  built,
+  chosen,
+  sessions,
+  direct,
+  busy,
+  onToggle,
+  onDirect,
+}: {
+  built: Built;
+  chosen: ReadonlySet<number>;
+  sessions: SessionView[];
+  direct: boolean;
+  busy: boolean;
+  onToggle: (index: number) => void;
+  onDirect: () => void;
+}) {
+  const network = useNetwork();
+  const byIndex = new Map(sessions.map((s) => [s.index, s]));
+  const picked = built.returns.filter((r) => chosen.has(r.index));
+  const total = picked.reduce((sum, r) => sum + BigInt(r.lovelace), 0n);
+  const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
+  const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
+  const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
+  const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
+  const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
+
+  return (
+    <>
+      {built.returns.length > 0 && (
         <section className="section" aria-label="Sessions">
           <h2>Tap a session to leave it out</h2>
           <ul className="list" data-testid="claim-returns">
@@ -171,7 +237,7 @@ export function ClaimAll({
                     type="button"
                     className={on ? "token-row claim-row claim-row--on" : "token-row claim-row"}
                     aria-pressed={on}
-                    onClick={() => toggle(r.index)}
+                    onClick={() => onToggle(r.index)}
                   >
                     <span className="claim-check" aria-hidden="true">
                       {on && <CheckIcon size={14} />}
@@ -192,7 +258,7 @@ export function ClaimAll({
           </ul>
         </section>
       )}
-      {built && built.skipped.length > 0 && (
+      {built.skipped.length > 0 && (
         <section className="section" aria-label="Left out">
           <h2>Left out</h2>
           <ul className="list" data-testid="claim-skipped">
@@ -229,23 +295,32 @@ export function ClaimAll({
         <LeftBehindNote key={s.index} leftBehind={s.leftBehind} name={`private session ${s.index + 1}`} />
       ))}
       <HandleWarning tokens={picked.flatMap((r) => r.tokens)} returning />
-      {built && (
-        <ReviewRows testId="claim-total">
-          <Row label={boxes ? "Back now" : "Into your private balance"} value={`${formatAda(total.toString())} ₳`} strong />
-          {tokens > 0 && <Row label="" value={`and ${plural(tokens, "token")}`} />}
-          {boxes > 0 && delay && (
-            <Row label="Through Lovejoin" value={`${plural(boxes, "box", "boxes")} of 10 ₳, each back after ${delayText(delay)}`} />
-          )}
-          <Row label="Network fees" value={`${formatAda(fees.toString())} ₳`} />
-          <Row label="Transactions" value={String(txs)} />
-        </ReviewRows>
-      )}
+      <ReviewRows testId="claim-total">
+        <Row label={boxes ? "Back now" : "Into your private balance"} value={`${formatAda(total.toString())} ₳`} strong />
+        {tokens > 0 && <Row label="" value={`and ${plural(tokens, "token")}`} />}
+        {boxes > 0 && delay && (
+          <Row label="Through Lovejoin" value={`${plural(boxes, "box", "boxes")} of 10 ₳, each back after ${delayText(delay)}`} />
+        )}
+        <Row label="Network fees" value={`${formatAda(fees.toString())} ₳`} />
+        <Row label="Transactions" value={String(txs)} />
+      </ReviewRows>
       <Callout tone="privacy">
         Each session comes back in its own transaction, so nothing in them ties the sessions together. They're sent one
         after another, though, and returns that land together hint that they're one person's.
         {boxes > 0 &&
           " A session's spare ADA goes through Lovejoin first, paid by that session, and each box comes back on its own, later, so those don't land together."}
+        {direct && " They come back directly, as you chose: anyone can tie each on chain to its session and its funding."}
       </Callout>
-    </Screen>
+      {boxes > 0 && (
+        <>
+          <p className="note" data-testid="lovejoin-unaudited">
+            {LOVEJOIN_UNAUDITED}
+          </p>
+          <button type="button" className="link" disabled={busy} onClick={onDirect} data-testid="claim-direct">
+            Bring them back directly instead
+          </button>
+        </>
+      )}
+    </>
   );
 }

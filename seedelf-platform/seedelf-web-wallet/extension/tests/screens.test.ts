@@ -9,13 +9,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
-import type { LovejoinHeld, PendingTx, SessionOutSummary, SessionView, SwapLovejoin, SwapQuote } from "../src/shared/rpc";
+import type {
+  LovejoinHeld,
+  PendingTx,
+  SessionBackSummary,
+  SessionOutSummary,
+  SessionView,
+  SwapLovejoin,
+  SwapQuote,
+} from "../src/shared/rpc";
 import { HandleWarning } from "../src/ui/components/HandleWarning";
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
 import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
+import { ClaimReview } from "../src/ui/screens/ClaimAll";
 import { ClaimCard } from "../src/ui/screens/Dapps";
 import { Chains, detailOf as lovejoinDetail, NotMixed, PrivateReview, PublicReview, subOf as lovejoinSub } from "../src/ui/screens/Lovejoin";
 import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
@@ -518,6 +527,42 @@ describe("a site's private session (launch review H7, #43, H6, #23, #56)", () =>
 });
 
 describe("Bring everything back's review (launch review #57, H6, #23)", () => {
+  const back = (over: Partial<SessionBackSummary> = {}): SessionBackSummary => ({
+    network: "preprod",
+    index: 4,
+    txHash: "cd".repeat(32),
+    fee: "300000",
+    lovelace: "5200000",
+    tokens: [],
+    depositOutputs: 1,
+    inputs: 2,
+    ...over,
+  });
+  const review = (returns: SessionBackSummary[], direct = false) =>
+    text(
+      createElement(ClaimReview, {
+        built: { returns, skipped: [] },
+        chosen: new Set(returns.map((r) => r.index)),
+        sessions: [siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 2 } })],
+        direct,
+        busy: false,
+        onToggle: () => undefined,
+        onDirect: () => undefined,
+      }),
+    );
+
+  it("offers to bring them back directly when some go through Lovejoin, and says it has had no audit (privacy review §4.1)", () => {
+    const line = review([back({ lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6" } })]);
+    expect(line).toContain("Through Lovejoin 2 boxes of 10 ₳, each back after 1 to 6 hours");
+    expect(line).toContain("Bring them back directly instead");
+    expect(line).toContain("Lovejoin hasn't had a third-party audit");
+    // Built again directly: nothing more to offer, and it says what that ties.
+    const direct = review([back()], true);
+    expect(direct).not.toContain("Bring them back directly instead");
+    expect(direct).not.toContain("third-party audit");
+    expect(direct).toContain("They come back directly, as you chose: anyone can tie each on chain to its session and its funding.");
+  });
+
   it("warns before an ADA Handle comes back into the private balance", () => {
     const handle = { policyId: "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a", assetName: "000de140" + hex("alice") };
     const line = text(createElement(HandleWarning, { tokens: [handle], returning: true }));
