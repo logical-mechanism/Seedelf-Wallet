@@ -1457,7 +1457,8 @@ export class SessionService {
     const tries = { busy: 0, spent: 0, maybeSent };
     for (;;) {
       try {
-        await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept);
+        // What was kept for Send is the chain, under its return's hash.
+        await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept, undefined, pending.txs.at(-1)!.txHash);
         break;
       } catch (e) {
         const wait = chainRetryMs(i, tries, e);
@@ -1495,6 +1496,8 @@ export class SessionService {
   /**
    * Records a session's transaction, then submits it, so the record always
    * knows what may be on its way. Its page watches it, not Home's banner.
+   * `kept`: where it was kept for Send, cleared once it's sent if that still
+   * holds `keptHash` (this transaction, or the chain it's part of).
    */
   private async sendRecorded(
     network: NetworkName,
@@ -1504,6 +1507,7 @@ export class SessionService {
     bytes: Uint8Array<ArrayBuffer>,
     kept: string,
     after?: (s: SessionRecord) => void,
+    keptHash = txHash,
   ): Promise<PendingTx> {
     const { wallet, session, now } = this.deps;
     const mine = (s: SessionRecord) => s.txs.find((t) => t.txHash === txHash);
@@ -1538,7 +1542,7 @@ export class SessionService {
     });
     await wallet.withKeys(async () => {
       await rememberSpent(session, bytes);
-      await session.remove(kept);
+      await clearKept(session, kept, keptHash);
       await session.remove(SESSION_BALANCES_PREFIX + network);
     });
     return { kind: PENDING_KIND[kind], network, txHash, submittedAt: now(), confirmations: null };
@@ -1744,6 +1748,24 @@ export class SessionService {
     const run = this.queue.then(task, task);
     this.queue = run.catch(() => undefined);
     return run;
+  }
+}
+
+/**
+ * Clears `key`, where a transaction was kept for Send, only while it still
+ * holds `txHash` (or, Bring everything back's list, the entry that does):
+ * the runner's return of one session, or the rest of a chain being sent,
+ * never clears a return the user is reviewing for another. Call it while
+ * unlocked.
+ */
+async function clearKept(session: ScriptSpendDeps["session"], key: string, txHash: string): Promise<void> {
+  const held = await session.get<{ txHash?: string } | Array<{ txHash: string }>>(key);
+  if (Array.isArray(held)) {
+    const rest = held.filter((k) => k.txHash !== txHash);
+    if (rest.length === held.length) return;
+    await (rest.length ? session.set(key, rest) : session.remove(key));
+  } else if (held?.txHash === txHash) {
+    await session.remove(key);
   }
 }
 

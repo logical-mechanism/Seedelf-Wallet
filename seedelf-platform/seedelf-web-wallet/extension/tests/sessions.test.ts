@@ -763,6 +763,44 @@ describe("bring everything back", () => {
   });
 });
 
+describe("a return kept for Send", () => {
+  it("isn't cleared by the runner bringing another session back", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const net = t.deps.wasm.Network.Preprod;
+    const one = await t.wallet.withKeys((k) => ({ address: k.oneTime.address(net, 1), keyHash: k.oneTime.keyHash(1) }));
+    const now = t.clock.now;
+    const out = (n: number) => ({ kind: "out", txHash: String(n).repeat(64), at: now, confirmed: true });
+    await t.store.set("sessions.preprod", {
+      next: 2,
+      sessions: [
+        { index: 0, ownStake: true, createdAt: now, txs: [out(1)], site: { origin: "https://a.example" } },
+        {
+          index: 1,
+          ownStake: true,
+          createdAt: now,
+          txs: [out(2)],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } }, stopping: now },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(atSession("a0".repeat(32), 0, "12000000"), {
+      ...atSession("b0".repeat(32), 0, "16000000"),
+      address: one.address,
+      payment_cred: one.keyHash,
+    });
+
+    // The user reviews Bring it back for the site's session; meanwhile the runner brings the stopped swap back.
+    const back = await sessions.backBuild("preprod", 0);
+    await sessions.advance("preprod", 1, true);
+    expect((await sessions.list("preprod")).find((v) => v.index === 1)!.txs.map((x) => x.kind)).toEqual(["out", "back"]);
+    // The user's Send still sends what they reviewed.
+    await expect(sessions.backSubmit("preprod", back.txHash)).resolves.toMatchObject({ txHash: back.txHash });
+    expect(t.koios.submitted.map(txIdOf).at(-1)).toBe(back.txHash);
+  });
+});
+
 describe("a session's return", () => {
   /** Session 0, a site's, whose funding made `change` (a UTxO of the private balance), holding 12 ₳ and its 5 ₳ collateral. */
   async function returning(change: string) {
