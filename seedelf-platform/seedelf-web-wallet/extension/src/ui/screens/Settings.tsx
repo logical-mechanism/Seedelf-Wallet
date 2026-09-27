@@ -46,6 +46,7 @@ import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
 import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
 import { Modal } from "../components/Modal";
+import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
@@ -193,9 +194,7 @@ export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (
       />
       {!asking && (
         <p className="note" data-testid="network-note">
-          {status.network === "preprod"
-            ? "Preprod: Cardano's test network, for trying the wallet out. ADA here is test ADA, with no value."
-            : "Mainnet: Cardano's real network. ADA here is real money."}
+          {NETWORK_NOTE[status.network]}
         </p>
       )}
       {asking && (

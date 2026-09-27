@@ -80,7 +80,7 @@ export function App() {
   } else if (!status) {
     screen = null;
   } else if (status.state === "no-wallet") {
-    screen = <Onboarding key={start ?? "welcome"} start={start} onDone={setStatus} />;
+    screen = <Onboarding key={start ?? "welcome"} status={status} start={start} onDone={setStatus} onNetwork={setStatus} />;
   } else if (status.state === "locked" && resetting) {
     screen = (
       <Reset

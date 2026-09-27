@@ -871,6 +871,18 @@ main {
   padding-top: var(--s6);
 }
 
+/* Which network a new wallet is on, chosen before its phrase (a build with both). */
+.network-picker {
+  width: 100%;
+  max-width: 340px;
+  margin-top: var(--s4);
+  text-align: left;
+}
+
+.onboarding-on-network {
+  margin: 0 0 var(--s3);
+}
+
 /* Unlock */
 
 .unlock {

@@ -30,6 +30,8 @@ The toolbar button opens the wallet in a **full tab**, or brings back the one al
 
 Onboarding runs in a full tab. From the side panel, **Create** and **Restore** open one.
 
+- **The network comes first,** in a build with both (the store's): the welcome screen asks **Mainnet** or **Preprod** (mainnet by default) above **Create** and **Restore**, and moves at once, since no wallet exists yet to confirm for. Create and Restore then say which network they're on, with **Change network** back to the choice ("Forgot password" opens Restore without the welcome). So a preprod phrase is restored on preprod, never on mainnet first.
+
 - **Create:**
   1. The worker generates a 24-word phrase.
   2. The UI shows it once, blurred until the user presses **Reveal**, with the warnings below. There's no copy button.

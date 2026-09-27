@@ -2947,3 +2947,38 @@ test("a mainnet build switches networks in Settings, and marks preprod on every 
   await expect(page.getByTestId("test-network")).toBeVisible();
   expect((await askWorker(page, { type: "account" })).reply.value.receiveAddress).toBe(vector(12).preprod.receive_0);
 });
+
+test.describe("a mainnet build's welcome", () => {
+  // A fresh install of the store's build starts on mainnet.
+  test.use({ network: "mainnet" });
+
+  test("asks which network before a wallet is restored, so a preprod phrase goes straight to preprod", async ({ context }) => {
+    const { host_permissions: hosts } = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as { host_permissions: string[] };
+    test.skip(!hosts.includes("https://api.koios.rest/*"), "a preprod-only build has one network");
+    const page = await openApp(context);
+    await expect(page.getByTestId("network")).toHaveText("MAINNET");
+    const choice = page.getByRole("group", { name: "Cardano network" });
+    await expect(choice.getByRole("button", { name: "Mainnet" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("onboarding-network-note")).toHaveText("Mainnet: Cardano's real network. ADA here is real money.");
+
+    // Preprod, before any phrase: nothing to confirm, since there's no wallet yet.
+    await choice.getByRole("button", { name: "Preprod" }).click();
+    await expect(page.getByTestId("network")).toHaveText("PREPROD");
+    await expect(page.getByTestId("test-network")).toBeVisible();
+    await expect(page.getByTestId("onboarding-network-note")).toContainText("ADA here is test ADA, with no value");
+
+    // Restore says where it's restoring, and Change network goes back to the choice.
+    await page.getByRole("button", { name: "Restore wallet" }).click();
+    await expect(page.getByTestId("onboarding-on-network")).toContainText("Restoring a wallet on Preprod.");
+    await page.getByRole("button", { name: "Change network" }).click();
+    await expect(page.getByRole("group", { name: "Cardano network" }).getByRole("button", { name: "Preprod" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await restore(page, vector(12).phrase);
+    await expect(page.getByTestId("network")).toHaveText("PREPROD");
+    expect((await askWorker(page, { type: "status" })).reply.value).toMatchObject({ state: "unlocked", network: "preprod" });
+    expect((await askWorker(page, { type: "account" })).reply.value.receiveAddress).toBe(vector(12).preprod.receive_0);
+  });
+});
