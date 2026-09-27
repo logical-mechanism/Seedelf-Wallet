@@ -160,6 +160,8 @@ This is the equivalent of the CLI's `external sweep`, built by the same core cod
   - Home shows the sent transaction with a Cardanoscan link.
   - It asks Koios for its status every 15 s for up to 10 minutes, and reopening the wallet resumes the watch.
   - Once it's confirmed, the balances are read again.
+  - It's valid for two hours from when it was built. If the chain passes that without it, Home says it expired and nothing was sent, and its UTxOs count again.
+  - **If Koios doesn't answer the submit,** it may have gone through (launch review #10): Home says so, the wallet holds its UTxOs back and sends it again now and then (the network takes it once), and no new payment is built until it lands or expires. Every Send works this way, private ones too (see *Submits* in architecture.md).
 - **Signing:** only the Cardano account's payment keys sign, one signature per key, inside WebAssembly.
 - **No Seedelf needed.** No script runs and no collateral is needed.
 - **Privacy:** it links the Cardano account to *some* register UTxOs, but not to any Seedelf name. The form says so.
