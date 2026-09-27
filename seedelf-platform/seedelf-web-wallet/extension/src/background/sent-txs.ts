@@ -6,6 +6,13 @@
 // sign over a UTxO it can't find. Kept beside what they spent (spent.ts),
 // in chrome.storage.session, so a lock wipes them.
 //
+// A site is answered from here only with the outputs that pay its own
+// account (the public account, or its private session). The rest, another
+// account's or the private balance's, are looked for as a stranger's are:
+// otherwise how the site is answered would tell it which transactions are
+// the wallet's (privacy review §2.2). A site's own submits are kept for it
+// with what it signed (dapp.ts's `SESSION_DAPP_SIGNED`).
+//
 // Each network's are kept apart, and read only on it. The account's keys are
 // the same on both, and a signature binds nothing to a network: a site on
 // preprod that found a mainnet Send's change here would get the account's

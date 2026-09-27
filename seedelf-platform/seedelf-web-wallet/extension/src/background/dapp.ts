@@ -27,9 +27,12 @@
 //             waiting and counts towards the unlock back-off. WebAssembly
 //             won't have a payment key sign over an input nobody can find,
 //             so the outputs of every transaction it signs are kept (the
-//             account's for the last 32, every one for 20 minutes), and the
-//             wallet's own sends' on that network (sent-txs.ts): a dApp can
-//             build its next transaction on them before they're on chain.
+//             account's for the last 32, every one for 20 minutes), and of
+//             each a site sends through it, for that site; and the wallet's
+//             own sends' on that network (sent-txs.ts) that pay the site's
+//             account: a dApp can build its next transaction on them before
+//             they're on chain. Nothing else the wallet sent is answered
+//             from what it kept: that would tell a site it was the wallet's.
 //             What the user locked, and the collateral, stay out of a site's
 //             transaction as out of the wallet's own: one that uses them is
 //             refused (`keptApart`), and so is one that uses what the site's
@@ -193,16 +196,22 @@ interface View {
   readAt: number;
 }
 
-/** A signed transaction's outputs, for chaining. */
+/**
+ * A signed transaction's outputs, for chaining; or those of one a site sent
+ * through the wallet that the wallet didn't sign (`origin`).
+ */
 interface Signed {
   txHash: string;
   /** Its outputs to the account: what the site may spend (`getUtxos`) until they're on chain. */
   outputs: PathedUtxo[];
   /** Every output, to the account or not, to read a transaction built on it while `signedAt` is recent. */
   every?: KoiosUtxo[];
+  /** When it was signed, or, for one the wallet didn't sign, sent. */
   signedAt?: number;
   /** When a site sent it through the wallet. */
   submittedAt?: number;
+  /** The site that sent it, when the wallet didn't sign it: only that site builds on it. */
+  origin?: string;
 }
 
 interface Waiting {
@@ -819,14 +828,16 @@ export class DappService {
 
   /**
    * The UTxOs a transaction spends, as far as the wallet can find them: the
-   * account's, the outputs of transactions it signed for the site, and of
-   * those the wallet sent itself on this network in the last few minutes
-   * (sent-txs.ts: a Send's change, a session's funding or top-up), none of
-   * which Koios lists before they're on chain; then the account read again
-   * if one is missing, and Koios for the rest (one request). The WebAssembly won't
-   * have a payment key sign over one it can't find. A site gets a few fresh
-   * readings and lookups a minute (`PER_MINUTE`): past them, the kept
-   * reading does, and a lookup is refused.
+   * account's, the outputs of transactions the site's account signed or sent
+   * for sites (`SESSION_DAPP_SIGNED`), and those that pay the account of
+   * transactions the wallet sent itself on this network in the last few
+   * minutes (sent-txs.ts: a Send's change, a session's funding or top-up),
+   * none of which Koios lists before they're on chain; then the account read
+   * again if one is missing, and Koios for the rest (one request). The
+   * WebAssembly won't have a payment key sign over one it can't find. A site
+   * gets a few fresh readings and lookups a minute (`PER_MINUTE`): past them,
+   * the kept reading does, and a lookup is refused. Whatever isn't its own
+   * account's, or its sites', goes that way, as a stranger's does.
    */
   private async resolve(
     network: NetworkName,
@@ -835,17 +846,16 @@ export class DappService {
     refs: string[],
   ): Promise<{ view: View; rows: KoiosUtxo[] }> {
     const since = this.deps.now() - CHAIN_MS;
-    const signed = (await this.signed(network, holder)).flatMap((s) => [
-      ...(s.signedAt !== undefined && s.signedAt > since ? (s.every ?? []) : []),
-      ...s.outputs.map((p) => p.utxo),
-    ]);
-    const sent = await this.sentOutputs(network, refs);
+    const signed = (await this.signed(network, holder))
+      .filter((s) => s.origin === undefined || s.origin === origin)
+      .flatMap((s) => [...(s.signedAt !== undefined && s.signedAt > since ? (s.every ?? []) : []), ...s.outputs.map((p) => p.utxo)]);
+    let view = await this.view(network, holder);
+    const sent = await this.sentOutputs(network, holder, view, refs);
     const find = (view: View) => {
       // What Koios lists wins over what the wallet kept.
       const known = new Map([...sent, ...signed, ...view.utxos.map((p) => p.utxo)].map((u) => [outpoint(u), u]));
       return { found: refs.flatMap((r) => known.get(r) ?? []), missing: refs.filter((r) => !known.has(r)) };
     };
-    let view = await this.view(network, holder);
     let { found, missing } = find(view);
     if (missing.length && this.allow(origin, "fresh")) {
       view = await this.view(network, holder, true);
@@ -941,15 +951,42 @@ export class DappService {
 
   /**
    * The outputs among `refs` of transactions the wallet sent on `network` in
-   * the last few minutes. Never the other network's: the account's keys are
-   * the same on both, so its UTxO there would be signed for as the account's.
+   * the last few minutes that pay the site's own account: the session's key,
+   * or the public account's keys or stake key. What a site builds on before
+   * it's on chain is those (a Send's change, a session's funding or top-up),
+   * and it sees them anyway. Every other output of the wallet's is left to
+   * the site's lookups and Koios, as a stranger's is: answered from here, with
+   * neither, it would tell a site that a transaction was the wallet's, from
+   * another of its accounts or its private balance, and so tie them to the
+   * site's (privacy review §2.2). A site's own submits are chained on from its
+   * account's `SESSION_DAPP_SIGNED` instead. Never the other network's: the
+   * account's keys are the same on both, so its UTxO there would be signed
+   * for as the account's.
    */
-  private async sentOutputs(network: NetworkName, refs: string[]): Promise<KoiosUtxo[]> {
+  private async sentOutputs(network: NetworkName, holder: Holder, view: View, refs: string[]): Promise<KoiosUtxo[]> {
     const { wallet, session, wasm } = this.deps;
     const hashes = new Set(refs.map((r) => r.slice(0, r.indexOf("#"))));
     const sent = (await wallet.withKeys(() => recentlySent(session, network))).filter((s) => hashes.has(s.txHash));
-    // A site's own submit is kept there too: WebAssembly's decoder reads it only if it isn't nested too deep.
-    return sent.flatMap((s) => (nestsWithin(hexBytes(s.txCbor)) ? outputsOf(wasm, s.txCbor) : []));
+    if (!sent.length) return [];
+    const pays = await this.paysHolder(holder, view);
+    // WebAssembly's decoder reads one only if it isn't nested too deep.
+    return sent.flatMap((s) => (nestsWithin(hexBytes(s.txCbor)) ? outputsOf(wasm, s.txCbor).filter((u) => pays(u.address)) : []));
+  }
+
+  /**
+   * Whether an address pays the site's account: for a session, its payment
+   * key; for the public account, one of its payment keys in range (the
+   * view's), or its stake key, as every address it shows carries.
+   */
+  private async paysHolder(holder: Holder, view: View): Promise<(address: string) => boolean> {
+    const { wallet, wasm } = this.deps;
+    if (holder) return (address) => keysOf(wasm, address).payment === holder.keyHash;
+    const stake = keysOf(wasm, view.stake).stake;
+    const payment = new Set(await wallet.withKeys(({ cardano }) => view.keys.map((k) => cardano.paymentKeyHash(k.role, k.index))));
+    return (address) => {
+      const keys = keysOf(wasm, address);
+      return (keys.payment !== undefined && payment.has(keys.payment)) || (stake !== undefined && keys.stake === stake);
+    };
   }
 
   /** Whether a site may make the worker ask Koios for `what` now, and counts it if so. */
@@ -1248,15 +1285,28 @@ export class DappService {
         throw new DappError({ code: TxSendError.Failure, info: (e as Error).message });
       }
     }
-    const { wallet, session, now } = this.deps;
+    const { wallet, session, wasm, now } = this.deps;
     await wallet.withKeys(async () => {
       await rememberSpent(session, network, bytes);
       const key = SESSION_DAPP_SIGNED + network + suffix(holder);
       const kept = (await session.get<Signed[]>(key)) ?? [];
-      await session.set(
-        key,
-        kept.map((s) => (s.txHash === id ? { ...s, submittedAt: now() } : s)),
-      );
+      // One the wallet didn't sign is kept here too, for this site's next
+      // transaction to build on: the wallet's own list of what it sent
+      // answers a site only with what pays its account (`sentOutputs`).
+      const own: Signed[] = kept.some((s) => s.txHash === id)
+        ? kept.map((s) => (s.txHash === id ? { ...s, submittedAt: now() } : s))
+        : [
+            ...kept,
+            {
+              txHash: id,
+              outputs: [],
+              every: nestsWithin(bytes) ? outputsOf(wasm, hexOfBytes(bytes)).slice(0, MAX_CHAINED) : [],
+              signedAt: now(),
+              submittedAt: now(),
+              origin,
+            },
+          ];
+      await session.set(key, own.slice(-KEEP_SIGNED));
       // Home reads the account again, to show what the site did.
       await session.remove(SESSION_BALANCES_PREFIX + network);
     });
@@ -1343,6 +1393,26 @@ function outputsOf(wasm: AccountDeps["wasm"], txCbor: string): KoiosUtxo[] {
 }
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
+const hexOfBytes = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+/**
+ * An address's payment key hash and stake key hash (hex), where it has them
+ * (CIP-19's header): a base address both, an enterprise or pointer address
+ * its payment key, a reward address its stake key. Script hashes aren't
+ * keys: none. Nothing for one that can't be read.
+ */
+function keysOf(wasm: AccountDeps["wasm"], address: string): { payment?: string; stake?: string } {
+  let hex: string;
+  try {
+    hex = wasm.cip30Address(address);
+  } catch {
+    return {};
+  }
+  const kind = Number.parseInt(hex.slice(0, 1), 16);
+  const payment = kind < 8 && kind % 2 === 0 ? hex.slice(2, 58) : undefined;
+  const stake = kind === 0 || kind === 1 ? hex.slice(58, 114) : kind === 14 ? hex.slice(2, 58) : undefined;
+  return { ...(payment?.length === 56 ? { payment } : {}), ...(stake?.length === 56 ? { stake } : {}) };
+}
 
 function hexOf(value: unknown, problem: string): Uint8Array<ArrayBuffer> {
   if (typeof value !== "string" || !/^([0-9a-fA-F]{2})+$/.test(value.trim())) throw invalid(problem);

@@ -1200,6 +1200,80 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect(t.dapp.approvals()).toEqual([]);
   });
 
+  it("answers a site that names another account's recent transaction as it answers a stranger's: the same words, the same lookups", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s, out } = await connectedPrivately(t, dapp);
+    const lookups = () => t.koios.calls.filter((c) => c.path === "utxo_info").length;
+    /** What a site hears for a transaction spending `input`, and how many lookups it made. */
+    const probe = async (d: DappService, from: DappSession, input: string) => {
+      const before = lookups();
+      const failure = await d.call(from, "signTx", [siteTx({ inputs: [input] }), false]).then(
+        () => undefined,
+        (e: { failure: unknown }) => e.failure,
+      );
+      return { failure, lookups: lookups() - before };
+    };
+    const outputsOf = (tx: string) => (JSON.parse(t.deps.wasm.ogmiosUtxos(tx)) as Array<{ index: number }>).map((o) => o.index);
+
+    // The public account's Send, sent a moment ago: its payment and change aren't on chain yet.
+    const { summary: sent, tx: sendTx } = await built(t);
+    await t.send.submit("preprod", sent.txHash);
+    const stranger = await probe(dapp, s, `${"ab".repeat(32)}#0`);
+    expect(stranger).toEqual({
+      failure: { code: TxSignError.ProofGeneration, info: "Nothing in this transaction is this private session's to sign." },
+      lookups: 1,
+    });
+    for (const i of outputsOf(sendTx)) expect(await probe(dapp, s, `${sent.txHash}#${i}`)).toEqual(stranger);
+
+    // A site on the public account names the session's funding: every output, the session's and the private balance's change.
+    const publicSite = await connected(t, site("https://public.example"));
+    const funding = Buffer.from(t.koios.submitted.find((b) => txIdOf(b) === out.txHash)!).toString("hex");
+    const publicStranger = await probe(t.dapp, publicSite, `${"ab".repeat(32)}#1`);
+    expect(publicStranger).toMatchObject({ lookups: 1 });
+    for (const i of outputsOf(funding)) expect(await probe(t.dapp, publicSite, `${out.txHash}#${i}`)).toEqual(publicStranger);
+
+    // Once the session's site has used up its lookups, still the same.
+    for (let i = 0; i < 6; i++) await probe(dapp, s, `${"ef".repeat(32)}#${i}`);
+    const spent = await probe(dapp, s, `${"ab".repeat(32)}#0`);
+    expect(spent.failure).toMatchObject({ code: APIError.Refused, info: expect.stringContaining("too often") });
+    for (const i of outputsOf(sendTx)) expect(await probe(dapp, s, `${sent.txHash}#${i}`)).toEqual(spent);
+  });
+
+  it("lets a site build on what it sent itself before it's on chain, and no other site", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s: privateSite } = await connectedPrivately(t, dapp);
+    const b = await connected(t, site("https://b.example"));
+    const c = await connected(t, site("https://c.example"));
+    // Site B sends a transaction the wallet didn't sign: it pays someone else, with change to the account.
+    const { tx } = await built(t);
+    const id = (await t.dapp.call(b, "submitTx", [tx])) as string;
+    const theirs = (JSON.parse(t.deps.wasm.ogmiosUtxos(tx)) as Array<{ index: number; address: string }>).find((o) => o.address === THEIRS)!;
+    const input = `${id}#${theirs.index}`;
+    const lookedUp = () => t.koios.calls.filter((c) => c.path === "utxo_info").flatMap((c) => c.body._utxo_refs as string[]);
+
+    // B's next transaction spends that output, with the account's: read without Koios, as before.
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    const signing = t.dapp.call(b, "signTx", [siteTx({ inputs: [input, `${own!.txHash}#${own!.index}`] }), true]);
+    await until(() => t.dapp.approvals().length === 1);
+    const approval = t.dapp.approvals()[0]!;
+    if (approval.kind !== "sign-tx") throw new Error(approval.kind);
+    expect(approval.summary).toMatchObject({ unknownInputs: [], ownInputs: 1 });
+    await t.dapp.answer(approval.id, false);
+    await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+    expect(lookedUp()).not.toContain(input);
+
+    // Another site, on the account or on a private session, finds it only where a stranger would: Koios.
+    await expect(t.dapp.call(c, "signTx", [siteTx({ inputs: [input] }), false])).rejects.toMatchObject({ failure: { code: TxSignError.ProofGeneration } });
+    expect(lookedUp().filter((r) => r === input)).toHaveLength(1);
+    await expect(dapp.call(privateSite, "signTx", [siteTx({ inputs: [input] }), false])).rejects.toMatchObject({
+      failure: { code: TxSignError.ProofGeneration },
+    });
+    expect(lookedUp().filter((r) => r === input)).toHaveLength(2);
+  });
+
   it("won't register or delegate the session's stake key, which stays unregistered, but lets it stop", async () => {
     const t = await on();
     const { dapp } = privately(t);
