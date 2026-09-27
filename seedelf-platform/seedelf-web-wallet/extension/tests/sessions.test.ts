@@ -1477,6 +1477,59 @@ describe("disconnecting a site's session", () => {
     expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
   });
 
+  it("waits for a funding the wallet's watch still sends, or took lately, whatever the 20 minutes since it was first sent say (final review sessions-6)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await sessions.siteOutBuild("preprod", ORIGIN, "15000000", []);
+    // Koios takes 20 s, then doesn't answer: the watch has it as maybe sent, from then.
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      if (!url.endsWith("/submittx")) return real(url, init);
+      t.clock.now += 20_000;
+      return new Response("upstream request timeout", { status: 504 });
+    };
+    await expect(sessions.siteOutSubmit("preprod", out.txHash, ORIGIN)).resolves.toMatchObject({ pending: { maybeSent: true } });
+    t.koios.fetch = real;
+    t.koios.missing.add(out.txHash);
+
+    // Twenty minutes since the session recorded it: the watch still sends it, so it may land yet.
+    await busy(t, FAILED_AFTER - 20_000);
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("hasn't reached the chain yet");
+    // A lock wipes the watch until it's put back: its sealed copy still says so.
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("hasn't reached the chain yet");
+
+    // The watch sends it again, and Koios takes it: sent a minute ago, it may still land.
+    await t.pending.pending("preprod");
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: out.txHash, submittedAt: t.clock.now });
+    await busy(t, 60_000);
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("hasn't reached the chain yet");
+
+    // Twenty minutes after that, still not on chain: it never went, and the empty session ends.
+    await busy(t, FAILED_AFTER);
+    await sessions.disconnect("preprod", 0);
+    expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
+  });
+
+  it("forgets no swap whose funding the wallet's watch still sends (final review sessions-6)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await sessions.outBuild("preprod", await sessions.quote("preprod", ASK));
+    const undo = unanswered(t);
+    await sessions.outSubmit("preprod", out.txHash);
+    undo();
+    t.koios.missing.add(out.txHash);
+    // Twenty minutes on, the runner finds it never funded; the watch, which hasn't looked since, still sends it.
+    await busy(t, FAILED_AFTER);
+    expect((await sessions.advance("preprod", 0)).stage).toBe("failed");
+    await expect(sessions.forget("preprod", 0)).rejects.toThrow("Its funding may still reach the chain");
+    // The watch lets it go, unseen: now it's forgotten.
+    await t.pending.pending("preprod");
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
+    expect(await sessions.forget("preprod", 0)).toEqual([]);
+  });
+
   it("waits for its return's chain through Lovejoin, and doesn't wait for what no return takes", async () => {
     const t = await returning("0f".repeat(32));
     // The chain's rest is being sent between the runner's steps.

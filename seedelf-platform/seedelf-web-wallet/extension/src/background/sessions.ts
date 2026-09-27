@@ -83,7 +83,8 @@ import {
   type LovejoinChain,
   type LovejoinService,
 } from "./lovejoin";
-import type { PrivateStore } from "./private-store";
+import { pendingKey } from "./pending";
+import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
 import { keep, measureLocally, nothingToSpend, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
 import { forgetSpent, outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
@@ -526,6 +527,10 @@ export class SessionService {
       if (!view) throw new Error("There's no such session.");
       if (view.stage !== "failed") throw new Error("Only a session whose funding never reached the chain can be forgotten.");
       const book = await this.book(network);
+      // One the wallet is still sending may land yet, into a session no one reads (final review sessions-6).
+      if (await this.stillWatched(network, book.sessions.find((s) => s.index === index)!)) {
+        throw new Error("Its funding may still reach the chain: the wallet is still sending it. Wait for it, then forget the session.");
+      }
       await this.save(network, { ...book, sessions: book.sessions.filter((s) => s.index !== index) });
       return this.listNow(network);
     });
@@ -824,11 +829,13 @@ export class SessionService {
    * session again, so it waits for its return's chain, and for every
    * transaction of its that may still land (tx_status): a funding, a top-up,
    * a return. One the chain hasn't shown in FAILED_AFTER_MS never reached it
-   * (a funding that never landed can be disconnected). The account is read
-   * as Koios lists it, what this wallet spent included: a return that never
-   * lands leaves its inputs there. What no return takes doesn't count. This
-   * is the check that matters: Settings disconnects a site with no other.
-   * Its index isn't used again.
+   * (a funding that never landed can be disconnected), unless the wallet's
+   * watch (pending.ts) still sends it, or took it within that long: then
+   * the cutoff counts from then (final review sessions-6). The account is
+   * read as Koios lists it, what this wallet spent included: a return that
+   * never lands leaves its inputs there. What no return takes doesn't count.
+   * This is the check that matters: Settings disconnects a site with no
+   * other. Its index isn't used again.
    */
   disconnect(network: NetworkName, index: number): Promise<void> {
     return this.serial(async () => {
@@ -844,7 +851,8 @@ export class SessionService {
         const statuses = await koios.txStatus(waiting.map((t) => t.txHash));
         const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
         if (on.size) s = await this.update(network, index, (r) => void settle(r, on));
-        if (s.txs.some((t) => !t.confirmed && !t.unsent && now() - t.at <= FAILED_AFTER_MS)) {
+        const recent = s.txs.some((t) => !t.confirmed && !t.unsent && now() - t.at <= FAILED_AFTER_MS);
+        if (recent || (await this.stillWatched(network, s))) {
           throw new Error("Its last transaction hasn't reached the chain yet. Wait for it, then disconnect.");
         }
       }
@@ -857,6 +865,36 @@ export class SessionService {
       await this.update(network, index, (r) => {
         r.closedAt = now();
       });
+    });
+  }
+
+  /**
+   * Whether a transaction of session `s` the chain hasn't shown (a funding
+   * or a top-up) is one the wallet's watch (pending.ts) still has: maybe
+   * sent, and sent again now and then, or taken again within
+   * FAILED_AFTER_MS. Such a one may land after the session's own 20 minutes.
+   * Read from the watch and its sealed copy, with no Koios call. A lock wipes
+   * the watch until the sealed copy is put back, so this only ever adds a
+   * refusal, never proves one dead.
+   */
+  private async stillWatched(network: NetworkName, s: SessionRecord): Promise<boolean> {
+    const { wallet, session, store, now } = this.deps;
+    const waiting = new Map(s.txs.filter((t) => !t.confirmed && !t.unsent).map((t) => [t.txHash, t]));
+    if (!waiting.size) return false;
+    type Watched = PendingTx & { resentAt?: number };
+    const watched = await wallet.withKeys(() => session.get<Watched>(pendingKey(network)));
+    const sealed = await store.get<Watched | null>(`maybeSent.${network}`).catch((e: unknown) => {
+      // One that won't open can't be put back, as pending.ts reads it.
+      if (e instanceof UnreadableRecordError) return undefined;
+      throw e;
+    });
+    return [watched, sealed].some((w) => {
+      if (!w || w.network !== network || w.confirmations !== null || w.dropped) return false;
+      const t = waiting.get(w.txHash);
+      if (!t) return false;
+      // Maybe sent: sent again now and then, until the chain shows it or the watch lets it go.
+      if (w.maybeSent) return true;
+      return now() - Math.max(t.at, w.submittedAt, w.resentAt ?? 0) <= FAILED_AFTER_MS;
     });
   }
 
