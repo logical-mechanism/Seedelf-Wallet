@@ -141,6 +141,7 @@ fn request(tx: String, inputs: Vec<KoiosRow>, partial_sign: bool) -> TxRequest {
         inputs,
         partial_sign,
         stake_index: 0,
+        stake_deposit: None,
     }
 }
 
@@ -535,10 +536,113 @@ fn a_deposit_refund_paid_to_someone_else_is_what_the_account_sends() {
     assert_eq!(summary.certificates[0].refund.as_deref(), Some("2000000"));
 }
 
+/// 4 ₳ in from `0/2`, the account's stake key deregistered with the old
+/// certificate, 3.8 ₳ back to `0/0` and 2 ₳ paid to someone else.
+fn old_deregistration(credential: StakeCredential) -> String {
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&ours(Role::Receive, 0), 3_800_000, None),
+            out(&theirs(), 2_000_000, None),
+        ],
+    );
+    b.certificates =
+        NonEmptySet::try_from(vec![conway::Certificate::StakeDeregistration(credential)]).ok();
+    tx_hex(b)
+}
+
 #[test]
-fn an_old_deregistration_of_the_accounts_stake_key_is_refused() {
+fn an_old_deregistration_with_the_keys_deposit_is_counted_as_conways() {
+    // The refund is the deposit the key paid, which the extension reads
+    // (Koios's account_info), as a string or a number.
+    let (_, rows) = swap();
+    let tx = old_deregistration(stake_credential());
+    for deposit in [serde_json::json!("2000000"), serde_json::json!(2_000_000)] {
+        let request: TxRequest = serde_json::from_value(serde_json::json!({
+            "network": "preprod",
+            "txCbor": tx,
+            "keys": keys(),
+            "inputs": [{
+                "tx_hash": TX_A,
+                "tx_index": 1,
+                "address": ours(Role::Receive, 2).to_bech32().unwrap(),
+                "value": "4000000",
+            }],
+            "stakeDeposit": deposit,
+        }))
+        .unwrap();
+        assert_eq!(request.stake_deposit, Some(2_000_000));
+        let summary = cip30::inspect_tx(&account(), &request).unwrap();
+        assert_eq!(summary.net_lovelace, "-2200000", "2 ₳ of it leave");
+        assert_eq!(summary.staking_lovelace, "2000000");
+        assert_eq!(summary.spent_lovelace, "4000000");
+        let cert = &summary.certificates[0];
+        assert!(cert.own);
+        assert_eq!(cert.kind, "unregister");
+        assert_eq!(cert.refund.as_deref(), Some("2000000"));
+        assert_eq!(summary.signs, vec!["0/2", "stake"]);
+    }
+
+    // Shown the same as Conway's, which says its refund.
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&ours(Role::Receive, 0), 3_800_000, None),
+            out(&theirs(), 2_000_000, None),
+        ],
+    );
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::UnReg(
+        stake_credential(),
+        2_000_000,
+    )])
+    .ok();
+    let conways = cip30::inspect_tx(&account(), &request(tx_hex(b), rows.clone(), false)).unwrap();
+    let old = cip30::inspect_tx(
+        &account(),
+        &TxRequest {
+            stake_deposit: Some(2_000_000),
+            ..request(tx, rows.clone(), false)
+        },
+    )
+    .unwrap();
+    assert_eq!(old.net_lovelace, conways.net_lovelace);
+    assert_eq!(old.staking_lovelace, conways.staking_lovelace);
+    assert_eq!(old.certificates[0].refund, conways.certificates[0].refund);
+
+    // Someone else's stays theirs, deposit or not.
+    let summary = cip30::inspect_tx(
+        &account(),
+        &TxRequest {
+            stake_deposit: Some(2_000_000),
+            ..request(
+                old_deregistration(StakeCredential::AddrKeyhash(Hash::new([9; 28]))),
+                rows,
+                true,
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.staking_lovelace, "0");
+    assert!(!summary.certificates[0].own);
+    assert_eq!(summary.certificates[0].refund, None);
+
+    // A deposit that isn't an amount is refused, not taken for none.
+    let bad = serde_json::from_value::<TxRequest>(serde_json::json!({
+        "network": "preprod", "txCbor": "", "keys": [], "inputs": [], "stakeDeposit": "2 ADA",
+    }));
+    assert!(bad.is_err());
+}
+
+#[test]
+fn an_old_deregistration_of_the_accounts_stake_key_is_refused_without_its_deposit() {
     // Its refund isn't in the certificate, so what leaves can't be counted.
     let (_, rows) = swap();
+    // Left out of the JSON, as a private session's request does.
+    let left_out: TxRequest = serde_json::from_value(serde_json::json!({
+        "network": "preprod", "txCbor": "", "keys": [], "inputs": [],
+    }))
+    .unwrap();
+    assert_eq!(left_out.stake_deposit, None);
     let mut b = body(vec![input(TX_A, 1)], vec![out(&theirs(), 5_800_000, None)]);
     b.certificates = NonEmptySet::try_from(vec![conway::Certificate::StakeDeregistration(
         stake_credential(),

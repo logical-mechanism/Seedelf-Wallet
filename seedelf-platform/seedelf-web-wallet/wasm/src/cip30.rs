@@ -663,6 +663,31 @@ pub struct TxRequest {
     /// session `i`, whose stake key is `2/i`.
     #[serde(default)]
     pub stake_index: u32,
+    /// The deposit the stake key paid when it registered (Koios's
+    /// `account_info.deposit`), in lovelace, as a number or a string: what an
+    /// old deregistration certificate gets back, which it doesn't say.
+    /// Without it, the account's own is refused.
+    #[serde(default, deserialize_with = "lovelace_or_none")]
+    pub stake_deposit: Option<u64>,
+}
+
+/// An amount of lovelace a request may give as a JSON number or a decimal
+/// string (as Koios writes them), or leave out.
+fn lovelace_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Lovelace {
+        Number(u64),
+        Text(String),
+    }
+    match Option::<Lovelace>::deserialize(d)? {
+        None => Ok(None),
+        Some(Lovelace::Number(n)) => Ok(Some(n)),
+        Some(Lovelace::Text(text)) => text
+            .parse()
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom(format!("{text:?} isn't an amount of lovelace"))),
+    }
 }
 
 /// One output paying anyone but the account.
@@ -1283,12 +1308,20 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         }
         if c.own {
             match cert {
-                // Its refund is the protocol's deposit, which the certificate
-                // doesn't say, so what the account puts in can't be counted.
-                // The wallet's own staking writes Conway's, which says it.
-                C::StakeDeregistration(_) => bail!(
-                    "This transaction stops your staking with an old kind of certificate that doesn't say how much deposit comes back, so the wallet can't show where it goes and won't sign it."
-                ),
+                // Its refund is the deposit the key paid when it registered,
+                // which the certificate doesn't say: the extension reads it
+                // (`stake_deposit`), and it's counted as Conway's UnReg says
+                // its own. Without it, what the account puts in can't be
+                // counted. The wallet's own staking writes Conway's.
+                C::StakeDeregistration(_) => match request.stake_deposit {
+                    Some(deposit) => {
+                        staking = add_staking(staking, deposit)?;
+                        c.refund = Some(deposit.to_string());
+                    }
+                    None => bail!(
+                        "This transaction stops your staking with an old kind of certificate that doesn't say how much deposit comes back, so the wallet can't show where it goes and won't sign it."
+                    ),
+                },
                 C::UnReg(_, refund) => staking = add_staking(staking, *refund)?,
                 _ => {}
             }
