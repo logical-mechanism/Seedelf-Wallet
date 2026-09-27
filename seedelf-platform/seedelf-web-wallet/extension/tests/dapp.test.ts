@@ -71,6 +71,24 @@ function siteTx({ inputs, collateral = [], certificates = [] }: { inputs: string
   return `84a${fields.length}${fields.join("")}a0f5f6`;
 }
 
+/** A stake address's key hash, from its CIP-30 bytes. */
+const stakeKeyHash = (reward: string) => loadTestWasm().cip30Address(reward).slice(2);
+
+/** Staking certificates for a stake key hash, by what they do (CBOR, hex). */
+function certificates(keyHash: string) {
+  const key = `8200581c${keyHash}`;
+  const pool = `581c${"ab".repeat(28)}`;
+  const deposit = "1a001e8480";
+  return {
+    register: `8200${key}`,
+    registerDeposit: `8307${key}${deposit}`,
+    delegate: `8302${key}${pool}`,
+    vote: `8309${key}8102`,
+    registerDelegate: `840b${key}${pool}${deposit}`,
+    unregister: `8308${key}${deposit}`,
+  };
+}
+
 /** A payment from the account, built by the wallet's own Send: a dApp's transaction as far as the connector knows. */
 async function built(t: Awaited<ReturnType<typeof on>>, to = THEIRS) {
   const summary = await t.send.build("preprod", [{ to, lovelace: "3000000", tokens: [] }]);
@@ -690,6 +708,37 @@ describe("private CIP-30: a site connected to a private session", () => {
     };
     expect(await spends(`${out.txHash}#1`)).toMatchObject({ kind: "sign-tx", session: 0, collateralSpent: true });
     expect(await spends(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`)).not.toHaveProperty("collateralSpent");
+  });
+
+  it("won't register or delegate the session's stake key, which stays unregistered, but lets it stop", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s } = await connectedPrivately(t, dapp);
+    const reward = await t.wallet.withKeys((k) => k.oneTime.rewardAddress(t.deps.wasm.Network.Preprod, 0));
+    const input = `${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`;
+    const { unregister, ...staking } = certificates(stakeKeyHash(reward));
+    for (const [kind, certificate] of Object.entries(staking)) {
+      await expect(dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [certificate] }), false]), kind).rejects.toMatchObject({
+        failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("stays unregistered") },
+      });
+    }
+    expect(dapp.approvals()).toEqual([]);
+
+    // Stopping it, for a session registered before this, is still asked.
+    const stopping = dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [unregister] }), false]);
+    await until(() => dapp.approvals().length === 1);
+    await dapp.answer(dapp.approvals()[0]!.id, false);
+    await expect(stopping).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+
+    // The public account's own staking through a site is still the user's to approve.
+    const publicSite = await connected(t, site("https://stake.example"));
+    await t.balances.get("preprod");
+    const [first] = (await t.coins.lists("preprod")).cardano;
+    const { vote } = certificates(stakeKeyHash(account(12).preprod.stake as string));
+    const voting = t.dapp.call(publicSite, "signTx", [siteTx({ inputs: [`${first!.txHash}#${first!.index}`], certificates: [vote] }), false]);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await expect(voting).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
   });
 
   it("keeps the request waiting when the funding isn't sent, and its unfunded session can be closed from the dApps page", async () => {

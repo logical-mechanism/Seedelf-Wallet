@@ -827,6 +827,15 @@ export class DappService {
         info: `This transaction needs signatures the wallet can't give: it spends or is signed for by keys that aren't ${whose}.`,
       });
     }
+    // A session's stake key is never registered (privacy.md): its return and
+    // Disconnect read UTxOs only, so a deposit or rewards under it would be
+    // left behind for good. Stopping it stays possible.
+    if (holder && summary.certificates.some((c) => c.own && c.kind !== "unregister")) {
+      throw new DappError({
+        code: TxSignError.ProofGeneration,
+        info: "This transaction registers or delegates this private session's stake key, which stays unregistered: its deposit and any rewards would be left behind when the session ends, so the wallet won't sign it. Stake, or delegate your vote, from your public account instead.",
+      });
+    }
     const ask: DappAsk = {
       kind: "sign-tx",
       partial: partialSign,
