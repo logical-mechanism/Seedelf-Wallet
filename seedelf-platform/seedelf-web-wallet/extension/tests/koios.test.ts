@@ -285,6 +285,17 @@ describe("Koios client: transactions", () => {
     await expect(refused("StakeKeyNotRegisteredDELEG")).rejects.toThrow("staking changed since you reviewed");
     await expect(refused("SomethingElse")).rejects.toThrow("The network rejected the transaction: SomethingElse");
   });
+
+  it("explains a transaction past its time, or a device clock far off, and a fee too small", async () => {
+    const refused = (error: string) => scripted([new Response(error, { status: 400 })]).koios.submitTx(new Uint8Array([1]));
+    const late = JSON.stringify({ contents: { contents: { contents: { error: ["ConwayUtxowFailure (UtxoFailure (OutsideValidityIntervalUTxO (ValidityInterval {invalidBefore = SNothing, invalidHereafter = SJust (SlotNo 100)}) (SlotNo 7300)))"] } } } });
+    await expect(refused(late)).rejects.toThrow(
+      "The network refused it: its time to be sent had run out, or this device's clock is far off. Nothing was sent. Check the clock, then review it again.",
+    );
+    const cheap = JSON.stringify({ contents: { contents: { contents: { error: ["ConwayUtxowFailure (UtxoFailure (FeeTooSmallUTxO (Mismatch {mismatchSupplied = Coin 170000, mismatchExpected = Coin 170075})))"] } } } });
+    await expect(refused(cheap)).rejects.toThrow("The network refused it: its fee is less than the network asks.");
+    await expect(refused(cheap)).rejects.not.toThrow("Coin 170000");
+  });
 });
 
 describe("Koios's public-tier limit", () => {

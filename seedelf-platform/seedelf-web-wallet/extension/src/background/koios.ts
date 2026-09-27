@@ -502,6 +502,17 @@ export class Koios {
     }
     const staking = stakingRefusal(text);
     if (staking) throw new KoiosError(staking);
+    // The public account's transactions are valid for two hours from this device's clock (account.ts).
+    if (text.includes("OutsideValidityIntervalUTxO")) {
+      throw new KoiosError(
+        "The network refused it: its time to be sent had run out, or this device's clock is far off. Nothing was sent. Check the clock, then review it again.",
+      );
+    }
+    if (text.includes("FeeTooSmallUTxO")) {
+      throw new KoiosError(
+        "The network refused it: its fee is less than the network asks. Its fee settings may have changed since the review. Nothing was sent: review it again.",
+      );
+    }
     if (!response.ok) throw new KoiosError(`The network rejected the transaction: ${text.slice(0, 500)}`);
     return JSON.parse(text) as string;
   }
