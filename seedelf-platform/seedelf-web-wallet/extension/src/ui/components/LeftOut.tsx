@@ -1,8 +1,9 @@
 // What a Max review left where it is, and why, UTxO by UTxO (launch review
 // H6 and #12). Max takes everything it can, but not a UTxO whose token
 // would total more with the rest than one output can hold (it comes with a
-// later payment), nor one holding a reference script the wallet can't spend.
-// Without this, "everything" would quietly not be.
+// later payment), nor one holding a reference script the wallet can't spend,
+// nor one a return through Lovejoin still being sent spends (final review
+// lovejoin-3). Without this, "everything" would quietly not be.
 
 import type { LeftOutUtxo } from "../../shared/rpc";
 import { plural, shortHex } from "../format";
@@ -10,7 +11,9 @@ import { Callout } from "./Callout";
 
 /** Why a UTxO was left out, after its outpoint. */
 export function leftOutReason(reason: LeftOutUtxo["reason"]): string {
-  return reason === "tokens" ? "comes with a later payment" : "holds a reference script the wallet can't spend";
+  if (reason === "tokens") return "comes with a later payment";
+  if (reason === "returning") return "waits for a return through Lovejoin that's still being sent, which adds to it";
+  return "holds a reference script the wallet can't spend";
 }
 
 /** Max's review: each UTxO it left out, and why; nothing when it took them all. */

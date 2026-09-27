@@ -27,7 +27,9 @@ import {
   type ChainProgress,
 } from "../src/background/lovejoin";
 import { MAYBE_SENT_WAIT, pendingKey } from "../src/background/pending";
-import { SESSION_SPENT } from "../src/background/spent";
+import { nothingToSpend, readContract } from "../src/background/script-spend";
+import { outpoint, SESSION_SPENT } from "../src/background/spent";
+import { SESSION_WITHDRAW } from "../src/background/withdraw";
 import { Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
@@ -788,6 +790,45 @@ describe("chains the wallet sends at once", CHAINS, () => {
     const rows = (await sessions.accountUtxos("preprod", sessionSwap.keyHash)).map((u) => `${u.tx_hash}#${u.tx_index}`);
     expect(rows).toContain(`${"c7".repeat(32)}#0`);
     expect(rows).not.toContain(change);
+  });
+
+  it("keeps the funding's change a return chain merges into from the private balance's spends while it's sent (final review lovejoin-3)", async () => {
+    const { t, sessions } = await withSession("40000000");
+    // The session's funding made a1…#0, the private balance's largest UTxO: its return merges into it, at the chain's end.
+    const funding = "a1".repeat(32);
+    const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ txHash: string }> }> }>("sessions.preprod"))!;
+    book.sessions[0]!.txs[0]!.txHash = funding;
+    await t.store.set("sessions.preprod", book);
+    const change = `${funding}#0`;
+    const deps = { ...t.deps, collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch) };
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.merged).toBe(1);
+    // Kept for Send, it holds nothing back.
+    expect((await readContract(deps, "preprod")).utxos.map(outpoint)).toContain(change);
+
+    // Being sent, no spend of the private balance takes it: Make public pays from the rest.
+    await sessions.backSubmit("preprod", review.txHash);
+    const read = await readContract(deps, "preprod");
+    expect(read.utxos.map(outpoint)).not.toContain(change);
+    expect(read.returning.map(outpoint)).toEqual([change]);
+    const to = account(15).preprod.receive_0 as string;
+    await t.withdraw.build("preprod", [{ to, lovelace: "1000000", tokens: [] }]);
+    const kept = await t.wallet.withKeys(() => t.session.get<{ txCbor: string }>(SESSION_WITHDRAW));
+    expect(txInputs(hexBytes(kept!.txCbor))).not.toContain(change);
+    // Max says why it leaves it.
+    const max = await t.withdraw.build("preprod", [{ to, lovelace: null, tokens: [] }]);
+    expect(max.leftOut).toEqual([{ txHash: funding, txIndex: 0, reason: "returning" }]);
+
+    // With the rest locked, nothing pays, and the error says what the private balance waits for.
+    await t.coins.setLocked("preprod", "seedelf", `${"a2".repeat(32)}#0`, true);
+    await expect(t.withdraw.build("preprod", [{ to, lovelace: "1000000", tokens: [] }])).rejects.toThrow(
+      "Every UTxO in your private balance is locked, or waits for a return through Lovejoin that's still being sent.",
+    );
+    // And with nothing else in it, that it's all waiting for the return.
+    const only = { ...read.view, owned: read.view.owned.filter((u) => outpoint(u) === change) };
+    expect(nothingToSpend({}, only, "Your private balance is empty.", read.returning).message).toBe(
+      "Your private balance waits for a return through Lovejoin that's still being sent: its last transaction adds to what's there, so nothing else spends it meanwhile. Try again once it's all sent.",
+    );
   });
 });
 

@@ -946,8 +946,8 @@ export class SessionService {
     empty: string,
   ): Promise<{ summary: SessionOutSummary; txCbor: string; seed: string }> {
     const { wasm } = this.deps;
-    const { view, utxos, params } = await readContract(this.deps, network);
-    if (!utxos.length) throw nothingToSpend(this.deps, view, empty);
+    const { view, utxos, params, returning } = await readContract(this.deps, network);
+    if (!utxos.length) throw nothingToSpend(this.deps, view, empty, returning);
     type Finished = Omit<SessionOutSummary, "network" | "payments" | "inputs" | "index" | "address"> & {
       txCbor: string;
       seed: string;

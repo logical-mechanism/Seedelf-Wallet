@@ -65,10 +65,15 @@ export class MintService {
 
   private async buildStealth(network: NetworkName, label: string): Promise<MintSummary> {
     const { wasm } = this.deps;
-    const { view, utxos, params } = await readContract(this.deps, network);
+    const { view, utxos, params, returning } = await readContract(this.deps, network);
     const request = { network, params, label, utxos };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your private balance is empty. Make some ADA private first; the Seedelf is paid from there.");
+      throw nothingToSpend(
+        this.deps,
+        view,
+        "Your private balance is empty. Make some ADA private first; the Seedelf is paid from there.",
+        returning,
+      );
     }
 
     const finished = await measureLocally<MintResult>(this.deps, request, (keys, r) => wasm.buildMint(keys.seedelf, r));

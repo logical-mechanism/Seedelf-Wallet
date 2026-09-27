@@ -102,8 +102,10 @@ export function unspent(utxos: KoiosUtxo[], spent: ReadonlySet<string>): KoiosUt
 // then its pool boxes, its change to come and its collateral are still
 // listed as unspent. So each chain reserves them, and nothing else takes
 // them meanwhile: another chain's draw from the pool, and, while it's being
-// sent, a payment from its account or a site connected to it. Reservations
-// are kept apart from what's spent: a reading that lists one isn't behind.
+// sent, a payment from its account or a site connected to it, or from the
+// private balance, whose UTxO a return merges into (script-spend.ts).
+// Reservations are kept apart from what's spent: a reading that lists one
+// isn't behind.
 
 /** chrome.storage.session: each chain's reservation, per network: `seedelf.reserved.<network>`, by chain. */
 export const SESSION_RESERVED_PREFIX = "seedelf.reserved.";

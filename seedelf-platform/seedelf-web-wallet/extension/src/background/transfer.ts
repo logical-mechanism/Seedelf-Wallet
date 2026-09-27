@@ -59,7 +59,7 @@ export class TransferService {
     checkRecipients(payments.length);
     const names = payments.map((p) => seedelfNameOf(p.to));
     await settleMaybeSent(this.deps, network);
-    const { view, utxos, params } = await readContract(this.deps, network);
+    const { view, utxos, params, returning } = await readContract(this.deps, network);
     const request = {
       network,
       params,
@@ -72,7 +72,12 @@ export class TransferService {
       })),
     };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your private balance is empty. Make some ADA private first: private payments are paid from there.");
+      throw nothingToSpend(
+        this.deps,
+        view,
+        "Your private balance is empty. Make some ADA private first: private payments are paid from there.",
+        returning,
+      );
     }
 
     const finished = await measureLocally<TransferResult>(this.deps, request, (keys, r) => wasm.buildTransfer(keys.seedelf, r));

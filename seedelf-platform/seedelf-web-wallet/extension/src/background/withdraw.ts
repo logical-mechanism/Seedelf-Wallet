@@ -15,6 +15,7 @@
 
 import type { NetworkName } from "../networks";
 import type {
+  LeftOutUtxo,
   Paid,
   PaymentAsk,
   PendingTx,
@@ -66,7 +67,7 @@ export class WithdrawService {
     const destinations: WithdrawDestination[] = [];
     for (const p of payments) destinations.push(await resolve(p.to));
     await settleMaybeSent(this.deps, network);
-    const { view, utxos, params } = await readContract(this.deps, network);
+    const { view, utxos, params, returning } = await readContract(this.deps, network);
     const request = {
       network,
       params,
@@ -74,18 +75,24 @@ export class WithdrawService {
       payments: payments.map((p, i) => ({ to: destinations[i]!.address, lovelace: p.lovelace, tokens: p.tokens })),
     };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to make public.");
+      throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to make public.", returning);
     }
     const finished = await measureLocally<WithdrawResult>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r));
     const { txCbor, seed, inputs, payments: paid, ...rest } = finished;
-    // Max says what no Seedelf spend can take, which the private balance leaves out too.
-    const scripts = finished.max ? unspendable(this.deps, view) : [];
+    // Max says what no Seedelf spend can take, which the private balance leaves out too, and what a
+    // return through Lovejoin being sent will spend (final review lovejoin-3).
+    const leftOut: LeftOutUtxo[] = finished.max
+      ? [
+          ...unspendable(this.deps, view).map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "script" as const })),
+          ...returning.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "returning" as const })),
+        ]
+      : [];
     const summary: WithdrawSummary = {
       ...rest,
       network,
       payments: paid.map(({ to: _to, ...p }, i) => ({ ...destinations[i]!, ...p })),
       inputs: inputs.length,
-      ...(scripts.length ? { leftOut: scripts.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "script" as const })) } : {}),
+      ...(leftOut.length ? { leftOut } : {}),
     };
     await keep(this.deps, SESSION_WITHDRAW, { ...summary, txCbor, seed });
     return summary;

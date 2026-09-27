@@ -65,6 +65,15 @@ describe("Max's review", () => {
     expect(text).toContain("would add up to more with the rest than one output can hold");
     expect(renderToStaticMarkup(createElement(LeftOutNote, { testId: "x", leftOut: [] }))).toBe("");
   });
+
+  it("says a UTxO a return through Lovejoin still spends waits for it (final review lovejoin-3)", () => {
+    const html = renderToStaticMarkup(
+      createElement(LeftOutNote, { testId: "withdraw-left-out", leftOut: [{ txHash: "c3".repeat(32), txIndex: 1, reason: "returning" }] }),
+    );
+    const text = html.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'");
+    expect(text).toContain(`${"c3".repeat(4)}…c3c3#1 waits for a return through Lovejoin that's still being sent, which adds to it`);
+    expect(text).not.toContain("reference script");
+  });
 });
 
 describe("the UTxOs screen", () => {

@@ -444,7 +444,7 @@ export interface WithdrawSummary {
    * output can hold.
    */
   left: number;
-  /** Max's: private UTxOs no payment takes (a reference script), which the private balance leaves out. */
+  /** Max's: private UTxOs no payment takes (a reference script), which the private balance leaves out, or one a return through Lovejoin being sent spends. */
   leftOut?: LeftOutUtxo[];
 }
 
@@ -881,12 +881,14 @@ export interface SessionBackSummary {
  * `tokens`, one of its tokens would total more with the rest than an output
  * can hold, so a later transaction takes it; `script`, it holds a reference
  * script the wallet can't measure, so it can't price spending it, and no
- * transaction of this wallet takes it.
+ * transaction of this wallet takes it; `returning`, a return through
+ * Lovejoin that's still being sent spends it (a private one, Make public's
+ * Max).
  */
 export interface LeftOutUtxo {
   txHash: string;
   txIndex: number;
-  reason: "tokens" | "script";
+  reason: "tokens" | "script" | "returning";
 }
 
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */

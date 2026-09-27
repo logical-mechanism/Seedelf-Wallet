@@ -34,6 +34,7 @@ import type { PreferencesService } from "./preferences";
 import { settleMaybeSent, submitWatched } from "./pending";
 import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
+import { outpoint, reservedSet } from "./spent";
 import type { Keys, Wallet } from "./wallet";
 
 /** A built transaction is only sent within this long; after that, build again. */
@@ -76,24 +77,52 @@ export interface Kept {
 
 /**
  * This wallet's view of the contract (contract-scan.ts), what a Seedelf
- * spend may pay with (`utxos`: owned, holding no seedelf, and not locked),
- * and the protocol parameters.
+ * spend may pay with (`utxos`: owned, holding no seedelf, not locked, and
+ * not `returning`), and the protocol parameters. `returning`: what a return
+ * through Lovejoin being sent will spend, left out. A session's return ends
+ * merged into its funding's change, many blocks after its chain starts, so
+ * no other spend of the private balance takes that change meanwhile (final
+ * review lovejoin-3). The view itself is left as it is.
  */
 export async function readContract(
   deps: ScriptSpendDeps,
   network: NetworkName,
-): Promise<{ view: ContractView; utxos: KoiosUtxo[]; params: Record<string, unknown> }> {
-  const [view, params] = await Promise.all([readContractView(deps, network), deps.koios(network).epochParams()]);
-  return { view, utxos: await deps.coins.seedelf(network, spendable(deps, view)), params };
+): Promise<{ view: ContractView; utxos: KoiosUtxo[]; params: Record<string, unknown>; returning: KoiosUtxo[] }> {
+  const [view, params, reserved] = await Promise.all([
+    readContractView(deps, network),
+    deps.koios(network).epochParams(),
+    deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true })),
+  ]);
+  const all = spendable(deps, view);
+  const returning = all.filter((u) => reserved.inputs.has(outpoint(u)));
+  const free = all.filter((u) => !reserved.inputs.has(outpoint(u)));
+  return { view, utxos: await deps.coins.seedelf(network, free), params, returning };
 }
 
-/** Why a Seedelf spend has nothing to pay with: `utxos` from readContract, `empty` for an empty balance. */
-export function nothingToSpend(deps: Pick<ScriptSpendDeps, "contract">, view: ContractView, empty: string): Error {
-  return new Error(
-    spendable(deps, view).length
-      ? "Every UTxO in your private balance is locked. Unlock one on its UTxOs screen first."
-      : empty,
-  );
+/**
+ * Why a Seedelf spend has nothing to pay with: `utxos` from readContract,
+ * `empty` for an empty balance, and `returning` (readContract's) for what a
+ * return through Lovejoin being sent holds.
+ */
+export function nothingToSpend(
+  deps: Pick<ScriptSpendDeps, "contract">,
+  view: ContractView,
+  empty: string,
+  returning: KoiosUtxo[] = [],
+): Error {
+  const all = spendable(deps, view);
+  if (!all.length) return new Error(empty);
+  if (returning.length === all.length) {
+    return new Error(
+      "Your private balance waits for a return through Lovejoin that's still being sent: its last transaction adds to what's there, so nothing else spends it meanwhile. Try again once it's all sent.",
+    );
+  }
+  if (returning.length) {
+    return new Error(
+      "Every UTxO in your private balance is locked, or waits for a return through Lovejoin that's still being sent. Unlock one on its UTxOs screen, or try again once the return is all sent.",
+    );
+  }
+  return new Error("Every UTxO in your private balance is locked. Unlock one on its UTxOs screen first.");
 }
 
 /**
