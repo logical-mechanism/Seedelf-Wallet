@@ -206,6 +206,14 @@ fn slot_config(network_flag: bool) -> (u64, u64, u32) {
     }
 }
 
+/// The slot `unix_ms` (milliseconds since 1970) falls in, on preprod
+/// (`network_flag`) or mainnet: what a transaction's validity interval is
+/// counted in. A time before the Shelley era gives its first slot.
+pub fn slot_at(network_flag: bool, unix_ms: u64) -> u64 {
+    let (zero_time, zero_slot, slot_length) = slot_config(network_flag);
+    zero_slot + unix_ms.saturating_sub(zero_time) / u64::from(slot_length)
+}
+
 fn purpose(tag: &RedeemerTag) -> &'static str {
     match tag {
         RedeemerTag::Spend => "spend",

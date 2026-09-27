@@ -291,6 +291,7 @@ fn moves_an_amount_from_pure_ada_first() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -323,6 +324,7 @@ fn adds_inputs_until_the_change_is_valid() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -354,6 +356,7 @@ fn picked_tokens_move_in_full_and_the_rest_come_back() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -410,6 +413,7 @@ fn part_of_a_token_moves_in_and_the_rest_comes_back() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -444,6 +448,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -483,6 +488,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &pure, &all);
@@ -512,6 +518,7 @@ fn many_tokens_split_twenty_to_an_output() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -536,6 +543,7 @@ fn explains_what_is_wrong() {
             &w.wallet,
             &w.change,
             &Staking::none(),
+            None,
         )
         .err()
         .map(|e| e.to_string())
@@ -579,6 +587,7 @@ fn explains_what_is_wrong() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .err()
     .unwrap();
@@ -600,6 +609,7 @@ fn a_fee_over_the_limit_is_refused_in_words() {
             &w.wallet,
             &w.change,
             &Staking::none(),
+            None,
         )
     };
     // Parameters Koios would never be taken with: from_koios refuses them.
@@ -722,6 +732,7 @@ fn sends_an_amount_and_part_of_a_token_to_an_address() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -762,6 +773,7 @@ fn send_max_pays_everything_but_the_fee_and_the_change_floor() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -803,6 +815,7 @@ fn max_leaves_out_a_utxo_whose_tokens_would_overflow_the_rest() {
             true,
             &w.change,
             &Staking::none(),
+            None,
         )
     };
     let built = send(AccountAmount::Max).unwrap();
@@ -835,6 +848,7 @@ fn max_leaves_out_a_utxo_whose_tokens_would_overflow_the_rest() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &moved);
@@ -871,6 +885,7 @@ fn spending_a_utxo_with_a_reference_script_pays_for_its_bytes() {
             true,
             &w.change,
             &Staking::none(),
+            None,
         )
         .unwrap()
     };
@@ -909,6 +924,7 @@ fn spending_a_utxo_with_a_reference_script_pays_for_its_bytes() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     assert_sound(&w, &available, &moved);
@@ -935,6 +951,7 @@ fn a_reference_script_the_wallet_cant_measure_is_never_spent() {
             true,
             &w.change,
             &Staking::none(),
+            None,
         )
         .unwrap()
     };
@@ -954,6 +971,7 @@ fn a_reference_script_the_wallet_cant_measure_is_never_spent() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .err()
     .unwrap()
@@ -975,6 +993,7 @@ fn send_refuses_what_would_lose_money() {
             true,
             &w.change,
             &Staking::none(),
+            None,
         )
         .err()
         .map(|e| e.to_string())
@@ -1034,6 +1053,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &sent, Some(&to));
@@ -1047,6 +1067,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     );
     assert!(short.is_err(), "a lovelace less is refused");
 
@@ -1066,6 +1087,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &moved);
@@ -1110,6 +1132,7 @@ fn funds_a_seedelf_under_a_fresh_copy_of_its_register() {
             &w.change,
             &Staking::none(),
             None,
+            None,
         )
     };
     let built = fund(AccountAmount::Lovelace(10_000_000), &picked).unwrap();
@@ -1153,6 +1176,7 @@ fn paying_a_seedelf_refuses_a_register_that_would_lose_the_money() {
             true,
             &w.change,
             &Staking::none(),
+            None,
             None,
         )
         .err()
@@ -1220,6 +1244,7 @@ fn pays_several_recipients_in_order_each_its_own_amount_and_tokens() {
         &w.change,
         &Staking::none(),
         None,
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -1281,6 +1306,7 @@ fn several_recipients_refuse_max_too_much_and_no_one() {
             true,
             &w.change,
             &Staking::none(),
+            None,
             None,
         )
         .err()
@@ -1371,6 +1397,7 @@ fn a_transaction_over_the_size_limit_is_refused_in_words() {
         &w.change,
         &Staking::none(),
         None,
+        None,
     )
     .err()
     .unwrap()
@@ -1385,6 +1412,7 @@ fn a_transaction_over_the_size_limit_is_refused_in_words() {
             true,
             &w.change,
             &Staking::none(),
+            None,
             None,
         )
         .is_ok()

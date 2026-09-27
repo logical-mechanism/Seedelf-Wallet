@@ -147,6 +147,7 @@ mod move_in {
             lovelace: lovelace.map(String::from),
             tokens,
             withdrawal: None,
+            invalid_hereafter: None,
         }
     }
 
@@ -423,6 +424,7 @@ mod move_in {
             }],
             withdrawal: None,
             note: None,
+            invalid_hereafter: None,
         }
     }
 
@@ -1134,6 +1136,7 @@ mod account_mint {
             label: label.into(),
             evaluation,
             withdrawal: None,
+            invalid_hereafter: None,
         }
     }
 
@@ -2352,6 +2355,7 @@ mod staking {
             utxos: account_utxos(account),
             action,
             state,
+            invalid_hereafter: None,
         }
     }
 
@@ -2459,6 +2463,7 @@ mod staking {
             collateral: None,
             label: "rewards".into(),
             withdrawal: Some("57475311".into()),
+            invalid_hereafter: None,
             evaluation,
         };
         let draft = api::draft_account_mint(&account, sk, mint(None)).unwrap();
@@ -2635,6 +2640,7 @@ mod staking {
             }],
             withdrawal: withdrawal.map(String::from),
             note: None,
+            invalid_hereafter: None,
         };
         let plain = api::account_send(&account, send(None)).unwrap();
         assert_eq!(plain.withdrawal, "0");
@@ -2672,5 +2678,129 @@ mod staking {
             "drep_always_no_confidence"
         );
         assert!(api::drep_id(LOGIC).is_err());
+    }
+}
+
+/// The validity interval the worker asks for: `invalidHereafter` goes into
+/// the body of a move-in, a send, a staking transaction and an account-paid
+/// mint (its draft too), under the hash the keys sign. A request without one
+/// builds none.
+mod validity {
+    use pallas_primitives::{Fragment, conway};
+    use seedelf_core::build::tx_id;
+    use seedelf_crypto::cardano::{CardanoAccount, Role};
+    use seedelf_crypto::derivation::seedelf_key_v1;
+    use seedelf_wasm::api;
+    use serde::de::DeserializeOwned;
+    use serde_json::{Value, json};
+
+    use super::move_in::account_utxos;
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    /// 2026-09-27 12:00 UTC.
+    const NOW_MS: f64 = 1_790_510_400_000.0;
+    /// Two hours on, on preprod.
+    const SLOT: u64 = 134_834_400;
+
+    fn fixture(path: &str) -> Value {
+        let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn params() -> Value {
+        fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone()
+    }
+
+    /// `request` as the worker sends it: JSON, with `invalidHereafter` when
+    /// there's a slot.
+    fn asked<T: DeserializeOwned>(mut request: Value, slot: Option<u64>) -> T {
+        if let Some(slot) = slot {
+            request["invalidHereafter"] = json!(slot);
+        }
+        serde_json::from_value(request).unwrap()
+    }
+
+    /// The slot a transaction stops being valid at, after checking its hash
+    /// is its body's.
+    fn ttl(tx_cbor: &str, tx_hash: Option<&str>) -> Option<u64> {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        if let Some(hash) = tx_hash {
+            assert_eq!(hex::encode(*tx_id(&bytes).unwrap()), hash);
+        }
+        conway::Tx::decode_fragment(&bytes)
+            .unwrap()
+            .transaction_body
+            .ttl
+    }
+
+    #[test]
+    fn a_slot_is_counted_from_the_time_on_each_network() {
+        assert_eq!(
+            api::slot_at(true, NOW_MS + 2.0 * 3_600_000.0).unwrap(),
+            SLOT
+        );
+        // Mainnet's Chang hard fork, 2024-09-01 21:44:51 UTC.
+        assert_eq!(
+            api::slot_at(false, 1_725_227_091_500.0).unwrap(),
+            133_660_800
+        );
+        for time in [f64::NAN, f64::INFINITY, -1.0] {
+            assert!(api::slot_at(true, time).is_err(), "{time}");
+        }
+    }
+
+    #[test]
+    fn the_slot_asked_for_goes_in_every_account_transaction() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let utxos: Vec<Value> = account_utxos(&account)
+            .into_iter()
+            .map(|p| json!({ "utxo": p.utxo, "role": p.role, "index": p.index }))
+            .collect();
+        let to = account
+            .base_address(true, Role::Receive, 5)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let base = json!({ "network": "preprod", "params": params(), "utxos": utxos });
+        let request = |extra: Value| {
+            let mut r = base.clone();
+            r.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            r
+        };
+        let move_in = request(json!({ "lovelace": "10000000", "tokens": [] }));
+        let send =
+            request(json!({ "payments": [{ "to": to, "lovelace": "5000000", "tokens": [] }] }));
+        let stake = request(json!({
+            "action": { "kind": "withdraw" },
+            "state": { "registered": true, "deposit": "2000000", "rewards": "57475311", "drep": "drep_always_abstain" },
+        }));
+        let mint = request(json!({ "label": "until" }));
+        let evaluation = fixture("../../seedelf-core/tests/fixtures/ogmios/account_mint.json");
+
+        for slot in [None, Some(SLOT)] {
+            let r = api::move_in(&account, sk, asked(move_in.clone(), slot)).unwrap();
+            assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "move-in");
+
+            let r = api::account_send(&account, asked(send.clone(), slot)).unwrap();
+            assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "send");
+
+            let r = api::stake(&account, asked(stake.clone(), slot)).unwrap();
+            assert_eq!(r.withdrawal, "57475311");
+            assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "staking");
+
+            let draft = api::draft_account_mint(&account, sk, asked(mint.clone(), slot)).unwrap();
+            assert_eq!(
+                ttl(&draft.draft_cbor, None),
+                slot,
+                "the mint Ogmios measures"
+            );
+            let mut finish = mint.clone();
+            finish["evaluation"] = evaluation.clone();
+            let r = api::finish_account_mint(&account, sk, asked(finish, slot)).unwrap();
+            assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "mint");
+        }
     }
 }

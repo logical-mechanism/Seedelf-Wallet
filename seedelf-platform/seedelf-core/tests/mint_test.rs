@@ -1134,6 +1134,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         // The largest pure-ADA UTxO pays; the 5 ADA one isn't needed, so it's put up.
@@ -1169,6 +1170,7 @@ mod account {
                 &p.seedelf,
                 &p.change,
                 &Staking::none(),
+                None,
             )
             .unwrap()
         };
@@ -1202,6 +1204,7 @@ mod account {
                 &p.seedelf,
                 &p.change,
                 &Staking::none(),
+                None,
             )
             .unwrap();
             assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
@@ -1233,6 +1236,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
@@ -1262,6 +1266,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..2]));
@@ -1278,6 +1283,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         assert_eq!(mint.collateral().tx_hash, single[0].tx_hash);
@@ -1297,6 +1303,7 @@ mod account {
                 &p.seedelf,
                 &p.change,
                 &Staking::none(),
+                None,
             )
             .err()
             .expect("an error")
@@ -1317,6 +1324,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .err()
         .unwrap();
@@ -1333,7 +1341,8 @@ mod account {
                 "",
                 &bad,
                 &p.change,
-                &Staking::none()
+                &Staking::none(),
+                None
             )
             .err()
             .unwrap()
@@ -1348,6 +1357,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         let no_mint = json!({"result": [{"validator": {"index": 0, "purpose": "spend"}, "budget": {"memory": 1, "cpu": 1}}]});

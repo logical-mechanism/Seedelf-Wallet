@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { CardanoAccount, Network, SeedelfKey, buildAccountSend, buildMoveIn, checkPayableAddress } from "./wasm.mjs";
+import { CardanoAccount, Network, SeedelfKey, buildAccountSend, buildMoveIn, checkPayableAddress, slotAt } from "./wasm.mjs";
 
 const json = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const phrase = json("../../../seedelf-crypto/tests/vectors/cardano_account.json").vectors.find(
@@ -87,6 +87,29 @@ test("sends from the Cardano account to an address inside WebAssembly", () => {
   );
   assert.throws(() => checkPayableAddress(account.stakeAddress(Network.Preprod), Network.Preprod), /normal preprod address/);
   account.free();
+});
+
+test("a payment asked for a slot stops being valid there", () => {
+  // Two hours after 2026-09-27 12:00 UTC, on each network.
+  const later = Date.UTC(2026, 8, 27, 14);
+  assert.equal(slotAt(Network.Preprod, later), 134_834_400);
+  assert.equal(slotAt(Network.Mainnet, later), 4_492_800 + (later - 1_596_059_091_000) / 1000);
+  assert.throws(() => slotAt(Network.Preprod, Number.NaN), /isn't a time/);
+
+  const account = CardanoAccount.fromPhrase(phrase, 0);
+  const key = SeedelfKey.fromPhrase(phrase, 0);
+  const utxos = pathedUtxos(account);
+  const slot = slotAt(Network.Preprod, later);
+  // The body's key 3, the slot as a 4-byte number.
+  const ttl = `031a${slot.toString(16).padStart(8, "0")}`;
+  const moveIn = { network: "preprod", params, utxos, lovelace: "10000000", tokens: [] };
+  assert.ok(JSON.parse(buildMoveIn(account, key, JSON.stringify({ ...moveIn, invalidHereafter: slot }))).txCbor.includes(ttl));
+  assert.ok(!JSON.parse(buildMoveIn(account, key, JSON.stringify(moveIn))).txCbor.includes(ttl));
+  const to = account.receiveAddress(Network.Preprod, 5);
+  const send = { network: "preprod", params, utxos, payments: [{ to, lovelace: "5000000", tokens: [] }], invalidHereafter: slot };
+  assert.ok(JSON.parse(buildAccountSend(account, JSON.stringify(send))).txCbor.includes(ttl));
+  account.free();
+  key.free();
 });
 
 test("explains a bad request", () => {

@@ -410,7 +410,7 @@ fn the_first_delegation_pays_the_deposit_and_signs_with_the_stake_key() {
         utxo(&w, 2, 1, 50_000_000, vec![]),
     ];
     let first = staking(&w, StakeAction::Delegate(logic()), StakeState::default());
-    let built = build::account_staking(&w.params, &available, &first, &w.change).unwrap();
+    let built = build::account_staking(&w.params, &available, &first, &w.change, None).unwrap();
     let tx = assert_sound(&w, &available, &first, &built);
 
     assert_eq!(tx.inputs, vec![hex::encode([2u8; 32])], "one UTxO pays");
@@ -426,12 +426,12 @@ fn withdrawing_and_stopping_bring_the_rewards_and_the_deposit_back() {
     let state = registered(57_475_311, true);
 
     let withdraw = staking(&w, StakeAction::Withdraw, state);
-    let built = build::account_staking(&w.params, &available, &withdraw, &w.change).unwrap();
+    let built = build::account_staking(&w.params, &available, &withdraw, &w.change, None).unwrap();
     assert_sound(&w, &available, &withdraw, &built);
     assert_eq!(built.change_lovelace, 1_500_000 + 57_475_311 - built.fee);
 
     let stop = staking(&w, StakeAction::Stop, state);
-    let built = build::account_staking(&w.params, &available, &stop, &w.change).unwrap();
+    let built = build::account_staking(&w.params, &available, &stop, &w.change, None).unwrap();
     let tx = assert_sound(&w, &available, &stop, &built);
     assert_eq!(tx.certificates.len(), 1);
     assert_eq!(
@@ -447,7 +447,7 @@ fn a_staking_transaction_still_spends_a_utxo_and_explains_a_shortfall() {
 
     // The deposit and fee need more than a small UTxO holds.
     let small = vec![utxo(&w, 1, 0, 2_100_000, vec![])];
-    let err = build::account_staking(&w.params, &small, &first, &w.change)
+    let err = build::account_staking(&w.params, &small, &first, &w.change, None)
         .err()
         .map(|e| e.to_string())
         .unwrap_or_default();
@@ -458,9 +458,9 @@ fn a_staking_transaction_still_spends_a_utxo_and_explains_a_shortfall() {
 
     // Rewards alone could pay the fee, but a transaction spends a UTxO.
     let withdraw = staking(&w, StakeAction::Withdraw, registered(10_000_000, true));
-    assert!(build::account_staking(&w.params, &[], &withdraw, &w.change).is_err());
+    assert!(build::account_staking(&w.params, &[], &withdraw, &w.change, None).is_err());
     assert!(
-        build::account_staking(&w.params, &small, &Staking::none(), &w.change)
+        build::account_staking(&w.params, &small, &Staking::none(), &w.change, None)
             .err()
             .is_some_and(|e| e.to_string().contains("certificate or a withdrawal"))
     );
@@ -485,6 +485,7 @@ fn a_send_spends_the_rewards_too() {
         true,
         &w.change,
         &rewards,
+        None,
     )
     .unwrap();
     assert_sound(&w, &available, &rewards, &built);
@@ -502,6 +503,7 @@ fn a_send_spends_the_rewards_too() {
             true,
             &w.change,
             &Staking::none(),
+            None,
         )
         .is_err()
     );
@@ -516,6 +518,7 @@ fn a_send_spends_the_rewards_too() {
         true,
         &w.change,
         &rewards,
+        None,
     )
     .unwrap();
     assert_sound(&w, &available, &rewards, &max);
@@ -543,6 +546,7 @@ fn a_move_in_spends_the_rewards_too() {
         &wallet,
         &w.change,
         &rewards,
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &rewards, &built);
@@ -575,6 +579,7 @@ fn an_account_mint_spends_the_rewards_too() {
         &seedelf,
         &w.change,
         &rewards,
+        None,
     )
     .unwrap();
     // The 2 ADA UTxO and the rewards pay; without them it wouldn't.
@@ -589,6 +594,7 @@ fn an_account_mint_spends_the_rewards_too() {
             &seedelf,
             &w.change,
             &Staking::none(),
+            None,
         )
         .is_err()
     );
@@ -629,6 +635,7 @@ fn a_patch_happens_before_signing_and_nothing_to_patch_changes_nothing() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let same = Staking::none().patch(plain.tx.clone()).unwrap();

@@ -100,6 +100,11 @@ pub mod api {
         /// The staking rewards to withdraw along with it: see [`withdrawing`].
         #[serde(default)]
         pub withdrawal: Option<String>,
+        /// The slot the transaction stops being valid at ([`slot_at`]):
+        /// past it, one that never landed can't land any more. Without it,
+        /// it stays valid for as long as its inputs are unspent.
+        #[serde(default)]
+        pub invalid_hereafter: Option<u64>,
     }
 
     #[derive(Deserialize, Clone)]
@@ -405,7 +410,15 @@ pub mod api {
         let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
 
         let built = build::move_in(
-            &params, &available, amount, &picked, &owner, &wallet, &change, &rewards,
+            &params,
+            &available,
+            amount,
+            &picked,
+            &owner,
+            &wallet,
+            &change,
+            &rewards,
+            request.invalid_hereafter,
         )?;
 
         let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
@@ -771,6 +784,9 @@ pub mod api {
         /// read: one line, at most 64 characters (see [`Note::new`]).
         #[serde(default)]
         pub note: Option<String>,
+        /// As for a move-in: see [`MoveInRequest::invalid_hereafter`].
+        #[serde(default)]
+        pub invalid_hereafter: Option<u64>,
     }
 
     /// One recipient of a send from the Cardano account.
@@ -910,6 +926,7 @@ pub mod api {
             &change,
             &rewards,
             note.as_ref(),
+            request.invalid_hereafter,
         )?;
 
         let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
@@ -957,6 +974,9 @@ pub mod api {
         pub action: StakingAction,
         /// Fresh from Koios's `account_info`.
         pub state: StakeStateIn,
+        /// As for a move-in: see [`MoveInRequest::invalid_hereafter`].
+        #[serde(default)]
+        pub invalid_hereafter: Option<u64>,
     }
 
     /// What to do with the stake key.
@@ -1063,7 +1083,13 @@ pub mod api {
         let change = account.base_address(network_flag, Role::Receive, 0)?;
         let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
 
-        let built = build::account_staking(&params, &available, &staking, &change)?;
+        let built = build::account_staking(
+            &params,
+            &available,
+            &staking,
+            &change,
+            request.invalid_hereafter,
+        )?;
 
         let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
         let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
@@ -1117,6 +1143,16 @@ pub mod api {
             "mainnet" => Ok(false),
             other => bail!("unknown network {other}"),
         }
+    }
+
+    /// The slot `unix_ms` (milliseconds since 1970) falls in on a network
+    /// (`true` is preprod), as `seedelf_core::eval::slot_at` counts it: what
+    /// a request's `invalidHereafter` is.
+    pub fn slot_at(network_flag: bool, unix_ms: f64) -> Result<u64> {
+        if !unix_ms.is_finite() || unix_ms < 0.0 {
+            bail!("{unix_ms} isn't a time");
+        }
+        Ok(seedelf_core::eval::slot_at(network_flag, unix_ms as u64))
     }
 
     fn seed_from_hex(seed: &str) -> Result<[u8; 32]> {
@@ -1403,6 +1439,10 @@ pub mod api {
         /// The staking rewards to withdraw along with it: see [`withdrawing`].
         #[serde(default)]
         pub withdrawal: Option<String>,
+        /// As for a move-in ([`MoveInRequest::invalid_hereafter`]). The draft
+        /// holds it too, so the finish must be given the same slot.
+        #[serde(default)]
+        pub invalid_hereafter: Option<u64>,
         /// Ogmios's answer to evaluating the draft.
         pub evaluation: Option<serde_json::Value>,
     }
@@ -1472,6 +1512,7 @@ pub mod api {
             &seedelf,
             &change,
             &rewards,
+            request.invalid_hereafter,
         )?;
         Ok((mint, paths, rewards))
     }
@@ -2682,6 +2723,16 @@ pub fn pool_id(id: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = drepId)]
 pub fn drep_id(id: &str) -> Result<String, JsError> {
     api::drep_id(id).map_err(js_error)
+}
+
+/// The slot `unixMs` (milliseconds since 1970, as `Date.now()` gives) falls
+/// in on `network`: what a move-in's, a send's, a staking transaction's or an
+/// account-paid mint's `invalidHereafter` is counted in.
+#[wasm_bindgen(js_name = slotAt)]
+pub fn slot_at(network: Network, unix_ms: f64) -> Result<f64, JsError> {
+    api::slot_at(network.flag(), unix_ms)
+        .map(|slot| slot as f64)
+        .map_err(js_error)
 }
 
 /// Creating a seedelf from the Seedelf balance: picks the Seedelf UTxOs that

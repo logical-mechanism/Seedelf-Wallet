@@ -209,6 +209,17 @@ fn built_with(staged: StagingTransaction, patches: Patches) -> Result<BuiltTrans
     )
 }
 
+/// `tx`, valid until slot `invalid_hereafter` when one is given: the ledger
+/// refuses it from that slot on, so one that never landed can't land later.
+/// Staged, not patched, so every draft is priced with it and the staking and
+/// note patches hash a body that holds it.
+fn expiring(tx: StagingTransaction, invalid_hereafter: Option<u64>) -> StagingTransaction {
+    match invalid_hereafter {
+        Some(slot) => tx.invalid_from_slot(slot),
+        None => tx,
+    }
+}
+
 /// The transaction input for a Koios UTxO.
 pub fn input_of(utxo: &UtxoResponse) -> Result<Input> {
     Ok(Input::new(
@@ -554,6 +565,10 @@ pub struct AccountPayment {
 /// - Change goes to `change_addr`. There is no change output when nothing is left.
 /// - `staking` rides along: a reward withdrawal adds to what pays
 ///   ([`Staking::withdraw`]), and it's patched into the transaction.
+/// - `invalid_hereafter` is the slot the transaction stops being valid at
+///   ([`crate::eval::slot_at`] gives one from the time): past it, one that
+///   never landed can't land any more, so a payment made again can't pay
+///   twice. `None` leaves it valid for as long as its inputs are unspent.
 #[allow(clippy::too_many_arguments)]
 pub fn move_in(
     params: &ProtocolParameters,
@@ -564,6 +579,7 @@ pub fn move_in(
     wallet_addr: &Address,
     change_addr: &Address,
     staking: &Staking,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     let payee = Payee::Seedelf { owner, wallet_addr };
     account_payment(
@@ -573,12 +589,14 @@ pub fn move_in(
         Patches::staking(staking),
         change_addr,
         MOVE_IN_SHORT,
+        invalid_hereafter,
     )
 }
 
 /// Send: the Cardano account pays `to`, a key address on this network
 /// (`network_flag`: `true` is preprod), in one output. The UTxOs are chosen,
-/// the change made, and `staking` carried, as for [`move_in`].
+/// the change made, and `staking` and `invalid_hereafter` carried, as for
+/// [`move_in`].
 #[allow(clippy::too_many_arguments)]
 pub fn account_send(
     params: &ProtocolParameters,
@@ -589,6 +607,7 @@ pub fn account_send(
     network_flag: bool,
     change_addr: &Address,
     staking: &Staking,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     let payee = Payee::Address(to);
     account_send_many(
@@ -599,6 +618,7 @@ pub fn account_send(
         change_addr,
         staking,
         None,
+        invalid_hereafter,
     )
 }
 
@@ -606,8 +626,9 @@ pub fn account_send(
 /// order given, then the change. Each is a key address on this network or a
 /// Seedelf (see [`Payee::Seedelf`]), with its own amount and tokens. Max pays a
 /// single recipient. The UTxOs are chosen, the change made, and `staking`
-/// carried, as for [`move_in`]. A `note` goes on the transaction as CIP-20's
-/// message, which anyone can read; the fee pays for its bytes.
+/// and `invalid_hereafter` carried, as for [`move_in`]. A `note` goes on the
+/// transaction as CIP-20's message, which anyone can read; the fee pays for
+/// its bytes.
 #[allow(clippy::too_many_arguments)]
 pub fn account_send_many(
     params: &ProtocolParameters,
@@ -617,6 +638,7 @@ pub fn account_send_many(
     change_addr: &Address,
     staking: &Staking,
     note: Option<&Note>,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     if recipients.is_empty() {
         bail!("A payment needs someone to pay");
@@ -635,6 +657,7 @@ pub fn account_send_many(
         Patches { staking, note },
         change_addr,
         SEND_SHORT,
+        invalid_hereafter,
     )
 }
 
@@ -653,11 +676,13 @@ fn check_register(register: &Register) -> Result<()> {
 /// deposit, and everything else comes back to `change_addr`; UTxOs are
 /// chosen as for [`move_in`], as few as pay. A withdrawal or a refund counts
 /// towards the fee, but a transaction always spends at least one UTxO.
+/// `invalid_hereafter` is as for [`move_in`].
 pub fn account_staking(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
     staking: &Staking,
     change_addr: &Address,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     if staking.is_empty() {
         bail!("A staking transaction needs a certificate or a withdrawal");
@@ -673,6 +698,7 @@ pub fn account_staking(
         Patches::staking(staking),
         change_addr,
         STAKE_SHORT,
+        invalid_hereafter,
     )
 }
 
@@ -683,6 +709,7 @@ fn account_payment(
     patches: Patches,
     change_addr: &Address,
     short: NotEnough,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     let max = pays.iter().any(|p| p.amount == AccountAmount::Max);
     if max && pays.len() > 1 {
@@ -749,7 +776,15 @@ fn account_payment(
     });
 
     let attempt = |selected: &[UtxoResponse]| {
-        build_account_payment(params, selected, pays, patches, change_addr, short)
+        build_account_payment(
+            params,
+            selected,
+            pays,
+            patches,
+            change_addr,
+            short,
+            invalid_hereafter,
+        )
     };
 
     if max {
@@ -788,6 +823,7 @@ fn build_account_payment(
     patches: Patches,
     change_addr: &Address,
     short: NotEnough,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     let (inputs_total, all_tokens) = assets_of(selected.to_vec())?;
     // What pays: the inputs, plus rewards and a refund, less a deposit.
@@ -882,7 +918,7 @@ fn build_account_payment(
         for output in change_outputs(params, change_addr, change, &staying, short)? {
             tx = tx.output(output);
         }
-        Ok(tx.fee(fee))
+        Ok(expiring(tx.fee(fee), invalid_hereafter))
     })?;
 
     Ok(AccountPayment {
@@ -2367,6 +2403,8 @@ pub struct AccountMint {
     change_addr: Address,
     /// A reward withdrawal riding along, patched into every draft.
     staking: Staking,
+    /// The slot it stops being valid at, staged in every draft.
+    invalid_hereafter: Option<u64>,
     /// The new token's name: prefix, label, and the smallest input.
     pub token_name: Vec<u8>,
     /// Locked with the token; only removing the seedelf gets it back.
@@ -2515,6 +2553,7 @@ impl AccountMint {
         for output in std::iter::once(self.seedelf.clone()).chain(change) {
             tx = tx.output(output);
         }
+        tx = expiring(tx, self.invalid_hereafter);
         Ok(tx
             .collateral_input(input_of(&self.collateral)?)
             .collateral_output(collateral_return)
@@ -2550,6 +2589,9 @@ impl AccountMint {
 ///   fresh re-randomization). Tokens in the inputs go back with the change,
 ///   to `change_addr`.
 /// - `staking` rides along, as for [`move_in`]: a withdrawal of the rewards.
+/// - `invalid_hereafter` is as for [`move_in`]; the draft Ogmios measures
+///   holds it too.
+#[allow(clippy::too_many_arguments)]
 pub fn account_mint(
     chain: &Chain,
     available: &[UtxoResponse],
@@ -2558,6 +2600,7 @@ pub fn account_mint(
     seedelf: &Register,
     change_addr: &Address,
     staking: &Staking,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountMint> {
     if !is_payable(seedelf) {
         bail!("The Seedelf's register isn't made of valid points");
@@ -2626,6 +2669,7 @@ pub fn account_mint(
             redeemer: redeemer.clone(),
             change_addr: change_addr.clone(),
             staking: staking.clone(),
+            invalid_hereafter,
             token_name,
             lovelace,
         };
