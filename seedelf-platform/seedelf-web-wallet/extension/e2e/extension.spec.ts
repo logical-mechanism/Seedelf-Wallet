@@ -2319,10 +2319,11 @@ test.describe("the dApp connector", () => {
     let sign = await prompt;
     await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
     await expect(sign.getByTestId("dapp-paid").locator("[data-value]")).toHaveAttribute("data-value", vector(15).preprod.receive_0);
-    // The account's rewards ride along (57.475311 ₳), so its UTxOs end up with more than they paid: the stake key signs too.
-    await expect(sign.getByTestId("dapp-tx-net")).toContainText("Your public account gets");
+    // The account's rewards ride along (57.475311 ₳) and come back to it: it sends the 3 ₳ and the fee, and the stake key signs too.
+    await expect(sign.getByTestId("dapp-tx-net")).toContainText("Your public account sends");
+    await expect(sign.getByTestId("dapp-tx-net")).toContainText("From your staking");
     await expect(sign.getByTestId("dapp-tx-net")).toContainText("your stake key");
-    await expect(sign.getByTestId("dapp-staking")).toContainText("Withdraws your staking rewards: 57.475311 ₳");
+    await expect(sign.getByTestId("dapp-staking")).toContainText("Withdraws your staking rewards, 57.475311 ₳, into your public account.");
     await snap(sign, "dapp-sign-tx");
     // Sign waits for the password, even though the wallet is unlocked; a wrong one is refused and the request stays.
     await expect(sign.getByRole("button", { name: "Sign", exact: true })).toBeDisabled();

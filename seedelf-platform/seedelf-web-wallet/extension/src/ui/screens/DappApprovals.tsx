@@ -24,7 +24,8 @@ import { PasswordField } from "../components/PasswordField";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { explorerUrl, formatAda, formatQuantity, plural, shortHex, voteLabel } from "../format";
+import { certificateLine, paidTo, stakingComesBack, withdrawalLine } from "../dapp";
+import { explorerUrl, formatAda, formatQuantity, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { tokenInfo, tokenLabel } from "../tokens";
 
@@ -454,6 +455,10 @@ function SignTx({
   const keys = s.signs.filter((k) => k !== "stake").length;
   const stake = s.signs.includes("stake");
   const signers = [keys ? plural(keys, "payment key") : "", stake ? "your stake key" : ""].filter(Boolean).join(" and ");
+  const whose = session ? "your private session" : "your public account";
+  const staking = BigInt(s.stakingLovelace);
+  const back = stakingComesBack(s);
+  const ownKey = s.paid.filter((p) => p.ownPaymentKey).length;
 
   const notes: ReactNode[] = [];
   if (s.scripts) notes.push("It runs smart contracts.");
@@ -478,6 +483,8 @@ function SignTx({
             value={token(t)}
           />
         ))}
+        {/* Rewards and a deposit back are the account's money too: counted above, and said so. */}
+        {staking > 0n && <Row label="From your staking" value={`${formatAda(s.stakingLovelace)} ₳ (included)`} />}
         <Row label="Network fee" value={`${formatAda(s.fee)} ₳${s.ownInputs ? " (included)" : ""}`} />
         {s.collateral && s.collateral.own > 0 && (
           <Row label="Collateral at risk" value={`${formatAda(s.collateral.atRisk)} ₳`} />
@@ -493,11 +500,7 @@ function SignTx({
               <li key={i} className="list__row">
                 <span className="stack-tight">
                   <MiddleEllipsis text={p.address} />
-                  <span className="note">
-                    {[p.seedelf ? "Seedelf Wallet's contract" : p.script ? "A contract" : "An address", p.datum ? "with data" : ""]
-                      .filter(Boolean)
-                      .join(", ")}
-                  </span>
+                  <span className="note">{paidTo(p)}</span>
                 </span>
                 <span className="dapp-amount">
                   {formatAda(p.lovelace)} ₳
@@ -513,6 +516,13 @@ function SignTx({
         </section>
       )}
 
+      {ownKey > 0 && (
+        <Callout tone="warn" testId="dapp-own-key">
+          It pays {plural(ownKey, "output")} to your payment key with a stake part that isn't yours. That isn't change,
+          so it isn't counted as coming back: the money can still be spent from this wallet, but it earns staking
+          rewards for someone else, or for no one.
+        </Callout>
+      )}
       {s.paid.some((p) => p.seedelf === "none") && (
         <Callout tone="warn" testId="dapp-seedelf-unsafe">
           It pays Seedelf Wallet's contract without a register: whatever goes there, anyone can take.
@@ -533,17 +543,16 @@ function SignTx({
       )}
 
       {(s.certificates.length > 0 || s.withdrawals.length > 0) && (
-        <Callout tone={s.certificates.some((c) => c.own) ? "warn" : "info"} testId="dapp-staking">
+        <Callout
+          tone={s.certificates.some((c) => c.own) || (staking > 0n && !back) ? "warn" : "info"}
+          testId="dapp-staking"
+        >
           <ul className="dapp-points">
             {s.certificates.map((c, i) => (
-              <li key={i}>{certificate(c)}</li>
+              <li key={i}>{certificateLine(c, back, whose)}</li>
             ))}
             {s.withdrawals.map((w, i) => (
-              <li key={`w${i}`}>
-                {w.own
-                  ? `Withdraws your staking rewards: ${formatAda(w.lovelace)} ₳.`
-                  : `Withdraws ${formatAda(w.lovelace)} ₳ from a contract's reward account.`}
-              </li>
+              <li key={`w${i}`}>{withdrawalLine(w, back, whose)}</li>
             ))}
           </ul>
         </Callout>
@@ -598,23 +607,6 @@ function SignTx({
       </Callout>
     </>
   );
-}
-
-/** A certificate in a sentence: the account's own staking, or someone else's. */
-function certificate(c: DappTxSummary["certificates"][number]): string {
-  if (!c.own) {
-    if (c.kind === "pool") return "A stake pool's certificate.";
-    if (c.kind === "drep") return "A DRep's certificate.";
-    if (c.kind === "committee") return "A constitutional committee certificate.";
-    return "A certificate for a stake key that isn't yours.";
-  }
-  const parts: string[] = [];
-  if (c.kind.startsWith("register")) parts.push(`Registers your stake key${c.deposit ? ` (a ${formatAda(c.deposit)} ₳ deposit)` : ""}`);
-  if (c.kind === "unregister") parts.push(`Stops your staking${c.refund ? ` (the ${formatAda(c.refund)} ₳ deposit back)` : ""}`);
-  if (c.pool) parts.push(`stakes with ${c.pool}`);
-  if (c.drep) parts.push(`delegates your vote: ${voteLabel(c.drep)}`);
-  const sentence = parts.join(", ");
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
 }
 
 function SignData({

@@ -524,11 +524,17 @@ export interface DappToken {
 export interface DappTxSummary {
   txHash: string;
   fee: string;
-  /** The account's change in ADA (signed) and each token that moved. */
+  /**
+   * The account's change in ADA (signed) and each token that moved: what
+   * comes back less what it puts in, its staking's included.
+   */
   netLovelace: string;
   netTokens: DappToken[];
+  /** What the account's UTxOs put in, and what its own outputs get back. */
   spentLovelace: string;
   returnedLovelace: string;
+  /** What the account puts in from its staking: its rewards withdrawn, and its stake key's deposit back. */
+  stakingLovelace: string;
   ownInputs: number;
   /** Outputs to anyone else. */
   paid: Array<{
@@ -540,6 +546,12 @@ export interface DappTxSummary {
     script: boolean;
     /** Into Seedelf Wallet's contract: under a register, or with none (anyone could take it). */
     seedelf: "register" | "none" | null;
+    /**
+     * The account's payment key under a stake part that isn't its own, or
+     * none: spendable by the account, but its stake counts for someone else,
+     * so it's paid, not change.
+     */
+    ownPaymentKey: boolean;
   }>;
   ownOutputs: Array<{
     txIndex: number;
@@ -556,7 +568,10 @@ export interface DappTxSummary {
   certificates: Array<{
     kind: string;
     own: boolean;
+    /** The pool it stakes with, or a stake pool's own certificate's pool (`pool1…`). */
     pool: string | null;
+    /** A stake pool's own certificate (kind "pool"): it registers the pool (or new terms), or retires it. */
+    poolAction: "register" | "retire" | null;
     drep: string | null;
     deposit: string | null;
     refund: string | null;

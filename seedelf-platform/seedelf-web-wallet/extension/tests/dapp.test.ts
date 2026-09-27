@@ -13,6 +13,8 @@ import { recentlySent, rememberSent, SENT_KEEP_MS } from "../src/background/sent
 import { SessionService } from "../src/background/sessions";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { APIError, DataSignError, TxSendError, TxSignError } from "../src/shared/dapp";
+import type { DappTxSummary } from "../src/shared/rpc";
+import { certificateLine, paidTo, stakingComesBack, withdrawalLine } from "../src/ui/dapp";
 import { txIdOf } from "./fixtures/cbor";
 import {
   koiosPreprod,
@@ -69,14 +71,31 @@ const uint = (n: number) => (n < 24 ? n.toString(16).padStart(2, "0") : `18${n.t
 const outpoints = (list: string[]) =>
   `8${list.length}${list.map((o) => `825820${o.slice(0, 64)}${uint(Number(o.slice(65)))}`).join("")}`;
 
+const coin = (n: bigint) => (n < 0x100000000n ? `1a${n.toString(16).padStart(8, "0")}` : `1b${n.toString(16).padStart(16, "0")}`);
+
 /**
  * A site's transaction, built by hand: it spends `inputs` (`txhash#index`),
- * puts up `collateral`, pays 4 ₳ to someone else, and carries
- * `certificates` (CBOR, hex). Nothing balances it: the wallet only reads it.
+ * puts up `collateral`, pays `pays` (base addresses in CIP-30's hex; 4 ₳ to
+ * someone else unless given), and carries `certificates` and `withdrawals`
+ * (CBOR, hex). Its fee is 0.17 ₳. Nothing balances it: the wallet only reads it.
  */
-function siteTx({ inputs, collateral = [], certificates = [] }: { inputs: string[]; collateral?: string[]; certificates?: string[] }) {
-  const fields = [`00${outpoints(inputs)}`, `0181825839${loadTestWasm().cip30Address(THEIRS)}1a003d0900`, "021a00029810"];
+function siteTx({
+  inputs,
+  collateral = [],
+  certificates = [],
+  withdrawals,
+  pays = [{ address: loadTestWasm().cip30Address(THEIRS), lovelace: 4_000_000n }],
+}: {
+  inputs: string[];
+  collateral?: string[];
+  certificates?: string[];
+  withdrawals?: string;
+  pays?: Array<{ address: string; lovelace: bigint }>;
+}) {
+  const outputs = `8${pays.length}${pays.map((p) => `825839${p.address}${coin(p.lovelace)}`).join("")}`;
+  const fields = [`00${outpoints(inputs)}`, `01${outputs}`, "021a00029810"];
   if (certificates.length) fields.push(`048${certificates.length}${certificates.join("")}`);
+  if (withdrawals) fields.push(`05${withdrawals}`);
   if (collateral.length) fields.push(`0d${outpoints(collateral)}`);
   return `84a${fields.length}${fields.join("")}a0f5f6`;
 }
@@ -285,6 +304,53 @@ describe("the dApp connector", () => {
     expect(t.koios.calls.filter((c) => c.path === "utxo_info").flatMap((c) => c.body._utxo_refs)).not.toContain(
       `${sent.txHash}#${change.index}`,
     );
+  });
+
+  it("says in its prompt where the account's rewards go, what pays its key under another stake part, and a pool's certificate", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const { wasm } = t.deps;
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    const input = `${own!.txHash}#${own!.index}`;
+    const asked = async (tx: string, partial = false) => {
+      const signing = t.dapp.call(s, "signTx", [tx, partial]);
+      await until(() => t.dapp.approvals().length === 1);
+      const approval = t.dapp.approvals()[0]!;
+      if (approval.kind !== "sign-tx") throw new Error(approval.kind);
+      await t.dapp.answer(approval.id, false);
+      await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+      return approval.summary;
+    };
+    // 1,000 ₳ of the account's rewards.
+    const withdrawals = `a1581d${wasm.cip30Address(account(12).preprod.stake as string)}${coin(1_000_000_000n)}`;
+    const whose = "your public account";
+
+    // Paid to someone else: the headline counts them in what the account sends, and the line says they leave.
+    const away = await asked(siteTx({ inputs: [input], withdrawals }));
+    expect(away).toMatchObject({ stakingLovelace: "1000000000", netLovelace: `-${BigInt(own!.lovelace) + 1_000_000_000n}` });
+    expect(stakingComesBack(away)).toBe(false);
+    expect(withdrawalLine(away.withdrawals[0]!, false, whose)).toBe(
+      "Withdraws your staking rewards, 1,000 ₳, and they don't all come back to your public account: they're counted in what it sends above.",
+    );
+    // Back into the account: it sends only the fee.
+    const back = BigInt(own!.lovelace) + 1_000_000_000n - 170_000n;
+    const home = await asked(siteTx({ inputs: [input], withdrawals, pays: [{ address: wasm.cip30Address(OWN), lovelace: back }] }));
+    expect(home.netLovelace).toBe("-170000");
+    expect(stakingComesBack(home)).toBe(true);
+    expect(withdrawalLine(home.withdrawals[0]!, true, whose)).toBe("Withdraws your staking rewards, 1,000 ₳, into your public account.");
+
+    // The account's payment key under someone else's stake part: paid, not change.
+    const franken = wasm.cip30Address(OWN).slice(0, 58) + wasm.cip30Address(THEIRS).slice(58);
+    const odd = await asked(siteTx({ inputs: [input], pays: [{ address: franken, lovelace: 4_000_000n }] }));
+    expect(odd.paid).toMatchObject([{ ownPaymentKey: true }]);
+    expect(odd.ownOutputs).toEqual([]);
+    expect(paidTo(odd.paid[0]!)).toBe("Your payment key, with a stake part that isn't yours");
+
+    // A stake pool's retirement, which its operator signs too.
+    const pool = await asked(siteTx({ inputs: [input], certificates: [`8304581c${"ab".repeat(28)}190100`] }), true);
+    expect(pool.certificates).toMatchObject([{ kind: "pool", own: false, poolAction: "retire", pool: expect.stringMatching(/^pool1/) }]);
+    expect(certificateLine(pool.certificates[0]!, true, whose)).toBe(`Retires stake pool ${pool.certificates[0]!.pool}.`);
   });
 
   it("won't sign a site's transaction that uses a UTxO the user locked, or spends the collateral", async () => {
@@ -957,6 +1023,36 @@ describe("the wallet's own transactions, kept a while for sites to build on", ()
     big.set(tx(99));
     await rememberSent(session, big, 20_000);
     expect(await recentlySent(session, 20_000)).toHaveLength(16);
+  });
+});
+
+describe("the prompt's words for the account's staking", () => {
+  type Certificate = DappTxSummary["certificates"][number];
+  const cert = (c: Partial<Certificate>): Certificate => ({
+    kind: "unregister",
+    own: true,
+    pool: null,
+    poolAction: null,
+    drep: null,
+    deposit: null,
+    refund: "2000000",
+    ...c,
+  });
+
+  it("says whether a deposit back comes back to the account, and names a stake pool's certificate", () => {
+    expect(certificateLine(cert({}), true, "your public account")).toBe(
+      "Stops your staking, and its 2 ₳ deposit comes back to your public account.",
+    );
+    expect(certificateLine(cert({}), false, "your private session")).toBe(
+      "Stops your staking, and its 2 ₳ deposit doesn't all come back to your private session: it's counted in what it sends above.",
+    );
+    const pool = { kind: "pool", own: false, refund: null, pool: "pool1abc" } as const;
+    expect(certificateLine(cert({ ...pool, poolAction: "register" }), true, "")).toBe("Registers stake pool pool1abc, or updates its terms.");
+    expect(certificateLine(cert({ ...pool, poolAction: "retire" }), true, "")).toBe("Retires stake pool pool1abc.");
+    expect(certificateLine(cert({ ...pool, pool: null }), true, "")).toBe("A stake pool's certificate.");
+    // Staking money comes back when the account's own outputs get at least as much.
+    expect(stakingComesBack({ returnedLovelace: "2000000", stakingLovelace: "2000000" })).toBe(true);
+    expect(stakingComesBack({ returnedLovelace: "1999999", stakingLovelace: "2000000" })).toBe(false);
   });
 });
 
