@@ -1739,12 +1739,10 @@ test("Lovejoin: a mix that stopped partway leaves its box not mixed yet, said so
 });
 
 // The deposit set its box's withdraw time as it went in. The chain stopped, so
-// the box never comes back by itself, and Lovejoin's page shows no next one
-// back; but Home's row still counts it on its way ("Next back" and a time):
-// held() reads the schedule's due times, which only a withdraw run trims to
-// the boxes that can come back (lovejoin.ts withdrawDueNow). InLovejoin
-// expects a box not mixed yet to have none.
-test.fixme("Lovejoin: Home's row doesn't count a box not mixed yet as on its way back", async ({ context, koios }) => {
+// the box never comes back by itself, and its time went with the stop
+// (lovejoin.ts unschedule): Home's row counts the box, not mixed yet, and
+// no next one back.
+test("Lovejoin: Home's row doesn't count a box not mixed yet as on its way back", async ({ context, koios }) => {
   const page = await stoppedPublicMix(context, koios);
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();

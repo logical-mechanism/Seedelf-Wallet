@@ -1025,6 +1025,8 @@ describe("a chain's boxes", CHAINS, () => {
     t.clock.now += 7 * HOUR;
     await t.wallet.unlock(PASSWORD);
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4, stopped: CHAIN_CUT });
+    // Home counts the three it mixed all the way as on their way back, not the fourth.
+    expect(await t.lovejoin.held("preprod")).toMatchObject({ boxes: 3, stopped: 1 });
     // On chain: three boxes mixed all the way, and one still the deposit's.
     const sent = record!.leaves.filter((l) => record!.mixes.slice(0, 3).includes(l.txHash));
     t.koios.addedToAccounts.push(await ownedBox(t, record!.deposit, 3), ...(await Promise.all(sent.map((l) => ownedBox(t, l.txHash, l.txIndex)))));
@@ -1053,6 +1055,58 @@ describe("a chain's boxes", CHAINS, () => {
     await expect(lovejoin.withdrawNow("preprod", { txHash: record!.deposit, txIndex: 3 })).rejects.toThrow("wasn't mixed");
     await lovejoin.withdrawNow("preprod", { txHash: record!.deposit, txIndex: 3 }, true);
     expect(withdrawn(t).at(-1)).toBe(`${record!.deposit}#3`);
+  });
+
+  it("counts on Home only boxes that can come back: none of a mix that stopped after its deposit", async () => {
+    const t = await funded();
+    const summary = await t.lovejoin.publicBuild("preprod", 1);
+    // The deposit goes in, and the network turns the first mix away: the mix stops.
+    const fetch = t.koios.fetch;
+    let submits = 0;
+    t.koios.fetch = async (url, init) =>
+      url.endsWith("/submittx") && ++submits > 1
+        ? new Response("ConwayUtxowFailure (ScriptWitnessNotValidatingUTXOW)", { status: 400 })
+        : fetch(url, init);
+    await expect(t.lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow();
+    // Its box never comes back by itself: nothing is on its way back, and the mix stopped.
+    expect(await t.lovejoin.held("preprod")).toEqual({ boxes: 0, lovelace: "0", next: null, notMixed: 0, stopped: 1 });
+    // The pool lists the deposit's box: not mixed yet, and still none on its way back.
+    const [record] = (await t.store.get<{ chains: Array<{ deposit: string }> }>("lovejoin.preprod"))!.chains;
+    t.koios.addedToAccounts.push(await ownedBox(t, record!.deposit, 0));
+    const status = await t.lovejoin.status("preprod");
+    expect(status.notMixed).toEqual([{ txHash: record!.deposit, txIndex: 0 }]);
+    expect(status.due).toEqual([]);
+    expect(await t.lovejoin.held("preprod")).toEqual({ boxes: 0, lovelace: "0", next: null, notMixed: 1, stopped: 1 });
+  });
+
+  it("drops the due time of a box a chain that was all sent left not mixed, once a pool read finds it", async () => {
+    const { t } = await withSession("40000000");
+    // All sent an hour ago, but a node dropped its last mix: the box is still at the first mix's output.
+    const [D, m1, m2] = ["d0", "e1", "e2"].map((h) => h.repeat(32));
+    const done = {
+      id: m2,
+      progress: "seedelf.lovejoin.sending.preprod",
+      deposit: D,
+      mixes: [m1, m2],
+      leaves: [{ txHash: m2!, txIndex: 0 }],
+      boxes: 1,
+      total: 3,
+      sent: 3,
+      at: t.clock.now - HOUR,
+      scheduled: true,
+      done: true,
+      ended: t.clock.now - HOUR,
+    };
+    // And a box of an older mix that can come back, due in two hours.
+    t.koios.addedToAccounts.push(await ownedBox(t, m1!, 1), await ownedBox(t, "f5", 0));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now + 2 * HOUR, t.clock.now + 3 * HOUR], chains: [done] });
+    const status = await t.lovejoin.status("preprod");
+    expect(status.notMixed).toEqual([{ txHash: m1, txIndex: 1 }]);
+    expect(status.due).toEqual([t.clock.now + 2 * HOUR]);
+    expect(await t.lovejoin.held("preprod")).toMatchObject({ boxes: 1, next: t.clock.now + 2 * HOUR, notMixed: 1 });
+    // Read again, nothing more goes.
+    await t.lovejoin.status("preprod");
+    expect((await t.lovejoin.held("preprod")).boxes).toBe(1);
   });
 
   it("keeps a stopped chain's record while a spend that may never land hides its box, so the box never comes back by itself (final review lovejoin-1)", async () => {

@@ -417,6 +417,11 @@ interface ChainRecord {
   stopped?: string;
   /** When it was all sent, or stopped. */
   ended?: number;
+  /**
+   * How many of its boxes it left not mixed yet, whose due times went: they
+   * never come back by themselves (unschedule). Counted so none goes twice.
+   */
+  unscheduled?: number;
 }
 
 /** Why a chain whose progress is gone stopped: nothing is sending the rest. */
@@ -542,6 +547,31 @@ function unmixedOf(chains: ChainRecord[], owned: OutRef[]): OutRef[] {
   const made = new Set(chains.flatMap((c) => [...(c.deposit ? [c.deposit] : []), ...c.mixes]));
   const leaves = new Set(chains.flatMap((c) => c.leaves.map(ref)));
   return owned.filter((b) => made.has(b.txHash) && !leaves.has(ref(b)));
+}
+
+/**
+ * How many boxes chain `c` stopped short of their last mix, as its record
+ * says: a deposit's boxes whose last mix wasn't sent. None for mixing again,
+ * where a box the chain didn't reach is as it was, maybe free to come back.
+ */
+function unfinished(c: ChainRecord): number {
+  if (!c.deposit || !c.scheduled) return 0;
+  const sent = new Set([c.deposit, ...c.mixes].slice(0, c.sent));
+  return Math.max(0, c.boxes - c.leaves.filter((l) => sent.has(l.txHash)).length);
+}
+
+/**
+ * Chain `c` left `count` more of its boxes not mixed yet. They never come
+ * back by themselves, so as many due times go (the latest, never leaving
+ * fewer than `keep`, the boxes that can come back), and Home counts only
+ * boxes on their way back. `c` counts them, so none goes twice. A box that
+ * later goes back through Lovejoin (Mix my boxes again) gets a time afresh.
+ */
+function unschedule(s: Schedule, c: ChainRecord, count: number, keep = 0): void {
+  if (count <= 0) return;
+  const drop = Math.max(0, Math.min(count, s.due.length - keep));
+  s.due.sort((a, b) => a - b).splice(s.due.length - drop, drop);
+  c.unscheduled = (c.unscheduled ?? 0) + count;
 }
 
 /** `boxes` by how long they've sat in the pool, longest first (Koios's `block_time`, in seconds). */
@@ -1114,7 +1144,10 @@ export class LovejoinService {
     });
   }
 
-  /** Chain `id` is all sent, or `stopped` partway, and why. */
+  /**
+   * Chain `id` is all sent, or `stopped` partway, and why. Stopped, the due
+   * times of the boxes it hadn't mixed all the way go (unschedule).
+   */
   async chainEnded(network: NetworkName, id: string, stopped?: string): Promise<void> {
     const now = this.deps.now();
     await this.update(network, (s) => {
@@ -1122,7 +1155,10 @@ export class LovejoinService {
       if (!c || c.ended) return;
       c.ended = now;
       if (stopped === undefined) c.done = true;
-      else c.stopped = stopped;
+      else {
+        c.stopped = stopped;
+        unschedule(s, c, unfinished(c));
+      }
     });
   }
 
@@ -1151,6 +1187,7 @@ export class LovejoinService {
         if (why === undefined || c.ended) continue;
         c.stopped = why;
         c.ended = at;
+        unschedule(s, c, unfinished(c));
       }
     });
   }
@@ -1168,18 +1205,24 @@ export class LovejoinService {
    * wallet's spends; `listed` doesn't. A record that ended long enough ago
    * and holds no box in the listing anymore goes, and Home's count of boxes
    * not mixed yet follows. A box only hidden by a spend that may never land
-   * keeps its record (final review lovejoin-1).
+   * keeps its record (final review lovejoin-1). A box not mixed yet that no
+   * record counted before (a mix of it a node dropped) loses its due time
+   * here, never one a box that can come back needs.
    */
   private async sortOut(network: NetworkName, owned: OutRef[], listed: OutRef[]): Promise<{ unmixed: OutRef[]; free: OutRef[] }> {
     const now = this.deps.now();
     const { chains } = await this.read(network);
     const unmixed = unmixedOf(chains.filter((c) => c.ended), owned);
+    const held = new Set(unmixedOf(chains, owned).map(ref));
+    const free = owned.filter((b) => !held.has(ref(b)));
     await this.update(network, (s) => {
+      for (const c of s.chains) {
+        if (c.ended) unschedule(s, c, unmixedOf([c], owned).length - (c.unscheduled ?? 0), free.length);
+      }
       s.chains = s.chains.filter((c) => !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], listed).length > 0);
       s.notMixed = unmixed.length;
     });
-    const held = new Set(unmixedOf(chains, owned).map(ref));
-    return { unmixed, free: owned.filter((b) => !held.has(ref(b))) };
+    return { unmixed, free };
   }
 
   /** The wallet's boxes a chain of its, built or being sent, will spend: none of them is withdrawn. */
@@ -1222,9 +1265,10 @@ export class LovejoinService {
 
   /**
    * The boxes on their way back, from the schedule alone: one due time per
-   * box, kept to the pool's count at each scan; how many weren't mixed yet at
-   * the last one; and how many chains stopped partway. No Koios request, so
-   * Home can ask whenever it shows.
+   * box that can come back by itself, kept to the pool's count at each scan
+   * (a box a chain left not mixed yet has none: unschedule); how many
+   * weren't mixed yet at the last one; and how many chains stopped partway.
+   * No Koios request, so Home can ask whenever it shows.
    */
   async held(network: NetworkName): Promise<LovejoinHeld> {
     if (!this.available(network)) return { boxes: 0, lovelace: "0", next: null, notMixed: 0, stopped: 0 };
@@ -1257,16 +1301,16 @@ export class LovejoinService {
     // Nor while the last withdraw may still be on its way: two a minute apart say they're one owner's.
     if (await this.settleWithdrawing(network)) return [];
     const used = (await this.deps.store.get<Schedule>(`lovejoin.${network}` as const)) !== undefined;
-    const { due } = await this.read(network);
     const now = this.deps.now();
-    if (!(scan && used) && !due.some((t) => t <= now)) return [];
+    if (!(scan && used) && !(await this.read(network)).due.some((t) => t <= now)) return [];
     const { pool, owned, listed } = await this.ours(network);
     // A box a chain of the wallet's made and hadn't finished mixing never
     // comes back by itself: it waits, not mixed yet, for Mix my boxes again.
     const { free: back } = await this.sortOut(network, owned, listed);
     // A box with no due time (a restore) gets one; a due time with no box
     // (withdrawn by hand, or a chain that didn't go through) goes.
-    if (back.length > due.length) await this.schedule(network, back.length - due.length);
+    const known = (await this.read(network)).due.length;
+    if (back.length > known) await this.schedule(network, back.length - known);
     const schedule = await this.read(network);
     const kept = [...schedule.due].sort((a, b) => a - b).slice(0, back.length);
     await this.update(network, (s) => (s.due = kept));
