@@ -659,7 +659,7 @@ export class SessionService {
       try {
         return { index: built.index, pending: await send(this.deps, network, txHash, SESSION_SITE_OUT, "session-out", "payment") };
       } catch (e) {
-        await this.unsent(network, built.index, txHash, e);
+        await this.markUnsent(network, built.index, txHash, e);
         throw e;
       }
     });
@@ -743,7 +743,7 @@ export class SessionService {
       try {
         pending = await send(this.deps, network, txHash, SESSION_MIX_OUT, "session-out", "mix");
       } catch (e) {
-        await this.unsent(network, built.index, txHash, e);
+        await this.markUnsent(network, built.index, txHash, e);
         throw e;
       }
       await this.deps.alarm?.start();
@@ -786,7 +786,7 @@ export class SessionService {
       try {
         return await send(this.deps, network, txHash, SESSION_TOP_UP, "session-out", "top-up");
       } catch (e) {
-        await this.unsent(network, built.index, txHash, e);
+        await this.markUnsent(network, built.index, txHash, e);
         throw e;
       }
     });
@@ -866,7 +866,7 @@ export class SessionService {
    * may be on its way, and it's looked for (tx_status, the account) before
    * it counts as failed.
    */
-  private async unsent(network: NetworkName, index: number, txHash: string, e: unknown): Promise<void> {
+  private async markUnsent(network: NetworkName, index: number, txHash: string, e: unknown): Promise<void> {
     if (maybeSent(e)) return;
     await this.update(network, index, (s) => {
       const t = s.txs.find((r) => r.txHash === txHash);
@@ -933,7 +933,7 @@ export class SessionService {
       try {
         pending = await send(this.deps, network, txHash, SESSION_OUT, "session-out", "payment");
       } catch (e) {
-        await this.unsent(network, built.index, txHash, e);
+        await this.markUnsent(network, built.index, txHash, e);
         throw e;
       }
       await this.deps.alarm?.start();
