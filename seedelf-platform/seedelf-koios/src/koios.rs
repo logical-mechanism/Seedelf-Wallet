@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, anyhow};
 use hex;
+use pallas_codec::minicbor::{Decoder, data::Type};
 use reqwest::{Client, Error, Response};
 use seedelf_crypto::register::Register;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use serde_json::value::RawValue;
 use std::sync::{LazyLock, RwLock};
 
 /// Shared HTTP client with sane timeouts. Reuses TCP connections across calls.
@@ -128,10 +130,51 @@ pub struct Asset {
     pub fingerprint: String,
 }
 
+/// An inline datum as Koios lists it: its CBOR, which is what's read (see
+/// [`register_of_datum`]), and the same datum as JSON.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct InlineDatum {
     pub bytes: String,
-    pub value: Value, // Flexible for arbitrary JSON
+    /// `null` when it's too deeply nested to read: see [`lenient_value`].
+    #[serde(default, deserialize_with = "lenient_value")]
+    pub value: Value,
+}
+
+/// Reads a datum's JSON on its own, or `null` when it's too deeply nested for
+/// serde_json, which stops at 128 levels for a whole response. Taking it raw
+/// first skips it without that limit, so anyone paying an address a deep
+/// datum can't make every response listing that address unreadable.
+fn lenient_value<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Value, D::Error> {
+    let raw = Box::<RawValue>::deserialize(deserializer)?;
+    Ok(serde_json::from_str(raw.get()).unwrap_or(Value::Null))
+}
+
+/// A reference script on a UTxO, as Koios lists it, less its JSON `value`: a
+/// native script's nests two levels a level, so a deep one would make
+/// serde_json refuse the whole response. A field that isn't kept is skipped
+/// without the limit.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct ReferenceScript {
+    #[serde(default)]
+    pub hash: Option<String>,
+    /// Its size in bytes.
+    #[serde(default)]
+    pub size: Option<u64>,
+    /// `plutusV1`, `plutusV2`, `plutusV3`, `timelock` or `multisig`.
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    /// The script's CBOR, hex.
+    #[serde(default)]
+    pub bytes: Option<String>,
+}
+
+/// A row's reference script, if it has one. One in a shape this doesn't
+/// expect still counts as a script, so it's never taken for none.
+fn some_script<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ReferenceScript>, D::Error> {
+    let raw = Option::<Box<RawValue>>::deserialize(deserializer)?;
+    Ok(raw.map(|raw| serde_json::from_str(raw.get()).unwrap_or_default()))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -147,7 +190,8 @@ pub struct UtxoResponse {
     pub block_time: u64,
     pub datum_hash: Option<String>,
     pub inline_datum: Option<InlineDatum>,
-    pub reference_script: Option<Value>, // Flexible for arbitrary scripts
+    #[serde(default, deserialize_with = "some_script")]
+    pub reference_script: Option<ReferenceScript>,
     pub asset_list: Option<Vec<Asset>>,
     pub is_spent: bool,
 }
@@ -265,50 +309,83 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
     Ok(utxos)
 }
 
-/// Extracts byte values from an `InlineDatum` with detailed logging.
+/// Extracts the `Register` from an `InlineDatum` with logging.
 ///
-/// This function attempts to extract two byte strings from the `fields` array inside the `InlineDatum`.
-/// If the extraction fails due to missing keys, incorrect types, or insufficient elements, an error
-/// message is logged to standard error.
+/// The register is read from the datum's CBOR `bytes` (see
+/// [`register_of_datum`]), never from its JSON `value`, which may be `null`
+/// for a deep datum.
 ///
 /// # Arguments
 ///
-/// * `inline_datum` - An optional reference to an `InlineDatum`. The `InlineDatum` is expected to contain
-///   a `value` key, which maps to an object with a `fields` array of at least two elements.
+/// * `inline_datum` - An optional reference to an `InlineDatum`.
 ///
 /// # Returns
 ///
-/// * `Some(Register)` - A `Register` instance containing the two extracted byte strings.
-/// * `None` - If the extraction fails or `inline_datum` is `None`.
+/// * `Some(Register)` - The register: constructor 0 holding two 48-byte fields.
+/// * `None` - If `inline_datum` is `None` or isn't a register.
 ///
 /// # Behavior
 ///
-/// Logs errors to `stderr` using `eprintln!` when:
-/// - `inline_datum` is `None`.
-/// - The `value` key is missing or is not an object.
-/// - The `fields` key is missing or is not an array.
-/// - The `fields` array has fewer than two elements.
+/// Logs to `stderr` using `eprintln!` when it returns `None`.
 pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<Register> {
-    if let Some(datum) = inline_datum {
-        if let Value::Object(ref value_map) = datum.value {
-            if let Some(Value::Array(fields)) = value_map.get("fields") {
-                if let (Some(first), Some(second)) = (fields.first(), fields.get(1)) {
-                    let first_bytes: String = first.get("bytes")?.as_str()?.to_string();
-                    let second_bytes: String = second.get("bytes")?.as_str()?.to_string();
-                    return Some(Register::new(first_bytes, second_bytes));
-                } else {
-                    eprintln!("Fields array has fewer than two elements.");
-                }
-            } else {
-                eprintln!("`fields` key is missing or not an array.");
-            }
-        } else {
-            eprintln!("`value` is not an object.");
-        }
-    } else {
+    let Some(datum) = inline_datum else {
         eprintln!("Inline datum is None.");
+        return None;
+    };
+    let register = hex::decode(&datum.bytes)
+        .ok()
+        .and_then(|cbor| register_of_datum(&cbor));
+    if register.is_none() {
+        eprintln!("The inline datum isn't a register.");
     }
-    None
+    register
+}
+
+/// The register in a datum's CBOR: constructor 0 holding exactly two 48-byte
+/// byte strings, with nothing after, however the CBOR spells them (a definite
+/// or indefinite list, bytes whole or in chunks, constructor 0's general form
+/// `102([0, fields])`): the shapes Koios would show as constructor 0 with two
+/// fields. It's read token by token, never by a recursive decoder, so a deeply
+/// nested datum is only "not a register". Whether the points are valid is left
+/// to the caller.
+pub fn register_of_datum(cbor: &[u8]) -> Option<Register> {
+    let mut d = Decoder::new(cbor);
+    match d.tag().ok()?.as_u64() {
+        121 => {}
+        102 => {
+            if d.array().ok()? != Some(2) || d.u64().ok()? != 0 {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    let fields = d.array().ok()?;
+    if fields.is_some_and(|n| n != 2) {
+        return None;
+    }
+    let generator = point_bytes(&mut d)?;
+    let public_value = point_bytes(&mut d)?;
+    if fields.is_none() {
+        // An indefinite list: a break must end it after the two fields.
+        if d.datatype().ok()? != Type::Break {
+            return None;
+        }
+        d.set_position(d.position() + 1);
+    }
+    (d.position() == cbor.len())
+        .then(|| Register::new(hex::encode(generator), hex::encode(public_value)))
+}
+
+/// One of a register's fields: 48 bytes, whole or in chunks.
+fn point_bytes(d: &mut Decoder) -> Option<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(48);
+    for chunk in d.bytes_iter().ok()? {
+        bytes.extend_from_slice(chunk.ok()?);
+        if bytes.len() > 48 {
+            return None;
+        }
+    }
+    (bytes.len() == 48).then_some(bytes)
 }
 
 /// Checks if a target policy ID exists in the asset list.
@@ -669,39 +746,30 @@ pub async fn asset_history(
     Ok(data)
 }
 
-fn extract_bytes_from_value_with_logging(value: &Value) -> Option<Register> {
-    if value.is_null() {
-        // Don't log anything — null is expected sometimes
-        return None;
-    }
-    if let Value::Object(map) = value {
-        if let Some(Value::Object(val)) = map.get("value") {
-            if let Some(Value::Array(fields)) = val.get("fields") {
-                if let (Some(first), Some(second)) = (fields.first(), fields.get(1)) {
-                    let first_bytes = first.get("bytes")?.as_str()?.to_string();
-                    let second_bytes = second.get("bytes")?.as_str()?.to_string();
-                    return Some(Register::new(first_bytes, second_bytes));
-                } else {
-                    eprintln!("Inline datum fields array too short.");
-                }
-            } else {
-                eprintln!("`value.fields` is missing or not an array.");
-            }
-        } else {
-            eprintln!("`inline_datum.value` is missing or not an object.");
-        }
-    } else {
-        eprintln!("`inline_datum` is not an object.");
-    }
-    None
-}
-
 #[derive(Debug, Deserialize, Clone, Default)]
 struct TxInfoResponse {
     tx_hash: String,
     block_height: u64,
-    inputs: Vec<serde_json::Value>,
-    outputs: Vec<serde_json::Value>,
+    inputs: Vec<TxInfoOutput>,
+    outputs: Vec<TxInfoOutput>,
+}
+
+/// An input or output in `tx_info`: only its inline datum is kept. Every
+/// other field, a reference script's JSON among them, is skipped unread, so
+/// its depth can't make the response unreadable.
+#[derive(Debug, Deserialize, Clone, Default)]
+struct TxInfoOutput {
+    #[serde(default)]
+    inline_datum: Option<InlineDatum>,
+}
+
+impl TxInfoOutput {
+    /// The register it's under, if any; no datum is expected sometimes, so
+    /// nothing is logged.
+    fn register(&self) -> Option<Register> {
+        let cbor = hex::decode(&self.inline_datum.as_ref()?.bytes).ok()?;
+        register_of_datum(&cbor)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -717,21 +785,13 @@ impl TxResponse {
         let input_registers = info
             .inputs
             .iter()
-            .filter_map(|input| {
-                input
-                    .get("inline_datum")
-                    .and_then(extract_bytes_from_value_with_logging)
-            })
+            .filter_map(TxInfoOutput::register)
             .collect();
 
         let output_registers = info
             .outputs
             .iter()
-            .filter_map(|output| {
-                output
-                    .get("inline_datum")
-                    .and_then(extract_bytes_from_value_with_logging)
-            })
+            .filter_map(TxInfoOutput::register)
             .collect();
 
         TxResponse {
@@ -894,4 +954,38 @@ pub async fn epoch_params(network_flag: bool) -> Result<ProtocolParameters> {
         .ok_or_else(|| anyhow!("Empty Epoch Params Response"))?;
 
     ProtocolParameters::from_koios(&params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_deep_datum_or_script_in_a_transaction_leaves_the_history_readable() {
+        let register = Register::create(seedelf_crypto::schnorr::random_scalar()).unwrap();
+        let levels = 100_000;
+        let deep_datum = format!(
+            r#"{{"bytes":"{}00","value":{}{{"int":0}}{}}}"#,
+            "81".repeat(levels),
+            r#"{"list":["#.repeat(levels),
+            "]}".repeat(levels),
+        );
+        let deep_script = format!(
+            r#"{{"hash":"ab","size":1,"type":"timelock","bytes":"00","value":{}{{"type":"sig"}}{}}}"#,
+            r#"{"type":"all","scripts":["#.repeat(levels),
+            "]}".repeat(levels),
+        );
+        let ours = format!(
+            r#"{{"bytes":"{}","value":{{"constructor":0}}}}"#,
+            hex::encode(register.to_vec().unwrap())
+        );
+        // As `tx_info` lists a transaction, with `_scripts`.
+        let page = format!(
+            r#"[{{"tx_hash":"00","block_height":7,"inputs":[{{"inline_datum":{deep_datum},"reference_script":null}},{{"inline_datum":null}}],"outputs":[{{"inline_datum":{ours},"reference_script":{deep_script}}}],"plutus_contracts":[{{"input":{{"redeemer":{{"datum":{{"value":{deep_datum}}}}}}}}}]}}]"#
+        );
+        let txs: Vec<TxInfoResponse> = serde_json::from_str(&page).unwrap();
+        let tx = TxResponse::from_info_response(txs.into_iter().next().unwrap());
+        assert!(tx.input_registers.is_empty());
+        assert_eq!(tx.output_registers, vec![register]);
+    }
 }

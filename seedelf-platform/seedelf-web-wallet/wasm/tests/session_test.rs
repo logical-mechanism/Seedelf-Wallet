@@ -19,6 +19,8 @@ use seedelf_wasm::api::{self, SessionReturnRequest};
 use seedelf_wasm::cip30::{self, DataRequest, KeyPath, KoiosRow, TxRequest};
 use serde_json::{Value, json};
 
+mod deep;
+
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const POLICY: &str = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72";
@@ -399,6 +401,84 @@ fn a_return_takes_only_the_sessions_own_utxos() {
         .is_err(),
         "the other network's address"
     );
+}
+
+#[test]
+fn a_strangers_deep_utxo_at_the_session_is_brought_back_with_the_rest() {
+    let accounts = accounts();
+    let at = session(3);
+    let rows: Vec<Value> = [
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(2, 1, &at, 2_500_000, &[(POLICY, MIN, 906_594_100)]),
+    ]
+    .iter()
+    .map(|u| serde_json::to_value(u).unwrap())
+    .chain([json!("stranger")])
+    .collect();
+    let stranger = deep::row(
+        9,
+        &at.to_bech32().unwrap(),
+        "",
+        1_500_000,
+        &deep::datum(200),
+        "null",
+    );
+    // What `buildSessionReturn` does with the worker's JSON.
+    let request: SessionReturnRequest = serde_json::from_str(&deep::splice(
+        &json!({ "network": "preprod", "params": params(), "index": 3, "utxos": rows }),
+        &[("stranger", &stranger)],
+    ))
+    .unwrap();
+    let result = api::session_return(&accounts, random_scalar(), request).unwrap();
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert!(
+        tx.inputs()
+            .iter()
+            .any(|i| **i.hash() == [9; 32] && i.index() == 0)
+    );
+    assert_eq!(result.inputs, 3);
+    let fee: u64 = result.fee.parse().unwrap();
+    assert_eq!(result.lovelace, (24_000_000 - fee).to_string());
+}
+
+#[test]
+fn a_return_merges_past_a_deep_datum_and_refuses_one_too_deep_to_read() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    let change = funding_change(9, 2, sk, 40_000_000);
+    let request = |levels: usize| -> SessionReturnRequest {
+        let rows: Vec<Value> = [
+            utxo(1, 0, &at, 20_000_000, &[]),
+            utxo(3, 0, &at, 5_000_000, &[]),
+        ]
+        .iter()
+        .map(|u| serde_json::to_value(u).unwrap())
+        .chain([json!("stranger")])
+        .collect();
+        let stranger = deep::row(
+            8,
+            &at.to_bech32().unwrap(),
+            "",
+            1_500_000,
+            &deep::datum(levels),
+            "null",
+        );
+        let request = json!({
+            "network": "preprod", "params": params(), "index": 3,
+            "utxos": rows, "merge": [change],
+        });
+        serde_json::from_str(&deep::splice(&request, &[("stranger", &stranger)])).unwrap()
+    };
+    // Measured in the wallet with the stranger's datum in the script context.
+    let merged = api::session_return(&accounts, sk, request(100)).unwrap();
+    assert_eq!((merged.merged, merged.inputs), (1, 3));
+    // One the evaluator would overflow the stack on is refused, in words.
+    let err = api::session_return(&accounts, sk, request(100_000))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("holds a datum the wallet can't read"), "{err}");
 }
 
 /// A swap as Minswap's aggregator builds one for a session: its UTxO pays a

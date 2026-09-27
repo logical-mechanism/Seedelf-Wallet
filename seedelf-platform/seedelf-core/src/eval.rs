@@ -55,7 +55,7 @@ pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
     let tx_hash: [u8; 32] = hex::decode(&row.tx_hash)?
         .try_into()
         .map_err(|_| anyhow!("UTxO {}#{} has a malformed hash", row.tx_hash, row.tx_index))?;
-    if row.reference_script.as_ref().is_some_and(|s| !s.is_null()) {
+    if row.reference_script.is_some() {
         bail!(
             "UTxO {}#{} holds a reference script, which the wallet can't evaluate with yet",
             row.tx_hash,

@@ -19,6 +19,8 @@ use seedelf_wasm::lovejoin::{
 };
 use serde_json::{Value, json};
 
+mod deep;
+
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const MIN_POLICY: &str = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72";
@@ -599,6 +601,62 @@ fn our_box_rows(sk: Scalar, count: usize, protocol: &Protocol) -> Vec<UtxoRespon
         .iter()
         .map(|b| box_row(b, protocol))
         .collect()
+}
+
+#[test]
+fn a_strangers_deep_utxos_at_mix_box_leave_the_pool_readable() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(1357u64);
+    let ours = our_box_rows(sk, 2, &protocol);
+    let mut rows: Vec<Value> = pool(&protocol)
+        .iter()
+        .chain(&ours)
+        .map(|r| serde_json::to_value(r).unwrap())
+        .collect();
+    rows.extend([json!("datum"), json!("script")]);
+    let mix_box = protocol.mix_box_address().to_bech32().unwrap();
+    let cred = hex::encode(protocol.mix_box_hash);
+    // A box-sized UTxO under a deep datum, and a box of ours but for its deep
+    // reference script.
+    let deep_datum = deep::row(
+        0xd1,
+        &mix_box,
+        &cred,
+        protocol.denom,
+        &deep::datum(200),
+        "null",
+    );
+    let scripted = deep::row(
+        0xd2,
+        &mix_box,
+        &cred,
+        protocol.denom,
+        &serde_json::to_string(&ours[0].inline_datum).unwrap(),
+        &deep::script(100_000),
+    );
+    let strangers = [
+        ("datum", deep_datum.as_str()),
+        ("script", scripted.as_str()),
+    ];
+
+    // What `lovejoinOwned` does with the worker's JSON: both are skipped.
+    let request: OwnedRequest = serde_json::from_str(&deep::splice(
+        &json!({ "network": "preprod", "pool": rows }),
+        &strangers,
+    ))
+    .unwrap();
+    let owned = lovejoin::owned(sk, request).unwrap();
+    assert_eq!(owned.boxes.len(), 2);
+    assert_eq!(owned.lovelace, "20000000");
+
+    // `buildLovejoinWithdraw` takes one of ours back.
+    let request: WithdrawRequest = serde_json::from_str(&deep::splice(
+        &json!({ "network": "preprod", "params": params(), "pool": rows }),
+        &strangers,
+    ))
+    .unwrap();
+    let built = lovejoin::withdraw(sk, request).unwrap();
+    assert!(owned.boxes.contains(&built.box_ref));
 }
 
 #[test]

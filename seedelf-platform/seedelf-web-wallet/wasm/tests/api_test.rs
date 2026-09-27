@@ -1,6 +1,8 @@
 use seedelf_crypto::register::Register;
 use seedelf_wasm::api;
 
+mod deep;
+
 // Same vector as seedelf-crypto's `random_register` test: sk = 18446744073709551606.
 const VECTOR_SK: &str = "000000000000000000000000000000000000000000000000fffffffffffffff6";
 const G1: &str = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
@@ -84,7 +86,7 @@ mod move_in {
     use seedelf_wasm::api::{
         self, MoveInRequest, PathedUtxo, SendPayment, SendRequest, TokenAmount,
     };
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -710,6 +712,64 @@ mod move_in {
         )
         .unwrap_err();
         assert!(e.to_string().contains("more than none"), "{e}");
+    }
+
+    #[test]
+    fn sends_past_a_strangers_deep_utxos_at_the_account() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let home = account
+            .base_address(true, Role::Receive, 0)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let cred = hex::encode(account.key_hash(Role::Receive, 0).unwrap());
+        let deep_datum = crate::deep::row(
+            0xd1,
+            &home,
+            &cred,
+            1_500_000,
+            &crate::deep::datum(200),
+            "null",
+        );
+        let scripted = crate::deep::row(
+            0xd2,
+            &home,
+            &cred,
+            1_500_000,
+            "null",
+            &crate::deep::script(100_000),
+        );
+        // What `buildAccountSend` does with the worker's JSON.
+        let request = |lovelace: Value, strangers: &[(&str, &str)]| -> SendRequest {
+            let rows: Vec<Value> = account_utxos(&account)
+                .iter()
+                .map(|p| json!({ "utxo": p.utxo, "role": p.role, "index": p.index }))
+                .chain(
+                    strangers
+                        .iter()
+                        .map(|(name, _)| json!({ "utxo": name, "role": 0, "index": 0 })),
+                )
+                .collect();
+            let request = json!({
+                "network": "preprod",
+                "params": params(),
+                "utxos": rows,
+                "payments": [{ "to": theirs(), "lovelace": lovelace, "tokens": [] }],
+            });
+            serde_json::from_str(&crate::deep::splice(&request, strangers)).unwrap()
+        };
+
+        let both = [
+            ("datum", deep_datum.as_str()),
+            ("script", scripted.as_str()),
+        ];
+        let result = api::account_send(&account, request(json!("3000000"), &both)).unwrap();
+        assert_eq!(result.payments[0].lovelace, "3000000");
+
+        // Max spends the deep datum's UTxO with the rest.
+        let max = api::account_send(&account, request(Value::Null, &both[..1])).unwrap();
+        assert!(max.max);
+        assert_eq!(max.inputs, 7);
     }
 }
 
