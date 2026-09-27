@@ -282,7 +282,7 @@ export function SiteSession({
     >
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={onRefresh} />
       <div className="field-row">
-        <SwapTag {...tagOf(s)} />
+        <SwapTag {...tagOf(s, attached)} />
         <a className="menu-link" href={addressUrl(network, s.address)} target="_blank" rel="noreferrer">
           On Cardanoscan <ExternalIcon size={12} />
         </a>
