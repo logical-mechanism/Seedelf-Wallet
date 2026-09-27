@@ -1,6 +1,6 @@
 use seedelf_core::assets::{Asset, Assets, string_to_u64};
 use seedelf_core::utxos;
-use seedelf_koios::koios::{Asset as KoiosAsset, ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{Asset as KoiosAsset, ProtocolParameters, Ratio, UtxoResponse};
 
 fn fixture_params() -> ProtocolParameters {
     ProtocolParameters {
@@ -11,6 +11,7 @@ fn fixture_params() -> ProtocolParameters {
         price_mem: 0.0577,
         price_step: 0.0000721,
         cost_model_v3: Vec::new(),
+        min_fee_ref_script_cost_per_byte: Ratio::whole(15),
     }
 }
 

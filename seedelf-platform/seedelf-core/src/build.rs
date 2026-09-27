@@ -53,6 +53,46 @@ pub fn linear_fee(params: &ProtocolParameters, tx_size: u64) -> u64 {
         .saturating_add(params.min_fee_b)
 }
 
+/// The most reference-script bytes one transaction may use, over its spent
+/// and reference inputs together: the ledger's `maxRefScriptSizePerTx`,
+/// 200 KiB.
+pub const MAX_REFERENCE_SCRIPT_BYTES: u64 = 204_800;
+
+/// How many bytes of reference script each of Conway's price tiers holds.
+const REFERENCE_SCRIPT_TIER: u64 = 25_600;
+
+/// Conway's fee for `bytes` of reference scripts, which the ledger adds for
+/// every script on a spent or reference input: the first 25,600 bytes at
+/// `min_fee_ref_script_cost_per_byte`, each next 25,600 at 1.2 times the
+/// price of the ones before, and the total rounded down (the ledger's
+/// `tierRefScriptFee`, in exact fractions as it works). More than
+/// [`MAX_REFERENCE_SCRIPT_BYTES`] is refused, in words, as the ledger would.
+pub fn reference_script_fee(params: &ProtocolParameters, bytes: u64) -> Result<u64> {
+    if bytes > MAX_REFERENCE_SCRIPT_BYTES {
+        bail!(
+            "This transaction would use {bytes} bytes of reference scripts, over the network's limit of {MAX_REFERENCE_SCRIPT_BYTES}. Spend fewer UTxOs holding one at once"
+        );
+    }
+    let price = params.min_fee_ref_script_cost_per_byte;
+    if price.denominator == 0 {
+        bail!("The network's reference script price isn't a number");
+    }
+    // Tier k costs price × (6/5)^k a byte. Over the common denominator
+    // 5^tiers, each full tier adds TIER × 6^k × 5^(tiers−k), and the bytes
+    // past the last full tier add rest × 6^tiers. With at most 8 tiers, every
+    // step fits a u128.
+    let tiers = (bytes / REFERENCE_SCRIPT_TIER) as u32;
+    let rest = u128::from(bytes % REFERENCE_SCRIPT_TIER);
+    let tier = u128::from(REFERENCE_SCRIPT_TIER);
+    let scaled: u128 = (0..tiers)
+        .map(|k| tier * 6u128.pow(k) * 5u128.pow(tiers - k))
+        .sum::<u128>()
+        + rest * 6u128.pow(tiers);
+    let fee =
+        scaled * u128::from(price.numerator) / (u128::from(price.denominator) * 5u128.pow(tiers));
+    u64::try_from(fee).context("The reference scripts' fee doesn't fit a number")
+}
+
 /// The most a transaction the wallet builds may pay in fees. Real ones pay
 /// under 1 ₳, and even a 16 KiB transaction running scripts to the ledger's
 /// limit pays about 2.6 ₳. More comes from wrong protocol parameters, and the
@@ -878,10 +918,6 @@ pub const MINT_BUDGET_GUESS: Budget = Budget {
     steps: 30_000_000,
 };
 
-/// The Conway reference-script fee per byte (`min_fee_ref_script_cost_per_byte`).
-/// Both scripts are far below the first 25 KiB tier, so it's flat.
-const REFERENCE_SCRIPT_FEE_PER_BYTE: u64 = 15;
-
 /// The collateral giveme.my lends: one 5 ADA UTxO.
 pub const COLLATERAL_LOVELACE: u64 = 5_000_000;
 
@@ -1578,7 +1614,7 @@ impl ScriptSpend {
         if self.mint.is_some() {
             script_bytes += contract.seedelf_contract_size;
         }
-        let script_reference = script_bytes * REFERENCE_SCRIPT_FEE_PER_BYTE;
+        let script_reference = reference_script_fee(&self.chain.params, script_bytes)?;
 
         // Two signatures: the one-time key and giveme.my's collateral key, or
         // the account's key when an account puts up the collateral.
@@ -2333,8 +2369,10 @@ impl AccountMint {
             .mint(0)
             .context("Ogmios measured no budget for the Seedelf policy")?;
         let compute = computation_fee(&self.chain.params, budget.mem, budget.steps);
-        let script_reference =
-            self.chain.config.contract.seedelf_contract_size * REFERENCE_SCRIPT_FEE_PER_BYTE;
+        let script_reference = reference_script_fee(
+            &self.chain.params,
+            self.chain.config.contract.seedelf_contract_size,
+        )?;
         let (fee, staged) = settle(
             self.signers(),
             Patches::staking(&self.staking),

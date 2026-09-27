@@ -891,19 +891,87 @@ pub struct ProtocolParameters {
     pub price_mem: f64,
     pub price_step: f64,
     pub cost_model_v3: Vec<i64>,
+    /// What a byte of reference script costs, before Conway's tiers (see
+    /// `seedelf_core::build::reference_script_fee`): a fraction, exactly as
+    /// the ledger keeps it.
+    pub min_fee_ref_script_cost_per_byte: Ratio,
+}
+
+/// A fraction, `numerator / denominator`, as the ledger keeps a price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ratio {
+    pub numerator: u64,
+    pub denominator: u64,
+}
+
+impl Ratio {
+    /// A whole number.
+    pub const fn whole(n: u64) -> Self {
+        Ratio {
+            numerator: n,
+            denominator: 1,
+        }
+    }
+
+    /// A number as Koios writes it, a JSON number or a string, exactly:
+    /// `12.5` is 25/2. `None` for anything else, a negative number too.
+    fn exact(value: &Value) -> Option<Self> {
+        let text = match value {
+            Value::Number(n) => n.to_string(),
+            Value::String(s) => s.clone(),
+            _ => return None,
+        };
+        let (mantissa, exponent) = match text.split_once(['e', 'E']) {
+            Some((m, e)) => (m, e.parse::<i32>().ok()?),
+            None => (text.as_str(), 0),
+        };
+        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        let digits = format!("{whole}{fraction}");
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let scale = exponent.checked_sub(i32::try_from(fraction.len()).ok()?)?;
+        let mut numerator: u128 = digits.parse().ok()?;
+        let mut denominator: u128 = 1;
+        if scale >= 0 {
+            numerator = numerator.checked_mul(10u128.checked_pow(scale.unsigned_abs())?)?;
+        } else {
+            denominator = 10u128.checked_pow(scale.unsigned_abs())?;
+        }
+        let (mut a, mut b) = (numerator, denominator);
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        Some(Ratio {
+            numerator: u64::try_from(numerator / a.max(1)).ok()?,
+            denominator: u64::try_from(denominator / a.max(1)).ok()?,
+        })
+    }
+}
+
+impl std::fmt::Display for Ratio {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.denominator == 1 {
+            write!(f, "{}", self.numerator)
+        } else {
+            write!(f, "{}/{}", self.numerator, self.denominator)
+        }
+    }
 }
 
 /// The most [`ProtocolParameters::from_koios`] takes for each parameter,
 /// generously above mainnet's and preprod's in 2026 (44 and 155,381 lovelace,
-/// 4,310 a byte, a 2 ₳ deposit, prices of 0.0577 and 0.0000721). The ledger
-/// takes any overpayment, so a wrong answer from Koios would otherwise raise
-/// every fee, minimum and deposit the wallet pays, unseen.
+/// 4,310 a byte, a 2 ₳ deposit, prices of 0.0577 and 0.0000721, 15 lovelace a
+/// byte of reference script). The ledger takes any overpayment, so a wrong
+/// answer from Koios would otherwise raise every fee, minimum and deposit the
+/// wallet pays, unseen.
 pub const MAX_MIN_FEE_A: u64 = 1_000;
 pub const MAX_MIN_FEE_B: u64 = 2_000_000;
 pub const MAX_COINS_PER_UTXO_SIZE: u64 = 20_000;
 pub const MAX_KEY_DEPOSIT: u64 = 10_000_000;
 pub const MAX_PRICE_MEM: f64 = 0.577;
 pub const MAX_PRICE_STEP: f64 = 0.000721;
+pub const MAX_MIN_FEE_REF_SCRIPT_COST_PER_BYTE: u64 = 150;
 
 impl ProtocolParameters {
     /// Reads the parameters from one row of Koios's `epoch_params` response.
@@ -938,6 +1006,26 @@ impl ProtocolParameters {
         let key_deposit: u64 = lovelace("key_deposit", MAX_KEY_DEPOSIT)?;
         let price_mem: f64 = price("price_mem", MAX_PRICE_MEM)?;
         let price_step: f64 = price("price_step", MAX_PRICE_STEP)?;
+        let per_byte = "min_fee_ref_script_cost_per_byte";
+        if params[per_byte].as_f64().is_some_and(|v| v < 0.0) {
+            return Err(looks_wrong(
+                per_byte,
+                &params[per_byte],
+                MAX_MIN_FEE_REF_SCRIPT_COST_PER_BYTE,
+            ));
+        }
+        let min_fee_ref_script_cost_per_byte =
+            Ratio::exact(&params[per_byte]).ok_or_else(|| anyhow!("Missing {per_byte}"))?;
+        if u128::from(min_fee_ref_script_cost_per_byte.numerator)
+            > u128::from(MAX_MIN_FEE_REF_SCRIPT_COST_PER_BYTE)
+                * u128::from(min_fee_ref_script_cost_per_byte.denominator)
+        {
+            return Err(looks_wrong(
+                per_byte,
+                min_fee_ref_script_cost_per_byte,
+                MAX_MIN_FEE_REF_SCRIPT_COST_PER_BYTE,
+            ));
+        }
         let cost_model_v3: Vec<i64> = params["cost_models"]["PlutusV3"]
             .as_array()
             .ok_or_else(|| anyhow!("Missing PlutusV3 cost model"))?
@@ -953,6 +1041,7 @@ impl ProtocolParameters {
             price_mem,
             price_step,
             cost_model_v3,
+            min_fee_ref_script_cost_per_byte,
         })
     }
 }

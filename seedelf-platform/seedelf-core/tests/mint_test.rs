@@ -24,7 +24,7 @@ use seedelf_core::transaction::{
 };
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::{create_proof, prove, random_scalar};
-use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, Ratio, UtxoResponse};
 use serde_json::{Value, json};
 
 const TOKEN_POLICY: &str = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
@@ -267,6 +267,8 @@ fn ledger_minimum_fee(
 ) -> u64 {
     assert_eq!((params.min_fee_a, params.min_fee_b), (44, 155_381));
     assert_eq!((params.price_mem, params.price_step), (0.0577, 0.0000721));
+    // Flat below the first 25,600-byte tier.
+    assert_eq!(params.min_fee_ref_script_cost_per_byte, Ratio::whole(15));
     let units = (577 * mem as u128 * 1_000 + 721 * steps as u128).div_ceil(10_000_000) as u64;
     44 * size + 155_381 + units + 15 * script_bytes
 }
@@ -859,6 +861,28 @@ fn prices_bytes_as_the_ledger_does() {
     let rows: Value = serde_json::from_str(include_str!("fixtures/epoch_params.json")).unwrap();
     assert_eq!(rows[0]["min_fee_a"], 44);
     assert_eq!(rows[0]["min_fee_b"], 155_381);
+}
+
+#[test]
+fn the_reference_scripts_are_priced_from_the_parameters() {
+    let mint_at = |numerator: u64| {
+        let mut w = world();
+        w.chain.params.min_fee_ref_script_cost_per_byte = Ratio::whole(numerator);
+        let spent = [owned(&w, 0x20, 0, 25_000_000, &[])];
+        let seedelf = w.owner.clone().rerandomize().unwrap();
+        let minted =
+            build::mint_from(&w.chain, &spent, "priced", &seedelf, &w.owner, w.signer).unwrap();
+        proven(&w, minted)
+            .finalize(&Budgets::from_ogmios(&measured(1)).unwrap())
+            .unwrap()
+    };
+    // The wallet script's 629 bytes and the policy's 519, both by reference.
+    let today = mint_at(15);
+    assert_eq!(today.fee.script_reference, (629 + 519) * 15);
+    // A governance change moves the fee with it, not a constant.
+    let dearer = mint_at(20);
+    assert_eq!(dearer.fee.script_reference, (629 + 519) * 20);
+    assert_eq!(dearer.fee.total - today.fee.total, (629 + 519) * 5);
 }
 
 #[test]

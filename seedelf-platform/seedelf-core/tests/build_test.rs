@@ -19,7 +19,7 @@ use seedelf_core::transaction::calculate_min_required_utxo;
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
-use seedelf_koios::koios::{Asset, ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{Asset, ProtocolParameters, Ratio, UtxoResponse};
 
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -610,6 +610,67 @@ fn a_fee_over_the_limit_is_refused_in_words() {
     };
     let built = move_in(&costly).unwrap();
     assert!(built.fee > 9_000_000 && built.fee <= build::MAX_FEE);
+}
+
+/// The ledger's `tierRefScriptFee`, as it's written: a running total in
+/// fractions, tier by tier, rounded down once at the end.
+fn ledger_reference_script_fee(price: (u128, u128), bytes: u64) -> u64 {
+    // (numerator, denominator) pairs, never reduced: small enough here.
+    let add = |(a, b): (u128, u128), (c, d): (u128, u128)| (a * d + c * b, b * d);
+    let mut total = (0u128, 1u128);
+    let mut tier_price = price;
+    let mut n = u128::from(bytes);
+    while n >= 25_600 {
+        total = add(total, (25_600 * tier_price.0, tier_price.1));
+        tier_price = (tier_price.0 * 6, tier_price.1 * 5);
+        n -= 25_600;
+    }
+    let total = add(total, (n * tier_price.0, tier_price.1));
+    (total.0 / total.1) as u64
+}
+
+#[test]
+fn reference_scripts_are_priced_in_conways_tiers() {
+    let at = |numerator, denominator| ProtocolParameters {
+        min_fee_ref_script_cost_per_byte: Ratio {
+            numerator,
+            denominator,
+        },
+        ..params()
+    };
+    let fifteen = params();
+    assert_eq!(fifteen.min_fee_ref_script_cost_per_byte, Ratio::whole(15));
+    // Flat below the first tier: the Seedelf and Lovejoin scripts cost what
+    // they always did.
+    for (bytes, fee) in [(0, 0), (629, 9_435), (629 + 519, 17_220), (3_785, 56_775)] {
+        assert_eq!(build::reference_script_fee(&fifteen, bytes).unwrap(), fee);
+    }
+    // Each tier's bytes cost 1.2 times the one before's, rounded down once.
+    for (bytes, fee) in [
+        (25_600, 384_000),
+        (25_601, 384_018),
+        (51_200, 844_800),
+        (100_000, 1_999_104),
+        (build::MAX_REFERENCE_SCRIPT_BYTES, 6_335_648),
+    ] {
+        assert_eq!(build::reference_script_fee(&fifteen, bytes).unwrap(), fee);
+    }
+    // Against the ledger's own recursion, at prices that aren't whole too.
+    for (numerator, denominator) in [(15, 1), (25, 2), (44, 3), (1, 10), (0, 1)] {
+        let params = at(numerator, denominator);
+        for bytes in (0..=build::MAX_REFERENCE_SCRIPT_BYTES).step_by(1_237) {
+            assert_eq!(
+                build::reference_script_fee(&params, bytes).unwrap(),
+                ledger_reference_script_fee((numerator.into(), denominator.into()), bytes),
+                "{bytes} bytes at {numerator}/{denominator}"
+            );
+        }
+    }
+    // Past what a transaction may use, it's refused in words, as the ledger would.
+    let err = build::reference_script_fee(&fifteen, build::MAX_REFERENCE_SCRIPT_BYTES + 1)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("over the network's limit of 204800"), "{err}");
 }
 
 // ---------------------------------------------------------------------------

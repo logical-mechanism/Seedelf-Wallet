@@ -11,7 +11,7 @@ use seedelf_core::eval::Resolved;
 use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol};
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
-use seedelf_koios::koios::ProtocolParameters;
+use seedelf_koios::koios::{ProtocolParameters, Ratio};
 use serde_json::{Value, json};
 
 fn fixture() -> Value {
@@ -54,6 +54,7 @@ fn params() -> ProtocolParameters {
         "key_deposit": "2000000",
         "price_mem": 0.0577,
         "price_step": 0.0000721,
+        "min_fee_ref_script_cost_per_byte": 15,
         "cost_models": { "PlutusV3": cost_model },
     }))
     .unwrap()
@@ -268,6 +269,22 @@ fn a_mix_never_pays_a_fee_over_the_limit() {
     };
     let err = lovejoin::mix(&wrong, &protocol, &boxes, &rich).unwrap_err();
     assert!(err.to_string().contains("over the wallet's limit"), "{err}");
+}
+
+#[test]
+fn a_mix_prices_its_reference_scripts_from_the_parameters() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    let today = lovejoin::mix(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    let dearer = ProtocolParameters {
+        min_fee_ref_script_cost_per_byte: Ratio::whole(45),
+        ..params()
+    };
+    let mix = lovejoin::mix(&dearer, &protocol, &boxes, &payer(20_000_000)).unwrap();
+    // mix_box's 629 bytes and mix_logic's 3,156, at 30 lovelace a byte more.
+    // A proof's scalars move the measured budget by a hair between builds.
+    let more = mix.fee - today.fee;
+    assert!(more.abs_diff(3_785 * 30) < 100, "{more}");
 }
 
 #[test]

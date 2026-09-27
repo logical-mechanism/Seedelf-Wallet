@@ -26,7 +26,7 @@
 use crate::address::{collateral_address, wallet_contract};
 use crate::build::{
     Budget, Budgets, DRAFT_BUDGET, MAX_TX_BUDGET, check_fee, collateral_output, even, fake_signer,
-    linear_fee, settle_fee,
+    linear_fee, reference_script_fee, settle_fee,
 };
 use crate::cbor;
 use crate::constants::{COLLATERAL_HASH, VARIANT, get_config};
@@ -55,9 +55,6 @@ use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use uplc::tx::to_plutus_data::ToPlutusData;
-
-/// The Conway reference-script fee per byte, flat below the first 25 KiB tier.
-const REFERENCE_SCRIPT_FEE_PER_BYTE: u64 = 15;
 
 /// The unit datum, `Constr 0 []`: `mix_box`'s spend redeemer (it reads none).
 const UNIT: [u8; 3] = hex!("d87980");
@@ -300,13 +297,15 @@ fn least_change(params: &ProtocolParameters, address: &Address) -> Result<u64> {
     crate::transaction::calculate_min_required_utxo(Output::new(address.clone(), 1_000_000), params)
 }
 
-fn price(params: &ProtocolParameters, size: u64, budgets: &[Budget], script_bytes: u64) -> u64 {
+/// A script transaction's fee: its signed `size`, the `budgets` it declares,
+/// and `script_fee`, its reference scripts' ([`reference_script_fee`]).
+fn price(params: &ProtocolParameters, size: u64, budgets: &[Budget], script_fee: u64) -> u64 {
     linear_fee(params, size)
         + budgets
             .iter()
             .map(|b| computation_fee(params, b.mem, b.steps))
             .sum::<u64>()
-        + script_bytes * REFERENCE_SCRIPT_FEE_PER_BYTE
+        + script_fee
 }
 
 /// A budget as a staged redeemer carries it.
@@ -625,15 +624,11 @@ pub fn mix(
     if total.mem > MAX_TX_BUDGET.mem || total.steps > MAX_TX_BUDGET.steps {
         bail!("Mixing {n} boxes at once needs more computation than a transaction may use");
     }
+    let script_fee = reference_script_fee(params, protocol.script_bytes)?;
     let mut fee = 1_000_000;
     for _ in 0..5 {
         let tx = stage(fee, Some(&budgets))?;
-        let needed = price(
-            params,
-            signed_size(&tx, payer.signers)?,
-            &used,
-            protocol.script_bytes,
-        );
+        let needed = price(params, signed_size(&tx, payer.signers)?, &used, script_fee);
         check_fee(needed)?;
         if needed <= fee && fee - needed < 1_000 {
             break;
@@ -818,6 +813,7 @@ pub fn withdraw(
     // Each round's proof is new, and its scalars' sizes move the budget by a
     // hair, so the transaction declares 1% over what was measured, and is
     // priced on what it declares (which the ledger charges).
+    let script_fee = reference_script_fee(params, protocol.script_bytes)?;
     let mut fee = 500_000;
     let mut declared: Option<Budgets> = None;
     for _ in 0..8 {
@@ -832,12 +828,7 @@ pub fn withdraw(
                     charged.push(d.spend(index).context("No budget for a box")?);
                 }
                 charged.push(d.withdraw(0).context("No budget for mix_logic")?);
-                let needed = price(
-                    params,
-                    signed_size(&tx, 1)?,
-                    &charged,
-                    protocol.script_bytes,
-                );
+                let needed = price(params, signed_size(&tx, 1)?, &charged, script_fee);
                 if needed <= fee && fee - needed < 5_000 {
                     return Ok(Withdraw {
                         tx,
