@@ -127,6 +127,10 @@ describe("withdraw", () => {
     const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
     expect(summary).toMatchObject({ max: true, inputs: 2, left: 0 });
     expect(BigInt(summary.payments[0]!.lovelace)).toBe(28_000_000n - BigInt(summary.fee.total));
+    // Max's review says what it left out, and why; the UTxOs screen marks it (launch review #12).
+    expect(summary.leftOut).toEqual([{ txHash: scripted.tx_hash, txIndex: scripted.tx_index, reason: "script" }]);
+    const { seedelf } = await t.coins.lists("preprod");
+    expect(seedelf.filter((u) => u.unspendable)).toEqual([expect.objectContaining({ txHash: scripted.tx_hash, unspendable: "script" })]);
   });
 
   it("isn't stopped by a stranger's UTxO nested thousands of levels deep in the contract (launch review H4)", async () => {

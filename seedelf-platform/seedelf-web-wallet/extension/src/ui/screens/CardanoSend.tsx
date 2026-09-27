@@ -17,6 +17,7 @@ import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { DestinationInput, type DestinationRead, type KnownRead } from "../components/Destination";
 import { HandleWarning } from "../components/HandleWarning";
+import { LeftOutNote } from "../components/LeftOut";
 import {
   AddRecipient,
   fieldId,
@@ -150,6 +151,7 @@ export function CardanoSend({
           />
         ))}
         {summary.payments.some((p) => p.own) && <OwnNote />}
+        <LeftOutNote leftOut={summary.leftOut} testId="send-left-out" />
         <p className="note">
           {summary.payments.some((p) => p.seedelf) &&
             `Only the owner of ${several ? "each" : "this"} Seedelf can spend the payment, and it can't be linked to their Seedelf by looking at the chain. `}

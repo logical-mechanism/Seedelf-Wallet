@@ -157,6 +157,27 @@ describe("locked UTxOs", () => {
     await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Every UTxO in your private balance is locked");
   });
 
+  it("aren't offered for a UTxO no payment can take: one holding a reference script Koios doesn't give (launch review #12)", async () => {
+    const t = await unlocked(12);
+    const template = koiosPreprod.accounts[phrase(12).preprod.stake]!.account_utxos[0]!;
+    const script = { hash: "cd".repeat(28), size: 900, type: "plutusV3", bytes: null };
+    const measured = { hash: "ab".repeat(28), size: 3, type: "timelock", bytes: "820080" };
+    t.koios.addedToAccounts.push(
+      { ...template, tx_hash: "d1".repeat(32), tx_index: 0, value: "3000000", asset_list: [], reference_script: script },
+      { ...template, tx_hash: "d2".repeat(32), tx_index: 0, value: "3000000", asset_list: [], reference_script: measured },
+    );
+    await t.balances.get("preprod");
+    const { cardano } = await t.coins.lists("preprod");
+    expect(cardano.filter((u) => u.unspendable).map(at)).toEqual([`${"d1".repeat(32)}#0`]);
+    // One whose script the wallet can measure is spent, and priced, as any other.
+    expect(cardano.find((u) => u.txHash === "d2".repeat(32))).not.toHaveProperty("unspendable");
+    // Max says what it left out, and why (launch review H6, #12).
+    const max = await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(max.leftOut).toEqual([{ txHash: "d1".repeat(32), txIndex: 0, reason: "script" }]);
+    const moveIn = await t.moveIn.build("preprod", null, []);
+    expect(moveIn.leftOut).toEqual([{ txHash: "d1".repeat(32), txIndex: 0, reason: "script" }]);
+  });
+
   it("refuse the collateral and UTxOs not in the last reading", async () => {
     const t = await unlocked(24);
     await t.balances.get("preprod");

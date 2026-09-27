@@ -2933,3 +2933,14 @@ button.dapp-tile:hover {
 .token-mark--warn {
   color: var(--warn);
 }
+
+/* Max's UTxOs left where they are (LeftOutNote): one to a line. */
+
+.left-out {
+  margin: 6px 0;
+}
+
+.left-out code {
+  font-family: var(--mono);
+  font-size: 12px;
+}

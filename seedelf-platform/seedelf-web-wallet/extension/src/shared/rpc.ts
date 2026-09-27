@@ -275,6 +275,14 @@ export interface UtxoInfo {
   collateral?: boolean;
   /** It holds one of your seedelfs: its full token name, and its tag when it reads as text. Only removing it spends the UTxO. */
   seedelf?: { name: string; label?: string };
+  /**
+   * No transaction of this wallet can take it: `script`, it holds a
+   * reference script. A private one: the wallet's script evaluator can't
+   * spend one yet, so it isn't in the private balance. A public one: Koios
+   * doesn't give the script, so its fee can't be priced. (A register's datum
+   * is always flat, so an owned UTxO never has one too deep to read.)
+   */
+  unspendable?: "script";
 }
 
 /** Both sides' UTxOs, largest first. */
@@ -318,6 +326,8 @@ export interface MoveInSummary {
   changeLovelace: string;
   changeTokens: number;
   inputs: number;
+  /** Max's UTxOs it couldn't take with the rest, and why (empty for an amount). */
+  leftOut?: LeftOutUtxo[];
 }
 
 /** What pays for a new seedelf: the Cardano account (mint first, then move in), or the Seedelf balance (a stealth mint). */
@@ -424,8 +434,14 @@ export interface WithdrawSummary {
   changeOutputs: number;
   /** How many Seedelf UTxOs pay for it. */
   inputs: number;
-  /** Seedelf UTxOs Max left for another withdrawal (it takes 20 at most). */
+  /**
+   * Seedelf UTxOs Max left for another withdrawal: past the 20 it takes at
+   * most, or holding a token that would total more with the rest than an
+   * output can hold.
+   */
   left: number;
+  /** Max's: private UTxOs no payment takes (a reference script), which the private balance leaves out. */
+  leftOut?: LeftOutUtxo[];
 }
 
 /** One recipient of a send from the Cardano account: an address (found by `$handle`, maybe), or someone's seedelf. */
@@ -452,6 +468,8 @@ export interface SendSummary {
   changeTokens: number;
   /** How many of the account's UTxOs pay for it. */
   inputs: number;
+  /** Max's UTxOs it couldn't take with the rest, and why (empty for amounts). */
+  leftOut?: LeftOutUtxo[];
 }
 
 /** Where a removed seedelf's ADA goes: the Cardano account's `0/0`, or back into the Seedelf balance. */

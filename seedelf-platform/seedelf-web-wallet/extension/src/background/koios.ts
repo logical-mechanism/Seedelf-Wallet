@@ -76,6 +76,19 @@ export function trimmed(row: KoiosUtxo): KoiosUtxo {
   };
 }
 
+/**
+ * Whether the wallet can price spending `u`: it holds no reference script,
+ * or one Koios gives the bytes of, as long as it says it is (core's
+ * `utxos::reference_script_size`). WebAssembly leaves the others out of
+ * anything it builds, for good; the UTxOs screen says so.
+ */
+export function measurable(u: KoiosUtxo): boolean {
+  const script = u.reference_script as { bytes?: unknown; size?: unknown } | null | undefined;
+  if (!script) return true;
+  const { bytes, size } = script;
+  return typeof bytes === "string" && /^([0-9a-fA-F]{2})+$/.test(bytes) && (size == null || size === bytes.length / 2);
+}
+
 /** One of an account's transactions: `account_txs`. */
 export interface KoiosAccountTx {
   tx_hash: string;

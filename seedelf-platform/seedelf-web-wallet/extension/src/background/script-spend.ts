@@ -103,6 +103,12 @@ export function spendable(deps: Pick<ScriptSpendDeps, "contract">, view: Contrac
   return view.owned.filter((u) => !seedelfTokenOf(u, contract.seedelfPolicyId) && !u.reference_script);
 }
 
+/** The owned UTxOs `spendable` leaves out for a reference script: no Seedelf spend takes them yet. */
+export function unspendable(deps: Pick<ScriptSpendDeps, "contract">, view: ContractView): KoiosUtxo[] {
+  const { contract = CONTRACT_V1 } = deps;
+  return view.owned.filter((u) => !seedelfTokenOf(u, contract.seedelfPolicyId) && !!u.reference_script);
+}
+
 /**
  * Builds a Seedelf spend with WebAssembly in one call: it proves the spend
  * and measures its scripts in the wallet, so nothing is sent before Send.

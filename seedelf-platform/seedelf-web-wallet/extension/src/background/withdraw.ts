@@ -28,7 +28,7 @@ import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { destinationResolver, resolveDestination } from "./destination";
 import { settleMaybeSent } from "./pending";
-import { keep, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
+import { keep, measureLocally, nothingToSpend, readContract, send, unspendable, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the withdrawal built last, until it's sent or replaced. */
 export const SESSION_WITHDRAW = "seedelf.withdraw.built";
@@ -78,11 +78,14 @@ export class WithdrawService {
     }
     const finished = await measureLocally<WithdrawResult>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r));
     const { txCbor, seed, inputs, payments: paid, ...rest } = finished;
+    // Max says what no Seedelf spend can take, which the private balance leaves out too.
+    const scripts = finished.max ? unspendable(this.deps, view) : [];
     const summary: WithdrawSummary = {
       ...rest,
       network,
       payments: paid.map(({ to: _to, ...p }, i) => ({ ...destinations[i]!, ...p })),
       inputs: inputs.length,
+      ...(scripts.length ? { leftOut: scripts.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "script" as const })) } : {}),
     };
     await keep(this.deps, SESSION_WITHDRAW, { ...summary, txCbor, seed });
     return summary;

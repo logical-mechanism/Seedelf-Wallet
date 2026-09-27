@@ -66,7 +66,7 @@ import type {
 } from "../shared/rpc";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId } from "./cbor";
-import { KoiosBusyError, KoiosError, SpentInputError, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosUtxo } from "./koios";
 import { builtOutputs, type BuiltOutput, type Estimate, type Minswap, type PendingOrder } from "./minswap";
 import {
   CHAIN_CUT,
@@ -388,19 +388,6 @@ function holdingOf(utxos: KoiosUtxo[]): NonNullable<SessionView["holding"]> {
 function returnable(s: SessionRecord, rows: KoiosUtxo[]): KoiosUtxo[] {
   const behind = new Set((s.leftBehind ?? []).map((b) => `${b.txHash}#${b.txIndex}`));
   return behind.size ? rows.filter((u) => !behind.has(outpoint(u))) : rows;
-}
-
-/**
- * Whether the wallet can price spending `u`: it holds no reference script,
- * or one Koios gives the bytes of, as long as it says it is (core's
- * `utxos::reference_script_size`). WebAssembly leaves the others out of
- * anything it builds, for good.
- */
-function measurable(u: KoiosUtxo): boolean {
-  const script = u.reference_script as { bytes?: unknown; size?: unknown } | null | undefined;
-  if (!script) return true;
-  const { bytes, size } = script;
-  return typeof bytes === "string" && /^([0-9a-fA-F]{2})+$/.test(bytes) && (size == null || size === bytes.length / 2);
 }
 
 /** WebAssembly couldn't build a return because what it takes doesn't pay for its own deposit and fee. */

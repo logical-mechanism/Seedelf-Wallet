@@ -12,6 +12,7 @@ import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
 import { call } from "../background";
 import { AdaInput, MinimumHint, MinimumNote, RoundNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { LeftOutNote } from "../components/LeftOut";
 import { DestinationInput, type DestinationRead, type KnownRead } from "../components/Destination";
 import {
   AddRecipient,
@@ -31,6 +32,9 @@ import { TokenAmountRow } from "../components/TokenList";
 import { adaWithTokens, formatAda, lockedAside, plural, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { tokenQuantity } from "../tokens";
+
+/** The most UTxOs Max takes in one transaction (the WebAssembly's `MAX_WITHDRAW_UTXOS`). */
+const MAX_UTXOS = 20;
 
 export function Withdraw({
   seedelf,
@@ -140,9 +144,13 @@ export function Withdraw({
         ))}
         {summary.left > 0 && (
           <p className="note" data-testid="withdraw-left">
-            {plural(summary.left, "private UTxO")} stay for another payment: a transaction fits 20 at most.
+            {plural(summary.left, "private UTxO")} {summary.left === 1 ? "stays" : "stay"} for another payment:{" "}
+            {summary.inputs < MAX_UTXOS
+              ? `${summary.left === 1 ? "it holds" : "each holds"} a token that would add up to more with the rest than one output can hold.`
+              : `a transaction takes ${MAX_UTXOS} at most, and never a token adding up to more than one output can hold.`}
           </p>
         )}
+        <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
         {summary.payments.some((p) => p.own) && <OwnWarning />}
         <p className="note">
           Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the network to confirm.

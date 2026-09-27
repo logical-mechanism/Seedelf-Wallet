@@ -24,7 +24,7 @@ import type { PathedUtxo } from "./account";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { keptContractView } from "./contract-scan";
-import type { KoiosUtxo } from "./koios";
+import { measurable, type KoiosUtxo } from "./koios";
 import type { PrivateStore } from "./private-store";
 import { outpoint, spentSet } from "./spent";
 import type { Area } from "./storage";
@@ -143,13 +143,17 @@ export class CoinControlService {
     const fresh = account.filter((p) => !spent.has(outpoint(p.utxo)));
     const collateral = collateralOf(choices, fresh)?.utxo;
 
+    // A Seedelf spend can't take a UTxO holding a reference script yet (script-spend.ts `spendable`),
+    // and the account can't price one whose script Koios doesn't give (`measurable`).
+    const script = { unspendable: "script" } as const;
     const seedelf = (view?.owned ?? []).map((u): UtxoInfo => {
       const name = seedelfTokenOf(u, contract.seedelfPolicyId);
-      if (!name) return { ...info(u), locked: lockedSeedelf.has(outpoint(u)) };
+      const unspendable = u.reference_script ? script : {};
+      if (!name) return { ...info(u), locked: lockedSeedelf.has(outpoint(u)), ...unspendable };
       // The seedelf is named, not counted among the tokens.
       const tokens = info(u).tokens.filter((t) => !(t.policyId === contract.seedelfPolicyId && t.assetName === name));
       const label = seedelfLabel(name);
-      return { ...info(u), tokens, locked: false, seedelf: { name, ...(label ? { label } : {}) } };
+      return { ...info(u), tokens, locked: false, seedelf: { name, ...(label ? { label } : {}) }, ...unspendable };
     });
     const cardano = fresh.map(
       (p): UtxoInfo => ({
@@ -157,6 +161,7 @@ export class CoinControlService {
         address: p.utxo.address,
         locked: p === collateral || lockedCardano.has(outpoint(p.utxo)),
         ...(p === collateral ? { collateral: true } : {}),
+        ...(measurable(p.utxo) ? {} : script),
       }),
     );
     return {

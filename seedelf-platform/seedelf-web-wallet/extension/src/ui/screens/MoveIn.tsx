@@ -12,6 +12,7 @@ import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { HandleWarning } from "../components/HandleWarning";
+import { LeftOutNote } from "../components/LeftOut";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
 import { adaWithTokens, formatAda, lockedAside, rewardsAside, tokenKey as key } from "../format";
@@ -101,6 +102,7 @@ export function MoveIn({
           <Row label="New private UTxOs" value={String(summary.depositOutputs)} />
         </ReviewRows>
         <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
+        <LeftOutNote leftOut={summary.leftOut} testId="move-in-left-out" />
         <p className="note">
           The new UTxOs are locked to fresh copies of your Seedelf key's register. It takes about a minute for the network
           to confirm them.
