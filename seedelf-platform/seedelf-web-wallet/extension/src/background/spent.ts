@@ -18,6 +18,7 @@
 import type { NetworkName } from "../networks";
 import { bodyOutpoints, txInputs } from "./cbor";
 import type { KoiosUtxo } from "./koios";
+import { rememberSent } from "./sent-txs";
 import type { Area } from "./storage";
 
 /** chrome.storage.session: `txhash#index` of every UTxO this wallet has spent lately, and when (ms). */
@@ -44,6 +45,8 @@ export async function rememberSpent(session: Area, tx: Uint8Array, now = Date.no
     .sort(([, a], [, b]) => a - b)
     .slice(-SPENT_MOST);
   await session.set(SESSION_SPENT, Object.fromEntries(fresh));
+  // And the transaction itself, a while: a site may build on its outputs (sent-txs.ts).
+  await rememberSent(session, tx);
 }
 
 /** Forgets `outpoints`: a transaction that never landed spent nothing (pending.ts). Call it while unlocked. */

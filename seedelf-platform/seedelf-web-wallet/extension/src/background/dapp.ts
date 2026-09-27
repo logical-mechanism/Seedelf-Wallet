@@ -20,13 +20,15 @@
 //             the account's keys that it needs. With `dappPassword` on (the
 //             default), Sign needs the password too, even while unlocked
 //             and even right after an unlock: a wrong one leaves the request
-//             waiting and counts towards the unlock back-off. The account's
-//             own outputs of every transaction it signs are kept (the last
-//             32), so a dApp can build its next transaction on them before
-//             they're on chain. What the user locked, and the collateral,
-//             stay out of a site's transaction as out of the wallet's own:
-//             one that uses them is refused (`keptApart`). `signData` is
-//             CIP-8, with the address's key.
+//             waiting and counts towards the unlock back-off. WebAssembly
+//             won't have a payment key sign over an input nobody can find,
+//             so the outputs of every transaction it signs are kept (the
+//             account's for the last 32, every one for 20 minutes), and the
+//             wallet's own sends' (sent-txs.ts): a dApp can build its next
+//             transaction on them before they're on chain. What the user
+//             locked, and the collateral, stay out of a site's transaction
+//             as out of the wallet's own: one that uses them is refused
+//             (`keptApart`). `signData` is CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts).
 // Limits      What a site asks for without the user costs the wallet little:
@@ -57,11 +59,12 @@ import {
 } from "../shared/dapp";
 import type { DappApproval, DappAsk, DappSite, DappTxSummary, SessionOutSummary, TokenQuantity } from "../shared/rpc";
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
-import { bodyOutpoints, txId } from "./cbor";
+import { bodyOutpoints, nestsWithin, txId } from "./cbor";
 import type { CoinControlService } from "./coin-control";
 import { SpentInputError, type KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
+import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
 import { outpoint, rememberSpent, spentSet } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
@@ -77,6 +80,10 @@ const VIEW_MS = 30_000;
 const KEEP_SIGNED = 32;
 /** A submitted transaction's outputs count in the balance until they're on chain, or this long. */
 const INFLIGHT_MS = 10 * 60_000;
+/** A signed transaction's outputs can be spent by the site's next one for this long, as the wallet's own sends' (sent-txs.ts). */
+const CHAIN_MS = SENT_KEEP_MS;
+/** Of a signed transaction's outputs, this many are kept for that. */
+const MAX_CHAINED = 64;
 /** After the window is closed while locked, a site's reads are refused for this long. */
 const REFUSE_MS = 60_000;
 /** At most this many calls from sites wait for the user at once. */
@@ -165,10 +172,14 @@ interface View {
   readAt: number;
 }
 
-/** A signed transaction's outputs to the account, for chaining. */
+/** A signed transaction's outputs, for chaining. */
 interface Signed {
   txHash: string;
+  /** Its outputs to the account: what the site may spend (`getUtxos`) until they're on chain. */
   outputs: PathedUtxo[];
+  /** Every output, to the account or not, to read a transaction built on it while `signedAt` is recent. */
+  every?: KoiosUtxo[];
+  signedAt?: number;
   /** When a site sent it through the wallet. */
   submittedAt?: number;
 }
@@ -691,8 +702,12 @@ export class DappService {
 
   /**
    * The UTxOs a transaction spends, as far as the wallet can find them: the
-   * account's (read again if one is missing), its signed transactions'
-   * outputs, then Koios for the rest (one request). A site gets a few fresh
+   * account's, the outputs of transactions it signed for the site, and of
+   * those the wallet sent itself in the last few minutes (sent-txs.ts: a
+   * Send's change, a session's funding or top-up), none of which Koios
+   * lists before they're on chain; then the account read again if one is
+   * missing, and Koios for the rest (one request). The WebAssembly won't
+   * have a payment key sign over one it can't find. A site gets a few fresh
    * readings and lookups a minute (`PER_MINUTE`): past them, the kept
    * reading does, and a lookup is refused.
    */
@@ -702,9 +717,15 @@ export class DappService {
     origin: string,
     refs: string[],
   ): Promise<{ view: View; rows: KoiosUtxo[] }> {
-    const signed = (await this.signed(network, holder)).flatMap((s) => s.outputs);
+    const since = this.deps.now() - CHAIN_MS;
+    const signed = (await this.signed(network, holder)).flatMap((s) => [
+      ...(s.signedAt !== undefined && s.signedAt > since ? (s.every ?? []) : []),
+      ...s.outputs.map((p) => p.utxo),
+    ]);
+    const sent = await this.sentOutputs(refs);
     const find = (view: View) => {
-      const known = new Map([...view.utxos, ...signed].map((p) => [outpoint(p.utxo), p.utxo]));
+      // What Koios lists wins over what the wallet kept.
+      const known = new Map([...sent, ...signed, ...view.utxos.map((p) => p.utxo)].map((u) => [outpoint(u), u]));
       return { found: refs.flatMap((r) => known.get(r) ?? []), missing: refs.filter((r) => !known.has(r)) };
     };
     let view = await this.view(network, holder);
@@ -762,6 +783,15 @@ export class DappService {
       });
     }
     return false;
+  }
+
+  /** The outputs among `refs` of transactions the wallet sent in the last few minutes. */
+  private async sentOutputs(refs: string[]): Promise<KoiosUtxo[]> {
+    const { wallet, session, wasm } = this.deps;
+    const hashes = new Set(refs.map((r) => r.slice(0, r.indexOf("#"))));
+    const sent = (await wallet.withKeys(() => recentlySent(session))).filter((s) => hashes.has(s.txHash));
+    // A site's own submit is kept there too: WebAssembly's decoder reads it only if it isn't nested too deep.
+    return sent.flatMap((s) => (nestsWithin(hexBytes(s.txCbor)) ? outputsOf(wasm, s.txCbor) : []));
   }
 
   /** Whether a site may make the worker ask Koios for `what` now, and counts it if so. */
@@ -849,13 +879,17 @@ export class DappService {
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx,
       );
-      await this.remember(network, holder, signed.summary);
+      await this.remember(network, holder, signed.summary, (tx as string).trim());
       return signed.witnessSet;
     });
   }
 
-  /** Keeps a signed transaction's outputs to the account, for the site's next transaction. */
-  private async remember(network: NetworkName, holder: Holder, summary: DappTxSummary): Promise<void> {
+  /**
+   * Keeps a signed transaction's outputs for the site's next transaction:
+   * those to the account for it to spend, and every one (the first 64) for a
+   * while, so one built on it can be read before it's on chain.
+   */
+  private async remember(network: NetworkName, holder: Holder, summary: DappTxSummary, txCbor: string): Promise<void> {
     const outputs: PathedUtxo[] = summary.ownOutputs.map((o) => ({
       role: o.role as 0 | 1,
       index: o.index,
@@ -878,11 +912,20 @@ export class DappService {
         })),
       },
     }));
-    const { wallet, session } = this.deps;
+    const { wallet, session, wasm, now } = this.deps;
+    // WebAssembly has read it already, so it isn't nested too deep.
+    const every = outputsOf(wasm, txCbor).slice(0, MAX_CHAINED);
     await wallet.withKeys(async () => {
       const key = SESSION_DAPP_SIGNED + network + suffix(holder);
       const kept = (await session.get<Signed[]>(key)) ?? [];
-      const next = [...kept.filter((s) => s.txHash !== summary.txHash), { txHash: summary.txHash, outputs }];
+      const since = now() - CHAIN_MS;
+      const next: Signed[] = [
+        // Older ones' outputs to others go once they can't be chained on.
+        ...kept
+          .filter((s) => s.txHash !== summary.txHash)
+          .map(({ every: all, ...s }) => (s.signedAt !== undefined && s.signedAt > since ? { ...s, every: all } : s)),
+        { txHash: summary.txHash, outputs, every, signedAt: now() },
+      ];
       await session.set(key, next.slice(-KEEP_SIGNED));
     });
   }
@@ -1011,6 +1054,52 @@ function sessionCollateral(utxos: PathedUtxo[]): { spendable: PathedUtxo[]; coll
 function remove<T>(list: T[], drop: (item: T) => boolean): void {
   for (let i = list.length - 1; i >= 0; i--) if (drop(list[i]!)) list.splice(i, 1);
 }
+
+/** A transaction's output, as WebAssembly's `ogmiosUtxos` gives it (Ogmios v6). */
+interface OgmiosUtxo {
+  transaction: { id: string };
+  index: number;
+  address: string;
+  /** `ada.lovelace`, and each policy's tokens by name. */
+  value: Record<string, Record<string, number | string>>;
+  datum?: string;
+  datumHash?: string;
+}
+
+/** A transaction's outputs, as Koios lists UTxOs; none if it can't be read. */
+function outputsOf(wasm: AccountDeps["wasm"], txCbor: string): KoiosUtxo[] {
+  let rows: OgmiosUtxo[];
+  try {
+    // Amounts past 2^53 would lose digits as JSON numbers: read as text.
+    rows = JSON.parse(wasm.ogmiosUtxos(txCbor).replace(/:(\d{16,})([,}])/g, ':"$1"$2')) as OgmiosUtxo[];
+  } catch {
+    return [];
+  }
+  return rows.map(({ transaction, index, address, value, datum, datumHash }) => ({
+    tx_hash: transaction.id,
+    tx_index: index,
+    address,
+    value: String(value.ada?.lovelace ?? 0),
+    stake_address: null,
+    payment_cred: null,
+    block_height: null,
+    inline_datum: datum ? { bytes: datum, value: null } : null,
+    datum_hash: datumHash ?? null,
+    asset_list: Object.entries(value)
+      .filter(([policy]) => policy !== "ada")
+      .flatMap(([policy, names]) =>
+        Object.entries(names).map(([name, quantity]) => ({
+          policy_id: policy,
+          asset_name: name,
+          quantity: String(quantity),
+          decimals: 0,
+          fingerprint: "",
+        })),
+      ),
+  }));
+}
+
+const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
 function hexOf(value: unknown, problem: string): Uint8Array<ArrayBuffer> {
   if (typeof value !== "string" || !/^([0-9a-fA-F]{2})+$/.test(value.trim())) throw invalid(problem);

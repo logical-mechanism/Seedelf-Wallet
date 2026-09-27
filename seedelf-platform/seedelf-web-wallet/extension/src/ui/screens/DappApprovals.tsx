@@ -577,8 +577,8 @@ function SignTx({
       )}
       {s.unknownInputs.length > 0 && (
         <Callout tone="warn" testId="dapp-unknown">
-          It spends {plural(s.unknownInputs.length, "UTxO")} the wallet couldn't find, so what it takes from others can't
-          be shown.
+          It spends {plural(s.unknownInputs.length, "UTxO")} the wallet couldn't find, so what they hold can't be shown.
+          Only your stake key signs here, and it spends none of them.
         </Callout>
       )}
 

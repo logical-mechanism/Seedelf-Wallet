@@ -9,11 +9,21 @@ import { DappService, SESSION_DAPP_SIGNED, type DappSession } from "../src/backg
 import type { KoiosUtxo } from "../src/background/koios";
 import { Minswap } from "../src/background/minswap";
 import { SESSION_SEND } from "../src/background/send";
+import { recentlySent, rememberSent, SENT_KEEP_MS } from "../src/background/sent-txs";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { APIError, DataSignError, TxSendError, TxSignError } from "../src/shared/dapp";
 import { txIdOf } from "./fixtures/cbor";
-import { koiosPreprod, loadTestWasm, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
+import {
+  koiosPreprod,
+  loadTestWasm,
+  memoryArea,
+  ownedUtxos,
+  sessionSwap,
+  testBalances,
+  vectors,
+  withdrawPreprod,
+} from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
@@ -240,6 +250,41 @@ describe("the dApp connector", () => {
       failure: { code: APIError.InvalidRequest },
     });
     expect(t.dapp.approvals()).toEqual([]);
+  });
+
+  it("reads a transaction built on one it signed, or on the wallet's own Send, before either is on chain", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const outputs = (tx: string) => JSON.parse(t.deps.wasm.ogmiosUtxos(tx)) as Array<{ index: number; address: string }>;
+    const signedFor = async (tx: string, partial = false) => {
+      const signing = t.dapp.call(s, "signTx", [tx, partial]);
+      await until(() => t.dapp.approvals().length === 1);
+      const approval = t.dapp.approvals()[0]!;
+      if (approval.kind !== "sign-tx") throw new Error(approval.kind);
+      await t.dapp.answer(approval.id, true, PASSWORD);
+      await signing;
+      return approval.summary;
+    };
+
+    // The site's first transaction pays someone else; its next spends that output, with the account's.
+    const { summary: first, tx } = await built(t);
+    await signedFor(tx);
+    const theirs = outputs(tx).find((o) => o.address === THEIRS)!;
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    const next = await signedFor(siteTx({ inputs: [`${first.txHash}#${theirs.index}`, `${own!.txHash}#${own!.index}`] }), true);
+    expect(next).toMatchObject({ unknownInputs: [], ownInputs: 1, complete: false });
+
+    // The wallet's own Send, sent: a site's transaction spending its change reads it as the account's.
+    const { summary: sent, tx: sendTx } = await built(t);
+    await t.send.submit("preprod", sent.txHash);
+    const change = outputs(sendTx).find((o) => o.address !== THEIRS)!;
+    const spendsChange = await signedFor(siteTx({ inputs: [`${sent.txHash}#${change.index}`] }));
+    expect(spendsChange).toMatchObject({ unknownInputs: [], ownInputs: 1, complete: true });
+    // Neither was on chain for Koios.
+    expect(t.koios.calls.filter((c) => c.path === "utxo_info").flatMap((c) => c.body._utxo_refs)).not.toContain(
+      `${sent.txHash}#${change.index}`,
+    );
   });
 
   it("won't sign a site's transaction that uses a UTxO the user locked, or spends the collateral", async () => {
@@ -765,6 +810,26 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect((await dapp.privateBuild(connect.id, "15000000", [])).index).toBe(1);
   });
 
+  it("reads a site's transaction that spends a top-up before it's on chain", async () => {
+    const t = await on();
+    const { dapp, sessions } = privately(t);
+    const { s } = await connectedPrivately(t, dapp);
+    t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "ee".repeat(32), block_height: 9_000_001 });
+    const more = await sessions.topUpBuild("preprod", 0, "3000000", []);
+    await sessions.topUpSubmit("preprod", more.txHash);
+    const sent = Buffer.from(t.koios.submitted.at(-1)!).toString("hex");
+    const outputs = JSON.parse(t.deps.wasm.ogmiosUtxos(sent)) as Array<{ index: number; address: string }>;
+    const topUp = outputs.find((o) => o.address === sessionSwap.address)!;
+
+    const signing = dapp.call(s, "signTx", [siteTx({ inputs: [`${more.txHash}#${topUp.index}`] }), false]);
+    await until(() => dapp.approvals().length === 1);
+    const approval = dapp.approvals()[0]!;
+    if (approval.kind !== "sign-tx") throw new Error(approval.kind);
+    expect(approval.summary).toMatchObject({ unknownInputs: [], ownInputs: 1, spentLovelace: "3000000", signs: ["0/0"] });
+    await dapp.answer(approval.id, false);
+    await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+  });
+
   it("takes a top-up, and disconnects only once everything's brought back, ending the session", async () => {
     const t = await on();
     const { dapp, sessions } = privately(t);
@@ -787,6 +852,27 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect(await dapp.forget(s.origin)).toEqual([]);
     expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
     await expect(dapp.call(s, "getBalance", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+  });
+});
+
+describe("the wallet's own transactions, kept a while for sites to build on", () => {
+  const bytes = (hex: string) => Uint8Array.from(hex.match(/../g)!, (h) => Number.parseInt(h, 16));
+  const tx = (i: number) => bytes(`84a10081825820${i.toString(16).padStart(64, "0")}00a0f5f6`);
+
+  it("keeps the newest 16 for 20 minutes, and none it can't read or too big to be on chain", async () => {
+    const session = memoryArea();
+    for (let i = 0; i < 20; i++) await rememberSent(session, tx(i), 1_000 * i);
+    const kept = await recentlySent(session, 20_000);
+    expect(kept.map((s) => s.txHash)).toEqual(Array.from({ length: 16 }, (_, i) => txIdOf(tx(i + 4))));
+    expect(kept[0]!.txCbor).toBe(Buffer.from(tx(4)).toString("hex"));
+    // Twenty minutes after the oldest kept, it's gone.
+    expect(await recentlySent(session, 4_000 + SENT_KEEP_MS)).toHaveLength(15);
+
+    await rememberSent(session, bytes("00"), 20_000);
+    const big = new Uint8Array(16_385);
+    big.set(tx(99));
+    await rememberSent(session, big, 20_000);
+    expect(await recentlySent(session, 20_000)).toHaveLength(16);
   });
 });
 
