@@ -200,6 +200,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.prices.get(ctx.network);
     case "dapp-approvals":
       return ctx.dapp.approvals();
+    case "dapp-unlocking":
+      return ctx.dapp.unlockingSites();
     case "dapp-close":
       return ctx.dapp.closeWindow();
     case "dapp-answer":

@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
-import { DappService, SESSION_DAPP_SIGNED, type DappSession } from "../src/background/dapp";
+import { DappService, SESSION_DAPP_SIGNED, type DappError, type DappSession } from "../src/background/dapp";
 import type { KoiosUtxo } from "../src/background/koios";
 import { chainOwner } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
@@ -870,27 +870,82 @@ describe("the dApp connector", () => {
     expect((await t.dapp.sites()).map((s) => s.origin)).toEqual(origins);
   });
 
-  it("waits for an unlock in its window, and refuses for a while once it's closed instead", async () => {
+  it("waits for an unlock in its window, naming the site, and refuses for a while once it's closed instead", async () => {
     const t = await on();
     const s = await connected(t);
     await t.wallet.lock();
-    expect(await t.dapp.call(s, "isEnabled", [])).toBe(false);
 
-    const reading = t.dapp.call(s, "getNetworkId", []);
+    // enable() unlocks in the window, which names who's waiting, then answers at once: the site is connected.
+    const enabling = t.dapp.call(s, "enable", []);
     await until(() => t.dappWindow.shown === 2);
+    expect(t.dapp.unlockingSites()).toEqual(["https://app.example.com"]);
     await t.wallet.unlock(PASSWORD);
     await t.dapp.stateChanged();
-    expect(await reading).toBe(0);
+    expect(await enabling).toBe(true);
+    expect(t.dapp.unlockingSites()).toEqual([]);
+    expect(await t.dapp.call(s, "getNetworkId", [])).toBe(0);
 
     await t.wallet.lock();
-    const refused = t.dapp.call(s, "getBalance", []);
+    const message = [t.deps.wasm.cip30Address(OWN), hex("Sign in")];
+    const refused = t.dapp.call(s, "signData", message);
     await until(() => t.dappWindow.shown === 3);
     t.dappWindow.open = false;
     await t.dapp.windowClosed();
-    await expect(refused).rejects.toMatchObject({ failure: { code: APIError.Refused } });
-    // A site that polls doesn't bring the window back for a minute.
-    await expect(t.dapp.call(s, "getBalance", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+    // Closed: declined, as a request the user said no to is, and nothing more.
+    await expect(refused).rejects.toMatchObject({ failure: { code: APIError.Refused, info: "The user declined." } });
+    // A site that asks again and again doesn't bring the window back for a minute.
+    await expect(t.dapp.call(s, "signData", message)).rejects.toMatchObject({ failure: { code: APIError.Refused } });
     expect(t.dappWindow.shown).toBe(3);
+  });
+
+  it("tells no site when the wallet locks or unlocks: isEnabled holds, and reads are refused as a stranger's, unasked", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const stranger = site("https://stranger.example");
+    const notConnected = { failure: { code: APIError.Refused, info: "This site isn't connected to Seedelf Wallet. Call enable() first." } };
+    const unlocked = {
+      connected: await t.dapp.call(s, "isEnabled", []),
+      stranger: await t.dapp.call(stranger, "isEnabled", []),
+      read: await t.dapp.call(stranger, "getNetworkId", []).catch((e: DappError) => e),
+    };
+    expect(unlocked).toMatchObject({ connected: true, stranger: false, read: notConnected });
+
+    await t.wallet.lock();
+    // The same answers, and no window: a site learns nothing of the lock from them, and can't bring the window up.
+    expect(await t.dapp.call(s, "isEnabled", [])).toBe(true);
+    expect(await t.dapp.call(stranger, "isEnabled", [])).toBe(false);
+    for (const who of [stranger, s]) {
+      for (const method of ["getNetworkId", "getBalance", "getUtxos", "getUsedAddresses", "getRewardAddresses"] as const) {
+        await expect(t.dapp.call(who, method, [])).rejects.toMatchObject(notConnected);
+      }
+    }
+    expect(t.dappWindow.shown).toBe(1);
+    expect(t.dapp.unlockingSites()).toEqual([]);
+
+    // Kept in the worker's memory only: one started while locked can't read the sealed list, and says no.
+    const restarted = new DappService({
+      ...t.deps,
+      store: t.store,
+      sessions: t.sessions,
+      network: () => "preprod",
+      window: t.dappWindow,
+      changed: () => undefined,
+    });
+    expect(await restarted.call(s, "isEnabled", [])).toBe(false);
+    // A site disconnected, or a wallet removed, isn't enabled.
+    await t.wallet.unlock(PASSWORD);
+    await t.dapp.forget(s.origin);
+    await t.wallet.lock();
+    expect(await t.dapp.call(s, "isEnabled", [])).toBe(false);
+    await t.wallet.unlock(PASSWORD);
+    await connected(t, s);
+    await t.wallet.reset();
+    await t.dapp.stateChanged();
+    // The next wallet made here, locked before it has read its own list, has no site of the last one's.
+    await t.wallet.create(account(15).phrase, PASSWORD);
+    await t.preferences.set({ dappConnector: true });
+    await t.wallet.lock();
+    expect(await t.dapp.call(s, "isEnabled", [])).toBe(false);
   });
 
   it("forgets what a site asked for once its page is gone, and declines it all when the window closes", async () => {

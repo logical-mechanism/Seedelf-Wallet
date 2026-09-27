@@ -1163,6 +1163,8 @@ export interface Requests {
   price: { payload: None; result: AdaPrice | null };
   /** What sites are waiting for the user to answer, oldest first. */
   "dapp-approvals": { payload: None; result: DappApproval[] };
+  /** The sites waiting for the wallet to be unlocked, by origin: the connector's window names them on its Unlock screen. */
+  "dapp-unlocking": { payload: None; result: string[] };
   /** The connector's window has nothing left: the worker closes it, or answers false when something came in meanwhile. */
   "dapp-close": { payload: None; result: boolean };
   /**
@@ -1347,6 +1349,7 @@ const REQUEST_LIST = [
   "network-set",
   "price",
   "dapp-approvals",
+  "dapp-unlocking",
   "dapp-close",
   "dapp-answer",
   "dapp-private-build",

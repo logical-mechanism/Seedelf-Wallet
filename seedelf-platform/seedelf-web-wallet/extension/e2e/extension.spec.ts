@@ -2881,12 +2881,30 @@ test.describe("the dApp connector", () => {
     await connect.getByRole("button", { name: "Connect", exact: true }).click();
     expect(await enabling).toBe(true);
     await closed;
+    // The API the site keeps, as dApps do.
+    await dapp.evaluate(async () => {
+      (window as any).kept = await (window as any).cardano.seedelf.enable();
+    });
     await page.getByRole("button", { name: "Lock" }).click();
 
+    // Locked, nothing the site hears says so: isEnabled holds, and a read is refused as a stranger's, with no window.
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(true);
+    const pages = context.pages().length;
+    expect(
+      await dapp.evaluate(() =>
+        (window as any).kept.getNetworkId().catch((e: { code: number; info: string }) => ({ code: e.code, info: e.info })),
+      ),
+    ).toEqual({
+      code: -3,
+      info: "This site isn't connected to Seedelf Wallet. Call enable() first.",
+    });
+    expect(context.pages()).toHaveLength(pages);
+
+    // enable() unlocks in the connector's window, which names the site.
     opened = connectorWindow(context);
     const reading = cip30(dapp, "getNetworkId");
     const unlock = await opened;
-    await expect(unlock.getByTestId("unlock-site")).toHaveText("A site is waiting for Seedelf Wallet. Unlock to see what it asks.");
+    await expect(unlock.getByTestId("unlock-site")).toHaveText("https://dapp.example is asking for Seedelf Wallet. Unlock to see what it asks.");
     const unlocked = unlock.waitForEvent("close");
     await unlock.getByLabel("Password").fill(PASSWORD);
     await unlock.getByRole("button", { name: "Unlock" }).click();

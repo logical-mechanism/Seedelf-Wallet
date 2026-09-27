@@ -1,6 +1,6 @@
-// The dApp connector (CIP-30) in the worker, for the public account. The
-// content scripts (shared/dapp.ts) bring each site's calls here, with the
-// site's origin as Chrome reports it.
+// The dApp connector (CIP-30) in the worker, for the public account or a
+// site's private session. The content scripts (shared/dapp.ts) bring each
+// site's calls here, with the site's origin as Chrome reports it.
 //
 // Connecting  A site calls `enable()`; the connector's window asks the user
 //             (unlocking first if need be). Connected sites are a sealed
@@ -10,10 +10,17 @@
 //             (Settings switches it): `getNetworkId` says which, and a site
 //             connected on one isn't on the other. What sites were asking
 //             on the network the wallet left is declined (`networkChanged`).
-// Locked      Everything but `isEnabled()` (false while locked) opens the
-//             window to unlock first. Closing it without unlocking refuses
-//             the calls, and that site's reads are refused without asking
-//             for a minute, so a dApp that polls doesn't keep opening it.
+// Locked      Nothing a site hears changes at the moment of an unlock unless
+//             it asked for it (privacy review §2.11). `isEnabled()` answers
+//             whether it's connected, as last read. Which sites are is
+//             sealed, so a read is refused at once as a stranger's is ("call
+//             enable()"), and never opens the window: a site that isn't
+//             connected learns nothing, and can't bring the window up by
+//             reading. `enable()`, a signature and a send open the window to
+//             unlock first, which names the sites waiting. Closing it without
+//             unlocking declines them, and that site's signatures and sends
+//             are refused without asking for a minute, so a dApp that asks
+//             again and again doesn't keep opening it.
 // Reading     The account as `readAccountUtxos` finds it (two Koios
 //             requests), kept 30 s: less what the user locked and the
 //             collateral (`getCollateral` gives that one), plus what the
@@ -67,6 +74,7 @@ import type { NetworkName } from "../networks";
 import {
   APIError,
   DataSignError,
+  READ_METHODS,
   TxSendError,
   TxSignError,
   type DappFailure,
@@ -100,7 +108,7 @@ const INFLIGHT_MS = 10 * 60_000;
 const CHAIN_MS = SENT_KEEP_MS;
 /** Of a signed transaction's outputs, this many are kept for that. */
 const MAX_CHAINED = 64;
-/** After the window is closed while locked, a site's reads are refused for this long. */
+/** After the window is closed while locked, a site's signatures and sends are refused for this long, unasked. */
 const REFUSE_MS = 60_000;
 /** At most this many calls from sites wait for the user at once. */
 const MAX_WAITING = 20;
@@ -235,13 +243,15 @@ interface Unlocking {
 type SignedTx = { witnessSet: string; summary: DappTxSummary };
 
 const ALREADY_CONNECTED = "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session.";
+/** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
+const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable() first.";
 /** What a site asking on the network the wallet left hears, and the window says. */
 const NETWORK_LEFT = "Seedelf Wallet moved to another network in its settings, so this request was declined. Ask again.";
 
 export class DappService {
   private readonly waiting: Waiting[] = [];
   private readonly unlocking: Unlocking[] = [];
-  /** Sites whose reads are refused until then, after the user closed the window instead of unlocking. */
+  /** Sites whose signatures and sends are refused until then, after the user closed the window instead of unlocking. */
   private readonly refusedUntil = new Map<string, number>();
   /** How many of each site's calls are running. */
   private readonly running = new Map<string, number>();
@@ -255,6 +265,13 @@ export class DappService {
   private sitesQueue: Promise<unknown> = Promise.resolve();
   /** The worker is closing the connector's window (`closeWindow`), not the user. */
   private closing = false;
+  /**
+   * The sites connected on each network, as this worker last read or wrote
+   * the sealed `dapps` record: in memory only, never stored. `isEnabled`
+   * answers from it while the wallet is locked, when the record can't be
+   * read. A worker started since has none.
+   */
+  private readonly lastSites = new Map<NetworkName, Set<string>>();
 
   constructor(private readonly deps: DappDeps) {}
 
@@ -278,10 +295,14 @@ export class DappService {
     const { origin } = session;
     if (method === "isEnabled" && !on) return false;
     if (!on) throw refused("Connecting sites is off in Seedelf Wallet's settings.");
-    if (method === "isEnabled") {
-      return (await this.deps.wallet.state()) === "unlocked" && (await this.connected(await this.deps.network(), origin));
+    if (method === "isEnabled") return this.isEnabled(origin);
+    if ((await this.deps.wallet.state()) !== "unlocked") {
+      // Which sites are connected is sealed while locked: a read is refused
+      // at once, as a stranger's is, and never opens the window. A connected
+      // dApp hears to call enable(), which unlocks in the window.
+      if (READ_METHODS.has(method)) throw refused(NOT_CONNECTED);
+      await this.unlocked(session, method);
     }
-    await this.unlocked(session, method);
     // The network the wallet is on as this call goes on: a site connected on
     // one isn't on the other, and what it asks is answered, and signed, there.
     const network = await this.deps.network();
@@ -294,7 +315,7 @@ export class DappService {
       return true;
     }
     const site = await this.site(network, origin);
-    if (!site) throw refused("This site isn't connected to Seedelf Wallet. Call enable() first.");
+    if (!site) throw refused(NOT_CONNECTED);
     const holder = await this.holder(network, site);
     switch (method) {
       case "getNetworkId":
@@ -382,11 +403,18 @@ export class DappService {
     }
   }
 
-  /** The wallet's state changed: an unlock lets the waiting calls on. */
+  /** The wallet's state changed: an unlock lets the waiting calls on. A removed wallet's sites are forgotten. */
   async stateChanged(): Promise<void> {
-    if (!this.unlocking.length || (await this.deps.wallet.state()) !== "unlocked") return;
+    const state = await this.deps.wallet.state();
+    if (state === "no-wallet") this.lastSites.clear();
+    if (!this.unlocking.length || state !== "unlocked") return;
     for (const u of this.unlocking.splice(0)) u.resolve();
     this.deps.changed();
+  }
+
+  /** The sites waiting for the wallet to be unlocked, by origin, oldest first: the connector's window names them. */
+  unlockingSites(): string[] {
+    return [...new Set(this.unlocking.map((u) => u.session.origin))];
   }
 
   /**
@@ -429,7 +457,8 @@ export class DappService {
     const until = this.deps.now() + REFUSE_MS;
     for (const u of this.unlocking.splice(0)) {
       this.refusedUntil.set(u.session.origin, until);
-      u.reject(refused("Seedelf Wallet is locked."));
+      // As a declined request is: nothing more about the wallet.
+      u.reject(refused("The user declined."));
     }
     // A private session's funding is sent: it isn't undone, and the site connects once it arrives.
     for (const w of this.waiting.filter((x) => !funding(x))) {
@@ -471,6 +500,7 @@ export class DappService {
   /** The sites connected on `network`. */
   private async sitesOn(network: NetworkName): Promise<DappSite[]> {
     const all = (await this.deps.store.get<Connected[]>("dapps")) ?? [];
+    this.keepSites(all);
     return all
       .filter((s) => s.network === network)
       .map(({ origin, connectedAt, session }) => ({ origin, connectedAt, ...(session === undefined ? {} : { session }) }))
@@ -543,9 +573,32 @@ export class DappService {
       const all = (await this.deps.store.get<Connected[]>("dapps")) ?? [];
       const next = change(all);
       if (next !== all) await this.deps.store.set("dapps", next);
+      this.keepSites(next);
     });
     this.sitesQueue = run.catch(() => undefined);
     return run;
+  }
+
+  /** Keeps which sites are connected, in memory, for `isEnabled` while locked. */
+  private keepSites(all: Connected[]): void {
+    this.lastSites.clear();
+    for (const { network, origin } of all) {
+      const sites = this.lastSites.get(network) ?? new Set<string>();
+      this.lastSites.set(network, sites.add(origin));
+    }
+  }
+
+  /**
+   * Whether `origin` is connected on the network the wallet is on, locked or
+   * not: an answer that changed at an unlock would tell a site polling it
+   * when the wallet is in use. While locked, the sealed record can't be
+   * read: the answer is what this worker last read of it. One started since
+   * the lock says false, as for a site that isn't connected.
+   */
+  private async isEnabled(origin: string): Promise<boolean> {
+    const [state, network] = await Promise.all([this.deps.wallet.state(), this.deps.network()]);
+    if (state === "unlocked") return this.connected(network, origin);
+    return state === "locked" && !!this.lastSites.get(network)?.has(origin);
   }
 
   /** Who a connected site talks to: its private session's account, or the public account. */

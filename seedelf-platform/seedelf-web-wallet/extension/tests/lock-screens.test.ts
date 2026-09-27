@@ -20,6 +20,17 @@ describe("the lock screens", () => {
     expect(renderToStaticMarkup(createElement(Unlock, props))).not.toContain("unlock-why");
   });
 
+  it("name, in the connector's window, the sites waiting for the unlock, by origin", async () => {
+    const { waitingText } = await import("../src/ui/screens/Unlock");
+    expect(waitingText(["https://app.example"])).toBe("https://app.example is asking for Seedelf Wallet. Unlock to see what it asks.");
+    expect(waitingText(["https://app.example", "https://b.example", "https://c.example"])).toBe(
+      "https://app.example and 2 other sites are asking for Seedelf Wallet. Unlock to see what they ask.",
+    );
+    expect(waitingText(["https://app.example", "https://b.example"])).toContain("and 1 other site are asking");
+    // Before the worker says which, or with none: a site, unnamed.
+    expect(waitingText([])).toBe("A site is waiting for Seedelf Wallet. Unlock to see what it asks.");
+  });
+
   it("say a Lock that failed, and offer it again", async () => {
     const { LockFailed } = await import("../src/ui/App");
     const html = renderToStaticMarkup(createElement(LockFailed, { message: "Storage refused.", onRetry: () => undefined }));
