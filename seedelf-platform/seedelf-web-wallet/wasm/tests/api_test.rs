@@ -1811,8 +1811,12 @@ mod transfer {
 }
 
 mod withdraw {
+    use pallas_addresses::{
+        Network as AddressNetwork, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+    };
+    use pallas_crypto::hash::Hash;
     use pallas_traverse::MultiEraTx;
-    use seedelf_crypto::cardano::CardanoAccount;
+    use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::derivation::seedelf_key_v1;
     use seedelf_crypto::schnorr::random_scalar;
     use seedelf_koios::koios::UtxoResponse;
@@ -2358,12 +2362,80 @@ mod withdraw {
             .find(|v| v["account"] == 0 && v["phrase"].as_str().unwrap().split(' ').count() == 12)
             .unwrap();
         let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
-        let own = |a: &str| api::is_own_address(&account, a).unwrap();
+        let own = |a: &str| api::is_own_address(&account, a, &[]).unwrap();
         assert!(own(v12["preprod"]["receive_0"].as_str().unwrap()));
         assert!(own(v12["mainnet"]["receive_0"].as_str().unwrap()));
         assert!(!own(&theirs()));
         assert!(!own(&contract()));
         assert!(!own("nope"));
+    }
+
+    /// An address from payment and staking parts, on preprod.
+    fn shelley(payment: ShelleyPaymentPart, delegation: ShelleyDelegationPart) -> String {
+        ShelleyAddress::new(AddressNetwork::Testnet, payment, delegation)
+            .to_bech32()
+            .unwrap()
+    }
+
+    #[test]
+    fn knows_the_accounts_own_addresses_by_payment_key_too() {
+        // Privacy review §2.17: the wallet spends anything under its payment
+        // keys, whatever the staking part, so Make public warns about those too.
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let own = |a: &str, known: &[String]| api::is_own_address(&account, a, known).unwrap();
+        let key = |role, index| account.key_hash(role, index).unwrap();
+        let stake = key(Role::Staking, 0);
+        let foreign_stake = Hash::<28>::from([7; 28]);
+        let foreign_key = Hash::<28>::from([9; 28]);
+
+        // An enterprise address of receive 0, and of change 19, the last always matched.
+        let enterprise = |role, index| {
+            shelley(
+                ShelleyPaymentPart::Key(key(role, index)),
+                ShelleyDelegationPart::Null,
+            )
+        };
+        assert!(own(&enterprise(Role::Receive, 0), &[]));
+        assert!(own(
+            &enterprise(Role::Change, api::OWN_KEYS_ALWAYS - 1),
+            &[]
+        ));
+        // Receive 0's key with someone else's stake key.
+        assert!(own(
+            &shelley(
+                ShelleyPaymentPart::Key(key(Role::Receive, 0)),
+                ShelleyDelegationPart::Key(foreign_stake),
+            ),
+            &[],
+        ));
+        // Someone else's key with ours: an observer sees our stake credential.
+        assert!(own(
+            &shelley(
+                ShelleyPaymentPart::Key(foreign_key),
+                ShelleyDelegationPart::Key(stake),
+            ),
+            &[],
+        ));
+        // A key past the first 20 counts once the last reading found it.
+        let far = enterprise(Role::Receive, 25);
+        assert!(!own(&far, &[]));
+        let known = [hex::encode(key(Role::Receive, 25)).to_uppercase()];
+        assert!(own(&far, &known));
+        // Someone else's key and stake key are nobody's own.
+        assert!(!own(
+            &shelley(
+                ShelleyPaymentPart::Key(foreign_key),
+                ShelleyDelegationPart::Key(foreign_stake),
+            ),
+            &known,
+        ));
+        assert!(!own(
+            &shelley(
+                ShelleyPaymentPart::Key(foreign_key),
+                ShelleyDelegationPart::Null
+            ),
+            &[],
+        ));
     }
 }
 

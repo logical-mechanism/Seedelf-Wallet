@@ -1,8 +1,12 @@
 // Where a withdrawal or a send goes, as the user typed it: a bech32 address,
 // or an ADA Handle. A handle is looked up through Koios
 // (`asset_nft_address`), which sees which handle is asked about. A
-// destination carrying this account's staking key is flagged: paying it from
-// Seedelf re-links the money to the account.
+// destination that's this account's own is flagged: paying it from Seedelf
+// re-links the money to the account. That's one carrying the account's
+// staking key, or under one of its payment keys, whatever its staking part
+// (an enterprise address, say), as the wallet counts and spends the account
+// (account.ts): the first 20 of each chain, and those the last balance
+// reading found (privacy review §2.17). Nothing is asked of anyone for it.
 
 import type * as Wasm from "@seedelf/wasm";
 
@@ -10,7 +14,9 @@ import type { NetworkName } from "../networks";
 import { ADA_HANDLE_POLICY, CIP68_USER_TOKEN, HANDLE } from "../shared/handles";
 import type { WithdrawDestination } from "../shared/rpc";
 import { SEEDELF_NOT_AN_ADDRESS, seedelfName } from "../shared/seedelf-name";
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import type { Koios } from "./koios";
+import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
 
 export { ADA_HANDLE_POLICY, HANDLE };
@@ -21,6 +27,8 @@ export interface DestinationDeps {
   wasm: typeof Wasm;
   wallet: Wallet;
   koios: (network: NetworkName) => Koios;
+  /** chrome.storage.session: the account's payment keys the last balance reading found. */
+  session?: Area;
 }
 
 /** A destination as typed: a bech32 address, or `$handle`. Throws the reason it can't be paid. */
@@ -50,7 +58,10 @@ export async function resolveDestination(
   }
   // Throws the reason: not an address, a script, a stake address, the other network.
   wasm.checkPayableAddress(address, net);
-  const own = await wallet.withKeys((keys) => keys.cardano.isOwnAddress(address));
+  const own = await wallet.withKeys(async (keys) => {
+    const found = await deps.session?.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
+    return keys.cardano.isOwnAddress(address, found?.keys ?? []);
+  });
   return handle ? { address, handle, own } : { address, own };
 }
 

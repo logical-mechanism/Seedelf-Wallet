@@ -2165,17 +2165,47 @@ pub mod api {
         }
     }
 
-    /// Whether `address` carries this account's staking key: every address a
-    /// normal wallet shows for the account does. Paying it from Seedelf links
-    /// the money back to the account.
-    pub fn is_own_address(account: &CardanoAccount, address: &str) -> Result<bool> {
+    /// How many keys of each payment chain (receive, change) `is_own_address`
+    /// always matches, whatever the last reading found: the gap limit's.
+    pub const OWN_KEYS_ALWAYS: u32 = 20;
+
+    /// Whether `address` is this account's own: under one of its payment
+    /// keys, whatever its staking part (an enterprise address, say), as the
+    /// wallet counts and spends the account; or carrying its staking key, as
+    /// every address a normal wallet shows for it does. The payment keys are
+    /// the first [`OWN_KEYS_ALWAYS`] of each chain, and `known` (hex key
+    /// hashes, as the last balance reading found them). Paying it from Seedelf
+    /// links the money back to the account (privacy review §2.17).
+    pub fn is_own_address(
+        account: &CardanoAccount,
+        address: &str,
+        known: &[String],
+    ) -> Result<bool> {
+        let Ok(Address::Shelley(shelley)) = Address::from_bech32(address.trim()) else {
+            return Ok(false);
+        };
         let stake = account.key_hash(Role::Staking, 0)?;
-        Ok(match Address::from_bech32(address.trim()) {
-            Ok(Address::Shelley(shelley)) => {
-                matches!(shelley.delegation(), ShelleyDelegationPart::Key(h) if *h == stake)
+        if matches!(shelley.delegation(), ShelleyDelegationPart::Key(h) if *h == stake) {
+            return Ok(true);
+        }
+        let ShelleyPaymentPart::Key(payment) = shelley.payment() else {
+            return Ok(false);
+        };
+        let payment_hex = hex::encode(payment);
+        if known
+            .iter()
+            .any(|k| k.trim().eq_ignore_ascii_case(&payment_hex))
+        {
+            return Ok(true);
+        }
+        for role in [Role::Receive, Role::Change] {
+            for index in 0..OWN_KEYS_ALWAYS {
+                if account.key_hash(role, index)? == *payment {
+                    return Ok(true);
+                }
             }
-            _ => false,
-        })
+        }
+        Ok(false)
     }
 
     /// Signing a finished script spend at Send, as JSON from the extension.
@@ -2464,11 +2494,18 @@ impl WasmCardanoAccount {
         self.address(network, cardano::Role::Change, index)
     }
 
-    /// Whether `address` carries this account's staking key, as every
-    /// address a normal wallet shows for it does. Unreadable addresses aren't.
+    /// Whether `address` is this account's own: under one of its payment
+    /// keys, whatever its staking part (the first 20 of each chain, and
+    /// `keys`, hex, as the last balance reading found them), or carrying its
+    /// staking key, as every address a normal wallet shows for it does.
+    /// Unreadable addresses aren't.
     #[wasm_bindgen(js_name = isOwnAddress)]
-    pub fn is_own_address(&self, address: &str) -> Result<bool, JsError> {
-        api::is_own_address(&self.inner, address).map_err(js_error)
+    pub fn is_own_address(
+        &self,
+        address: &str,
+        keys: Option<Vec<String>>,
+    ) -> Result<bool, JsError> {
+        api::is_own_address(&self.inner, address, &keys.unwrap_or_default()).map_err(js_error)
     }
 
     /// The payment key hash at `role/index` (0 receive, 1 change), hex: the
