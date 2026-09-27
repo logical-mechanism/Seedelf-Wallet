@@ -692,11 +692,19 @@ pub struct TxSummary {
     pub tx_hash: String,
     pub fee: String,
     /// The account's change: ADA (signed lovelace) and each token that moved.
+    /// Its ADA is what comes back less what the account puts in: its UTxOs
+    /// and its staking both.
     pub net_lovelace: String,
     pub net_tokens: Vec<Token>,
     /// What the account's UTxOs put in, and what comes back to it.
     pub spent_lovelace: String,
     pub returned_lovelace: String,
+    /// What the account puts in from its staking: the rewards it withdraws
+    /// and the deposit its stake key gets back. It's the account's money as
+    /// much as its UTxOs are, so it counts in the net. Any of it the
+    /// account's outputs don't hold (`returned_lovelace` beyond
+    /// `spent_lovelace`) goes to the others it pays, or to the fee.
+    pub staking_lovelace: String,
     /// How many of the account's UTxOs it spends.
     pub own_inputs: usize,
     /// Outputs to anyone else.
@@ -1052,6 +1060,16 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         });
     }
 
+    // What the account puts in from its staking: its rewards, and its stake
+    // key's deposit back. Neither is in a UTxO, and either can leave in the
+    // outputs as any of its ADA can.
+    let mut staking = 0u64;
+    let add_staking = |staking: u64, lovelace: u64| {
+        staking
+            .checked_add(lovelace)
+            .ok_or_else(|| anyhow!("an ADA amount overflows"))
+    };
+
     let mut certificates = Vec::new();
     for cert in body.certificates.iter().flat_map(|c| c.iter()) {
         use conway::Certificate as C;
@@ -1150,6 +1168,18 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             // Pools, the committee and DReps sign with keys this wallet doesn't hold.
             None => others_sign += 1,
         }
+        if c.own {
+            match cert {
+                // Its refund is the protocol's deposit, which the certificate
+                // doesn't say, so what the account puts in can't be counted.
+                // The wallet's own staking writes Conway's, which says it.
+                C::StakeDeregistration(_) => bail!(
+                    "This transaction stops your staking with an old kind of certificate that doesn't say how much deposit comes back, so the wallet can't show where it goes and won't sign it."
+                ),
+                C::UnReg(_, refund) => staking = add_staking(staking, *refund)?,
+                _ => {}
+            }
+        }
         certificates.push(c);
     }
 
@@ -1167,6 +1197,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 let own = match s.payload() {
                     StakePayload::Stake(h) if *h == keys.stake => {
                         signers.insert(Signer::Stake);
+                        staking = add_staking(staking, *amount)?;
                         true
                     }
                     StakePayload::Stake(h) => {
@@ -1223,7 +1254,11 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     // covers datums in the witness set, as a DEX order's is: nothing runs.
     let scripts = witnesses.redeemer.is_some();
 
-    let (net, net_tokens) = difference(&spent, &returned);
+    let put_in = Amount {
+        lovelace: add_staking(spent.lovelace, staking)?,
+        ..spent.clone()
+    };
+    let (net, net_tokens) = difference(&put_in, &returned);
     others_sign += foreign_keys.len();
     let complete = others_sign == 0 && unknown.is_empty();
     let summary = TxSummary {
@@ -1233,6 +1268,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         net_tokens,
         spent_lovelace: spent.lovelace.to_string(),
         returned_lovelace: returned.lovelace.to_string(),
+        staking_lovelace: staking.to_string(),
         own_inputs,
         paid,
         own_outputs,

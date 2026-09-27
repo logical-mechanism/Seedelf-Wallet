@@ -430,6 +430,92 @@ fn a_legacy_registration_needs_no_signature() {
     assert_eq!(summary.certificates[0].kind, "register");
 }
 
+/// 4 ₳ in from `0/2` and 1,000 ₳ of the account's rewards withdrawn, with
+/// `back` coming back to `0/0` and the rest paid to someone else.
+fn rewards_out(back: u64) -> String {
+    let rewards = 1_000_000_000;
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&ours(Role::Receive, 0), back, None),
+            out(&theirs(), 4_000_000 + rewards - 200_000 - back, None),
+        ],
+    );
+    b.withdrawals =
+        NonEmptyKeyValuePairs::try_from(vec![(Bytes::from(stake_account_bytes()), rewards)]).ok();
+    tx_hex(b)
+}
+
+#[test]
+fn rewards_paid_to_someone_else_are_what_the_account_sends() {
+    let (_, rows) = swap();
+    let summary = cip30::inspect_tx(
+        &account(),
+        &request(rewards_out(3_800_000), rows.clone(), false),
+    )
+    .unwrap();
+    assert_eq!(summary.net_lovelace, "-1000200000", "1,000.2 ₳ leave");
+    assert_eq!(summary.staking_lovelace, "1000000000");
+    assert_eq!(
+        summary.spent_lovelace, "4000000",
+        "still what its UTxOs put in"
+    );
+    assert_eq!(summary.signs, vec!["0/2", "stake"]);
+
+    // Withdrawn back to the account, the rewards were its own already: only the fee goes.
+    let summary = cip30::inspect_tx(
+        &account(),
+        &request(rewards_out(1_003_800_000), rows, false),
+    )
+    .unwrap();
+    assert_eq!(summary.net_lovelace, "-200000");
+    assert_eq!(summary.staking_lovelace, "1000000000");
+}
+
+#[test]
+fn a_deposit_refund_paid_to_someone_else_is_what_the_account_sends() {
+    let (_, rows) = swap();
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&ours(Role::Receive, 0), 3_800_000, None),
+            out(&theirs(), 2_000_000, None),
+        ],
+    );
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::UnReg(
+        stake_credential(),
+        2_000_000,
+    )])
+    .ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, false)).unwrap();
+    assert_eq!(summary.net_lovelace, "-2200000");
+    assert_eq!(summary.staking_lovelace, "2000000");
+    assert_eq!(summary.certificates[0].refund.as_deref(), Some("2000000"));
+}
+
+#[test]
+fn an_old_deregistration_of_the_accounts_stake_key_is_refused() {
+    // Its refund isn't in the certificate, so what leaves can't be counted.
+    let (_, rows) = swap();
+    let mut b = body(vec![input(TX_A, 1)], vec![out(&theirs(), 5_800_000, None)]);
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::StakeDeregistration(
+        stake_credential(),
+    )])
+    .ok();
+    let refused =
+        cip30::inspect_tx(&account(), &request(tx_hex(b.clone()), rows.clone(), true)).unwrap_err();
+    assert!(refused.to_string().contains("old kind of certificate"));
+
+    // Someone else's is theirs to count.
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::StakeDeregistration(
+        StakeCredential::AddrKeyhash(Hash::new([9; 28])),
+    )])
+    .ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert_eq!(summary.staking_lovelace, "0");
+    assert!(!summary.certificates[0].own);
+}
+
 #[test]
 fn a_collateral_return_to_someone_else_is_refused() {
     let (_, rows) = swap();
