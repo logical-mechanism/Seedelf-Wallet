@@ -50,7 +50,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
-import { KoiosBusyError, SpentInputError, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, KoiosError, SpentInputError, type KoiosUtxo } from "./koios";
 import { SESSION_PENDING } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
@@ -86,6 +86,12 @@ export interface ChainTries {
   busy: number;
   /** Refused as spending what's spent. */
   spent: number;
+  /**
+   * It may have gone in before these tries: it was sent already and hasn't
+   * landed, or a send of it began and never finished (a worker stopped
+   * during a back-off).
+   */
+  maybeSent?: boolean;
 }
 
 /**
@@ -103,7 +109,7 @@ export function chainRetryMs(i: number, tries: ChainTries, e: unknown): number |
     tries.busy++;
     return CHAIN_BUSY_MS * tries.busy;
   }
-  if (e instanceof SpentInputError && (i > 0 || tries.busy > 0)) {
+  if (e instanceof SpentInputError && (i > 0 || tries.busy > 0 || tries.maybeSent)) {
     if (tries.spent >= CHAIN_SPENT_TRIES) return undefined;
     tries.spent++;
     return CHAIN_SPENT_MS;
@@ -123,6 +129,12 @@ export const CHAIN_WINDOW = 4;
 /** How often a chain being sent looks for its transactions on chain. */
 export const CHAIN_POLL_MS = 5_000;
 /**
+ * A chain's oldest transaction in the mempool that hasn't landed after this
+ * long (several blocks) is sent again: a node may have dropped it, and with
+ * it every transaction of the chain after it. The ledger takes it once.
+ */
+export const CHAIN_RESEND_MS = 3 * 60_000;
+/**
  * The most one call sends a chain for: about a block. The rest goes on at
  * the next call (the runner's step, the page, the alarm), so no request runs
  * near Chrome's five minutes.
@@ -136,6 +148,14 @@ export interface ChainProgress {
   next: number;
   /** Sent, and not seen on chain yet. */
   flying: string[];
+  /** When each of `flying` was last sent (ms), in its order. */
+  sentAt?: number[];
+  /**
+   * The transaction a send began for and hadn't finished when this was
+   * saved: it may be in the mempool already, if the worker stopped partway
+   * (Chrome stops an idle worker during a long back-off).
+   */
+  sending?: number;
 }
 
 /**
@@ -143,30 +163,56 @@ export interface ChainProgress {
  * the mempool: it sends while there's room, looks for what it sent on chain
  * every CHAIN_POLL_MS, and returns true once all of it is sent, or false
  * after about `budgetMs`, the rest for the next call. `send` sends transaction
- * `i` (its retries included), `onChain` says which hashes are on chain, and
- * `save` keeps the progress after each change.
+ * `i` (its retries included; `maybeSent`: it may be in the mempool already),
+ * `onChain` says which hashes are on chain, and `save` keeps the progress
+ * after each change. A read of what's on chain that Koios doesn't answer sees
+ * nothing yet; the oldest in the mempool is sent again after CHAIN_RESEND_MS.
  */
 export async function pumpChain(
   chain: ChainProgress,
   io: {
-    send(i: number): Promise<void>;
+    send(i: number, maybeSent: boolean): Promise<void>;
     onChain(hashes: string[]): Promise<Set<string>>;
     save(): Promise<void>;
     sleep(ms: number): Promise<void>;
+    now(): number;
   },
   budgetMs: number,
 ): Promise<boolean> {
+  // A chain saved before sends were timed counts from now.
+  if (chain.sentAt?.length !== chain.flying.length) chain.sentAt = chain.flying.map(() => io.now());
+  const sentAt = () => chain.sentAt!;
+  // Marked before the submit, so a send cut short is known to maybe be in.
+  const send = async (i: number, again: boolean) => {
+    const maybeSent = again || chain.sending === i;
+    chain.sending = i;
+    await io.save();
+    await io.send(i, maybeSent);
+    delete chain.sending;
+  };
   for (let polls = Math.ceil(budgetMs / CHAIN_POLL_MS); ; polls--) {
     if (chain.flying.length >= CHAIN_WINDOW) {
-      const on = await io.onChain(chain.flying);
+      const on = await io.onChain(chain.flying).catch((e: unknown) => {
+        if (e instanceof KoiosError) return new Set<string>();
+        throw e;
+      });
       if (on.size) {
+        chain.sentAt = sentAt().filter((_, k) => !on.has(chain.flying[k]!));
         chain.flying = chain.flying.filter((h) => !on.has(h));
         await io.save();
+      } else if (io.now() - sentAt()[0]! >= CHAIN_RESEND_MS) {
+        const oldest = chain.txs.findIndex((t) => t.txHash === chain.flying[0]);
+        if (oldest >= 0) {
+          await send(oldest, true);
+          sentAt()[0] = io.now();
+          await io.save();
+        }
       }
     }
     while (chain.next < chain.txs.length && chain.flying.length < CHAIN_WINDOW) {
-      await io.send(chain.next);
+      await send(chain.next, false);
       chain.flying.push(chain.txs[chain.next]!.txHash);
+      sentAt().push(io.now());
       chain.next++;
       await io.save();
     }
@@ -563,10 +609,12 @@ export class LovejoinService {
       const done = await pumpChain(
         sending,
         {
-          send: async (i) => {
+          send: async (i, maybeSent) => {
             const step = sending.txs[i]!;
             const bytes = hexBytes(step.txCbor);
-            const tries = { busy: 0, spent: 0 };
+            // Sent before and not landed: the mempool may have dropped it.
+            const again = sending.flying.includes(step.txHash);
+            const tries = { busy: 0, spent: 0, maybeSent };
             for (;;) {
               try {
                 const submitted = await koios.submitTx(bytes);
@@ -583,7 +631,7 @@ export class LovejoinService {
               }
             }
             await wallet.withKeys(() => rememberSpent(session, bytes));
-            if (step.kind === "deposit") await this.schedule(network, sending.boxes);
+            if (step.kind === "deposit" && !again) await this.schedule(network, sending.boxes);
           },
           onChain: async (hashes) => {
             const statuses = await koios.txStatus(hashes);
@@ -591,6 +639,7 @@ export class LovejoinService {
           },
           save,
           sleep,
+          now: this.deps.now,
         },
         budgetMs,
       );

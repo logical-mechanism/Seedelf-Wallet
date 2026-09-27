@@ -1331,7 +1331,7 @@ export class SessionService {
       done = await pumpChain(
         pending,
         {
-          send: (i) => this.sendStep(network, pending, i),
+          send: (i, maybeSent) => this.sendStep(network, pending, i, maybeSent),
           onChain: async (hashes) => {
             const statuses = await koios.txStatus(hashes);
             const on = new Set(hashes.filter((h) => statuses.get(h) != null));
@@ -1349,6 +1349,7 @@ export class SessionService {
           },
           save: () => this.savePending(network, pending),
           sleep,
+          now: this.deps.now,
         },
         budgetMs,
       );
@@ -1372,12 +1373,15 @@ export class SessionService {
    * Sends a chain's transaction `i`, trying again when Koios didn't answer or
    * hasn't caught up (chainRetryMs), and sets the boxes' withdraws once the
    * deposit is in; boxes mixed again wait afresh once their first mix is in.
+   * `maybeSent`: it may be in the mempool already (pumpChain).
    */
-  private async sendStep(network: NetworkName, pending: PendingChain, i: number): Promise<void> {
+  private async sendStep(network: NetworkName, pending: PendingChain, i: number, maybeSent = false): Promise<void> {
     const step = pending.txs[i]!;
     const bytes = hexBytes(step.txCbor);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    const tries = { busy: 0, spent: 0 };
+    // Sent before and not landed: sent again, its withdraws are set already.
+    const again = pending.flying.includes(step.txHash);
+    const tries = { busy: 0, spent: 0, maybeSent };
     for (;;) {
       try {
         await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept);
@@ -1396,6 +1400,7 @@ export class SessionService {
       }
     }
     const lovejoin = pending.summary.lovejoin;
+    if (again) return;
     if (step.kind === "deposit" && lovejoin) await this.deps.lovejoin?.schedule(network, lovejoin.boxes);
     if (i === 0 && step.kind === "mix" && lovejoin?.again) await this.deps.lovejoin?.reschedule(network, lovejoin.boxes);
   }

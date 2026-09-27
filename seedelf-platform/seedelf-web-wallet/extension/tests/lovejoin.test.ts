@@ -7,16 +7,19 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
-import type { KoiosUtxo } from "../src/background/koios";
+import { KoiosError, SpentInputError, type KoiosUtxo } from "../src/background/koios";
 import {
   CHAIN_POLL_MS,
   CHAIN_PUMP_MS,
+  CHAIN_RESEND_MS,
   CHAIN_WINDOW,
+  chainRetryMs,
   LOVEJOIN_MIX_BOX,
   LovejoinService,
   pumpChain,
   secureRandom,
   WITHDRAW_SPREAD_MS,
+  type ChainProgress,
 } from "../src/background/lovejoin";
 import { SESSION_PENDING } from "../src/background/pending";
 import { Minswap } from "../src/background/minswap";
@@ -122,6 +125,7 @@ describe("sending a chain a window at a time", () => {
       onChain: async (hashes: string[]) => new Set(hashes.filter((h) => landed.has(h))),
       save: async () => undefined,
       sleep: async () => void sleeps++,
+      now: () => 0,
     };
     // Nothing lands: four go, and the call ends after about a block of looking.
     expect(await pumpChain(chain, io, CHAIN_PUMP_MS)).toBe(false);
@@ -136,6 +140,83 @@ describe("sending a chain a window at a time", () => {
     expect(await pumpChain(chain, io, CHAIN_PUMP_MS)).toBe(true);
     expect(sent).toHaveLength(10);
     expect(most).toBe(CHAIN_WINDOW);
+  });
+
+  /** A chain of `n` and the clock its pump reads, moved on by each sleep. */
+  function pumped(n: number) {
+    const txs = Array.from({ length: n }, (_, i) => ({ kind: "mix" as const, txCbor: "", txHash: `t${i}`, fee: "0" }));
+    const chain: ChainProgress = { txs, next: 0, flying: [] };
+    const clock = { now: 0 };
+    const sent: Array<[number, boolean]> = [];
+    const io = {
+      send: async (i: number, maybeSent: boolean) => void sent.push([i, maybeSent]),
+      onChain: async (_hashes: string[]): Promise<Set<string>> => new Set(),
+      save: async () => undefined,
+      sleep: async (ms: number) => void (clock.now += ms),
+      now: () => clock.now,
+    };
+    return { chain, clock, sent, io };
+  }
+
+  it("sees nothing yet when Koios doesn't answer the read of what's on chain, and goes on at the next call", async () => {
+    const { chain, sent, io } = pumped(6);
+    io.onChain = async () => {
+      throw new KoiosError("Koios is having trouble right now (502 for tx_status). Try again in a minute.");
+    };
+    expect(await pumpChain(chain, io, CHAIN_PUMP_MS)).toBe(false);
+    expect(chain.flying).toHaveLength(CHAIN_WINDOW);
+    // Koios answers again, and the blocks have taken them.
+    io.onChain = async (hashes) => new Set(hashes);
+    expect(await pumpChain(chain, io, 0)).toBe(true);
+    expect(sent.map(([i]) => i)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it("still stops for what isn't Koios's", async () => {
+    const { chain, io } = pumped(6);
+    io.onChain = async () => {
+      throw new Error("The wallet is locked.");
+    };
+    await expect(pumpChain(chain, io, CHAIN_PUMP_MS)).rejects.toThrow("locked");
+  });
+
+  it("sends the oldest again once it has waited a few blocks without landing, and not again sooner", async () => {
+    const { chain, clock, sent, io } = pumped(6);
+    expect(await pumpChain(chain, io, CHAIN_RESEND_MS - CHAIN_POLL_MS)).toBe(false);
+    expect(sent).toEqual([0, 1, 2, 3].map((i) => [i, false]));
+    // Three minutes on, still nothing: a node dropped it. The first goes again, as maybe in already.
+    expect(await pumpChain(chain, io, CHAIN_POLL_MS)).toBe(false);
+    expect(sent.slice(4)).toEqual([[0, true]]);
+    expect(chain.sentAt![0]).toBe(clock.now);
+    // It lands, and the rest go.
+    io.onChain = async (hashes) => new Set(hashes.filter((h) => h === "t0"));
+    await pumpChain(chain, io, 0);
+    expect(sent.slice(5)).toEqual([[4, false]]);
+  });
+
+  it("marks a send before it begins, so one a stopped worker left unfinished counts as maybe in", async () => {
+    const { chain, sent, io } = pumped(6);
+    let saved = "";
+    io.save = async () => void (saved = JSON.stringify(chain));
+    // The worker stops while the deposit's send backs off.
+    io.send = async () => {
+      throw new Error("stopped");
+    };
+    await expect(pumpChain(chain, io, 0)).rejects.toThrow("stopped");
+    const resumed = JSON.parse(saved) as ChainProgress;
+    expect(resumed).toMatchObject({ next: 0, sending: 0 });
+    io.send = async (i, maybeSent) => void sent.push([i, maybeSent]);
+    await pumpChain(resumed, io, 0);
+    expect(sent.slice(0, 2)).toEqual([
+      [0, true],
+      [1, false],
+    ]);
+    expect(resumed.sending).toBeUndefined();
+  });
+
+  it("tries a first transaction refused as spent again when it may be in already", () => {
+    const refused = new SpentInputError("already spent");
+    expect(chainRetryMs(0, { busy: 0, spent: 0 }, refused)).toBeUndefined();
+    expect(chainRetryMs(0, { busy: 0, spent: 0, maybeSent: true }, refused)).toBeGreaterThan(0);
   });
 });
 
@@ -207,6 +288,26 @@ describe("a session's return through Lovejoin", CHAINS, () => {
     await sessions.runAll("preprod");
     expect(t.koios.submitted.slice(before)).toHaveLength(10);
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(review.txHash);
+  });
+
+  it("keeps the chain when Koios doesn't answer a read of what's on chain, and finishes it later", async () => {
+    const { t, sessions } = await withSession("40000000");
+    const review = await sessions.backBuild("preprod", 0);
+    const before = t.koios.submitted.length;
+    await sessions.backSubmit("preprod", review.txHash);
+    // Blocks take them, but Koios answers every read of tx_status with a 502 for a while.
+    t.koios.confirmations = 1;
+    const fetch = t.koios.fetch;
+    let down = true;
+    t.koios.fetch = async (url, init) => (down && url.endsWith("/tx_status") ? new Response("", { status: 502 }) : fetch(url, init));
+    await sessions.runAll("preprod");
+    const view = (await sessions.list("preprod"))[0]!;
+    expect(view.chain).toEqual({ total: 10, sent: 4, confirmed: 0, cut: false });
+    // Koios is back: the alarm's next run sends the rest.
+    down = false;
+    await sessions.runAll("preprod");
+    expect(t.koios.submitted.slice(before)).toHaveLength(10);
+    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 10, sent: 10, cut: false });
   });
 
   it("carries on when a transaction Koios didn't answer went in anyway: its resends are refused as spent until it's on chain", async () => {
