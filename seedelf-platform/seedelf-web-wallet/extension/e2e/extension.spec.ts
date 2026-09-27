@@ -2495,6 +2495,12 @@ test.describe("the dApp connector", () => {
     const connect = await opened;
     await expect(connect.getByRole("heading", { name: "Connect a site" })).toBeVisible();
     await expect(connect.getByTestId("dapp-origin")).toContainText("dapp.example");
+    // Nothing is chosen for the user: each says what it costs, and Connect waits for a choice.
+    await expect(connect.getByTestId("dapp-connect-costs")).toContainText("keeps what it saw");
+    await expect(connect.getByRole("button", { name: "Your public account" })).toHaveAttribute("aria-pressed", "false");
+    await expect(connect.getByRole("button", { name: "A private session" })).toHaveAttribute("aria-pressed", "false");
+    await expect(connect.getByRole("button", { name: "Connect", exact: true })).toBeDisabled();
+    await connect.getByRole("button", { name: "Your public account" }).click();
     await expect(connect.getByTestId("dapp-connect-privacy")).toContainText("Your private balance stays out of it");
     await snap(connect, "dapp-connect");
     const closed = connect.waitForEvent("close");
@@ -2784,6 +2790,7 @@ test.describe("the dApp connector", () => {
     const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
     const connect = await opened;
     const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Your public account" }).click();
     await connect.getByRole("button", { name: "Connect", exact: true }).click();
     expect(await enabling).toBe(true);
     await closed;
@@ -2836,6 +2843,7 @@ test.describe("the dApp connector", () => {
     const enabling = first.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
     const connect = await opened;
     const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Your public account" }).click();
     await connect.getByRole("button", { name: "Connect", exact: true }).click();
     expect(await enabling).toBe(true);
     await closed;
@@ -2878,6 +2886,7 @@ test.describe("the dApp connector", () => {
     const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
     const connect = await opened;
     const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Your public account" }).click();
     await connect.getByRole("button", { name: "Connect", exact: true }).click();
     expect(await enabling).toBe(true);
     await closed;

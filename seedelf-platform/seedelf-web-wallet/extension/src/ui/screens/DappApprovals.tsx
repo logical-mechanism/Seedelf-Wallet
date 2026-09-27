@@ -251,10 +251,13 @@ type Connection = "public" | "private";
 
 /**
  * A site asks to connect: to the public account, or to a private session
- * funded here first. A private session goes from its amount to its funding's
- * review (Send, with the password when it's on), then waits for the network.
+ * funded here first. Neither is chosen for the user (privacy review §3.3):
+ * each says what it costs, and Connect waits for a choice, since what a
+ * site sees of the public account can't be taken back. A private session
+ * goes from its amount to its funding's review (Send, with the password when
+ * it's on), then waits for the network. Exported for its tests.
  */
-function ConnectRequest({
+export function ConnectRequest({
   approval,
   more,
   busy,
@@ -275,7 +278,7 @@ function ConnectRequest({
   onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string } }) => Promise<boolean>;
 }) {
   const network = useNetwork();
-  const [connection, setConnection] = useState<Connection>("public");
+  const [connection, setConnection] = useState<Connection>();
   const [seedelf, setSeedelf] = useState<Balances["seedelf"]>();
   const [amount, setAmount] = useState("");
   const [typed, setTyped] = useState<Record<string, string>>({});
@@ -403,7 +406,11 @@ function ConnectRequest({
       onSubmit={connection === "private" ? build : undefined}
       title="Connect a site"
       titleId="dapp-title"
-      aside={`Nothing happens until you press ${connection === "private" ? "Review" : "Connect"}${more}`}
+      aside={
+        connection
+          ? `Nothing happens until you press ${connection === "private" ? "Review" : "Connect"}${more}`
+          : `Choose what it sees. Nothing happens until you press Connect or Review${more}`
+      }
       error={error}
       foot={
         <div className="actions">
@@ -420,7 +427,13 @@ function ConnectRequest({
               {building ? "Building…" : "Review"}
             </button>
           ) : (
-            <button type="button" className="primary" onClick={() => void onAnswer(true)} disabled={busy || held}>
+            // Only once the public account is chosen: never one press from the window opening.
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void onAnswer(true)}
+              disabled={busy || held || connection !== "public"}
+            >
               {busy ? "…" : "Connect"}
             </button>
           )}
@@ -443,7 +456,19 @@ function ConnectRequest({
             { value: "private", label: "A private session" },
           ]}
         />
-        {connection === "public" ? (
+        {connection === undefined ? (
+          <ul className="dapp-points" data-testid="dapp-connect-costs">
+            <li>
+              <strong>Your public account:</strong> the site sees its addresses, its balance and its UTxOs, and keeps
+              what it saw. No fee.
+            </li>
+            <li>
+              <strong>A private session:</strong> the site sees only a new one-time account you fund from your private
+              balance. A network fee now and when its money comes back (Lovejoin's too, if it goes through it), 5 ₳ of
+              collateral that comes back, and about a minute's wait.
+            </li>
+          </ul>
+        ) : connection === "public" ? (
           <>
             <ul className="dapp-points">
               <li>It sees your public account: its addresses, its balance and its UTxOs.</li>

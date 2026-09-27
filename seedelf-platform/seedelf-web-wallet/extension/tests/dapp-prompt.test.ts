@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { DappTxSummary } from "../src/shared/rpc";
-import { SignData, SignTx } from "../src/ui/screens/DappApprovals";
+import { ConnectRequest, SignData, SignTx } from "../src/ui/screens/DappApprovals";
 import { assetFingerprint } from "../src/ui/tokens";
 
 const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
@@ -94,5 +94,34 @@ describe("a site's signing prompt", () => {
   it("shows the whole address a message is signed for, on a line of its own", () => {
     const html = renderToStaticMarkup(createElement(SignData, { address: ADDRESS, signer: "payment", payload: "00", text: "Sign in" }));
     expect(html).toContain(`<span class="dapp-address" data-testid="dapp-data-address" data-value="${ADDRESS}">${ADDRESS}</span>`);
+  });
+});
+
+describe("a site's connect window", () => {
+  const render = () =>
+    renderToStaticMarkup(
+      createElement(ConnectRequest, {
+        approval: { kind: "connect", id: "a", origin: "https://app.example", title: "App", password: true },
+        more: "",
+        busy: false,
+        held: false,
+        onError: () => undefined,
+        onAnswer: async () => true,
+      }),
+    );
+
+  it("chooses nothing for the user: Connect waits for a choice, and each says what it costs (privacy review §3.3)", () => {
+    const html = render();
+    // Neither the public account nor a private session is pressed.
+    expect([...html.matchAll(/aria-pressed="(true|false)"/g)].map((m) => m[1])).toEqual(["false", "false"]);
+    expect(/<button[^>]*>Connect<\/button>/.exec(html)![0]).toContain("disabled");
+    const page = text(html);
+    expect(page).toContain("Choose what it sees. Nothing happens until you press Connect or Review");
+    expect(page).toContain("Your public account: the site sees its addresses, its balance and its UTxOs, and keeps what it saw. No fee.");
+    expect(page).toContain("A private session: the site sees only a new one-time account you fund from your private balance.");
+    expect(page).toContain("5 ₳ of collateral that comes back");
+    // What each shows once chosen isn't said yet.
+    expect(html).not.toContain('data-testid="dapp-connect-privacy"');
+    expect(html).not.toContain('data-testid="dapp-private-points"');
   });
 });
