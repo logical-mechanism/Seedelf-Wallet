@@ -1948,6 +1948,8 @@ export class SessionService {
       ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
       ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}),
       ...leftBehindView(s, utxos),
+      // A funding turned away never went out: only then does the page say it never reached the chain.
+      ...(stage === "failed" && out.unsent ? { unsent: true } : {}),
     };
   }
 

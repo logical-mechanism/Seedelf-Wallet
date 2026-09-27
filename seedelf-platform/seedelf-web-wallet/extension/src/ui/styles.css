@@ -2953,3 +2953,13 @@ button.dapp-tile:hover {
   color: var(--warn);
   border-color: var(--warn-line);
 }
+
+/* A token's whole fingerprint, where a swap names one the wallet won't swap
+   into (Swaps.tsx Unverified): its own line, and it wraps. */
+
+.swap-token-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}

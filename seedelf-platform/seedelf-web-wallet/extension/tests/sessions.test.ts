@@ -458,7 +458,8 @@ describe("a private session", () => {
     await expect(t.sessions.outSubmit("preprod", out.txHash)).rejects.toThrow();
     expect(t.koios.submitted).toHaveLength(0);
     const [failed] = await t.sessions.list("preprod", true);
-    expect(failed).toMatchObject({ index: 0, stage: "failed" });
+    // Turned away, it never went out: the page says so, and offers nothing but Forget.
+    expect(failed).toMatchObject({ index: 0, stage: "failed", unsent: true });
     // The kept payment for index 0 can't be sent again, and the next session is index 1.
     await expect(t.sessions.outSubmit("preprod", out.txHash)).rejects.toThrow("started already");
     expect((await t.sessions.outBuild("preprod", quote)).index).toBe(1);
@@ -492,7 +493,7 @@ describe("a private session", () => {
     await expect(sessions.outSubmit("preprod", next.txHash)).rejects.toThrow("limiting requests");
     undo();
     t.koios.confirmations = null;
-    expect((await sessions.list("preprod", true)).find((v) => v.index === 1)).toMatchObject({ stage: "failed" });
+    expect((await sessions.list("preprod", true)).find((v) => v.index === 1)).toMatchObject({ stage: "failed", unsent: true });
   });
 
   it("never takes a one-time account the chain has seen used, whatever this device's record says", async () => {
@@ -821,6 +822,8 @@ describe("a swap that runs itself", () => {
       await busy(t, FAILED_AFTER);
       let view = await sessions.advance("preprod", 0);
       expect(view.stage).toBe("failed");
+      // Not seen isn't turned away: it may still land, so the page offers Try again.
+      expect(view.unsent).toBeUndefined();
       await sessions.runAll("preprod");
       expect(runner.on).toBe(false);
 

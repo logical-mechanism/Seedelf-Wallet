@@ -2,7 +2,10 @@
 // chunk 16): into the private UTxO the session's funding made, or new ones;
 // and, when its spare ADA goes through Lovejoin first, the boxes, the
 // fan-out, when each comes back, and a way to bring this one back directly.
-// Then, as its chain goes, how far it has got: sent, then on chain.
+// Then, as its chain goes, how far it has got: sent, then on chain; and,
+// when a return left Lovejoin out, why (launch review #23). Wherever the
+// user chooses Lovejoin, it says Lovejoin has had no third-party audit:
+// Lovejoin's own docs say so, and no copy here may say otherwise.
 import { useEffect, useRef, useState } from "react";
 
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
@@ -10,6 +13,14 @@ import { call } from "../background";
 import { formatAda, plural } from "../format";
 import { Callout } from "./Callout";
 import { Row } from "./ReviewRows";
+
+/**
+ * Lovejoin's standing, said wherever the user chooses it (the Lovejoin page,
+ * a swap's approval, a return's review; Settings says it too): the
+ * protocol's own review is the only one it has had.
+ */
+export const LOVEJOIN_UNAUDITED =
+  "Lovejoin hasn't had a third-party audit: its makers' own review is the only one it has had. Use it knowing that.";
 
 /** How far a return's chain through Lovejoin has got, in words. */
 export function chainText(c: NonNullable<SessionView["chain"]>): string {
@@ -73,14 +84,17 @@ export function LovejoinRows({ back }: { back: SessionBackSummary }) {
   );
 }
 
+/** A reason from the worker as part of a sentence: without its full stop. */
+const clause = (reason: string) => reason.trim().replace(/\.$/, "");
+
 /** Why, and the way out: `onDirect` rebuilds the return without Lovejoin. Or why Lovejoin was left out this time. */
 export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummary; busy: boolean; onDirect: () => void }) {
   const l = back.lovejoin;
   if (back.lovejoinSkipped) {
     return (
       <Callout tone="warn" testId="lovejoin-skipped">
-        Lovejoin is left out of this return: {back.lovejoinSkipped}. So the chain doesn't start, and everything comes back
-        directly, as it would without Lovejoin.
+        Lovejoin is left out of this return: {clause(back.lovejoinSkipped)}. So the chain doesn't start, and everything comes
+        back directly, as it would without Lovejoin.
       </Callout>
     );
   }
@@ -93,10 +107,28 @@ export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummar
         in fees, all {l.txs} transactions together). Each box comes back into your private balance on its own, after a random{" "}
         {delayText(l.delay)}, the first time the wallet is unlocked after that. The rest comes back now.
       </Callout>
+      <p className="note" data-testid="lovejoin-unaudited">
+        {LOVEJOIN_UNAUDITED}
+      </p>
       <button type="button" className="link" disabled={busy} onClick={onDirect} data-testid="lovejoin-direct">
         Bring it back directly instead
       </button>
     </>
+  );
+}
+
+/**
+ * Why a session's return came back directly, leaving Lovejoin out, though
+ * its spare ADA would have paid for a box: the pool below its floor, too
+ * few boxes free, or a chain the wallet couldn't build (launch review #23).
+ */
+export function LovejoinSkipped({ reason }: { reason?: string }) {
+  if (!reason) return null;
+  return (
+    <Callout tone="warn" testId="session-lovejoin-skipped">
+      Lovejoin was left out of its return: {clause(reason)}. So it comes back directly, without mixing: what comes back is
+      tied to the session on chain.
+    </Callout>
   );
 }
 

@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 
+import type { NetworkName } from "../../networks";
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
@@ -15,13 +16,14 @@ import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { formatAda, plural } from "../format";
+import { useNetwork } from "../network";
 import { pairOf } from "./Swaps";
 
 /** A session Bring everything back can take: it holds something, and nothing of it is on its way or runs by itself. */
 export const isClaimable = (s: SessionView) => s.stage === "open" && !s.auto && (s.holding?.utxos ?? 0) > 0;
 
 /** A session by name: its site, or its swap. */
-const nameOf = (s?: SessionView) => (s?.site ? new URL(s.site.origin).host : s ? pairOf(s) : "A session");
+const nameOf = (network: NetworkName, s?: SessionView) => (s?.site ? new URL(s.site.origin).host : s ? pairOf(s, network) : "A session");
 
 type Built = { returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> };
 type Result = { sent: Array<{ index: number; txHash: string }>; failed: Array<{ index: number; error: string }> };
@@ -42,6 +44,7 @@ export function ClaimAll({
   const [result, setResult] = useState<Result>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const network = useNetwork();
   const byIndex = new Map(sessions.map((s) => [s.index, s]));
 
   // Each return built and signed up front; the review shows what each brings, and its fee.
@@ -94,7 +97,7 @@ export function ClaimAll({
             <ul className="list" data-testid="claim-sent">
               {result.sent.map((x) => (
                 <li key={x.index} className="list__row">
-                  <span className="list__name">{nameOf(byIndex.get(x.index))}</span>
+                  <span className="list__name">{nameOf(network, byIndex.get(x.index))}</span>
                   <span className="list__value note">Private session {x.index + 1}</span>
                 </li>
               ))}
@@ -106,7 +109,7 @@ export function ClaimAll({
             <ul className="dapp-points">
               {result.failed.map((x) => (
                 <li key={x.index}>
-                  {nameOf(byIndex.get(x.index))}: {x.error}
+                  {nameOf(network, byIndex.get(x.index))}: {x.error}
                 </li>
               ))}
             </ul>
@@ -165,7 +168,7 @@ export function ClaimAll({
                     <span className="claim-check" aria-hidden="true">
                       {on && <CheckIcon size={14} />}
                     </span>
-                    <span className="token-row__label">{nameOf(byIndex.get(r.index))}</span>
+                    <span className="token-row__label">{nameOf(network, byIndex.get(r.index))}</span>
                     <span className="token-row__amount">{formatAda(r.lovelace)} ₳</span>
                     <span className="token-row__sub">
                       Private session {r.index + 1}
@@ -186,7 +189,7 @@ export function ClaimAll({
             {built.skipped.map((x) => (
               <li key={x.index} className="list__row">
                 <span className="stack-tight">
-                  <span className="list__name">{nameOf(byIndex.get(x.index))}</span>
+                  <span className="list__name">{nameOf(network, byIndex.get(x.index))}</span>
                   <span className="note">{x.reason}</span>
                 </span>
               </li>

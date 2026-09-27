@@ -798,6 +798,13 @@ export interface SessionView {
    * it out.
    */
   leftBehind?: LeftBehindUtxo[];
+  /**
+   * With stage `failed`: its funding was turned away when it was sent, so it
+   * never went out. Without it, a failed funding is one the chain hasn't
+   * shown in 20 minutes (Koios didn't answer its submit, or it's slow), which
+   * may still land: Try again looks for it again.
+   */
+  unsent?: boolean;
 }
 
 /**

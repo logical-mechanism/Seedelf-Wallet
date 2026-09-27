@@ -9,6 +9,13 @@
 //             them, then the swap and its funding payment to review.
 // Session     one session: a timeline of the swap as it runs itself, with Stop,
 //             or, for one from before, the next step as a button.
+//
+// Tokens are named as every text view names them (tokens.ts tokenText), and
+// ADA is told by its ID, "lovelace", never by a label: anyone can mint a
+// token called ₳ (launch review #18). What's received must be ADA, a token on
+// the wallet's list, or one Minswap verifies by its ID: the quote says, and
+// the wallet funds no other (#20). The least an order gives is what the
+// wallet asks Minswap for; Minswap builds the order (#21).
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 
@@ -34,12 +41,15 @@ import type {
 import { call } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
+import { HandleWarning } from "../components/HandleWarning";
 import {
   chainText,
   delayText,
   IntoRow,
+  LOVEJOIN_UNAUDITED,
   LovejoinNote,
   LovejoinRows,
+  LovejoinSkipped,
   ReturnLinks,
   useSendingLabel,
   useSessionsWhile,
@@ -63,6 +73,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import {
   ADA_RULES,
   type AmountRules,
@@ -79,7 +90,7 @@ import {
   whenOf,
 } from "../format";
 import { useNetwork } from "../network";
-import { usePreferences } from "../preferences";
+import { useAmounts } from "../preferences";
 import {
   adaShort,
   halfOf,
@@ -91,23 +102,47 @@ import {
   SLIPPAGE_MAX,
   SLIPPAGE_MIN,
 } from "../swap";
-import { initials, sortTokens, tint, tokenInfo, tokenLabel, viewToken } from "../tokens";
+import { initials, sortTokens, tint, tokenAmountText, tokenDecimals, tokenInfo, tokenMark, tokenText, viewToken } from "../tokens";
 
 const ADA: SwapSide = { label: "₳", decimals: 6 };
 
-/** An amount on one side of a swap: "10 ₳", "906.5941 MIN". */
-function amountOf(quantity: string, side: SwapSide): string {
-  return side === ADA || side.label === "₳" ? `${formatAda(quantity)} ₳` : `${formatQuantity(quantity, side.decimals)} ${side.label}`;
+/** One side of a swap: ADA ("lovelace") or a token, by Minswap's ID, and how it's shown. */
+interface Pick {
+  id: string;
+  side: SwapSide;
 }
 
-/** A side's name on its own: ADA, or the token's ticker. */
-const sideName = (side: SwapSide) => (side.label === "₳" ? "ADA" : side.label);
+const ADA_PICK: Pick = { id: "lovelace", side: ADA };
+
+/** An amount on one side of a swap: "10 ₳", "906.5941 MIN". ADA by its ID: a token may call itself ₳. */
+function amountOf(quantity: string, pick: Pick): string {
+  return pick.id === "lovelace" ? `${formatAda(quantity)} ₳` : `${formatQuantity(quantity, pick.side.decimals)} ${pick.side.label}`;
+}
+
+/** A side's name on its button and in the lists: ADA, or the token's name (tokenText). */
+const nameOf = (p: Pick) => (p.id === "lovelace" ? "ADA" : p.side.label);
+
+/** A token's side, by its Minswap ID: named by `tokenText`, with `decimals` (a quote's, or the list's). */
+function pickOf(network: NetworkName, id: string, decimals: number): Pick {
+  return id === "lovelace" ? ADA_PICK : { id, side: { label: tokenText(network, tokenOf(id)).label, decimals } };
+}
+
+/**
+ * A session's two sides, named now as every text view names a token: its
+ * recorded display keeps only their decimals, since a label recorded before
+ * could pass for another token.
+ */
+function sidesOf(network: NetworkName, s: SessionView): { pay: Pick; get: Pick } | undefined {
+  const d = s.swap?.display;
+  if (!s.swap || !d) return undefined;
+  return { pay: pickOf(network, s.swap.tokenIn, d.in.decimals), get: pickOf(network, s.swap.tokenOut, d.out.decimals) };
+}
 
 /** A session's swap in a line: "10 ₳ → MIN", "906.5941 MIN → ADA". */
-export function pairOf(s: SessionView): string {
-  const d = s.swap?.display;
-  if (!s.swap || !d) return "A swap";
-  return `${amountOf(s.swap.amount, d.in)} → ${sideName(d.out)}`;
+export function pairOf(s: SessionView, network: NetworkName): string {
+  const sides = sidesOf(network, s);
+  if (!s.swap || !sides) return "A swap";
+  return `${amountOf(s.swap.amount, sides.pay)} → ${nameOf(sides.get)}`;
 }
 
 const STAGE: Record<SessionView["stage"], string> = {
@@ -140,7 +175,8 @@ export type SwapTone = "live" | "wait" | "done" | "off" | "bad";
 
 /** A session's tag: a word or two, in its tone. */
 function tagOf(s: SessionView): { tone: SwapTone; label: string } {
-  if (s.stage === "failed") return { tone: "bad", label: "Failed" };
+  // A funding the chain hasn't shown may still land: it waits on the user's Try again or Forget it.
+  if (s.stage === "failed") return s.unsent || !s.auto ? { tone: "bad", label: "Failed" } : { tone: "wait", label: "Not seen" };
   const a = s.auto;
   if (!a) {
     // From before: every step after the funding is the user's.
@@ -187,8 +223,8 @@ export function SwapTag({ tone, label }: { tone: SwapTone; label: string }) {
 
 /** A swap's two tokens, what's paid overlapping what's received. */
 function SwapPair({ session: s }: { session: SessionView }) {
-  const d = s.swap?.display;
-  if (!s.swap || !d) {
+  const sides = sidesOf(useNetwork(), s);
+  if (!sides) {
     return (
       <span className="swap-pair" aria-hidden="true">
         <span className="avatar activity__icon">
@@ -199,8 +235,8 @@ function SwapPair({ session: s }: { session: SessionView }) {
   }
   return (
     <span className="swap-pair" aria-hidden="true">
-      <SwapAvatar pick={{ id: s.swap.tokenIn, side: d.in }} />
-      <SwapAvatar pick={{ id: s.swap.tokenOut, side: d.out }} />
+      <SwapAvatar pick={sides.pay} />
+      <SwapAvatar pick={sides.get} />
     </span>
   );
 }
@@ -208,10 +244,11 @@ function SwapPair({ session: s }: { session: SessionView }) {
 /** A session in a list, which opens its page: the pair, what it's doing or when it ran, and its tag. Home shows the running ones. */
 export function SwapRow({ session: s, onOpen }: { session: SessionView; onOpen: () => void }) {
   const tag = tagOf(s);
+  const network = useNetwork();
   return (
     <button type="button" className="token-row swap-row" onClick={onOpen}>
       <SwapPair session={s} />
-      <span className="token-row__label">{pairOf(s)}</span>
+      <span className="token-row__label">{pairOf(s, network)}</span>
       <SwapTag {...tag} />
       <span className={tag.tone === "wait" ? "token-row__sub swap-row__sub--wait" : "token-row__sub"}>
         {subOf(s, Date.now())}
@@ -356,14 +393,6 @@ export function Swaps({
 // A new swap
 // ---------------------------------------------------------------------------
 
-/** One side of a swap: ADA ("lovelace") or a token, by Minswap's ID, and how it's shown. */
-interface Pick {
-  id: string;
-  side: SwapSide;
-}
-
-const ADA_PICK: Pick = { id: "lovelace", side: ADA };
-
 /** The most of one token a value can hold: 2⁶³ − 1. */
 const TOKEN_MAX = 2n ** 63n - 1n;
 /** How long typing pauses before Minswap is asked for a quote: it limits how often it's asked. */
@@ -371,29 +400,38 @@ const QUOTE_PAUSE_MS = 600;
 /** A quote older than this is asked for again before the funding is built on it. */
 const QUOTE_FRESH_MS = 60_000;
 
-/** A side's name on its button and in the lists: ADA, or the token's ticker. */
-const nameOf = (p: Pick) => (p.id === "lovelace" ? "ADA" : p.side.label);
-
 /** What the private balance holds of a side. */
 function heldOf(seedelf: Balances["seedelf"], id: string): string {
   if (id === "lovelace") return seedelf.lovelace;
   return seedelf.tokens.find((t) => t.policyId + t.assetName === id)?.quantity ?? "0";
 }
 
-/** ADA, then the private balance's tokens by name, with a second line and what's held. NFTs aren't swapped on a DEX. */
-function ownPicks(network: NetworkName, seedelf: Balances["seedelf"]): Array<Pick & { sub: string; held: string }> {
+/** A held token in the picker: its side, its second line, what's held, and whether it's on the wallet's list. */
+type OwnPick = Pick & { sub: string; held: string; listed: boolean };
+
+/**
+ * ADA, then the private balance's tokens by name, with a second line and
+ * what's held: one that isn't on the wallet's list says so, with its
+ * fingerprint. NFTs aren't swapped on a DEX.
+ */
+function ownPicks(network: NetworkName, seedelf: Balances["seedelf"]): OwnPick[] {
   const views = sortTokens(
     seedelf.tokens.map((t) => viewToken(network, t)),
     "name",
   ).filter((v) => !v.nft);
   return [
-    { ...ADA_PICK, sub: "Cardano", held: seedelf.lovelace },
-    ...views.map((v) => ({
-      id: v.token.policyId + v.token.assetName,
-      side: { label: tokenLabel(network, v.token), decimals: tokenInfo(network, v.token)?.decimals ?? v.token.decimals },
-      sub: v.sub,
-      held: v.token.quantity,
-    })),
+    { ...ADA_PICK, sub: "Cardano", held: seedelf.lovelace, listed: true },
+    ...views.map((v) => {
+      const text = tokenText(network, v.token);
+      const mark = tokenMark(text);
+      return {
+        id: v.token.policyId + v.token.assetName,
+        side: { label: text.label, decimals: tokenDecimals(network, v.token) },
+        sub: mark ? mark.charAt(0).toUpperCase() + mark.slice(1) : v.sub,
+        held: v.token.quantity,
+        listed: text.listed,
+      };
+    }),
   ];
 }
 
@@ -485,9 +523,6 @@ function NewSwap({
   onStarted: (index: number, pending: PendingTx) => void;
 }) {
   const network = useNetwork();
-  const { prefs } = usePreferences();
-  // Where Lovejoin is deployed, a return's spare ADA goes through it (Settings, Lovejoin).
-  const lovejoin = network === "preprod";
   const [pay, setPay] = useState<Pick>(ADA_PICK);
   const [get, setGet] = useState<Pick>();
   const [amount, setAmount] = useState("");
@@ -558,7 +593,9 @@ function NewSwap({
       : undefined;
   const short = current && !tooMuch ? adaShort(seedelf.lovelace, current) : undefined;
   const max = pay.id === "lovelace" ? maxAdaIn(held, quoted?.quote) : held;
-  const ready = !!current && !tooMuch && !short && !quoteError;
+  // A token that's neither on the wallet's list nor verified by Minswap: anyone can name one like a known one (#20).
+  const unverified = current?.verified === false;
+  const ready = !!current && !tooMuch && !short && !unverified && !quoteError;
   const level = shown ? impactLevel(shown.priceImpact) : "ok";
 
   const setTyped = (value: string) => {
@@ -624,6 +661,10 @@ function NewSwap({
   if (out && get) {
     const { summary, quote } = out;
     const [swapPart, collateral] = summary.payments;
+    const got = get.id === "lovelace" ? undefined : tokenText(network, tokenOf(get.id));
+    // What the worker says bringing the session back through Lovejoin takes (Settings, Lovejoin), when it's on and pays for a box.
+    const lovejoin = quote.lovejoin && quote.lovejoin.boxes > 0 ? quote.lovejoin : undefined;
+    const adaOut = quote.ask.tokenOut === "lovelace";
     return (
       <Screen
         title="Review the swap"
@@ -642,17 +683,22 @@ function NewSwap({
           <div className="swap-summary__row">
             <SwapAvatar pick={pay} />
             <span className="swap-summary__label">You pay</span>
-            <span className="swap-summary__amount">{amountOf(quote.amountIn, pay.side)}</span>
+            <span className="swap-summary__amount">{amountOf(quote.amountIn, pay)}</span>
           </div>
           <div className="swap-summary__row">
             <SwapAvatar pick={get} />
             <span className="swap-summary__label">You receive</span>
-            <span className="swap-summary__amount">≈ {amountOf(quote.amountOut, get.side)}</span>
+            <span className="swap-summary__amount">≈ {amountOf(quote.amountOut, get)}</span>
           </div>
           <p className="swap-summary__foot">
-            At least {amountOf(quote.minAmountOut, get.side)} · {formatPercent(quote.priceImpact)} price impact · through{" "}
+            Asks for at least {amountOf(quote.minAmountOut, get)} · {formatPercent(quote.priceImpact)} price impact · through{" "}
             {quote.route.join(", ")}
           </p>
+          {got && !got.listed && (
+            <p className="swap-summary__foot" data-testid="swap-out-unlisted">
+              {got.label} isn't on the wallet's list: Minswap verifies it, by its ID ({got.fingerprint}).
+            </p>
+          )}
         </div>
         <h2>First, a one-time account is funded</h2>
         <ReviewRows testId="swap-fund-review">
@@ -664,22 +710,22 @@ function NewSwap({
           <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
         </ReviewRows>
         <h2>Then it runs by itself</h2>
-        <Plan least={amountOf(quote.minAmountOut, get.side)} lovejoin={lovejoin} />
-        <p className="note">
-          Send approves all of it: the wallet places the order and brings everything back without asking again, as long
-          as the order gives at least {amountOf(quote.minAmountOut, get.side)}. If the price moves past that, it pauses and
-          asks you. Stop is there until it's done.
+        <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={!!lovejoin} adaOut={adaOut} />
+        <p className="note" data-testid="swap-approves">
+          Send approves all of it: the wallet asks Minswap for an order of at least {amountOf(quote.minAmountOut, get)},
+          Minswap builds it, and the wallet places it and brings everything back without asking again. Before it signs,
+          it checks that what Minswap built pays only this session, an order for it and Minswap's fee; the order's minimum
+          it can't read, so that's Minswap's to build as asked. If the price moves so that the order can't give that much,
+          it pauses and asks you. Stop is there until it's done.
         </p>
         <p className="note">
           What the swap doesn't use, the collateral and the order's deposit come back with the proceeds. Three
           transactions, each with its network fee: that's the cost of keeping your public account out of it.
         </p>
-        {lovejoin && (
+        {lovejoin && <LovejoinCost lovejoin={lovejoin} adaOut={adaOut} />}
+        {quote.lovejoin && !lovejoin && (
           <p className="note" data-testid="swap-lovejoin">
-            On the way back, ADA to spare goes through Lovejoin first: as many boxes of 10 ₳ as it pays for, mixed with other
-            people's ({prefs.lovejoinDepth} {prefs.lovejoinDepth === 1 ? "wave" : "waves"} deep), the session paying every mix.
-            Each box comes back on its own after {delayText(prefs.lovejoinDelay)}, the first time the wallet is unlocked
-            after that. Less than a box's worth, and any tokens, come back at once. Settings, Lovejoin changes this.
+            Less than a box's worth of ADA is spare, so Lovejoin is left out: it all comes back at once.
           </p>
         )}
         <Callout tone="privacy">
@@ -702,11 +748,13 @@ function NewSwap({
         ? `Not enough ${nameOf(pay)}`
         : !current
           ? "Getting a quote…"
-          : short
-            ? "Not enough ADA"
-            : busy
-              ? "Building…"
-              : "Review swap";
+          : unverified
+            ? "Not verified by Minswap"
+            : short
+              ? "Not enough ADA"
+              : busy
+                ? "Building…"
+                : "Review swap";
 
   return (
     <Screen
@@ -835,9 +883,10 @@ function NewSwap({
       {note && <p className="field-note">{note}</p>}
       {tooMuch && (
         <p className="field-note" data-testid="swap-short">
-          That's more than the {amountOf(held, pay.side)} in your private balance.
+          That's more than the {amountOf(held, pay)} in your private balance.
         </p>
       )}
+      {unverified && get && <Unverified pick={get} />}
       {short && current && (
         <p className="field-note" data-testid="swap-short">
           Not enough ADA: the swap takes {formatAda(current.fund.lovelace)} ₳ with its costs, and the one-time account{" "}
@@ -890,7 +939,7 @@ function NewSwap({
           </div>
           {details && (
             <dl className="swap-details__rows" id="swap-quote-rows" data-testid="swap-quote-rows">
-              <Detail label="Minimum received" value={amountOf(shown.minAmountOut, get.side)} />
+              <Detail label="Asks for at least" value={amountOf(shown.minAmountOut, get)} />
               <Detail label="Price impact" value={formatPercent(shown.priceImpact)} tone={level} />
               <Detail
                 label="Slippage"
@@ -940,17 +989,23 @@ function NewSwap({
   );
 }
 
-/** What happens after Send, as the swap's own page then shows it: the timeline's four steps, none taken yet. */
-function Plan({ least, lovejoin }: { least: string; lovejoin: boolean }) {
+/**
+ * What happens after Send, as the swap's own page then shows it: the
+ * timeline's four steps, none taken yet. `lovejoin`: the return goes through
+ * Lovejoin first; `adaOut`: the proceeds are ADA, so they go through it too.
+ */
+export function Plan({ least, lovejoin, adaOut }: { least: string; lovejoin: boolean; adaOut: boolean }) {
   const steps = [
     ["Funded", "A one-time account, from your private balance"],
-    ["Order placed", `Through Minswap, for at least ${least}`],
+    ["Order placed", `Minswap builds it, asked for at least ${least}`],
     ["Filled", "By a DEX's batcher, usually within a few blocks"],
     [
       "Back in your private balance",
-      lovejoin
-        ? "Spare ADA through Lovejoin first, in boxes that come back later; the proceeds and the rest at once"
-        : "The proceeds and everything left",
+      !lovejoin
+        ? "The proceeds and everything left"
+        : adaOut
+          ? "The proceeds and spare ADA through Lovejoin first, in boxes that come back later; the rest at once"
+          : "Spare ADA through Lovejoin first, in boxes that come back later; the proceeds and the rest at once",
     ],
   ];
   return (
@@ -970,18 +1025,74 @@ function Plan({ least, lovejoin }: { least: string; lovejoin: boolean }) {
   );
 }
 
-/** What the funding carries for the swap, in words. */
-function fundText(lovelace: string, tokens: TokenQuantity[], side: SwapSide, network: "preprod" | "mainnet"): string {
+/**
+ * What bringing the session back through Lovejoin is expected to take, from
+ * the worker's quote: the boxes (at most: the pool may take fewer), their
+ * mixes and fees, and the fees to bring each back, after its wait. The
+ * proceeds go through it too when they're ADA (launch review #26).
+ */
+export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: NonNullable<SwapQuote["lovejoin"]>; adaOut: boolean }) {
+  return (
+    <>
+      <h2>On the way back, through Lovejoin</h2>
+      <ReviewRows testId="swap-lovejoin-cost">
+        <Row label="Boxes of 10 ₳" value={`About ${l.boxes}, at most`} />
+        <Row label="Mixed" value={`${l.depth} ${l.depth === 1 ? "wave" : "waves"} deep, ${plural(l.mixes, "mix", "mixes")}`} />
+        <Row label="Mix fees, about" value={`${formatAda(l.mixFees)} ₳`} />
+        <Row label="Bringing them back, about" value={`${formatAda(l.withdrawFees)} ₳`} />
+        <Row label="Back later" value={`Each box on its own, after ${delayText(l.delay)}`} />
+      </ReviewRows>
+      <p className="note" data-testid="swap-lovejoin">
+        On the way back, {adaOut ? "the proceeds and ADA to spare go" : "ADA to spare goes"} through Lovejoin first: about{" "}
+        {plural(l.boxes, "box", "boxes")} of 10 ₳ (at most: the pool may take fewer), mixed with other people's in{" "}
+        {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳ in fees, which the session pays. Each box comes
+        back on its own after {delayText(l.delay)}, the first time the wallet is unlocked after that, for about{" "}
+        {formatAda(l.withdrawFees)} ₳ in fees all together. Less than a box's worth, and any tokens, come back at once.
+        Settings, Lovejoin changes this.
+      </p>
+      <p className="note" data-testid="lovejoin-unaudited">
+        {LOVEJOIN_UNAUDITED}
+      </p>
+    </>
+  );
+}
+
+/**
+ * A quote for a token the wallet won't swap into (#20): neither on its list
+ * nor verified by Minswap, by its ID. It's named by its fingerprint, and
+ * Review stays off: the worker refuses to fund it.
+ */
+export function Unverified({ pick }: { pick: Pick }) {
+  const text = tokenText(useNetwork(), tokenOf(pick.id));
+  return (
+    <Callout tone="warn" testId="swap-unverified">
+      <div className="stack-tight">
+        <strong>Not verified by Minswap</strong>
+        <span>
+          {text.label} isn't on the wallet's list, and Minswap's verified list doesn't have it by its ID, so the wallet won't
+          swap into it: anyone can give a token a known token's name.
+        </span>
+        <code className="swap-token-id">{text.fingerprint}</code>
+      </div>
+    </Callout>
+  );
+}
+
+/** What the funding carries for the swap, in words: each token named by `tokenAmountText`. */
+function fundText(lovelace: string, tokens: TokenQuantity[], side: SwapSide, network: NetworkName): string {
   const ada = `${formatAda(lovelace)} ₳`;
   if (!tokens.length) return ada;
-  return `${ada} and ${tokens.map((t) => `${formatQuantity(t.quantity, side.decimals)} ${tokenLabel(network, t)}`).join(", ")}`;
+  return `${ada} and ${tokens.map((t) => tokenAmountText(network, { ...t, decimals: side.decimals })).join(", ")}`;
 }
 
 /**
  * Picks one side's token: ADA or one in the private balance, and for what's
  * received, any on Minswap's list too. Minswap sees what's searched for.
+ * What's received lists held tokens that are neither on the wallet's list
+ * nor found on Minswap's verified list apart, after Minswap's, never first:
+ * anyone can put a token named like a known one in a private balance (#20).
  */
-function TokenSelect({
+export function TokenSelect({
   which,
   seedelf,
   chosen,
@@ -1021,7 +1132,11 @@ function TokenSelect({
   }, [search, q]);
 
   const lower = q.toLowerCase();
-  const mine = lower ? own.filter((p) => [nameOf(p), p.sub, p.id].some((s) => s.toLowerCase().includes(lower))) : own;
+  const matching = lower ? own.filter((p) => [nameOf(p), p.sub, p.id].some((s) => s.toLowerCase().includes(lower))) : own;
+  // Minswap's search lists verified tokens only: one of those held is as good as listed.
+  const vouched = (p: OwnPick) => p.listed || !!found?.some((t) => t.id === p.id);
+  const mine = which === "get" ? matching.filter(vouched) : matching;
+  const others = which === "get" ? matching.filter((p) => !vouched(p)) : [];
   const theirs = found?.filter((t) => !own.some((p) => p.id === t.id));
 
   const row = (p: Pick, sub: string, held?: string) => (
@@ -1062,7 +1177,7 @@ function TokenSelect({
           {mine.map((p) => row(p, p.sub, p.held))}
         </ul>
       ) : (
-        <p className="note">Nothing you hold matches “{q}”.</p>
+        <p className="note">{others.length ? "Nothing else you hold is listed or verified." : `Nothing you hold matches “${q}”.`}</p>
       )}
       {which === "get" && (
         <>
@@ -1074,10 +1189,24 @@ function TokenSelect({
           {!!theirs?.length && (
             <ul className="list" data-testid="swap-tokens">
               {theirs.slice(0, 12).map((t) => {
-                const label = t.ticker ?? t.name ?? shortHex(t.id);
-                return row({ id: t.id, side: { label, decimals: t.decimals } }, t.name ?? shortHex(t.id, 12, 6));
+                // Named as every text view names a token; Minswap's own name for it goes under.
+                const pick = pickOf(network, t.id, t.decimals);
+                const minswap = [t.ticker, t.name].filter(Boolean).join(" · ") || shortHex(t.id, 12, 6);
+                return row(pick, `${minswap}, verified by Minswap`);
               })}
             </ul>
+          )}
+          {others.length > 0 && (
+            <>
+              <h3 className="swap-pick__heading">Also in your private balance</h3>
+              <p className="field-note" data-testid="swap-unverified-note">
+                Not on the wallet's list{found ? ", nor on Minswap's verified list" : ""}: anyone can give a token a known
+                token's name. The quote says whether Minswap verifies one, by its ID; the wallet swaps into no other.
+              </p>
+              <ul className="list" data-testid="swap-unverified-tokens">
+                {others.map((p) => row(p, p.sub, p.held))}
+              </ul>
+            </>
           )}
         </>
       )}
@@ -1172,7 +1301,7 @@ function SlippageSettings({
 /** How often a running swap's page asks the runner for its next step. */
 const ADVANCE_EVERY_MS = 20_000;
 
-function Session({
+export function Session({
   session,
   updatedAt,
   reading,
@@ -1188,11 +1317,13 @@ function Session({
   onChanged: (sessions: SessionView[]) => void;
 }) {
   const network = useNetwork();
+  const amounts = useAmounts();
   const [s, setS] = useState(session);
   const [orders, setOrders] = useState<SessionOrder[]>();
   const [review, setReview] = useState<SessionTxReview>();
   const [back, setBack] = useState<SessionBackSummary>();
   const [stopping, setStopping] = useState(false);
+  const [forgetting, setForgetting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -1241,7 +1372,7 @@ function Session({
     call("session-orders", { index: s.index }).then(setOrders, (e: Error) => setError(e.message));
   }, [s.auto, s.index, s.stage, swapped, updatedAt]);
 
-  const d = s.swap?.display;
+  const sides = sidesOf(network, s);
   const act = async (task: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -1289,10 +1420,10 @@ function Session({
         }
       >
         <ReviewRows testId="session-tx-review">
-          {review.kind === "swap" && review.quote && d && (
+          {review.kind === "swap" && review.quote && sides && (
             <>
-              <Row label="You get about" value={amountOf(review.quote.amountOut, d.out)} strong />
-              <Row label="At least" value={amountOf(review.quote.minAmountOut, d.out)} />
+              <Row label="You get about" value={amountOf(review.quote.amountOut, sides.get)} strong />
+              <Row label="Asked for at least" value={amountOf(review.quote.minAmountOut, sides.get)} />
             </>
           )}
           {review.kind === "cancel" && <Row label="Cancels" value={plural(review.orders ?? 0, "order")} strong />}
@@ -1351,18 +1482,20 @@ function Session({
           <LovejoinRows back={back} />
           <Row label={back.lovejoin ? "Back now" : "Into your private balance"} value={`${formatAda(back.lovelace)} ₳`} strong />
           {back.tokens.map((t) => (
-            <Row key={tokenKey(t)} label="" value={tokenText(t, s, network)} />
+            <Row key={tokenKey(t)} label="" value={heldText(t, s, network)} />
           ))}
           <Row label={back.lovejoin ? "Network fees" : "Network fee"} value={`${formatAda(back.fee)} ₳`} />
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at session ${s.index + 1}`} />
           <IntoRow back={back} />
         </ReviewRows>
+        <ReturnLeftOut leftOut={back.leftOut} />
+        <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote
           back={back}
           busy={busy}
           onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
         />
-        <ReturnLinks back={back} after="The account is never used again." />
+        <ReturnLinks back={back} after={back.leftOut?.length ? undefined : "The account is never used again."} />
       </Screen>
     );
   }
@@ -1372,16 +1505,48 @@ function Session({
   const rows = (
     <ReviewRows testId="session-rows">
       {!s.auto && <Row label="Where it's at" value={STAGE[s.stage]} strong />}
-      {s.swap && d && <Row label="Quoted" value={`about ${amountOf(s.swap.amountOut, d.out)}`} />}
+      {s.swap && sides && <Row label="Quoted" value={`about ${amountOf(s.swap.amountOut, sides.get)}`} />}
       <Row label="Started" value={whenOf(s.createdAt, new Date())} />
       <Row label="Account" value={shortHex(s.address, 16, 8)} title={s.address} />
-      {holding && <Row label="It holds" value={`${formatAda(holding.lovelace)} ₳`} />}
+      {/* What it holds is a balance: hidden while balances are (launch review #56). */}
+      {holding && <Row label="It holds" value={`${amounts.ada(holding.lovelace)} ₳`} />}
       {holding?.tokens.map((t) => (
-        <Row key={tokenKey(t)} label="" value={tokenText(t, s, network)} />
+        <Row key={tokenKey(t)} label="" value={amounts.text(heldText(t, s, network))} />
       ))}
     </ReviewRows>
   );
-  const forget = () => void act(async () => onChanged(await call("session-forget", { index: s.index })));
+  // A funding turned away never went out; one the chain hasn't shown may still land, and a
+  // forgotten session's account isn't looked at again: that one asks first (launch review #11).
+  const forgetNow = () =>
+    void act(async () => {
+      onChanged(await call("session-forget", { index: s.index }));
+      setForgetting(false);
+    });
+  const forget = () => (s.unsent || !s.auto ? forgetNow() : setForgetting(true));
+  const lookAgain = () => void act(async () => setS(await call("session-resume", { index: s.index })));
+  const forgetModal = forgetting && (
+    <Modal
+      title="Forget this swap?"
+      titleId="session-forget-title"
+      onClose={() => setForgetting(false)}
+      foot={
+        <>
+          <button type="button" className="secondary" onClick={() => setForgetting(false)} disabled={busy}>
+            Keep it
+          </button>
+          <button type="button" className="danger" onClick={forgetNow} disabled={busy}>
+            {busy ? "Forgetting…" : "Forget it"}
+          </button>
+        </>
+      }
+    >
+      <p className="note">
+        The chain hasn't shown its funding, but Koios may have taken it, so it may still land. If it lands after you forget
+        the swap, the wallet doesn't look at this account again, and the money waits there unseen. Try again looks for it
+        first.
+      </p>
+    </Modal>
+  );
 
   if (s.auto) {
     const auto = s.auto;
@@ -1389,7 +1554,7 @@ function Session({
     const placed = s.txs.some((t) => t.kind === "swap");
     return (
       <Screen
-        title={pairOf(s)}
+        title={pairOf(s, network)}
         titleId="session-title"
         onBack={onBack}
         aside={`Private session ${s.index + 1}`}
@@ -1400,9 +1565,16 @@ function Session({
               Done
             </button>
           ) : s.stage === "failed" ? (
-            <button type="button" className="secondary" onClick={forget} disabled={busy}>
-              Forget it
-            </button>
+            <div className="actions">
+              {!s.unsent && (
+                <button type="button" className="primary" onClick={lookAgain} disabled={busy} data-testid="session-look-again">
+                  {busy ? "Looking…" : "Try again"}
+                </button>
+              )}
+              <button type="button" className="secondary" onClick={forget} disabled={busy}>
+                Forget it
+              </button>
+            </div>
           ) : auto.stopping ? null : (
             <button type="button" className="secondary" onClick={() => setStopping(true)} disabled={busy}>
               Stop
@@ -1416,7 +1588,7 @@ function Session({
           <Callout tone="warn" testId="session-paused">
             <div className="stack-tight">
               <strong>Paused: it needs you</strong>
-              <span>{pauseText(auto.paused, auto.approvedMinOut, d?.out)}</span>
+              <span data-testid="session-paused-why">{pauseText(auto.paused, auto.approvedMinOut, sides?.get)}</span>
               <span className="row-links">
                 <button
                   type="button"
@@ -1445,7 +1617,10 @@ function Session({
           busy={busy}
           onRetry={() => void act(async () => setS(await call("session-resume", { index: s.index })))}
         />
+        <LovejoinSkipped reason={s.lovejoinSkipped} />
         {rows}
+        <LeftBehindNote leftBehind={s.leftBehind} />
+        {forgetModal}
         {stopping && (
           <Modal
             title="Stop this swap?"
@@ -1489,7 +1664,7 @@ function Session({
       title={`Private session ${s.index + 1}`}
       titleId="session-title"
       onBack={onBack}
-      aside={pairOf(s)}
+      aside={pairOf(s, network)}
       error={error}
       foot={
         <SessionFoot
@@ -1506,6 +1681,8 @@ function Session({
     >
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={onRefresh} />
       {rows}
+      <LovejoinSkipped reason={s.lovejoinSkipped} />
+      <LeftBehindNote leftBehind={s.leftBehind} />
       <p className="note" data-testid="session-next">
         {nextStep(s, swapped, waiting)}
       </p>
@@ -1513,18 +1690,27 @@ function Session({
   );
 }
 
-/** A token the session holds or brings back, with its decimals. */
-function tokenText(t: TokenQuantity, s: SessionView, network: NetworkName): string {
+/**
+ * A token the session holds or brings back, as every text view names one
+ * (`tokenAmountText`): what the swap gets is in the quote's decimals.
+ */
+function heldText(t: TokenQuantity, s: SessionView, network: NetworkName): string {
   const d = s.swap?.display;
-  const decimals = d && tokenKey(t) === tokenKeyOf(s.swap!.tokenOut) ? d.out.decimals : (tokenInfo(network, t)?.decimals ?? 0);
-  return `${formatQuantity(t.quantity, decimals)} ${tokenLabel(network, t)}`;
+  const decimals = d && tokenKey(t) === tokenKeyOf(s.swap!.tokenOut) ? d.out.decimals : undefined;
+  return tokenAmountText(network, { ...t, ...(decimals === undefined ? {} : { decimals }) });
 }
 
-/** Why a swap that runs itself waits for the user, in words. */
-function pauseText(p: SessionPause, approvedMinOut: string, out?: SwapSide): string {
-  if (p.why === "refused") return `The wallet won't sign what Minswap built: ${p.detail}`;
+/**
+ * Why a swap that runs itself waits for the user, in words: the price, or
+ * which of the wallet's checks what Minswap built failed (`detail`, launch
+ * review #21).
+ */
+export function pauseText(p: SessionPause, approvedMinOut: string, out?: Pick): string {
+  if (p.why === "refused") {
+    return `The wallet won't sign what Minswap built: ${p.detail.trim().replace(/\.?$/, ".")} Try again asks Minswap to build it afresh.`;
+  }
   const amount = (q: string) => (out ? amountOf(q, out) : q);
-  return `The price moved: the order would give about ${amount(p.amountOut)} now, less than the ${amount(approvedMinOut)} you approved at least, so it wasn't placed. Try again later, or review the new price yourself.`;
+  return `The price moved: an order now would give about ${amount(p.amountOut)}, less than the ${amount(approvedMinOut)} you approved at least, so the wallet didn't ask for one. Try again later, or review the new price yourself.`;
 }
 
 /** When a failed step is tried again. */
@@ -1554,7 +1740,7 @@ type StepState = "done" | "now" | "paused" | "failed" | "todo" | "skipped";
 function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry: () => void }) {
   const network = useNetwork();
   const auto = s.auto!;
-  const d = s.swap?.display;
+  const sides = sidesOf(network, s);
   const at = { funding: 0, ordering: 1, filling: 2, cancelling: 2, returning: 3, done: 4 }[auto.step];
   const tx = (kind: SessionTx["kind"]) => s.txs.findLast((t) => t.kind === kind);
   const failed = s.stage === "failed";
@@ -1568,16 +1754,21 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     if (i > at) return "todo";
     return auto.paused || auto.retry ? "paused" : "now";
   };
-  const least = d ? amountOf(auto.approvedMinOut, d.out) : undefined;
+  const least = sides ? amountOf(auto.approvedMinOut, sides.get) : undefined;
   const steps: Array<{ title: string; sub: string; tx?: SessionTx }> = [
     {
       title: failed ? "Not funded" : "Funded",
-      sub: failed ? "It never reached the chain" : "A one-time account, from your private balance",
+      // Only one turned away is known never to have gone out: one unseen may still land.
+      sub: failed
+        ? s.unsent
+          ? "It never reached the chain"
+          : "The chain hasn't shown it yet"
+        : "A one-time account, from your private balance",
       tx: tx("out"),
     },
     {
       title: unordered ? "No order" : "Order placed",
-      sub: unordered ? "Stopped before one was placed" : least ? `For at least ${least}` : "Through Minswap",
+      sub: unordered ? "Stopped before one was placed" : least ? `Asked for at least ${least}` : "Through Minswap",
       tx: tx("swap"),
     },
     {
@@ -1591,7 +1782,11 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
             : "By a DEX's batcher, usually within a few blocks",
       tx: tx("cancel"),
     },
-    { title: "Back in your private balance", sub: "Everything at the account, under fresh registers", tx: tx("back") },
+    {
+      title: "Back in your private balance",
+      sub: s.lovejoinSkipped ? "Directly: Lovejoin was left out" : "Everything at the account, under fresh registers",
+      tx: tx("back"),
+    },
   ];
   const done = auto.step === "done";
   return (
@@ -1653,10 +1848,12 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
 }
 
 /** What's happening now, in plain words. */
-function nowLine(s: SessionView): string {
+export function nowLine(s: SessionView): string {
   const a = s.auto!;
   if (s.stage === "failed") {
-    return "Its funding never reached the chain, so the account is empty. Forget it: its account isn't used again.";
+    return s.unsent
+      ? "Its funding never reached the chain, so the account is empty. Forget it: its account isn't used again."
+      : "The chain hasn't shown its funding in 20 minutes, so the swap waits. Koios may have taken it, and it may still land: Try again looks for it again.";
   }
   switch (a.step) {
     case "funding":
@@ -1699,7 +1896,9 @@ function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
     case "funding":
       return "Waiting for the network to confirm the funding. It takes about a minute: refresh to check.";
     case "failed":
-      return "Its funding never reached the chain, so the account is empty. Forget it: its account isn't used again.";
+      return s.unsent
+        ? "Its funding never reached the chain, so the account is empty. Forget it: its account isn't used again."
+        : "The chain hasn't shown its funding in 20 minutes. Refresh to look again: it may still land. Forget it only once you're sure it didn't go out.";
     case "returning":
       return "Coming back into your private balance. Refresh to check.";
     case "closed":
