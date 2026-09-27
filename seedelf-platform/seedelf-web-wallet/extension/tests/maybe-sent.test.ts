@@ -250,7 +250,10 @@ describe("Home's banner", () => {
     expect(text({ ...sent, maybeSent: true }, true)).toContain(
       "Payment may have gone through. Waiting for the network… Koios didn't answer when it was sent. The wallet sends it again now and then, which is safe",
     );
-    expect(text({ ...sent, maybeSent: true }, false)).toContain("Payment may have gone through Koios didn't answer");
+    // It waits until the worker settles it, whatever Home's clock says: no Dismiss for a payment that may still land.
+    const later = text({ ...sent, maybeSent: true }, false);
+    expect(later).toContain("Payment may have gone through. Waiting for the network…");
+    expect(later).not.toContain("Dismiss");
     expect(text(sent, true)).toContain("Payment sent. Waiting for the network…");
   });
 
