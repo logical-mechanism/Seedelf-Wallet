@@ -510,6 +510,103 @@ fn nothing_to_sign_is_refused() {
     assert!(refused.to_string().contains("Nothing in this transaction"));
 }
 
+// --- A site's bytes, bounded before they're decoded -------------------------
+
+/// A transaction with nothing in its body whose witness set holds `data`,
+/// raw plutus data in hex.
+fn with_plutus_data(data: &str) -> String {
+    format!("84a3008001800200a10481{data}f5f6")
+}
+
+/// Plutus data nested `levels` lists deep, as a site could write it.
+fn nested(levels: usize) -> String {
+    format!("{}00", "81".repeat(levels))
+}
+
+fn refused_as_nested(e: anyhow::Error) -> bool {
+    e.to_string().contains("nested more than 128 levels")
+}
+
+#[test]
+fn deeply_nested_data_is_refused_before_it_is_decoded() {
+    // Nested thousands deep, Pallas's decoding overflowed WebAssembly's stack.
+    for levels in [200, 30_000] {
+        let tx = with_plutus_data(&nested(levels));
+        let refused =
+            cip30::inspect_tx(&account(), &request(tx.clone(), vec![], true)).unwrap_err();
+        assert!(refused_as_nested(refused));
+        let refused = cip30::sign_tx(&account(), &request(tx, vec![], true)).unwrap_err();
+        assert!(refused_as_nested(refused));
+    }
+    // What real transactions nest is read as before.
+    let tx = with_plutus_data(&nested(100));
+    assert!(cip30::inspect_tx(&account(), &request(tx, vec![], true)).is_ok());
+}
+
+#[test]
+fn nesting_inside_a_datums_bytes_counts_too() {
+    // An inline datum is CBOR inside a byte string (#6.24), and Pallas decodes it.
+    let (_, rows) = swap();
+    let tx = |levels: usize| {
+        tx_hex(body(
+            vec![input(TX_A, 1)],
+            vec![out(&theirs(), 2_000_000, Some(&nested(levels)))],
+        ))
+    };
+    let refused =
+        cip30::inspect_tx(&account(), &request(tx(200), rows.clone(), false)).unwrap_err();
+    assert!(refused_as_nested(refused));
+    assert!(cip30::inspect_tx(&account(), &request(tx(60), rows, false)).is_ok());
+}
+
+#[test]
+fn a_big_numbers_bytes_are_bytes_and_the_check_goes_on_after_them() {
+    // A big number is a tag and a byte string too, of bytes that aren't CBOR (0xff…).
+    let big = format!("c254{}", "ff".repeat(20));
+    let read = |second: &str| {
+        let tx = format!("84a3008001800200a10482{big}{second}f5f6");
+        cip30::inspect_tx(&account(), &request(tx, vec![], true))
+    };
+    assert!(read(&nested(50)).is_ok());
+    assert!(refused_as_nested(read(&nested(200)).unwrap_err()));
+}
+
+#[test]
+fn a_transaction_far_larger_than_cardano_allows_is_refused() {
+    let (_, rows) = swap();
+    // About 78 KB: past four times the ledger's 16 KiB.
+    let to = theirs();
+    let outputs = (0..1_200).map(|_| out(&to, 1_000_000, None)).collect();
+    let tx = tx_hex(body(vec![input(TX_A, 1)], outputs));
+    let refused = cip30::inspect_tx(&account(), &request(tx, rows, true)).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("far larger than Cardano allows")
+    );
+}
+
+#[test]
+fn putting_signatures_in_checks_the_bytes_first() {
+    let (tx, rows) = swap();
+    let signed = cip30::sign_tx(&account(), &request(tx, rows, false)).unwrap();
+    let deep = with_plutus_data(&nested(200));
+    assert!(refused_as_nested(
+        cip30::attach_witnesses(&deep, &signed.witness_set).unwrap_err()
+    ));
+}
+
+#[test]
+fn a_count_the_bytes_cant_hold_is_refused_not_made_room_for() {
+    let (tx, rows) = swap();
+    let signed = cip30::sign_tx(&account(), &request(tx, rows, false)).unwrap();
+    // 2^64 - 1 entries: reserving room for them aborted WebAssembly.
+    let huge_map = "bbffffffffffffffff";
+    assert!(cip30::attach_witnesses(&format!("84a0{huge_map}f5f6"), &signed.witness_set).is_err());
+    assert!(cip30::attach_witnesses(&with_plutus_data("00"), huge_map).is_err());
+    assert!(cip30::attach_witnesses(&with_plutus_data("00"), "a1009bffffffffffffffff").is_err());
+}
+
 // --- Signing data (CIP-8) ---------------------------------------------------
 
 fn data_request(address: &str) -> DataRequest {

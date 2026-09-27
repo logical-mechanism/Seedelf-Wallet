@@ -423,6 +423,174 @@ impl Keys {
 }
 
 // ---------------------------------------------------------------------------
+// A site's CBOR, before anything decodes it
+// ---------------------------------------------------------------------------
+
+/// The largest transaction a site may ask the wallet to read: four times the
+/// ledger's limit today (16 KiB), so a raise of it breaks no site. Reading
+/// checks every register datum's points, about a millisecond each, so this
+/// keeps a read well under a second.
+const MAX_TX_BYTES: usize = 64 * 1024;
+
+/// How deep a site's CBOR may nest. Pallas decodes plutus data, metadata and
+/// native scripts recursively, and a few thousand levels (a 3 KB
+/// transaction) overflow WebAssembly's stack. That leaves the instance dead:
+/// nothing works after it, not even Lock. Real transactions nest a few dozen
+/// levels at most.
+const MAX_NESTING: usize = 128;
+
+/// One open level in [`nests_within`]'s walk.
+enum Level {
+    /// An array or a map (its keys and values each an item), with the items
+    /// left to read: `None` until a break.
+    Items(Option<u64>),
+    /// A tag, before the one item it wraps.
+    Tag,
+    /// CBOR in a byte string a tag wraps, as an inline datum or a reference
+    /// script is: Pallas decodes that too. It ends at `end`, inside bytes
+    /// that end at `outer`.
+    Wrapped { end: usize, outer: usize },
+}
+
+/// A CBOR item's head at `pos`: its major type, its argument (`None` for an
+/// indefinite length), and where what follows the head starts.
+fn cbor_head(bytes: &[u8], pos: usize) -> Option<(u8, Option<u64>, usize)> {
+    let initial = *bytes.get(pos)?;
+    let wide = |n: usize| -> Option<(u64, usize)> {
+        let b = bytes.get(pos + 1..pos + 1 + n)?;
+        Some((
+            b.iter().fold(0u64, |a, x| (a << 8) | u64::from(*x)),
+            pos + 1 + n,
+        ))
+    };
+    let (argument, next) = match initial & 0x1f {
+        n @ 0..=23 => (Some(u64::from(n)), pos + 1),
+        24 => wide(1).map(|(a, p)| (Some(a), p))?,
+        25 => wide(2).map(|(a, p)| (Some(a), p))?,
+        26 => wide(4).map(|(a, p)| (Some(a), p))?,
+        27 => wide(8).map(|(a, p)| (Some(a), p))?,
+        31 => (None, pos + 1),
+        // 28–30 are reserved.
+        _ => return None,
+    };
+    Some((initial >> 5, argument, next))
+}
+
+/// Whether CBOR `bytes` stay within `max` levels: each array, map and tag is
+/// one, and so is the CBOR a tag wraps in a byte string. It walks the bytes
+/// without recursing, one head at a time.
+///
+/// What isn't well-formed ends the walk, as it ends any decoder there too.
+/// Inside a wrapped byte string it only means those bytes aren't CBOR (a big
+/// number's, say), and the walk goes on after them.
+fn nests_within(bytes: &[u8], max: usize) -> bool {
+    let mut levels = vec![Level::Items(Some(1))];
+    let mut pos = 0;
+    let mut limit = bytes.len();
+    while let Some(level) = levels.last() {
+        match *level {
+            Level::Items(Some(0)) => {
+                levels.pop();
+                continue;
+            }
+            Level::Wrapped { end, outer } => {
+                (pos, limit) = (end, outer);
+                levels.pop();
+                continue;
+            }
+            _ => {}
+        }
+        match cbor_step(bytes, pos, limit, &mut levels) {
+            Some(next) => (pos, limit) = next,
+            None => {
+                let Some(i) = levels
+                    .iter()
+                    .rposition(|l| matches!(l, Level::Wrapped { .. }))
+                else {
+                    return true;
+                };
+                let Level::Wrapped { end, outer } = levels[i] else {
+                    unreachable!("found as wrapped")
+                };
+                levels.truncate(i);
+                (pos, limit) = (end, outer);
+                continue;
+            }
+        }
+        // The first level is the whole item's, not a nesting.
+        if levels.len() > max + 1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Reads the item at `pos` for the innermost open level, opening a level
+/// for an array, a map, a tag or a wrapped byte string, whose bytes end at
+/// `limit`. Where the walk goes next and where the bytes it's in end, or
+/// `None` for bytes that aren't well-formed CBOR.
+fn cbor_step(
+    bytes: &[u8],
+    pos: usize,
+    limit: usize,
+    levels: &mut Vec<Level>,
+) -> Option<(usize, usize)> {
+    let bytes = &bytes[..limit];
+    if *bytes.get(pos)? == 0xff {
+        // A break closes an indefinite array, map or string.
+        return match levels.last() {
+            Some(Level::Items(None)) => {
+                levels.pop();
+                Some((pos + 1, limit))
+            }
+            _ => None,
+        };
+    }
+    let after_tag = matches!(levels.last(), Some(Level::Tag));
+    match levels.last_mut() {
+        Some(Level::Items(Some(n))) => *n -= 1,
+        // The tag's level stays open until its item is read.
+        Some(level @ Level::Tag) => *level = Level::Items(Some(0)),
+        _ => {}
+    }
+    let (major, argument, next) = cbor_head(bytes, pos)?;
+    let opened = match (major, argument) {
+        (0 | 1 | 7, Some(_)) => None,
+        (2 | 3, Some(length)) => {
+            let end = usize::try_from(length)
+                .ok()
+                .and_then(|l| next.checked_add(l))
+                .filter(|end| *end <= limit)?;
+            if major == 2 && after_tag {
+                levels.push(Level::Wrapped { end, outer: limit });
+                levels.push(Level::Items(Some(1)));
+                return Some((next, end));
+            }
+            return Some((end, limit));
+        }
+        // An indefinite string's chunks, until a break.
+        (2 | 3, None) => Some(Level::Items(None)),
+        (4, length) => Some(Level::Items(length)),
+        (5, length) => Some(Level::Items(length.map(|n| n.saturating_mul(2)))),
+        (6, Some(_)) => Some(Level::Tag),
+        _ => return None,
+    };
+    levels.extend(opened);
+    Some((next, limit))
+}
+
+/// Refuses a site's CBOR that nests deeper than [`MAX_NESTING`], before
+/// anything decodes it.
+fn check_nesting(bytes: &[u8]) -> Result<()> {
+    if !nests_within(bytes, MAX_NESTING) {
+        bail!(
+            "The wallet can't read this transaction: its data is nested more than {MAX_NESTING} levels deep."
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // What a dApp's transaction does
 // ---------------------------------------------------------------------------
 
@@ -683,8 +851,12 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     let network = address_network(flag);
     let network_name = if flag { "preprod" } else { "mainnet" };
     let other_name = if flag { "mainnet" } else { "a test network" };
-    let bytes =
-        hex::decode(request.tx_cbor.trim()).map_err(|_| anyhow!("The transaction isn't hex."))?;
+    let text = request.tx_cbor.trim();
+    if text.len() > 2 * MAX_TX_BYTES {
+        bail!("The wallet can't read this transaction: it's far larger than Cardano allows.");
+    }
+    let bytes = hex::decode(text).map_err(|_| anyhow!("The transaction isn't hex."))?;
+    check_nesting(&bytes)?;
     let tx = conway::Tx::decode_fragment(&bytes)
         .map_err(|e| anyhow!("The wallet can't read this transaction: {e}"))?;
     let tx_hash = build::tx_id(&bytes)?;
@@ -1183,7 +1355,9 @@ fn raw_map<'b>(d: &mut minicbor::Decoder<'b>) -> Result<Vec<(u64, &'b [u8])>> {
         .map()
         .map_err(|e| anyhow!("a witness set is a map: {e}"))?
         .ok_or_else(|| anyhow!("an indefinite-length witness set isn't supported"))?;
-    let mut out = Vec::with_capacity(entries as usize);
+    // Not sized by `entries`: whoever wrote the bytes chose it, and a huge
+    // one would abort WebAssembly. Each entry needs bytes to be read.
+    let mut out = Vec::new();
     for _ in 0..entries {
         let key = d
             .u64()
@@ -1205,7 +1379,7 @@ fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
         .array()
         .map_err(|e| anyhow!("vkey witnesses are a list: {e}"))?
         .ok_or_else(|| anyhow!("an indefinite-length witness list isn't supported"))?;
-    let mut items = Vec::with_capacity(n as usize);
+    let mut items = Vec::new();
     for _ in 0..n {
         items.push(raw_item(&mut d)?);
     }
@@ -1223,6 +1397,8 @@ fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
 pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String> {
     let tx = hex::decode(tx_cbor.trim())?;
     let added = hex::decode(witness_set.trim())?;
+    check_nesting(&tx)?;
+    check_nesting(&added)?;
 
     let mut d = minicbor::Decoder::new(&tx);
     if d.array()
