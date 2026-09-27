@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
-import type { LovejoinHeld, PendingTx, SessionView } from "../src/shared/rpc";
+import type { LovejoinHeld, PendingTx, SessionOutSummary, SessionView, SwapLovejoin, SwapQuote } from "../src/shared/rpc";
 import { HandleWarning } from "../src/ui/components/HandleWarning";
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
 import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
@@ -21,11 +21,14 @@ import { Chains, detailOf as lovejoinDetail, NotMixed, PrivateReview, PublicRevi
 import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
 import {
   isRunningSwap,
+  LovejoinChoice,
   LovejoinCost,
   pairOf,
   pauseText,
   Plan,
   Session,
+  StopDialog,
+  SwapApproval,
   SwapRow,
   TokenSelect,
   Unverified,
@@ -213,7 +216,7 @@ describe("a swap's approval (launch review #21, #26)", () => {
   it("says the least is what the wallet asks Minswap for, and Minswap builds the order", () => {
     const plan = text(createElement(Plan, { least: "4.158 tUSDM", lovejoin: false, adaOut: false }));
     expect(plan).toContain("Minswap builds it, asked for at least 4.158 tUSDM");
-    expect(plan).toContain("The proceeds and everything left");
+    expect(plan).toContain("The proceeds and everything left, directly");
   });
 
   it("no longer says a token→ADA swap's proceeds come back at once when Lovejoin takes them", () => {
@@ -226,19 +229,128 @@ describe("a swap's approval (launch review #21, #26)", () => {
   });
 
   it("shows what bringing it back through Lovejoin is expected to cost, and that Lovejoin has had no audit", () => {
-    const lovejoin = { boxes: 4, depth: 2, mixes: 16, mixFees: "15200000", withdrawFees: "1200000", delay: "1-6" };
+    const lovejoin = { boxes: 4, depth: 2, mixes: 16, mixFees: "15200000", withdrawFees: "1200000", delay: "1-6", on: true };
     const line = text(createElement(LovejoinCost, { lovejoin, adaOut: true }));
     expect(line).toContain("Boxes of 10 ₳ About 4, at most");
     expect(line).toContain("Mix fees, about 15.2 ₳");
     expect(line).toContain("Bringing them back, about 1.2 ₳");
-    expect(line).toContain("the proceeds and ADA to spare go through Lovejoin first: about 4 boxes of 10 ₳ (at most");
+    expect(line).toContain("the proceeds and ADA to spare go through Lovejoin first: about 4 boxes of 10 ₳ (at most: the pool may take fewer, or none)");
+    expect(line).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep)");
+    expect(line).toContain("Settings, Lovejoin sets how deep and how long, or turns it off.");
     expect(line).toContain("Lovejoin hasn't had a third-party audit");
+    // As many as the pool has room for at Review (privacy review §2.7).
+    const capped = text(createElement(LovejoinCost, { lovejoin: { ...lovejoin, boxes: 2, of: 4 }, adaOut: true }));
+    expect(capped).toContain("Boxes of 10 ₳ About 2 of 4, as the pool is now");
+    expect(capped).toContain("about 2 boxes of 10 ₳ of the 4 its ADA pays for, as many as Lovejoin's pool has room for now");
   });
 
   it("says which check what Minswap built failed", () => {
     expect(pauseText({ at: 0, why: "refused", detail: "it places no order." }, "1", undefined)).toBe(
       "The wallet won't sign what Minswap built: it places no order. Try again asks Minswap to build it afresh.",
     );
+  });
+});
+
+describe("a swap's way back, on its approval and at Stop (privacy review §2.7, §2.8, §4.1)", () => {
+  const through: SwapLovejoin = { boxes: 3, depth: 2, mixes: 12, mixFees: "11400000", withdrawFees: "900000", delay: "1-6", on: true };
+  const quote: SwapQuote = {
+    network: "preprod",
+    ask: { amount: "10000000", tokenIn: "lovelace", tokenOut: TUSDM, slippage: 1 },
+    amountIn: "10000000",
+    amountOut: "4200000",
+    minAmountOut: "4158000",
+    dexFee: "2000000",
+    deposits: "2000000",
+    aggregatorFee: "0",
+    priceImpact: 0.3,
+    route: ["MinswapV2"],
+    fund: { lovelace: "16000000", tokens: [] },
+    collateral: "5000000",
+    verified: true,
+  };
+  const summary: SessionOutSummary = {
+    network: "preprod",
+    txHash: "ab".repeat(32),
+    index: 2,
+    address: "addr_test1" + "q".repeat(50),
+    payments: [
+      { address: "addr_test1" + "q".repeat(50), own: false, lovelace: "16000000", minimum: null, tokens: [] },
+      { address: "addr_test1" + "q".repeat(50), own: false, lovelace: "5000000", minimum: null, tokens: [] },
+    ],
+    max: false,
+    fee: { size: "0", compute: "0", scriptReference: "0", total: "400000" },
+    changeLovelace: "3600000",
+    changeTokens: 0,
+    changeOutputs: 1,
+    inputs: 1,
+    left: 0,
+  };
+  const pay = { id: "lovelace", side: { label: "₳", decimals: 6 } };
+  const get = { id: TUSDM, side: { label: "tUSDM", decimals: 6 } };
+  const approval = (lovejoin: SwapLovejoin | undefined, on = true) =>
+    text(createElement(SwapApproval, { summary, quote, lovejoin, pay, get, through: on, onThrough: () => undefined, busy: false }));
+  const choice = (lovejoin: SwapLovejoin, on = true) =>
+    renderToStaticMarkup(
+      createElement(LovejoinChoice, { lovejoin, adaOut: false, funded: "16000000", through: on, onThrough: () => undefined, busy: false }),
+    );
+
+  it("has a switch to bring it back directly, on as Settings has it, and says what each way costs", () => {
+    const on = choice(through);
+    expect(on).toMatch(/role="switch"[^>]*aria-checked="true"/);
+    expect(on).toContain("Bring it back through Lovejoin");
+    expect(choice(through, false)).toMatch(/role="switch"[^>]*aria-checked="false"/);
+    const line = approval(through);
+    expect(line).toContain("On the way back, through Lovejoin");
+    expect(line).toContain("Spare ADA through Lovejoin first");
+    // Off: it all comes back at once, and it says what that ties.
+    const off = approval(through, false);
+    expect(off).not.toContain("On the way back, through Lovejoin");
+    expect(off).toContain("It all comes back at once, directly: anyone can tie it on chain to this session and its funding");
+    expect(off).toContain("The proceeds and everything left, directly");
+    expect(off).not.toContain("third-party audit");
+  });
+
+  it("says a stop or a refund brings an ADA swap's funding back through Lovejoin, and that Lovejoin has had no audit", () => {
+    const line = approval({ ...through, boxes: 0, mixes: 0, mixFees: "0", withdrawFees: "0", ifStopped: { boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" } });
+    expect(line).toContain("Bring it back through Lovejoin");
+    expect(line).toContain(
+      "If you stop it, or Minswap refunds the order, its 16 ₳ come back instead, through Lovejoin first: about 1 box of 10 ₳ (at most: the pool may take fewer, or none), mixed in 4 mixes for about 3.8 ₳ in fees",
+    );
+    expect(line).toContain("Lovejoin hasn't had a third-party audit");
+    expect(line).not.toContain("Less than a box's worth");
+  });
+
+  it("says the pool takes nothing now, and doesn't promise Lovejoin", () => {
+    const line = approval({
+      ...through,
+      boxes: 0,
+      of: 3,
+      mixes: 0,
+      skipped: "Right now Lovejoin's pool holds 12 boxes that aren't yours, under the 30 it needs",
+    });
+    expect(line).toContain(
+      "Right now Lovejoin's pool holds 12 boxes that aren't yours, under the 30 it needs, so this swap's ADA would come back directly, tied to this session on chain.",
+    );
+    expect(line).not.toContain("On the way back, through Lovejoin");
+    expect(line).toContain("The proceeds and everything left, directly");
+  });
+
+  it("offers Stop through Lovejoin, with what it takes, or directly", () => {
+    const dialog = (cost: SwapLovejoin | null | undefined, placed = false) =>
+      text(createElement(StopDialog, { placed, cost, busy: false, onStop: () => undefined, onClose: () => undefined }));
+    const mixes = dialog({ ...through, boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" });
+    expect(mixes).toContain("Stop, through Lovejoin");
+    expect(mixes).toContain("Stop and bring it back directly");
+    expect(mixes).toContain("Its ADA goes through Lovejoin first: about 1 box of 10 ₳");
+    expect(mixes).toContain("for about 3.8 ₳ in fees, which the session pays, and about 0.3 ₳ to bring them back, each on its own after 1 to 6 hours");
+    // Directly: as it always said.
+    const direct = dialog(null);
+    expect(direct).toContain("Stop the swap");
+    expect(direct).not.toContain("bring it back directly");
+    expect(direct).toContain("No order is placed. Everything comes back into your private balance, less the return's network fee.");
+    const short = dialog({ ...through, boxes: 0, skipped: "Right now Lovejoin's pool holds 3 boxes that aren't yours, under the 30 it needs" }, true);
+    expect(short).toContain("Stop the swap");
+    expect(short).toContain("under the 30 it needs, so it would come back directly");
   });
 });
 

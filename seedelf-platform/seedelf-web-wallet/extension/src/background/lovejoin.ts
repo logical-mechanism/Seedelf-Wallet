@@ -61,8 +61,9 @@
 // at each unlock, only on a network where the wallet has something open in
 // Lovejoin: boxes on their way back, a chain, boxes not mixed yet (a
 // restored wallet finds its boxes when the Lovejoin tile opens, and opening
-// it with nothing there keeps no record, privacy review §2.18); a withdraw
-// is giveme.my plus one submit.
+// it with nothing there keeps no record, privacy review §2.18); one at a
+// swap's review, when its return would go through Lovejoin, used again for
+// five minutes (room, §2.7); a withdraw is giveme.my plus one submit.
 
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
 import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
@@ -693,6 +694,9 @@ function moveDue(s: Schedule, from: number, to: number, mark?: (m: DueMark) => v
 const empty = (s: Schedule) =>
   !s.due.length && !s.chains.length && !s.notMixed && !s.withdrawing && !Object.keys(s.leaves ?? {}).length;
 
+/** How long a swap's review uses a reading of the pool again (room): reviews in a row ask Koios once. */
+export const POOL_ROOM_MS = 5 * 60_000;
+
 /** A whole number of boxes, one to MAX_MIX_BOXES, or why not. */
 export function checkBoxes(boxes: number): void {
   if (!Number.isInteger(boxes) || boxes < 1 || boxes > MAX_MIX_BOXES) {
@@ -705,6 +709,8 @@ export class LovejoinService {
   private pumping = false;
   /** One task at a time on each record (inTurn). */
   private turns = new Map<string, Promise<unknown>>();
+  /** The pool as a swap's review last read it, by network (room). */
+  private rooms = new Map<NetworkName, { at: number; room: { others: number; free: number } }>();
 
   constructor(private readonly deps: LovejoinDeps) {}
 
@@ -784,6 +790,27 @@ export class LovejoinService {
     const { others, reserved } = await this.split(network);
     this.floor(network, others.length);
     await this.enough(free(others, reserved).length, boxes);
+  }
+
+  /**
+   * Lovejoin's pool as a swap's review sees it (privacy review §2.7): the
+   * real boxes in it that aren't the wallet's (`others`, what the floor
+   * counts), and those no chain of the wallet's will spend (`free`, what a
+   * mix draws from). One pool read, used again for POOL_ROOM_MS, so reviews
+   * in a row ask Koios once. Never throws: a pool it can't read says
+   * nothing, and a return reads it again anyway.
+   */
+  async room(network: NetworkName): Promise<{ others: number; free: number } | undefined> {
+    const kept = this.rooms.get(network);
+    if (kept && this.deps.now() - kept.at < POOL_ROOM_MS) return kept.room;
+    try {
+      const { others, reserved } = await this.split(network);
+      const room = { others: others.length, free: free(others, reserved).length };
+      this.rooms.set(network, { at: this.deps.now(), room });
+      return room;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

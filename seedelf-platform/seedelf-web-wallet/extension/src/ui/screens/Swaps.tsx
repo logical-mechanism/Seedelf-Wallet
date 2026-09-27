@@ -33,6 +33,7 @@ import type {
   SessionTxReview,
   SessionView,
   SwapAsk,
+  SwapLovejoin,
   SwapQuote,
   SwapSide,
   SwapTokenInfo,
@@ -47,6 +48,7 @@ import {
   delayText,
   IntoRow,
   LOVEJOIN_UNAUDITED,
+  lovejoinHides,
   LovejoinNote,
   LovejoinRows,
   LovejoinSkipped,
@@ -530,7 +532,6 @@ function NewSwap({
   /** The funding was sent: session `index` runs from here. */
   onStarted: (index: number, pending: PendingTx) => void;
 }) {
-  const network = useNetwork();
   const [pay, setPay] = useState<Pick>(ADA_PICK);
   const [get, setGet] = useState<Pick>();
   const [amount, setAmount] = useState("");
@@ -547,7 +548,9 @@ function NewSwap({
   const [details, setDetails] = useState(false);
   const [inverted, setInverted] = useState(false);
   const [price, setPrice] = useState<AdaPrice | null>(null);
-  const [out, setOut] = useState<{ summary: SessionOutSummary; quote: SwapQuote }>();
+  const [out, setOut] = useState<{ summary: SessionOutSummary; quote: SwapQuote; lovejoin?: SwapLovejoin }>();
+  // The approval's switch: through Lovejoin, as Settings starts it, or directly (privacy review §4.1).
+  const [through, setThrough] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -645,8 +648,9 @@ function NewSwap({
         // The form now says what's short.
         if (adaShort(seedelf.lovelace, quote)) return;
       }
-      const summary = await call("session-out-build", { quote, display: { in: pay.side, out: get.side } });
-      setOut({ summary, quote });
+      const { lovejoin, ...summary } = await call("session-out-build", { quote, display: { in: pay.side, out: get.side } });
+      setThrough(lovejoin?.on ?? false);
+      setOut({ summary, quote, lovejoin });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -659,7 +663,9 @@ function NewSwap({
     setBusy(true);
     setError(undefined);
     try {
-      onStarted(out.summary.index, await call("session-out-submit", { txHash: out.summary.txHash }));
+      // What the approval says of Lovejoin is kept with the swap: it comes back that way.
+      const direct = out.lovejoin ? { direct: !through } : {};
+      onStarted(out.summary.index, await call("session-out-submit", { txHash: out.summary.txHash, ...direct }));
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -667,12 +673,6 @@ function NewSwap({
   }
 
   if (out && get) {
-    const { summary, quote } = out;
-    const [swapPart, collateral] = summary.payments;
-    const got = get.id === "lovelace" ? undefined : tokenText(network, tokenOf(get.id));
-    // What the worker says bringing the session back through Lovejoin takes (Settings, Lovejoin), when it's on and pays for a box.
-    const lovejoin = quote.lovejoin && quote.lovejoin.boxes > 0 ? quote.lovejoin : undefined;
-    const adaOut = quote.ask.tokenOut === "lovelace";
     return (
       <Screen
         title="Review the swap"
@@ -687,60 +687,7 @@ function NewSwap({
           </button>
         }
       >
-        <div className="swap-summary" data-testid="swap-summary">
-          <div className="swap-summary__row">
-            <SwapAvatar pick={pay} />
-            <span className="swap-summary__label">You pay</span>
-            <span className="swap-summary__amount">{amountOf(quote.amountIn, pay)}</span>
-          </div>
-          <div className="swap-summary__row">
-            <SwapAvatar pick={get} />
-            <span className="swap-summary__label">You receive</span>
-            <span className="swap-summary__amount">≈ {amountOf(quote.amountOut, get)}</span>
-          </div>
-          <p className="swap-summary__foot">
-            Asks for at least {amountOf(quote.minAmountOut, get)} · {formatPercent(quote.priceImpact)} price impact · through{" "}
-            {quote.route.join(", ")}
-          </p>
-          {got && !got.listed && quote.verified && (
-            <p className="swap-summary__foot" data-testid="swap-out-unlisted">
-              {got.label} isn't on the wallet's list: Minswap verifies it, by its ID ({got.fingerprint}).
-            </p>
-          )}
-        </div>
-        <h2>First, a one-time account is funded</h2>
-        <ReviewRows testId="swap-fund-review">
-          <Row label="To" value={`Private session ${summary.index + 1}`} strong />
-          <Row label="Account" value={shortHex(summary.address, 16, 8)} title={summary.address} />
-          <Row label="For the swap" value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} strong />
-          <Row label="Its collateral" value={`${formatAda(collateral!.lovelace)} ₳`} />
-          <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-          <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
-        </ReviewRows>
-        <h2>Then it runs by itself</h2>
-        <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={!!lovejoin} adaOut={adaOut} />
-        <p className="note" data-testid="swap-approves">
-          Send approves all of it: the wallet asks Minswap for an order of at least {amountOf(quote.minAmountOut, get)},
-          Minswap builds it, and the wallet places it and brings everything back without asking again. Before it signs,
-          it checks that what Minswap built pays only this session, an order for it and Minswap's fee; the order's minimum
-          it can't read, so that's Minswap's to build as asked. If the price moves so that the order can't give that much,
-          it pauses and asks you. Stop is there until it's done.
-        </p>
-        <p className="note">
-          What the swap doesn't use, the collateral and the order's deposit come back with the proceeds. Three
-          transactions, each with its network fee: that's the cost of keeping your public account out of it.
-        </p>
-        {lovejoin && <LovejoinCost lovejoin={lovejoin} adaOut={adaOut} />}
-        {quote.lovejoin && !lovejoin && (
-          <p className="note" data-testid="swap-lovejoin">
-            Less than a box's worth of ADA is spare, so none of it goes through Lovejoin: it all comes back at once.
-          </p>
-        )}
-        <Callout tone="privacy">
-          This payment links the private UTxOs it spends to the one-time account, as Make public does. The account then
-          links to Minswap and back again.
-        </Callout>
-        <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
+        <SwapApproval {...out} pay={pay} get={get} through={through} onThrough={setThrough} busy={busy} />
       </Screen>
     );
   }
@@ -998,6 +945,105 @@ function NewSwap({
 }
 
 /**
+ * A swap's approval, under its Send: the swap, the funding payment, what
+ * then happens by itself, and how it comes back (LovejoinChoice).
+ * `lovejoin`: the quote's Lovejoin, checked against the pool at Review.
+ */
+export function SwapApproval({
+  summary,
+  quote,
+  lovejoin: l,
+  pay,
+  get,
+  through,
+  onThrough,
+  busy,
+}: {
+  summary: SessionOutSummary;
+  quote: SwapQuote;
+  lovejoin?: SwapLovejoin;
+  pay: Pick;
+  get: Pick;
+  through: boolean;
+  onThrough: (through: boolean) => void;
+  busy: boolean;
+}) {
+  const network = useNetwork();
+  const [swapPart, collateral] = summary.payments;
+  const got = get.id === "lovelace" ? undefined : tokenText(network, tokenOf(get.id));
+  const adaOut = quote.ask.tokenOut === "lovelace";
+  // Lovejoin would take something, now or after a stop or a refund: the approval says which way it comes back.
+  const any = !!l && (l.boxes > 0 || !!l.of || !!l.ifStopped);
+  return (
+    <>
+      <div className="swap-summary" data-testid="swap-summary">
+        <div className="swap-summary__row">
+          <SwapAvatar pick={pay} />
+          <span className="swap-summary__label">You pay</span>
+          <span className="swap-summary__amount">{amountOf(quote.amountIn, pay)}</span>
+        </div>
+        <div className="swap-summary__row">
+          <SwapAvatar pick={get} />
+          <span className="swap-summary__label">You receive</span>
+          <span className="swap-summary__amount">≈ {amountOf(quote.amountOut, get)}</span>
+        </div>
+        <p className="swap-summary__foot">
+          Asks for at least {amountOf(quote.minAmountOut, get)} · {formatPercent(quote.priceImpact)} price impact · through{" "}
+          {quote.route.join(", ")}
+        </p>
+        {got && !got.listed && quote.verified && (
+          <p className="swap-summary__foot" data-testid="swap-out-unlisted">
+            {got.label} isn't on the wallet's list: Minswap verifies it, by its ID ({got.fingerprint}).
+          </p>
+        )}
+      </div>
+      <h2>First, a one-time account is funded</h2>
+      <ReviewRows testId="swap-fund-review">
+        <Row label="To" value={`Private session ${summary.index + 1}`} strong />
+        <Row label="Account" value={shortHex(summary.address, 16, 8)} title={summary.address} />
+        <Row label="For the swap" value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} strong />
+        <Row label="Its collateral" value={`${formatAda(collateral!.lovelace)} ₳`} />
+        <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
+        <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
+      </ReviewRows>
+      <h2>Then it runs by itself</h2>
+      <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={any && through && !l!.skipped && l!.boxes > 0} adaOut={adaOut} />
+      <p className="note" data-testid="swap-approves">
+        Send approves all of it: the wallet asks Minswap for an order of at least {amountOf(quote.minAmountOut, get)},
+        Minswap builds it, and the wallet places it and brings everything back without asking again. Before it signs, it
+        checks that what Minswap built pays only this session, an order for it and Minswap's fee; the order's minimum it
+        can't read, so that's Minswap's to build as asked. If the price moves so that the order can't give that much, it
+        pauses and asks you. Stop is there until it's done.
+      </p>
+      <p className="note">
+        What the swap doesn't use, the collateral and the order's deposit come back with the proceeds. Three transactions,
+        each with its network fee: that's the cost of keeping your public account out of the swap's own transactions.
+      </p>
+      {any && (
+        <LovejoinChoice
+          lovejoin={l!}
+          adaOut={adaOut}
+          funded={quote.fund.lovelace}
+          through={through}
+          onThrough={onThrough}
+          busy={busy}
+        />
+      )}
+      {l && !any && (
+        <p className="note" data-testid="swap-lovejoin">
+          Less than a box's worth of ADA is spare, so none of it goes through Lovejoin: it all comes back at once.
+        </p>
+      )}
+      <Callout tone="privacy">
+        This payment links the private UTxOs it spends to the one-time account, as Make public does. The account then links
+        to Minswap and back again.
+      </Callout>
+      <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
+    </>
+  );
+}
+
+/**
  * What happens after Send, as the swap's own page then shows it: the
  * timeline's four steps, none taken yet. `lovejoin`: the return goes through
  * Lovejoin first; `adaOut`: the proceeds are ADA, so they go through it too.
@@ -1010,7 +1056,7 @@ export function Plan({ least, lovejoin, adaOut }: { least: string; lovejoin: boo
     [
       "Back in your private balance",
       !lovejoin
-        ? "The proceeds and everything left"
+        ? "The proceeds and everything left, directly"
         : adaOut
           ? "The proceeds and spare ADA through Lovejoin first, in boxes that come back later; the rest at once"
           : "Spare ADA through Lovejoin first, in boxes that come back later; the proceeds and the rest at once",
@@ -1034,29 +1080,109 @@ export function Plan({ least, lovejoin, adaOut }: { least: string; lovejoin: boo
 }
 
 /**
- * What bringing the session back through Lovejoin is expected to take, from
- * the worker's quote: the boxes (at most: the pool may take fewer), their
- * mixes and fees, and the fees to bring each back, after its wait. The
- * proceeds go through it too when they're ADA (launch review #26).
+ * How a swap comes back, on its approval (privacy review §4.1): a switch,
+ * through Lovejoin as Settings starts it, or directly, kept with the swap.
+ * Through it: what that takes (LovejoinCost), what a stop or a refund of an
+ * ADA swap's order would take instead, since its whole funding then comes
+ * back (`ifStopped`, §2.8), or why Lovejoin's pool takes nothing now
+ * (`skipped`, §2.7). `funded`: the funding's ADA for the swap.
  */
-export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: NonNullable<SwapQuote["lovejoin"]>; adaOut: boolean }) {
+export function LovejoinChoice({
+  lovejoin: l,
+  adaOut,
+  funded,
+  through,
+  onThrough,
+  busy,
+}: {
+  lovejoin: SwapLovejoin;
+  adaOut: boolean;
+  funded: string;
+  through: boolean;
+  onThrough: (through: boolean) => void;
+  busy: boolean;
+}) {
+  const cost = through && !l.skipped && l.boxes > 0;
+  const stopped = through && !l.skipped ? l.ifStopped : undefined;
+  return (
+    <>
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="swap-lovejoin-label">Bring it back through Lovejoin</span>
+          <span className="note" id="swap-lovejoin-note" data-testid="swap-lovejoin-choice">
+            {through
+              ? "Its spare ADA is mixed with other people's on the way back, so what comes back is harder to tie to this session."
+              : "It all comes back at once, directly: anyone can tie it on chain to this session and its funding. Your public account stays out either way."}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={through}
+          aria-labelledby="swap-lovejoin-label"
+          aria-describedby="swap-lovejoin-note"
+          onClick={() => onThrough(!through)}
+          disabled={busy}
+          data-testid="swap-lovejoin-switch"
+        />
+      </div>
+      {through && l.skipped && (
+        <Callout tone="warn" testId="swap-lovejoin-pool">
+          {l.skipped}, so this swap's ADA would come back directly, tied to this session on chain. The wallet looks again when
+          it brings it back: if the pool has room by then, it goes through Lovejoin.
+        </Callout>
+      )}
+      {cost && <LovejoinCost lovejoin={l} adaOut={adaOut} />}
+      {stopped && (
+        <p className="note" data-testid="swap-lovejoin-stopped">
+          If you stop it, or Minswap refunds the order, its {formatAda(funded)} ₳ come back instead, through Lovejoin first:{" "}
+          {boxesText(stopped)}, mixed in {plural(stopped.mixes, "mix", "mixes")} for about {formatAda(stopped.mixFees)} ₳
+          in fees, which the session pays, and about {formatAda(stopped.withdrawFees)} ₳ to bring them back, each after{" "}
+          {delayText(l.delay)}. Stop also lets you bring it back directly.
+        </p>
+      )}
+      {through && !cost && (
+        <p className="note" data-testid="lovejoin-unaudited">
+          {LOVEJOIN_UNAUDITED}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** About how many boxes of 10 ₳: at most, or as many as the pool has room for now (`of`: what the ADA pays for). */
+function boxesText(l: { boxes: number; of?: number }): string {
+  return l.of
+    ? `about ${plural(l.boxes, "box", "boxes")} of 10 ₳ of the ${l.of} its ADA pays for, as many as Lovejoin's pool has room for now (fewer, or none, if it has less by then)`
+    : `about ${plural(l.boxes, "box", "boxes")} of 10 ₳ (at most: the pool may take fewer, or none)`;
+}
+
+/**
+ * What bringing the session back through Lovejoin is expected to take, from
+ * the worker's quote: the boxes (at most: the pool may take fewer, or none;
+ * or as many as the pool has room for at Review), their mixes and fees, and
+ * the fees to bring each back, after its wait. The proceeds go through it
+ * too when they're ADA (launch review #26).
+ */
+export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; adaOut: boolean }) {
   return (
     <>
       <h2>On the way back, through Lovejoin</h2>
       <ReviewRows testId="swap-lovejoin-cost">
-        <Row label="Boxes of 10 ₳" value={`About ${l.boxes}, at most`} />
+        <Row label="Boxes of 10 ₳" value={l.of ? `About ${l.boxes} of ${l.of}, as the pool is now` : `About ${l.boxes}, at most`} />
         <Row label="Mixed" value={`${l.depth} ${l.depth === 1 ? "wave" : "waves"} deep, ${plural(l.mixes, "mix", "mixes")}`} />
         <Row label="Mix fees, about" value={`${formatAda(l.mixFees)} ₳`} />
         <Row label="Bringing them back, about" value={`${formatAda(l.withdrawFees)} ₳`} />
         <Row label="Back later" value={`Each box on its own, after ${delayText(l.delay)}`} />
       </ReviewRows>
       <p className="note" data-testid="swap-lovejoin">
-        On the way back, {adaOut ? "the proceeds and ADA to spare go" : "ADA to spare goes"} through Lovejoin first: about{" "}
-        {plural(l.boxes, "box", "boxes")} of 10 ₳ (at most: the pool may take fewer), mixed with other people's in{" "}
-        {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳ in fees, which the session pays. Each box comes
-        back on its own after {delayText(l.delay)}, a few minutes into the first time the wallet is unlocked after that, for about{" "}
-        {formatAda(l.withdrawFees)} ₳ in fees all together. Less than a box's worth, and any tokens, come back at once.
-        Settings, Lovejoin sets how deep and how long, or turns it off.
+        On the way back, {adaOut ? "the proceeds and ADA to spare go" : "ADA to spare goes"} through Lovejoin first:{" "}
+        {boxesText(l)}, mixed with other people's in {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳ in
+        fees, which the session pays. {lovejoinHides(l.depth)} Each box comes back on its own after {delayText(l.delay)}, a
+        few minutes into the first time the wallet is unlocked after that, for about {formatAda(l.withdrawFees)} ₳ in fees
+        all together. Less than a box's worth, and any tokens, come back at once. Settings, Lovejoin sets how deep and how
+        long, or turns it off.
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED}
@@ -1331,6 +1457,8 @@ export function Session({
   const [review, setReview] = useState<SessionTxReview>();
   const [back, setBack] = useState<SessionBackSummary>();
   const [stopping, setStopping] = useState(false);
+  // What Stop brings back through Lovejoin, read as its dialog opens: null, directly.
+  const [stopCost, setStopCost] = useState<SwapLovejoin | null>();
   const [forgetting, setForgetting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -1562,6 +1690,12 @@ export function Session({
     const auto = s.auto;
     const done = s.stage === "closed";
     const placed = s.txs.some((t) => t.kind === "swap");
+    const openStop = () => {
+      setStopCost(undefined);
+      setStopping(true);
+      // A pool read the worker keeps five minutes; without it, Stop says only what it always did.
+      call("session-stop-cost", { index: s.index }).then(setStopCost, () => setStopCost(null));
+    };
     return (
       <Screen
         title={pairOf(s, network)}
@@ -1586,7 +1720,7 @@ export function Session({
               </button>
             </div>
           ) : auto.stopping ? null : (
-            <button type="button" className="secondary" onClick={() => setStopping(true)} disabled={busy}>
+            <button type="button" className="secondary" onClick={openStop} disabled={busy}>
               Stop
             </button>
           )
@@ -1632,37 +1766,18 @@ export function Session({
         <LeftBehindNote leftBehind={s.leftBehind} />
         {forgetModal}
         {stopping && (
-          <Modal
-            title="Stop this swap?"
-            titleId="session-stop-title"
+          <StopDialog
+            placed={placed}
+            cost={stopCost}
+            busy={busy}
             onClose={() => setStopping(false)}
-            foot={
-              <>
-                <button type="button" className="secondary" onClick={() => setStopping(false)} disabled={busy}>
-                  Keep going
-                </button>
-                <button
-                  type="button"
-                  className="danger"
-                  disabled={busy}
-                  onClick={() =>
-                    void act(async () => {
-                      setS(await call("session-stop", { index: s.index }));
-                      setStopping(false);
-                    })
-                  }
-                >
-                  {busy ? "Stopping…" : "Stop the swap"}
-                </button>
-              </>
+            onStop={(direct) =>
+              void act(async () => {
+                setS(await call("session-stop", { index: s.index, ...(direct ? { direct } : {}) }));
+                setStopping(false);
+              })
             }
-          >
-            <p className="note">
-              {placed
-                ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance. The cancel and the return each cost a network fee."
-                : "No order is placed. Everything comes back into your private balance, less the return's network fee."}
-            </p>
-          </Modal>
+          />
         )}
       </Screen>
     );
@@ -1697,6 +1812,70 @@ export function Session({
         {nextStep(s, swapped, waiting)}
       </p>
     </Screen>
+  );
+}
+
+/**
+ * Stop's dialog (privacy review §2.8, §4.1): what stopping does, and when it
+ * comes back through Lovejoin, what that takes as the worker works it out
+ * now (`cost`: undefined while it's read, null when it comes back
+ * directly), with the way to bring it back directly instead.
+ */
+export function StopDialog({
+  placed,
+  cost,
+  busy,
+  onStop,
+  onClose,
+}: {
+  placed: boolean;
+  cost?: SwapLovejoin | null;
+  busy: boolean;
+  onStop: (direct: boolean) => void;
+  onClose: () => void;
+}) {
+  const mixes = !!cost && !cost.skipped && cost.boxes > 0;
+  return (
+    <Modal
+      title="Stop this swap?"
+      titleId="session-stop-title"
+      onClose={onClose}
+      foot={
+        <>
+          <button type="button" className="secondary" onClick={onClose} disabled={busy}>
+            Keep going
+          </button>
+          <button type="button" className="danger" disabled={busy} onClick={() => onStop(false)}>
+            {busy ? "Stopping…" : mixes ? "Stop, through Lovejoin" : "Stop the swap"}
+          </button>
+        </>
+      }
+    >
+      <p className="note" data-testid="session-stop-what">
+        {mixes
+          ? `${placed ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance." : "No order is placed. Everything comes back into your private balance."} Its ADA goes through Lovejoin first: ${boxesText(cost)}, mixed in ${plural(cost.mixes, "mix", "mixes")} for about ${formatAda(cost.mixFees)} ₳ in fees, which the session pays, and about ${formatAda(cost.withdrawFees)} ₳ to bring them back, each on its own after ${delayText(cost.delay)}.${placed ? " The cancel costs a network fee too." : ""}`
+          : placed
+            ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance. The cancel and the return each cost a network fee."
+            : "No order is placed. Everything comes back into your private balance, less the return's network fee."}
+      </p>
+      {cost?.skipped && (
+        <p className="note" data-testid="session-stop-pool">
+          {cost.skipped}, so it would come back directly, tied to this session on chain.
+        </p>
+      )}
+      {cost === undefined && <p className="note">Working out what goes through Lovejoin…</p>}
+      {mixes && (
+        <div className="stack-tight">
+          <button type="button" className="link align-start" disabled={busy} onClick={() => onStop(true)} data-testid="session-stop-direct">
+            Stop and bring it back directly
+          </button>
+          <p className="note">
+            Directly, it all comes back at once, for the return's network fee alone, and anyone can tie it on chain to this
+            session and its funding.
+          </p>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -1794,7 +1973,11 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     },
     {
       title: "Back in your private balance",
-      sub: s.lovejoinSkipped ? "Directly: Lovejoin was left out" : "Everything at the account, under fresh registers",
+      sub: s.lovejoinSkipped
+        ? "Directly: Lovejoin was left out"
+        : auto.direct
+          ? "Directly, as you chose: everything at the account, under fresh registers"
+          : "Everything at the account, under fresh registers",
       tx: tx("back"),
     },
   ];

@@ -340,7 +340,7 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
           <span className="note" id="lovejoin-returns-note" data-testid="lovejoin-returns-note">
             {on
               ? "A swap's approval, its Stop and each return you review can still bring that one back directly."
-              : `Off, a session's ADA comes back directly: anyone can tie it on chain to the session, and through its funding to the private UTxOs that paid for it. Your public account stays out either way. It saves each box's mixes (${depthCost(network, prefs.lovejoinDepth)}), about 0.3 ₳ to bring it back, and the hours of waiting. A mix from the Lovejoin tile still mixes.`}
+              : `Off, a session's ADA comes back directly: anyone can tie it on chain to the session, and through its funding to the private UTxOs that paid for it. Your public account stays out either way. It saves each box's mixes (${depthCost(network, prefs.lovejoinDepth)}), about 0.3 ₳ to bring it back, and the hours of waiting. A mix from the Lovejoin tile still mixes, and a swap comes back as its approval said.`}
           </span>
         </span>
         <button

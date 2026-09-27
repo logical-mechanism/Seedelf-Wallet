@@ -227,7 +227,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "session-out-build":
       return ctx.sessions.outBuild(ctx.network, message.quote, message.display);
     case "session-out-submit":
-      return ctx.sessions.outSubmit(ctx.network, message.txHash);
+      return ctx.sessions.outSubmit(ctx.network, message.txHash, message.direct);
     case "session-swap-build":
       return ctx.sessions.swapBuild(ctx.network, message.index);
     case "session-swap-submit":
@@ -255,7 +255,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "session-advance":
       return ctx.sessions.advance(ctx.network, message.index, message.now ?? false);
     case "session-stop":
-      return ctx.sessions.stop(ctx.network, message.index);
+      return ctx.sessions.stop(ctx.network, message.index, message.direct ?? false);
+    case "session-stop-cost":
+      return ctx.sessions.stopCost(ctx.network, message.index);
     case "session-resume":
       return ctx.sessions.resume(ctx.network, message.index);
     case "lovejoin-status":

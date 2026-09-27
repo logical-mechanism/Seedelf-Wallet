@@ -713,16 +713,49 @@ export interface SwapQuote {
    * can name a token like a known one: false, and the wallet won't fund it.
    */
   verified?: boolean;
+  /** Where Lovejoin is on, what bringing the session back through it is expected to take. */
+  lovejoin?: SwapLovejoin;
+}
+
+/**
+ * What bringing a swap's session back through Lovejoin is expected to take
+ * (Settings, Lovejoin): the 10 ₳ boxes its spare ADA pays for, the
+ * proceeds' too when they're ADA, at most (the pool may take fewer, or
+ * none); their `mixes` at `depth`, about `mixFees` all together; and about
+ * `withdrawFees` for them all to come back, each after a wait in `delay`
+ * (hours, "1-6"). Amounts in lovelace. No boxes: it all comes back at once.
+ */
+export interface SwapLovejoin {
+  boxes: number;
+  depth: number;
+  mixes: number;
+  mixFees: string;
+  withdrawFees: string;
+  delay: string;
   /**
-   * Where Lovejoin is on, what bringing the session back through it is
-   * expected to take (Settings, Lovejoin): the 10 ₳ boxes its spare ADA pays
-   * for, the proceeds' too when they're ADA, at most (the pool may take
-   * fewer); their `mixes` at `depth`, about `mixFees` all together; and
-   * about `withdrawFees` for them all to come back, each after a wait in
-   * `delay` (hours, "1-6"). Amounts in lovelace. No boxes: it all comes back
-   * at once.
+   * Whether Settings brings private sessions back through Lovejoin: the
+   * approval's switch starts there, and what it approves is kept (privacy
+   * review §4.1).
    */
-  lovejoin?: { boxes: number; depth: number; mixes: number; mixFees: string; withdrawFees: string; delay: string };
+  on: boolean;
+  /**
+   * Read at Review, from Lovejoin's pool (privacy review §2.7): the boxes the
+   * spare ADA pays for, when the pool has room for fewer (`boxes`).
+   */
+  of?: number;
+  /**
+   * Read at Review: why the pool takes no box now (under its floor, or too
+   * few boxes to mix with), so the return would come back directly. It's
+   * read again when the session comes back.
+   */
+  skipped?: string;
+  /**
+   * If the swap is stopped, or Minswap refunds or cancels its order, its
+   * funding's ADA comes back instead of the proceeds: what that takes
+   * through Lovejoin, when it's more boxes than the fill's (an ADA→token
+   * swap's principal, privacy review §2.8).
+   */
+  ifStopped?: { boxes: number; mixes: number; mixFees: string; withdrawFees: string; of?: number };
 }
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
@@ -758,6 +791,12 @@ export interface SessionAuto {
    * it doesn't go out the moment the wallet unlocks (privacy review §3.1).
    */
   waitsUntil?: number;
+  /**
+   * How it comes back, as the user approved it or chose at Stop (privacy
+   * review §4.1): true, directly; false, through Lovejoin. None on a swap
+   * from before: as Settings has it.
+   */
+  direct?: boolean;
 }
 
 /**
@@ -1137,9 +1176,17 @@ export interface Requests {
   /** Minswap's quote for a swap, with what a session for it is funded with. */
   "swap-quote": { payload: SwapAsk; result: SwapQuote };
   /** Builds the payment that funds a new session for `quote`, from the private balance, without sending it. */
-  "session-out-build": { payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide } }; result: SessionOutSummary };
-  /** Records the session, then submits its funding payment, if its hash matches. */
-  "session-out-submit": { payload: { txHash: string }; result: PendingTx };
+  "session-out-build": {
+    payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide } };
+    /** `lovejoin`: the quote's, checked against Lovejoin's pool as it is now (privacy review §2.7). */
+    result: SessionOutSummary & { lovejoin?: SwapLovejoin };
+  };
+  /**
+   * Records the session, then submits its funding payment, if its hash
+   * matches. `direct`: the approval's choice to bring it back without
+   * Lovejoin (true) or through it (false); Settings' when it's left out.
+   */
+  "session-out-submit": { payload: { txHash: string; direct?: boolean }; result: PendingTx };
   /** Has Minswap build the session's swap, freshly quoted, and reads it. */
   "session-swap-build": { payload: { index: number }; result: SessionTxReview };
   /** Signs the swap built last with the session's key and submits it. */
@@ -1211,8 +1258,13 @@ export interface Requests {
   "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number }; anyway?: boolean }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
   "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
-  /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */
-  "session-stop": { payload: { index: number }; result: SessionView };
+  /**
+   * Stops the swap: its order is cancelled, then everything comes back into
+   * the private balance (`direct`: not through Lovejoin, whatever was approved).
+   */
+  "session-stop": { payload: { index: number; direct?: boolean }; result: SessionView };
+  /** What Stop would bring back through Lovejoin, for its dialog; null when it comes back directly. */
+  "session-stop-cost": { payload: { index: number }; result: SwapLovejoin | null };
   /** Goes on after a pause or a failure: the step is tried again now. */
   "session-resume": { payload: { index: number }; result: SessionView };
 }
@@ -1305,6 +1357,7 @@ const REQUEST_LIST = [
   "session-claim-submit",
   "session-advance",
   "session-stop",
+  "session-stop-cost",
   "session-resume",
   "lovejoin-status",
   "lovejoin-withdraw-now",

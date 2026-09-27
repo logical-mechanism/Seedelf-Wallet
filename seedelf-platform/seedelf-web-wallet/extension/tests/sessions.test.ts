@@ -240,7 +240,8 @@ describe("a swap's quote", () => {
       minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
       lovejoin: t.lovejoin,
     });
-    // ADA for MIN: the tokens come back with their deposit, and the 2 ₳ of room pays for no box.
+    // ADA for MIN: the tokens come back with their deposit, and the 2 ₳ of room pays for no box. Stopped or
+    // refunded, its 16 ₳ of funding come back instead, and pay for one (privacy review §2.8).
     expect((await sessions.quote("preprod", ASK)).lovejoin).toEqual({
       boxes: 0,
       depth: 2,
@@ -248,6 +249,8 @@ describe("a swap's quote", () => {
       mixFees: "0",
       withdrawFees: "0",
       delay: "1-6",
+      on: true,
+      ifStopped: { boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" },
     });
     // MIN for 50 ₳: the proceeds, the deposit back and the room, 54 ₳, pay for 3 boxes at 13.8 ₳ each and the deposit.
     t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "50000000", min_amount_out: "49750000" };
@@ -259,6 +262,7 @@ describe("a swap's quote", () => {
       mixFees: "11400000",
       withdrawFees: "900000",
       delay: "1-6",
+      on: true,
     });
     // A large one: no more than one chain takes (MAX_CHAIN_MIXES, 32 boxes of 4 mixes).
     t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "906594100" };
@@ -269,9 +273,9 @@ describe("a swap's quote", () => {
     expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ boxes: MAX_DEPOSIT_BOXES, depth: 1, mixes: MAX_DEPOSIT_BOXES });
     // Where Lovejoin isn't, there's nothing to say.
     expect((await t.sessions.quote("preprod", selling)).lovejoin).toBeUndefined();
-    // Nor where Settings brings sessions back directly (privacy review §4.1).
+    // Where Settings brings sessions back directly, the approval's switch starts off (privacy review §4.1).
     await t.deps.preferences.set({ lovejoinReturns: false });
-    expect((await sessions.quote("preprod", selling)).lovejoin).toBeUndefined();
+    expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ on: false, boxes: MAX_DEPOSIT_BOXES });
   });
 
   it("leaves Splash out of routing on preprod, where Minswap builds its orders with a mainnet address", () => {

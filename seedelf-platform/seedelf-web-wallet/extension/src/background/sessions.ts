@@ -26,7 +26,10 @@
 // is what the wallet asks Minswap for, at least the least approved; Minswap
 // builds the order, and its minimum isn't read back. Anything else pauses for
 // the user. Stop is the user's alone: an order that waits is cancelled, then
-// everything comes back.
+// everything comes back. The approval also says how it comes back: through
+// Lovejoin (as Settings starts it, the pool read once at Review) or
+// directly, kept with the swap (`auto.direct`); Stop can make it direct
+// (privacy review §2.7, §2.8, §4.1).
 // Every transaction is recorded before it's submitted.
 //
 // A site's private session (chunk 15c, private CIP-30) is the same account,
@@ -44,7 +47,7 @@
 // session's account only while a swap runs or when asked: one Koios request
 // for all the open ones, and one tx_status for what's waiting.
 
-import type { NetworkName } from "../networks";
+import { NETWORKS, type NetworkName } from "../networks";
 import type {
   DappTxSummary,
   LeftBehindUtxo,
@@ -60,6 +63,7 @@ import type {
   SessionTxReview,
   SessionView,
   SwapAsk,
+  SwapLovejoin,
   SwapQuote,
   SwapSide,
   SwapTokenInfo,
@@ -79,6 +83,7 @@ import {
   checkBoxes,
   LovejoinSkipped,
   mayBeIn,
+  mixesPerBox,
   pumpChain,
   secureRandom,
   sentAlready,
@@ -193,6 +198,12 @@ interface AutoRecord {
    * at the next run after that unlock's, so it never waits for good.
    */
   unlockWait?: number;
+  /**
+   * How it comes back, as approved (privacy review §4.1): true, directly;
+   * false, through Lovejoin, whatever Settings says since. Stop can make it
+   * direct. None on a swap from before: as Settings has it.
+   */
+  direct?: boolean;
 }
 
 interface SessionRecord {
@@ -589,39 +600,66 @@ export class SessionService {
       );
     }
     const quote = quoteOf(network, checked, est);
+    // Worked out here, without the pool: that's read once, at Review (outBuild).
     const lovejoin = await this.lovejoinCost(network, quote);
     return { ...quote, verified: await this.verified(network, checked.tokenOut), ...(lovejoin ? { lovejoin } : {}) };
   }
 
   /**
-   * What bringing a swap's session back through Lovejoin is expected to take,
-   * where Lovejoin is on and Settings sends returns through it: the boxes its
-   * spare ADA pays for at the set depth,
-   * the proceeds' too when they're ADA (with the deposit back, and the room
-   * left over), their mixes (WebAssembly's MIX_FEE_ESTIMATE each) and their
-   * withdraws. At most: the pool may take fewer, and one chain takes no
-   * more than chainBoxes (MAX_CHAIN_MIXES, and what one deposit makes).
+   * What bringing a swap's session back through Lovejoin is expected to
+   * take, where Lovejoin is on, whichever way Settings has it (`on`: the
+   * approval's switch starts there): the boxes its spare ADA pays for at the
+   * set depth, the proceeds' too when they're ADA (with the deposit back,
+   * and the room left over), their mixes and their withdraws (priced). And,
+   * when it's more, what the funding's ADA takes instead, if the swap is
+   * stopped or its order refunded (`ifStopped`, privacy review §2.8).
+   * `pool`: at Review, as Lovejoin's pool has room for now, or why it has
+   * none (§2.7); read only when the return would go through it.
    */
-  private async lovejoinCost(network: NetworkName, quote: SwapQuote): Promise<SwapQuote["lovejoin"]> {
-    const lovejoin = this.deps.lovejoin;
-    if (!lovejoin?.available(network) || !(await this.throughLovejoin())) return undefined;
+  private async lovejoinCost(network: NetworkName, quote: SwapQuote, pool = false): Promise<SwapLovejoin | undefined> {
+    if (!this.deps.lovejoin?.available(network)) return undefined;
+    const on = await this.throughLovejoin();
+    const { price, skipped, depth, delay } = await this.priced(network, pool && on);
+    // A token's proceeds come back with its deposit, and aren't spare: tokens never go in.
+    const proceeds = quote.ask.tokenOut === "lovelace" ? BigInt(quote.amountOut) + BigInt(quote.deposits) : 0n;
+    const filled = price(proceeds + SWAP_MARGIN);
+    // Stopped, cancelled or refunded: the funding comes back instead. A token's carries the token, so none of it goes in.
+    const stopped = price(quote.ask.tokenIn === "lovelace" ? BigInt(quote.fund.lovelace) : 0n);
+    const more = (stopped.of ?? stopped.boxes) > (filled.of ?? filled.boxes);
+    return { ...filled, depth, delay, on, ...(skipped ? { skipped } : {}), ...(more ? { ifStopped: stopped } : {}) };
+  }
+
+  /**
+   * What spare ADA at a session's account pays for through Lovejoin at the
+   * set depth (`price`): its boxes, at most what one chain takes
+   * (chainBoxes: MAX_CHAIN_MIXES, and what one deposit makes), their mixes
+   * (WebAssembly's MIX_FEE_ESTIMATE each) and about what bringing them back
+   * takes. `pool`: also as Lovejoin's pool has room for now (room, a read
+   * kept five minutes), `of` the boxes the ADA pays for when that's fewer,
+   * and `skipped`, why it has none.
+   */
+  private async priced(network: NetworkName, pool: boolean) {
+    const lovejoin = this.deps.lovejoin!;
     // What each box more takes, and what the chain takes besides: the deposit and its change.
     const [one, two] = await Promise.all([lovejoin.funding(network, 1), lovejoin.funding(network, 2)]);
     const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
     const besides = BigInt(one.lovelace) - perBox;
-    // A token's proceeds come back with its deposit, and aren't spare: tokens never go in.
-    const proceeds = quote.ask.tokenOut === "lovelace" ? BigInt(quote.amountOut) + BigInt(quote.deposits) : 0n;
-    const spare = proceeds + SWAP_MARGIN;
-    const affordable = spare > besides ? Number((spare - besides) / perBox) : 0;
-    const boxes = Math.min(affordable, chainBoxes(one.depth));
-    return {
-      boxes,
-      depth: one.depth,
-      mixes: boxes * one.mixes,
-      mixFees: (BigInt(boxes) * BigInt(one.mixFees)).toString(),
-      withdrawFees: (BigInt(boxes) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),
-      delay: one.delay,
+    const room = pool ? await lovejoin.room(network) : undefined;
+    const skipped = room && poolShort(network, room, one.depth);
+    const fits = !room ? Infinity : skipped ? 0 : Math.floor(room.free / (mixesPerBox(one.depth) * 2));
+    const price = (spare: bigint) => {
+      const affordable = spare > besides ? Number((spare - besides) / perBox) : 0;
+      const pays = Math.min(affordable, chainBoxes(one.depth));
+      const boxes = Math.min(pays, fits);
+      return {
+        boxes,
+        mixes: boxes * one.mixes,
+        mixFees: (BigInt(boxes) * BigInt(one.mixFees)).toString(),
+        withdrawFees: (BigInt(boxes) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),
+        ...(boxes < pays ? { of: pays } : {}),
+      };
     };
+    return { price, skipped, depth: one.depth, delay: one.delay };
   }
 
   /**
@@ -644,7 +682,7 @@ export class SessionService {
     network: NetworkName,
     quote: SwapQuote,
     display?: { in: SwapSide; out: SwapSide },
-  ): Promise<SessionOutSummary> {
+  ): Promise<SessionOutSummary & { lovejoin?: SwapLovejoin }> {
     const ask = checkAsk(quote.ask);
     if (!(await this.verified(network, ask.tokenOut))) throw new Error(UNVERIFIED);
     const index = await this.freshIndex(network);
@@ -664,7 +702,9 @@ export class SessionService {
     const approved = { minAmountOut: quote.minAmountOut, fund: quote.fund, aggregatorFee: quote.aggregatorFee };
     const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved };
     await keep(this.deps, SESSION_OUT, kept);
-    return summary;
+    // Once, at Review, never as the user types: whether Lovejoin's pool takes the boxes now (privacy review §2.7).
+    const lovejoin = await this.lovejoinCost(network, quote, true);
+    return { ...summary, ...(lovejoin ? { lovejoin } : {}) };
   }
 
   /**
@@ -996,8 +1036,13 @@ export class SessionService {
     return { summary, txCbor, seed };
   }
 
-  /** Records the session, then sends its funding payment. From here the swap runs itself. */
-  outSubmit(network: NetworkName, txHash: string): Promise<PendingTx> {
+  /**
+   * Records the session, then sends its funding payment. From here the swap
+   * runs itself. `direct`: the approval's choice to bring it back without
+   * Lovejoin, or (false) through it; Settings' when there's none. Kept with
+   * it: what was approved stands (privacy review §4.1).
+   */
+  outSubmit(network: NetworkName, txHash: string, direct?: boolean): Promise<PendingTx> {
     return this.serial(async () => {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptOut>(SESSION_OUT));
@@ -1009,6 +1054,8 @@ export class SessionService {
       }
       const book = await this.book(network);
       if (built.index < book.next) throw new Error("That session was started already. Start a new one.");
+      // Where Lovejoin is, how it comes back is kept with it.
+      const back = this.deps.lovejoin?.available(network) ? { direct: direct ?? !(await this.throughLovejoin()) } : {};
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
         index: built.index,
@@ -1016,7 +1063,7 @@ export class SessionService {
         createdAt: now(),
         txs: [{ kind: "out", txHash, at: now() }],
         swap: built.swap,
-        auto: { approved: built.approved },
+        auto: { approved: built.approved, ...back },
       };
       await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
       let pending: PendingTx;
@@ -1211,12 +1258,17 @@ export class SessionService {
     });
   }
 
-  /** Stop, the user's alone: an order that waits is cancelled, then everything comes back. */
-  stop(network: NetworkName, index: number): Promise<SessionView> {
+  /**
+   * Stop, the user's alone: an order that waits is cancelled, then
+   * everything comes back. `direct`: not through Lovejoin, whatever was
+   * approved (privacy review §4.1).
+   */
+  stop(network: NetworkName, index: number, direct = false): Promise<SessionView> {
     return this.serial(async () => {
       await this.automatic(network, index);
       await this.update(network, index, (s) => {
         s.auto!.stopping ??= this.deps.now();
+        if (direct) s.auto!.direct = true;
         delete s.auto!.paused;
         delete s.auto!.retry;
       });
@@ -1224,6 +1276,24 @@ export class SessionService {
       await this.step(network, index, "asked");
       return this.one(network, index);
     });
+  }
+
+  /**
+   * What Stop brings back through Lovejoin, for its dialog (privacy review
+   * §2.8): the boxes the ADA at the session's account pays for, as its last
+   * reading found it, and until its order fills, its funding's ADA too (a
+   * cancel or a refund brings that back), all as Lovejoin's pool has room
+   * for now (a read kept five minutes). Null when it comes back directly:
+   * approved that way, or where Lovejoin isn't.
+   */
+  async stopCost(network: NetworkName, index: number): Promise<SwapLovejoin | null> {
+    const s = await this.automatic(network, index);
+    if (s.mix || !this.deps.lovejoin?.available(network) || !(await this.throughLovejoin(s))) return null;
+    const rows = this.seen.get(`${network}:${index}`);
+    const held = rows ? spareOf(returnable(s, rows)) : 0n;
+    const funded = s.swap?.tokenIn === "lovelace" && !s.auto!.filled ? BigInt(s.auto!.approved.fund.lovelace) : 0n;
+    const { price, skipped, depth, delay } = await this.priced(network, true);
+    return { ...price(held > funded ? held : funded), depth, delay, on: true, ...(skipped ? { skipped } : {}) };
   }
 
   /**
@@ -1771,12 +1841,14 @@ export class SessionService {
 
   /**
    * Whether session `s`'s return goes through Lovejoin, as the user has it
-   * (privacy review §4.1): a mix from the Lovejoin tile always does; any
-   * other as Settings has it now (`lovejoinReturns`). Off, it comes back
-   * directly, and nothing says Lovejoin was left out: the user left it out.
+   * (privacy review §4.1): a mix from the Lovejoin tile always does; a swap
+   * as approved (`auto.direct`, which Stop can make direct); any other as
+   * Settings has it now (`lovejoinReturns`). Off, it comes back directly,
+   * and nothing says Lovejoin was left out: the user left it out.
    */
   private async throughLovejoin(s?: SessionRecord): Promise<boolean> {
     if (s?.mix) return true;
+    if (s?.auto?.direct !== undefined) return !s.auto.direct;
     return (await this.deps.preferences?.get())?.lovejoinReturns ?? DEFAULT_PREFERENCES.lovejoinReturns;
   }
 
@@ -2316,6 +2388,33 @@ function leftOut(e: unknown): string {
   return `the wallet couldn't build its chain: ${message.charAt(0).toLowerCase()}${message.slice(1).replace(/\.$/, "")}`;
 }
 
+/**
+ * Why a chain can't draw from Lovejoin's pool as a swap's review read it
+ * (`room`), at `depth`, in the review's words: under the network's floor, or
+ * too few boxes free to mix with. Undefined when it can.
+ */
+function poolShort(network: NetworkName, room: { others: number; free: number }, depth: number): string | undefined {
+  const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
+  const boxes = (n: number) => `${n} ${n === 1 ? "box" : "boxes"}`;
+  if (room.others < floor) return `Right now Lovejoin's pool holds ${boxes(room.others)} that aren't yours, under the ${floor} it needs`;
+  const needs = mixesPerBox(depth) * 2;
+  if (room.free < needs) {
+    return `Right now Lovejoin's pool has ${boxes(room.free)} to mix with, and a box ${depth} ${depth === 1 ? "wave" : "waves"} deep needs ${needs}`;
+  }
+  return undefined;
+}
+
+/**
+ * The spare ADA among a session's UTxOs, as a return through Lovejoin
+ * counts it: ADA alone, less its collateral (one of exactly 5 ₳). A token's
+ * UTxO, or one carrying a reference script, comes back as it is.
+ */
+function spareOf(rows: KoiosUtxo[]): bigint {
+  const ada = rows.filter((u) => !u.asset_list?.length && !u.reference_script);
+  const total = ada.reduce((sum, u) => sum + BigInt(u.value), 0n);
+  return ada.some((u) => BigInt(u.value) === SESSION_COLLATERAL) ? total - SESSION_COLLATERAL : total;
+}
+
 /** What's left behind at a session's account, as far as the last reading (`utxos`) still has it. */
 function leftBehindView(s: SessionRecord, utxos?: KoiosUtxo[]): Pick<SessionView, "leftBehind"> {
   const there = utxos && new Set(utxos.map(outpoint));
@@ -2363,6 +2462,7 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     ...(auto.paused ? { paused: auto.paused } : {}),
     ...(auto.retry ? { retry: { at: auto.retry.at, error: auto.retry.error } } : {}),
     ...(auto.unlockWait !== undefined ? { waitsUntil: auto.unlockWait } : {}),
+    ...(auto.direct !== undefined ? { direct: auto.direct } : {}),
   };
 }
 

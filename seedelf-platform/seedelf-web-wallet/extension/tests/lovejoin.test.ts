@@ -41,7 +41,7 @@ import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
-import { koiosPreprod, loadTestWasm, sessionSwap, testBalances, testWallet, vectors, withdrawPreprod } from "./fakes";
+import { koiosPreprod, loadTestWasm, minswapEstimate, sessionSwap, testBalances, testWallet, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -2049,6 +2049,173 @@ describe("mixing from the tile", CHAINS, () => {
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
     // Sent once.
     await expect(t.lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow("isn't ready to send");
+  });
+});
+
+describe("a swap's way back (privacy review §2.7, §2.8, §4.1)", CHAINS, () => {
+  const ASK = minswapEstimate.ask;
+  const poolReads = (t: ReturnType<typeof testBalances>) =>
+    t.koios.calls.filter((c) => c.path === "credential_utxos" && c.body._payment_credentials[0] === NETWORKS.preprod.lovejoin!.mixBox).length;
+
+  /** A wallet that can fund a 10 ₳ swap (one Seedelf spend), Lovejoin's pool, and sessions that use it. */
+  async function swapping() {
+    const t = testBalances();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    const spend = withdrawPreprod.amount.evaluation as { result: unknown[] };
+    t.koios.evaluation = (body: { params: { additionalUtxo?: unknown[] } }) =>
+      body.params.additionalUtxo ? AGREES : { ...spend, result: spend.result.slice(0, 1) };
+    t.koios.addedToAccounts.push(...POOL);
+    const sessions = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin: t.lovejoin,
+      sleep: async () => undefined,
+    });
+    return { t, sessions };
+  }
+
+  /** A swap that runs itself, approved `direct` or not (none: from before), funded, its account holding 40 ₳ and its 5 ₳ collateral. */
+  async function approved(direct?: boolean) {
+    const t = testBalances();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: t.clock.now,
+          txs: [{ kind: "out", txHash: "ab".repeat(32), at: t.clock.now, confirmed: true }],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: {
+            approved: { minAmountOut: "902083681", fund: { lovelace: "40000000", tokens: [] } },
+            ...(direct === undefined ? {} : { direct }),
+          },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...POOL);
+    t.koios.evaluation = AGREES;
+    t.koios.confirmations = 1;
+    const sessions = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin: t.lovejoin,
+      sleep: async () => undefined,
+    });
+    return { t, sessions };
+  }
+
+  const kinds = async (t: ReturnType<typeof testBalances>) =>
+    (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }> }> }>("sessions.preprod"))!.sessions[0]!.txs.map((x) => x.kind);
+
+  it("reads the pool once, at Review, and says the ADA would come back directly while the pool is under its floor", async () => {
+    const { t, sessions } = await swapping();
+    // As the user types, no pool read. The proceeds are tokens: only a stop's 16 ₳ pays for a box.
+    const quote = await sessions.quote("preprod", ASK);
+    expect(quote.lovejoin).toMatchObject({ on: true, boxes: 0, ifStopped: { boxes: 1, mixes: 4 } });
+    expect(poolReads(t)).toBe(0);
+    const preprod = NETWORKS.preprod.lovejoin!;
+    const floor = preprod.poolFloor;
+    preprod.poolFloor = 25;
+    try {
+      const out = await sessions.outBuild("preprod", quote);
+      expect(out.lovejoin).toMatchObject({
+        on: true,
+        boxes: 0,
+        skipped: "Right now Lovejoin's pool holds 20 boxes that aren't yours, under the 25 it needs",
+        ifStopped: { boxes: 0, of: 1 },
+      });
+      expect(poolReads(t)).toBe(1);
+      // Reviewed again within five minutes: the same reading.
+      await sessions.outBuild("preprod", quote);
+      expect(poolReads(t)).toBe(1);
+    } finally {
+      preprod.poolFloor = floor;
+    }
+  });
+
+  it("says a pool with too few boxes free takes none, and reads it again after five minutes", async () => {
+    const { t, sessions } = await swapping();
+    const all = [...t.koios.addedToAccounts];
+    t.koios.addedToAccounts = all.filter((u) => !POOL.slice(7).includes(u));
+    const quote = await sessions.quote("preprod", ASK);
+    expect((await sessions.outBuild("preprod", quote)).lovejoin).toMatchObject({
+      skipped: "Right now Lovejoin's pool has 7 boxes to mix with, and a box 2 waves deep needs 8",
+    });
+    t.koios.addedToAccounts = all;
+    t.clock.now += 6 * 60_000;
+    await t.wallet.touch();
+    const again = (await sessions.outBuild("preprod", quote)).lovejoin!;
+    expect(again.skipped).toBeUndefined();
+    expect(again.ifStopped).toEqual({ boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" });
+    expect(poolReads(t)).toBe(2);
+  });
+
+  it("reads no pool at Review when Settings brings sessions back directly, and keeps what the approval chose", async () => {
+    const { t, sessions } = await swapping();
+    await t.deps.preferences.set({ lovejoinReturns: false });
+    const quote = await sessions.quote("preprod", ASK);
+    const out = await sessions.outBuild("preprod", quote);
+    expect(out.lovejoin).toMatchObject({ on: false, ifStopped: { boxes: 1 } });
+    expect(poolReads(t)).toBe(0);
+    // The approval's switch, turned on: kept with the swap, recorded before its funding is sent.
+    await sessions.outSubmit("preprod", out.txHash, false).catch(() => undefined);
+    const book = (await t.store.get<{ sessions: Array<{ auto: { direct?: boolean } }> }>("sessions.preprod"))!;
+    expect(book.sessions[0]!.auto.direct).toBe(false);
+
+    // No choice sent: Settings' is kept.
+    const other = await swapping();
+    await other.t.deps.preferences.set({ lovejoinReturns: false });
+    const next = await other.sessions.outBuild("preprod", await other.sessions.quote("preprod", ASK));
+    await other.sessions.outSubmit("preprod", next.txHash).catch(() => undefined);
+    expect((await other.sessions.list("preprod"))[0]!.auto?.direct).toBe(true);
+  });
+
+  it("comes back as approved: directly though Settings sends returns through Lovejoin", async () => {
+    const { t, sessions } = await approved(true);
+    expect(await sessions.stopCost("preprod", 0)).toBeNull();
+    const view = await sessions.stop("preprod", 0);
+    expect(await kinds(t)).toEqual(["out", "back"]);
+    expect(view.auto?.direct).toBe(true);
+    expect(view.lovejoinSkipped).toBeUndefined();
+    expect(poolReads(t)).toBe(0);
+  });
+
+  it("comes back as approved: through Lovejoin though Settings has turned it off since", async () => {
+    const { t, sessions } = await approved(false);
+    await t.deps.preferences.set({ lovejoinReturns: false });
+    await sessions.stop("preprod", 0);
+    expect((await kinds(t)).slice(0, 3)).toEqual(["out", "deposit", "mix"]);
+  });
+
+  it("says what Stop brings back through Lovejoin, as the pool has room for, and stops directly when asked", async () => {
+    const { t, sessions } = await approved(false);
+    await sessions.list("preprod", true);
+    // 40 ₳ at the account, its collateral aside: two boxes, four mixes each.
+    expect(await sessions.stopCost("preprod", 0)).toEqual({
+      boxes: 2,
+      mixes: 8,
+      mixFees: "7600000",
+      withdrawFees: "600000",
+      depth: 2,
+      delay: "1-6",
+      on: true,
+    });
+    // Stop, bring it back directly: one return, and the swap says so.
+    const view = await sessions.stop("preprod", 0, true);
+    expect(await kinds(t)).toEqual(["out", "back"]);
+    expect(view.auto?.direct).toBe(true);
+
+    // A pool with room for one box: one of the two.
+    const small = await approved(false);
+    small.t.koios.addedToAccounts = small.t.koios.addedToAccounts.filter((u) => !POOL.slice(9).includes(u));
+    await small.sessions.list("preprod", true);
+    expect(await small.sessions.stopCost("preprod", 0)).toMatchObject({ boxes: 1, of: 2, mixes: 4 });
   });
 });
 
