@@ -144,11 +144,14 @@ export function chainRetryMs(i: number, tries: ChainTries, e: unknown): number |
 
 /**
  * The most transactions of a chain waiting in the mempool at once. A block
- * may use 20 billion CPU steps in scripts and a mix uses 5.73 billion, so a
- * block takes 3 mixes, and a node's mempool holds about two blocks' worth. A
- * submit past that waits for a block to make room, longer than Koios answers
- * (found on preprod: a long chain's submits timed out from its 7th on). Four
- * leaves room for other people's transactions.
+ * may use 20 billion CPU steps in scripts and a mix uses about 5.8 billion
+ * (5.73 measured on preprod, 5.80 on mainnet), so a block takes 3 mixes, and
+ * a node's mempool holds about two blocks' worth. A submit past that waits
+ * for a block to make room, longer than Koios answers (found on preprod: a
+ * long chain's submits timed out from its 7th on). Four leaves room for
+ * other people's transactions; fewer would let a block take fewer of ours,
+ * and make every chain longer. On mainnet other people's scripts share the
+ * blocks too, so a long chain takes longer there.
  */
 export const CHAIN_WINDOW = 4;
 /** How often a chain being sent looks for its transactions on chain. */
@@ -459,9 +462,10 @@ export function delayHours(delay: LovejoinDelay): [number, number] {
 export const MAX_MIX_BOXES = 10;
 
 /**
- * The most mixes one chain makes: ten boxes three waves deep, the most a mix
- * from the tile makes (about 15 s to build). Mixing boxes again takes as
- * many as fit, the pool allowing.
+ * The most mixes one chain makes, any chain: ten boxes three waves deep, the
+ * most a mix from the tile makes (about 15 s to build, and 44 blocks at
+ * least to send). Mixing boxes again, and a return, take as many as fit
+ * under it, the pool allowing.
  */
 export const MAX_CHAIN_MIXES = MAX_MIX_BOXES * mixesPerBox(3);
 
