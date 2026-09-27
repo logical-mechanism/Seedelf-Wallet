@@ -26,10 +26,14 @@ pub struct Config {
 }
 
 /// We can store all variants of the contracts inside this function then call it whenever we need it.
-pub fn get_config(variant: u64, network: bool) -> Result<Config> {
+///
+/// `preprod` is `true` for preprod and `false` for mainnet, as everywhere in
+/// the workspace. Variant 1 is the deployed contracts: its values are frozen,
+/// and a new build of the contracts is a new variant, never an edit to 1.
+pub fn get_config(variant: u64, preprod: bool) -> Result<Config> {
     match variant {
         1 => {
-            let reference: Reference = if network {
+            let reference: Reference = if preprod {
                 Reference {
                     wallet_reference_utxo: hex!(
                         "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6"
