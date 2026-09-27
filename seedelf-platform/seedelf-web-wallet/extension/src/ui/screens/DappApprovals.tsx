@@ -31,6 +31,14 @@ import { tokenInfo, tokenLabel } from "../tokens";
 
 /** How long an empty list waits before the window closes: a site's next request may be on its way. */
 const CLOSE_AFTER_MS = 800;
+/**
+ * How long the buttons wait when another request takes the shown one's
+ * place, so a click meant for that one can't answer this one.
+ */
+const HOLD_MS = 1_000;
+
+/** How the request shown came to be: the next after the user's answer, or in the place of one that's gone. */
+type Change = "next" | "replaced";
 
 export function DappApprovals() {
   const [approvals, setApprovals] = useState<DappApproval[]>();
@@ -68,9 +76,27 @@ export function DappApprovals() {
   const currentId = current?.id;
   useEffect(() => setPassword(""), [currentId]);
 
+  // Another request in the place of the one shown (the next, or one whose
+  // page went away): it says so, and its buttons wait a moment.
+  const shown = useRef<string>(undefined);
+  const answered = useRef<string>(undefined);
+  const [change, setChange] = useState<Change>();
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!currentId) return;
+    const before = shown.current;
+    shown.current = currentId;
+    if (before === undefined || before === currentId) return;
+    setChange(before === answered.current ? "next" : "replaced");
+    setHeld(true);
+    const timer = setTimeout(() => setHeld(false), HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [currentId]);
+
   /** Answers the request shown: `extra` carries a private session's funding and the password it needs. */
   async function answer(approve: boolean, extra: { password?: string; fund?: { txHash: string } } = {}): Promise<boolean> {
-    if (!current || busy || (approve && needsPassword && !password)) return false;
+    if (!current || busy || held || (approve && needsPassword && !password)) return false;
+    answered.current = current.id;
     setBusy(true);
     setError(undefined);
     try {
@@ -113,6 +139,8 @@ export function DappApprovals() {
         approval={current}
         more={more}
         busy={busy}
+        held={held}
+        change={change}
         error={error}
         onError={setError}
         onAnswer={answer}
@@ -138,14 +166,14 @@ export function DappApprovals() {
       }
       foot={
         <div className="actions">
-          <button type="button" className="secondary" onClick={() => answer(false)} disabled={busy}>
+          <button type="button" className="secondary" onClick={() => answer(false)} disabled={busy || held}>
             Decline
           </button>
           <button
             type={needsPassword ? "submit" : "button"}
             className="primary"
             onClick={needsPassword ? undefined : () => answer(true)}
-            disabled={busy || (needsPassword && !password)}
+            disabled={busy || held || (needsPassword && !password)}
           >
             {busy ? "…" : action}
           </button>
@@ -153,6 +181,7 @@ export function DappApprovals() {
       }
     >
       <div className="stack" data-testid={`dapp-${current.kind}`}>
+        <Changed change={change} />
         <Site origin={current.origin} title={current.title} session={current.session} />
         {current.kind === "sign-tx" && (
           <SignTx
@@ -172,6 +201,25 @@ export function DappApprovals() {
       </div>
     </Screen>
   );
+}
+
+/** Says the request shown isn't the one before: its buttons wait a moment meanwhile. */
+function Changed({ change }: { change?: Change }) {
+  if (change === "replaced") {
+    return (
+      <Callout tone="warn" testId="dapp-changed">
+        The request you were reading is gone, and this one took its place. Read it before you answer.
+      </Callout>
+    );
+  }
+  if (change === "next") {
+    return (
+      <p className="note" data-testid="dapp-changed">
+        The next request, in place of the one you answered.
+      </p>
+    );
+  }
+  return null;
 }
 
 /**
@@ -210,6 +258,8 @@ function ConnectRequest({
   approval,
   more,
   busy,
+  held,
+  change,
   error,
   onError,
   onAnswer,
@@ -217,6 +267,9 @@ function ConnectRequest({
   approval: Extract<DappApproval, { kind: "connect" }>;
   more: string;
   busy: boolean;
+  /** Its buttons wait: it just took another request's place. */
+  held: boolean;
+  change?: Change;
   error?: string;
   onError: (error?: string) => void;
   onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string } }) => Promise<boolean>;
@@ -272,7 +325,7 @@ function ConnectRequest({
 
   async function build(e: FormEvent) {
     e.preventDefault();
-    if (!canReview || building) return;
+    if (!canReview || building || held) return;
     setBuilding(true);
     onError(undefined);
     try {
@@ -354,15 +407,20 @@ function ConnectRequest({
       error={error}
       foot={
         <div className="actions">
-          <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy || building}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onAnswer(false)}
+            disabled={busy || building || held}
+          >
             Cancel
           </button>
           {connection === "private" ? (
-            <button type="submit" className="primary" disabled={!canReview || building}>
+            <button type="submit" className="primary" disabled={!canReview || building || held}>
               {building ? "Building…" : "Review"}
             </button>
           ) : (
-            <button type="button" className="primary" onClick={() => void onAnswer(true)} disabled={busy}>
+            <button type="button" className="primary" onClick={() => void onAnswer(true)} disabled={busy || held}>
               {busy ? "…" : "Connect"}
             </button>
           )}
@@ -370,6 +428,7 @@ function ConnectRequest({
       }
     >
       <div className="stack" data-testid="dapp-connect">
+        <Changed change={change} />
         {site}
         <Choice<Connection>
           label="Connect it to"

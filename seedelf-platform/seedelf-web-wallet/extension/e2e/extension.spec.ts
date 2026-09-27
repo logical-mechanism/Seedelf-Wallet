@@ -2591,6 +2591,52 @@ test.describe("the dApp connector", () => {
     expect((await signing).error?.code).toBe(2);
   });
 
+  test("a request that takes another's place in the window says so, and its buttons wait a moment", async ({ context }) => {
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    // Without the password, Sign alone answers: what a click on the wrong request would do.
+    const password = page.getByRole("switch", { name: "Ask for your password to sign for a site" });
+    await password.click();
+    await expect(password).toHaveAttribute("aria-checked", "false");
+    const first = await openDapp(context);
+    let opened = connectorWindow(context);
+    const enabling = first.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
+    const connect = await opened;
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe(true);
+    await closed;
+
+    // Two of the site's pages ask; the window shows the first page's.
+    const second = await context.newPage();
+    await second.goto("https://dapp.example/");
+    const used = ((await cip30(first, "getUsedAddresses")).value as string[])[0]!;
+    const hex = (text: string) => Buffer.from(text).toString("hex");
+    opened = connectorWindow(context);
+    // Its page closes before it's answered.
+    const gone = cip30(first, "signData", used, hex("Harmless")).catch(() => undefined);
+    const window = await opened;
+    await expect(window.getByTestId("dapp-data-message")).toHaveText("Harmless");
+    const replacing = cip30(second, "signData", used, hex("The other one"));
+    await expect(window.getByText("1 of 2")).toBeVisible();
+    await expect(window.getByTestId("dapp-changed")).toHaveCount(0);
+
+    // The first page goes away: the second's takes its place, says so, and Sign waits a moment.
+    await first.close();
+    await gone;
+    await expect(window.getByTestId("dapp-data-message")).toHaveText("The other one");
+    await expect(window.getByTestId("dapp-changed")).toContainText("The request you were reading is gone");
+    const sign = window.getByRole("button", { name: "Sign", exact: true });
+    await expect(sign).toBeDisabled();
+    await expect(sign).toBeEnabled({ timeout: 3_000 });
+    await sign.click();
+    expect(((await replacing).value as { signature: string }).signature).toMatch(/^84/);
+  });
+
   test("a locked wallet asks for the password in the connector's window first", async ({ context }) => {
     const page = await openApp(context);
     await restore(page, vector(12).phrase);
