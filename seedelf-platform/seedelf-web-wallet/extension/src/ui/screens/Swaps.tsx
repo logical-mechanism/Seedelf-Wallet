@@ -162,8 +162,15 @@ const STEP: Record<SessionAuto["step"], string> = {
   done: "Done",
 };
 
-/** Back in the private balance, or never funded: nothing more happens. */
-const isOver = (s: SessionView) => s.stage === "closed" || s.stage === "failed";
+/**
+ * Back in the private balance, or never funded: nothing more happens. A
+ * swap's funding the chain hasn't shown may still land, and waits on the
+ * user's Try again or Forget it: that one isn't over (launch review #11).
+ */
+const isOver = (s: SessionView) => s.stage === "closed" || (s.stage === "failed" && (!!s.unsent || !s.auto));
+
+/** A swap whose funding the chain hasn't shown yet, which may still land: it needs the user. */
+export const fundingUnseen = (s: SessionView) => s.stage === "failed" && !s.unsent && !!s.auto;
 
 /** A swap that runs itself and isn't over: Home shows it. A mix (Lovejoin's) isn't a swap. */
 export function isRunningSwap(s: SessionView): boolean {
@@ -198,6 +205,7 @@ const PAUSED: Record<SessionPause["why"], string> = {
 function subOf(s: SessionView, now: number): string {
   if (isOver(s)) return whenOf(s.createdAt, new Date(now));
   if (!s.auto) return s.stage === "open" ? "Its next step is yours" : STAGE[s.stage];
+  if (fundingUnseen(s)) return "Its funding hasn't shown up yet";
   if (s.auto.paused) return PAUSED[s.auto.paused.why];
   // Stopped before its order: it comes back rather than place one.
   return STEP[s.auto.stopping && s.auto.step === "ordering" ? "returning" : s.auto.step];
@@ -694,7 +702,7 @@ function NewSwap({
             Asks for at least {amountOf(quote.minAmountOut, get)} · {formatPercent(quote.priceImpact)} price impact · through{" "}
             {quote.route.join(", ")}
           </p>
-          {got && !got.listed && (
+          {got && !got.listed && quote.verified && (
             <p className="swap-summary__foot" data-testid="swap-out-unlisted">
               {got.label} isn't on the wallet's list: Minswap verifies it, by its ID ({got.fingerprint}).
             </p>
@@ -725,7 +733,7 @@ function NewSwap({
         {lovejoin && <LovejoinCost lovejoin={lovejoin} adaOut={adaOut} />}
         {quote.lovejoin && !lovejoin && (
           <p className="note" data-testid="swap-lovejoin">
-            Less than a box's worth of ADA is spare, so Lovejoin is left out: it all comes back at once.
+            Less than a box's worth of ADA is spare, so none of it goes through Lovejoin: it all comes back at once.
           </p>
         )}
         <Callout tone="privacy">
@@ -1504,7 +1512,9 @@ export function Session({
   const holding = s.holding && (!isOver(s) || s.holding.lovelace !== "0" || s.holding.tokens.length) ? s.holding : null;
   const rows = (
     <ReviewRows testId="session-rows">
-      {!s.auto && <Row label="Where it's at" value={STAGE[s.stage]} strong />}
+      {!s.auto && (
+        <Row label="Where it's at" value={s.stage === "failed" && !s.unsent ? "Its funding hasn't shown up" : STAGE[s.stage]} strong />
+      )}
       {s.swap && sides && <Row label="Quoted" value={`about ${amountOf(s.swap.amountOut, sides.get)}`} />}
       <Row label="Started" value={whenOf(s.createdAt, new Date())} />
       <Row label="Account" value={shortHex(s.address, 16, 8)} title={s.address} />

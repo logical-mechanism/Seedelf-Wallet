@@ -25,7 +25,7 @@ import { useAmounts } from "../preferences";
 import { ClaimAll, isClaimable } from "./ClaimAll";
 import { Lovejoin } from "./Lovejoin";
 import { attachedTo, type ConnectedSites, isSiteSession, SiteRow, SiteSession } from "./SiteSessions";
-import { isRunningSwap, Swaps, SwapTag } from "./Swaps";
+import { fundingUnseen, isRunningSwap, Swaps, SwapTag } from "./Swaps";
 
 type DappId = "minswap" | "lovejoin";
 
@@ -156,7 +156,8 @@ export function Dapps({
   }
 
   const running = sessions.filter(isRunningSwap);
-  const waiting = running.filter((s) => s.auto?.paused).length;
+  // Paused, or a funding the chain hasn't shown yet: either waits on the user.
+  const waiting = running.filter((s) => s.auto?.paused || fundingUnseen(s)).length;
   const sites = sessions.filter(isSiteSession);
 
   return (

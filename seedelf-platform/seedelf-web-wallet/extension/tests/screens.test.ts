@@ -17,7 +17,17 @@ import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimCard } from "../src/ui/screens/Dapps";
 import { Chains, detailOf as lovejoinDetail, NotMixed, subOf as lovejoinSub } from "../src/ui/screens/Lovejoin";
 import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
-import { LovejoinCost, pairOf, pauseText, Plan, Session, TokenSelect, Unverified } from "../src/ui/screens/Swaps";
+import {
+  isRunningSwap,
+  LovejoinCost,
+  pairOf,
+  pauseText,
+  Plan,
+  Session,
+  SwapRow,
+  TokenSelect,
+  Unverified,
+} from "../src/ui/screens/Swaps";
 
 /** A page's text, as a person reads it. */
 function text(element: ReactElement, network: "preprod" | "mainnet" = "preprod"): string {
@@ -237,6 +247,14 @@ describe("a swap whose funding the chain hasn't shown (launch review #11)", () =
     const line = page({ ...failed, unsent: true });
     expect(line).toContain("It never reached the chain");
     expect(line).not.toContain("Try again");
+  });
+
+  it("stays among the swaps in progress, Home's too, as needing the user, until it's looked for or forgotten", () => {
+    expect(isRunningSwap(failed)).toBe(true);
+    expect(isRunningSwap({ ...failed, unsent: true })).toBe(false);
+    const row = text(createElement(SwapRow, { session: failed, onOpen: () => undefined }));
+    expect(row).toContain("Not seen");
+    expect(row).toContain("Its funding hasn't shown up yet");
   });
 });
 
