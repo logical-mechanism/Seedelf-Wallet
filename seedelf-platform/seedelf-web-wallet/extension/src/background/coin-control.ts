@@ -131,7 +131,7 @@ export class CoinControlService {
     const [view, account, spent, reading] = await wallet.withKeys(
       async () =>
         [
-          await keptContractView(session, network),
+          await keptContractView(session, network, contract),
           (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [],
           await spentSet(session),
           await session.get<Balances>(SESSION_BALANCES_PREFIX + network),
@@ -175,9 +175,11 @@ export class CoinControlService {
       if (found.seedelf) throw new Error("A Seedelf's UTxO is never spent by a payment: only removing it does.");
       if (found.collateral) throw new Error("That's your collateral. Reclaim it in Settings, under Collateral.");
       const choices = await this.choices(network);
-      // Only what's still there is kept, so the record doesn't grow with spent UTxOs.
-      const present = new Set(lists[side].map((u) => `${u.txHash}#${u.index}`));
-      const next = new Set(choices[side].filter((o) => present.has(o)));
+      // The others stay as they are, listed in this reading or not: a
+      // backend that's behind, or a page read twice, can leave out a UTxO
+      // that's still there, and its lock must hold when it shows up again.
+      // One that's spent matches nothing; the list grows only by clicks.
+      const next = new Set(choices[side]);
       if (locked) next.add(utxo);
       else next.delete(utxo);
       await this.save(network, { ...choices, [side]: [...next] });

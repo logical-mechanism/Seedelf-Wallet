@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
+import { forgetContractView } from "../src/background/contract-scan";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { SESSION_MINT } from "../src/background/mint";
 import { SESSION_COLLATERAL } from "../src/background/send";
@@ -156,18 +157,45 @@ describe("locked UTxOs", () => {
     await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Every UTxO in your private balance is locked");
   });
 
-  it("refuse the collateral and UTxOs not in the last reading, and forget spent ones", async () => {
+  it("refuse the collateral and UTxOs not in the last reading", async () => {
     const t = await unlocked(24);
     await t.balances.get("preprod");
     const { fives } = account24();
     await expect(t.coins.setLocked("preprod", "cardano", at(fives[0]!), true)).rejects.toThrow("Reclaim it in Settings");
     await expect(t.coins.setLocked("preprod", "cardano", `${"00".repeat(32)}#0`, true)).rejects.toThrow("last reading");
+  });
 
+  it("hold when a reading leaves their UTxO out and another lock changes: a backend behind, say", async () => {
+    const t = await unlocked(24);
+    await t.balances.get("preprod");
+    const { fives } = account24();
     await t.coins.setLocked("preprod", "cardano", at(fives[1]!), true);
+    // A lagging backend's reading doesn't list it; the user then locks and unlocks another.
     t.koios.spent.add(at(fives[1]!));
     await t.balances.get("preprod", true);
     await t.coins.setLocked("preprod", "cardano", at(fives[2]!), true);
-    expect((await t.coins.choices("preprod")).cardano).toEqual([at(fives[2]!)]);
+    await t.coins.setLocked("preprod", "cardano", at(fives[2]!), false);
+    expect((await t.coins.choices("preprod")).cardano).toEqual([at(fives[1]!)]);
+
+    // Listed again, it's still locked, and Max leaves it out.
+    t.koios.spent.delete(at(fives[1]!));
+    await t.balances.get("preprod", true);
+    expect((await t.coins.lists("preprod")).cardano.find((u) => at(u) === at(fives[1]!))).toMatchObject({ locked: true });
+    await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    const built = await t.session.get<{ txCbor: string }>("seedelf.send.built");
+    expect(bodyOutpoints(hexBytes(built!.txCbor), 0)).not.toContain(at(fives[1]!));
+  });
+
+  it("hold on the private side too, when a full read of the contract leaves their UTxO out", async () => {
+    const t = await unlocked(12);
+    await t.balances.get("preprod");
+    const [p, q] = (await t.coins.lists("preprod")).seedelf.filter((u) => !u.seedelf);
+    await t.coins.setLocked("preprod", "seedelf", at(p!), true);
+    t.koios.spent.add(at(p!));
+    await forgetContractView(t.deps, "preprod");
+    await t.balances.get("preprod", true);
+    await t.coins.setLocked("preprod", "seedelf", at(q!), true);
+    expect((await t.coins.choices("preprod")).seedelf.sort()).toEqual([at(p!), at(q!)].sort());
   });
 
   it("are sealed on the device, unreadable while locked, and ask Koios nothing", async () => {
