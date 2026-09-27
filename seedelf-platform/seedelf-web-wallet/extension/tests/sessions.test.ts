@@ -474,7 +474,8 @@ describe("a private session", () => {
     const quote = await sessions.quote("preprod", ASK);
     let undo = unanswered(t);
     const out = await sessions.outBuild("preprod", quote);
-    await expect(sessions.outSubmit("preprod", out.txHash)).rejects.toThrow("Koios is having trouble");
+    // Koios didn't answer: the Send is maybe sent (script-spend's send), not refused.
+    await expect(sessions.outSubmit("preprod", out.txHash)).resolves.toMatchObject({ maybeSent: true });
     undo();
     // Its node took it: it may land any moment, so it's funding, not failed, and it can't be forgotten.
     expect(t.koios.submitted.map(txIdOf)).toEqual([out.txHash]);
