@@ -8,13 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base, chromium, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { test as base, chromium, expect, type BrowserContext, type Locator, type Page, type Request } from "@playwright/test";
 
 import type { NetworkName } from "../src/networks";
 import { DAPP_ORIGINS } from "../src/shared/dapp";
 import { LOCAL_NETWORK } from "../src/shared/preferences";
 import { UI_PORT } from "../src/shared/rpc";
 import { txIdOf } from "../tests/fixtures/cbor";
+import { swapTx } from "../tests/fixtures/swap-tx";
 
 export { expect };
 
@@ -88,7 +89,7 @@ export const withdrawPreprod = fixture("withdraw-preprod.json");
 export const activityPreprod = fixture("activity-preprod.json");
 export const stakingPreprod = fixture("staking-preprod.json");
 export const minswapEstimate = fixture("minswap-estimate-preprod.json");
-/** Session 0 of the 12-word phrase, its UTxO, and a swap from it (wasm/tests/session_test.rs). */
+/** Session 0 of the 12-word phrase and its UTxO (wasm/tests/session_test.rs). */
 export const sessionSwap = fixture("session-swap.json");
 /** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
 export const lovejoinPool = fixture("lovejoin-pool-preprod.json").pool;
@@ -123,10 +124,16 @@ export interface KoiosFake {
   failWith?: number;
   /** When set, every answer waits this long (ms), as a slow Koios would. */
   delayMs?: number;
-  /** Transactions submitted, by id. */
+  /** Transactions submitted, by id: each that reached the network. */
   submitted: string[];
-  /** What tx_status reports. */
-  confirmations: number | null;
+  /**
+   * How submittx answers the nth transaction sent (from 1), when not as
+   * usual: `timeout` takes it and never answers, as a gateway that timed out
+   * (it may have gone through); a status refuses it with `body`.
+   */
+  submitAnswer?: (n: number) => "timeout" | { status: number; body: string } | undefined;
+  /** What tx_status reports: for every transaction, or for each by its id. */
+  confirmations: number | null | ((txHash: string) => number | null);
   /** giveme.my's answer; by default its recorded refusal of a transaction it can't validate. */
   collateral: { status: number; body: unknown };
   /** Transactions giveme.my was asked to witness. */
@@ -139,6 +146,10 @@ export interface KoiosFake {
   stakes: Map<string, Record<string, unknown>>;
   /** UTxOs under other payment keys, as credential_utxos finds them: a private session's, say. */
   addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
+  /** Outpoints (`txhash#index`) the chain has spent, as utxo_info marks them: an order a batcher filled, say. */
+  spent: Set<string>;
+  /** Requests a page made instead of the worker (`byWorker`): there must be none. */
+  strays: string[];
 }
 
 /** Minswap's aggregator, for swaps in private sessions. */
@@ -151,18 +162,38 @@ export interface MinswapFake {
   orders: unknown[];
   /** While set, quotes and builds answer 429, as Minswap's rate limit does. */
   limited?: boolean;
+  /** Requests a page made instead of the worker (`byWorker`): there must be none. */
+  strays: string[];
+}
+
+/**
+ * Who asked: the worker, or a page. Only the worker talks to Koios, giveme.my
+ * and Minswap. A page that does is running the worker's code itself (a page
+ * chunk that imports sw.js runs all of it), a second worker beside the real
+ * one; `strays` keeps its requests, and the test fails.
+ */
+function byWorker(request: Request, strays: string[]): boolean {
+  if (request.serviceWorker()) return true;
+  strays.push(request.url());
+  return false;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
+  let submits = 0;
   await context.route("https://preprod.koios.rest/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").pop()!;
-    koios.calls.push(path);
+    if (byWorker(request, koios.strays)) koios.calls.push(path);
     if (koios.delayMs) await new Promise((resolve) => setTimeout(resolve, koios.delayMs));
     if (koios.failWith) return route.fulfill({ status: koios.failWith, body: "" });
     if (path === "submittx") {
       const id = txIdOf(new Uint8Array(request.postDataBuffer()!));
+      const answer = koios.submitAnswer?.(++submits);
+      if (answer !== undefined && answer !== "timeout") {
+        return route.fulfill({ status: answer.status, contentType: "text/plain", body: answer.body });
+      }
       koios.submitted.push(id);
+      if (answer === "timeout") return route.abort("timedout");
       return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(id) });
     }
     if (path === "epoch_params") {
@@ -200,7 +231,8 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     if (path === "tx_status") {
-      const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: koios.confirmations }));
+      const confirmations = (tx: string) => (typeof koios.confirmations === "function" ? koios.confirmations(tx) : koios.confirmations);
+      const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: confirmations(tx_hash) }));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const staking: Record<string, (b: any) => unknown[]> = {
@@ -211,6 +243,22 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     };
     if (staking[path]) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(staking[path]!(body)) });
+    }
+    if (path === "utxo_info") {
+      // Any UTxO the fixtures know, spent or not, as Koios answers; one known only as spent, by its outpoint alone.
+      const refs: string[] = body._utxo_refs;
+      const ref = (u: { tx_hash: string; tx_index: number }) => `${u.tx_hash}#${u.tx_index}`;
+      const known = [
+        ...koiosPreprod.contract_utxos,
+        ...ownedUtxos,
+        ...Object.values(koiosPreprod.accounts as Record<string, { account_utxos: unknown[] }>).flatMap((a) => a.account_utxos),
+        ...koios.addedToAccounts,
+      ] as Array<{ tx_hash: string; tx_index: number }>;
+      const found = known.filter((u) => refs.includes(ref(u))).map((u) => ({ ...u, is_spent: koios.spent.has(ref(u)) }));
+      const gone = refs
+        .filter((r) => koios.spent.has(r) && !found.some((u) => ref(u) === r))
+        .map((r) => ({ tx_hash: r.split("#")[0], tx_index: Number(r.split("#")[1]), is_spent: true }));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([...found, ...gone]) });
     }
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
     // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
@@ -235,7 +283,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
   });
   await context.route("https://www.giveme.my/preprod/collateral/", async (route) => {
-    koios.collateralAsked++;
+    if (byWorker(route.request(), koios.strays)) koios.collateralAsked++;
     return route.fulfill({
       status: koios.collateral.status,
       contentType: "application/json",
@@ -254,7 +302,7 @@ async function fakeMinswap(context: BrowserContext, swaps: MinswapFake) {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").pop()!;
     const body = request.method() === "POST" ? request.postDataJSON() : null;
-    swaps.calls.push({ path, body });
+    if (byWorker(request, swaps.strays)) swaps.calls.push({ path, body });
     const answer = (value: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
     if (path === "tokens") {
       const q = String(body.query).toLowerCase();
@@ -320,6 +368,8 @@ export const test = base.extend<{
       nfts: new Map(),
       stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
       addedToAccounts: [],
+      spent: new Set(),
+      strays: [],
     });
   },
   swaps: async ({}, use) => {
@@ -337,8 +387,10 @@ export const test = base.extend<{
         },
       ],
       estimate: minswapEstimate.estimate,
-      swapCbor: sessionSwap.swapCbor,
+      // Its order carries the datum it names by hash, as Minswap's do: the runner won't sign one that doesn't.
+      swapCbor: swapTx(),
       orders: [],
+      strays: [],
     });
   },
   context: async ({ scale, siteAccess, network, userDataDir, koios, swaps }, use) => {
@@ -350,6 +402,7 @@ export const test = base.extend<{
     await use(context);
     await context.close();
     if (siteAccess) rmSync(extension, { recursive: true, force: true });
+    expect([...koios.strays, ...swaps.strays], "only the worker asks Koios, giveme.my and Minswap").toEqual([]);
   },
 });
 
