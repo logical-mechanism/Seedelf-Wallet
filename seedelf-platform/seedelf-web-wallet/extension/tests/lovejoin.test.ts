@@ -25,7 +25,7 @@ import {
   WITHDRAW_SPREAD_MS,
   type ChainProgress,
 } from "../src/background/lovejoin";
-import { pendingKey } from "../src/background/pending";
+import { MAYBE_SENT_WAIT, pendingKey } from "../src/background/pending";
 import { Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SessionService } from "../src/background/sessions";
@@ -1269,5 +1269,51 @@ describe("mixing from the tile", CHAINS, () => {
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
     // Sent once.
     await expect(t.lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow("isn't ready to send");
+  });
+});
+
+describe("a payment that may still go through", CHAINS, () => {
+  it("stops a box brought back now and a mix from the public account, and Home's banner keeps watching it (final review lovejoin-2)", async () => {
+    const t = testBalances();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    t.koios.evaluation = AGREES;
+    const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
+    const keyHash = await t.wallet.withKeys((keys) => keys.cardano.paymentKeyHash(0, 0));
+    const at = (tx: string, value: string) => ({ ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, payment_cred: keyHash, asset_list: [] });
+    t.koios.addedToAccounts.push(...POOL, await ownedBox(t, "d5"), at("e5", "5000000"), at("e6", "30000000"));
+    await t.lovejoin.schedule("preprod", 1);
+    // A mix from the public account reviewed in one window, then a payment in another that Koios doesn't answer.
+    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const payment = await t.send.build("preprod", [{ to: account(15).preprod.receive_0 as string, lovelace: "2000000", tokens: [] }]);
+    const fetch = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      const answer = await fetch(url, init);
+      if (!url.endsWith("/submittx")) return answer;
+      t.koios.fetch = fetch;
+      throw new DOMException("signal timed out", "TimeoutError");
+    };
+    expect(await t.send.submit("preprod", payment.txHash)).toMatchObject({ maybeSent: true });
+    const watched = await t.wallet.withKeys(() => t.session.get(pendingKey("preprod")));
+    const submitted = t.koios.submitted.length;
+
+    const lovejoin = witnessed(t);
+    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(lovejoin.publicBuild("preprod", 1)).rejects.toThrow(MAYBE_SENT_WAIT);
+    // Nothing went beside it: giveme.my wasn't asked, and none of the mix was sent, recorded or taken as being sent.
+    expect(t.koios.submitted).toHaveLength(submitted);
+    expect(t.collateral.asked).toEqual([]);
+    expect(await lovejoin.progress("preprod")).toBeNull();
+    expect((await t.store.get<{ chains?: unknown[] }>("lovejoin.preprod"))?.chains ?? []).toEqual([]);
+    const reserved = await t.wallet.withKeys(() => t.session.get<Record<string, { until?: number }>>("seedelf.reserved.preprod"));
+    expect(reserved?.public?.until).toBeDefined();
+    expect(await t.wallet.withKeys(() => t.session.get(pendingKey("preprod")))).toEqual(watched);
+
+    // Once it lands, the box comes back, and the banner watches that.
+    t.koios.confirmations = 1;
+    t.clock.now += 10 * 60_000 + 1;
+    const back = await lovejoin.withdrawNow("preprod");
+    expect(back).toMatchObject({ kind: "lovejoin-withdraw" });
+    expect(await t.wallet.withKeys(() => t.session.get(pendingKey("preprod")))).toEqual(back);
   });
 });

@@ -65,7 +65,7 @@ import type {
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
 import { KoiosBusyError, KoiosError, SpentInputError, type KoiosUtxo } from "./koios";
-import { pendingKey } from "./pending";
+import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import type { ScriptSpendDeps } from "./script-spend";
@@ -820,6 +820,8 @@ export class LovejoinService {
     checkBoxes(boxes);
     const sending = await this.sendingOf(network);
     if (sending && !sending.stopped) throw new Error("Your last mix from the public account is still being sent. Wait for it to finish.");
+    // It spends the account: not while a payment from it may still go through (pending.ts).
+    await settleMaybeSent(this.deps, network);
     const { wasm, wallet, session, now } = this.deps;
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     if (!collateral) {
@@ -874,6 +876,8 @@ export class LovejoinService {
       throw new Error("That mix isn't ready to send. Review it again.");
     }
     if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
+    // A payment may have gone maybe sent since the review: nothing of the mix goes, or is kept for it, meanwhile.
+    await settleMaybeSent(this.deps, network);
     const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
     await wallet.withKeys(async () => {
       await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
@@ -891,10 +895,8 @@ export class LovejoinService {
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
     await this.pumpPublic(network, 0);
     const pending: PendingTx = { kind: "lovejoin-mix", network, txHash, submittedAt: now(), confirmations: null };
-    await wallet.withKeys(async () => {
-      await session.remove(SESSION_BALANCES_PREFIX + network);
-      await session.set(pendingKey(network), pending);
-    });
+    await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
+    await watchSent(this.deps, pending);
     return pending;
   }
 
@@ -1263,6 +1265,8 @@ export class LovejoinService {
     if (await this.settleWithdrawing(network)) {
       throw new Error("The last box brought back may still be on its way: Koios didn't answer when it was sent. Try again in a few minutes.");
     }
+    // Nor while a payment may still go through: Home's banner watches that one until it's settled (pending.ts).
+    await settleMaybeSent(this.deps, network);
     const pool = await this.pool(network);
     const owned = await this.owned(network, pool);
     const { unmixed, free: back } = await this.sortOut(network, owned);
@@ -1304,7 +1308,7 @@ export class LovejoinService {
     }
     await dueGoes();
     // Home's banner watches it, as it does every send the user makes; the ones due by themselves stay out of it.
-    await this.deps.wallet.withKeys(() => this.deps.session.set(pendingKey(network), pending));
+    await watchSent(this.deps, pending);
     return pending;
   }
 

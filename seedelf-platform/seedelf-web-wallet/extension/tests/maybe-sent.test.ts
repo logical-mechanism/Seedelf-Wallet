@@ -12,7 +12,7 @@ import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { SESSION_BUILT } from "../src/background/move-in";
-import { EXPIRED_AFTER_SLOTS, MAYBE_SENT_WAIT, pendingKey, UNSEEN_AFTER_MS } from "../src/background/pending";
+import { EXPIRED_AFTER_SLOTS, MAYBE_SENT_WAIT, pendingKey, UNSEEN_AFTER_MS, watchSent } from "../src/background/pending";
 import { SESSION_SEND } from "../src/background/send";
 import { spentSet } from "../src/background/spent";
 import { SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
@@ -211,6 +211,72 @@ describe("a payment Koios didn't answer", () => {
     expect(await t.session.get(SESSION_SEND)).toBeUndefined();
     expect(await t.pending.pending("preprod")).toBeNull();
     await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).resolves.toBeDefined();
+  });
+});
+
+describe("the watch of a payment that may still go through", () => {
+  /**
+   * Two windows: `during` runs while the next submit is on its way to Koios,
+   * and its own submit goes unanswered; the first then gets its answer, or
+   * none either (`unansweredToo`).
+   */
+  function whileSubmitting(t: T, during: () => Promise<unknown>, unansweredToo = false) {
+    const real = t.koios.fetch;
+    let submits = 0;
+    t.koios.fetch = async (url, init) => {
+      if (!url.endsWith("/submittx")) return real(url, init);
+      const first = ++submits === 1;
+      if (first) await during();
+      const answer = await real(url, init);
+      if (!first || unansweredToo) throw new DOMException("signal timed out", "TimeoutError");
+      return answer;
+    };
+  }
+
+  it("stays when a payment checked before it went maybe sent goes through after it (final review money-submit-1)", async () => {
+    const t = await unlocked();
+    const moveIn = await t.moveIn.build("preprod", "5000000", []);
+    const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    // The move-in's Send is on its way when the payment's goes unanswered.
+    let paid: PendingTx | undefined;
+    whileSubmitting(t, async () => (paid = await t.send.submit("preprod", payment.txHash)));
+    expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ kind: "move-in", confirmations: null });
+    expect(paid).toMatchObject({ txHash: payment.txHash, maybeSent: true });
+
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: payment.txHash, maybeSent: true });
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    const spent = await spentSet(t.session);
+    for (const tx of t.koios.submitted) for (const o of txInputs(tx)) expect(spent).toContain(o);
+  });
+
+  it("stays when another goes maybe sent beside it, which is held back all the same", async () => {
+    const t = await unlocked();
+    const moveIn = await t.moveIn.build("preprod", "5000000", []);
+    const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    whileSubmitting(t, () => t.send.submit("preprod", payment.txHash), true);
+    expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ txHash: moveIn.txHash, maybeSent: true });
+
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: payment.txHash, maybeSent: true });
+    // The move-in is kept as sent, for Send again, and its UTxOs are held back.
+    expect(await t.session.get(SESSION_BUILT)).toHaveProperty("sentCbor");
+    const spent = await spentSet(t.session);
+    for (const tx of t.koios.submitted) for (const o of txInputs(tx)) expect(spent).toContain(o);
+  });
+
+  it("isn't taken by Lovejoin's withdraw or mix sent beside it, and is once it's settled", async () => {
+    const t = await unlocked();
+    const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    unanswered(t);
+    await t.send.submit("preprod", payment.txHash);
+    const watched = await t.session.get(pendingKey("preprod"));
+    const withdraw: PendingTx = { kind: "lovejoin-withdraw", network: "preprod", txHash: "cd".repeat(32), submittedAt: t.clock.now, confirmations: null };
+    await watchSent(t.deps, withdraw);
+    expect(await t.session.get(pendingKey("preprod"))).toEqual(watched);
+
+    t.koios.confirmations = 1;
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: payment.txHash, confirmations: 1 });
+    await watchSent(t.deps, withdraw);
+    expect(await t.session.get(pendingKey("preprod"))).toEqual(withdraw);
   });
 });
 

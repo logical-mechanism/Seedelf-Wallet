@@ -17,6 +17,11 @@
 // never shows is let go, its UTxOs freed: from the public account when the
 // chain passes its slot, and a private one, which has no slot yet, after 20
 // minutes unseen.
+//
+// Every write of the watch goes through `put`: nothing replaces a
+// transaction that may still go through with another, not a Send checked
+// before it went maybe sent, nor Lovejoin's withdraw or mix (final review
+// money-submit-1). Its watch is what stops a second payment.
 
 import type { NetworkName } from "../networks";
 import type { PendingTx } from "../shared/rpc";
@@ -101,6 +106,32 @@ export interface Sending {
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
+/** A maybe-sent transaction the chain hasn't settled: while it's watched, nothing new goes out on its network. */
+function unsettled(w: Watched | undefined): w is Watched {
+  return !!w?.maybeSent && w.confirmations === null && !w.dropped;
+}
+
+/**
+ * Puts `record` in its network's watch, unless another transaction there may
+ * still go through: that one stays, until settle() settles it. Returns
+ * whether `record` went in. Call it while unlocked.
+ */
+async function put(session: Area, record: Watched): Promise<boolean> {
+  const was = await session.get<Watched>(pendingKey(record.network));
+  if (unsettled(was) && was.txHash !== record.txHash) return false;
+  await session.set(pendingKey(record.network), record);
+  return true;
+}
+
+/**
+ * Has Home's banner watch a transaction sent outside Send (Lovejoin's
+ * withdraw brought back now, its mix from the public account), unless a
+ * payment on that network may still go through: that one's watch stays.
+ */
+export async function watchSent(deps: PendingDeps, pending: PendingTx): Promise<void> {
+  await deps.wallet.withKeys(() => put(deps.session, pending));
+}
+
 /** The watched transaction as Home is shown it. */
 function shown(watched: Watched): PendingTx {
   const { txCbor: _txCbor, inputs: _inputs, contract: _contract, summary: _summary, kept: _kept, resentAt: _resentAt, ...pending } = watched;
@@ -141,7 +172,7 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   await wallet.withKeys(async () => {
     await rememberSpent(session, bytes);
     await session.remove(s.key);
-    await session.set(pendingKey(s.network), watched);
+    await put(session, watched);
   });
   await deps.activity?.sent(s.network, pending, s.summary).catch(() => undefined);
   return pending;
@@ -173,7 +204,10 @@ async function maybeSent(deps: PendingDeps, s: Sending): Promise<PendingTx> {
     await rememberSpent(session, bytes);
     // Send sends these very bytes again, and asks giveme.my nothing.
     await session.set(s.key, { ...s.kept, sentCbor: s.txCbor });
-    await session.set(pendingKey(s.network), watched);
+    // Another that may still go through keeps the watch (both went out at
+    // once, from two windows): new payments wait for it, and this one is
+    // held back all the same.
+    await put(session, watched);
     return watched;
   });
   // What the kept view has of the contract is behind whatever happened.
