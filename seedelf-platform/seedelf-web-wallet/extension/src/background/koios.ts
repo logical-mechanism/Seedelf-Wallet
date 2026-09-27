@@ -192,11 +192,19 @@ export class SpentInputError extends KoiosError {}
 
 /**
  * Koios didn't answer a submit (a timeout, a lost connection), asked the
- * wallet to slow down (429), or failed on its side (5xx). The transaction may
- * or may not have gone through; sending the same one again later is safe
- * (the ledger takes it once).
+ * wallet to slow down (429), or failed on its side (5xx). Sending the same
+ * transaction again later is safe (the ledger takes it once). `maybeSent`:
+ * it may or may not have gone through; not for a 429, which Koios's gateway
+ * answers before passing anything on.
  */
-export class KoiosBusyError extends KoiosError {}
+export class KoiosBusyError extends KoiosError {
+  constructor(
+    message: string,
+    readonly maybeSent = true,
+  ) {
+    super(message);
+  }
+}
 
 /**
  * Whether Chrome lets the wallet reach `url`'s host. Koios's public tier sends
@@ -430,7 +438,8 @@ export class Koios {
         throw new KoiosBusyError(unreachable(e));
       }
       text = await response.text();
-      if (response.status === 429 || response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
+      if (response.status === 429) throw new KoiosBusyError(koiosTrouble(429, "submittx"), false);
+      if (response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
       // Found live: a Koios backend whose own node was down answered. The
       // transaction never reached the network, so it's safe to send again,
       // and the gateway likely picks another backend.

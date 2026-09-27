@@ -20,6 +20,8 @@ import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
+/** A funding the chain doesn't have after this long never reached it (sessions.ts). */
+const FAILED_AFTER = 20 * 60_000 + 1;
 const account = (words: number) =>
   vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === words)!;
 const MIN = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e";
@@ -152,6 +154,35 @@ function swapTx({
 
 /** Minswap's swap from session 0's funding, as the fake aggregator builds it. */
 const SWAP = swapTx();
+
+/** Koios takes what's submitted, then answers `status` as though it hadn't: a gateway that timed out, say. Returns the undo. */
+function unanswered(t: Awaited<ReturnType<typeof unlocked>>, status = 504) {
+  const real = t.koios.fetch;
+  t.koios.fetch = async (url, init) => {
+    const answer = await real(url, init);
+    return url.endsWith("/submittx") ? new Response("upstream request timeout", { status }) : answer;
+  };
+  return () => {
+    t.koios.fetch = real;
+  };
+}
+
+/** Koios's gateway turns submits away (429) before its node sees them. Returns the undo. */
+function turnedAway(t: Awaited<ReturnType<typeof unlocked>>) {
+  const real = t.koios.fetch;
+  t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("", { status: 429 }) : real(url, init));
+  return () => {
+    t.koios.fetch = real;
+  };
+}
+
+/** Moves the clock on by `ms`, the user busy all along, so the wallet doesn't lock itself. */
+async function busy(t: Awaited<ReturnType<typeof unlocked>>, ms: number) {
+  for (let left = ms; left > 0; left -= 10 * 60_000) {
+    t.clock.now += Math.min(left, 10 * 60_000);
+    await t.wallet.touch();
+  }
+}
 
 /** The runner's alarm, as chrome.alarms would be. */
 function alarm() {
@@ -425,6 +456,33 @@ describe("a private session", () => {
     // A failed session can be forgotten; its index still isn't reused.
     expect(await t.sessions.forget("preprod", 0)).toEqual([]);
     expect((await t.sessions.outBuild("preprod", quote)).index).toBe(1);
+  });
+
+  it("waits for a funding Koios didn't answer rather than call it failed, and fails one its gateway turned away at once", async () => {
+    const t = await unlocked();
+    moreFunds(t, 1);
+    const sessions = signing(t);
+    const quote = await sessions.quote("preprod", ASK);
+    let undo = unanswered(t);
+    const out = await sessions.outBuild("preprod", quote);
+    await expect(sessions.outSubmit("preprod", out.txHash)).rejects.toThrow("Koios is having trouble");
+    undo();
+    // Its node took it: it may land any moment, so it's funding, not failed, and it can't be forgotten.
+    expect(t.koios.submitted.map(txIdOf)).toEqual([out.txHash]);
+    expect((await sessions.list("preprod", true))[0]).toMatchObject({ index: 0, stage: "funding" });
+    await expect(sessions.forget("preprod", 0)).rejects.toThrow("Only a session whose funding never reached the chain");
+    // It lands.
+    t.koios.confirmations = 1;
+    t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
+    expect((await sessions.list("preprod", true))[0]).toMatchObject({ index: 0, stage: "open" });
+
+    // A 429 is Koios's gateway turning it away before its node sees it: never sent.
+    undo = turnedAway(t);
+    const next = await sessions.outBuild("preprod", quote);
+    await expect(sessions.outSubmit("preprod", next.txHash)).rejects.toThrow("limiting requests");
+    undo();
+    t.koios.confirmations = null;
+    expect((await sessions.list("preprod", true)).find((v) => v.index === 1)).toMatchObject({ stage: "failed" });
   });
 
   it("never takes a one-time account the chain has seen used, whatever this device's record says", async () => {
@@ -721,6 +779,92 @@ describe("a swap that runs itself", () => {
     view = await sessions.advance("preprod", 0);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(t.koios.submitted).toHaveLength(3);
+  });
+
+  it("looks at the account before it calls a funding failed: what the funding paid is there, so it goes on", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await started(sessions);
+    // A Koios backend whose tx_status never knows the funding, though the account holds what it paid.
+    t.koios.confirmations = 1;
+    t.koios.missing.add(out.txHash);
+    t.koios.addedToAccounts.push(
+      atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value),
+      atSession(out.txHash, 1, "5000000"),
+    );
+    await busy(t, FAILED_AFTER);
+    const view = await sessions.advance("preprod", 0);
+    expect(view.stage).toBe("open");
+    expect(view.txs.map((x) => [x.kind, !!x.confirmed])).toEqual([
+      ["out", true],
+      ["swap", false],
+    ]);
+  });
+
+  it("goes on with a funding it found failed once it shows up after all: on a refresh, or Try again", async () => {
+    for (const how of ["refresh", "resume"] as const) {
+      const t = await unlocked();
+      const runner = alarm();
+      const sessions = signing(t, runner);
+      await started(sessions);
+      // Twenty minutes, and the chain has none of it: failed, and the runner leaves it.
+      await busy(t, FAILED_AFTER);
+      let view = await sessions.advance("preprod", 0);
+      expect(view.stage).toBe("failed");
+      await sessions.runAll("preprod");
+      expect(runner.on).toBe(false);
+
+      // It lands late.
+      funded(t);
+      if (how === "refresh") {
+        expect((await sessions.list("preprod", true))[0]).toMatchObject({ stage: "open", auto: { step: "ordering" } });
+        expect(runner.on).toBe(true);
+        view = await sessions.advance("preprod", 0, true);
+      } else {
+        view = await sessions.resume("preprod", 0);
+      }
+      expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    }
+  });
+
+  it("looks for a step Koios didn't answer before building it again, and once that copy lands, it's the one", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    await sessions.stop("preprod", 0);
+    funded(t);
+    // The return goes out, and Koios times out on it: it may be on its way.
+    const undo = unanswered(t);
+    let view = await sessions.advance("preprod", 0, true);
+    undo();
+    const first = txIdOf(t.koios.submitted.at(-1)!);
+    t.koios.missing.add(first);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "back"]);
+
+    // Minutes on, it isn't built again: Koios may have it.
+    await busy(t, 3 * 60_000);
+    await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(2);
+
+    // Unseen for 15 minutes, and what it spends free again (a lock forgets what was spent): it's built again.
+    await busy(t, 13 * 60_000);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(3);
+    const second = txIdOf(t.koios.submitted.at(-1)!);
+    expect(second).not.toBe(first);
+    t.koios.missing.add(second);
+
+    // The first lands after all: it's the return, the second can't land, and the session is done.
+    t.koios.missing.delete(first);
+    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.stage).toBe("closed");
+    expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
+      ["out", expect.any(String)],
+      ["back", first],
+    ]);
   });
 
   it("pauses when the price moved past what was approved, and orders at least that when it's back within it", async () => {
