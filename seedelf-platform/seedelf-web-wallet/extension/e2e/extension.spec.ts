@@ -567,6 +567,10 @@ test("activity: the private history from the device, the public account's from K
     "href",
     /^https:\/\/preprod\.cardanoscan\.io\/transaction\/[0-9a-f]{64}$/,
   );
+  // A private one says what opening it tells (privacy review §3.4).
+  await expect(details.getByTestId("explorer-note")).toHaveText(
+    "Opening this on Cardanoscan tells that site, and your browser history, that this transaction is yours.",
+  );
   await page.keyboard.press("Escape");
   // Refresh reads the balances again, which is how arrivals are noted.
   await page.getByRole("button", { name: "Refresh" }).click();
@@ -698,6 +702,8 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   expect(koios.submitted).toHaveLength(1);
   const [txId] = koios.submitted;
   await expect(banner.getByRole("link")).toHaveAttribute("href", `https://preprod.cardanoscan.io/transaction/${txId}`);
+  // The public account signed it in the open: its link stays plain.
+  await expect(banner.getByTestId("explorer-note")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Make private" })).toBeDisabled();
   await snap(page, "move-in-sent");
 
