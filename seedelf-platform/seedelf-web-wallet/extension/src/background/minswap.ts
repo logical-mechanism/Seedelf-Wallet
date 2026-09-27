@@ -12,6 +12,9 @@
 // It answers browsers with CORS headers, so the wallet needs no host
 // permission for it (networks.ts).
 
+import { blake2b } from "@noble/hashes/blake2.js";
+
+import { skip } from "./cbor";
 import type { FetchLike } from "./koios";
 
 /** "lovelace", or a token's policy ID and name in hex, run together. */
@@ -196,3 +199,129 @@ function routed(ask: SwapAsk, exclude: string[]) {
     exclude_protocols: exclude,
   };
 }
+
+/** One output of a transaction Minswap built, as a session's checks read it. */
+export interface BuiltOutput {
+  /** Its address's bytes, hex. */
+  address: string;
+  lovelace: bigint;
+  /** It carries tokens too. */
+  tokens: boolean;
+  /**
+   * Its datum's CBOR, hex: inline, or the one the transaction carries for
+   * its hash. Null when it has none, or names one the transaction doesn't
+   * carry.
+   */
+  datum: string | null;
+}
+
+/**
+ * Where a transaction Minswap built pays: each output's address, ADA and
+ * datum. An order's datum is its details (who it's for, what it gives); a
+ * DEX that keeps it by hash carries it in the witness set, as Minswap's V1
+ * orders do. Throws on bytes it can't read.
+ */
+export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
+  if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
+  const witnesses = skip(tx, 1);
+  const carried = new Map<string, string>();
+  for (const [key, at] of entries(tx, witnesses)) {
+    if (key !== 4) continue;
+    for (const d of items(tx, at)) {
+      const datum = tx.subarray(d, skip(tx, d));
+      carried.set(hex(blake2b(datum, { dkLen: 32 })), hex(datum));
+    }
+  }
+  const outputs = entries(tx, 1).find(([key]) => key === 1);
+  if (!outputs) throw new Error("the transaction has no outputs");
+  return items(tx, outputs[1]).map((o) => {
+    const fields = new Map<number, number>();
+    if (head(tx, o).major === 5) {
+      for (const [key, at] of entries(tx, o)) fields.set(key, at);
+    } else {
+      items(tx, o).forEach((at, i) => fields.set(i, at));
+    }
+    const address = bytesAt(tx, fields.get(0));
+    const value = fields.get(1);
+    if (value === undefined) throw new Error("an output has no value");
+    const coin = head(tx, value);
+    const [lovelace, tokens] =
+      coin.major === 0 ? [coin.n, false] : [head(tx, items(tx, value)[0]!).n, head(tx, items(tx, value)[1]!).n > 0n];
+    // A legacy output's third field is its datum's hash; a map's, `[0, hash]` or `[1, #6.24(datum)]`.
+    let datum: string | null = null;
+    const option = fields.get(2);
+    if (option !== undefined && head(tx, o).major === 5) {
+      const [which, inner] = items(tx, option);
+      if (head(tx, which!).n === 1n) {
+        const tag = head(tx, inner!);
+        if (tag.major !== 6 || tag.n !== 24n) throw new Error("an output's inline datum isn't wrapped as CBOR");
+        datum = hex(bytesAt(tx, tag.p));
+      } else {
+        datum = carried.get(hex(bytesAt(tx, inner))) ?? null;
+      }
+    } else if (option !== undefined) {
+      datum = carried.get(hex(bytesAt(tx, option))) ?? null;
+    }
+    return { address: hex(address), lovelace, tokens, datum };
+  });
+}
+
+interface Head {
+  major: number;
+  n: bigint;
+  /** Where the item's content starts. */
+  p: number;
+  indefinite: boolean;
+}
+
+function head(b: Uint8Array, pos: number): Head {
+  if (pos >= b.length) throw new Error("the transaction's CBOR ends too soon");
+  const major = b[pos]! >> 5;
+  const info = b[pos]! & 0x1f;
+  const size = info === 24 ? 1 : info === 25 ? 2 : info === 26 ? 4 : info === 27 ? 8 : 0;
+  if (info > 27 && info < 31) throw new Error("the transaction's CBOR isn't well formed");
+  if (pos + 1 + size > b.length) throw new Error("the transaction's CBOR ends too soon");
+  let n = BigInt(info);
+  if (size) n = [...b.subarray(pos + 1, pos + 1 + size)].reduce((v, x) => (v << 8n) | BigInt(x), 0n);
+  return { major, n, p: pos + 1 + size, indefinite: info === 31 };
+}
+
+/** The items of the array at `pos` (a tagged set's too), where each starts. */
+function items(b: Uint8Array, pos: number): number[] {
+  let h = head(b, pos);
+  if (h.major === 6) h = head(b, h.p);
+  if (h.major !== 4) throw new Error("the transaction's CBOR has a map where a list goes");
+  const found: number[] = [];
+  let p = h.p;
+  for (let i = 0n; h.indefinite ? b[p] !== 0xff : i < h.n; i++) {
+    found.push(p);
+    p = skip(b, p);
+  }
+  return found;
+}
+
+/** The map at `pos`: each small-number key, and where its value starts. */
+function entries(b: Uint8Array, pos: number): Array<[number, number]> {
+  const h = head(b, pos);
+  if (h.major !== 5) throw new Error("the transaction's CBOR has a list where a map goes");
+  const found: Array<[number, number]> = [];
+  let p = h.p;
+  for (let i = 0n; h.indefinite ? b[p] !== 0xff : i < h.n; i++) {
+    const key = head(b, p);
+    const value = skip(b, p);
+    found.push([key.major === 0 ? Number(key.n) : -1, value]);
+    p = skip(b, value);
+  }
+  return found;
+}
+
+/** The byte string at `pos`. */
+function bytesAt(b: Uint8Array, pos: number | undefined): Uint8Array {
+  if (pos === undefined) throw new Error("an output has no address");
+  const h = head(b, pos);
+  if (h.major !== 2 || h.indefinite) throw new Error("the transaction's CBOR has something else where bytes go");
+  if (h.n > BigInt(b.length - h.p)) throw new Error("the transaction's CBOR ends too soon");
+  return b.subarray(h.p, h.p + Number(h.n));
+}
+
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");

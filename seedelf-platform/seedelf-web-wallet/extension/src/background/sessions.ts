@@ -21,10 +21,12 @@
 // alarm calls it every minute while a swap runs and the wallet is unlocked,
 // and unlocking calls it, so an interrupted swap carries on where it was. It
 // signs only within the approval: the session's UTxOs, its key alone, no more
-// paid out than was funded, and an order for at least the least approved.
-// Anything else pauses for the user. Stop is the user's alone: an order that
-// waits is cancelled, then everything comes back. Every transaction is
-// recorded before it's submitted.
+// paid out than was funded, paid only to the session, to an order made out to
+// it, and to Minswap's quoted fee. The order's minimum is what the wallet asks
+// Minswap for, at least the least approved; Minswap builds the order, and its
+// minimum isn't read back. Anything else pauses for the user. Stop is the
+// user's alone: an order that waits is cancelled, then everything comes back.
+// Every transaction is recorded before it's submitted.
 //
 // A site's private session (chunk 15c, private CIP-30) is the same account,
 // connected to a site instead of used for a swap: the connector (dapp.ts)
@@ -64,7 +66,7 @@ import type {
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId } from "./cbor";
 import { KoiosError, SpentInputError, type KoiosUtxo } from "./koios";
-import type { Estimate, Minswap, PendingOrder } from "./minswap";
+import { builtOutputs, type BuiltOutput, type Estimate, type Minswap, type PendingOrder } from "./minswap";
 import {
   CHAIN_CUT,
   CHAIN_PUMP_MS,
@@ -138,7 +140,8 @@ type RecordedTx = SessionTx & {
 
 /** A swap that runs itself: what the user approved with the funding, and how it's going. */
 interface AutoRecord {
-  approved: { minAmountOut: string; fund: SwapQuote["fund"] };
+  /** `aggregatorFee`: Minswap's, as quoted; none on sessions from before, which pay it no fee. */
+  approved: { minAmountOut: string; fund: SwapQuote["fund"]; aggregatorFee?: string };
   paused?: SessionPause;
   retry?: { at: number; error: string; tries: number };
   /** When the user pressed Stop. */
@@ -222,6 +225,8 @@ interface KeptTx {
   /** The request WebAssembly read it with, to sign it the same way. */
   request: string;
   quote?: SwapQuote;
+  /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`). */
+  orders?: string[];
   builtAt: number;
 }
 
@@ -285,6 +290,9 @@ const PENDING_KIND = {
 
 /** The most funding changes one return merges into (WebAssembly's MAX_MERGE). */
 const MAX_MERGE = 4;
+
+/** The most a cancel's fee may be: Minswap's cancel of six orders, each a script spend, costs well under it. */
+const MAX_CANCEL_FEE = 3_000_000n;
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
@@ -505,7 +513,7 @@ export class SessionService {
     );
     const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) };
     // Sending this is the approval: the swap runs itself within it.
-    const approved = { minAmountOut: quote.minAmountOut, fund: quote.fund };
+    const approved = { minAmountOut: quote.minAmountOut, fund: quote.fund, aggregatorFee: quote.aggregatorFee };
     const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved };
     await keep(this.deps, SESSION_OUT, kept);
     return summary;
@@ -820,7 +828,7 @@ export class SessionService {
     const ask = checkAsk(s.swap);
     const est = await minswap.estimate(ask);
     const txCbor = await minswap.buildTx(address, est.min_amount_out, ask);
-    return this.review(network, index, "swap", txCbor, rows, { quote: quoteOf(network, ask, est) });
+    return this.review(network, s, "swap", txCbor, rows, { quote: quoteOf(network, ask, est) });
   }
 
   /** The session's orders that aren't filled yet. */
@@ -847,7 +855,7 @@ export class SessionService {
     if (!orders.length) throw new Error("No order of this session is waiting: it was filled, or cancelled already.");
     const txCbor = await minswap.cancelTx(address, orders);
     const rows = await this.utxosOf(network, keyHash);
-    return this.review(network, index, "cancel", txCbor, rows, { orders: orders.length });
+    return this.review(network, s, "cancel", txCbor, rows, { orders: orders.length });
   }
 
   /** Signs the swap or cancel reviewed last with the session's key, puts the signature in, and submits it. */
@@ -1151,7 +1159,7 @@ export class SessionService {
     const orders = await this.deps.minswap(network).pendingOrders(address);
     if (orders.length) {
       // Waiting for a batcher to fill it, unless the user stopped it.
-      if (auto.stopping) await this.cancel(network, s.index, address, rows, orders);
+      if (auto.stopping) await this.cancel(network, s, address, rows, orders);
       return;
     }
     // A fill or a refund comes in a transaction the session didn't make; a cancel's refund in its own.
@@ -1179,23 +1187,26 @@ export class SessionService {
     // At least what the user approved, or more when the price has moved their way.
     const min = BigInt(est.min_amount_out) > least ? est.min_amount_out : approved.minAmountOut;
     const txCbor = await minswap.buildTx(address, min, ask);
-    const built = await this.inspect(network, s.index, "swap", txCbor, rows, { ...quoteOf(network, ask, est), minAmountOut: min });
-    withinFunding(built.summary, approved.fund);
+    // Minswap's fee is bounded by what was approved, not by what it quotes now.
+    const quote = { ...quoteOf(network, ask, est), minAmountOut: min, aggregatorFee: approved.aggregatorFee ?? "0" };
+    const built = await this.inspect(network, s, "swap", txCbor, rows, quote);
+    withinFunding(paidOut(built.summary, address), built.summary.fee, approved.fund);
     await this.signAndSend(network, built);
   }
 
   /** Cancels the session's orders, after Stop: Minswap's cancel, checked, and the key's signature. */
   private async cancel(
     network: NetworkName,
-    index: number,
+    s: SessionRecord,
     address: string,
     rows: KoiosUtxo[],
     orders: PendingOrder[],
   ): Promise<void> {
     const txCbor = await this.deps.minswap(network).cancelTx(address, orders.slice(0, 6));
-    const built = await this.inspect(network, index, "cancel", txCbor, rows);
-    // A cancel only brings the orders' funds back to the session: it pays nothing out but its fee.
-    if (built.summary.paid.length) throw new Refused("its cancel pays someone other than this session.");
+    const built = await this.inspect(network, s, "cancel", txCbor, rows);
+    // A cancel only brings the orders' funds back to the session: it pays nothing out but its fee, and that's small.
+    if (paidOut(built.summary, address).length) throw new Refused("its cancel pays someone other than this session.");
+    if (BigInt(built.summary.fee) > MAX_CANCEL_FEE) throw new Refused("its cancel's fee is more than a cancel takes.");
     await this.signAndSend(network, built);
   }
 
@@ -1207,20 +1218,27 @@ export class SessionService {
 
   // -------------------------------------------------------------------------
 
-  /** Reads a transaction Minswap built against the session's key: what it spends, and what its key never signs. */
+  /**
+   * Reads a transaction Minswap built against the session's key: what it
+   * spends, what its key never signs, and, a swap's, where it pays
+   * (`checkOrder`, with Minswap's fee as `quote` has it).
+   */
   private async inspect(
     network: NetworkName,
-    index: number,
+    s: SessionRecord,
     kind: "swap" | "cancel",
     txCbor: string,
     rows: KoiosUtxo[],
     quote?: SwapQuote,
   ): Promise<KeptTx & { summary: DappTxSummary }> {
     const { wasm, wallet, now } = this.deps;
+    const { index } = s;
     let refs: string[];
+    let outputs: BuiltOutput[];
     try {
       const bytes = hexBytes(txCbor);
       refs = [...new Set([...(bodyOutpoints(bytes, 0) ?? []), ...(bodyOutpoints(bytes, 13) ?? [])])];
+      outputs = builtOutputs(bytes);
     } catch {
       throw new Error("The wallet can't read the transaction Minswap built.");
     }
@@ -1233,6 +1251,8 @@ export class SessionService {
       network,
       txCbor,
       keys: [{ role: 0, index }],
+      // Its own stake key: what pays its address back is its own (a session from before has the shared one).
+      stakeIndex: s.ownStake ? index : 0,
       inputs: [...refs.flatMap((r) => own.get(r) ?? []), ...foreign],
       partialSign: false,
     });
@@ -1246,21 +1266,27 @@ export class SessionService {
       throw new Refused(message.charAt(0).toLowerCase() + message.slice(1));
     }
     refuseOddities(summary, index);
-    return { network, index, kind, txHash: summary.txHash, txCbor, request, quote, builtAt: now(), summary };
+    let orders: string[] | undefined;
+    if (kind === "swap") {
+      const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
+      const at = checkOrder(outputs, { address: wasm.cip30Address(address), keyHash }, BigInt(quote?.aggregatorFee ?? "0"));
+      orders = at.map((i) => `${summary.txHash}#${i}`);
+    }
+    return { network, index, kind, txHash: summary.txHash, txCbor, request, quote, orders, builtAt: now(), summary };
   }
 
   /** Reads a transaction Minswap built, and keeps it for the user's Send. */
   private async review(
     network: NetworkName,
-    index: number,
+    s: SessionRecord,
     kind: "swap" | "cancel",
     txCbor: string,
     rows: KoiosUtxo[],
     extra: { quote?: SwapQuote; orders?: number },
   ): Promise<SessionTxReview> {
-    const { summary, builtAt: _builtAt, ...kept } = await this.inspect(network, index, kind, txCbor, rows, extra.quote);
+    const { summary, builtAt: _builtAt, ...kept } = await this.inspect(network, s, kind, txCbor, rows, extra.quote);
     await keep(this.deps, SESSION_TX, kept);
-    return { network, index, kind, txHash: summary.txHash, summary, ...extra };
+    return { network, index: s.index, kind, txHash: summary.txHash, summary, ...extra };
   }
 
   /** Signs a swap or cancel with the session's key alone, puts the signature in byte for byte, and sends it. */
@@ -1893,14 +1919,20 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
   };
 }
 
+/** What a transaction pays anyone but the session: a session from before's own address reads as paid (its stake part is the shared one). */
+function paidOut(s: DappTxSummary, address: string): DappTxSummary["paid"] {
+  return s.paid.filter((p) => p.address !== address);
+}
+
 /**
  * The runner's limit on what Minswap built: what leaves the session's
- * account, its fee included, is no more than was funded for the swap.
+ * account (`paid`), its fee included, is no more than was funded for the
+ * swap. A gift to the treasury is refused before (refuseOddities).
  */
-function withinFunding(s: DappTxSummary, fund: SwapQuote["fund"]): void {
-  let lovelace = BigInt(s.fee);
+function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote["fund"]): void {
+  let lovelace = BigInt(fee);
   const tokens = new Map<string, bigint>();
-  for (const p of s.paid) {
+  for (const p of paid) {
     lovelace += BigInt(p.lovelace);
     for (const t of p.tokens) tokens.set(t.policyId + t.assetName, (tokens.get(t.policyId + t.assetName) ?? 0n) + BigInt(t.quantity));
   }
@@ -1912,8 +1944,56 @@ function withinFunding(s: DappTxSummary, fund: SwapQuote["fund"]): void {
 }
 
 /**
+ * Where a swap Minswap built pays, before the session's key signs it (the
+ * runner, or the user's review), from its bytes (`builtOutputs`):
+ * - back to the session's own address;
+ * - an order at a DEX's contract, staked with the session's stake key or
+ *   none, whose details (its datum, inline or carried for its hash) name the
+ *   session's key: a real order names its owner, who gets the proceeds or
+ *   the refund;
+ * - at most one other address, Minswap's fee: ADA alone, and no more than
+ *   `aggregatorFee` quoted (none on preprod).
+ * Anything else is refused. The order's minimum isn't read back: it's what
+ * the wallet asks Minswap for, and Minswap builds the order. Returns the
+ * orders' output indexes.
+ */
+export function checkOrder(outputs: BuiltOutput[], session: { address: string; keyHash: string }, aggregatorFee: bigint): number[] {
+  // A base address's staking part: bytes 29 to 57, after the header and the payment part.
+  const stake = session.address.slice(58, 114);
+  const orders: number[] = [];
+  let fee = false;
+  outputs.forEach((o, i) => {
+    if (o.address === session.address) return;
+    // The header's high four bits: 0 to 7 are Shelley addresses, an odd one paying a script.
+    const type = Number.parseInt(o.address.charAt(0), 16);
+    if (type > 7) throw new Refused("it pays an address that isn't this session's.");
+    if (type % 2 === 0) {
+      if (o.address.slice(2, 58) === session.keyHash) throw new Refused("it pays this session's key under someone else's staking part.");
+      if (fee || o.tokens || o.lovelace > aggregatorFee) throw new Refused("it pays an address that isn't this session's.");
+      fee = true;
+      return;
+    }
+    const staked = type === 1 ? o.address.slice(58, 114) === stake : type === 7;
+    if (!staked) throw new Refused("it pays a contract under someone else's staking part.");
+    if (!o.datum) throw new Refused("it pays a contract without saying who the order is for.");
+    if (!names(o.datum, session.keyHash)) throw new Refused("its order isn't for this session.");
+    orders.push(i);
+  });
+  return orders;
+}
+
+/** Whether CBOR (hex) holds `keyHash` as a byte string of its own. */
+function names(cbor: string, keyHash: string): boolean {
+  const needle = `581c${keyHash}`;
+  for (let at = cbor.indexOf(needle); at >= 0; at = cbor.indexOf(needle, at + 1)) if (at % 2 === 0) return true;
+  return false;
+}
+
+/**
  * What a session's key never signs, whatever Minswap sent: anything that needs
- * another key, staking or governance, minting, or a spend the wallet can't see.
+ * another key, staking or governance, minting, a spend the wallet can't see,
+ * or a gift to the treasury, which no output shows and withinFunding
+ * wouldn't count.
  */
 function refuseOddities(s: DappTxSummary, index: number): void {
   if (!s.complete || s.othersSign) throw new Refused("it needs someone else's signature too.");
@@ -1923,4 +2003,5 @@ function refuseOddities(s: DappTxSummary, index: number): void {
     throw new Refused("it does something with staking or governance.");
   }
   if (s.mint.length) throw new Refused("it mints or burns tokens.");
+  if (s.donation && BigInt(s.donation) > 0n) throw new Refused("it gives ADA to the treasury.");
 }

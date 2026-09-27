@@ -3,15 +3,19 @@
 // signed with the session's key alone, and everything brought back into the
 // private balance. The 12-word phrase, the real WebAssembly, and fakes of
 // Koios, giveme.my and Minswap's aggregator.
+import { readFileSync } from "node:fs";
+
+import { blake2b } from "@noble/hashes/blake2.js";
 import { describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
+import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
 import { SESSION_PENDING } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
-import { checkAsk, INDEX_PROBE, SESSION_BACK, SESSION_OUT, SessionService } from "../src/background/sessions";
+import { checkAsk, checkOrder, INDEX_PROBE, Refused, SESSION_BACK, SESSION_OUT, SessionService } from "../src/background/sessions";
+import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
@@ -63,6 +67,92 @@ function atSession(tx_hash: string, tx_index: number, value: string, tokens: Arr
   } as KoiosUtxo;
 }
 
+const hex = (b: ArrayLike<number>) => Buffer.from(Uint8Array.from(b)).toString("hex");
+const bytes = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
+
+/**
+ * Just enough CBOR to write a transaction: numbers, bytes, lists, maps with
+ * number keys, tags, simple values, and items written already (`raw`, hex).
+ */
+type Cbor = number | bigint | Uint8Array | Cbor[] | Map<number, Cbor> | { tag: number; of: Cbor } | { raw: string } | boolean | null;
+function cbor(v: Cbor): number[] {
+  const head = (major: number, n: number | bigint): number[] => {
+    const x = BigInt(n);
+    const size = x < 24n ? 0 : x < 0x100n ? 1 : x < 0x10000n ? 2 : x < 0x100000000n ? 4 : 8;
+    const info = [0, 24, 25, 0, 26, 0, 0, 0, 27][size]!;
+    return [(major << 5) | (size ? info : Number(x)), ...Array.from({ length: size }, (_, i) => Number((x >> BigInt(8 * (size - 1 - i))) & 0xffn))];
+  };
+  if (v === null) return [0xf6];
+  if (typeof v === "boolean") return [v ? 0xf5 : 0xf4];
+  if (typeof v === "number" || typeof v === "bigint") return head(0, v);
+  if (v instanceof Uint8Array) return [...head(2, v.length), ...v];
+  if (Array.isArray(v)) return [...head(4, v.length), ...v.flatMap(cbor)];
+  if (v instanceof Map) return [...head(5, v.size), ...[...v].flatMap(([k, x]) => [...cbor(k), ...cbor(x)])];
+  if ("raw" in v) return [...bytes(v.raw)];
+  return [...head(6, v.tag), ...cbor(v.of)];
+}
+
+/** Session 0's address, and the recorded swap's order contract's under its staking part, as bytes (hex). */
+const SESSION_ADDRESS = loadTestWasm().cip30Address(sessionSwap.address);
+const ORDER_ADDRESS = `10${"a6".repeat(28)}${SESSION_ADDRESS.slice(58)}`;
+
+/**
+ * The details of a real order Minswap's aggregator built on preprod
+ * (wasm/tests/fixtures/minswap-swap-preprod.json, a Minswap V1 order kept by
+ * its hash), made out to session 0: its key and staking part in place of the
+ * recorded sender's.
+ */
+const recordedSwap = JSON.parse(
+  readFileSync(new URL("../../wasm/tests/fixtures/minswap-swap-preprod.json", import.meta.url), "utf8"),
+) as { sender: string; cbor: string };
+const SENDER = loadTestWasm().cip30Address(recordedSwap.sender);
+const ORDER_DATUM = builtOutputs(bytes(recordedSwap.cbor))[0]!
+  .datum!.replaceAll(SENDER.slice(2, 58), sessionSwap.keyHash)
+  .replaceAll(SENDER.slice(58), SESSION_ADDRESS.slice(58));
+
+/**
+ * A swap shaped like the one Minswap's aggregator built on preprod, from
+ * session 0's funding (the recorded one, session-swap.json, with its order's
+ * details carried): the order at a DEX's contract, kept by its datum's hash,
+ * and the change back. `outputs` in their place, each `[address, lovelace,
+ * datum]`; `donation` to the treasury.
+ */
+function swapTx({
+  datum = ORDER_DATUM,
+  outputs,
+  donation,
+}: { datum?: string; outputs?: Array<[string, number, string?]>; donation?: number } = {}): string {
+  const hashOf = (d: string) => blake2b(bytes(d), { dkLen: 32 });
+  const paid = outputs ?? [
+    [ORDER_ADDRESS, 14_000_000, datum],
+    [SESSION_ADDRESS, 131_585_414],
+  ];
+  const body = new Map<number, Cbor>([
+    [0, { tag: 258, of: [[bytes(sessionSwap.utxo.tx_hash), sessionSwap.utxo.tx_index]] }],
+    [
+      1,
+      paid.map(([address, lovelace, d]) => {
+        const out = new Map<number, Cbor>([
+          [0, bytes(address)],
+          [1, lovelace],
+        ]);
+        if (d) out.set(2, [0, hashOf(d)]);
+        return out;
+      }),
+    ],
+    [2, 205_189],
+    [3, 134_639_865],
+  ]);
+  if (donation) body.set(22, donation);
+  // The datums its orders name by hash, carried in the witness set, as Minswap's are.
+  const datums = paid.flatMap(([, , d]) => (d ? [{ raw: d }] : []));
+  const witnesses = new Map<number, Cbor>(datums.length ? [[4, { tag: 258, of: datums }]] : []);
+  return hex(cbor([body, witnesses, true, null]));
+}
+
+/** Minswap's swap from session 0's funding, as the fake aggregator builds it. */
+const SWAP = swapTx();
+
 /** The runner's alarm, as chrome.alarms would be. */
 function alarm() {
   const a = {
@@ -81,6 +171,7 @@ function alarm() {
 function signing(t: Awaited<ReturnType<typeof unlocked>>, runner = alarm()) {
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+  t.minswap.swapCbor = SWAP;
   return new SessionService({
     ...t.deps,
     wasm: {
@@ -283,7 +374,7 @@ describe("a private session", () => {
     const sent = t.koios.submitted.at(-1)!;
     expect(txIdOf(sent)).toBe(review.txHash);
     // Signed: the witness set gained the session key's signature.
-    expect(sent.length).toBeGreaterThan(sessionSwap.swapCbor.length / 2 + 96);
+    expect(sent.length).toBeGreaterThan(SWAP.length / 2 + 96);
 
     // Filled: the proceeds and the change are at the account; the funding UTxO was spent.
     t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
@@ -468,8 +559,8 @@ const ORDER = {
   deposit: "2000000",
 };
 
-/** The recorded swap's id: signing it adds a witness, never changes its body. */
-const SWAP_TX = txIdOf(Uint8Array.from(Buffer.from(sessionSwap.swapCbor, "hex")));
+/** The swap's id: signing it adds a witness, never changes its body. */
+const SWAP_TX = txIdOf(bytes(SWAP));
 
 describe("a swap that runs itself", () => {
   type T = Awaited<ReturnType<typeof unlocked>>;
@@ -632,6 +723,130 @@ describe("a swap that runs itself", () => {
     const view = await sessions.advance("preprod", 0);
     expect(view.auto!.paused).toMatchObject({ why: "refused", detail: "it pays out more ADA than was funded for the swap." });
     expect(t.koios.submitted).toHaveLength(1);
+  });
+
+  it("pauses rather than sign a swap that pays anyone but the session, an order made out to it, and Minswap's quoted fee", async () => {
+    const other = `00${"c4".repeat(28)}${"c5".repeat(28)}`;
+    const refused = async (swapCbor: string, quoted?: string) => {
+      const t = await unlocked();
+      const sessions = signing(t);
+      t.minswap.swapCbor = swapCbor;
+      if (quoted) t.minswap.estimate = { ...minswapEstimate.estimate, aggregator_fee: quoted };
+      await started(sessions);
+      funded(t);
+      const { paused } = (await sessions.advance("preprod", 0)).auto!;
+      // Paused, nothing is signed: only the funding was sent.
+      expect(t.koios.submitted).toHaveLength(paused ? 1 : 2);
+      return paused?.why === "refused" ? paused.detail : paused;
+    };
+    // The change to someone else.
+    expect(await refused(swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [other, 131_585_414]] }))).toBe(
+      "it pays an address that isn't this session's.",
+    );
+    // The session's key under someone else's staking.
+    const franken = `${SESSION_ADDRESS.slice(0, 58)}${"c5".repeat(28)}`;
+    expect(await refused(swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [franken, 131_585_414]] }))).toBe(
+      "it pays this session's key under someone else's staking part.",
+    );
+    // An order made out to someone else: the recorded one's, the public account's.
+    expect(await refused(swapTx({ datum: builtOutputs(bytes(recordedSwap.cbor))[0]!.datum! }))).toBe(
+      "its order isn't for this session.",
+    );
+    // An order whose details it doesn't carry.
+    expect(await refused(sessionSwap.swapCbor)).toBe("it pays a contract without saying who the order is for.");
+    // An order under another staking part.
+    const staked = `10${"a6".repeat(28)}${"c5".repeat(28)}`;
+    expect(await refused(swapTx({ outputs: [[staked, 14_000_000, ORDER_DATUM], [SESSION_ADDRESS, 131_585_414]] }))).toBe(
+      "it pays a contract under someone else's staking part.",
+    );
+
+    // Minswap's fee: one more address, ADA alone, no more than the fee approved with the funding.
+    const withFee = swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [other, 1_000_000], [SESSION_ADDRESS, 130_585_414]] });
+    expect(await refused(withFee, "1000000")).toBeUndefined();
+    expect(await refused(withFee, "999999")).toBe("it pays an address that isn't this session's.");
+    expect(await refused(withFee)).toBe("it pays an address that isn't this session's.");
+  });
+
+  it("pauses rather than sign a swap that gives ADA to the treasury, which no output shows", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    t.minswap.swapCbor = swapTx({
+      outputs: [
+        [ORDER_ADDRESS, 14_000_000, ORDER_DATUM],
+        [SESSION_ADDRESS, 31_585_414],
+      ],
+      donation: 100_000_000,
+    });
+    await started(sessions);
+    funded(t);
+    const view = await sessions.advance("preprod", 0);
+    expect(view.auto!.paused).toMatchObject({ why: "refused", detail: "it gives ADA to the treasury." });
+    expect(t.koios.submitted).toHaveLength(1);
+  });
+
+  it("cancels an order with a small fee that pays no one else, and pauses rather than sign one with a large fee", async () => {
+    const cancelTx = (fee: number, donation?: number) => {
+      const own = bytes(SESSION_ADDRESS);
+      const body = new Map<number, Cbor>([
+        // The swap's change, and its order at the DEX's contract.
+        [0, { tag: 258, of: [[bytes(SWAP_TX), 1], [bytes(SWAP_TX), 0]] }],
+        [1, [new Map<number, Cbor>([[0, own], [1, 131_585_414 + 14_000_000 - fee - (donation ?? 0)]])]],
+        [2, fee],
+        [3, 134_639_865],
+        [13, { tag: 258, of: [[bytes(SWAP_TX), 1]] }],
+        [14, { tag: 258, of: [bytes(sessionSwap.keyHash)] }],
+        [16, new Map<number, Cbor>([[0, own], [1, 131_585_414 - (fee * 3) / 2]])],
+        [17, (fee * 3) / 2],
+      ]);
+      if (donation) body.set(22, donation);
+      const redeemers = new Map<number, Cbor>([[5, [[0, 0, { tag: 122, of: [] }, [500_000, 200_000_000]]]]]);
+      return hex(cbor([body, redeemers, true, null]));
+    };
+    const stopped = async (cancelCbor: string) => {
+      const t = await unlocked();
+      const sessions = signing(t);
+      await started(sessions);
+      funded(t);
+      await sessions.advance("preprod", 0);
+      // The order waits at the DEX's contract; Stop asks Minswap to cancel it.
+      t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
+      t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"), {
+        ...atSession(SWAP_TX, 0, "14000000"),
+        address: bech32("addr_test", bytes(ORDER_ADDRESS)),
+        payment_cred: "a6".repeat(28),
+      });
+      t.minswap.orders = [{ ...ORDER, tx_in: `${SWAP_TX}#0` }];
+      t.minswap.cancelCbor = cancelCbor;
+      const view = await sessions.stop("preprod", 0);
+      return { view, sent: t.koios.submitted.length };
+    };
+    // 0.4 ₳, all of it back to the session: signed and sent.
+    const fine = await stopped(cancelTx(400_000));
+    expect(fine.view.auto!.paused).toBeUndefined();
+    expect(fine.view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    // 5 ₳ is more than any cancel of Minswap's takes.
+    const costly = await stopped(cancelTx(5_000_000));
+    expect(costly.view.auto!.paused).toMatchObject({ why: "refused", detail: "its cancel's fee is more than a cancel takes." });
+    expect(costly.sent).toBe(2);
+    // So is 13 ₳ of the order's given to the treasury.
+    const gift = await stopped(cancelTx(400_000, 13_000_000));
+    expect(gift.view.auto!.paused).toMatchObject({ why: "refused", detail: "it gives ADA to the treasury." });
+  });
+
+  it("reads where a swap pays the same way on the order Minswap's aggregator really built", async () => {
+    const outputs = builtOutputs(bytes(recordedSwap.cbor));
+    // Made out to its sender (the 12-word phrase's public account): its order, output 0, and the change back.
+    expect(checkOrder(outputs, { address: SENDER, keyHash: SENDER.slice(2, 58) }, 0n)).toEqual([0]);
+    expect(() => checkOrder(outputs, { address: SESSION_ADDRESS, keyHash: sessionSwap.keyHash }, 0n)).toThrow(Refused);
+  });
+
+  it("won't let the user sign a swap the runner wouldn't", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    t.minswap.swapCbor = sessionSwap.swapCbor;
+    await started(sessions);
+    funded(t);
+    await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow("The wallet won't sign what Minswap built: it pays a contract without saying");
   });
 
   it("pauses rather than sign a swap that spends UTxOs that aren't the session's, as a DEX swapping against its pools does", async () => {
