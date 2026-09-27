@@ -1050,9 +1050,9 @@ describe("the prompt's words for the account's staking", () => {
     expect(certificateLine(cert({ ...pool, poolAction: "register" }), true, "")).toBe("Registers stake pool pool1abc, or updates its terms.");
     expect(certificateLine(cert({ ...pool, poolAction: "retire" }), true, "")).toBe("Retires stake pool pool1abc.");
     expect(certificateLine(cert({ ...pool, pool: null }), true, "")).toBe("A stake pool's certificate.");
-    // Staking money comes back when the account's own outputs get at least as much.
-    expect(stakingComesBack({ returnedLovelace: "2000000", stakingLovelace: "2000000" })).toBe(true);
-    expect(stakingComesBack({ returnedLovelace: "1999999", stakingLovelace: "2000000" })).toBe(false);
+    // Staking money comes back when the account's own outputs get at least as much, the fee aside.
+    expect(stakingComesBack({ returnedLovelace: "1830000", stakingLovelace: "2000000", fee: "170000" })).toBe(true);
+    expect(stakingComesBack({ returnedLovelace: "1829999", stakingLovelace: "2000000", fee: "170000" })).toBe(false);
   });
 });
 

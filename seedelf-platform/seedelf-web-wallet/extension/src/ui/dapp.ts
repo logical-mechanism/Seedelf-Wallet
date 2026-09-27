@@ -13,11 +13,11 @@ type Withdrawal = DappTxSummary["withdrawals"][number];
 
 /**
  * Whether the account's staking money comes back to it: its own outputs get
- * at least as much. When they get less, some of it can only have gone to
- * the others paid, or the fee.
+ * at least as much, the network fee aside (shown on its own row). When they
+ * get less, the rest can only have gone to the others paid.
  */
-export function stakingComesBack(s: Pick<DappTxSummary, "returnedLovelace" | "stakingLovelace">): boolean {
-  return BigInt(s.returnedLovelace) >= BigInt(s.stakingLovelace);
+export function stakingComesBack(s: Pick<DappTxSummary, "returnedLovelace" | "stakingLovelace" | "fee">): boolean {
+  return BigInt(s.returnedLovelace) + BigInt(s.fee) >= BigInt(s.stakingLovelace);
 }
 
 /** What an output pays, under its address. */
