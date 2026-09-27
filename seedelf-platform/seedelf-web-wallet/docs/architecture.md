@@ -6,7 +6,7 @@ Keep it light: a small Manifest V3 extension, the Seedelf crypto and transaction
 
 ```mermaid
 flowchart LR
-  UI["UI<br/>(full tab or side panel)"] -- "typed RPC (runtime messages)" --> SW
+  UI["UI<br/>(full tab or side panel)"] -- "typed RPC (a port per request)" --> SW
   subgraph SW["Service worker"]
     Vault["Vault + lock"]
     Wallet["Wallet state"]
@@ -21,7 +21,7 @@ flowchart LR
 - **Service worker:** owns everything that matters.
   - While unlocked, it holds the decrypted secret. It is the only place secrets ever exist.
   - It also holds wallet state, builds and signs transactions, and makes all network calls.
-- **UI:** renders state and sends the user's actions to the service worker. It never holds keys. The only secret it ever sees is the recovery phrase, while the user writes it down or types it in during onboarding.
+- **UI:** renders state and sends the user's actions to the service worker. It never holds keys. The only secrets it ever sees are the ones the user types or asks for: the password, and the recovery phrase while the user writes it down or types it in (onboarding, or Settings' reveal and check). Each goes only to the worker.
 - **Content scripts (chunk 15):** none until the user turns on the [dApp connector](#dapp-connector).
   - This matters for security: until then, the wallet adds nothing to web pages.
   - Its install-time host permissions are only Koios and giveme.my. The sites are an optional permission, asked for when the connector is turned on, and kept when it's turned off (see [dApp connector](#dapp-connector)).
@@ -29,6 +29,7 @@ flowchart LR
 ## Service worker
 
 - **The worker owns the state and the UI mirrors it.** The UI takes a snapshot on open (the `status` request), then refreshes whenever the worker broadcasts `state-changed`, for example on auto-lock. This is Lace's model, minus its framework.
+  - **Requests go to the worker alone** (the launch review, #33). Each travels on a port of its own (`UI_PORT`, `ui/background.ts`), which only the worker listens for (`ui-port.ts`: this extension's own pages only). `runtime.sendMessage` would also hand it, and a password or the phrase in it, to every other open wallet page. The broadcasts (`state-changed`, `dapp-changed`) carry nothing, so they stay messages.
   - The wallet states are `no-wallet`, `locked` and `unlocked` (`extension/src/background/wallet.ts`).
   - The worker runs state changes one at a time, so two pages can't race each other past the unlock back-off.
 - **Chrome kills an idle worker after about 30 seconds.** State must reload from storage on every wake-up. The worker's timers don't survive either, so auto-lock uses `chrome.alarms`.
@@ -41,9 +42,12 @@ flowchart LR
 - **Staying unlocked across restarts (built in chunk 5).** A worker restart loses everything held in memory, including the unlocked keys. No page can hold the keys either: there may be several, and each closes when the user closes it.
   - On unlock, the vault's entropy goes into `chrome.storage.session` (`seedelf.entropy`), along with the time of the last activity (`seedelf.lastActivity`). That storage is in memory only, never written to disk, cleared when the browser closes, and not readable by content scripts.
   - **It is readable by the extension's own pages**, as any extension storage is: there's no store only the worker can read. What keeps it from them is that they run only the extension's own code (the CSP allows no other script). Since the crypto review (2026-09-25), no page listens to `chrome.storage.onChanged`, whose events carry session storage's changes, the entropy among them at every unlock and lock: the UI follows `chrome.storage.local.onChanged` alone.
-  - **Content scripts can't read local storage either** (the crypto review): the worker sets both areas to `TRUSTED_CONTEXTS` at every start (`chrome.storage.<area>.setAccessLevel`; Chrome's default leaves local storage open to content scripts). The connector's bridge runs in every site's renderer and never reads storage, so a renderer a site took over can't take the sealed vault through it to guess the password offline, or change the unsealed settings.
+  - **Content scripts can't read local storage either** (the crypto review): the worker sets both areas to `TRUSTED_CONTEXTS` at every start (`chrome.storage.<area>.setAccessLevel`; Chrome's default leaves local storage open to content scripts). The connector's bridge runs in every site's renderer and never reads storage, so a renderer a site took over can't take the sealed vault through it to guess the password offline, or change the unsealed settings. A Chrome that won't set it on local storage keeps the connector off: its scripts are never registered, and the status says why (`connectorBlocked: "storage"`, `storage-access.ts`).
   - A restarted worker re-derives the keys from there, unless the auto-lock deadline has passed, in which case it locks.
   - **Lock** (manual or auto-lock) clears the entropy from session storage and frees the keys in memory. Wiping memory is best effort (see *Build settings* under [Crypto](#crypto)).
+    - Storage goes first, and the keys are dropped whatever happens, each freed in its own `try`: a WebAssembly instance that trapped refuses `free()`, and nothing it does can keep the wallet unlocked (the launch review, #17).
+    - A call that traps (`isTrap` in `wasm.ts`) locks the wallet and replaces the instance with a fresh one in place (`freshWasm`, wasm-bindgen's reset function, which `wasm/build.sh` asks for). The old instance's key objects stop working, so the user unlocks again.
+    - Auto-lock counts an activity time in the future (a clock that moved back) as expired, and its alarm stops once there's no entropy, as after a browser restart, without loading WebAssembly.
   - The result: the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every idle restart.
 
 ## Crypto
@@ -211,7 +215,9 @@ flowchart LR
   - The query goes by payment credential, so it finds contract UTxOs with and without a staking part. Older outputs on preprod carry the shared Seedelf stake key; the current CLI writes none.
   - **The contract is read in full only when due (chunk 12, `contract-scan.ts`).** A full read costs a request per 1,000 contract UTxOs, and Koios's public tier allows 5,000 requests a day, so it happens after an unlock, every 30 minutes, and after the network refuses a spent input (`SpentInputError`).
     - In between, a read asks only for the UTxOs in blocks after the last one seen (`credential_utxos?block_height=gt.N`, re-reading 2 blocks), usually a single request.
-    - What's kept, in `chrome.storage.session`, is this wallet's own UTxOs, each Seedelf's UTxO (for Send's lookup) and the height: never the whole contract.
+    - What's kept, in `chrome.storage.session`, is this wallet's own UTxOs, where each Seedelf is (for Send's lookup) and the height: never the whole contract.
+    - Another wallet's Seedelf is kept as its outpoint, address and register, a few hundred bytes, and given back as the minimal row paying it reads (the launch review, H5). Session storage has 10 MB for the whole extension, and anyone can add Seedelfs, each with as many tokens as a UTxO holds. A view that still can't be kept is used anyway, and the next read is full.
+    - Which rows are ours is checked 200 to a turn of the wallet's queue, so a lock or a page's request never waits for the whole contract, and a lock partway ends the read with nothing kept (#52).
     - The wallet's own spends drop out as it makes them (`spent.ts`). A spend made with the same phrase elsewhere, or a rollback, shows at the next full read.
     - The balance, Send's lookup and every Seedelf spend's build read through it, so opening Send after Home costs one small request, not another full read.
 - **Discovering the Cardano account:** walk the receive chain (`0/i`) and the change chain (`1/i`) from index 0 until 20 addresses in a row are unused. "Used" means Koios lists the address under the account's stake key.
@@ -227,8 +233,8 @@ flowchart LR
   - The worker remembers the inputs of every transaction it submits (`spent.ts`, in `chrome.storage.session`, wiped on lock).
   - A balance reading or a build whose answer lists one of them is read again, up to three more times, 3 s apart.
   - What's spent is left out either way, so a stale answer can't be built on.
-- **Activity (chunk 12, `activity.ts`):** the Seedelf history makes no requests (sends are written at submit, arrivals come from the contract scan), sealed in the private store. The Cardano account's comes from `account_txs` (newest first, 20 a page; after the newest block read, to catch up) and one `tx_info` a page, with inputs, outputs, assets, metadata, withdrawals and certificates turned on (about 2 KB a transaction): each entry names its staking (a registration's deposit, the pool, the vote, a withdrawal, stopping), from the certificates naming the account's stake address, and carries its note (CIP-20's label 674, at most 500 characters kept). A pool's ticker comes only from the device (the session's pool reads, then the kept pool list), never from a request. The pages stay in `chrome.storage.session`; the account's addresses come from the last balance reading.
-- **Coin control (chunk 12, `coin-control.ts`):** the UTxOs the user locked, per side, and the Cardano account's collateral. None of it asks Koios anything: the UTxOs screen and the locked amounts read the last balance reading's UTxOs (`seedelf.accountUtxos.<network>`) and the contract scan's.
+- **Activity (chunk 12, `activity.ts`):** the Seedelf history makes no requests (sends are written at submit, arrivals come from the contract scan), sealed in the private store. The Cardano account's comes from `account_txs` (newest first, 20 a page; after the newest block read, to catch up) and one `tx_info` a page, with inputs, outputs, assets, metadata, withdrawals and certificates turned on (about 2 KB a transaction): each entry names its staking (a registration's deposit, the pool, the vote, a withdrawal, stopping), from the certificates naming the account's stake address, and carries its note (CIP-20's label 674, at most 500 characters kept). A pool's ticker comes only from the device (the session's pool reads, then the kept pool list), never from a request. The pages stay in `chrome.storage.session`; the account's payment keys come from the last balance reading. An input or output is the account's by its payment key, as the balance counts it, and a transaction with nothing of the account's (someone paying their own key under our stake key, which `account_txs` lists) is left out (the launch review, #30).
+- **Coin control (chunk 12, `coin-control.ts`):** the UTxOs the user locked, per side, and the Cardano account's collateral. None of it asks Koios anything: the UTxOs screen and the locked amounts read the last balance reading's UTxOs (`seedelf.accountUtxos.<network>`) and the contract scan's. Toggling a lock changes only that UTxO's: a reading that leaves a locked UTxO out (a backend behind, say) never drops its lock (#51).
   - **Locked** UTxOs are left out before WebAssembly sees the UTxOs, in `readAccount` (a move-in, a send, an account-paid mint) and `readContract` (every Seedelf spend). The balance still counts them, and reports them apart (`locked` on each side), fresh on every request. A Seedelf's UTxO can't be locked, and the collateral is reclaimed, not unlocked.
   - **The collateral** is one pure-ADA 5 ₳ UTxO under the account: the one the user chose, or else the oldest the account holds, unless the user reclaimed it. It's always left out of payments, and passed to `draftAccountMint` as the mint's collateral. Setting one with none to take is a send of 5 ₳ to the account's own `0/0` (`SendService.buildCollateral`); its output 0 is the collateral from Send on, and it's "waiting" until a reading has it, for up to 10 minutes.
   - The choices are a private record (`coins.<network>`), sealed like Contacts: which Seedelf UTxOs are the user's is exactly what the contract hides.
@@ -256,8 +262,8 @@ flowchart LR
 | `chrome.storage.session` | `seedelf.entropy` | The vault entropy, only while unlocked |
 | `chrome.storage.session` | `seedelf.lastActivity` | When the user last did something, for auto-lock |
 | `chrome.storage.session` | `seedelf.balances.<network>` | The last balance reading, only while unlocked |
-| `chrome.storage.session` | `seedelf.contract.<network>` | This wallet's contract UTxOs, each Seedelf's UTxO and the last block seen (`contract-scan.ts`), only while unlocked |
-| `chrome.storage.session` | `seedelf.accountAddresses.<network>`, `seedelf.accountActivity.<network>` | The account's stake address and addresses (from the balance reading), and its Activity pages, only while unlocked |
+| `chrome.storage.session` | `seedelf.contract.<network>` | This wallet's contract UTxOs, where each Seedelf is (outpoint, address, register) and the last block seen (`contract-scan.ts`), only while unlocked |
+| `chrome.storage.session` | `seedelf.accountAddresses.<network>`, `seedelf.accountActivity.<network>` | The account's stake address, addresses and payment keys (from the balance reading), and its Activity pages, only while unlocked |
 | `chrome.storage.session` | `seedelf.accountUtxos.<network>` | The account's UTxOs with their key paths, from the balance reading, for the UTxOs screen and what's locked; only while unlocked |
 | `chrome.storage.local` | `seedelf.preferences` | The user's settings: `spendRewards` (chunk 13); `hideBalances`, `lockAfterMinutes` and `currency` (chunk 14); `dappConnector` (chunk 15). Not sealed: nothing in it is about money. Deleted with the wallet. |
 | `chrome.storage.local` | `seedelf.pools.<network>` | Every live pool, for a day (chunk 13). The same for everyone, so it says nothing about the user. |
@@ -382,7 +388,7 @@ flowchart LR
   - Each session's return is its own transaction, signed by its own key, never one spending several sessions' UTxOs: that would show on chain that they share an owner.
   - They're built up front, for a review where any can be left out, then sent one after another; one that fails doesn't stop the rest.
   - The dApps page reads the sessions' accounts when it opens (one Koios request for all of them), so it knows what they hold.
-- **The password at Sign** (the `dappPassword` setting, on by default): a site's `signTx` or `signData` is signed only once the password typed in the window checks out (`Wallet.checkPassword`), even while unlocked and even right after an unlock. A wrong one leaves the request waiting, tells the site nothing, and counts towards the unlock back-off. Only the wallet's own pages can answer a request: the worker refuses messages from anywhere else.
+- **The password at Sign** (the `dappPassword` setting, on by default): a site's `signTx` or `signData` is signed only once the password typed in the window checks out (`Wallet.checkPassword`), even while unlocked and even right after an unlock. A wrong one leaves the request waiting, tells the site nothing, and counts towards the unlock back-off. Only the wallet's own pages can answer a request: the worker refuses requests from anywhere else.
 
 ## Private sessions
 
