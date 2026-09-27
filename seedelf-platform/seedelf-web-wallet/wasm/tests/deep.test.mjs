@@ -72,7 +72,9 @@ test("a stranger's deep UTxO at mix_box leaves the Lovejoin pool readable", () =
     { datum: row(box, "d1", deepDatum, "null"), script: row(box, "d2", JSON.stringify(pool[0].inline_datum), deepScript) },
   );
   const owned = JSON.parse(lovejoinOwned(key, request));
-  assert.deepEqual(owned, { boxes: [], lovelace: "0" });
+  assert.deepEqual([owned.boxes, owned.lovelace], [[], "0"]);
+  // Neither counts among the boxes to mix with.
+  assert.equal(owned.others, pool.length);
   // The module is still whole.
   assert.deepEqual(JSON.parse(lovejoinOwned(key, JSON.stringify({ network: "preprod", pool }))), owned);
   key.free();

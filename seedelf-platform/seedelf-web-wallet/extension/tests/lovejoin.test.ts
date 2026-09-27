@@ -331,6 +331,17 @@ describe("the network's check", CHAINS, () => {
     t.koios.evaluation = { jsonrpc: "2.0", error: { code: 3010, message: "Some scripts of the transaction terminated with error(s).", data: [] } };
     expect((await sessions.backBuild("preprod", 0)).lovejoinSkipped).toMatch(/refused|couldn't evaluate/);
   });
+
+  it("leaves it out too when a UTxO at mix_box that isn't a box made the pool look big enough", async () => {
+    const { t, sessions } = await withSession("40000000");
+    // Seven boxes and 12 ₳ under a box's datum: eight at mix_box, and a box two waves deep takes eight others.
+    const junk = { ...POOL[0]!, tx_hash: "e1".repeat(32), value: "12000000" };
+    t.koios.addedToAccounts = [...t.koios.addedToAccounts.filter((u) => !POOL.slice(7).includes(u)), junk];
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin).toBeUndefined();
+    expect(review.lovejoinSkipped).toBe("Lovejoin's pool has 7 boxes to mix with, and this needs 8");
+    expect(review.inputs).toBe(2);
+  });
 });
 
 /** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */

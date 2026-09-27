@@ -925,3 +925,145 @@ fn mixing_again_is_funded_for_the_mixes_alone() {
     .unwrap();
     assert_eq!((funded.lovelace.as_str(), funded.mixes), ("9100000", 8));
 }
+
+/// What else anyone can leave at `mix_box`, none of it a box: a token beside
+/// the 10 ₳, no datum, a datum whose points aren't on the curve, and a box's
+/// datum on 12 ₳.
+fn junk(protocol: &Protocol) -> Vec<UtxoResponse> {
+    let like = |tx: u8| UtxoResponse {
+        tx_hash: hex::encode([tx; 32]),
+        ..pool(protocol)[0].clone()
+    };
+    vec![
+        UtxoResponse {
+            asset_list: Some(
+                serde_json::from_value(json!([{ "policy_id": MIN_POLICY, "asset_name": "4d494e",
+                    "quantity": "1", "decimals": 0, "fingerprint": "" }]))
+                .unwrap(),
+            ),
+            ..like(0xe1)
+        },
+        UtxoResponse {
+            inline_datum: None,
+            ..like(0xe2)
+        },
+        UtxoResponse {
+            inline_datum: serde_json::from_value(json!({
+                "bytes": hex::encode(mix_datum(&[0xaa; 48], &[0xbb; 48])), "value": {},
+            }))
+            .unwrap(),
+            ..like(0xe3)
+        },
+        UtxoResponse {
+            value: "12000000".into(),
+            ..like(0xe4)
+        },
+    ]
+}
+
+#[test]
+fn junk_at_mix_box_is_not_counted_among_the_boxes_to_mix_with() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(1357u64);
+    let ours = our_box_rows(sk, 2, &protocol);
+    let boxes = pool(&protocol);
+    let mut rows = boxes.clone();
+    rows.extend(junk(&protocol));
+    rows.extend(ours.iter().cloned());
+    let owned = lovejoin::owned(
+        sk,
+        OwnedRequest {
+            network: "preprod".into(),
+            pool: rows,
+        },
+    )
+    .unwrap();
+    assert_eq!(owned.boxes.len(), 2);
+    // Only the other boxes, never the junk: what a mix may take.
+    assert_eq!(owned.others, boxes.len());
+    let refs: Vec<OutRef> = boxes
+        .iter()
+        .map(|r| OutRef {
+            tx_hash: r.tx_hash.clone(),
+            tx_index: r.tx_index,
+        })
+        .collect();
+    assert_eq!(owned.other_boxes, refs);
+    let answer = serde_json::to_value(&owned).unwrap();
+    assert_eq!(answer["others"], boxes.len());
+    assert_eq!(answer["otherBoxes"].as_array().unwrap().len(), boxes.len());
+}
+
+#[test]
+fn a_pool_too_small_for_a_sessions_chain_skips_lovejoin() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(2469u64);
+    // One box to mix with, and four UTxOs the worker counted as boxes too: a
+    // box one wave deep takes two.
+    let mut rows = pool(&protocol)[..1].to_vec();
+    rows.extend(junk(&protocol));
+    let request = |pool: Vec<UtxoResponse>, again: bool, utxos: Vec<UtxoResponse>| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos,
+        collateral: collateral(),
+        pool,
+        depth: 1,
+        boxes: Some(1),
+        merge: vec![],
+        again,
+        own: vec![],
+    };
+    let result =
+        lovejoin::chain(&accounts(), sk, request(rows.clone(), false, holdings())).unwrap();
+    assert!(result.txs.is_empty());
+    assert_eq!(result.boxes, 0);
+    assert_eq!(
+        result.skipped.as_deref(),
+        Some("Lovejoin's pool has 1 boxes to mix with, and this needs 2")
+    );
+    let answer = serde_json::to_value(&result).unwrap();
+    assert_eq!(answer["skipped"], json!(result.skipped));
+
+    // Mixing the wallet's boxes again is skipped the same way.
+    let at = session();
+    let funded = seedelf_core::lovejoin::again_funding(1, 1);
+    let mut again = rows.clone();
+    again.extend(our_box_rows(sk, 1, &protocol));
+    let utxos = vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])];
+    let result = lovejoin::chain(&accounts(), sk, request(again, true, utxos)).unwrap();
+    assert!(result.txs.is_empty());
+    assert!(result.skipped.is_some());
+
+    // One more box and it's built, and says nothing of a skip.
+    rows.extend(pool(&protocol)[1..2].iter().cloned());
+    let result =
+        lovejoin::chain(&accounts(), sk, request(rows.clone(), false, holdings())).unwrap();
+    assert_eq!(result.boxes, 1);
+    assert!(result.skipped.is_none());
+    assert!(
+        serde_json::to_value(&result)
+            .unwrap()
+            .get("skipped")
+            .is_none()
+    );
+
+    // The public account's mix is reviewed by hand: too few boxes is an error.
+    let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let err = lovejoin::chain_from_account(
+        &public,
+        sk,
+        AccountChainRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos: vec![public_utxo(0x51, Role::Receive, 1, 30_000_000)],
+            collateral: public_utxo(0x5c, Role::Receive, 0, 5_000_000),
+            pool: rows[..1].to_vec(),
+            depth: 1,
+            boxes: 1,
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("pool has 1 boxes"), "{err}");
+}

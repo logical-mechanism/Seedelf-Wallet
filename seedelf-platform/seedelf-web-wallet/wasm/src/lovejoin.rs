@@ -31,7 +31,7 @@ use pallas_txbuilder::BuiltTransaction;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
 use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
-use seedelf_core::lovejoin::{self, Coin, PoolBox, Protocol};
+use seedelf_core::lovejoin::{self, Coin, PoolBox, PoolShort, Protocol};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
@@ -232,6 +232,29 @@ pub struct ChainResult {
     /// The session's UTxOs the return leaves at its account, for a later
     /// return (`api::SessionReturnResult::left_out`).
     pub left_out: Vec<api::LeftOut>,
+    /// Why nothing was built: Lovejoin's pool has too few boxes to mix with
+    /// (anyone can leave a UTxO at `mix_box` that isn't a box, and only boxes
+    /// count). The return then comes back directly. Absent when built.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+}
+
+impl ChainResult {
+    /// A chain the pool can't supply: nothing built, and why.
+    fn skipped(depth: u32, short: &PoolShort) -> Self {
+        ChainResult {
+            txs: Vec::new(),
+            boxes: 0,
+            depth,
+            fees: "0".to_string(),
+            returned: "0".to_string(),
+            tokens: Vec::new(),
+            merged: 0,
+            leaves: Vec::new(),
+            left_out: Vec::new(),
+            skipped: Some(short.to_string()),
+        }
+    }
 }
 
 fn sign(tx: BuiltTransaction, accounts: &CardanoAccount, index: u32) -> Result<BuiltTransaction> {
@@ -243,6 +266,10 @@ fn sign(tx: BuiltTransaction, accounts: &CardanoAccount, index: u32) -> Result<B
     .map_err(|e| anyhow!("failed to sign: {e:?}"))
 }
 
+/// Session `request.index`'s chain through Lovejoin and its return, each
+/// transaction signed. When the pool's boxes (only the rows `PoolBox::from_row`
+/// takes) are too few for it, nothing is built: the result says why
+/// (`skipped`), so the worker brings the session back directly.
 pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Result<ChainResult> {
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
@@ -260,7 +287,7 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
 
     // The ADA-only UTxOs the chain doesn't spend: they come back with the return.
     let mut unused: Vec<UtxoResponse> = Vec::new();
-    let (built, boxes) = if request.again {
+    let fanned = if request.again {
         let mut coins = held.coins.clone();
         coins.sort_by_key(|(c, _)| std::cmp::Reverse(c.lovelace));
         let mut coins = coins.into_iter();
@@ -281,15 +308,15 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
             address,
             signers: 1,
         };
-        let built = lovejoin::again(
+        lovejoin::again(
             &params,
             &protocol,
             &payer,
             &ours[..boxes],
             request.depth,
             &pool,
-        )?;
-        (built, boxes)
+        )
+        .map(|built| (built, boxes))
     } else {
         let boxes = request
             .boxes
@@ -308,8 +335,15 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
             deposit_signers: 1,
             mix_signers: 1,
         };
-        let built = lovejoin::chain(&params, &protocol, &funding, &owners, request.depth, &pool)?;
-        (built, boxes)
+        lovejoin::chain(&params, &protocol, &funding, &owners, request.depth, &pool)
+            .map(|built| (built, boxes))
+    };
+    let (built, boxes) = match fanned {
+        Err(e) => match e.downcast_ref::<PoolShort>() {
+            Some(short) => return Ok(ChainResult::skipped(request.depth, short)),
+            None => return Err(e),
+        },
+        Ok(fanned) => fanned,
     };
 
     // The return, last: the chain's change (not on chain yet), the
@@ -393,6 +427,7 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
         merged: if plan.merged { request.merge.len() } else { 0 },
         leaves: built.leaves.iter().map(OutRef::of_box).collect(),
         left_out: plan.left_out,
+        skipped: None,
     })
 }
 
@@ -592,6 +627,7 @@ pub fn chain_from_account(
         merged: 0,
         leaves: built.leaves.iter().map(OutRef::of_box).collect(),
         left_out: Vec::new(),
+        skipped: None,
     })
 }
 
@@ -607,22 +643,30 @@ pub struct OwnedRequest {
 pub struct OwnedResult {
     pub boxes: Vec<OutRef>,
     pub lovelace: String,
+    /// How many of the pool's boxes aren't ours: what a mix may take. Only
+    /// rows that are boxes count (`PoolBox::from_row`), never what else sits
+    /// at `mix_box`, so a count made from it matches what a chain can draw.
+    pub others: usize,
+    /// Those boxes.
+    pub other_boxes: Vec<OutRef>,
 }
 
 /// The wallet's boxes in the pool, wherever other people's mixes have moved
-/// them: the Seedelf key's ownership check on each `{a, b}`.
+/// them: the Seedelf key's ownership check on each `{a, b}`. And the pool's
+/// other boxes, the ones a mix may take.
 pub fn owned(sk: Scalar, request: OwnedRequest) -> Result<OwnedResult> {
     let protocol = Protocol::of(network_flag(&request.network)?)?;
-    let boxes: Vec<OutRef> = request
+    let (ours, others): (Vec<PoolBox>, Vec<PoolBox>) = request
         .pool
         .iter()
         .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .filter(|b| b.is_owned(&sk))
-        .map(|b| OutRef::of_box(&b))
-        .collect();
+        .partition(|b| b.is_owned(&sk));
+    let boxes: Vec<OutRef> = ours.iter().map(OutRef::of_box).collect();
     Ok(OwnedResult {
         lovelace: (boxes.len() as u64 * protocol.denom).to_string(),
         boxes,
+        others: others.len(),
+        other_boxes: others.iter().map(OutRef::of_box).collect(),
     })
 }
 

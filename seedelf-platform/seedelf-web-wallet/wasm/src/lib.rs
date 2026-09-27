@@ -2463,7 +2463,8 @@ pub fn plan_lovejoin(accounts: &WasmOneTimeAccounts, request: &str) -> Result<St
 /// scripts and signed with its key: the deposit, the mixes, then the return
 /// (`lovejoin::ChainRequest` → `lovejoin::ChainResult`); with `again`, the
 /// wallet's boxes in the pool mixed again, with no deposit. The worker sends
-/// them in order.
+/// them in order. A pool with too few boxes builds nothing and says why in
+/// `skipped`.
 #[wasm_bindgen(js_name = buildLovejoinChain)]
 pub fn build_lovejoin_chain(
     accounts: &WasmOneTimeAccounts,
@@ -2519,8 +2520,8 @@ pub fn declared_covers(tx_cbor: &str, answer: &str) -> Result<String, JsError> {
     })
 }
 
-/// The wallet's boxes among the pool's rows (`lovejoin::OwnedRequest` →
-/// `lovejoin::OwnedResult`).
+/// The wallet's boxes among the pool's rows, and how many other boxes a mix
+/// may take (`lovejoin::OwnedRequest` → `lovejoin::OwnedResult`).
 #[wasm_bindgen(js_name = lovejoinOwned)]
 pub fn lovejoin_owned(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     to_json(&lovejoin::owned(key.sk, from_json(request)?).map_err(js_error)?)

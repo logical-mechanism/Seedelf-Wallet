@@ -211,6 +211,8 @@ export interface LovejoinChain {
   leaves: Array<{ txHash: string; txIndex: number }>;
   /** The session's UTxOs the return leaves at its account (SessionBackSummary's `leftOut`). */
   leftOut: LeftOutUtxo[];
+  /** Why nothing was built: the pool's boxes are too few to mix with (a session's chain only). */
+  skipped?: string;
 }
 
 /** What the review shows before a chain is built (`lovejoin::PlanResult`). */
@@ -442,6 +444,7 @@ export class LovejoinService {
       (keys) =>
         JSON.parse(this.deps.wasm.buildLovejoinChain(keys.oneTime, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
     );
+    if (chain.skipped) throw new LovejoinSkipped(chain.skipped);
     await this.crossCheck(network, chain);
     return chain;
   }

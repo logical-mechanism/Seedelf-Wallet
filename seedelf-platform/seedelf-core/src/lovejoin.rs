@@ -1051,8 +1051,30 @@ pub fn again(
     fan_out(params, protocol, boxes.to_vec(), payer, depth, fresh)
 }
 
+/// Lovejoin's pool has too few boxes to mix with for a fan-out: `have`
+/// boxes that aren't ours, where it takes `needed`. Its own type, so a
+/// caller can tell it from a build that failed (`downcast_ref`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolShort {
+    pub have: usize,
+    pub needed: usize,
+}
+
+impl std::fmt::Display for PoolShort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Lovejoin's pool has {} boxes to mix with, and this needs {}",
+            self.have, self.needed
+        )
+    }
+}
+
+impl std::error::Error for PoolShort {}
+
 /// The pool's boxes a fan-out of `trees` boxes at `depth` draws from, in a
-/// random order, `ours` left out: two for every mix, never one twice.
+/// random order, `ours` left out: two for every mix, never one twice. Too
+/// few is a [`PoolShort`].
 fn fresh_for(trees: usize, depth: u32, pool: &[PoolBox], ours: &[PoolBox]) -> Result<Vec<PoolBox>> {
     if !(1..=3).contains(&depth) {
         bail!("The fan-out is 1 to 3 waves deep");
@@ -1064,10 +1086,11 @@ fn fresh_for(trees: usize, depth: u32, pool: &[PoolBox], ours: &[PoolBox]) -> Re
         .collect();
     let needed = trees * mixes_per_box(depth) * 2;
     if fresh.len() < needed {
-        bail!(
-            "Lovejoin's pool has {} boxes to mix with, and this needs {needed}",
-            fresh.len()
-        );
+        return Err(PoolShort {
+            have: fresh.len(),
+            needed,
+        }
+        .into());
     }
     shuffle(&mut fresh);
     Ok(fresh)

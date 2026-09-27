@@ -8,7 +8,7 @@ use pallas_primitives::conway::{PlutusData, Redeemers};
 use pallas_primitives::{Fragment, MaybeIndefArray};
 use pallas_traverse::MultiEraTx;
 use seedelf_core::eval::Resolved;
-use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol};
+use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, PoolShort, Protocol};
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, Ratio};
@@ -546,6 +546,11 @@ fn a_chain_needs_enough_pool_boxes() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("pool has 3 boxes"), "{err}");
+    // Its own type, which a caller tells from a build that failed.
+    assert_eq!(
+        err.downcast_ref::<PoolShort>(),
+        Some(&PoolShort { have: 3, needed: 8 })
+    );
 }
 
 #[test]
@@ -706,6 +711,7 @@ fn mixing_again_needs_a_box_and_enough_others() {
     let err =
         lovejoin::again(&params(), &protocol, &payer(20_000_000), &ours, 1, &pool).unwrap_err();
     assert!(err.to_string().contains("pool has 1 boxes"), "{err}");
+    assert!(err.downcast_ref::<PoolShort>().is_some());
 }
 
 #[test]
