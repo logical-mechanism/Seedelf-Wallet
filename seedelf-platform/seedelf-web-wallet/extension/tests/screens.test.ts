@@ -12,6 +12,8 @@ import type { LovejoinHeld, PendingTx, SessionView } from "../src/shared/rpc";
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
 import { NetworkContext } from "../src/ui/network";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
+import { ClaimCard } from "../src/ui/screens/Dapps";
+import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
 import { LovejoinCost, pairOf, pauseText, Plan, Session, TokenSelect, Unverified } from "../src/ui/screens/Swaps";
 
 /** A page's text, as a person reads it. */
@@ -262,5 +264,102 @@ describe("a swap's page (launch review #23, H6, #56)", () => {
     expect(line).toContain("holds a reference script the wallet can't price");
     expect(line).toContain("It holds •••• ₳");
     expect(line).not.toContain("17 ₳");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A site's private session, and the dApps page
+// ---------------------------------------------------------------------------
+
+/** A site's private session, funded, holding nothing. */
+function siteSession(over: Partial<SessionView> = {}): SessionView {
+  return {
+    index: 4,
+    network: "preprod",
+    address: "addr_test1" + "s".repeat(50),
+    createdAt: 0,
+    stage: "open",
+    txs: [{ kind: "out", txHash: "ef".repeat(32), at: 0, confirmed: true }],
+    holding: { lovelace: "0", tokens: [], utxos: 0 },
+    site: { origin: "https://app.example" },
+    ...over,
+  };
+}
+
+describe("a site's private session (launch review H7, #43, H6, #23, #56)", () => {
+  const seedelf = { lovelace: "0", tokens: [], utxos: 0, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+  const markup = (s: SessionView, attached?: boolean) =>
+    renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        createElement(SiteSession, {
+          session: s,
+          attached,
+          seedelf,
+          reading: false,
+          onRefresh: () => undefined,
+          onBack: () => undefined,
+          onPending: () => undefined,
+          onDisconnected: () => undefined,
+        }),
+      ),
+    );
+  const disconnect = (html: string) => html.match(/<button[^>]*data-testid="site-disconnect"[^>]*>/)![0];
+
+  it("keeps Disconnect off while its funding, its return or its chain is on its way, and says why", () => {
+    expect(disconnectWait(siteSession({ stage: "funding", holding: null }))).toBe("Its funding is on its way: wait for it to land");
+    expect(disconnectWait(siteSession({ stage: "returning" }))).toBe("Its return is on its way: wait for it to land");
+    // Every transaction on chain but the chain's tail: still going.
+    const chain = { total: 5, sent: 5, confirmed: 3, cut: false };
+    expect(disconnectWait(siteSession({ chain }))).toBe("Its return is on its way: wait for it to land");
+    expect(disconnectWait(siteSession({ chain: { ...chain, confirmed: 5 } }))).toBeUndefined();
+    expect(disconnectWait(siteSession({ holding: { lovelace: "3000000", tokens: [], utxos: 1 } }))).toBe("Bring everything back first");
+    const html = markup(siteSession({ stage: "funding", holding: null }), true);
+    expect(disconnect(html)).toContain("disabled");
+    expect(html).toContain('data-testid="site-session-wait"');
+    // Empty, and nothing on its way: it can go, once asked.
+    expect(disconnect(markup(siteSession(), true))).not.toContain("disabled");
+  });
+
+  it("says when its site talks to something else, and offers Bring it back", () => {
+    const funded = siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 1 } });
+    const sites = [{ origin: "https://app.example", connectedAt: 0 }];
+    expect(attachedTo(funded, sites)).toBe(false);
+    expect(attachedTo(funded, [{ ...sites[0]!, session: 4 }])).toBe(true);
+    expect(attachedTo(funded, undefined)).toBeUndefined();
+    const html = markup(funded, false);
+    expect(html).toContain('data-testid="site-session-detached"');
+    const line = text(createElement(SiteRow, { session: funded, attached: false, onOpen: () => undefined }));
+    expect(line).toContain("Not connected");
+    expect(markup(funded, true)).not.toContain("site-session-detached");
+  });
+
+  it("lists what stays, says why Lovejoin was left out, and keeps hidden balances hidden", () => {
+    const html = markup(
+      siteSession({
+        holding: { lovelace: "25000000", tokens: [], utxos: 1 },
+        lovejoinSkipped: "the wallet couldn't build its chain: too few boxes.",
+        leftBehind: [{ txHash: "12".repeat(32), txIndex: 0, reason: "fee", lovelace: "900000" }],
+      }),
+      true,
+    );
+    const line = html.replace(/<[^>]+>/g, " ").replaceAll("&#x27;", "'").replace(/\s+/g, " ");
+    expect(line).toContain("Lovejoin was left out of its return: the wallet couldn't build its chain: too few boxes. So it comes back directly");
+    expect(line).toContain("is too little, with what else is left there, to pay for its own way back");
+    expect(line).toContain("It holds •••• ₳");
+    expect(line).not.toContain("25 ₳");
+  });
+
+  it("says a funding the chain hasn't shown may still land, and one turned away never went out", () => {
+    const failed = siteSession({ stage: "failed", holding: { lovelace: "0", tokens: [], utxos: 0 } });
+    expect(markup(failed, true)).toContain("it may still land");
+    expect(markup({ ...failed, unsent: true }, true)).toContain("Its funding never reached the chain");
+  });
+
+  it("hides what the sessions hold on the dApps page while balances are hidden", () => {
+    const line = text(createElement(ClaimCard, { sessions: [siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 1 } })], onOpen: () => undefined }));
+    expect(line).toContain("•••• ₳");
+    expect(line).not.toContain("25 ₳");
   });
 });
