@@ -337,8 +337,9 @@ export function SiteSession({
         </Callout>
       )}
       <Callout tone="privacy">
-        The site sees only this account. Topping it up links more of your private balance to it, and bringing it back links
-        it to new private UTxOs.
+        The wallet gives the site only this account. Topping it up links more of your private balance to it, and bringing it
+        back links it to new private UTxOs. The site still sees this browser: if it has seen your public account here, it
+        can tell the session is yours.
       </Callout>
       {disconnecting && (
         <Modal

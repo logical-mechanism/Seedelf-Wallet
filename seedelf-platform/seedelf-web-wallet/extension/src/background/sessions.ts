@@ -1,6 +1,8 @@
 // Private sessions (roadmap chunk 15, step 2): a one-time account funded from
 // the private balance, used for a swap through Minswap's aggregator, and
-// brought back into the private balance. The public account never appears.
+// brought back into the private balance. The public account isn't in any of
+// its transactions, though the funding's own inputs lead back to it when they
+// were money the user made private (privacy review §2.12).
 //
 // out     a Seedelf spend (Make public's builder, giveme.my's collateral)
 //         pays the session's account twice: the swap with its costs, and

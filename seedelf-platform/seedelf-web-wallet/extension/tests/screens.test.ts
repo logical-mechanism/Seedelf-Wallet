@@ -19,13 +19,14 @@ import type {
   SwapQuote,
 } from "../src/shared/rpc";
 import { HandleWarning } from "../src/ui/components/HandleWarning";
+import { LovejoinNote } from "../src/ui/components/LovejoinReturn";
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
 import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimReview } from "../src/ui/screens/ClaimAll";
-import { ClaimCard } from "../src/ui/screens/Dapps";
+import { ClaimCard, Dapps } from "../src/ui/screens/Dapps";
 import { Chains, detailOf as lovejoinDetail, NotMixed, PrivateReview, PublicReview, subOf as lovejoinSub } from "../src/ui/screens/Lovejoin";
 import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
 import {
@@ -41,6 +42,7 @@ import {
   StopDialog,
   SwapApproval,
   SwapRow,
+  Swaps,
   TokenSelect,
   Unverified,
 } from "../src/ui/screens/Swaps";
@@ -494,6 +496,54 @@ function siteSession(over: Partial<SessionView> = {}): SessionView {
     ...over,
   };
 }
+
+describe("what the swap and session screens say sites and chain watchers see (privacy review §2.6, §2.12)", () => {
+  const seedelf = { lovelace: "0", tokens: [], utxos: 0, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+
+  it("never says the public account never appears, and says where the money leads", () => {
+    const swaps = text(createElement(Swaps, { seedelf, onBack: () => undefined, onPending: () => undefined }));
+    expect(swaps).toContain("Your public account isn't in its transactions, but anyone can follow the money through the one-time account");
+    expect(swaps).toContain("money you made private yourself leads on to your public account");
+    expect(swaps).not.toContain("never appears");
+    const dapps = text(createElement(Dapps, { seedelf, onBack: () => undefined, onPending: () => undefined }));
+    expect(dapps).toContain("A dApp here is given only a one-time account, never your public account or your private balance");
+    expect(dapps).toContain("money you made private yourself leads on to your public account");
+    expect(dapps).not.toContain("never sees");
+    const site = text(
+      createElement(SiteSession, {
+        session: siteSession(),
+        seedelf,
+        reading: false,
+        onRefresh: () => undefined,
+        onBack: () => undefined,
+        onPending: () => undefined,
+        onDisconnected: () => undefined,
+      }),
+    );
+    expect(site).toContain("The wallet gives the site only this account.");
+    expect(site).toContain("if it has seen your public account here, it can tell the session is yours");
+    expect(site).not.toContain("The site sees only this account");
+  });
+
+  it("says a return through Lovejoin is harder to tie to the session, not untied, and how far a box hides", () => {
+    const back: SessionBackSummary = {
+      network: "preprod",
+      index: 4,
+      txHash: "cd".repeat(32),
+      fee: "8300000",
+      lovelace: "5200000",
+      tokens: [],
+      depositOutputs: 1,
+      inputs: 2,
+      lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6" },
+    };
+    const line = text(createElement(LovejoinNote, { back, busy: false, onDirect: () => undefined }));
+    expect(line).toContain("so what comes back is harder to tie to this session");
+    expect(line).not.toContain("isn't tied");
+    expect(line).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep), fewer while few people use Lovejoin");
+    expect(line).toContain("Spending boxes that came back together, or with the change the session's funding left, narrows it.");
+  });
+});
 
 describe("a site's private session (launch review H7, #43, H6, #23, #56)", () => {
   const seedelf = { lovelace: "0", tokens: [], utxos: 0, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };

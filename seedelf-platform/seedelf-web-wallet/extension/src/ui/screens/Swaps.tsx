@@ -1,7 +1,9 @@
 // Swaps, each in a private session (background/sessions.ts): a one-time
 // account is funded from the private balance, Minswap's aggregator builds the
 // swap for it, the session's key signs it, and once it's filled everything
-// comes back into the private balance. The public account never appears.
+// comes back into the private balance. The public account isn't in its
+// transactions; anyone can follow the money back through the funding, though
+// (privacy review §2.12).
 //
 // Swaps       the sessions, newest first: those in progress, then past ones,
 //             each with its pair and a tag for how it's doing. And New swap.
@@ -404,8 +406,9 @@ export function Swaps({
       )}
       <Callout tone="privacy">
         A swap runs from a new one-time account: it's funded from your private balance, Minswap swaps from it, and
-        everything comes back into your private balance. Your public account never appears. Anyone can follow the money
-        through the one-time account, though, and the amounts and times tie its two ends together.
+        everything comes back into your private balance. Your public account isn't in its transactions, but anyone can
+        follow the money through the one-time account, back into your private balance, and money you made private
+        yourself leads on to your public account. The amounts and times tie its two ends together too.
       </Callout>
     </Screen>
   );
