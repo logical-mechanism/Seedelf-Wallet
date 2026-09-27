@@ -661,6 +661,10 @@ describe("Bring everything back's review (launch review #57, H6, #23)", () => {
     expect(line).toContain("Through Lovejoin 2 boxes of 10 ₳, each back after 1 to 6 hours");
     expect(line).toContain("Bring them back directly instead");
     expect(line).toContain("Lovejoin hasn't had a third-party audit");
+    // Sent together, their deposits and mixes share blocks (privacy review §6).
+    expect(line).toContain("their deposits land in the same block or two and their mixes share blocks");
+    expect(line).toContain("Bringing each back from its own page, hours apart, avoids both.");
+    expect(line).not.toContain("so those don't land together");
     // Built again directly: nothing more to offer, and it says what that ties.
     const direct = review([back()], true);
     expect(direct).not.toContain("Bring them back directly instead");

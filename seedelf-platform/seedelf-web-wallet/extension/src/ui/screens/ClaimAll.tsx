@@ -308,7 +308,7 @@ export function ClaimReview({
         Each session comes back in its own transaction, so nothing in them ties the sessions together. They're sent one
         after another, though, and returns that land together hint that they're one person's.
         {boxes > 0 &&
-          " A session's spare ADA goes through Lovejoin first, paid by that session, and each box comes back on its own, later, so those don't land together."}
+          " A session's spare ADA goes through Lovejoin first, paid by that session, and each box comes back on its own, later. But their deposits land in the same block or two and their mixes share blocks, and a pool with few boxes serves the first sessions while the rest come back directly. Bringing each back from its own page, hours apart, avoids both."}
         {direct && " They come back directly, as you chose: anyone can tie each on chain to its session and its funding."}
       </Callout>
       {boxes > 0 && (

@@ -150,6 +150,10 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(shown).toContain("each return you review can still bring that one back directly");
     expect(shown).toContain("so what comes back is harder to tie to the session on chain");
     expect(shown).not.toContain("isn't tied");
+    // What counts as spare, what bringing a box back costs, and that a lock stops a chain (privacy review §6).
+    expect(shown).toContain("(a token→ADA swap's proceeds count)");
+    expect(shown).toContain("about 0.3 ₳ brings each box back");
+    expect(shown).toContain("locking partway stops them, and what's left comes back directly");
     // Not from the services that carry both ends (privacy review §2.4).
     expect(shown).toContain("Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my");
     expect(shown).toContain("(up to 1 in 9)");
