@@ -25,8 +25,8 @@
 
 use crate::address::{collateral_address, wallet_contract};
 use crate::build::{
-    Budget, Budgets, DRAFT_BUDGET, MAX_TX_BUDGET, collateral_output, even, fake_signer, linear_fee,
-    settle_fee,
+    Budget, Budgets, DRAFT_BUDGET, MAX_TX_BUDGET, check_fee, collateral_output, even, fake_signer,
+    linear_fee, settle_fee,
 };
 use crate::cbor;
 use crate::constants::{COLLATERAL_HASH, VARIANT, get_config};
@@ -634,6 +634,7 @@ pub fn mix(
             &used,
             protocol.script_bytes,
         );
+        check_fee(needed)?;
         if needed <= fee && fee - needed < 1_000 {
             break;
         }

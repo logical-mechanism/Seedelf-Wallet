@@ -893,28 +893,51 @@ pub struct ProtocolParameters {
     pub cost_model_v3: Vec<i64>,
 }
 
+/// The most [`ProtocolParameters::from_koios`] takes for each parameter,
+/// generously above mainnet's and preprod's in 2026 (44 and 155,381 lovelace,
+/// 4,310 a byte, a 2 ₳ deposit, prices of 0.0577 and 0.0000721). The ledger
+/// takes any overpayment, so a wrong answer from Koios would otherwise raise
+/// every fee, minimum and deposit the wallet pays, unseen.
+pub const MAX_MIN_FEE_A: u64 = 1_000;
+pub const MAX_MIN_FEE_B: u64 = 2_000_000;
+pub const MAX_COINS_PER_UTXO_SIZE: u64 = 20_000;
+pub const MAX_KEY_DEPOSIT: u64 = 10_000_000;
+pub const MAX_PRICE_MEM: f64 = 0.577;
+pub const MAX_PRICE_STEP: f64 = 0.000721;
+
 impl ProtocolParameters {
     /// Reads the parameters from one row of Koios's `epoch_params` response.
     /// Split from [`epoch_params`] so callers that fetch Koios JSON
     /// themselves (the web wallet, through WebAssembly) parse it the same way.
+    /// Refuses any parameter over its limit (see [`MAX_MIN_FEE_A`] and the
+    /// rest).
     pub fn from_koios(params: &Value) -> Result<Self> {
         // Koios gives lovelace amounts as numbers or as strings.
-        let lovelace = |field: &str| {
-            params[field]
+        let lovelace = |field: &str, most: u64| -> Result<u64> {
+            let value: u64 = params[field]
                 .as_u64()
                 .or_else(|| params[field].as_str().and_then(|s| s.parse().ok()))
-                .ok_or_else(|| anyhow!("Missing {field}"))
+                .ok_or_else(|| anyhow!("Missing {field}"))?;
+            if value > most {
+                return Err(looks_wrong(field, value, most));
+            }
+            Ok(value)
         };
-        let min_fee_a: u64 = lovelace("min_fee_a")?;
-        let min_fee_b: u64 = lovelace("min_fee_b")?;
-        let coins_per_utxo_size: u64 = lovelace("coins_per_utxo_size")?;
-        let key_deposit: u64 = lovelace("key_deposit")?;
-        let price_mem: f64 = params["price_mem"]
-            .as_f64()
-            .ok_or_else(|| anyhow!("Missing price_mem"))?;
-        let price_step: f64 = params["price_step"]
-            .as_f64()
-            .ok_or_else(|| anyhow!("Missing price_step"))?;
+        let price = |field: &str, most: f64| -> Result<f64> {
+            let value: f64 = params[field]
+                .as_f64()
+                .ok_or_else(|| anyhow!("Missing {field}"))?;
+            if !(0.0..=most).contains(&value) {
+                return Err(looks_wrong(field, value, most));
+            }
+            Ok(value)
+        };
+        let min_fee_a: u64 = lovelace("min_fee_a", MAX_MIN_FEE_A)?;
+        let min_fee_b: u64 = lovelace("min_fee_b", MAX_MIN_FEE_B)?;
+        let coins_per_utxo_size: u64 = lovelace("coins_per_utxo_size", MAX_COINS_PER_UTXO_SIZE)?;
+        let key_deposit: u64 = lovelace("key_deposit", MAX_KEY_DEPOSIT)?;
+        let price_mem: f64 = price("price_mem", MAX_PRICE_MEM)?;
+        let price_step: f64 = price("price_step", MAX_PRICE_STEP)?;
         let cost_model_v3: Vec<i64> = params["cost_models"]["PlutusV3"]
             .as_array()
             .ok_or_else(|| anyhow!("Missing PlutusV3 cost model"))?
@@ -932,6 +955,17 @@ impl ProtocolParameters {
             cost_model_v3,
         })
     }
+}
+
+/// A parameter from Koios over its limit, in words.
+fn looks_wrong(
+    field: &str,
+    value: impl std::fmt::Display,
+    most: impl std::fmt::Display,
+) -> anyhow::Error {
+    anyhow!(
+        "The network's {field} from Koios looks wrong: {value}, where at most {most} is expected. Nothing was built; try again later"
+    )
 }
 
 /// Fetch the current epoch's protocol parameters from Koios.

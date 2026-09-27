@@ -47,7 +47,28 @@ pub fn fake_signer() -> PrivateKey {
 /// `fees::PolicyParams::default()` is Byron's policy, 43.946 lovelace a byte,
 /// which falls a few dozen lovelace short on a Seedelf spend.)
 pub fn linear_fee(params: &ProtocolParameters, tx_size: u64) -> u64 {
-    params.min_fee_a * tx_size + params.min_fee_b
+    params
+        .min_fee_a
+        .saturating_mul(tx_size)
+        .saturating_add(params.min_fee_b)
+}
+
+/// The most a transaction the wallet builds may pay in fees. Real ones pay
+/// under 1 ₳, and even a 16 KiB transaction running scripts to the ledger's
+/// limit pays about 2.6 ₳. More comes from wrong protocol parameters, and the
+/// ledger would take it all.
+pub const MAX_FEE: u64 = 10_000_000;
+
+/// Refuses a fee over [`MAX_FEE`], in words.
+pub fn check_fee(fee: u64) -> Result<()> {
+    if fee > MAX_FEE {
+        bail!(
+            "This transaction's fee would be {} ADA, over the wallet's limit of {} ADA, so it wasn't built. The network's fee settings look wrong: try again later",
+            ada(fee),
+            ada(MAX_FEE)
+        );
+    }
+    Ok(())
 }
 
 /// Settles the size fee of a key-signed transaction. `build(fee)` stages the
@@ -101,7 +122,8 @@ impl<'a> Patches<'a> {
 /// [`settle_fee`] with any pricing: `price(size)` is the fee a transaction of
 /// `size` signed bytes needs. `patches` go into each draft before it's
 /// priced; `signers` doesn't count the stake key a staking patch needs.
-/// A draft over [`MAX_TX_SIZE`] is refused here, in words.
+/// A draft over [`MAX_TX_SIZE`], or a fee over [`MAX_FEE`], is refused here,
+/// in words.
 fn settle(
     signers: usize,
     patches: Patches,
@@ -118,6 +140,7 @@ fn settle(
             );
         }
         let needed = price(size);
+        check_fee(needed)?;
         if needed <= fee && fee - needed < 1_000 {
             return Ok((fee, staged));
         }

@@ -252,6 +252,25 @@ fn a_mix_needs_two_boxes_and_a_payer_who_can_pay() {
 }
 
 #[test]
+fn a_mix_never_pays_a_fee_over_the_limit() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    // A public account's collateral can cover far more than a mix's fee.
+    let rich = Payer {
+        fee: coin(0x11, 30_000_000),
+        collateral: coin(0x22, 50_000_000),
+        address: key_address(0x33),
+        signers: 2,
+    };
+    let wrong = ProtocolParameters {
+        min_fee_b: 12_000_000,
+        ..params()
+    };
+    let err = lovejoin::mix(&wrong, &protocol, &boxes, &rich).unwrap_err();
+    assert!(err.to_string().contains("over the wallet's limit"), "{err}");
+}
+
+#[test]
 fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
     let protocol = Protocol::of(true).unwrap();
     let params = params();

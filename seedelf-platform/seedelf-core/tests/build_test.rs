@@ -578,6 +578,40 @@ fn explains_what_is_wrong() {
     assert!(minimum_deposit(&w.params, &Assets::new()).unwrap() > 1_000_000);
 }
 
+#[test]
+fn a_fee_over_the_limit_is_refused_in_words() {
+    let w = world();
+    let available = vec![utxo(&w, 1, 0, 50_000_000, vec![])];
+    let move_in = |params: &ProtocolParameters| {
+        build::move_in(
+            params,
+            &available,
+            AccountAmount::Lovelace(5_000_000),
+            &[],
+            &w.owner,
+            &w.wallet,
+            &w.change,
+            &Staking::none(),
+        )
+    };
+    // Parameters Koios would never be taken with: from_koios refuses them.
+    let wrong = ProtocolParameters {
+        min_fee_b: build::MAX_FEE,
+        ..params()
+    };
+    let err = move_in(&wrong).err().unwrap().to_string();
+    assert!(
+        err.contains("over the wallet's limit of 10.000000 ADA"),
+        "{err}"
+    );
+    let costly = ProtocolParameters {
+        min_fee_b: build::MAX_FEE - 1_000_000,
+        ..params()
+    };
+    let built = move_in(&costly).unwrap();
+    assert!(built.fee > 9_000_000 && built.fee <= build::MAX_FEE);
+}
+
 // ---------------------------------------------------------------------------
 // Send: the Cardano account pays an address
 // ---------------------------------------------------------------------------
