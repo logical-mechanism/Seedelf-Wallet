@@ -45,6 +45,23 @@ function Icon({ u }: { u: UtxoInfo }) {
   return <CoinsIcon size={16} />;
 }
 
+type MixProgress = { total: number; sent: number; stopped?: string } | null;
+
+/**
+ * Says a public mix through Lovejoin is being sent: what it spends, and the
+ * change it makes, stay out of this list and the balance until it's all
+ * sent, so they don't look gone.
+ */
+export function MixHolding({ progress }: { progress: MixProgress }) {
+  if (!progress || progress.stopped || progress.sent >= progress.total) return null;
+  return (
+    <Callout tone="info" testId="utxos-mix-holding">
+      A mix through Lovejoin is being sent from this account ({progress.sent} of {progress.total} sent). The UTxOs it
+      spends, and its change, are held by the mix: they're left out here and from your balance until it's all sent.
+    </Callout>
+  );
+}
+
 /** Why the wallet can't spend a UTxO marked `unspendable`, on its side. */
 export function unspendableWhy(of: UtxoSide): string {
   return of === "seedelf"
@@ -70,6 +87,9 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
     changed.current = onChanged;
   });
 
+  // A public mix being sent holds what it spends, and its change, out of this list until it's all sent.
+  const [mix, setMix] = useState<MixProgress>(null);
+
   const read = useCallback(
     async (refresh: boolean) => {
       setRefreshing(refresh);
@@ -78,6 +98,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
         const next = await call("utxos", { refresh });
         setLists(next);
         setOrder(arrange(next[of]));
+        if (of === "cardano") setMix(await call("lovejoin-mix-public-progress", {}).catch(() => null));
         if (refresh) changed.current();
       } catch (e) {
         setError((e as Error).message);
@@ -122,6 +143,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
         Lock a UTxO to keep it out of every payment from this balance, Max included.
         {of === "cardano" && " A site's transaction can't use a locked UTxO either: the wallet refuses to sign it."}
       </p>
+      {of === "cardano" && <MixHolding progress={mix} />}
       {stuck > 0 && (
         <Callout tone="warn" testId="utxos-unspendable">
           {stuck === 1 ? "One UTxO here holds" : `${stuck} UTxOs here hold`} a reference script the wallet can't spend,

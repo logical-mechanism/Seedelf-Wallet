@@ -10,7 +10,7 @@ import { DestinationField } from "../src/ui/components/Destination";
 import { LeftOutNote } from "../src/ui/components/LeftOut";
 import { TxBanner } from "../src/ui/components/TxBanner";
 import { NetworkContext } from "../src/ui/network";
-import { UtxoDetails, utxoTag } from "../src/ui/screens/Utxos";
+import { MixHolding, UtxoDetails, utxoTag } from "../src/ui/screens/Utxos";
 import { PoolListRow, SharedTicker } from "../src/ui/screens/Pools";
 import { DrepCard, DrepRow } from "../src/ui/screens/Voting";
 import { poolLabel, sharedNames, sharing, shortId, voteLabel } from "../src/ui/format";
@@ -132,5 +132,16 @@ describe("DReps and pools that share a name (launch review #59)", () => {
     expect(row).toContain(shortId(pool.id));
     expect(renderToStaticMarkup(createElement(SharedTicker, { shared: 3 }))).toContain("3 live pools use this ticker");
     expect(renderToStaticMarkup(createElement(SharedTicker, { shared: 1 }))).toBe("");
+  });
+});
+
+describe("the public UTxOs while a mix is sent", () => {
+  it("says the mix holds what it spends, until it's all sent", () => {
+    const shown = renderToStaticMarkup(createElement(MixHolding, { progress: { total: 5, sent: 2 } }));
+    expect(shown).toContain('data-testid="utxos-mix-holding"');
+    expect(shown).toContain("2 of 5 sent");
+    for (const progress of [null, { total: 5, sent: 5 }, { total: 5, sent: 2, stopped: "locked" }]) {
+      expect(renderToStaticMarkup(createElement(MixHolding, { progress }))).toBe("");
+    }
   });
 });
