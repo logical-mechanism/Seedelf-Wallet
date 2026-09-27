@@ -80,13 +80,41 @@ export function parseAda(text: string): string | undefined {
  * A typed amount of something with `decimals` places as its raw integer
  * string, or undefined if it isn't one: "1,234.5" with 6 decimals is
  * "1234500000". More decimal places than it has isn't an amount.
+ *
+ * A comma groups thousands only where it belongs ("1,234"). With no point,
+ * a single comma with fewer than three digits after it is a decimal comma:
+ * "12,5" is 12.5, never 125. Anything else with a comma isn't an amount.
  */
 export function parseQuantity(text: string, decimals: number): string | undefined {
-  const clean = text.trim().replaceAll(",", "");
-  const match = /^(\d+)(?:\.(\d*))?$/.exec(clean);
+  let clean = text.trim();
+  if (DECIMAL_COMMA.test(clean)) clean = clean.replace(",", ".");
+  const match = /^(\d+|[1-9]\d{0,2}(?:,\d{3})+)(?:\.(\d*))?$/.exec(clean);
   if (!match || (match[2] ?? "").length > decimals) return undefined;
   const scale = 10n ** BigInt(decimals);
-  return (BigInt(match[1]!) * scale + BigInt((match[2] ?? "").padEnd(decimals, "0") || "0")).toString();
+  return (BigInt(match[1]!.replaceAll(",", "")) * scale + BigInt((match[2] ?? "").padEnd(decimals, "0") || "0")).toString();
+}
+
+/** A number written with a decimal comma: digits, one comma, and at most two digits after it ("12,5", "0,25", "12,"). */
+const DECIMAL_COMMA = /^\d+,\d{0,2}$/;
+
+/** Whole units grouped by commas only where they belong, or not at all: "1,234", "1234", never "1,23" or "0,500". */
+const WELL_GROUPED = /^(\d+|[1-9]\d{0,2}(,\d{3})+)$/;
+
+/** What an amount field says when a comma typed or pasted can't be a thousands separator. */
+export const COMMA_NOTE = "Use a point for decimals, like 12.5. A comma only groups thousands, like 1,000.";
+
+/**
+ * What an edit put into `previous` to make `typed`: where, and the text
+ * typed or pasted ("" for a deletion). What the two share at each end was
+ * already there.
+ */
+function editOf(previous: string, typed: string): { start: number; text: string } {
+  const shortest = Math.min(previous.length, typed.length);
+  let start = 0;
+  while (start < shortest && previous[start] === typed[start]) start++;
+  let end = 0;
+  while (end < shortest - start && previous[previous.length - 1 - end] === typed[typed.length - 1 - end]) end++;
+  return { start, text: typed.slice(start, typed.length - end) };
 }
 
 /** A block explorer link for a transaction. */
@@ -113,8 +141,14 @@ export interface AmountRules {
 /**
  * Cleans what the user typed or pasted into an amount field.
  *
- * - The thousands are grouped with commas again, wherever they were typed or
- *   deleted: "3,000,00" is "300,000".
+ * - The thousands are grouped with commas again as digits come and go: the
+ *   field's own commas move ("3,000,000,00" after a Backspace is
+ *   "300,000,000").
+ * - A comma the user types or pastes is read for what it can only mean. With
+ *   no point, one comma with fewer than three digits after it is the decimal
+ *   point: "12,5" is 12.5, and "0,5" is 0.5, never 125 or 5. Otherwise it must
+ *   group thousands where it belongs ("12,500"), or the edit is refused
+ *   (`COMMA_NOTE`): a comma never just disappears.
  * - Decimal places past `decimals` are dropped, not rounded: the amount never
  *   grows.
  * - Anything that isn't a number, or is more than `max`, keeps the previous
@@ -125,9 +159,23 @@ export interface AmountRules {
 export function sanitizeAmount(previous: string, typed: string, rules: AmountRules): { value: string; note?: string } {
   let text = typed.trim();
   if (text === "") return { value: "" };
+  const edit = editOf(previous, text);
+  const commaTyped = edit.text.includes(",");
+  let decimalComma = false;
+  if (commaTyped && !text.includes(".")) {
+    const comma = text.lastIndexOf(",");
+    // The one comma typed, with at most two digits after it: the field's other commas are its own.
+    const only = edit.text.indexOf(",") === edit.text.lastIndexOf(",");
+    const inEdit = comma >= edit.start && comma < edit.start + edit.text.length;
+    if (only && inEdit && /^\d{0,2}$/.test(text.slice(comma + 1))) {
+      text = `${text.slice(0, comma)}.${text.slice(comma + 1)}`;
+      decimalComma = true;
+    }
+  }
   if (text.startsWith(".")) text = `0${text}`;
   const match = /^([\d,]*)(?:\.(\d*))?$/.exec(text);
-  if (!match || !/\d/.test(match[1]!)) return { value: previous, note: rules.notANumber };
+  if (!match || !/\d/.test(match[1]!)) return { value: previous, note: commaTyped ? COMMA_NOTE : rules.notANumber };
+  if (commaTyped && !decimalComma && !WELL_GROUPED.test(match[1]!)) return { value: previous, note: COMMA_NOTE };
   let fraction = match[2];
   let note: string | undefined;
   if (fraction !== undefined && fraction.length > rules.decimals) {
@@ -164,7 +212,9 @@ const significant = (text: string) => text.replace(/[^\d.]/g, "");
  * `value`: after the same digits, however the commas moved.
  */
 export function caretAfter(typed: string, caret: number, value: string): number {
-  const before = significant(typed.slice(0, caret)).length;
+  // A decimal comma that became the point counts as the point.
+  const read = !typed.includes(".") && value.includes(".") ? typed.replace(/,(?=\d{0,2}\s*$)/, ".") : typed;
+  const before = significant(read.slice(0, caret)).length;
   if (before === 0) return 0;
   let seen = 0;
   for (let i = 0; i < value.length; i++) {
