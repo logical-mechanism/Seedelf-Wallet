@@ -20,6 +20,14 @@ use zeroize::Zeroizing;
 pub mod cip30;
 pub mod lovejoin;
 
+/// The module's start function, which does nothing. wasm-bindgen's reset
+/// (`__wbg_reset_state`, built with `--experimental-reset-state-function`),
+/// which the extension uses to replace an instance that trapped
+/// (`extension/src/background/wasm.ts`), ends by calling the start function:
+/// without one it throws a TypeError after the new instance is in place.
+#[wasm_bindgen(start)]
+pub fn start() {}
+
 /// Plain-Rust implementations behind the exports, testable off-wasm.
 pub mod api {
     use std::collections::HashMap;

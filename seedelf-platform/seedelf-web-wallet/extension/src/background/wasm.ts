@@ -59,8 +59,9 @@ export function freshWasm(): void {
     reset();
   } catch (e) {
     // wasm-bindgen 0.2.128's reset ends by calling the module's start
-    // function, and this module has none. The new instance is in place by
-    // then, so that one error means nothing.
+    // function. The module has had one since the launch review (a no-op in
+    // wasm/src/lib.rs); a module built before then has none, and throws this
+    // after the new instance is in place, so that one error means nothing.
     if (!(e instanceof TypeError && e.message.includes("__wbindgen_start"))) throw e;
   }
 }
