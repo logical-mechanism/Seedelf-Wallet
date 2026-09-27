@@ -358,6 +358,9 @@ const PENDING_KIND = {
   mix: "session-back",
 } as const satisfies Record<SessionTx["kind"], PendingTx["kind"]>;
 
+/** Why a return leaves Lovejoin out when its account's collateral is gone (privacy review §2.15). */
+const NO_COLLATERAL = "its 5 ₳ collateral isn't at its account anymore, and the mixes need it";
+
 /** The most funding changes one return merges into (WebAssembly's MAX_MERGE). */
 const MAX_MERGE = 4;
 
@@ -1755,24 +1758,33 @@ export class SessionService {
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
     if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
-      // Never a stranger's 5 ₳ carrying a reference script: the mixes can't put it up.
-      const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script);
+      // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
+      // §2.15). Never a stranger's 5 ₳ carrying a reference script: the mixes can't put it up.
+      const fits = (u: KoiosUtxo) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script;
+      const funding = record?.txs[0]?.txHash;
+      const collateral = rows.find((u) => fits(u) && u.tx_hash === funding) ?? rows.find(fits);
       let chain: LovejoinChain | undefined;
-      try {
-        chain = await lovejoin.chain(
-          network,
-          index,
-          rows,
-          collateral,
-          params,
-          merge,
-          record?.mix?.boxes,
-          record?.mix?.again,
-          own,
-          record?.mix?.publicToo,
-        );
-      } catch (e) {
-        skipped = leftOut(e);
+      if (!collateral) {
+        // Something the account signed spent it (a site's transaction, say): no mix can go, so it comes back
+        // directly, and says so when its spare ADA would have paid for a box.
+        if (record?.mix || spareOf(rows) >= BigInt((await lovejoin.funding(network, 1)).lovelace)) skipped = NO_COLLATERAL;
+      } else {
+        try {
+          chain = await lovejoin.chain(
+            network,
+            index,
+            rows,
+            collateral,
+            params,
+            merge,
+            record?.mix?.boxes,
+            record?.mix?.again,
+            own,
+            record?.mix?.publicToo,
+          );
+        } catch (e) {
+          skipped = leftOut(e);
+        }
       }
       // A mix that can't pay for its boxes anymore (the fees went up) says so too.
       if (!chain && !skipped && record?.mix) skipped = "its ADA doesn't pay for a box and its mixes anymore";

@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { readAccount, readAccountUtxos } from "../src/background/account";
-import { txInputs } from "../src/background/cbor";
+import { bodyOutpoints, txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { KoiosError, SpentInputError, type KoiosUtxo } from "../src/background/koios";
 import {
@@ -493,6 +493,36 @@ describe("a session's return through Lovejoin", CHAINS, () => {
     // No pool read: the plan said no box before anything was fetched.
     expect(small.t.koios.calls.some((c) => c.path === "credential_utxos" && c.body._payment_credentials[0] === NETWORKS.preprod.lovejoin!.mixBox)).toBe(false);
     void t;
+  });
+});
+
+describe("a session's collateral (privacy review §2.15)", CHAINS, () => {
+  it("is the one its funding paid, before any other 5 ₳ at the account", async () => {
+    const { t, sessions } = await withSession("40000000");
+    // The funding's own, listed after a stranger's 5 ₳ (withSession's c2…#1).
+    t.koios.addedToAccounts.push(atSession("ab".repeat(32), 1, "5000000"));
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin).toMatchObject({ boxes: 2 });
+    const before = t.koios.submitted.length;
+    await sessions.backSubmit("preprod", review.txHash);
+    // The first mix, after the deposit, puts up the funding's collateral.
+    expect(bodyOutpoints(t.koios.submitted[before + 1]!, 13)).toEqual([`${"ab".repeat(32)}#1`]);
+  });
+
+  it("gone, the return comes back directly and says why, when its spare ADA would have paid for a box", async () => {
+    const { t, sessions } = await withSession("40000000");
+    // Something the site signed spent the 5 ₳.
+    t.koios.addedToAccounts = t.koios.addedToAccounts.filter((u) => u.tx_hash !== "c2".repeat(32));
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin).toBeUndefined();
+    expect(review.lovejoinSkipped).toBe("its 5 ₳ collateral isn't at its account anymore, and the mixes need it");
+    await sessions.backSubmit("preprod", review.txHash);
+    expect((await sessions.list("preprod"))[0]!.lovejoinSkipped).toBe(review.lovejoinSkipped);
+
+    // Too little to pay for a box: nothing to say.
+    const small = await withSession("8000000");
+    small.t.koios.addedToAccounts = small.t.koios.addedToAccounts.filter((u) => u.tx_hash !== "c2".repeat(32));
+    expect((await small.sessions.backBuild("preprod", 0)).lovejoinSkipped).toBeUndefined();
   });
 });
 
