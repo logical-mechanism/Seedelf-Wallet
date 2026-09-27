@@ -182,6 +182,42 @@ describe("a swap's quote", () => {
     expect((await t.sessions.quote("preprod", { ...ASK, tokenOut: real })).verified).toBe(true);
   });
 
+  it("says what its return through Lovejoin is expected to take: nothing for a token's proceeds, and boxes for ADA's", async () => {
+    const t = await unlocked();
+    const sessions = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin: t.lovejoin,
+    });
+    // ADA for MIN: the tokens come back with their deposit, and the 2 ₳ of room pays for no box.
+    expect((await sessions.quote("preprod", ASK)).lovejoin).toEqual({
+      boxes: 0,
+      depth: 2,
+      mixes: 0,
+      mixFees: "0",
+      withdrawFees: "0",
+      delay: "1-6",
+    });
+    // MIN for 50 ₳: the proceeds, the deposit back and the room, 54 ₳, pay for 3 boxes at 13.8 ₳ each and the deposit.
+    t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "50000000", min_amount_out: "49750000" };
+    const selling = { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500" };
+    expect((await sessions.quote("preprod", selling)).lovejoin).toEqual({
+      boxes: 3,
+      depth: 2,
+      mixes: 12,
+      mixFees: "11400000",
+      withdrawFees: "900000",
+      delay: "1-6",
+    });
+    // A large one: no more than one chain takes (MAX_CHAIN_MIXES, 32 boxes of 4 mixes).
+    t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "906594100" };
+    expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ boxes: 32, mixes: 128, mixFees: "121600000" });
+    // Where Lovejoin isn't, there's nothing to say.
+    expect((await t.sessions.quote("preprod", selling)).lovejoin).toBeUndefined();
+  });
+
   it("leaves Splash out of routing on preprod, where Minswap builds its orders with a mainnet address", () => {
     expect(excludedProtocols("preprod")).toEqual([...DIRECT_PROTOCOLS, "Splash", "SplashStable"]);
     expect(excludedProtocols("mainnet")).toEqual(DIRECT_PROTOCOLS);

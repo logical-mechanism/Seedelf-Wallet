@@ -72,6 +72,8 @@ import {
   chainRetryMs,
   checkBoxes,
   LovejoinSkipped,
+  MAX_CHAIN_MIXES,
+  mixesPerBox,
   pumpChain,
   type ChainProgress,
   type LovejoinChain,
@@ -104,6 +106,8 @@ export const SESSION_CHAIN_PREFIX = "seedelf.session.chain.";
 export const SESSION_COLLATERAL = 5_000_000n;
 /** Room in the funding for the swap's fee and the change it leaves: it all comes back. */
 export const SWAP_MARGIN = 2_000_000n;
+/** About what bringing one Lovejoin box back costs, paid from the box: a 1-box withdraw measured 0.2897 ₳ on mainnet. */
+export const LOVEJOIN_WITHDRAW_ESTIMATE = 300_000n;
 /** A funding payment the chain doesn't have after this long never reached it. */
 const FAILED_AFTER_MS = 20 * 60_000;
 /** A built transaction is only sent within this long; after that, build again. */
@@ -423,11 +427,45 @@ export class SessionService {
     }));
   }
 
-  /** Minswap's quote for `ask`, and whether the token it gets is verified. */
+  /**
+   * Minswap's quote for `ask`, whether the token it gets is verified, and
+   * what its return through Lovejoin is expected to take.
+   */
   async quote(network: NetworkName, ask: SwapAsk): Promise<SwapQuote> {
     const checked = checkAsk(ask);
     const quote = quoteOf(network, checked, await this.deps.minswap(network).estimate(checked));
-    return { ...quote, verified: await this.verified(network, checked.tokenOut) };
+    const lovejoin = await this.lovejoinCost(network, quote);
+    return { ...quote, verified: await this.verified(network, checked.tokenOut), ...(lovejoin ? { lovejoin } : {}) };
+  }
+
+  /**
+   * What bringing a swap's session back through Lovejoin is expected to take,
+   * where Lovejoin is on: the boxes its spare ADA pays for at the set depth,
+   * the proceeds' too when they're ADA (with the deposit back, and the room
+   * left over), their mixes (WebAssembly's MIX_FEE_ESTIMATE each) and their
+   * withdraws. At most: the pool may take fewer, and one chain goes no
+   * further than MAX_CHAIN_MIXES.
+   */
+  private async lovejoinCost(network: NetworkName, quote: SwapQuote): Promise<SwapQuote["lovejoin"]> {
+    const lovejoin = this.deps.lovejoin;
+    if (!lovejoin?.available(network)) return undefined;
+    // What each box more takes, and what the chain takes besides: the deposit and its change.
+    const [one, two] = await Promise.all([lovejoin.funding(network, 1), lovejoin.funding(network, 2)]);
+    const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
+    const besides = BigInt(one.lovelace) - perBox;
+    // A token's proceeds come back with its deposit, and aren't spare: tokens never go in.
+    const proceeds = quote.ask.tokenOut === "lovelace" ? BigInt(quote.amountOut) + BigInt(quote.deposits) : 0n;
+    const spare = proceeds + SWAP_MARGIN;
+    const affordable = spare > besides ? Number((spare - besides) / perBox) : 0;
+    const boxes = Math.min(affordable, Math.floor(MAX_CHAIN_MIXES / mixesPerBox(one.depth)));
+    return {
+      boxes,
+      depth: one.depth,
+      mixes: boxes * one.mixes,
+      mixFees: (BigInt(boxes) * BigInt(one.mixFees)).toString(),
+      withdrawFees: (BigInt(boxes) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),
+      delay: one.delay,
+    };
   }
 
   /**

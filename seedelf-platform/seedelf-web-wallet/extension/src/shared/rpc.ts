@@ -644,6 +644,16 @@ export interface SwapQuote {
    * can name a token like a known one: false, and the wallet won't fund it.
    */
   verified?: boolean;
+  /**
+   * Where Lovejoin is on, what bringing the session back through it is
+   * expected to take (Settings, Lovejoin): the 10 ₳ boxes its spare ADA pays
+   * for, the proceeds' too when they're ADA, at most (the pool may take
+   * fewer); their `mixes` at `depth`, about `mixFees` all together; and
+   * about `withdrawFees` for them all to come back, each after a wait in
+   * `delay` (hours, "1-6"). Amounts in lovelace. No boxes: it all comes back
+   * at once.
+   */
+  lovejoin?: { boxes: number; depth: number; mixes: number; mixFees: string; withdrawFees: string; delay: string };
 }
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
