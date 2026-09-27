@@ -53,7 +53,7 @@ describe("a service request", () => {
     const local = memoryArea();
     const { inits, fetchFn } = recording({ cardano: { usd: 0.25 } });
     const prices = new PriceService({
-      local,
+      session: memoryArea(),
       preferences: new PreferencesService(local),
       now: () => 1_800_000_000_000,
       fetch: fetchFn as typeof fetch,

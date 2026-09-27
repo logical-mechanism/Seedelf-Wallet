@@ -483,7 +483,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coins,
     preferences,
     coingecko,
-    prices: new PriceService({ local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
+    prices: new PriceService({ session: t.session, local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
     dappWindow,
     dappChanged: () => dappChanged,

@@ -13,8 +13,12 @@ export interface VaultRecord {
   version: 1;
   /** The SBV1 blob, base64. */
   blob: string;
-  /** Milliseconds since the epoch. */
-  createdAt: number;
+  /**
+   * When the wallet was made (milliseconds since the epoch), in the clear:
+   * written before the privacy review (§3.13), never read, and dropped at
+   * the next password change.
+   */
+  createdAt?: number;
 }
 
 /** Opening the vault failed authentication: the password is wrong. */
@@ -24,11 +28,11 @@ export class WrongPasswordError extends Error {
   }
 }
 
-/** Seals `entropy` under `password`. The password's bytes are zeroed after use. */
-export async function sealVault(entropy: Uint8Array, password: string, now: number): Promise<VaultRecord> {
+/** Seals `entropy` under `password`. The password's bytes are zeroed after use. Nothing else is kept beside it. */
+export async function sealVault(entropy: Uint8Array, password: string): Promise<VaultRecord> {
   const secret = new TextEncoder().encode(password);
   try {
-    return { version: 1, blob: toBase64(await SecretBox.seal(entropy, secret)), createdAt: now };
+    return { version: 1, blob: toBase64(await SecretBox.seal(entropy, secret)) };
   } finally {
     secret.fill(0);
   }

@@ -148,7 +148,7 @@ function getContext(): Promise<Worker> {
     // Every request waits its turn under Koios's public-tier limit, whatever the network.
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios, undefined, undefined, undefined, KOIOS_LIMIT);
     const store = new PrivateStore({ wallet, local });
-    const prices = new PriceService({ local, preferences, now: Date.now });
+    const prices = new PriceService({ session, local, preferences, now: Date.now });
     const activity = new ActivityService({ wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity });

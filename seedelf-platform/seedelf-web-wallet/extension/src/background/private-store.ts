@@ -5,7 +5,9 @@
 // chrome.storage.local with XChaCha20-Poly1305 under a key derived from the
 // recovery phrase's entropy (Wallet.withStoreKey). They can't be read while
 // the wallet is locked, or by anyone without the phrase, and removing the
-// wallet deletes them.
+// wallet deletes them. Each is padded before it's sealed, so its size says
+// little of what it holds: how many Lovejoin boxes, how long a history
+// (privacy review §3.13). Whether a record exists still shows.
 
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { randomBytes } from "@noble/hashes/utils.js";
@@ -39,6 +41,23 @@ interface Sealed {
   v: 1;
   nonce: string;
   data: string;
+}
+
+/** The smallest a sealed record's JSON is padded to; larger ones go to the next power of two. */
+export const PAD_MIN_BYTES = 1024;
+
+/**
+ * `value` as JSON, padded with spaces to PAD_MIN_BYTES or the next power of
+ * two: JSON.parse ignores them, so records sealed before padding, and after,
+ * read the same.
+ */
+function padded(value: unknown): Uint8Array {
+  const json = new TextEncoder().encode(JSON.stringify(value));
+  let size = PAD_MIN_BYTES;
+  while (size < json.length) size *= 2;
+  const plain = new Uint8Array(size).fill(0x20);
+  plain.set(json);
+  return plain;
 }
 
 /** The record's name is bound in as associated data, so records can't be swapped. */
@@ -93,11 +112,11 @@ export class PrivateStore {
     });
   }
 
-  /** Seals `value` (JSON) under a fresh nonce. Throws if locked. */
+  /** Seals `value` (JSON, padded) under a fresh nonce. Throws if locked. */
   async set(name: RecordName, value: unknown): Promise<void> {
     const sealed = await this.deps.wallet.withStoreKey((key): Sealed => {
       const nonce = randomBytes(24);
-      const plain = new TextEncoder().encode(JSON.stringify(value));
+      const plain = padded(value);
       const data = xchacha20poly1305(key, nonce, aad(name)).encrypt(plain);
       return { v: 1, nonce: toBase64(nonce), data: toBase64(data) };
     });

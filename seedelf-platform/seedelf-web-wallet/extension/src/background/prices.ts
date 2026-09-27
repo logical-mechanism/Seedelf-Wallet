@@ -1,7 +1,8 @@
 // ADA's value in the user's currency, for Home, after Lace's token pricing:
 // on mainnet only (test ADA has no value), from CoinGecko's public API, in
-// one request that answers every currency the wallet offers, kept on the
-// device for five minutes. It asks nothing about the wallet: CoinGecko learns
+// one request that answers every currency the wallet offers, kept for five
+// minutes in session storage, so no time of use is left on the disk (privacy
+// review §3.13). It asks nothing about the wallet: CoinGecko learns
 // only that someone at this IP address uses it, when Home opens or is
 // refreshed. Nothing is read in the background, and the currency "off" asks
 // nothing at all. Only ADA is priced: asking about the wallet's tokens would
@@ -14,7 +15,9 @@ import { SERVICE_FETCH } from "./koios";
 import type { PreferencesService } from "./preferences";
 import type { Area } from "./storage";
 
-/** chrome.storage.local: the last prices read, in every currency. */
+/** chrome.storage.session: the last prices read, in every currency. */
+export const SESSION_PRICES = "seedelf.prices";
+/** chrome.storage.local, where they were kept before: removed at the next read. */
 export const LOCAL_PRICES = "seedelf.prices";
 /** A price is read again once it's this old. */
 export const PRICE_TTL_MS = 5 * 60_000;
@@ -30,7 +33,10 @@ interface Kept {
 }
 
 export interface PriceDeps {
-  local: Area;
+  /** chrome.storage.session, where the prices are kept. */
+  session: Area;
+  /** chrome.storage.local, where they were kept before (LOCAL_PRICES). */
+  local?: Area;
   preferences: PreferencesService;
   now: () => number;
   fetch?: typeof fetch;
@@ -48,7 +54,7 @@ export class PriceService {
     const { currency } = await this.deps.preferences.get();
     if (currency === "off") return null;
     const now = this.deps.now();
-    let kept = await this.deps.local.get<Kept>(LOCAL_PRICES);
+    let kept = await this.deps.session.get<Kept>(SESSION_PRICES);
     if (!kept || now - kept.at >= PRICE_TTL_MS) kept = (await this.read(base)) ?? kept;
     const rate = kept?.rates[currency];
     if (!kept || rate === undefined || now - kept.at >= PRICE_SHOWN_MS) return null;
@@ -79,7 +85,8 @@ export class PriceService {
       }
       if (!Object.keys(rates).length) return undefined;
       const kept = { at: this.deps.now(), rates };
-      await this.deps.local.set(LOCAL_PRICES, kept);
+      await this.deps.session.set(SESSION_PRICES, kept);
+      await this.deps.local?.remove(LOCAL_PRICES);
       return kept;
     } catch {
       // Offline, blocked, or rate-limited: the value just isn't shown.

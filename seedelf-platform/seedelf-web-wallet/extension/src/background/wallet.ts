@@ -19,6 +19,15 @@ import { fromBase64, toBase64, type Area } from "./storage";
 import { LOCAL_PREFERENCES } from "./preferences";
 import { PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
 import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord } from "./vault";
+
+/**
+ * What chrome.storage.local caches beside the wallet, which Remove wallet
+ * deletes too: the pool list (staking.ts LOCAL_POOLS_PREFIX), which says when
+ * staking was last browsed, and ADA's price as it was kept before it moved to
+ * session storage (prices.ts LOCAL_PRICES). Named here, not imported: those
+ * modules import this one.
+ */
+export const LOCAL_CACHES = ["seedelf.pools.preprod", "seedelf.pools.mainnet", "seedelf.prices"] as const;
 import { isTrap } from "./wasm";
 
 /** HKDF salt of the key that seals private records on the device, v1. */
@@ -139,7 +148,7 @@ export class Wallet {
       }
       const entropy = this.deps.wasm.phraseToEntropy(phrase);
       try {
-        const record = await sealVault(entropy, password, this.deps.now());
+        const record = await sealVault(entropy, password);
         await this.deps.local.set(VAULT_KEY, record);
         await this.deps.local.remove(UNLOCK_FAILURES);
         await this.open(entropy);
@@ -271,21 +280,24 @@ export class Wallet {
       if (problem) throw new Error(problem);
       const entropy = await this.openWithPassword(current);
       try {
-        const record = (await this.deps.local.get<VaultRecord>(VAULT_KEY))!;
-        const sealed = await sealVault(entropy, next, record.createdAt);
-        await this.deps.local.set(VAULT_KEY, sealed);
+        // An older vault's creation time goes with it (vault.ts).
+        await this.deps.local.set(VAULT_KEY, await sealVault(entropy, next));
       } finally {
         entropy.fill(0);
       }
     });
   }
 
-  /** Deletes the vault. The UI asks for a typed confirmation first. */
+  /**
+   * Deletes the vault, the sealed records and the caches. Where the wallet
+   * opens and which network it's on stay (the privacy policy says so). The
+   * UI asks for a typed confirmation first.
+   */
   reset(): Promise<void> {
     return this.serial(async () => {
       await this.wipe();
       const records = PRIVATE_RECORDS.map((name) => PRIVATE_PREFIX + name);
-      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records);
+      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records, ...LOCAL_CACHES);
       this.deps.changed();
     });
   }
