@@ -2370,10 +2370,12 @@ test.describe("the dApp connector", () => {
     const submitted = (await cip30(dapp, "submitTx", tx)).value as string;
     expect(koios.submitted).toEqual([submitted]);
 
-    // Settings lists it, and disconnecting it means asking again.
+    // Settings lists it, and disconnecting it, once asked, means asking again.
     await page.getByRole("button", { name: "Connected sites" }).click();
     await expect(page.getByTestId("sites")).toContainText("dapp.example");
-    await page.getByRole("button", { name: "Disconnect" }).click();
+    await page.getByTestId("sites-disconnect").click();
+    await expect(page.getByRole("dialog")).toContainText("dapp.example has to ask again before it sees anything.");
+    await page.getByTestId("sites-disconnect-confirm").click();
     await expect(page.getByTestId("sites-empty")).toBeVisible();
     expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(false);
 
@@ -2442,7 +2444,8 @@ test.describe("the dApp connector", () => {
     await expect(page.getByTestId("site-session-failed")).toBeVisible();
     await expect(page.getByRole("button", { name: "Disconnect" })).toBeEnabled();
     await snap(page, "site-session");
-    await page.getByRole("button", { name: "Disconnect" }).click();
+    await page.getByTestId("site-disconnect").click();
+    await page.getByTestId("site-disconnect-confirm").click();
     await expect(page.getByTestId("dapp-sites")).toHaveCount(0);
     await expect(page.getByTestId("dapp-sites-hint")).toBeVisible();
   });

@@ -1,12 +1,13 @@
 // Settings' sections, rendered as the page renders them: the network switch
-// of a build with both networks, the preprod strip every screen shows, and
+// of a build with both networks, the preprod strip every screen shows,
 // Lovejoin's, on each network it's on, with what a mix costs there and that
-// it has had no third-party audit.
+// it has had no third-party audit, and Connected sites' Disconnect, which
+// waits while a site's private session has something on its way.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { Status } from "../src/shared/rpc";
+import type { DappSite, SessionView, Status } from "../src/shared/rpc";
 import { NetworkBadge, TestNetworkStrip } from "../src/ui/components/NetworkBadge";
 
 let Settings: typeof import("../src/ui/screens/Settings");
@@ -99,5 +100,66 @@ describe("Settings' Lovejoin section", () => {
     expect(mainnet).toContain("about 3.3 ₳");
     expect(preprod).not.toContain("pool holds");
     expect(preprod).toContain("about 3.5 ₳");
+  });
+});
+
+describe("Settings' Connected sites (launch review H7)", () => {
+  const publicSite: DappSite = { origin: "https://pay.example", connectedAt: 0 };
+  const sessionSite: DappSite = { origin: "https://app.example", connectedAt: 0, session: 4 };
+  /** A site's private session, funded, holding nothing, as the device's record has it (not read from Koios). */
+  const session = (over: Partial<SessionView> = {}): SessionView => ({
+    index: 4,
+    network: "mainnet",
+    address: "addr1" + "s".repeat(50),
+    createdAt: 0,
+    stage: "open",
+    txs: [{ kind: "out", txHash: "ef".repeat(32), at: 0, confirmed: true }],
+    holding: null,
+    site: { origin: "https://app.example" },
+    ...over,
+  });
+  const html = (sessions?: SessionView[]) =>
+    renderToStaticMarkup(
+      createElement(Settings.SiteRows, { sites: [publicSite, sessionSite], sessions, busy: false, onDisconnect: () => undefined }),
+    );
+  /** Each row's Disconnect, in the rows' order. */
+  const buttons = (h: string) => [...h.matchAll(/<button[^>]*data-testid="sites-disconnect"[^>]*>/g)].map((m) => m[0]);
+
+  it("keeps a site's Disconnect off while its session's funding, return or chain is on its way, and says why", () => {
+    const chain = { total: 5, sent: 5, confirmed: 3, cut: false };
+    for (const [over, why] of [
+      [{ stage: "funding" }, "Its funding is on its way: wait for it to land."],
+      [{ stage: "returning" }, "Its return is on its way: wait for it to land."],
+      [{ chain }, "Its return is on its way: wait for it to land."],
+    ] as const) {
+      const shown = html([session(over)]);
+      const [pub, priv] = buttons(shown);
+      expect(priv).toContain("disabled");
+      expect(text(shown)).toContain(why);
+      // A site on the public account has nothing on its way.
+      expect(pub).not.toContain("disabled");
+    }
+  });
+
+  it("leaves an account it hasn't read to the worker's check, and waits for the sessions to be read", () => {
+    // No Refresh here: an unread account doesn't hold Disconnect off.
+    const [, unread] = buttons(html([session()]));
+    expect(unread).not.toContain("disabled");
+    expect(html([session()])).not.toContain('data-testid="site-wait"');
+    // What it held when last read does.
+    const holding = html([session({ holding: { lovelace: "3000000", tokens: [], utxos: 1 } })]);
+    expect(buttons(holding)[1]).toContain("disabled");
+    expect(text(holding)).toContain("Bring everything back first.");
+    // Before the sessions are read, only the public account's site can go.
+    const [pub, priv] = buttons(html(undefined));
+    expect(pub).not.toContain("disabled");
+    expect(priv).toContain("disabled");
+  });
+
+  it("says, before disconnecting, whether a private session ends with it", () => {
+    expect(Settings.disconnectText("pay.example")).toBe("pay.example has to ask again before it sees anything.");
+    const ending = Settings.disconnectText("app.example", 4);
+    expect(ending).toContain("Private session 5 ends, and app.example has to ask again");
+    expect(ending).toContain("The wallet stops reading the session's account");
   });
 });

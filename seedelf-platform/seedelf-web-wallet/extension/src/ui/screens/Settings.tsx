@@ -6,7 +6,9 @@
 // it stays unlocked, the recovery phrase (the password again first, even
 // while unlocked) and a check of a written copy, a new password, removing the
 // wallet from this browser, and what this is. Nothing here asks Koios
-// anything, except setting a collateral that needs a transaction.
+// anything, except setting a collateral that needs a transaction, and
+// disconnecting a site's private session, whose account the worker reads
+// first.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
@@ -23,7 +25,7 @@ import {
   type LovejoinDelay,
   type LovejoinDepth,
 } from "../../shared/preferences";
-import type { DappSite, Status } from "../../shared/rpc";
+import type { DappSite, SessionView, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -43,12 +45,14 @@ import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
 import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
+import { Modal } from "../components/Modal";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
 import { usePreferences } from "../preferences";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
+import { disconnectWait } from "./SiteSessions";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
@@ -508,19 +512,44 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
 export const CONNECTOR_BLOCKED =
   "Off, and it stays off in this version of Chrome: it can't keep websites away from the wallet's storage, where your encrypted wallet is. Update Chrome to let sites connect.";
 
-/** The sites connected to the public account, each with Disconnect. The list is sealed on the device. */
+/**
+ * The sites connected on this network, each with Disconnect. A site's
+ * private session ends with it, so its Disconnect waits while anything is on
+ * its way to the session's account or from it, says why, and asks first, as
+ * the session's page on the dApps page does (launch review H7). The worker
+ * checks again, reading the account, and its refusal shows here. The list is
+ * sealed on the device; the sessions are read from the device's record, not
+ * Koios.
+ */
 function ConnectedSites({ onBack }: { onBack: () => void }) {
   const [sites, setSites] = useState<DappSite[]>();
+  const [sessions, setSessions] = useState<SessionView[]>();
+  const [asking, setAsking] = useState<DappSite>();
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const readSessions = () =>
+    call("sessions", {}).then(setSessions, (e: Error) => {
+      // The worker's own check still stands between Disconnect and a session on its way.
+      setSessions([]);
+      // A refusal from the worker, shown already, stays.
+      setError((shown) => shown ?? e.message);
+    });
   useEffect(() => {
     call("dapp-sites", {}).then(setSites, (e: Error) => setError(e.message));
+    void readSessions();
   }, []);
 
   async function forget(origin: string) {
+    setAsking(undefined);
+    setBusy(true);
+    setError(undefined);
     try {
       setSites(await call("dapp-forget", { origin }));
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      void readSessions();
     }
   }
 
@@ -531,30 +560,100 @@ function ConnectedSites({ onBack }: { onBack: () => void }) {
           No site is connected. A site asks when it wants to, and you choose.
         </p>
       )}
-      {!!sites?.length && (
-        <ul className="list section" data-testid="sites">
-          {sites.map((s) => (
-            <li key={s.origin} className="list__row">
-              <span className="stack-tight">
-                <strong>{new URL(s.origin).host}</strong>
-                <span className="note">
-                  {s.session === undefined ? "Your public account" : `Private session ${s.session + 1}`} · since{" "}
-                  {new Date(s.connectedAt).toLocaleDateString()}
-                </span>
-              </span>
-              <button type="button" className="chip" onClick={() => forget(s.origin)}>
-                Disconnect
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {!!sites?.length && <SiteRows sites={sites} sessions={sessions} busy={busy} onDisconnect={setAsking} />}
       <p className="note">
         A disconnected site has to ask again before it sees anything. A private session is disconnected once everything in
         it is brought back, from the dApps page.
       </p>
+      {asking && (
+        <Modal
+          title={`Disconnect ${host(asking)}?`}
+          titleId="sites-disconnect-title"
+          onClose={() => setAsking(undefined)}
+          foot={
+            <>
+              <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
+                Keep it
+              </button>
+              <button
+                type="button"
+                className="danger"
+                onClick={() => void forget(asking.origin)}
+                data-testid="sites-disconnect-confirm"
+              >
+                Disconnect the site
+              </button>
+            </>
+          }
+        >
+          <p className="note">{disconnectText(host(asking), asking.session)}</p>
+        </Modal>
+      )}
     </Screen>
   );
+}
+
+const host = (site: DappSite) => new URL(site.origin).host;
+
+/**
+ * The connected sites' rows. A site's Disconnect is off while its private
+ * session has something on its way, or holds something (as last read), with
+ * why; and until the sessions are read.
+ */
+export function SiteRows({
+  sites,
+  sessions,
+  busy,
+  onDisconnect,
+}: {
+  sites: DappSite[];
+  /** The sessions on this network, from the device's record; undefined until read. */
+  sessions?: SessionView[];
+  busy: boolean;
+  onDisconnect: (site: DappSite) => void;
+}) {
+  return (
+    <ul className="list section" data-testid="sites">
+      {sites.map((s) => {
+        const session = s.session === undefined ? undefined : sessions?.find((x) => x.index === s.session);
+        const wait = session && disconnectWait(session, { canRefresh: false });
+        const unread = s.session !== undefined && !sessions;
+        return (
+          <li key={s.origin} className="list__row">
+            <span className="stack-tight">
+              <strong>{host(s)}</strong>
+              <span className="note">
+                {s.session === undefined ? "Your public account" : `Private session ${s.session + 1}`} · since{" "}
+                {new Date(s.connectedAt).toLocaleDateString()}
+              </span>
+              {wait && (
+                <span className="note" data-testid="site-wait">
+                  {wait}.
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              className="chip"
+              disabled={busy || unread || !!wait}
+              title={wait}
+              onClick={() => onDisconnect(s)}
+              data-testid="sites-disconnect"
+            >
+              Disconnect
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** What disconnecting a site does, said before it's done: to the public account, or ending its private session `session`. */
+export function disconnectText(site: string, session?: number): string {
+  return session === undefined
+    ? `${site} has to ask again before it sees anything.`
+    : `Private session ${session + 1} ends, and ${site} has to ask again before it sees anything. The wallet stops reading the session's account: anything the site pays it later, or leaves open on it, isn't looked for again.`;
 }
 
 /** Whether a payment from the Cardano account withdraws the staking rewards too. */

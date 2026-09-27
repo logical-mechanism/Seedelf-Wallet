@@ -71,13 +71,15 @@ const moving = (s: SessionView) =>
 /**
  * Why Disconnect waits, if it does: anything on its way to the account or
  * from it (the worker refuses too, and says the same), or what the account
- * still holds (launch review H7).
+ * still holds (launch review H7). Settings' Connected sites has no Refresh
+ * (`canRefresh: false`): an account it hasn't read is left to the worker's
+ * own check, which reads it.
  */
-export function disconnectWait(s: SessionView): string | undefined {
+export function disconnectWait(s: SessionView, { canRefresh = true }: { canRefresh?: boolean } = {}): string | undefined {
   if (s.stage === "funding") return "Its funding is on its way: wait for it to land";
   if (moving(s)) return "Its return is on its way: wait for it to land";
   if (s.stage === "failed") return undefined;
-  if (!s.holding) return "Refresh to read what it holds";
+  if (!s.holding) return canRefresh ? "Refresh to read what it holds" : undefined;
   if (s.holding.utxos > 0) return "Bring everything back first";
   return undefined;
 }
