@@ -40,13 +40,28 @@ function head(b: Uint8Array, pos: number): Head {
   return { major, n, p, indefinite: info === 31 };
 }
 
-/** The end offset of the CBOR item that starts at `pos`. */
-export function skip(b: Uint8Array, pos: number): number {
+/**
+ * How deep a dApp's CBOR may nest: each list, map and tag is a level, as the
+ * WebAssembly counts them (cip30.rs refuses past 128 too). A real
+ * transaction is a few levels deep; a site's could be thousands, and reading
+ * it would run the worker's stack out.
+ */
+export const MAX_DEPTH = 128;
+
+const tooDeep = () => new Error(`the transaction's CBOR is nested more than ${MAX_DEPTH} levels deep`);
+
+/**
+ * The end offset of the CBOR item that starts at `pos`, `depth` levels in.
+ * `inside`: the CBOR a tag 24 wraps in a byte string (an inline datum, a
+ * reference script) is read too, and its levels count.
+ */
+export function skip(b: Uint8Array, pos: number, depth = 0, inside = false): number {
   const { major, n, p, indefinite } = head(b, pos);
+  if ((indefinite || major >= 4) && major !== 7 && depth >= MAX_DEPTH) throw tooDeep();
   if (indefinite) {
     // Items until the 0xff break.
     let q = p;
-    while (b[q] !== 0xff) q = skip(b, q);
+    while (b[q] !== 0xff) q = skip(b, q, depth + 1, inside);
     return q + 1;
   }
   switch (major) {
@@ -59,16 +74,37 @@ export function skip(b: Uint8Array, pos: number): number {
       return p + n;
     case 4: {
       let q = p;
-      for (let i = 0; i < n; i++) q = skip(b, q);
+      for (let i = 0; i < n; i++) q = skip(b, q, depth + 1, inside);
       return q;
     }
     case 5: {
       let q = p;
-      for (let i = 0; i < 2 * n; i++) q = skip(b, q);
+      for (let i = 0; i < 2 * n; i++) q = skip(b, q, depth + 1, inside);
       return q;
     }
-    default: // 6: a tag, then its item
-      return skip(b, p);
+    default: {
+      // 6: a tag, then its item.
+      const end = skip(b, p, depth + 1, inside);
+      const wrapped = head(b, p);
+      if (inside && n === 24 && wrapped.major === 2 && !wrapped.indefinite) {
+        const content = b.subarray(wrapped.p, end);
+        if (skip(content, 0, depth + 2, true) !== content.length) throw new Error("a tag 24 wraps more than one item");
+      }
+      return end;
+    }
+  }
+}
+
+/**
+ * Whether a whole transaction nests within `MAX_DEPTH` levels, the CBOR its
+ * tags 24 wrap included, with nothing after it: safe to hand WebAssembly's
+ * decoder, which reads nesting by recursion.
+ */
+export function nestsWithin(tx: Uint8Array): boolean {
+  try {
+    return skip(tx, 0, 0, true) === tx.length;
+  } catch {
+    return false;
   }
 }
 
@@ -88,10 +124,11 @@ export function bodyOutpoints(tx: Uint8Array, field: 0 | 13): string[] | undefin
   if (body.major !== 5 || body.indefinite) throw new Error("the transaction body isn't a map");
   let p = body.p;
   for (let i = 0; i < body.n; i++) {
+    // The body's fields are two levels in: the transaction, then the body.
     const key = head(tx, p);
-    const value = skip(tx, p);
+    const value = skip(tx, p, 2);
     if (key.major === 0 && key.n === field) return outpoints(tx, value);
-    p = skip(tx, value);
+    p = skip(tx, value, 2);
   }
   return undefined;
 }
@@ -113,5 +150,5 @@ function outpoints(b: Uint8Array, pos: number): string[] {
 /** A transaction's id: the BLAKE2b-256 of its body, exactly as encoded. */
 export function txId(tx: Uint8Array): string {
   if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
-  return hex(blake2b(tx.subarray(1, skip(tx, 1)), { dkLen: 32 }));
+  return hex(blake2b(tx.subarray(1, skip(tx, 1, 1)), { dkLen: 32 }));
 }

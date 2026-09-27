@@ -79,6 +79,12 @@ const FUNDING_POLL_MS = 10_000;
 const FUNDING_WAIT_MS = 20 * 60_000;
 /** CIP-30 caps collateral at 5 ₳. */
 const MAX_COLLATERAL = 5_000_000n;
+/**
+ * The most of a site's bytes the wallet reads: a transaction to sign or send,
+ * or data to sign. Four times Cardano's 16 KiB transaction limit, room for a
+ * raise, as the WebAssembly's own check.
+ */
+const MAX_SITE_BYTES = 65_536;
 
 /** A CIP-30 error, as the site sees it. */
 export class DappError extends Error {
@@ -661,7 +667,7 @@ export class DappService {
     partialSign: boolean,
     password: boolean,
   ): Promise<string> {
-    const bytes = hexOf(tx, "The transaction isn't hex.");
+    const bytes = txBytes(tx);
     let refs: string[];
     try {
       refs = [...(bodyOutpoints(bytes, 0) ?? []), ...(bodyOutpoints(bytes, 13) ?? [])];
@@ -795,7 +801,7 @@ export class DappService {
   }
 
   private async submitTx(network: NetworkName, holder: Holder, tx: unknown): Promise<string> {
-    const bytes = hexOf(tx, "The transaction isn't hex.");
+    const bytes = txBytes(tx);
     let id: string;
     try {
       id = txId(bytes);
@@ -865,6 +871,18 @@ function remove<T>(list: T[], drop: (item: T) => boolean): void {
 function hexOf(value: unknown, problem: string): Uint8Array<ArrayBuffer> {
   if (typeof value !== "string" || !/^([0-9a-fA-F]{2})+$/.test(value.trim())) throw invalid(problem);
   return Uint8Array.from(value.trim().match(/../g)!, (h) => Number.parseInt(h, 16));
+}
+
+/**
+ * A site's transaction, refused by its length before any of it is read: one
+ * over 64 KiB is nothing Cardano would take, and reading it would only cost
+ * the worker time and memory.
+ */
+function txBytes(value: unknown): Uint8Array<ArrayBuffer> {
+  if (typeof value === "string" && value.length > 2 * MAX_SITE_BYTES) {
+    throw invalid("The wallet can't read this transaction: it's far larger than Cardano allows.");
+  }
+  return hexOf(value, "The transaction isn't hex.");
 }
 
 /** A whole number as CBOR, hex. */

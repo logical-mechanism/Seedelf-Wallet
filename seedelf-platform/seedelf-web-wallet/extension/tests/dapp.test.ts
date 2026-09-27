@@ -208,6 +208,22 @@ describe("the dApp connector", () => {
     expect(t.dapp.approvals()).toEqual([]);
   });
 
+  it("refuses a transaction over 64 KiB before reading any of it: no Koios request, no prompt", async () => {
+    const t = await on();
+    const s = await connected(t);
+    // An input the account doesn't hold, and 70,000 bytes of padding after the body.
+    const big = `84a10081825820${"cd".repeat(32)}00a0f55a${(70_000).toString(16).padStart(8, "0")}${"00".repeat(70_000)}`;
+    const calls = t.koios.calls.length;
+    for (const method of ["signTx", "submitTx"] as const) {
+      await expect(t.dapp.call(s, method, [big, false])).rejects.toMatchObject({
+        failure: { code: APIError.InvalidRequest, info: expect.stringContaining("far larger than Cardano allows") },
+      });
+    }
+    expect(t.koios.calls.length).toBe(calls);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(t.dapp.approvals()).toEqual([]);
+  });
+
   it("sends through Koios, and counts what comes back until it's on chain", async () => {
     const t = await on();
     const s = await connected(t);
