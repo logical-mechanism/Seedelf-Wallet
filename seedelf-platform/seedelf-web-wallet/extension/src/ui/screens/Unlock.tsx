@@ -1,6 +1,7 @@
 // Unlock with the password. The worker enforces the back-off after wrong
 // passwords; this screen only shows the countdown. In the connector's
-// window it says a site is waiting: what it asks comes after.
+// window it says a site is waiting: what it asks comes after. When the
+// wallet locked itself because its core stopped working, it says so.
 
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -13,10 +14,13 @@ import { connectorWindow } from "../view";
 
 export function Unlock({
   retryAfterMs,
+  lockedBy,
   onUnlocked,
   onForgot,
 }: {
   retryAfterMs: number;
+  /** Why the wallet locked itself, when it did (Status `lockedBy`). */
+  lockedBy?: Status["lockedBy"];
   onUnlocked: () => void;
   onForgot: () => void;
 }) {
@@ -63,6 +67,11 @@ export function Unlock({
     <section className="unlock">
       <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={88} height={88} />
       <h1>Welcome back</h1>
+      {lockedBy === "trap" && (
+        <Callout tone="warn" testId="unlock-why">
+          The wallet's core stopped working, so the wallet locked itself and let go of your keys. Unlock it to carry on.
+        </Callout>
+      )}
       {connectorWindow && (
         <p className="note center" data-testid="unlock-site">
           A site is waiting for Seedelf Wallet. Unlock to see what it asks.

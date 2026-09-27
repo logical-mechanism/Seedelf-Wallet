@@ -393,6 +393,8 @@ describe("a wallet whose WebAssembly breaks", () => {
     expect(session.data.size).toBe(0);
     expect(events.alarm).toBe("stopped");
     expect(oneTime).toHaveBeenCalledOnce();
+    // The user locked it: nothing to explain.
+    expect(wallet.lockReason()).toBeUndefined();
     expect(await wallet.state()).toBe("locked");
     // And again: nothing kept to fail twice.
     await wallet.lock();
@@ -422,9 +424,12 @@ describe("a wallet whose WebAssembly breaks", () => {
     await wallet.trapped();
     expect(fresh()).toBe(1);
     expect(session.data.size).toBe(0);
+    // The Unlock screen can say why it locked; unlocking forgets it.
+    expect(wallet.lockReason()).toBe("trap");
 
     // A refusal is only an error: the wallet stays as it was.
     expect(await wallet.unlock(PASSWORD)).toEqual({ unlocked: true });
+    expect(wallet.lockReason()).toBeUndefined();
     await expect(wallet.withKeys(() => loadTestWasm().validatePhrase("not a phrase"))).rejects.toThrow();
     expect(await wallet.state()).toBe("unlocked");
     expect(isTrap(new WebAssembly.RuntimeError("unreachable"))).toBe(true);

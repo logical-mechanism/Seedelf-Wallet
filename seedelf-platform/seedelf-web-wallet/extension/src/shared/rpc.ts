@@ -22,6 +22,8 @@ export interface Status {
    * Chrome fixes it.
    */
   connectorBlocked?: "storage";
+  /** When locked: why, if the wallet locked itself. "trap": its WebAssembly stopped working, so it dropped the keys. */
+  lockedBy?: "trap";
 }
 
 export type UnlockResult =

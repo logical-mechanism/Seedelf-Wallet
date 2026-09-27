@@ -83,6 +83,17 @@ describe("handlers", () => {
     expect(status.retryAfterMs).toBeGreaterThan(0);
   });
 
+  it("says the wallet locked itself when its WebAssembly stopped working, until it's unlocked (launch review #17)", async () => {
+    const ctx = context();
+    const v = vectors("cardano_account.json").find((v) => v.account === 0)!;
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    await ctx.wallet.trapped();
+    expect(await handle({ type: "status" }, ctx)).toMatchObject({ state: "locked", lockedBy: "trap" });
+    await handle({ type: "unlock", password: PASSWORD }, ctx);
+    expect(await handle({ type: "status" }, ctx)).not.toHaveProperty("lockedBy");
+    expect(((await handle({ type: "lock" }, ctx)) as Status).lockedBy).toBeUndefined();
+  });
+
   it("creates a wallet and resets it", async () => {
     const ctx = context();
     const { phrase } = (await handle({ type: "generate-phrase" }, ctx)) as { phrase: string };

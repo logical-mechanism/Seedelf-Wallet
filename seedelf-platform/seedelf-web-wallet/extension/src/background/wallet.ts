@@ -95,12 +95,23 @@ export interface Keys {
 export class Wallet {
   private keys: Keys | undefined;
   private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * Why the wallet last locked itself, while this worker lives: its
+   * WebAssembly trapped (`broken`). Unlocking, or a lock of the user's,
+   * clears it. The Unlock screen says so (Status `lockedBy`).
+   */
+  private lockedBy: "trap" | undefined;
 
   constructor(private readonly deps: WalletDeps) {}
 
   /** The current state. Also applies auto-lock, so the alarm just calls this. */
   state(): Promise<WalletState> {
     return this.serial(() => this.load());
+  }
+
+  /** Why the wallet locked itself, if it did: "trap", its WebAssembly stopped working. */
+  lockReason(): "trap" | undefined {
+    return this.lockedBy;
   }
 
   /** How long before the next unlock attempt is allowed, in ms. */
@@ -167,7 +178,10 @@ export class Wallet {
     return this.serial(async () => {
       const wasUnlocked = (await this.load()) === "unlocked";
       await this.wipe();
-      if (wasUnlocked) this.deps.changed();
+      if (wasUnlocked) {
+        this.lockedBy = undefined;
+        this.deps.changed();
+      }
     });
   }
 
@@ -351,6 +365,7 @@ export class Wallet {
    * the only way on.
    */
   private async broken(): Promise<void> {
+    this.lockedBy = "trap";
     try {
       await this.wipe();
     } finally {
@@ -398,6 +413,7 @@ export class Wallet {
   }
 
   private async open(entropy: Uint8Array): Promise<void> {
+    this.lockedBy = undefined;
     this.free();
     this.keys = this.derive(entropy);
     await this.deps.session.set(SESSION_ENTROPY, toBase64(entropy));

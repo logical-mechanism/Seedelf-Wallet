@@ -269,5 +269,6 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
 async function status({ wallet, version, network, networks, connectorBlocked }: Context): Promise<Status> {
   const state = await wallet.state();
   const retryAfterMs = state === "locked" ? await wallet.retryAfterMs() : 0;
-  return { state, version, network, networks, retryAfterMs, ...(connectorBlocked ? { connectorBlocked } : {}) };
+  const lockedBy = state === "locked" ? wallet.lockReason() : undefined;
+  return { state, version, network, networks, retryAfterMs, ...(connectorBlocked ? { connectorBlocked } : {}), ...(lockedBy ? { lockedBy } : {}) };
 }
