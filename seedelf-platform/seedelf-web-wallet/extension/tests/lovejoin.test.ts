@@ -742,6 +742,38 @@ describe("a chain's boxes", CHAINS, () => {
     expect(t.collateral.asked).toHaveLength(1);
   });
 
+  it("counts a withdraw Koios didn't answer as maybe sent: its time goes, and no other box comes back until it's found", async () => {
+    const { t } = await withSession("40000000");
+    const since = (hours: number) => t.clock.now / 1000 - hours * 3600;
+    t.koios.addedToAccounts.push(await ownedBox(t, "d1", 0, since(5)), await ownedBox(t, "d2", 0, since(5)));
+    // One box due an hour ago, the other in five minutes.
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR, t.clock.now + 5 * 60_000] });
+    const lovejoin = witnessed(t);
+    // The submit times out, but the withdraw reached the mempool.
+    const fetch = t.koios.fetch;
+    let submits = 0;
+    t.koios.fetch = async (url, init) => (url.endsWith("/submittx") && ++submits === 1 ? new Response("", { status: 504 }) : fetch(url, init));
+    expect(await lovejoin.withdrawDue("preprod")).toEqual([]);
+    const kept = (await t.store.get<{ due: number[]; withdrawing?: { txHash: string } }>("lovejoin.preprod"))!;
+    // Its due time went, as a sent one's does, and it's kept, sealed, to be looked for.
+    expect(kept.due).toEqual([t.clock.now + 5 * 60_000]);
+    expect(kept.withdrawing?.txHash).toBeDefined();
+    // Ten minutes on, the other box is due too: nothing is built while the first may be on its way.
+    t.clock.now += 10 * 60_000;
+    await t.wallet.unlock(PASSWORD);
+    expect(await lovejoin.withdrawDue("preprod")).toEqual([]);
+    expect(t.collateral.asked).toHaveLength(1);
+    // Not seen for a while: it's sent again, as it was.
+    expect(submits).toBe(2);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(kept.withdrawing!.txHash);
+    // Found on chain: in the history, and the next box goes.
+    t.koios.confirmations = 1;
+    await lovejoin.withdrawDue("preprod");
+    expect((await t.store.get<{ withdrawing?: unknown }>("lovejoin.preprod"))!.withdrawing).toBeUndefined();
+    expect(t.collateral.asked).toHaveLength(2);
+    expect((await t.activity.seedelf("preprod")).some((e) => e.txHash === kept.withdrawing!.txHash)).toBe(true);
+  });
+
   it("says a session's chain a lock cut stopped, as soon as the wallet unlocks", async () => {
     const { t, sessions } = await withSession("40000000");
     const review = await sessions.backBuild("preprod", 0);
