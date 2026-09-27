@@ -1,7 +1,8 @@
-//! Lovejoin through the web wallet's WebAssembly layer (`seedelf_wasm::lovejoin`):
-//! a session's chain, signed by its key and measured against the deployed
-//! preprod scripts, and the later withdraw of its boxes. Mainnet's are in
-//! `lovejoin_mainnet_test.rs`.
+//! Lovejoin on mainnet through the web wallet's WebAssembly layer
+//! (`seedelf_wasm::lovejoin`): a session's chain, signed by its key and
+//! measured against mainnet's scripts with mainnet's parameters, and the later
+//! withdraw of its boxes. Mainnet's pool was empty when this was written, so
+//! its boxes here are fresh registers at mainnet's `mix_box`.
 
 use blstrs::Scalar;
 use pallas_addresses::Address;
@@ -20,8 +21,6 @@ use seedelf_wasm::lovejoin::{
 };
 use serde_json::{Value, json};
 
-mod deep;
-
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const MIN_POLICY: &str = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72";
@@ -30,30 +29,18 @@ fn accounts() -> CardanoAccount {
     CardanoAccount::from_phrase(PHRASE, ONE_TIME_ACCOUNT).unwrap()
 }
 
-fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../seedelf-core/tests/fixtures/eval-preprod.json"
-    ))
-    .unwrap()
-}
-
-/// Preprod's parameters at epoch 315, with its 350-entry V3 cost model.
+/// Mainnet's parameters at epoch 658, one row of Koios's `epoch_params`.
 fn params() -> Value {
-    let cases = fixture()["cases"].as_array().unwrap().clone();
-    let seedelf = cases
-        .iter()
-        .find(|c| c["name"].as_str().unwrap().starts_with("seedelf"))
-        .unwrap();
-    json!({
-        "min_fee_a": 44, "min_fee_b": 155381, "coins_per_utxo_size": "4310",
-        "key_deposit": "2000000", "price_mem": 0.0577, "price_step": 0.0000721,
-        "min_fee_ref_script_cost_per_byte": 15,
-        "cost_models": { "PlutusV3": seedelf["cost_model_v3"] },
-    })
+    let rows: Value = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/epoch_params_mainnet.json"
+    ))
+    .unwrap();
+    assert_eq!(rows[0]["epoch_no"], 658);
+    rows[0].clone()
 }
 
 fn session() -> String {
-    api::one_time_address(&accounts(), true, 0)
+    api::one_time_address(&accounts(), false, 0)
         .unwrap()
         .to_bech32()
         .unwrap()
@@ -93,27 +80,46 @@ fn box_row(b: &PoolBox, protocol: &Protocol) -> UtxoResponse {
     .unwrap()
 }
 
-/// Every box the recorded Lovejoin transactions spent, as pool rows.
+/// Boxes other people deposited at mainnet's `mix_box`, as Koios would list
+/// them: fresh registers, 30 of them.
 fn pool(protocol: &Protocol) -> Vec<UtxoResponse> {
-    let mut seen: Vec<PoolBox> = Vec::new();
-    for case in fixture()["cases"].as_array().unwrap() {
-        for u in case["utxos"].as_array().unwrap() {
-            let r = Resolved {
-                tx_hash: hex::decode(u["tx_hash"].as_str().unwrap())
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-                index: u["index"].as_u64().unwrap(),
-                output: hex::decode(u["output"].as_str().unwrap()).unwrap(),
+    (0..30u8)
+        .map(|i| {
+            let r = Register::create(Scalar::from(10_000u64 + i as u64))
+                .unwrap()
+                .rerandomize()
+                .unwrap();
+            let a: [u8; 48] = hex::decode(&r.generator).unwrap().try_into().unwrap();
+            let b: [u8; 48] = hex::decode(&r.public_value).unwrap().try_into().unwrap();
+            let mut e = pallas_codec::minicbor::Encoder::new(Vec::new());
+            e.map(3)
+                .unwrap()
+                .u8(0)
+                .unwrap()
+                .bytes(&protocol.mix_box_address().to_vec())
+                .unwrap()
+                .u8(1)
+                .unwrap()
+                .u64(protocol.denom)
+                .unwrap()
+                .u8(2)
+                .unwrap()
+                .array(2)
+                .unwrap()
+                .u8(1)
+                .unwrap()
+                .tag(pallas_codec::minicbor::data::Tag::new(24))
+                .unwrap()
+                .bytes(&mix_datum(&a, &b))
+                .unwrap();
+            let utxo = Resolved {
+                tx_hash: [0x80u8.wrapping_add(i); 32],
+                index: 0,
+                output: e.into_writer(),
             };
-            if let Some(b) = PoolBox::from_resolved(r, protocol)
-                && !seen.iter().any(|s| s.utxo == b.utxo)
-            {
-                seen.push(b);
-            }
-        }
-    }
-    seen.iter().map(|b| box_row(b, protocol)).collect()
+            box_row(&PoolBox::from_resolved(utxo, protocol).unwrap(), protocol)
+        })
+        .collect()
 }
 
 fn holdings() -> Vec<UtxoResponse> {
@@ -144,7 +150,7 @@ fn a_session_plans_its_boxes_on_its_spare_ada() {
         lovejoin::plan(
             &accounts(),
             PlanRequest {
-                network: "preprod".into(),
+                network: "mainnet".into(),
                 index: 0,
                 utxos: holdings(),
                 collateral: collateral(),
@@ -166,13 +172,13 @@ fn a_session_plans_its_boxes_on_its_spare_ada() {
 
 #[test]
 fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
-    let protocol = Protocol::of(true).unwrap();
+    let protocol = Protocol::of(false).unwrap();
     let sk = Scalar::from(1234u64);
     let result = lovejoin::chain(
         &accounts(),
         sk,
         ChainRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             params: params(),
             index: 0,
             utxos: holdings(),
@@ -225,8 +231,9 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
 /// The change a session's funding made: a Seedelf UTxO under a fresh copy
 /// of `sk`'s register.
 fn funding_change(sk: Scalar) -> UtxoResponse {
-    let config = seedelf_core::constants::get_config(1, true).unwrap();
-    let wallet = seedelf_core::address::wallet_contract(true, config.contract.wallet_contract_hash);
+    let config = seedelf_core::constants::get_config(1, false).unwrap();
+    let wallet =
+        seedelf_core::address::wallet_contract(false, config.contract.wallet_contract_hash);
     let register = Register::create(sk).unwrap().rerandomize().unwrap();
     let mut change = row(9, 2, &wallet.to_bech32().unwrap(), 12_000_000, &[]);
     change.inline_datum = serde_json::from_value(json!({
@@ -241,13 +248,13 @@ fn funding_change(sk: Scalar) -> UtxoResponse {
 
 #[test]
 fn a_chains_return_merges_into_the_funding_change() {
-    let protocol = Protocol::of(true).unwrap();
+    let protocol = Protocol::of(false).unwrap();
     let sk = Scalar::from(4321u64);
     let result = lovejoin::chain(
         &accounts(),
         sk,
         ChainRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             params: params(),
             index: 0,
             utxos: holdings(),
@@ -301,129 +308,14 @@ fn a_chains_return_merges_into_the_funding_change() {
 }
 
 #[test]
-fn a_chains_return_leaves_out_what_would_overflow_a_token() {
-    let protocol = Protocol::of(true).unwrap();
-    let sk = Scalar::from(4322u64);
-    let at = session();
-    // A stranger's three UTxOs of 2^63 − 1 of one token at the session.
-    let junk = (1u64 << 63) - 1;
-    let mut utxos = holdings();
-    for tx in 7..10 {
-        utxos.push(row(
-            tx,
-            0,
-            &at,
-            1_500_000,
-            &[(&"ab".repeat(28), "6a756e6b", junk)],
-        ));
-    }
-    let chain = |merge: Vec<UtxoResponse>| {
-        lovejoin::chain(
-            &accounts(),
-            sk,
-            ChainRequest {
-                network: "preprod".into(),
-                params: params(),
-                index: 0,
-                utxos: utxos.clone(),
-                collateral: collateral(),
-                pool: pool(&protocol),
-                depth: 1,
-                boxes: Some(1),
-                merge,
-                again: false,
-                own: vec![],
-            },
-        )
-        .unwrap()
-    };
-    for (merge, merged) in [(vec![], 0), (vec![funding_change(sk)], 1)] {
-        let result = chain(merge);
-        assert_eq!(result.merged, merged);
-        let back = result.txs.last().unwrap();
-        let bytes = hex::decode(&back.tx_cbor).unwrap();
-        let tx = MultiEraTx::decode(&bytes).unwrap();
-        // The session's token UTxO and two of the three come back; one waits.
-        assert!(spends(&tx, [3; 32], 0));
-        assert!(spends(&tx, [7; 32], 0) && spends(&tx, [8; 32], 0));
-        assert!(!spends(&tx, [9; 32], 0));
-        assert_eq!(result.left_out.len(), 1);
-        assert_eq!(result.left_out[0].tx_hash, hex::encode([9u8; 32]));
-        assert_eq!(result.tokens.len(), 2);
-    }
-}
-
-/// The recorded Koios row's reference script: the Seedelf policy, 519 bytes.
-fn recorded_script() -> Option<seedelf_koios::koios::ReferenceScript> {
-    let rows: Vec<UtxoResponse> = serde_json::from_str(include_str!(
-        "../../../seedelf-core/tests/fixtures/reference_script_utxo.json"
-    ))
-    .unwrap();
-    rows[0].reference_script.clone()
-}
-
-#[test]
-fn a_utxo_with_a_reference_script_pays_no_mix_and_comes_back_swept() {
-    let protocol = Protocol::of(true).unwrap();
-    let sk = Scalar::from(4323u64);
-    // A stranger's ADA-only UTxO at the session, carrying a reference script:
-    // the wallet's evaluator can't take it.
-    let mut utxos = holdings();
-    utxos.push(UtxoResponse {
-        reference_script: recorded_script(),
-        ..row(8, 0, &session(), 40_000_000, &[])
-    });
-    let result = lovejoin::chain(
-        &accounts(),
-        sk,
-        ChainRequest {
-            network: "preprod".into(),
-            params: params(),
-            index: 0,
-            utxos,
-            collateral: collateral(),
-            pool: pool(&protocol),
-            depth: 1,
-            boxes: Some(1),
-            merge: vec![funding_change(sk)],
-            again: false,
-            own: vec![],
-        },
-    )
-    .unwrap();
-    let deposit = MultiEraTx::decode(&hex::decode(&result.txs[0].tx_cbor).unwrap())
-        .unwrap()
-        .inputs()
-        .iter()
-        .map(|i| **i.hash())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        deposit,
-        vec![[1; 32]],
-        "the deposit is paid from the session's own"
-    );
-    // The return takes it, swept into new registers: no script runs, and the
-    // fee pays for its 519 bytes.
-    assert_eq!(result.merged, 0);
-    let back = result.txs.last().unwrap();
-    let bytes = hex::decode(&back.tx_cbor).unwrap();
-    let tx = MultiEraTx::decode(&bytes).unwrap();
-    assert!(spends(&tx, [8; 32], 0) && spends(&tx, [2; 32], 1) && spends(&tx, [3; 32], 0));
-    assert!(tx.redeemers().is_empty());
-    let fee: u64 = back.fee.parse().unwrap();
-    assert!(fee >= 44 * bytes.len() as u64 + 155_381 + 519 * 15);
-    assert!(result.left_out.is_empty());
-}
-
-#[test]
 fn the_boxes_come_back_one_by_one_through_giveme_my() {
-    let protocol = Protocol::of(true).unwrap();
+    let protocol = Protocol::of(false).unwrap();
     let sk = Scalar::from(5678u64);
     let chain = lovejoin::chain(
         &accounts(),
         sk,
         ChainRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             params: params(),
             index: 0,
             utxos: holdings(),
@@ -477,7 +369,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
     let owned = lovejoin::owned(
         sk,
         OwnedRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             pool: rows.clone(),
         },
     )
@@ -488,7 +380,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
     let built = lovejoin::withdraw(
         sk,
         WithdrawRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             params: params(),
             pool: rows,
             box_ref: None,
@@ -532,13 +424,13 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
 
 #[test]
 fn a_session_without_a_box_of_spare_ada_is_refused() {
-    let protocol = Protocol::of(true).unwrap();
+    let protocol = Protocol::of(false).unwrap();
     let at = session();
     let err = lovejoin::chain(
         &accounts(),
         Scalar::from(1u64),
         ChainRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             params: params(),
             index: 0,
             utxos: vec![
@@ -565,7 +457,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
 fn public_utxo(tx: u8, role: Role, index: u32, lovelace: u64) -> api::PathedUtxo {
     let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
     let at = public
-        .base_address(true, role, index)
+        .base_address(false, role, index)
         .unwrap()
         .to_bech32()
         .unwrap();
@@ -577,38 +469,8 @@ fn public_utxo(tx: u8, role: Role, index: u32, lovelace: u64) -> api::PathedUtxo
 }
 
 #[test]
-fn the_tile_funds_exactly_the_boxes_asked_for() {
-    let funded = lovejoin::funding(FundingRequest {
-        network: "preprod".into(),
-        boxes: 2,
-        depth: 2,
-        again: false,
-    })
-    .unwrap();
-    assert_eq!((funded.lovelace.as_str(), funded.mixes), ("29100000", 8));
-    assert!(
-        lovejoin::funding(FundingRequest {
-            network: "preprod".into(),
-            boxes: 0,
-            depth: 2,
-            again: false,
-        })
-        .is_err()
-    );
-    // Mainnet's boxes hold the same 10 ₳.
-    let mainnet = lovejoin::funding(FundingRequest {
-        network: "mainnet".into(),
-        boxes: 2,
-        depth: 2,
-        again: false,
-    })
-    .unwrap();
-    assert_eq!((mainnet.lovelace, mainnet.mixes), (funded.lovelace, 8));
-}
-
-#[test]
 fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
-    let protocol = Protocol::of(true).unwrap();
+    let protocol = Protocol::of(false).unwrap();
     let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
     let sk = Scalar::from(2468u64);
     let key = |role: Role, index: u32| public.key_hash(role, index).unwrap();
@@ -617,7 +479,7 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
             &public,
             sk,
             AccountChainRequest {
-                network: "preprod".into(),
+                network: "mainnet".into(),
                 params: params(),
                 // Two boxes at depth 1 take 23.4 ₳: the two largest ADA-only
                 // UTxOs, under two keys; the small one and the token one stay.
@@ -625,14 +487,6 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
                     public_utxo(0x51, Role::Receive, 1, 15_000_000),
                     public_utxo(0x52, Role::Change, 0, 12_000_000),
                     public_utxo(0x53, Role::Receive, 2, 3_000_000),
-                    // The largest, but carrying a reference script: never a coin.
-                    api::PathedUtxo {
-                        utxo: UtxoResponse {
-                            reference_script: recorded_script(),
-                            ..public_utxo(0x54, Role::Receive, 3, 50_000_000).utxo
-                        },
-                        ..public_utxo(0x54, Role::Receive, 3, 50_000_000)
-                    },
                 ],
                 collateral,
                 pool: pool(&protocol),
@@ -700,7 +554,7 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
         &public,
         sk,
         AccountChainRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             params: params(),
             utxos: vec![public_utxo(0x51, Role::Receive, 1, 15_000_000)],
             collateral: public_utxo(0x5c, Role::Receive, 0, 5_000_000),
@@ -733,64 +587,8 @@ fn our_box_rows(sk: Scalar, count: usize, protocol: &Protocol) -> Vec<UtxoRespon
 }
 
 #[test]
-fn a_strangers_deep_utxos_at_mix_box_leave_the_pool_readable() {
-    let protocol = Protocol::of(true).unwrap();
-    let sk = Scalar::from(1357u64);
-    let ours = our_box_rows(sk, 2, &protocol);
-    let mut rows: Vec<Value> = pool(&protocol)
-        .iter()
-        .chain(&ours)
-        .map(|r| serde_json::to_value(r).unwrap())
-        .collect();
-    rows.extend([json!("datum"), json!("script")]);
-    let mix_box = protocol.mix_box_address().to_bech32().unwrap();
-    let cred = hex::encode(protocol.mix_box_hash);
-    // A box-sized UTxO under a deep datum, and a box of ours but for its deep
-    // reference script.
-    let deep_datum = deep::row(
-        0xd1,
-        &mix_box,
-        &cred,
-        protocol.denom,
-        &deep::datum(200),
-        "null",
-    );
-    let scripted = deep::row(
-        0xd2,
-        &mix_box,
-        &cred,
-        protocol.denom,
-        &serde_json::to_string(&ours[0].inline_datum).unwrap(),
-        &deep::script(100_000),
-    );
-    let strangers = [
-        ("datum", deep_datum.as_str()),
-        ("script", scripted.as_str()),
-    ];
-
-    // What `lovejoinOwned` does with the worker's JSON: both are skipped.
-    let request: OwnedRequest = serde_json::from_str(&deep::splice(
-        &json!({ "network": "preprod", "pool": rows }),
-        &strangers,
-    ))
-    .unwrap();
-    let owned = lovejoin::owned(sk, request).unwrap();
-    assert_eq!(owned.boxes.len(), 2);
-    assert_eq!(owned.lovelace, "20000000");
-
-    // `buildLovejoinWithdraw` takes one of ours back.
-    let request: WithdrawRequest = serde_json::from_str(&deep::splice(
-        &json!({ "network": "preprod", "params": params(), "pool": rows }),
-        &strangers,
-    ))
-    .unwrap();
-    let built = lovejoin::withdraw(sk, request).unwrap();
-    assert!(owned.boxes.contains(&built.box_ref));
-}
-
-#[test]
 fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
-    let protocol = Protocol::of(true).unwrap();
+    let protocol = Protocol::of(false).unwrap();
     let sk = Scalar::from(2468u64);
     let ours = our_box_rows(sk, 3, &protocol);
     let mut every = pool(&protocol);
@@ -808,7 +606,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
     let plan = lovejoin::plan(
         &accounts(),
         PlanRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             index: 0,
             utxos: utxos.clone(),
             collateral: collateral(),
@@ -824,7 +622,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
         &accounts(),
         sk,
         ChainRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             params: params(),
             index: 0,
             utxos,
@@ -894,7 +692,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
         &accounts(),
         sk,
         ChainRequest {
-            network: "preprod".into(),
+            network: "mainnet".into(),
             params: params(),
             index: 0,
             utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
@@ -917,7 +715,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
 #[test]
 fn mixing_again_is_funded_for_the_mixes_alone() {
     let funded = lovejoin::funding(FundingRequest {
-        network: "preprod".into(),
+        network: "mainnet".into(),
         boxes: 2,
         depth: 2,
         again: true,

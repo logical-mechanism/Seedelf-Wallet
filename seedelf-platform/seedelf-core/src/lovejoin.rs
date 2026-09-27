@@ -1,6 +1,6 @@
 //! Lovejoin, the mixer (<https://github.com/logical-mechanism/Lovejoin>): its
-//! preprod deployment, the pool's boxes, and the three transactions the wallet
-//! makes with it.
+//! deployments on preprod and mainnet, the pool's boxes, and the three
+//! transactions the wallet makes with it.
 //!
 //! - **Deposit:** a key account locks 10 ₳ boxes at `mix_box`, each with an
 //!   inline datum `{a, b}`. Nothing validates a deposit. The wallet's boxes are
@@ -44,7 +44,9 @@ use pallas_addresses::{
 };
 use pallas_codec::minicbor;
 use pallas_crypto::hash::Hash;
-use pallas_primitives::conway::{ExUnits, PlutusData, TransactionInput, TransactionOutput};
+use pallas_primitives::conway::{
+    ExUnits, PlutusData, ScriptRef, TransactionInput, TransactionOutput,
+};
 use pallas_primitives::{Fragment, MaybeIndefArray};
 use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::{
@@ -69,17 +71,22 @@ pub struct Protocol {
     pub mix_logic_hash: [u8; 28],
     /// The protocol's reference UTxO and the two scripts' reference UTxOs.
     pub references: Vec<Resolved>,
-    /// The reference scripts' size, for the reference-script fee.
+    /// The reference scripts' size, for the reference-script fee, read from
+    /// `references`.
     pub script_bytes: u64,
 }
 
 impl Protocol {
-    /// Lovejoin on preprod (`true`, as everywhere in the workspace). It isn't
-    /// deployed on mainnet yet.
+    /// Lovejoin on preprod (`true`, as everywhere in the workspace) or on
+    /// mainnet (`false`, live since 2026-09-26). Mainnet's scripts are
+    /// preprod's logic recompiled, so their hashes and sizes differ.
+    ///
+    /// The reference scripts' size, which prices every mix and withdraw, is
+    /// read from the bundled reference outputs, never typed in: mainnet's
+    /// `mix_logic` is 3,161 bytes to preprod's 3,156, and preprod's number
+    /// would have priced every mainnet mix 75 lovelace under the ledger's
+    /// minimum.
     pub fn of(network_flag: bool) -> Result<Self> {
-        if !network_flag {
-            bail!("Lovejoin isn't on mainnet yet");
-        }
         let resolved = |tx_hash: [u8; 32], output: &str| -> Result<Resolved> {
             Ok(Resolved {
                 tx_hash,
@@ -87,27 +94,57 @@ impl Protocol {
                 output: hex::decode(output)?,
             })
         };
+        let (mix_box_hash, mix_logic_hash, references) = if network_flag {
+            (
+                hex!("67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5"),
+                hex!("b7079c65f3b40b6da344bf68840eb0363af17787e8375004387348b8"),
+                vec![
+                    resolved(
+                        hex!("c5ed058606efdde7f1419c2f4b9497a2f8f3bbe4d3bb906b97cbab6c2b161190"),
+                        references::LOVEJOIN_PREPROD_REFERENCE,
+                    )?,
+                    resolved(
+                        hex!("c19c0157e236a8b01af13d7731b89d2329331588cdec3a12c5b6c599e8817a96"),
+                        references::LOVEJOIN_PREPROD_MIX_BOX,
+                    )?,
+                    resolved(
+                        hex!("06045afa3f79b25eb89c523bf9d08ef8d6605ed9c2207140cbc672669b039364"),
+                        references::LOVEJOIN_PREPROD_MIX_LOGIC,
+                    )?,
+                ],
+            )
+        } else {
+            // Lovejoin cb5a5a3, artifacts/mainnet/addresses.json.
+            (
+                hex!("c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad"),
+                hex!("0dad3046f90d9cf8354eb8b743d50fb2c25d581269b94ffcdf59499e"),
+                vec![
+                    resolved(
+                        hex!("f89cb43a55eed378fe90fe954a9d86566280e6416d97f9008937ab492b37175c"),
+                        references::LOVEJOIN_MAINNET_REFERENCE,
+                    )?,
+                    resolved(
+                        hex!("7d21335ffea6d3e8144ecb55f62f045f3fecd1414c932c62d7edd2886a57416a"),
+                        references::LOVEJOIN_MAINNET_MIX_BOX,
+                    )?,
+                    resolved(
+                        hex!("2452c3e6886e6d946837bfea730a76dad43aefff267b5bbffd0232a2af68c7b6"),
+                        references::LOVEJOIN_MAINNET_MIX_LOGIC,
+                    )?,
+                ],
+            )
+        };
+        let script_bytes = references
+            .iter()
+            .map(|r| reference_script_size(&r.output))
+            .sum::<Result<u64>>()?;
         Ok(Protocol {
             network_flag,
             denom: 10_000_000,
-            mix_box_hash: hex!("67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5"),
-            mix_logic_hash: hex!("b7079c65f3b40b6da344bf68840eb0363af17787e8375004387348b8"),
-            references: vec![
-                resolved(
-                    hex!("c5ed058606efdde7f1419c2f4b9497a2f8f3bbe4d3bb906b97cbab6c2b161190"),
-                    references::LOVEJOIN_PREPROD_REFERENCE,
-                )?,
-                resolved(
-                    hex!("c19c0157e236a8b01af13d7731b89d2329331588cdec3a12c5b6c599e8817a96"),
-                    references::LOVEJOIN_PREPROD_MIX_BOX,
-                )?,
-                resolved(
-                    hex!("06045afa3f79b25eb89c523bf9d08ef8d6605ed9c2207140cbc672669b039364"),
-                    references::LOVEJOIN_PREPROD_MIX_LOGIC,
-                )?,
-            ],
-            // mix_box 629 and mix_logic 3,156 bytes.
-            script_bytes: 629 + 3_156,
+            mix_box_hash,
+            mix_logic_hash,
+            references,
+            script_bytes,
         })
     }
 
@@ -145,6 +182,24 @@ impl Protocol {
             .expect("encoding into a Vec doesn't fail");
         e.into_writer()
     }
+}
+
+/// The size of the script a reference output carries, as the ledger counts
+/// it for the reference-script fee: the script's bytes inside its
+/// `script_ref`. 0 for an output with none.
+fn reference_script_size(output: &[u8]) -> Result<u64> {
+    let TransactionOutput::PostAlonzo(output) = minicbor::decode::<TransactionOutput>(output)
+        .map_err(|e| anyhow!("A Lovejoin reference output can't be read: {e}"))?
+    else {
+        return Ok(0);
+    };
+    Ok(match output.script_ref.map(|s| s.0) {
+        None => 0,
+        Some(ScriptRef::PlutusV1Script(s)) => s.as_ref().len() as u64,
+        Some(ScriptRef::PlutusV2Script(s)) => s.as_ref().len() as u64,
+        Some(ScriptRef::PlutusV3Script(s)) => s.as_ref().len() as u64,
+        Some(ScriptRef::NativeScript(_)) => bail!("A Lovejoin reference holds a native script"),
+    })
 }
 
 /// A box's datum, `Constr 0 [a, b]`, in the canonical form `serialise_data`
@@ -856,7 +911,10 @@ pub fn mixes_per_box(depth: u32) -> usize {
 }
 
 /// What the wallet plans on for a 3-box mix before measuring one: preprod's
-/// cost 0.877 ₳, rounded up.
+/// cost 0.877 ₳, rounded up. One measured 0.82 ₳ against mainnet's scripts.
+/// The wallet pays its mixes itself and never draws on Lovejoin's fee shards,
+/// so the cap Lovejoin puts on a fee a shard pays (1 ₳ on mainnet) doesn't
+/// apply.
 pub const MIX_FEE_ESTIMATE: u64 = 950_000;
 
 /// What a deposit (when the chain has one) and the change the chain leaves

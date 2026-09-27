@@ -49,7 +49,11 @@
   - Context: `blake2b_256(serialise_data(tx.outputs) ‖ serialise_data(input refs) ‖ mix_hash)`.
   - It commits to every output, so nobody can redirect it.
   - The domain tag is `lovejoin/sigmajoin/v1/`, different from Seedelf's own proof, so a proof from one can't be replayed in the other.
-- **Deployment:** preprod only. Mainnet's config hashes are still `null`. The preprod addresses are in `_reference/Lovejoin/artifacts/preprod/addresses.json`.
+- **Deployment:** preprod, and mainnet since 2026-09-26 (Lovejoin cb5a5a3). The addresses are in `_reference/Lovejoin/artifacts/preprod/addresses.json` and `artifacts/mainnet/addresses.json`.
+  - Mainnet's scripts are preprod's logic recompiled, so their hashes differ: `mix_box` `c145c10f…1fad`, `mix_logic` `0dad3046…499e`.
+  - Its three reference UTxOs (`f89c…175c#0`, the datum and NFT; `7d21…416a#0`, `mix_box`; `2452…c7b6#0`, `mix_logic`) sit at `reference_holder`, an always-false script. Each output was checked against Koios: its address, lovelace, NFT, datum and script hash, and (160 + its size) × 4,310 is what it locks.
+  - `mix_logic` is 3,161 bytes there, to preprod's 3,156. `Protocol::of` reads the size from the bundled outputs, so the fees can't be priced on preprod's: 75 lovelace short, and the node would refuse every mix and withdraw.
+  - Mainnet caps the fee a shard pays at 1 ₳ and has no fee shards. Neither touches the wallet, which never uses Lovejoin's fee pool (*Out of scope*): it pays each mix itself, 0.82 ₳ for a 3-box mix on mainnet's scripts.
 
 **Measured on preprod:**
 
@@ -126,7 +130,7 @@
 
 **Rust: `seedelf-core`**
 - **`lovejoin.rs`:**
-  - The preprod constants (bundled from `addresses.json`: the reference UTxO and its datum, the script hashes, the reference-script UTxOs and their scripts; mainnet `None`).
+  - The preprod constants (bundled from `addresses.json`: the reference UTxO and its datum, the script hashes, the reference-script UTxOs and their scripts; mainnet `None`). Mainnet's were added once Lovejoin launched there (launch review M1).
   - The builders:
     - `deposit`: a key account → k boxes plus change, key-signed.
     - `mix`: N boxes → N re-randomized boxes in a random order, plus the payer's change; the payer's collateral; reference inputs; the withdraw-zero.
@@ -220,7 +224,7 @@
 - **Hard forks:** they can change the cost model faster than `uplc` releases, as protocol 11 did. The cross-check stops the chain rather than risk the collateral.
 - **The pool's size:** the design assumes a healthy pool (decided). With too few fresh boxes for a tree, the return is plain and says why.
 - **Collateral:** whether the last transaction can name the UTxO it spends as its own collateral (see *Decided in the design*).
-- **Mainnet:** Lovejoin isn't deployed there, so the tile and the return step are preprod-only until it is.
+- **Mainnet:** deployed on 2026-09-26, and `seedelf-core` and the WebAssembly build for it (launch review M1). The extension still opens the tile and the return step on preprod only until the owner decides how Lovejoin launches there. Its pool starts empty, and every mix needs boxes that aren't the wallet's (launch review M5).
 
 ## Built (2026-09-25, first session)
 
@@ -508,7 +512,7 @@ Totals: Rust 327, WebAssembly (Node) 33, Vitest 295, Playwright 52. The module i
 ## Out of scope
 
 - Tokens through Lovejoin.
-- Lovejoin's fee shards: we neither pay from them nor top them up.
+- Lovejoin's fee shards: we neither pay from them nor top them up. So mainnet's 1 ₳ cap on a shard-paid fee, and its having no shards, don't apply.
 - Lovejoin's website.
 - Widths above 3.
 - Background withdraws while the wallet is locked.

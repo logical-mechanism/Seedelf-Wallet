@@ -1,6 +1,6 @@
 //! Lovejoin's transactions (`seedelf_core::lovejoin`), each measured offline
 //! against the deployed preprod scripts: a wrong proof, context or layout
-//! fails here, not on chain.
+//! fails here, not on chain. Mainnet's are in `lovejoin_mainnet_test.rs`.
 
 use blstrs::Scalar;
 use pallas_codec::minicbor;
@@ -418,8 +418,50 @@ fn the_box_datum_is_canonical_and_reads_back() {
 }
 
 #[test]
-fn lovejoin_is_not_on_mainnet() {
-    assert!(Protocol::of(false).is_err());
+fn lovejoin_is_on_preprod_and_mainnet() {
+    let preprod = Protocol::of(true).unwrap();
+    let mainnet = Protocol::of(false).unwrap();
+    assert!(preprod.network_flag && !mainnet.network_flag);
+    assert_eq!(
+        mainnet.mix_box_address().to_bech32().unwrap(),
+        "addr1w8q5tsg07j72aal45ndm8l9lmh9ykmrmpqv3kp5skyh3ltgw48lct"
+    );
+    assert_ne!(preprod.mix_logic_hash, mainnet.mix_logic_hash);
+}
+
+/// The script a bundled reference output carries, read here on its own: the
+/// bytes inside its `script_ref`.
+fn reference_script(output: &[u8]) -> Option<Vec<u8>> {
+    use pallas_primitives::conway::{ScriptRef, TransactionOutput};
+    let TransactionOutput::PostAlonzo(output) = minicbor::decode(output).unwrap() else {
+        panic!("a post-Alonzo output")
+    };
+    match output.script_ref?.0 {
+        ScriptRef::PlutusV3Script(script) => Some(script.as_ref().to_vec()),
+        _ => panic!("a Plutus V3 script"),
+    }
+}
+
+#[test]
+fn the_reference_scripts_are_priced_on_the_scripts_referenced() {
+    // mainnet's mix_logic is 5 bytes longer: preprod's size would price every
+    // mainnet mix and withdraw 75 lovelace under the ledger's minimum.
+    for (network_flag, sizes) in [(true, vec![629, 3_156]), (false, vec![629, 3_161])] {
+        let protocol = Protocol::of(network_flag).unwrap();
+        let scripts: Vec<Vec<u8>> = protocol
+            .references
+            .iter()
+            .filter_map(|r| reference_script(&r.output))
+            .collect();
+        assert_eq!(scripts.iter().map(Vec::len).collect::<Vec<_>>(), sizes);
+        // They're the scripts the protocol names: blake2b-224 of 0x03 ‖ script.
+        let hash = |script: &[u8]| -> [u8; 28] {
+            *pallas_crypto::hash::Hasher::<224>::hash(&[&[3u8][..], script].concat())
+        };
+        assert_eq!(hash(&scripts[0]), protocol.mix_box_hash);
+        assert_eq!(hash(&scripts[1]), protocol.mix_logic_hash);
+        assert_eq!(protocol.script_bytes, sizes.iter().sum::<usize>() as u64);
+    }
 }
 
 /// Every box the recorded Lovejoin transactions spent, once each.
