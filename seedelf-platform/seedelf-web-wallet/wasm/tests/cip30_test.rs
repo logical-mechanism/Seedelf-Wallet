@@ -728,6 +728,210 @@ fn the_other_network_is_refused() {
     assert!(cip30::inspect_tx(&account(), &request(tx_hex(b), rows, false)).is_err());
 }
 
+/// `request` for mainnet.
+fn on_mainnet(mut request: TxRequest) -> TxRequest {
+    request.network = "mainnet".into();
+    request
+}
+
+#[test]
+fn a_utxo_on_the_other_network_is_never_spent() {
+    // The account's keys are the same on both networks, and a signature
+    // doesn't say which: signed "on preprod", it would spend a mainnet UTxO
+    // on mainnet. A preprod site can find the account's mainnet address.
+    let (_, mut rows) = swap();
+    let mainnet = account().base_address(false, Role::Receive, 0).unwrap();
+    rows.push(row(TX_B, 0, &mainnet, 1_000_000_000, &[]));
+    let refused = |b: conway::TransactionBody, rows: &[KoiosRow], mainnet: bool| -> String {
+        let tx = tx_hex(b);
+        let mut words = String::new();
+        for partial_sign in [true, false] {
+            let mut request = request(tx.clone(), rows.to_vec(), partial_sign);
+            if mainnet {
+                request = on_mainnet(request);
+            }
+            words = cip30::inspect_tx(&account(), &request)
+                .unwrap_err()
+                .to_string();
+            assert!(words.contains("spends a UTxO on"), "{words}");
+            assert!(cip30::sign_tx(&account(), &request).is_err());
+        }
+        words
+    };
+
+    // Spent alone, to someone else.
+    let words = refused(
+        body(
+            vec![input(TX_B, 0)],
+            vec![out(&theirs(), 999_800_000, None)],
+        ),
+        &rows,
+        false,
+    );
+    assert!(words.contains(&format!("on mainnet ({TX_B}#0)")), "{words}");
+    assert!(words.contains("the wallet is on preprod"), "{words}");
+
+    // Beside the account's own.
+    refused(
+        body(
+            vec![input(TX_A, 1), input(TX_B, 0)],
+            vec![out(&ours(Role::Receive, 0), 1_003_800_000, None)],
+        ),
+        &rows,
+        false,
+    );
+
+    // As collateral.
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 3_800_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_B, 0)]).ok();
+    refused(b, &rows, false);
+
+    // Someone else's is no more this network's.
+    let their_mainnet = CardanoAccount::from_phrase(PHRASE, 1)
+        .unwrap()
+        .base_address(false, Role::Receive, 0)
+        .unwrap();
+    let mut theirs_too = rows.clone();
+    theirs_too.push(row(TX_B, 1, &their_mainnet, 5_000_000, &[]));
+    refused(
+        body(
+            vec![input(TX_A, 1), input(TX_B, 1)],
+            vec![out(&ours(Role::Receive, 0), 8_800_000, None)],
+        ),
+        &theirs_too,
+        false,
+    );
+
+    // And the other way: a preprod UTxO on mainnet.
+    let mainnet_rows = vec![row(TX_B, 0, &mainnet, 5_000_000, &[])];
+    let mut both = mainnet_rows.clone();
+    both.push(row(TX_A, 1, &ours(Role::Receive, 2), 4_000_000, &[]));
+    let words = refused(
+        body(
+            vec![input(TX_B, 0), input(TX_A, 1)],
+            vec![out(&mainnet, 8_800_000, None)],
+        ),
+        &both,
+        true,
+    );
+    assert!(words.contains("on a test network"), "{words}");
+
+    // On its own network it's the account's, as ever.
+    let summary = cip30::inspect_tx(
+        &account(),
+        &on_mainnet(request(
+            tx_hex(body(
+                vec![input(TX_B, 0)],
+                vec![out(&mainnet, 4_800_000, None)],
+            )),
+            mainnet_rows,
+            false,
+        )),
+    )
+    .unwrap();
+    assert_eq!(summary.signs, vec!["0/0"]);
+    assert_eq!(summary.own_inputs, 1);
+}
+
+/// A Byron address: mainnet's with no network magic, a test network's with
+/// preprod's (1).
+fn byron(magic: Option<u32>) -> Address {
+    use pallas_addresses::byron::{
+        AddrAttrProperty, AddrAttrs, AddrType, AddressPayload, ByronAddress, SpendingData,
+    };
+    use pallas_codec::minicbor::bytes::ByteVec;
+    let attributes: AddrAttrs = magic
+        .map(|m| AddrAttrProperty::NetworkTag(ByteVec::from(minicbor::to_vec(m).unwrap())))
+        .into_iter()
+        .collect::<Vec<_>>()
+        .into();
+    Address::Byron(ByronAddress::from_decoded(AddressPayload::new(
+        AddrType::PubKey,
+        SpendingData::PubKey(ByteVec::from(vec![7; 64])),
+        attributes,
+    )))
+}
+
+#[test]
+fn a_byron_address_on_the_other_network_is_refused() {
+    // Pallas gives a Byron address no network. With no network magic, the
+    // ledger reads it as mainnet's.
+    let (_, rows) = swap();
+    let pays = |to: Address, mainnet: bool| {
+        let (tx, rows) = if mainnet {
+            let ours = account().base_address(false, Role::Receive, 0).unwrap();
+            (
+                tx_hex(body(vec![input(TX_B, 0)], vec![out(&to, 4_800_000, None)])),
+                vec![row(TX_B, 0, &ours, 5_000_000, &[])],
+            )
+        } else {
+            (
+                tx_hex(body(vec![input(TX_A, 1)], vec![out(&to, 3_800_000, None)])),
+                rows.clone(),
+            )
+        };
+        let request = request(tx, rows, false);
+        cip30::inspect_tx(
+            &account(),
+            &if mainnet {
+                on_mainnet(request)
+            } else {
+                request
+            },
+        )
+    };
+
+    let refused = pays(byron(None), false).unwrap_err().to_string();
+    assert!(
+        refused.contains("pays an address on mainnet, and the wallet is on preprod"),
+        "{refused}"
+    );
+    let refused = pays(byron(Some(1)), true).unwrap_err().to_string();
+    assert!(
+        refused.contains("pays an address on a test network, and the wallet is on mainnet"),
+        "{refused}"
+    );
+
+    // Each on its own network is paid as any address is.
+    let summary = pays(byron(Some(1)), false).unwrap();
+    assert_eq!(summary.paid.len(), 1);
+    assert_eq!(summary.net_lovelace, "-4000000");
+    let summary = pays(byron(None), true).unwrap();
+    assert_eq!(summary.paid.len(), 1);
+    assert_eq!(summary.signs, vec!["0/0"]);
+
+    // The collateral's return too.
+    let mut b = body(
+        vec![input(TX_A, 0)],
+        vec![out(&ours(Role::Receive, 0), 5_000_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_A, 1)]).ok();
+    b.collateral_return = Some(out(&byron(None), 3_700_000, None));
+    let refused = cip30::inspect_tx(&account(), &request(tx_hex(b.clone()), rows.clone(), true))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("its collateral would go to an address on mainnet"),
+        "{refused}"
+    );
+    // A Shelley one on the other network, even with the account's keys.
+    b.collateral_return = Some(out(
+        &account().base_address(false, Role::Receive, 0).unwrap(),
+        3_700_000,
+        None,
+    ));
+    let refused = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("its collateral would go to an address on mainnet"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn a_payment_into_seedelf_says_whether_it_has_a_register() {
     let (_, rows) = swap();

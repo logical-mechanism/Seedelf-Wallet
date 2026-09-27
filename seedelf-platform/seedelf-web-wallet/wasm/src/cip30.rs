@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, anyhow, bail};
+use pallas_addresses::byron::AddrAttrProperty;
 use pallas_addresses::{
     Address, Network as AddressNetwork, ShelleyDelegationPart, ShelleyPaymentPart, StakePayload,
 };
@@ -83,6 +84,28 @@ fn address_network(network_flag: bool) -> AddressNetwork {
     } else {
         AddressNetwork::Mainnet
     }
+}
+
+/// The network an address is for, as the ledger reads it. A Byron address
+/// says so in its attributes, which Pallas doesn't read for it: a network
+/// magic for a test network, and none for mainnet.
+fn network_of(address: &Address) -> Result<AddressNetwork> {
+    Ok(match address {
+        Address::Shelley(s) => s.network(),
+        Address::Stake(s) => s.network(),
+        Address::Byron(b) => {
+            let payload = b.decode().map_err(|e| anyhow!("{e}"))?;
+            if payload
+                .attributes
+                .iter()
+                .any(|a| matches!(a, AddrAttrProperty::NetworkTag(_)))
+            {
+                AddressNetwork::Testnet
+            } else {
+                AddressNetwork::Mainnet
+            }
+        }
+    })
 }
 
 type Enc = Encoder<Vec<u8>>;
@@ -938,6 +961,18 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 row.tx_index
             )
         })?;
+        // The account's keys are the same on both networks, and a signature
+        // says nothing of the network: one over a UTxO on the other network
+        // would spend it there. It's never counted, as ours or anyone's.
+        if let Address::Shelley(s) = &address
+            && s.network() != network
+        {
+            bail!(
+                "This transaction spends a UTxO on {other_name} ({}#{}), and the wallet is on {network_name}.",
+                row.tx_hash,
+                row.tx_index
+            );
+        }
         Ok(match address {
             Address::Shelley(s) => match s.payment() {
                 ShelleyPaymentPart::Key(h) => match keys.payment.get(h) {
@@ -995,6 +1030,15 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         let returned = match &body.collateral_return {
             Some(out) => {
                 let (address, amount, _, _) = output_parts(out)?;
+                if let Ok(a) = Address::from_bytes(&address)
+                    && network_of(&a).map_err(|e| {
+                        anyhow!("The collateral return has an unreadable address: {e}")
+                    })? != network
+                {
+                    bail!(
+                        "If a contract refused this transaction, its collateral would go to an address on {other_name}, and the wallet is on {network_name}."
+                    );
+                }
                 let ours =
                     Address::from_bytes(&address).is_ok_and(|a| keys.own_address(&a).is_some());
                 if !ours && own > 0 {
@@ -1046,7 +1090,10 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         let (address_bytes, amount, inline, hash) = output_parts(out)?;
         let address = Address::from_bytes(&address_bytes)
             .map_err(|e| anyhow!("Output {i} has an unreadable address: {e}"))?;
-        if address.network().is_some_and(|n| n != network) {
+        // A Byron address counts too: with no network magic, it's mainnet's.
+        if network_of(&address).map_err(|e| anyhow!("Output {i} has an unreadable address: {e}"))?
+            != network
+        {
             bail!(
                 "This transaction pays an address on {other_name}, and the wallet is on {network_name}."
             );
