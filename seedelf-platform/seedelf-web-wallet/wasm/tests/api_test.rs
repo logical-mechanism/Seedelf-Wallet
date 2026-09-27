@@ -63,16 +63,36 @@ fn covers(
 }
 
 #[test]
-fn with_phrase_rebuilds_the_vault_phrase() {
-    let entropy = [0u8; 32];
-    let words = api::with_phrase(&entropy, |p| Ok(p.split(' ').count())).unwrap();
-    assert_eq!(words, 24);
-    assert!(
-        api::with_phrase(&[0u8; 24], |_| Ok(())).is_err(),
-        "18 words"
+fn vault_entropy_gives_the_phrase_keys() {
+    // Unlock derives every key from the vault's entropy, without writing the
+    // phrase out: the keys must be the ones the phrase gives.
+    use seedelf_wasm::{
+        Network, SeedelfKey, WasmCardanoAccount as CardanoAccount,
+        WasmOneTimeAccounts as OneTimeAccounts,
+    };
+    let abandon_art = format!("{}art", "abandon ".repeat(23));
+    let entropy = vec![0u8; 32];
+
+    let seedelf = SeedelfKey::from_entropy(entropy.clone(), 0).unwrap();
+    let from_phrase = SeedelfKey::from_phrase(abandon_art.clone(), 0).unwrap();
+    assert_eq!(
+        seedelf.base_register().unwrap().public_value,
+        from_phrase.base_register().unwrap().public_value
     );
-    let failed: anyhow::Result<()> = api::with_phrase(&entropy, |_| anyhow::bail!("inner"));
-    assert_eq!(failed.unwrap_err().to_string(), "inner");
+
+    let cardano = CardanoAccount::from_entropy(entropy.clone(), 0).unwrap();
+    let from_phrase = CardanoAccount::from_phrase(abandon_art.clone(), 0).unwrap();
+    assert_eq!(
+        cardano.account_public_key(),
+        from_phrase.account_public_key()
+    );
+
+    let one_time = OneTimeAccounts::from_entropy(entropy).unwrap();
+    let from_phrase = OneTimeAccounts::from_phrase(abandon_art).unwrap();
+    assert_eq!(
+        one_time.address(Network::Preprod, 3).unwrap(),
+        from_phrase.address(Network::Preprod, 3).unwrap()
+    );
 }
 
 mod move_in {

@@ -43,7 +43,7 @@ flowchart LR
   - **It is readable by the extension's own pages**, as any extension storage is: there's no store only the worker can read. What keeps it from them is that they run only the extension's own code (the CSP allows no other script). Since the crypto review (2026-09-25), no page listens to `chrome.storage.onChanged`, whose events carry session storage's changes, the entropy among them at every unlock and lock: the UI follows `chrome.storage.local.onChanged` alone.
   - **Content scripts can't read local storage either** (the crypto review): the worker sets both areas to `TRUSTED_CONTEXTS` at every start (`chrome.storage.<area>.setAccessLevel`; Chrome's default leaves local storage open to content scripts). The connector's bridge runs in every site's renderer and never reads storage, so a renderer a site took over can't take the sealed vault through it to guess the password offline, or change the unsealed settings.
   - A restarted worker re-derives the keys from there, unless the auto-lock deadline has passed, in which case it locks.
-  - **Lock** (manual or auto-lock) clears the key from session storage as well as from memory.
+  - **Lock** (manual or auto-lock) clears the entropy from session storage and frees the keys in memory. Wiping memory is best effort (see *Build settings* under [Crypto](#crypto)).
   - The result: the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every idle restart.
 
 ## Crypto
@@ -60,7 +60,12 @@ flowchart LR
   - Its tests check the output against native Rust byte for byte.
 - **Build settings:**
   - `getrandom` 0.2 with the `js` feature, set in the wasm crate: `crypto.getRandomValues`. If it ever fails, the draw panics and the call throws; nothing goes on with zeros.
-  - Secrets in WebAssembly memory are wiped with `zeroize` (volatile writes the compiler can't drop): the Seedelf scalar on `free()`, the rebuilt phrase, the BIP39 seed and HKDF material, and the one-time key's. `bip39`'s `zeroize` feature wipes its mnemonics; the Cardano keys (`ed25519-bip32`'s `XPrv`) wipe themselves.
+  - **Secrets in WebAssembly memory are wiped with `zeroize`** (volatile writes the compiler can't drop), as far as the wallet's own code reaches:
+    - the Seedelf scalar on `free()`, and the one-time keys' material. The Cardano keys (`ed25519-bip32`'s `XPrv`) wipe themselves, and `bip39`'s `zeroize` feature wipes its mnemonics.
+    - Unlock derives the keys from the entropy directly, so the phrase isn't written out at all (the launch review, #32).
+    - Every copy of the phrase and the entropy that `seedelf-crypto` makes, the BIP39 seed, the HKDF key and output, and the Cardano master key. The HKDF expand has its own HMAC for this: cryptoxide's keeps its key in vectors it frees unwiped.
+    - The phrase and entropy exports take what they're given by value, wipe it, and build what they return in JavaScript. wasm-bindgen would free its copies unwiped.
+  - **Wiping is best effort.** Copies inside the libraries (cryptoxide's HMAC and PBKDF2, among them the proof nonce's HMAC keyed by the Seedelf scalar) and on the stack stay in freed memory until it's reused. JavaScript strings can't be wiped at all: the base64 entropy the worker reads from session storage, and a phrase typed or shown. So lock frees the keys and clears session storage, but it can't promise the worker's memory holds nothing until the worker is torn down.
   - `CC_wasm32_unknown_unknown=clang`, because `blst` is C code.
   - `AR_wasm32_unknown_unknown=llvm-ar`, which is `llvm-ar-18` on Ubuntu.
   - `wasm-bindgen-cli` pinned to the crate's `wasm-bindgen` version.

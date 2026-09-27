@@ -134,7 +134,7 @@ fn entropy_round_trips_on_every_vector() {
         let entropy = phrase_to_entropy(phrase).unwrap();
         let words = phrase.split(' ').count();
         assert_eq!(entropy.len(), words / 3 * 4, "{phrase}");
-        assert_eq!(entropy_to_phrase(&entropy).unwrap(), phrase);
+        assert_eq!(*entropy_to_phrase(&entropy).unwrap(), phrase);
     }
 }
 
@@ -145,9 +145,9 @@ fn entropy_matches_the_bip39_reference() {
         "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
     )
     .unwrap();
-    assert_eq!(entropy, vec![0x7f; 32]);
+    assert_eq!(*entropy, vec![0x7f; 32]);
     assert_eq!(
-        entropy_to_phrase(&[0u8; 32]).unwrap(),
+        *entropy_to_phrase(&[0u8; 32]).unwrap(),
         ABANDON_ART,
         "all-zero entropy is the abandon…art phrase"
     );
@@ -156,7 +156,7 @@ fn entropy_matches_the_bip39_reference() {
 #[test]
 fn entropy_is_taken_from_the_normalized_phrase() {
     let messy = format!("  {}  ", ABANDON_ART.to_uppercase().replace(' ', "   \n"));
-    assert_eq!(phrase_to_entropy(&messy).unwrap(), vec![0u8; 32]);
+    assert_eq!(*phrase_to_entropy(&messy).unwrap(), vec![0u8; 32]);
     assert!(
         phrase_to_entropy("abandon abandon")
             .unwrap_err()
@@ -170,7 +170,7 @@ fn entropy_lengths_follow_the_restore_policy() {
     for len in [16, 20, 32] {
         let phrase = entropy_to_phrase(&vec![0xa5; len]).unwrap();
         assert_eq!(phrase.split(' ').count(), len / 4 * 3);
-        assert_eq!(phrase_to_entropy(&phrase).unwrap(), vec![0xa5; len]);
+        assert_eq!(*phrase_to_entropy(&phrase).unwrap(), vec![0xa5; len]);
     }
     // 18 and 21 words are valid BIP39 but not accepted on restore
     for len in [0, 15, 17, 24, 28, 33, 64] {
@@ -195,4 +195,63 @@ fn wordlist_is_bip39_english() {
     let prefixes: std::collections::BTreeSet<String> =
         list.iter().map(|w| w.chars().take(4).collect()).collect();
     assert_eq!(prefixes.len(), 2048);
+}
+
+#[test]
+fn keys_from_entropy_are_the_frozen_keys() {
+    // unlock derives from the vault's entropy without writing the phrase out
+    for v in vectors() {
+        let phrase = v["phrase"].as_str().unwrap();
+        let account = v["account"].as_u64().unwrap() as u32;
+        let entropy = phrase_to_entropy(phrase).unwrap();
+        let sk = seedelf_key_v1_from_entropy(&entropy, account).unwrap();
+        assert_eq!(
+            hex::encode(sk.to_bytes_be()),
+            v["sk"],
+            "{phrase} / {account}"
+        );
+    }
+    for len in [0, 15, 24, 64] {
+        assert!(
+            seedelf_key_v1_from_entropy(&vec![0u8; len], 0)
+                .unwrap_err()
+                .to_string()
+                .contains("16, 20 or 32 bytes")
+        );
+    }
+}
+
+#[test]
+fn phrases_are_written_as_bip39_writes_them() {
+    for len in [16, 20, 32] {
+        let entropy: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
+        let mnemonic = bip39::Mnemonic::from_entropy(&entropy).unwrap();
+        assert_eq!(*entropy_to_phrase(&entropy).unwrap(), mnemonic.to_string());
+    }
+    let generated = generate_phrase();
+    assert_eq!(
+        *generated,
+        parse_phrase(&generated).unwrap().to_string(),
+        "a new phrase is written as it parses"
+    );
+}
+
+#[test]
+fn okm_is_cryptoxides_hkdf() {
+    // okm_v1 has its own HKDF expand, which wipes its keys; it must give
+    // exactly what cryptoxide's gives, for any seed and account
+    use cryptoxide::hkdf::{hkdf_expand, hkdf_extract};
+    use cryptoxide::sha2::Sha256;
+    for n in 0u8..16 {
+        let seed: [u8; 64] = std::array::from_fn(|i| (i as u8).wrapping_mul(n).wrapping_add(n));
+        for account in [0, 1, n as u32, 0x7fff_ffff] {
+            let mut info = INFO_PREFIX_V1.to_vec();
+            info.extend_from_slice(&account.to_be_bytes());
+            let mut prk = [0u8; 32];
+            hkdf_extract(Sha256::new(), SALT_V1, &seed, &mut prk);
+            let mut okm = [0u8; 64];
+            hkdf_expand(Sha256::new(), &prk, &info, &mut okm);
+            assert_eq!(okm_v1(&seed, account), okm, "seed {n} / account {account}");
+        }
+    }
 }

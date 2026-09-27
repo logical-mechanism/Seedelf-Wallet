@@ -109,6 +109,7 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
   - It lives in `chrome.storage.local` under `seedelf.vault`, as `{ version: 1, blob: <base64>, createdAt }`.
   - The entropy ↔ phrase conversion is in Rust (`seedelf_crypto::derivation::{phrase_to_entropy, entropy_to_phrase}`), with the same rules as `parse_phrase`.
   - Unlock goes straight from entropy to keys inside WebAssembly (`SeedelfKey.fromEntropy`, `CardanoAccount.fromEntropy`), so the phrase never becomes a JavaScript string after onboarding, unless the user asks to see it (Settings, below).
+  - Since the launch review (#32), WebAssembly doesn't write the phrase out either: the keys come from the entropy directly (`seedelf_key_v1_from_entropy`, `CardanoAccount::from_entropy`), and they're the keys the phrase gives. Tests check that against the frozen vectors and against pallas's own Cardano master key.
 - **SecretBox `SBV1`**, adapted from Lace (`packages/lib/core/src/secret-box/`) into [`secret-box/`](../extension/src/background/secret-box/). Those files stay under Apache-2.0, with Lace's notice and our changes listed in that folder's README.
   - **Key derivation:** Argon2id with m = 19456 KiB, t = 2, p = 1, giving a 32-byte key (`@noble/hashes`).
   - **Cipher:** ChaCha20-Poly1305 (`@noble/ciphers`).
@@ -128,3 +129,4 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
   - On lock, the worker frees the WebAssembly key objects, which overwrite `x` and the Cardano account key before releasing them, and clears `chrome.storage.session`.
   - Entropy buffers and the password's bytes are zeroed after use. JavaScript strings can't be zeroed, so the password string and the phrase typed during onboarding are simply dropped.
   - The password is never kept after use.
+  - **Wiping is best effort.** WebAssembly wipes the copies of the phrase, the entropy and the keys its own code makes (see [architecture.md](architecture.md#crypto)). Copies inside the libraries and on the stack, and JavaScript strings (the base64 entropy read from session storage, a phrase typed or shown), stay in memory until it's reused or the worker is torn down. Lock frees the keys and clears session storage; it can't promise nothing is left.

@@ -1,5 +1,5 @@
 use seedelf_crypto::cardano::{CardanoAccount, HARDENED, Role};
-use seedelf_crypto::derivation::seedelf_key_v1;
+use seedelf_crypto::derivation::{phrase_to_entropy, seedelf_key_v1};
 
 fn vectors() -> Vec<serde_json::Value> {
     let raw = include_str!("vectors/cardano_account.json");
@@ -84,5 +84,52 @@ fn cardano_keys_are_independent_of_the_seedelf_key() {
     for role in [Role::Receive, Role::Change, Role::Staking] {
         let key = acct.private_key(role, 0).unwrap().as_bytes();
         assert!(key.windows(32).all(|w| w != seedelf));
+    }
+}
+
+#[test]
+fn master_key_is_pallas_icarus_key() {
+    // The master key is made from the entropy in a wiped buffer, not by
+    // pallas from a phrase String: every key must be the one pallas gives.
+    use pallas_wallet::hd::Bip32PrivateKey;
+    for v in vectors() {
+        let phrase = v["phrase"].as_str().unwrap();
+        let account = v["account"].as_u64().unwrap() as u32;
+        let pallas = Bip32PrivateKey::from_bip39_mnenomic(phrase.to_string(), String::new())
+            .unwrap()
+            .derive(HARDENED | 1852)
+            .derive(HARDENED | 1815)
+            .derive(HARDENED | account);
+        let acct = CardanoAccount::from_phrase(phrase, account).unwrap();
+        for role in [Role::Receive, Role::Change, Role::Staking] {
+            assert_eq!(
+                acct.private_key(role, 0).unwrap().as_bytes(),
+                pallas.derive(role as u32).derive(0).as_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn accounts_from_entropy_match_cardano_sdk() {
+    // unlock derives from the vault's entropy without writing the phrase out
+    for v in vectors() {
+        let phrase = v["phrase"].as_str().unwrap();
+        let account = v["account"].as_u64().unwrap() as u32;
+        let entropy = phrase_to_entropy(phrase).unwrap();
+        let acct = CardanoAccount::from_entropy(&entropy, account).unwrap();
+        assert_eq!(
+            hex::encode(acct.account_public_key().as_bytes()),
+            v["account_public_key"]
+        );
+        assert_eq!(
+            bech32(acct.base_address(false, Role::Receive, 0)),
+            v["mainnet"]["receive_0"]
+        );
+    }
+    let entropy = phrase_to_entropy(vectors()[0]["phrase"].as_str().unwrap()).unwrap();
+    assert!(CardanoAccount::from_entropy(&entropy, HARDENED).is_err());
+    for len in [0, 15, 24, 64] {
+        assert!(CardanoAccount::from_entropy(&vec![0u8; len], 0).is_err());
     }
 }

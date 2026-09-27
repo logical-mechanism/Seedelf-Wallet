@@ -15,6 +15,7 @@ use blstrs::Scalar;
 use ff::Field;
 use seedelf_crypto::{cardano, derivation, register, schnorr};
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroizing;
 
 pub mod cip30;
 pub mod lovejoin;
@@ -48,7 +49,6 @@ pub mod api {
     use seedelf_core::staking::{self, StakeAction, StakeKey, StakeState, Staking};
     use seedelf_core::utxos::assets_of as utxo_assets;
     use seedelf_crypto::cardano::{CardanoAccount, Role};
-    use seedelf_crypto::derivation;
     use seedelf_crypto::register::Register;
     use seedelf_crypto::schnorr;
     use seedelf_koios::koios::{
@@ -71,15 +71,6 @@ pub mod api {
             bail!("secret key must not be zero");
         }
         Ok(sk)
-    }
-
-    /// Rebuilds the recovery phrase from vault entropy, hands it to `f`, then
-    /// overwrites it. The phrase never leaves WebAssembly.
-    pub fn with_phrase<T>(entropy: &[u8], f: impl FnOnce(&str) -> Result<T>) -> Result<T> {
-        let phrase = derivation::entropy_to_phrase(entropy)?;
-        let result = f(&phrase);
-        phrase.into_bytes().zeroize();
-        result
     }
 
     /// A move-in request from the extension, as JSON. `utxos` are the
@@ -2234,24 +2225,26 @@ impl SeedelfKey {
 
     /// The wallet's key: v1 derivation from a 12-, 15- or 24-word recovery
     /// phrase (see `seedelf_crypto::derivation`). Case and extra whitespace
-    /// are ignored; invalid phrases throw with a reason.
+    /// are ignored; invalid phrases throw with a reason. WebAssembly's copy
+    /// of the phrase is wiped.
     #[wasm_bindgen(js_name = fromPhrase)]
-    pub fn from_phrase(phrase: &str, account: u32) -> Result<SeedelfKey, JsError> {
-        derivation::seedelf_key_v1(phrase, account)
+    pub fn from_phrase(phrase: String, account: u32) -> Result<SeedelfKey, JsError> {
+        let phrase = Zeroizing::new(phrase);
+        derivation::seedelf_key_v1(&phrase, account)
             .map(|sk| SeedelfKey { sk })
             .map_err(js_error)
     }
 
     /// The wallet's key from the recovery phrase's BIP39 entropy, as the
     /// vault stores it: the same key `fromPhrase` gives for that phrase. The
-    /// phrase is rebuilt inside WebAssembly and never reaches JavaScript.
+    /// phrase is never written out, and WebAssembly's copy of the entropy is
+    /// wiped.
     #[wasm_bindgen(js_name = fromEntropy)]
-    pub fn from_entropy(entropy: &[u8], account: u32) -> Result<SeedelfKey, JsError> {
-        api::with_phrase(entropy, |phrase| {
-            derivation::seedelf_key_v1(phrase, account)
-        })
-        .map(|sk| SeedelfKey { sk })
-        .map_err(js_error)
+    pub fn from_entropy(entropy: Vec<u8>, account: u32) -> Result<SeedelfKey, JsError> {
+        let entropy = Zeroizing::new(entropy);
+        derivation::seedelf_key_v1_from_entropy(&entropy, account)
+            .map(|sk| SeedelfKey { sk })
+            .map_err(js_error)
     }
 
     /// Imports a key from 32 big-endian bytes in hex. For development and
@@ -2328,23 +2321,25 @@ pub struct WasmCardanoAccount {
 #[wasm_bindgen(js_class = CardanoAccount)]
 impl WasmCardanoAccount {
     /// Account `account` (`m/1852'/1815'/account'`) of a 12-, 15- or 24-word
-    /// phrase. v1 of the wallet uses account 0.
+    /// phrase. v1 of the wallet uses account 0. WebAssembly's copy of the
+    /// phrase is wiped.
     #[wasm_bindgen(js_name = fromPhrase)]
-    pub fn from_phrase(phrase: &str, account: u32) -> Result<WasmCardanoAccount, JsError> {
-        cardano::CardanoAccount::from_phrase(phrase, account)
+    pub fn from_phrase(phrase: String, account: u32) -> Result<WasmCardanoAccount, JsError> {
+        let phrase = Zeroizing::new(phrase);
+        cardano::CardanoAccount::from_phrase(&phrase, account)
             .map(|inner| WasmCardanoAccount { inner })
             .map_err(js_error)
     }
 
     /// Account `account` from the recovery phrase's BIP39 entropy, as the
-    /// vault stores it. The phrase never reaches JavaScript.
+    /// vault stores it. The phrase is never written out, and WebAssembly's
+    /// copy of the entropy is wiped.
     #[wasm_bindgen(js_name = fromEntropy)]
-    pub fn from_entropy(entropy: &[u8], account: u32) -> Result<WasmCardanoAccount, JsError> {
-        api::with_phrase(entropy, |phrase| {
-            cardano::CardanoAccount::from_phrase(phrase, account)
-        })
-        .map(|inner| WasmCardanoAccount { inner })
-        .map_err(js_error)
+    pub fn from_entropy(entropy: Vec<u8>, account: u32) -> Result<WasmCardanoAccount, JsError> {
+        let entropy = Zeroizing::new(entropy);
+        cardano::CardanoAccount::from_entropy(&entropy, account)
+            .map(|inner| WasmCardanoAccount { inner })
+            .map_err(js_error)
     }
 
     /// The account public key (public key || chain code), hex. Enough to
@@ -2427,22 +2422,25 @@ pub struct WasmOneTimeAccounts {
 
 #[wasm_bindgen(js_class = OneTimeAccounts)]
 impl WasmOneTimeAccounts {
-    /// From a 12-, 15- or 24-word phrase.
+    /// From a 12-, 15- or 24-word phrase. WebAssembly's copy of the phrase is
+    /// wiped.
     #[wasm_bindgen(js_name = fromPhrase)]
-    pub fn from_phrase(phrase: &str) -> Result<WasmOneTimeAccounts, JsError> {
-        cardano::CardanoAccount::from_phrase(phrase, cardano::ONE_TIME_ACCOUNT)
+    pub fn from_phrase(phrase: String) -> Result<WasmOneTimeAccounts, JsError> {
+        let phrase = Zeroizing::new(phrase);
+        cardano::CardanoAccount::from_phrase(&phrase, cardano::ONE_TIME_ACCOUNT)
             .map(|inner| WasmOneTimeAccounts { inner })
             .map_err(js_error)
     }
 
-    /// From the recovery phrase's BIP39 entropy, as the vault stores it.
+    /// From the recovery phrase's BIP39 entropy, as the vault stores it. The
+    /// phrase is never written out, and WebAssembly's copy of the entropy is
+    /// wiped.
     #[wasm_bindgen(js_name = fromEntropy)]
-    pub fn from_entropy(entropy: &[u8]) -> Result<WasmOneTimeAccounts, JsError> {
-        api::with_phrase(entropy, |phrase| {
-            cardano::CardanoAccount::from_phrase(phrase, cardano::ONE_TIME_ACCOUNT)
-        })
-        .map(|inner| WasmOneTimeAccounts { inner })
-        .map_err(js_error)
+    pub fn from_entropy(entropy: Vec<u8>) -> Result<WasmOneTimeAccounts, JsError> {
+        let entropy = Zeroizing::new(entropy);
+        cardano::CardanoAccount::from_entropy(&entropy, cardano::ONE_TIME_ACCOUNT)
+            .map(|inner| WasmOneTimeAccounts { inner })
+            .map_err(js_error)
     }
 
     /// Session `index`'s address (bech32): its own payment and stake keys.
@@ -2630,18 +2628,24 @@ pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String, JsEr
     cip30::attach_witnesses(tx_cbor, witness_set).map_err(js_error)
 }
 
+// The phrase and entropy exports below take their arguments by value and
+// build their results in JavaScript, so that WebAssembly's copies are wiped:
+// wasm-bindgen frees a borrowed argument or a returned `String` or `Vec`
+// as it is.
+
 /// A new 24-word recovery phrase from the browser's secure random source.
 #[wasm_bindgen(js_name = generatePhrase)]
-pub fn generate_phrase() -> String {
-    derivation::generate_phrase()
+pub fn generate_phrase() -> js_sys::JsString {
+    js_sys::JsString::from(derivation::generate_phrase().as_str())
 }
 
 /// Checks a typed recovery phrase: 12, 15 or 24 BIP39 English words with a
 /// valid checksum (case and extra whitespace ignored), the lengths Lace
 /// accepts. Throws with a reason suitable for showing to the user.
 #[wasm_bindgen(js_name = validatePhrase)]
-pub fn validate_phrase(phrase: &str) -> Result<(), JsError> {
-    derivation::parse_phrase(phrase)
+pub fn validate_phrase(phrase: String) -> Result<(), JsError> {
+    let phrase = Zeroizing::new(phrase);
+    derivation::parse_phrase(&phrase)
         .map(|_| ())
         .map_err(js_error)
 }
@@ -2650,14 +2654,20 @@ pub fn validate_phrase(phrase: &str) -> Result<(), JsError> {
 /// or 24 words), checked and normalized like `validatePhrase`. The vault
 /// stores this rather than the words.
 #[wasm_bindgen(js_name = phraseToEntropy)]
-pub fn phrase_to_entropy(phrase: &str) -> Result<Vec<u8>, JsError> {
-    derivation::phrase_to_entropy(phrase).map_err(js_error)
+pub fn phrase_to_entropy(phrase: String) -> Result<js_sys::Uint8Array, JsError> {
+    let phrase = Zeroizing::new(phrase);
+    derivation::phrase_to_entropy(&phrase)
+        .map(|entropy| js_sys::Uint8Array::from(entropy.as_slice()))
+        .map_err(js_error)
 }
 
 /// The recovery phrase for 16, 20 or 32 bytes of BIP39 entropy.
 #[wasm_bindgen(js_name = entropyToPhrase)]
-pub fn entropy_to_phrase(entropy: &[u8]) -> Result<String, JsError> {
-    derivation::entropy_to_phrase(entropy).map_err(js_error)
+pub fn entropy_to_phrase(entropy: Vec<u8>) -> Result<js_sys::JsString, JsError> {
+    let entropy = Zeroizing::new(entropy);
+    derivation::entropy_to_phrase(&entropy)
+        .map(|phrase| js_sys::JsString::from(phrase.as_str()))
+        .map_err(js_error)
 }
 
 /// The 2048-word BIP39 English list, for autocomplete while typing a phrase.

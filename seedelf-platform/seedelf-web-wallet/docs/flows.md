@@ -74,7 +74,7 @@ Onboarding runs in a full tab. From the side panel, **Create** and **Restore** o
 ## Lock and unlock
 
 - **Unlock:** opening the vault with the password derives every key.
-- **Lock:** the lock button in the top bar, or automatically after 15 minutes without activity (key presses and clicks in the wallet), or the time chosen in Settings: 1, 5, 15, 30 or 60 minutes (chunk 14, Lace's choices less "never"). Locking wipes all secrets from memory and session storage, and every open wallet page switches to the unlock screen.
+- **Lock:** the lock button in the top bar, or automatically after 15 minutes without activity (key presses and clicks in the wallet), or the time chosen in Settings: 1, 5, 15, 30 or 60 minutes (chunk 14, Lace's choices less "never"). Locking clears the entropy from session storage and frees the keys in memory (wiping memory is best effort: see [keys-and-accounts.md](keys-and-accounts.md)), and every open wallet page switches to the unlock screen.
 - **Closing the browser locks the wallet;** closing its tab or the side panel doesn't.
 - **Failed unlocks:** exponential back-off (1 s, 2 s, 4 s … capped at 60 s), enforced by the worker. The unlock screen shows the countdown.
 - **Forgot password:** "Restore from your phrase" deletes the wallet from this browser after a typed confirmation (`delete wallet`), then goes straight to restore.

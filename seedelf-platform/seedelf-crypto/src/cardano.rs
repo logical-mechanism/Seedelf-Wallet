@@ -14,13 +14,15 @@
 //! of the Seedelf key in [`crate::derivation`], which comes from the BIP39
 //! seed through its own HKDF domain.
 
-use crate::derivation::parse_phrase;
+use crate::derivation::{check_entropy, parse_phrase};
 use anyhow::{Result, bail};
+use cryptoxide::{hmac::Hmac, pbkdf2::pbkdf2, sha2::Sha512};
 use pallas_addresses::{
     Address, Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart, StakeAddress,
 };
 use pallas_crypto::hash::{Hash, Hasher};
 use pallas_wallet::hd::{Bip32PrivateKey, Bip32PublicKey};
+use zeroize::Zeroizing;
 
 /// CIP-1852 purpose.
 pub const PURPOSE: u32 = 1852;
@@ -54,17 +56,27 @@ impl CardanoAccount {
     /// Derives account `account` from a recovery phrase (12, 15 or 24 words,
     /// same rules as [`parse_phrase`]) with an empty BIP39 passphrase.
     pub fn from_phrase(phrase: &str, account: u32) -> Result<Self> {
-        if account >= HARDENED {
-            bail!("account index must be below 2^31, got {account}");
-        }
-        let mnemonic = parse_phrase(phrase)?;
-        let master = Bip32PrivateKey::from_bip39_mnenomic(mnemonic.to_string(), String::new())
-            .map_err(|e| anyhow::anyhow!("failed to derive the master key: {e:?}"))?;
+        check_account(account)?;
+        let entropy = Zeroizing::new(parse_phrase(phrase)?.to_entropy());
+        Ok(Self::from_master(icarus_master(&entropy)?, account))
+    }
+
+    /// Derives account `account` from a recovery phrase's entropy (16, 20
+    /// or 32 bytes), as the web wallet's vault stores it: the account
+    /// [`CardanoAccount::from_phrase`] gives for that phrase, without the
+    /// phrase ever being written out.
+    pub fn from_entropy(entropy: &[u8], account: u32) -> Result<Self> {
+        check_account(account)?;
+        check_entropy(entropy)?;
+        Ok(Self::from_master(icarus_master(entropy)?, account))
+    }
+
+    fn from_master(master: Bip32PrivateKey, account: u32) -> Self {
         let account_key = master
             .derive(HARDENED | PURPOSE)
             .derive(HARDENED | COIN_TYPE)
             .derive(HARDENED | account);
-        Ok(Self { account_key })
+        Self { account_key }
     }
 
     /// The account-level public key (xpub); enough to derive every address.
@@ -112,6 +124,33 @@ impl CardanoAccount {
             .map(Address::from)
             .map_err(|e| anyhow::anyhow!("failed to build the stake address: {e}"))
     }
+}
+
+fn check_account(account: u32) -> Result<()> {
+    if account >= HARDENED {
+        bail!("account index must be below 2^31, got {account}");
+    }
+    Ok(())
+}
+
+/// The Icarus master key (CIP-3) of BIP39 entropy with an empty password:
+/// what pallas's `Bip32PrivateKey::from_bip39_mnenomic` gives, without the
+/// phrase `String` that one takes and drops unwiped. The key is made and
+/// clamped in a buffer that's wiped, and `XPrv` wipes its own copy.
+fn icarus_master(entropy: &[u8]) -> Result<Bip32PrivateKey> {
+    let mut master = Zeroizing::new([0u8; 96]);
+    pbkdf2(
+        &mut Hmac::new(Sha512::new(), &[]),
+        entropy,
+        4096,
+        &mut master[..],
+    );
+    // ed25519-bip32's `normalize_bytes_force3rd`, as pallas applies it
+    master[0] &= 0b1111_1000;
+    master[31] &= 0b0001_1111;
+    master[31] |= 0b0100_0000;
+    Bip32PrivateKey::from_bytes(*master)
+        .map_err(|e| anyhow::anyhow!("failed to derive the master key: {e:?}"))
 }
 
 fn network(network_flag: bool) -> Network {
