@@ -854,6 +854,19 @@ describe("a chain's boxes", CHAINS, () => {
     expect((await t.activity.seedelf("preprod")).some((e) => e.txHash === kept.withdrawing!.txHash)).toBe(true);
   });
 
+  it("counts a chain as stopped when another is sent in its place, or its progress says it stopped", async () => {
+    const { t } = await withSession("40000000");
+    const txs = (h: string) =>
+      (["deposit", "mix"] as const).map((kind, i) => ({ kind, txCbor: "", txHash: h.repeat(31) + `0${i}`, fee: "0" }));
+    const key = "seedelf.lovejoin.sending.preprod";
+    await t.lovejoin.recordChain("preprod", { progress: key, txs: txs("a1"), leaves: [], boxes: 1 });
+    await t.wallet.withKeys(() => t.session.set(key, { txs: txs("b1"), next: 1, flying: [], stopped: "The network rejected the transaction: X" }));
+    await t.lovejoin.recordChain("preprod", { progress: key, txs: txs("b1"), leaves: [], boxes: 1 });
+    const { chains } = await t.lovejoin.status("preprod");
+    expect(chains.map((c) => c.stopped)).toEqual([CHAIN_CUT, "The network rejected the transaction: X"]);
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 2, sent: 1, stopped: "The network rejected the transaction: X" });
+  });
+
   it("says a session's chain a lock cut stopped, as soon as the wallet unlocks", async () => {
     const { t, sessions } = await withSession("40000000");
     const review = await sessions.backBuild("preprod", 0);

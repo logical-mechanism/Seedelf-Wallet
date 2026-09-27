@@ -1063,22 +1063,27 @@ export class LovejoinService {
   /**
    * Marks each chain recorded as being sent whose progress is gone as
    * stopped: a lock, a closed browser or an update wiped it partway, and
-   * nothing sends the rest (CHAIN_CUT). No Koios request.
+   * nothing sends the rest (CHAIN_CUT); or, whose progress says it stopped,
+   * with its reason. No Koios request.
    */
   async cuts(network: NetworkName): Promise<void> {
     const { wallet, session, now } = this.deps;
     const live = (await this.read(network)).chains.filter((c) => !c.ended);
     if (!live.length) return;
-    const gone = new Set<string>();
+    const stopped = new Map<string, string>();
     for (const c of live) {
-      if ((await wallet.withKeys(() => session.get(c.progress))) === undefined) gone.add(c.id);
+      const progress = await wallet.withKeys(() => session.get<ChainProgress & { stopped?: string }>(c.progress));
+      // Another chain's in its place is this one's gone too.
+      if (progress?.txs?.at(-1)?.txHash !== c.id) stopped.set(c.id, CHAIN_CUT);
+      else if (progress.stopped) stopped.set(c.id, progress.stopped);
     }
-    if (!gone.size) return;
+    if (!stopped.size) return;
     const at = now();
     await this.update(network, (s) => {
       for (const c of s.chains) {
-        if (!gone.has(c.id) || c.ended) continue;
-        c.stopped = CHAIN_CUT;
+        const why = stopped.get(c.id);
+        if (why === undefined || c.ended) continue;
+        c.stopped = why;
         c.ended = at;
       }
     });
