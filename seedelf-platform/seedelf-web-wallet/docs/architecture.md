@@ -359,8 +359,11 @@ flowchart LR
   - They leave out what's locked and the collateral, and add what sent transactions return that isn't on chain yet.
   - `getCollateral` is the set-aside 5 ₳ UTxO, or null.
 - **Signing** is WebAssembly's: `inspectDappTx` for the prompt, `signDappTx` once approved. Both get the same request: the transaction, the account's key paths, and the UTxOs it spends as far as the worker could find them (the account, then its signed transactions' outputs, then Koios `utxo_info`).
-  - The Rust side decides ownership by payment key hash, and which keys sign: inputs, collateral, required signers, stake certificates and withdrawals.
+  - The Rust side decides ownership, and which keys sign: inputs, collateral, required signers, stake certificates and withdrawals. An input is the account's by its payment key hash. An output is the account's only when its stake part is the account's stake key too; the account's payment key under any other stake part is listed as paid (`ownPaymentKey`).
+  - Its net counts what the account puts in from staking (`stakingLovelace`: its rewards withdrawn and its deposit refunded) as it counts its UTxOs, wherever they go.
+  - Before decoding anything, it refuses a transaction over 64 KiB or nested more than 128 levels deep, counting the CBOR in a datum's bytes.
   - It refuses the other network, a collateral return to someone else, and a transaction marked to fail its scripts.
+  - Whatever `partialSign` says, it also refuses a payment key's signature while any input or collateral is one it can't find (it may be the account's own, not on chain yet), an old-style deregistration of the account's stake key (its refund isn't in it), and a pool registration naming the account's stake key an owner.
 - **The window** (`dapp-window.ts`, `screens/DappApprovals.tsx`): a popup, one at a time. Closing it declines everything, and it closes itself once nothing's left.
 - **Private CIP-30** (chunk 15c): a connected site's record may name a private session (`session: i`). Each call resolves whom the site talks to, the public account or session `i`, and every path branches on it:
   - **Reading:** the session's one address, its UTxOs from `SessionService.accountUtxos`, its reward address (`OneTimeAccounts.rewardAddress`, stake key `2/i`), and the funding's pure 5 ₳ UTxO as its collateral, kept out of `getUtxos`. The reading and the signed outputs kept for chaining are stored per account (`…:i`).
