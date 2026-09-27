@@ -13,7 +13,7 @@ import {
   readContractView,
   SESSION_CONTRACT_PREFIX,
 } from "../src/background/contract-scan";
-import type { KoiosUtxo } from "../src/background/koios";
+import { type KoiosUtxo, trimmed } from "../src/background/koios";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
 import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
@@ -168,10 +168,10 @@ describe("the contract scan at scale", () => {
     const summary = await t.send.build("preprod", [{ to: name, lovelace: "5000000", tokens: [] }]);
     expect(summary.payments).toMatchObject([{ seedelf: { name }, address: THEIRS.address, own: false }]);
 
-    // This wallet's own Seedelf is its whole row: Remove spends it.
+    // This wallet's own Seedelf is its whole row, as Koios's rows are kept (trimmed): Remove spends it.
     const view = await readContractView(t.deps, "preprod");
     const mine = ownedUtxos[2]!;
-    expect(view.seedelfs[mine.asset_list![0]!.asset_name]).toEqual(mine);
+    expect(view.seedelfs[mine.asset_list![0]!.asset_name]).toEqual(trimmed(mine));
   });
 
   it("never fails a read it can't keep: it goes on with it, and reads in full next time", async () => {
