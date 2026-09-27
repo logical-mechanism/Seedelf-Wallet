@@ -73,6 +73,7 @@ flowchart LR
   - `CC_wasm32_unknown_unknown=clang`, because `blst` is C code.
   - `AR_wasm32_unknown_unknown=llvm-ar`, which is `llvm-ar-18` on Ubuntu.
   - `wasm-bindgen-cli` pinned to the crate's `wasm-bindgen` version.
+  - **The same commit gives the same module** (the launch review, #61). `seedelf-platform/Cargo.lock` is tracked, and `build.sh` and CI build and test with `--locked`, so the crates are the ones it records. `seedelf-platform/rust-toolchain.toml` pins Rust (1.98.1, with the wasm32 target), and CI installs the same. `build.sh` remaps the workspace, the target folder, Cargo's registry and Rust's sysroot (`--remap-path-prefix`), so no path on the builder's disk goes into the module, and it refuses a module that still carries one.
 - **The manifest CSP needs `script-src 'self' 'wasm-unsafe-eval'`** to load WebAssembly.
 - **Recovery phrases (BIP39) are handled in Rust too:** generation, validation and the Seedelf key derivation. See [keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation).
 - **Everything else uses small, audited JS libraries:**

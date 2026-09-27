@@ -28,6 +28,9 @@ release/
 *.log
 *.bak
 *.lock
+# The workspace's lock is tracked: it records the crates the shipped
+# WebAssembly is built from, and every build uses it (--locked).
+!Cargo.lock
 *.temp
 
 # By default, don't ignore node_modules of your app

@@ -580,7 +580,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - A proof takes about 10 ms.
   - **Things to know:**
     - `wasm-bindgen-cli` must match the crate version (0.2.128 today).
-    - `seedelf-platform/Cargo.lock` is gitignored (`*.lock`), so versions can float on a fresh clone. `build.sh` reports what to install.
+    - `seedelf-platform/Cargo.lock` was gitignored (`*.lock`) then, so versions could float on a fresh clone. It's tracked since the launch review (#61), and every build uses it (`--locked`).
     - The `seedelf-koios` `connect_timeout` gate moved to chunk 7, where `seedelf-core` first needs WASM.
   - **Next:** chunk 2. Implement the v1 key derivation in `seedelf-crypto`, then add `SeedelfKey.fromPhrase()`.
 - **2026-09-23: design done.** The docs in this folder hold every decision.

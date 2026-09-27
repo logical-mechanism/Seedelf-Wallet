@@ -15,8 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The toolchain seedelf-platform/rust-toolchain.toml pins: keep the two
+      # in step, so CI builds and tests what ships (launch review #61).
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.98.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
 
@@ -33,13 +36,15 @@ jobs:
       - name: Rust format
         run: cargo fmt --all -- --check
 
+      # --locked everywhere: the crates are the ones Cargo.lock records, the
+      # same graph the shipped WebAssembly is built from, or the step fails.
       - name: Clippy (web wallet crates)
-        run: cargo clippy -p seedelf-crypto -p seedelf-wasm --all-targets -- -D warnings
+        run: cargo clippy --locked -p seedelf-crypto -p seedelf-wasm --all-targets -- -D warnings
 
       - name: Rust tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
-      # Cargo.lock is not tracked, so match the CLI to whatever resolved here.
+      # Cargo.lock is tracked: the CLI must be the wasm-bindgen it pins.
       - name: Install wasm-bindgen-cli
         run: |
           version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
