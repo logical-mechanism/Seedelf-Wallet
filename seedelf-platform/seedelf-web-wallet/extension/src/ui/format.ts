@@ -66,10 +66,18 @@ const LOOKS_LIKE: Record<string, string> = {
  * "Ｓnek", "ЅNЕK" and "5NEK" are all "snek"-alike; "8Ball" and "8 BALL" match.
  */
 export function nameSkeleton(name: string): string {
+  return foldName(name).replace(/[^\p{L}\p{N}₳]/gu, "");
+}
+
+/**
+ * A name folded as `nameSkeleton` folds it, but with its spaces and
+ * punctuation still in, so its words can be told apart: "ADA bonus" is
+ * "ada bonus", and "OOO SNEK" is "ooo snek", as "000 SNEK" is.
+ */
+export function foldName(name: string): string {
   return [...name.normalize("NFKD").replace(/[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").toLowerCase()]
     .map((c) => LOOKS_LIKE[c] ?? c)
-    .join("")
-    .replace(/[^\p{L}\p{N}₳]/gu, "");
+    .join("");
 }
 
 /** A name as a list shows it: without the invisible characters that could hide or reorder its letters. */

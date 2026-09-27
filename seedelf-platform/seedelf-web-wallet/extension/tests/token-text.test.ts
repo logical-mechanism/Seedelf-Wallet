@@ -76,6 +76,61 @@ describe("tokenText", () => {
     expect(tokenText("preprod", { policyId: STRANGER, assetName: TUSDM.assetName }).posesAs).toBe("tUSDM");
   });
 
+  it("never lets digits or separators before ADA or a listed token's name join the amount before it", () => {
+    const cases: Array<[string, string]> = [
+      ["000 ADA", "ADA"],
+      [",000 ADA", "ADA"],
+      [",000,000 ADA", "ADA"],
+      [" 000 ADA", "ADA"],
+      [" 000 ADA", "ADA"],
+      ["’000 ADA", "ADA"],
+      ["000 tADA", "ADA"],
+      ["000 Lovelace", "ADA"],
+      ["000 tUSDM", "tUSDM"],
+      [",000 MIN", "MIN"],
+      ["000tUSDM", "tUSDM"],
+      // Letters that pass for the digits: Latin O, Cyrillic О.
+      ["OOO tUSDM", "tUSDM"],
+      ["О,ООО MIN", "MIN"],
+    ];
+    for (const [name, posesAs] of cases) {
+      const token = named(name);
+      const text = tokenText("preprod", token);
+      expect(text, name).toMatchObject({ label: text.id, listed: false, posesAs, own: name });
+      const real = posesAs === "ADA" ? "ADA" : `the listed ${posesAs}`;
+      expect(tokenAmountText("preprod", { ...token, quantity: "1" }), name).toBe(
+        `1 ${text.id} (not on the wallet's list: it calls itself ${name}, but it isn't ${real})`,
+      );
+    }
+  });
+
+  it("never lets one with ADA as one of its words read as an amount of ADA", () => {
+    for (const name of ["ADA bonus", "Bonus ADA", "ADA-bonus", "free lovelace", "000ADA bonus", "ΑDΑ airdrop"]) {
+      const text = tokenText("preprod", named(name));
+      expect(text, name).toMatchObject({ label: text.id, posesAs: "ADA", own: name });
+    }
+  });
+
+  it("keeps an unlisted name that only starts with digits, or has ADA inside a word, as it is", () => {
+    for (const name of ["8Ball", "4EVER", "8 BALL", "1st place", "Adamant", "Lovelaced", "Canada"]) {
+      const text = tokenText("preprod", named(name));
+      expect(text, name).toMatchObject({ label: name, listed: false });
+      expect(text.posesAs, name).toBeUndefined();
+    }
+  });
+
+  // Vitest builds with the extension's own flags: CI runs it both ways (`VITE_ENABLE_MAINNET=true npm test`).
+  const mainnetCase = __MAINNET_ENABLED__
+    ? "never lets digits before a mainnet ticker join the amount"
+    : "has no mainnet tickers to guard unless it's a mainnet build";
+  it(mainnetCase, () => {
+    for (const network of ["mainnet", "preprod"] as const) {
+      const text = tokenText(network, named("000 SNEK"));
+      if (__MAINNET_ENABLED__) expect(text, network).toMatchObject({ label: text.id, posesAs: "SNEK", own: "000 SNEK" });
+      else expect(text, network).toMatchObject({ label: "000 SNEK" });
+    }
+  });
+
   it("names one it can't read, or with a name that hides characters, by its fingerprint", () => {
     for (const assetName of ["", "ff00", hex("‮KENS")]) {
       const text = tokenText("preprod", { policyId: STRANGER, assetName });

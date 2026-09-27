@@ -12,7 +12,7 @@ import type { NetworkName } from "../networks";
 import type { TokenAmount, TokenRef } from "../shared/rpc";
 import mainnet from "../tokens/registry.mainnet.json";
 import preprod from "../tokens/registry.preprod.json";
-import { formatQuantity, nameSkeleton, shortHex, tokenKey, tokenName } from "./format";
+import { foldName, formatQuantity, nameSkeleton, shortHex, tokenKey, tokenName } from "./format";
 
 export interface TokenInfo {
   ticker: string;
@@ -83,8 +83,9 @@ export interface TokenText {
  * marked (`tokenMark`: "not on the wallet's list", with its fingerprint), and
  * one whose own name reads like ADA ("₳", "ADA", "lovelace") or like a listed
  * token's ticker or name, however it's spelled (case, lookalike letters,
- * invisible characters), goes by its fingerprint instead, so it never reads
- * as the real one.
+ * invisible characters, digits before it that join the amount: "000 ADA"),
+ * or has ADA as one of its words ("ADA bonus"), goes by its fingerprint
+ * instead, so it never reads as the real one.
  */
 export function tokenText(network: NetworkName, t: TokenRef & { fingerprint?: string }): TokenText {
   const info = tokenInfo(network, t);
@@ -139,6 +140,23 @@ const HIDDEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
 /** An emoji, which may carry a variation selector and join others: those invisible characters are its own. */
 const EMOJI = /\p{Extended_Pictographic}[\uFE0E\uFE0F]?(?:\u200D\p{Extended_Pictographic}[\uFE0E\uFE0F]?)*/gu;
 
+/** ADA's names as `nameSkeleton` has them: an unlisted token may not have one as any of its words either. */
+const ADA_WORDS = new Set(ADA_NAMES.map(nameSkeleton));
+
+/**
+ * What may lead a name and join the amount a text view puts before it, so
+ * "000 ADA" reads "1 000 ADA": digits in any script, spaces (the no-break
+ * and thin ones too), punctuation and symbols.
+ */
+const AMOUNT_LEAD = /^[\p{N}\p{M}\p{P}\p{S}\p{Z}\s]+/u;
+
+/**
+ * The same in a folded name (`foldName`), where the letters that pass for 0
+ * and 1 are o and l, as the digits are: whole words of them, and what
+ * separates them ("OOO SNEK", "O,OOO SNEK").
+ */
+const FOLDED_LEAD = /^(?:[ol\p{N}]*[\p{P}\p{S}\p{Z}\s]+)+/u;
+
 /** Each network's names to keep, skeleton to what the name passes for. */
 const LOOKALIKES = new Map<NetworkName, Map<string, string>>();
 
@@ -162,7 +180,22 @@ function lookalikeOf(network: NetworkName, own: string): string | undefined {
   const key = nameSkeleton(own);
   // "₳" anywhere reads as an ADA amount: "1,000 ₳ bonus".
   if (key.includes("₳")) return ADA;
-  return names.get(key);
+  const whole = names.get(key);
+  if (whole) return whole;
+  // Led by digits or separators, the rest follows the amount: "1 000 ADA",
+  // "1 ,000 SNEK". Digits map to letters in a skeleton ("000 ADA" is
+  // "oooada"), so the rest is looked up on its own.
+  const folded = foldName(own);
+  const rests = [foldName(own.replace(AMOUNT_LEAD, "")), folded.replace(FOLDED_LEAD, "")];
+  for (const rest of rests) {
+    const found = names.get(rest.replace(/[^\p{L}\p{N}₳]/gu, ""));
+    if (found) return found;
+  }
+  // ADA as one word of several reads as an amount of it too: "1,000 ADA bonus".
+  for (const name of [folded, ...rests]) {
+    if (name.split(/[^\p{L}\p{N}₳]+/u).some((word) => ADA_WORDS.has(word))) return ADA;
+  }
+  return undefined;
 }
 
 /**
