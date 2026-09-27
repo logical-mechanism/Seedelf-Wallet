@@ -2,7 +2,7 @@
 
 A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardano stealth wallet.
 
-> **Status:** early build, preprod only. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
+> **Status:** launch prep. The store's build runs on Cardano mainnet, with preprod in Settings for testing; a dev build is preprod only. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
 
