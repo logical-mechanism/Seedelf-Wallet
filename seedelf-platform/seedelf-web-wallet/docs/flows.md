@@ -323,7 +323,7 @@ CIP-30 for the public account, as Lace offers it (chunk 15). The design is in [a
    - **A message** (CIP-8): the address, which key signs, and the message as text, or hex when it isn't text. Signing moves no money.
    - A transaction that needs someone else's signature, when the site didn't ask for a partial one, or one that would hand the collateral to someone else, is refused before the window opens.
 4. **Locked:** the window asks for the password first. Closing it refuses the site, which then can't reopen it for a minute.
-5. **Disconnect:** Settings → *Connected sites* lists them, each with **Disconnect**. The list is sealed on the device.
+5. **Disconnect:** Settings → *Connected sites* lists them, each with **Disconnect**, which asks first. The list is sealed on the device. A site on a private session (*Any site* below) ends its session too, so its Disconnect waits, and says why, while the session's funding, its return or the return's chain through Lovejoin is on its way, or while the account held something when last read; the worker checks again, and its refusal shows.
 
 The account's own outputs of a transaction it signed are kept, so a site can build its next transaction on them before they're on chain. A site's `submitTx` goes through Koios, as the wallet's own sends do.
 
@@ -361,6 +361,6 @@ The same session, offered to a site over CIP-30 instead of the public account. T
 2. **Out:** a Seedelf spend to a fresh one-time account, with giveme.my's collateral. The window waits until Koios sees the money (about a minute), then `enable()` answers, so the site's first reading already shows it. Closing the window doesn't undo the payment.
 3. **Use:** the site sees an ordinary wallet: that account, its reward address and its 5 ₳ collateral, and nothing else. Each transaction and message gets the window's prompt, signed with the session's keys.
 4. **Top up and Bring it back** from the dApps page's *Sites*. Bringing it back leaves the site connected, to an empty account, because something still open at the site (a listing, an order) may pay it later.
-5. **Disconnect** ends the session, once the account is empty. It is never used again, and the site's next connect asks again.
+5. **Disconnect** (the site's page, or Settings → *Connected sites*) asks first, then ends the session, once nothing is on its way and the account is empty. It is never used again, and the site's next connect asks again.
 
 **Bring everything back** (the dApps page, when sessions hold money): every site's session, and every older swap brought back by hand, with nothing on its way, back into the private balance in one go. Each comes back in its own transaction, sent one after another. The review lists them, with the total and the fees, and a tap leaves one out: a site still in use, say.
