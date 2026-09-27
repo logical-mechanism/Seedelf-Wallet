@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { MAX_DEPTH, nestsWithin, txId, txInputs } from "../src/background/cbor";
+import { certificateKinds, MAX_DEPTH, nestsWithin, txId, txInputs } from "../src/background/cbor";
 
 const bytes = (hex: string) => Uint8Array.from(hex.match(/../g)!, (h) => Number.parseInt(h, 16));
 
@@ -34,6 +34,17 @@ describe("reading a dApp's transaction", () => {
     expect(txInputs(tx)).toEqual([`${hash}#1`]);
     expect(txId(tx)).toMatch(/^[0-9a-f]{64}$/);
     expect(nestsWithin(tx)).toBe(true);
+  });
+
+  it("says what each certificate is, in a list or a tagged set", () => {
+    const key = `8200581c${"ab".repeat(28)}`;
+    // An old-style stop (1), a delegation (2) and a Conway stop with its deposit (8).
+    const certificates = `82018200581c${"ab".repeat(28)}8302${key}581c${"cd".repeat(28)}8308${key}1a001e8480`;
+    const input = `81825820${"ef".repeat(32)}00`;
+    expect(certificateKinds(bytes(`84a200800483${certificates}a0f5f6`))).toEqual([1, 2, 8]);
+    expect(certificateKinds(bytes(`84a200${input}04d9010283${certificates}a0f5f6`))).toEqual([1, 2, 8]);
+    expect(certificateKinds(bytes(`84a100${input}a0f5f6`))).toEqual([]);
+    expect(() => certificateKinds(bytes(`84a1048101a0f5f6`))).toThrow("isn't a list");
   });
 
   it("refuses CBOR nested deeper than 128 levels, rather than run the worker's stack out", () => {

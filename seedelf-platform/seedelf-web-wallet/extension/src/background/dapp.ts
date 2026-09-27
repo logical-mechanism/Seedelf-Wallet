@@ -69,7 +69,7 @@ import {
 } from "../shared/dapp";
 import type { DappApproval, DappAsk, DappSite, DappTxSummary, SessionOutSummary, TokenQuantity } from "../shared/rpc";
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
-import { bodyOutpoints, nestsWithin, txId } from "./cbor";
+import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
 import type { CoinControlService } from "./coin-control";
 import { SpentInputError, type KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
@@ -958,6 +958,29 @@ export class DappService {
   }
 
   /**
+   * The deposit the public account's stake key was registered with, for a
+   * transaction that stops its staking with an old-style certificate (kind
+   * 1), which doesn't say what comes back: the ledger refunds the deposit
+   * recorded at registration, which Koios's `account_info` has (as Staking
+   * reads it). Looked up only for such a transaction, as one of the site's
+   * lookups (`PER_MINUTE`). None if it can't be read: WebAssembly then won't
+   * sign the certificate, as it can't show where the deposit goes.
+   */
+  private async stakeDeposit(origin: string, network: NetworkName, stake: string, bytes: Uint8Array): Promise<string | undefined> {
+    let kinds: number[];
+    try {
+      kinds = certificateKinds(bytes);
+    } catch {
+      // WebAssembly says what's wrong with it.
+      return undefined;
+    }
+    if (!kinds.includes(1)) return undefined;
+    if (!this.allow(origin, "lookup")) throw refused("This site asks Seedelf Wallet to look things up too often. Try again in a minute.");
+    const info = await this.deps.koios(network).accountInfo(stake).catch(() => undefined);
+    return info?.status === "registered" && /^\d+$/.test(info.deposit ?? "") ? info.deposit : undefined;
+  }
+
+  /**
    * Runs `read` once the site's transaction before this one has been read:
    * however many it sends at once, the wallet's queue holds one of its
    * readings at a time, so the user's own requests and Lock wait for one at most.
@@ -987,6 +1010,7 @@ export class DappService {
     network: NetworkName,
     holder: Holder,
     tx: unknown,
+    bytes: Uint8Array,
     inputs: string[],
     collateral: string[],
     partialSign: boolean,
@@ -997,6 +1021,8 @@ export class DappService {
     }
     const { view, rows } = await this.resolve(network, holder, origin, [...new Set([...inputs, ...collateral])]);
     const collateralSpent = await this.keptApart(network, holder, view, inputs, collateral);
+    // A session's stake key is never registered: nothing comes back to it.
+    const stakeDeposit = holder ? undefined : await this.stakeDeposit(origin, network, view.stake, bytes);
     const request = JSON.stringify({
       network,
       txCbor: tx,
@@ -1004,6 +1030,7 @@ export class DappService {
       inputs: rows,
       partialSign,
       stakeIndex: holder?.index ?? 0,
+      ...(stakeDeposit === undefined ? {} : { stakeDeposit }),
     });
     const { wasm, wallet } = this.deps;
     const whose = holder ? "this private session's" : "the public account's";
@@ -1066,7 +1093,7 @@ export class DappService {
     }
     await this.heldForLovejoin(network, inputs, collateral);
     const { request, summary, collateralSpent } = await this.readInTurn(session.origin, () =>
-      this.readTx(session.origin, network, holder, tx, inputs, collateral, partialSign),
+      this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign),
     );
     const { wasm, wallet } = this.deps;
     const ask: DappAsk = {

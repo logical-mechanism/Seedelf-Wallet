@@ -413,6 +413,68 @@ describe("the dApp connector", () => {
     expect(certificateLine(pool.certificates[0]!, true, whose)).toBe(`Retires stake pool ${pool.certificates[0]!.pool}.`);
   });
 
+  it("tells WebAssembly what an old-style stop of the account's staking gives back: the deposit its stake key was registered with", async () => {
+    const t = await on();
+    const wasm = t.deps.wasm;
+    const requests: Array<Record<string, unknown>> = [];
+    const dapp = new DappService({
+      ...t.deps,
+      wasm: {
+        ...wasm,
+        inspectDappTx: (keys: Parameters<typeof wasm.inspectDappTx>[0], request: string) => {
+          requests.push(JSON.parse(request) as Record<string, unknown>);
+          return wasm.inspectDappTx(keys, request);
+        },
+      } as typeof wasm,
+      store: t.store,
+      sessions: t.sessions,
+      network: () => "preprod",
+      window: t.dappWindow,
+      changed: () => undefined,
+    });
+    const s = site();
+    const enabling = dapp.call(s, "enable", []);
+    await until(() => dapp.approvals().length === 1);
+    await dapp.answer(dapp.approvals()[0]!.id, true);
+    await enabling;
+    /** What WebAssembly was asked to read for a site's transaction; whatever it makes of it is declined. */
+    const read = async (tx: string) => {
+      let settled = false;
+      const signing = dapp
+        .call(s, "signTx", [tx, false])
+        .catch(() => undefined)
+        .finally(() => (settled = true));
+      await until(() => settled || dapp.approvals().length === 1);
+      for (const a of dapp.approvals()) await dapp.answer(a.id, false);
+      await signing;
+      return requests.at(-1)!;
+    };
+    // Registered with 3 ₳, which isn't today's key deposit: the recorded one is what comes back.
+    const stake = account(12).preprod.stake as string;
+    const info = t.koios.stakes.get(stake)!;
+    t.koios.stakes.set(stake, { ...info, deposit: "3000000" });
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    const input = `${own!.txHash}#${own!.index}`;
+    const keyHash = stakeKeyHash(stake);
+    const oldStop = `82018200581c${keyHash}`;
+    const lookups = () => t.koios.calls.filter((c) => c.path === "account_info").length;
+    const before = lookups();
+    expect(await read(siteTx({ inputs: [input], certificates: [oldStop] }))).toMatchObject({ stakeDeposit: "3000000" });
+    expect(lookups()).toBe(before + 1);
+
+    // Anything else looks nothing up: a Conway stop says its deposit itself.
+    const { unregister, delegate } = certificates(keyHash);
+    for (const tx of [siteTx({ inputs: [input] }), siteTx({ inputs: [input], certificates: [unregister] }), siteTx({ inputs: [input], certificates: [delegate] })]) {
+      expect(await read(tx)).not.toHaveProperty("stakeDeposit");
+    }
+    expect(lookups()).toBe(before + 1);
+
+    // A key that isn't registered has no deposit to give back: none, and WebAssembly won't sign the stop.
+    t.koios.stakes.set(stake, { ...info, status: "not registered" });
+    expect(await read(siteTx({ inputs: [input], certificates: [oldStop] }))).not.toHaveProperty("stakeDeposit");
+  });
+
   it("won't sign a site's transaction that uses a UTxO the user locked, or spends the collateral", async () => {
     const t = await on();
     withCollateral(t);
@@ -1122,6 +1184,12 @@ describe("private CIP-30: a site connected to a private session", () => {
     await until(() => dapp.approvals().length === 1);
     await dapp.answer(dapp.approvals()[0]!.id, false);
     await expect(stopping).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+    // An old-style stop doesn't say its deposit, and none was paid here: nothing is looked up, and it isn't signed.
+    const lookups = t.koios.calls.filter((c) => c.path === "account_info").length;
+    await expect(
+      dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [`82018200581c${stakeKeyHash(reward)}`] }), false]),
+    ).rejects.toMatchObject({ failure: { code: TxSignError.ProofGeneration } });
+    expect(t.koios.calls.filter((c) => c.path === "account_info")).toHaveLength(lookups);
 
     // The public account's own staking through a site is still the user's to approve.
     const publicSite = await connected(t, site("https://stake.example"));

@@ -117,8 +117,8 @@ export function txInputs(tx: Uint8Array): string[] {
   return inputs;
 }
 
-/** The outpoints under one key of a transaction's body (0 the inputs, 13 the collateral), or undefined. */
-export function bodyOutpoints(tx: Uint8Array, field: 0 | 13): string[] | undefined {
+/** Where the value under one key of a transaction's body starts, or undefined. */
+function bodyField(tx: Uint8Array, field: number): number | undefined {
   if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
   const body = head(tx, 1);
   if (body.major !== 5 || body.indefinite) throw new Error("the transaction body isn't a map");
@@ -127,10 +127,38 @@ export function bodyOutpoints(tx: Uint8Array, field: 0 | 13): string[] | undefin
     // The body's fields are two levels in: the transaction, then the body.
     const key = head(tx, p);
     const value = skip(tx, p, 2);
-    if (key.major === 0 && key.n === field) return outpoints(tx, value);
+    if (key.major === 0 && key.n === field) return value;
     p = skip(tx, value, 2);
   }
   return undefined;
+}
+
+/** The outpoints under one key of a transaction's body (0 the inputs, 13 the collateral), or undefined. */
+export function bodyOutpoints(tx: Uint8Array, field: 0 | 13): string[] | undefined {
+  const value = bodyField(tx, field);
+  return value === undefined ? undefined : outpoints(tx, value);
+}
+
+/**
+ * What each of a transaction's certificates is (its body's key 4, a list or
+ * a tagged set): each one's first field, its kind as the ledger numbers them
+ * (1 is the old-style stop of a stake key's staking). None without any.
+ */
+export function certificateKinds(tx: Uint8Array): number[] {
+  const value = bodyField(tx, 4);
+  if (value === undefined) return [];
+  let set = head(tx, value);
+  if (set.major === 6) set = head(tx, set.p); // tag 258: a set
+  const kinds: number[] = [];
+  let p = set.p;
+  for (let i = 0; set.indefinite ? tx[p] !== 0xff : i < set.n; i++) {
+    const certificate = head(tx, p);
+    if (certificate.major !== 4) throw new Error("a certificate isn't a list");
+    const kind = head(tx, certificate.p);
+    if (kind.major === 0) kinds.push(kind.n);
+    p = skip(tx, p, 3);
+  }
+  return kinds;
 }
 
 function outpoints(b: Uint8Array, pos: number): string[] {
