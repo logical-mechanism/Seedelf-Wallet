@@ -54,9 +54,11 @@
 // wait again, each a fresh delay.
 //
 // Koios requests: one pool read and one evaluate for a chain; one pool read
-// at each unlock, only on a wallet that has used Lovejoin here (a restored
-// wallet finds its boxes when the Lovejoin tile opens); a withdraw is
-// giveme.my plus one submit.
+// at each unlock, only on a network where the wallet has something open in
+// Lovejoin: boxes on their way back, a chain, boxes not mixed yet (a
+// restored wallet finds its boxes when the Lovejoin tile opens, and opening
+// it with nothing there keeps no record, privacy review §2.18); a withdraw
+// is giveme.my plus one submit.
 
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
 import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
@@ -666,6 +668,10 @@ function moveDue(s: Schedule, from: number, to: number, mark?: (m: DueMark) => v
   mark?.(m);
   if (Object.keys(m).length) (s.marks ??= {})[to] = m;
 }
+
+/** Whether a schedule holds nothing: no record is kept for it (privacy review §2.18). */
+const empty = (s: Schedule) =>
+  !s.due.length && !s.chains.length && !s.notMixed && !s.withdrawing && !Object.keys(s.leaves ?? {}).length;
 
 /** A whole number of boxes, one to MAX_MIX_BOXES, or why not. */
 export function checkBoxes(boxes: number): void {
@@ -1380,9 +1386,9 @@ export class LovejoinService {
 
   /**
    * Withdraws a box that's due, one a run. `unlock` (the run as the wallet
-   * unlocks) reads the pool even when nothing is due yet, on a wallet that
-   * has used Lovejoin here, so its boxes' due times follow the pool; and
-   * sends nothing: each box due by then waits a fresh draw
+   * unlocks) reads the pool even when nothing is due yet, on a network where
+   * the wallet has something open in Lovejoin, so its boxes' due times follow
+   * the pool; and sends nothing: each box due by then waits a fresh draw
    * (privacy review §3.1). `since`: when the run began, so nothing goes back
    * in a run that sent anything else. One run at a time.
    */
@@ -1398,9 +1404,11 @@ export class LovejoinService {
     if (await this.chainsSending(network)) return [];
     // Nor while the last withdraw may still be on its way: two a minute apart say they're one owner's.
     if (await this.settleWithdrawing(network, unlock)) return [];
-    const used = (await this.deps.store.get<Schedule>(`lovejoin.${network}` as const)) !== undefined;
     const now = this.deps.now();
-    if (!(unlock && used) && !(await this.read(network)).due.some((t) => t <= now)) return [];
+    const before = await this.read(network);
+    // Only a network with something of the wallet's open in Lovejoin reads its pool at unlock (privacy review §2.18).
+    const open = before.due.length > 0 || before.chains.length > 0 || (before.notMixed ?? 0) > 0;
+    if (!(unlock && open) && !before.due.some((t) => t <= now)) return [];
     const { pool, owned, listed } = await this.ours(network);
     // A box a chain of the wallet's made and hadn't finished mixing never
     // comes back by itself: it waits, not mixed yet, for Mix my boxes again.
@@ -1690,16 +1698,20 @@ export class LovejoinService {
 
   /**
    * Changes the sealed schedule, one change at a time: the runner, the chains
-   * and the page never undo each other's. A due time's marks go with it.
+   * and the page never undo each other's. A due time's marks go with it. One
+   * that holds nothing isn't kept where none was: opening the Lovejoin tile on
+   * a network the wallet hasn't used leaves nothing behind (§2.18).
    */
   private update(network: NetworkName, change: (s: Schedule) => void): Promise<void> {
     return this.inTurn(`lovejoin.${network}`, async () => {
+      const key = `lovejoin.${network}` as const;
       const schedule = await this.read(network);
       change(schedule);
       const marks = Object.entries(schedule.marks ?? {}).filter(([t]) => schedule.due.includes(Number(t)));
       if (marks.length) schedule.marks = Object.fromEntries(marks);
       else delete schedule.marks;
-      await this.deps.store.set(`lovejoin.${network}` as const, schedule);
+      if (empty(schedule) && (await this.deps.store.get(key)) === undefined) return;
+      await this.deps.store.set(key, schedule);
     });
   }
 }

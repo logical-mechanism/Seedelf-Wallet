@@ -1550,6 +1550,25 @@ describe("the boxes' withdraws", CHAINS, () => {
     expect(t.koios.calls.length).toBe(calls);
   });
 
+  it("reads no pool at unlock where nothing is open: the tile opened with nothing there keeps no record, and an emptied one asks nothing (privacy review §2.18)", async () => {
+    const { t } = await withSession("40000000");
+    // Opening the tile reads the pool, finds nothing of the wallet's, and keeps nothing.
+    await t.lovejoin.status("preprod");
+    expect(await t.store.get("lovejoin.preprod")).toBeUndefined();
+    let calls = t.koios.calls.length;
+    expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect(t.koios.calls.length).toBe(calls);
+    // A record from before, everything back since: nothing either.
+    await t.store.set("lovejoin.preprod", { due: [], chains: [], notMixed: 0 });
+    expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect(t.koios.calls.length).toBe(calls);
+    // A box on its way back, not due yet: the unlock reads the pool, so its due time follows it.
+    calls = t.koios.calls.length;
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR], chains: [] });
+    await t.lovejoin.withdrawDue("preprod", true);
+    expect(t.koios.calls.slice(calls).map((c) => c.path)).toContain("credential_utxos");
+  });
+
   it("gives a box found with no due time one (a restore), when the tile opens", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "d3"), await ownedBox(t, "d4"));
