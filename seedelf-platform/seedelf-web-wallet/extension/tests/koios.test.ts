@@ -251,6 +251,28 @@ describe("Koios client: transactions", () => {
     await expect(refused.koios.evaluate("84a4")).rejects.toThrow("Koios refused the request (404 for ogmios)");
   });
 
+  it("says whether a submit Koios didn't answer may have gone through: not when it only asked to slow down", async () => {
+    const busy = async (answer: Response | Error): Promise<KoiosBusyError> => {
+      const koios = new Koios(BASE, async () => {
+        if (answer instanceof Error) throw answer;
+        return answer;
+      });
+      return (await koios.submitTx(new Uint8Array([0x84])).catch((e: unknown) => e)) as KoiosBusyError;
+    };
+    expect((await busy(new DOMException("signal timed out", "TimeoutError"))).maybeSent).toBe(true);
+    expect((await busy(new Response("", { status: 504 }))).maybeSent).toBe(true);
+    const limited = await busy(new Response("", { status: 429 }));
+    expect(limited).toBeInstanceOf(KoiosBusyError);
+    expect(limited.maybeSent).toBe(false);
+  });
+
+  it("reads the tip's slot", async () => {
+    const { koios, calls } = scripted([Response.json([{ hash: "ab", epoch_no: 250, abs_slot: 106_000_000, block_no: 4_000_000 }])]);
+    expect(await koios.tipSlot()).toBe(106_000_000);
+    expect(calls[0]!.url).toBe(`${BASE}/tip`);
+    await expect(scripted([Response.json([])]).koios.tipSlot()).rejects.toThrow("Koios returned no tip.");
+  });
+
   it("reads confirmations", async () => {
     const { koios, calls } = scripted([Response.json([{ tx_hash: "aa", num_confirmations: 3 }, { tx_hash: "bb", num_confirmations: null }])]);
     const status = await koios.txStatus(["aa", "bb"]);

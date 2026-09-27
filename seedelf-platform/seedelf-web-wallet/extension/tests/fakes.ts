@@ -92,6 +92,14 @@ export function testWallet(shared?: { local: MemoryArea; session: MemoryArea; cl
   return { wallet: new Wallet(deps), local, session, clock, events };
 }
 
+/** Moves the clock on by `ms` with the user busy all along, so the wallet doesn't lock itself. */
+export async function busyFor(t: { clock: { now: number }; wallet: Wallet }, ms: number): Promise<void> {
+  for (let left = ms; left > 0; left -= 10 * 60_000) {
+    t.clock.now += Math.min(left, 10 * 60_000);
+    await t.wallet.touch();
+  }
+}
+
 export const vectors = (name: string) =>
   JSON.parse(readFileSync(new URL(`../../../seedelf-crypto/tests/vectors/${name}`, import.meta.url), "utf8"))
     .vectors as Array<Record<string, any>>;
@@ -187,6 +195,8 @@ export interface FakeKoios {
   txExtras: Map<string, Partial<KoiosTxInfo>>;
   /** Stake addresses some address has used, as far as `account_addresses` goes: one-time accounts used before, say. */
   usedStakes: Set<string>;
+  /** The slot of the newest block, as `tip` answers. */
+  tip: number;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -209,6 +219,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     txExtras: new Map(),
     usedStakes: new Set(),
+    tip: 0,
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -233,6 +244,8 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         rows = holder ? [{ payment_address: holder }] : [];
       } else if (path === "epoch_params") {
         rows = epochParams;
+      } else if (path === "tip") {
+        rows = [{ abs_slot: fake.tip }];
       } else if (path === "tx_status") {
         rows = body._tx_hashes.map((tx_hash: string) => ({
           tx_hash,

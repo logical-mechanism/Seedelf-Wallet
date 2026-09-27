@@ -488,6 +488,22 @@ export interface PendingTx {
   submittedAt: number;
   /** Null until it's on chain. */
   confirmations: number | null;
+  /**
+   * Koios didn't answer its submit, so it may or may not have gone through.
+   * The wallet holds its UTxOs back, sends it again now and then (the network
+   * takes it once), and watches until the chain shows it or it can't land;
+   * until then it builds nothing new on that network.
+   */
+  maybeSent?: boolean;
+  /** The slot it can't land after: the public account's transactions carry one (account.ts). */
+  invalidHereafter?: number;
+  /**
+   * It never landed, and its UTxOs count in the balance again. `expired`:
+   * the chain passed its slot, so nothing was sent. `unseen`: a private
+   * payment Koios didn't answer, which the chain still hadn't shown 20
+   * minutes on; it most likely never went out.
+   */
+  dropped?: "expired" | "unseen";
 }
 
 /** A token in a dApp transaction's summary; `quantity` is signed where it's a change. */

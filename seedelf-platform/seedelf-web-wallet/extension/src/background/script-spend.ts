@@ -11,10 +11,13 @@
 // send   giveme.my witnesses the collateral; WebAssembly checks that
 //        signature and adds it with the one-time key's, re-derived from the
 //        seed, so a restarted worker still signs. Koios submits exactly that
-//        transaction, and the pending watch takes over.
+//        transaction, and the pending watch takes over (pending.ts). One
+//        Koios didn't answer may have gone through: it's kept, signed, and
+//        Send sends those very bytes again.
 //
-// A transaction WebAssembly signed at review (an account-paid mint) is kept
-// without a seed, and Send only submits it.
+// A transaction WebAssembly signed at review (an account-paid mint, and the
+// public account's send and staking) is kept without a seed, and Send only
+// submits it.
 
 import type * as Wasm from "@seedelf/wasm";
 
@@ -26,10 +29,9 @@ import type { ActivityService } from "./activity";
 import type { CoinControlService } from "./coin-control";
 import { CollateralRefusedError, type Collateral } from "./collateral";
 import { forgetContractView, readContractView, type ContractView } from "./contract-scan";
-import { SpentInputError, type Koios, type KoiosUtxo } from "./koios";
+import type { Koios, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
-import { SESSION_PENDING } from "./pending";
-import { rememberSpent } from "./spent";
+import { settleMaybeSent, submitWatched } from "./pending";
 import type { Area } from "./storage";
 import type { Keys, Wallet } from "./wallet";
 
@@ -63,9 +65,11 @@ export interface Kept {
   /** The one-time key's seed. */
   seed?: string;
   builtAt: number;
+  /** The slot it stops being valid at: the public account's (account.ts `validUntil`). */
+  invalidHereafter?: number;
+  /** Signed as sent, once a submit went unanswered: Send sends it again as it is (pending.ts). */
+  sentCbor?: string;
 }
-
-const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
 /**
  * This wallet's view of the contract (contract-scan.ts), what a Seedelf
@@ -142,7 +146,9 @@ export function keep(deps: ScriptSpendDeps, key: string, built: Omit<Kept, "buil
 
 /**
  * Sends the transaction kept under `key`, if it's the one reviewed (`txHash`
- * on `network`) and not too old. `what` names it in errors.
+ * on `network`) and not too old. `what` names it in errors. One Koios didn't
+ * answer comes back maybe sent (pending.ts), and stays kept: Send again sends
+ * the same bytes, however old, and asks giveme.my nothing.
  */
 export async function send(
   deps: ScriptSpendDeps,
@@ -157,12 +163,16 @@ export async function send(
   if (!built || built.txHash !== txHash || built.network !== network) {
     throw new Error(`That ${what} isn't ready to send. Review it again.`);
   }
-  if (now() - built.builtAt > BUILT_TTL_MS) {
-    throw new Error(`That ${what} was built more than 10 minutes ago. Review it again.`);
+  const again = built.sentCbor !== undefined;
+  if (!again) {
+    if (now() - built.builtAt > BUILT_TTL_MS) {
+      throw new Error(`That ${what} was built more than 10 minutes ago. Review it again.`);
+    }
+    await settleMaybeSent(deps, network);
   }
 
-  let txCbor = built.txCbor;
-  if (built.seed !== undefined) {
+  let txCbor = built.sentCbor ?? built.txCbor;
+  if (built.seed !== undefined && !again) {
     let collateral: unknown;
     try {
       collateral = await deps.collateral(network).witness(built.txCbor);
@@ -182,24 +192,18 @@ export async function send(
     if (signed.txHash !== txHash) throw new Error("Signing changed the transaction, so it wasn't sent.");
     txCbor = signed.txCbor;
   }
-  const bytes = hexBytes(txCbor);
-  let submitted: string;
-  try {
-    submitted = await deps.koios(network).submitTx(bytes);
-  } catch (e) {
-    // The kept view had a spent UTxO as ours: read the contract in full next
-    // time. (A transaction signed at review spends the account, not the contract.)
-    if (e instanceof SpentInputError && built.seed !== undefined) await forgetContractView(deps, network);
-    throw e;
-  }
-  if (submitted !== txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
-
-  const pending: PendingTx = { kind, network, txHash, submittedAt: now(), confirmations: null };
-  await wallet.withKeys(async () => {
-    await rememberSpent(session, bytes);
-    await session.remove(key);
-    await session.set(SESSION_PENDING, pending);
+  const { txCbor: _txCbor, seed: _seed, sentCbor: _sentCbor, builtAt: _builtAt, ...summary } = built;
+  return submitWatched(deps, {
+    network,
+    txHash,
+    kind,
+    txCbor,
+    key,
+    kept: built,
+    summary,
+    // A transaction signed at review spends the account, not the contract.
+    contract: built.seed !== undefined,
+    invalidHereafter: built.invalidHereafter,
+    again,
   });
-  await deps.activity?.sent(network, pending, built).catch(() => undefined);
-  return pending;
 }

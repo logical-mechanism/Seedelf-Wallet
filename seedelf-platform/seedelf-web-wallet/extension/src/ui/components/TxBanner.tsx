@@ -1,7 +1,8 @@
 // A sent transaction, as a banner: what's happening with a spinner or a
-// tick, the transaction on Cardanoscan, and Dismiss once there's nothing to
-// wait for. Centred, after Lace's toasts. Home's pending banner and the
-// collateral's "waiting" both use it.
+// tick, what it means when that needs saying, the transaction on
+// Cardanoscan, and Dismiss once there's nothing to wait for. Centred, after
+// Lace's toasts. Home's pending banner and the collateral's "waiting" both
+// use it.
 
 import type { ReactNode } from "react";
 
@@ -12,6 +13,7 @@ import { DoneIcon, ExternalIcon, InfoIcon, SpinnerIcon } from "./Icons";
 export function TxBanner({
   state,
   title,
+  detail,
   network,
   txHash,
   onDismiss,
@@ -20,6 +22,8 @@ export function TxBanner({
   /** Waiting for the network, confirmed, or no longer watched. */
   state: "waiting" | "done" | "stale";
   title: ReactNode;
+  /** What it means, under the title: for one that may have gone through, or never landed. */
+  detail?: ReactNode;
   network: NetworkName;
   txHash: string;
   onDismiss?: () => void;
@@ -41,6 +45,7 @@ export function TxBanner({
         </span>
         {title}
       </strong>
+      {detail && <span data-testid={`${testId}-detail`}>{detail}</span>}
       <a href={explorerUrl(network, txHash)} target="_blank" rel="noreferrer" className="banner__link">
         {shortHex(txHash, 10, 6)} on Cardanoscan
         <ExternalIcon size={12} />

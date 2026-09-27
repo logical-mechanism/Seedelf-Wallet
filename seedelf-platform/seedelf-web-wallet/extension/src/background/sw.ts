@@ -167,7 +167,7 @@ function getContext(): Promise<Context> {
     const withdraw = new WithdrawService(spends);
     const send = new SendService(spends);
     const staking = new StakingService({ ...spends, local });
-    const pending = new PendingService({ wallet, session, koios, now: Date.now });
+    const pending = new PendingService({ wallet, session, koios, now: Date.now, activity });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // No box is withdrawn while a chain mixing them again may still spend it.

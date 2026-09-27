@@ -23,6 +23,7 @@ import { SEEDELF_NAME_RULE, seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { keptContractView, readContractView, type ContractView } from "./contract-scan";
 import type { KoiosUtxo } from "./koios";
+import { settleMaybeSent } from "./pending";
 import { keep, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 import { outpoint } from "./spent";
 
@@ -57,6 +58,7 @@ export class TransferService {
     const { wasm } = this.deps;
     checkRecipients(payments.length);
     const names = payments.map((p) => seedelfNameOf(p.to));
+    await settleMaybeSent(this.deps, network);
     const { view, utxos, params } = await readContract(this.deps, network);
     const request = {
       network,

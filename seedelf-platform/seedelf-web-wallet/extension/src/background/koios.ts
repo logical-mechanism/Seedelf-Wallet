@@ -494,10 +494,11 @@ export class Koios {
       await this.sleep(RETRY_DELAYS_MS[attempt]!);
     }
     // A UTxO it spends is already spent: Koios showed the wallet an old view
-    // of the chain (spent.ts), or this transaction already went through.
+    // of the chain (spent.ts), or this transaction already went through, or
+    // another that spends the same (pending.ts looks for this one first).
     if (text.includes("BadInputsUTxO")) {
       throw new SpentInputError(
-        "The network refused it: a UTxO it spends is already spent. Koios may have shown an out-of-date view of the chain. Wait a minute, refresh, and review it again.",
+        "The network refused it: a UTxO it spends is already spent, by a payment on its way or made elsewhere, or Koios showed an out-of-date view of the chain. Wait a minute and check Activity before you review it again.",
       );
     }
     const staking = stakingRefusal(text);
@@ -529,6 +530,13 @@ export class Koios {
     const params = { transaction: { cbor: txCborHex }, ...(additionalUtxo?.length ? { additionalUtxo } : {}) };
     const body = { jsonrpc: "2.0", method: "evaluateTransaction", params };
     return this.send<unknown>("POST", "ogmios", body, "", { answer400: true });
+  }
+
+  /** The slot of the newest block Koios has. */
+  async tipSlot(): Promise<number> {
+    const [row] = await this.request<{ abs_slot?: unknown }>("GET", "tip", undefined);
+    if (typeof row?.abs_slot !== "number") throw new KoiosError("Koios returned no tip.");
+    return row.abs_slot;
   }
 
   /** Confirmations for each transaction; `null` until it's on chain. */

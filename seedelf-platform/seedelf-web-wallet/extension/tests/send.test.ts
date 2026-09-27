@@ -9,7 +9,7 @@ import { SESSION_PENDING } from "../src/background/pending";
 import { SESSION_SEND } from "../src/background/send";
 import { MAX_RECIPIENTS } from "../src/shared/recipients";
 import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NOT_AN_ADDRESS } from "../src/shared/seedelf-name";
-import { txIdOf } from "./fixtures/cbor";
+import { ttlOf, txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -180,7 +180,14 @@ describe("send", () => {
     const t = await unlocked();
     const summary = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
     const pending = await t.send.submit("preprod", summary.txHash);
-    expect(pending).toEqual({ kind: "send", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
+    expect(pending).toEqual({
+      kind: "send",
+      network: "preprod",
+      txHash: summary.txHash,
+      submittedAt: t.clock.now,
+      confirmations: null,
+      invalidHereafter: ttlOf(t.koios.submitted[0]!),
+    });
     expect(t.koios.submitted).toHaveLength(1);
     expect(txIdOf(t.koios.submitted[0]!)).toBe(summary.txHash);
     expect(t.collateral.asked).toHaveLength(0);

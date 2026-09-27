@@ -6,9 +6,10 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { SESSION_BUILT } from "../src/background/move-in";
 import { SESSION_PENDING } from "../src/background/pending";
+import { spentSet } from "../src/background/spent";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
-import { txIdOf } from "./fixtures/cbor";
-import { deepRow, koiosPreprod, testBalances, vectors, withRawRows } from "./fakes";
+import { ttlOf, txIdOf } from "./fixtures/cbor";
+import { busyFor, deepRow, koiosPreprod, testBalances, vectors, withRawRows } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const TUSDM = { policyId: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9", assetName: "0014df10745553444d" };
@@ -70,7 +71,15 @@ describe("move-in", () => {
     const t = await unlocked();
     const summary = await t.moveIn.build("preprod", "5000000", []);
     const pending = await t.moveIn.submit("preprod", summary.txHash);
-    expect(pending).toEqual({ kind: "move-in", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
+    expect(pending).toEqual({
+      kind: "move-in",
+      network: "preprod",
+      txHash: summary.txHash,
+      submittedAt: t.clock.now,
+      confirmations: null,
+      // The slot it stops being valid at, which it's watched until.
+      invalidHereafter: ttlOf(t.koios.submitted[0]!),
+    });
     expect(t.koios.submitted).toHaveLength(1);
     expect(txIdOf(t.koios.submitted[0]!)).toBe(summary.txHash);
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
@@ -88,10 +97,32 @@ describe("move-in", () => {
     expect(await t.pending.pending()).toBeNull();
   });
 
-  it("stops watching after 10 minutes", async () => {
+  it("watches until the chain passes its slot, then says it expired and frees its UTxOs", async () => {
     const t = await unlocked();
     const summary = await t.moveIn.build("preprod", "5000000", []);
-    await t.moveIn.submit("preprod", summary.txHash);
+    const { invalidHereafter } = await t.moveIn.submit("preprod", summary.txHash);
+    const inputs = txInputs(t.koios.submitted[0]!);
+    await busyFor(t, 11 * 60_000);
+    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
+    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
+    expect(t.koios.calls.some((c) => c.path === "tip")).toBe(false); // the device's clock says it can't have expired
+
+    // Two hours on, the chain is past its slot, but not by enough to trust a Koios backend's tx_status.
+    await busyFor(t, 2 * 60 * 60_000);
+    t.koios.tip = invalidHereafter! + 60;
+    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
+    expect(await spentSet(t.session)).toEqual(new Set(inputs));
+    t.koios.tip = invalidHereafter! + 31 * 60;
+    await t.session.set(`${SESSION_BALANCES_PREFIX}preprod`, { stale: true });
+    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, confirmations: null, dropped: "expired" });
+    expect(await spentSet(t.session)).toEqual(new Set());
+    expect(await t.session.get(`${SESSION_BALANCES_PREFIX}preprod`)).toBeUndefined();
+    expect(await t.pending.pending()).toBeNull();
+  });
+
+  it("stops watching a private payment, which has no slot, after 10 minutes", async () => {
+    const t = await unlocked();
+    await t.session.set(SESSION_PENDING, { kind: "withdraw", network: "preprod", txHash: "ab".repeat(32), submittedAt: t.clock.now, confirmations: null });
     t.clock.now += 11 * 60_000;
     expect(await t.pending.pending()).toMatchObject({ confirmations: null });
     expect(await t.pending.pending()).toBeNull();

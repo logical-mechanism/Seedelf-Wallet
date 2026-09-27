@@ -27,6 +27,7 @@ import { checkRecipients } from "../shared/recipients";
 import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { destinationResolver, resolveDestination } from "./destination";
+import { settleMaybeSent } from "./pending";
 import { keep, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the withdrawal built last, until it's sent or replaced. */
@@ -64,6 +65,7 @@ export class WithdrawService {
     const resolve = destinationResolver(this.deps, network);
     const destinations: WithdrawDestination[] = [];
     for (const p of payments) destinations.push(await resolve(p.to));
+    await settleMaybeSent(this.deps, network);
     const { view, utxos, params } = await readContract(this.deps, network);
     const request = {
       network,
@@ -96,6 +98,7 @@ export class WithdrawService {
     const seedelf = seedelfName(name);
     if (!seedelf) throw new Error("That isn't a Seedelf's name.");
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    await settleMaybeSent(this.deps, network);
     const { view, params } = await readContract(this.deps, network);
     // Any seedelf is found; WebAssembly refuses one that isn't this wallet's.
     const utxo = view.seedelfs[seedelf];

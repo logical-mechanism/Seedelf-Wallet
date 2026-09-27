@@ -46,6 +46,13 @@ export async function rememberSpent(session: Area, tx: Uint8Array, now = Date.no
   await session.set(SESSION_SPENT, Object.fromEntries(fresh));
 }
 
+/** Forgets `outpoints`: a transaction that never landed spent nothing (pending.ts). Call it while unlocked. */
+export async function forgetSpent(session: Area, outpoints: readonly string[], now = Date.now()): Promise<void> {
+  const spent = await kept(session, now);
+  for (const o of outpoints) delete spent[o];
+  await session.set(SESSION_SPENT, spent);
+}
+
 /** The outpoints spent within SPENT_KEEP_MS. Call it while unlocked. */
 export async function spentSet(session: Area, now = Date.now()): Promise<Set<string>> {
   const spent = await kept(session, now);

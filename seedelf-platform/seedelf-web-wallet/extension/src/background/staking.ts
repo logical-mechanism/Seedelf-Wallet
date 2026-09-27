@@ -34,6 +34,7 @@ import {
 } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { Koios, KoiosAccountInfo, KoiosPoolInfo } from "./koios";
+import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
@@ -237,6 +238,7 @@ export class StakingService {
    */
   async build(network: NetworkName, action: StakingAction): Promise<StakingSummary> {
     const { wasm, wallet, now } = this.deps;
+    await settleMaybeSent(this.deps, network);
     const { params, utxos, held, stake } = await readAccount(this.deps, network, { stake: true });
     if (utxos.length === 0) {
       throw nothingInAccount(held, "Your public account is empty. Staking needs ADA for the fee, and a 2 ₳ deposit the first time.");
@@ -262,7 +264,7 @@ export class StakingService {
     );
     const { txCbor, ...rest } = result;
     const summary: StakingSummary = { ...rest, network };
-    await keep(this.deps, SESSION_STAKE, { ...summary, txCbor });
+    await keep(this.deps, SESSION_STAKE, { ...summary, txCbor, invalidHereafter: request.invalidHereafter });
     return summary;
   }
 

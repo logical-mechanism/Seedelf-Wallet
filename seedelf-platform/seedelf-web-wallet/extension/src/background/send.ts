@@ -30,6 +30,7 @@ import { COLLATERAL_LOVELACE } from "./coin-control";
 import { readContractView, type ContractView } from "./contract-scan";
 import { destinationResolver } from "./destination";
 import type { KoiosUtxo } from "./koios";
+import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
 import { holdsOwn, seedelfUtxo } from "./transfer";
 
@@ -97,6 +98,7 @@ export class SendService {
     note?: string,
   ): Promise<SendSummary> {
     const { wasm, wallet, now } = this.deps;
+    await settleMaybeSent(this.deps, network);
     const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
     if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to send.");
 
@@ -128,7 +130,7 @@ export class SendService {
         return { ...shown, ...p };
       }),
     };
-    await keep(this.deps, key, { ...summary, txCbor });
+    await keep(this.deps, key, { ...summary, txCbor, invalidHereafter: request.invalidHereafter });
     return summary;
   }
 }

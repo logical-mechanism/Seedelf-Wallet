@@ -18,6 +18,7 @@
 import type { NetworkName } from "../networks";
 import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
+import { settleMaybeSent } from "./pending";
 import { keep, measure, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the mint built last, until it's sent or replaced. */
@@ -35,7 +36,8 @@ export type MintDeps = ScriptSpendDeps;
 export class MintService {
   constructor(private readonly deps: MintDeps) {}
 
-  build(network: NetworkName, label: string, from: MintSource): Promise<MintSummary> {
+  async build(network: NetworkName, label: string, from: MintSource): Promise<MintSummary> {
+    await settleMaybeSent(this.deps, network);
     return from === "account" ? this.buildFromAccount(network, label) : this.buildStealth(network, label);
   }
 
@@ -55,7 +57,7 @@ export class MintService {
       (keys, r) => wasm.draftAccountMint(keys.cardano, keys.seedelf, r),
       (keys, r) => wasm.finishAccountMint(keys.cardano, keys.seedelf, r),
     );
-    return this.keep(network, label, "account", finished);
+    return this.keep(network, label, "account", finished, request.invalidHereafter);
   }
 
   private async buildStealth(network: NetworkName, label: string): Promise<MintSummary> {
@@ -70,10 +72,16 @@ export class MintService {
     return this.keep(network, label, "seedelf", finished);
   }
 
-  private async keep(network: NetworkName, label: string, from: MintSource, finished: MintResult): Promise<MintSummary> {
+  private async keep(
+    network: NetworkName,
+    label: string,
+    from: MintSource,
+    finished: MintResult,
+    invalidHereafter?: number,
+  ): Promise<MintSummary> {
     const { txCbor, seed, inputs, collateral: _collateral, ...rest } = finished;
     const summary: MintSummary = { ...rest, network, label, from, inputs: inputs.length };
-    await keep(this.deps, SESSION_MINT, { ...summary, txCbor, seed });
+    await keep(this.deps, SESSION_MINT, { ...summary, txCbor, seed, invalidHereafter });
     return summary;
   }
 
