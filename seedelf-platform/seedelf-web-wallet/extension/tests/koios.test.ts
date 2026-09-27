@@ -79,6 +79,32 @@ describe("Koios client", () => {
     expect(all).toHaveLength(2500);
   });
 
+  it("drops a datum's JSON and cuts a reference script to what prices it, however deep they nest (launch review H4)", async () => {
+    // Anyone can pay an address an output like this: V8 parses it, but stringifying or storing it overflows the stack.
+    const levels = 100_000;
+    const datum = `{"bytes":"${"81".repeat(levels)}00","value":${'{"list":['.repeat(levels)}{"int":0}${"]}".repeat(levels)}}`;
+    const script = `{"hash":"${"ab".repeat(28)}","size":300001,"type":"timelock","bytes":null,"value":${'{"type":"all","scripts":['.repeat(levels)}{"type":"sig"}${"]}".repeat(levels)}}`;
+    const deep = `{"tx_hash":"${"ee".repeat(32)}","tx_index":0,"value":"1500000","inline_datum":${datum},"reference_script":${script},"asset_list":[]}`;
+    const plain = { tx_hash: "ff".repeat(32), tx_index: 1, value: "2000000", inline_datum: null, reference_script: null, asset_list: [] };
+    // A script in a shape Koios never sends still counts as one.
+    const odd = { ...plain, tx_index: 2, reference_script: "82008" };
+    const text = `[${deep},${JSON.stringify(plain)},${JSON.stringify(odd)}]`;
+    expect(() => JSON.stringify(JSON.parse(text))).toThrow(RangeError);
+
+    const read = await scripted([new Response(text)]).koios.credentialUtxos(["94bc"]);
+    expect(read[0]!.inline_datum).toEqual({ bytes: `${"81".repeat(levels)}00`, value: null });
+    expect(read[0]!.reference_script).toEqual({ hash: "ab".repeat(28), size: 300001, type: "timelock", bytes: null });
+    expect(read[1]!.inline_datum).toBeNull();
+    expect(read[1]!.reference_script).toBeNull();
+    expect(read[2]!.reference_script).toEqual({ hash: null, size: null, type: null, bytes: null });
+    // Everything the worker does with rows now works: requests to WebAssembly, session storage, messages.
+    expect(JSON.parse(JSON.stringify(read))).toEqual(structuredClone(read));
+
+    const info = await scripted([new Response(`[${deep}]`)]).koios.utxoInfo([`${"ee".repeat(32)}#0`]);
+    expect(info[0]!.inline_datum!.value).toBeNull();
+    expect(() => JSON.stringify(info)).not.toThrow();
+  });
+
   it("asks about at most 75 credentials a request, to stay under Koios's 5,120-byte body limit", async () => {
     const { koios, calls } = scripted([Response.json(rows(2)), Response.json(rows(1, 2))]);
     const credentials = Array.from({ length: 80 }, (_, i) => i.toString(16).padStart(56, "0"));

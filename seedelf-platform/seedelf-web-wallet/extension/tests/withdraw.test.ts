@@ -11,7 +11,7 @@ import { SESSION_PENDING } from "../src/background/pending";
 import { ADA_HANDLE_POLICY } from "../src/background/destination";
 import { SESSION_REMOVE, SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors, withdrawPreprod } from "./fakes";
+import { deepRow, koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors, withdrawPreprod, withRawRows } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const hex = (s: string) => Buffer.from(s).toString("hex");
@@ -127,6 +127,19 @@ describe("withdraw", () => {
     const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
     expect(summary).toMatchObject({ max: true, inputs: 2, left: 0 });
     expect(BigInt(summary.payments[0]!.lovelace)).toBe(28_000_000n - BigInt(summary.fee.total));
+  });
+
+  it("isn't stopped by a stranger's UTxO nested thousands of levels deep in the contract (launch review H4)", async () => {
+    const t = await unlocked();
+    // One pays the Seedelf's register a native reference script 5,000 levels deep; another, a datum as deep.
+    withRawRows(t.koios, koiosPreprod.wallet_contract, [
+      deepRow(ownedUtxos[0]!, 5_000, { txHash: "e3".repeat(32), script: true }),
+      deepRow(ownedUtxos[0]!, 5_000, { txHash: "e4".repeat(32) }),
+    ]);
+    const b = await t.balances.get("preprod");
+    expect(b.seedelf).toMatchObject({ lovelace: "28000000", utxos: 2 });
+    const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(summary).toMatchObject({ max: true, inputs: 2, left: 0 });
   });
 
   it("pays several addresses in one withdrawal; Max is for one", async () => {

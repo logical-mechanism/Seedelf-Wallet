@@ -22,16 +22,58 @@ export interface KoiosUtxo {
   block_height: number | null;
   /** Unix seconds of the block that made it. */
   block_time?: number;
+  /** The datum's CBOR (hex), and its JSON, which `trimmed` drops: registers are read from the bytes. */
   inline_datum: { bytes: string; value: unknown } | null;
   /** A datum by hash (older outputs); only the dApp connector reads it. */
   datum_hash?: string | null;
   asset_list: KoiosAsset[] | null;
   /**
-   * The reference script it carries, if any (Koios's `{ hash, size, type,
-   * bytes }`). Anyone can send one; the WebAssembly prices it, and a Seedelf
-   * spend can't take it yet.
+   * The reference script it carries, if any. Anyone can send one; the
+   * WebAssembly prices it, and a Seedelf spend can't take it yet.
    */
-  reference_script?: unknown;
+  reference_script?: KoiosScript | null;
+}
+
+/** A reference script as the wallet keeps it: Koios's, less its JSON `value` (`trimmed`). */
+export interface KoiosScript {
+  hash: string | null;
+  /** Bytes. */
+  size: number | null;
+  /** `plutusV1`, `plutusV2`, `plutusV3`, `timelock` or `multisig`. */
+  type: string | null;
+  /** The script's CBOR, hex. */
+  bytes: string | null;
+}
+
+const textOrNull = (v: unknown) => (typeof v === "string" ? v : null);
+
+/**
+ * A UTxO as the wallet keeps it, cut right after it's read: its datum's
+ * JSON dropped, and its reference script cut to what prices it. Anyone can
+ * pay an address an output whose datum or native script nests thousands of
+ * levels deep. V8 parses that, but JSON.stringify, structuredClone and
+ * chrome.storage overflow on it, and the WebAssembly refused a whole request
+ * over it (launch review H4). Registers come from the datum's bytes
+ * (chain.ts). A script is never cut to nothing: a UTxO holding one must
+ * still read as holding one.
+ */
+export function trimmed(row: KoiosUtxo): KoiosUtxo {
+  const datum = row.inline_datum as { bytes?: unknown } | null;
+  const script = row.reference_script as Record<string, unknown> | null | undefined;
+  return {
+    ...row,
+    inline_datum: datum ? { bytes: textOrNull(datum.bytes) ?? "", value: null } : null,
+    ...(script == null
+      ? {}
+      : {
+          reference_script: {
+            hash: textOrNull(script.hash),
+            size: typeof script.size === "number" ? script.size : null,
+            type: textOrNull(script.type),
+            bytes: textOrNull(script.bytes),
+          },
+        }),
+  };
 }
 
 /** One of an account's transactions: `account_txs`. */
@@ -277,14 +319,14 @@ export class Koios {
   /**
    * Every UTxO whose payment credential is one of `credentials` (key or
    * script hashes, hex); with `after`, only those in blocks after it. At most
-   * `CREDENTIALS_PER_REQUEST` go in a request.
+   * `CREDENTIALS_PER_REQUEST` go in a request. Each is `trimmed`.
    */
   async credentialUtxos(credentials: string[], after?: number): Promise<KoiosUtxo[]> {
     const filter = after === undefined ? "" : `block_height=gt.${after}`;
     const rows: KoiosUtxo[] = [];
     for (let i = 0; i < credentials.length; i += CREDENTIALS_PER_REQUEST) {
       const body = { _payment_credentials: credentials.slice(i, i + CREDENTIALS_PER_REQUEST), _extended: true };
-      rows.push(...(await this.paged<KoiosUtxo>("credential_utxos", body, filter)));
+      rows.push(...(await this.paged<KoiosUtxo>("credential_utxos", body, filter)).map(trimmed));
     }
     return rows;
   }
@@ -293,11 +335,13 @@ export class Koios {
    * The UTxOs asked for (`txhash#index`), spent or not, with their address
    * and value: for the dApp connector, the inputs of a dApp's transaction
    * that aren't the account's. At most `REFS_PER_REQUEST` go in a request.
+   * Each is `trimmed`.
    */
   async utxoInfo(refs: string[]): Promise<KoiosUtxo[]> {
     const rows: KoiosUtxo[] = [];
     for (let i = 0; i < refs.length; i += REFS_PER_REQUEST) {
-      rows.push(...(await this.post<KoiosUtxo>("utxo_info", { _utxo_refs: refs.slice(i, i + REFS_PER_REQUEST), _extended: true })));
+      const page = await this.post<KoiosUtxo>("utxo_info", { _utxo_refs: refs.slice(i, i + REFS_PER_REQUEST), _extended: true });
+      rows.push(...page.map(trimmed));
     }
     return rows;
   }

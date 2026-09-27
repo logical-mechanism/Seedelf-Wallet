@@ -305,6 +305,36 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
   return fake;
 }
 
+/**
+ * A stranger's UTxO like `template`, 3 ₳, as Koios's raw JSON: with an
+ * inline datum nested `levels` deep (a Plutus list of lists), or with
+ * `script`, the template's datum and a native reference script nested as
+ * deep. Too deep for JSON.stringify, so it's written by hand.
+ */
+export function deepRow(template: KoiosUtxo, levels: number, { script = false, txHash = "ee".repeat(32) } = {}): string {
+  const { inline_datum: _datum, reference_script: _script, ...rest } = template;
+  const plain = JSON.stringify({ ...rest, tx_hash: txHash, tx_index: 0, value: "3000000", asset_list: [] }).slice(0, -1);
+  const datum = script
+    ? JSON.stringify(template.inline_datum)
+    : `{"bytes":"${"81".repeat(levels)}00","value":${'{"list":['.repeat(levels)}{"int":0}${"]}".repeat(levels)}}`;
+  const reference = script
+    ? `{"hash":"${"ab".repeat(28)}","size":${3 * levels + 1},"type":"timelock","bytes":null,"value":${'{"type":"all","scripts":['.repeat(levels)}{"type":"sig","keyHash":"${"cd".repeat(28)}"}${"]}".repeat(levels)}}`
+    : "null";
+  return `${plain},"inline_datum":${datum},"reference_script":${reference}}`;
+}
+
+/** Koios lists `rows` (raw JSON) too, whenever it's asked about `credential`. */
+export function withRawRows(fake: FakeKoios, credential: string, rows: string[]): void {
+  const real = fake.fetch;
+  fake.fetch = async (url, init) => {
+    const answer = await real(url, init);
+    const asked = init.body ? (JSON.parse(String(init.body)) as { _payment_credentials?: string[] }) : undefined;
+    if (!url.includes("/credential_utxos") || !asked?._payment_credentials?.includes(credential)) return answer;
+    const listed = (await answer.text()).slice(1, -1);
+    return new Response(`[${[listed, ...rows].filter(Boolean).join(",")}]`);
+  };
+}
+
 export interface FakeCollateral {
   fetch: FetchLike;
   /** The transactions giveme.my was asked to witness (CBOR hex). */

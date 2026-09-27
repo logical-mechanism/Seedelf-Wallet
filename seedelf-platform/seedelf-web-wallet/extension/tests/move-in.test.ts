@@ -3,11 +3,12 @@
 // then watch it.
 import { describe, expect, it } from "vitest";
 
+import { txInputs } from "../src/background/cbor";
 import { SESSION_BUILT } from "../src/background/move-in";
 import { SESSION_PENDING } from "../src/background/pending";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
-import { testBalances, vectors } from "./fakes";
+import { deepRow, koiosPreprod, testBalances, vectors, withRawRows } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const TUSDM = { policyId: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9", assetName: "0014df10745553444d" };
@@ -113,6 +114,29 @@ describe("move-in", () => {
     await expect(t.moveIn.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction: ValueNotConservedUTxO");
     expect(await t.session.get(SESSION_BUILT)).toBeDefined();
     expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+  });
+
+  it("isn't stopped by a stranger's UTxO nested thousands of levels deep in the account (launch review H4)", async () => {
+    const t = await unlocked();
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    const [ours] = koiosPreprod.accounts[v.preprod.stake as string]!.account_utxos;
+    // Paid to the account's own address: one with a deep datum, one with a deep native reference script.
+    withRawRows(t.koios, ours!.payment_cred!, [
+      deepRow(ours!, 5_000, { txHash: "e1".repeat(32) }),
+      deepRow(ours!, 5_000, { txHash: "e2".repeat(32), script: true }),
+    ]);
+    const before = testBalances();
+    await before.wallet.create(v.phrase, PASSWORD);
+    const plain = await before.balances.get("preprod");
+
+    const b = await t.balances.get("preprod");
+    expect(BigInt(b.cardano.lovelace)).toBe(BigInt(plain.cardano.lovelace) + 6_000_000n);
+    // Max spends the one with the datum; the one with a script it can't measure stays, and says why.
+    const max = await t.moveIn.build("preprod", null, []);
+    expect(max.inputs).toBe(7);
+    expect((max as { leftOut?: unknown }).leftOut).toEqual([{ txHash: "e2".repeat(32), txIndex: 0, reason: "script" }]);
+    const built = await t.session.get<{ txCbor: string }>(SESSION_BUILT);
+    expect(txInputs(Uint8Array.from(Buffer.from(built!.txCbor, "hex")))).toContain(`${"e1".repeat(32)}#0`);
   });
 
   it("raises a short amount to the least the deposit needs", async () => {
