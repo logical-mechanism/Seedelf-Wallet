@@ -4,7 +4,7 @@
 import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
 import { APIError, DAPP_ORIGINS, DAPP_PORT, isDappMethod, type DappAnswer, type DappCall } from "../shared/dapp";
 import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
-import { DAPP_CHANGED, isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
+import { DAPP_CHANGED, STATE_CHANGED, type Message } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
 import { CoinControlService } from "./coin-control";
@@ -29,25 +29,17 @@ import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { LovejoinService } from "./lovejoin";
 import { chromeArea } from "./storage";
-import { Wallet } from "./wallet";
-import { loadWasm } from "./wasm";
+import { guardedConnector, keepStorageFromSites } from "./storage-access";
+import { serveUi } from "./ui-port";
+import { hasEntropy, Wallet, WASM_BROKEN } from "./wallet";
+import { freshWasm, isTrap, loadWasm } from "./wasm";
 
 const extensionOrigin = chrome.runtime.getURL("");
 
-// Storage is the extension's own pages' and this worker's, never a content
-// script's. The dApp connector's bridge runs in every site's renderer and
-// never reads storage, so a renderer a site took over can't read the sealed
-// vault (to guess its password offline) or change the settings through it.
-// Session storage is this way already; local storage isn't by default. Set at
-// every start, as the level doesn't outlive the browser; a Chrome that can't
-// set it keeps the default.
-for (const area of [chrome.storage.local, chrome.storage.session]) {
-  try {
-    area.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => undefined);
-  } catch {
-    // Never in the way of the listeners below.
-  }
-}
+// Storage is kept from content scripts at every start (storage-access.ts).
+// Where Chrome won't do it for local storage, the dApp connector stays off.
+const storageProtected = keepStorageFromSites(chrome.storage);
+const connector = guardedConnector(storageProtected, applyConnector);
 
 const AUTO_LOCK_ALARM = "seedelf.auto-lock";
 /** Wakes a swap that runs itself (sessions.ts), a chain being sent, and Lovejoin boxes waiting to come back, every minute while the wallet is unlocked. */
@@ -127,7 +119,7 @@ let context: Promise<Context> | undefined;
 
 function getContext(): Promise<Context> {
   if (context) return context;
-  context = loadWasm().then((wasm) => {
+  context = Promise.all([loadWasm(), storageProtected]).then(([wasm, protectedStorage]) => {
     const session = chromeArea(chrome.storage.session);
     const local = chromeArea(chrome.storage.local);
     const preferences = new PreferencesService(local);
@@ -144,6 +136,7 @@ function getContext(): Promise<Context> {
       now: Date.now,
       autoLock,
       lockAfterMs: () => preferences.lockAfterMs(),
+      fresh: freshWasm,
       changed: () => {
         broadcast(STATE_CHANGED);
         // Sites waiting for an unlock go on, and so does a swap that runs itself.
@@ -207,7 +200,8 @@ function getContext(): Promise<Context> {
       dapp,
       sessions,
       lovejoin,
-      connector: applyConnector,
+      connector,
+      ...(protectedStorage ? {} : { connectorBlocked: "storage" as const }),
       version: __VERSION__,
       network,
       networks: enabledNetworks(__MAINNET_ENABLED__),
@@ -229,7 +223,7 @@ const preferences = () => new PreferencesService(chromeArea(chrome.storage.local
 const applyKept = () => {
   void readOpenIn().then(applyOpenIn).catch(() => undefined);
   void preferences()
-    .then((p) => applyConnector(p.dappConnector))
+    .then((p) => connector(p.dappConnector))
     .catch(() => undefined);
 };
 chrome.runtime.onInstalled.addListener(applyKept);
@@ -256,7 +250,24 @@ function dappSession(sender: chrome.runtime.MessageSender | undefined): DappSess
   return { id: crypto.randomUUID(), origin: sender.origin, title: sender.tab.title };
 }
 
+/**
+ * A request from one of the wallet's pages. WebAssembly that traps under it
+ * outside the wallet's queue locks the wallet, as a trap inside does.
+ */
+async function answerUi(message: Message): Promise<unknown> {
+  const ctx = await getContext();
+  try {
+    return await handle(message, ctx);
+  } catch (e) {
+    if (!isTrap(e)) throw e;
+    await ctx.wallet.trapped();
+    throw new Error(WASM_BROKEN);
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
+  // The wallet's own pages ask on ports of their own (ui-port.ts).
+  if (serveUi(port, extensionOrigin, answerUi)) return;
   if (port.name !== DAPP_PORT) return;
   const session = dappSession(port.sender);
   if (!session) {
@@ -317,34 +328,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name !== AUTO_LOCK_ALARM) return;
   // Reading the state applies auto-lock once the user has been idle too long.
-  // A worker that can't start says why on the next request, not here.
-  void getContext()
-    .then(({ wallet }) => wallet.state())
-    .catch(() => undefined);
-});
-
-chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  // Only this extension's own pages may talk to the worker.
-  if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(extensionOrigin)) {
-    return false;
-  }
-  if (!isMessage(message)) {
-    // Requests carry a `type`; anything else (such as another page's state
-    // broadcast) isn't for the worker.
-    if ((message as { type?: unknown } | null)?.type === undefined) return false;
-    sendResponse({ ok: false, error: "unknown request" } satisfies Reply<"status">);
-    return false;
-  }
-
-  getContext()
-    .then((ctx) => handle(message, ctx))
-    .then(
-      (value) => sendResponse({ ok: true, value }),
-      (error: unknown) =>
-        sendResponse({
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        } satisfies Reply<typeof message.type>),
-    );
-  return true; // keep the channel open for the async reply
+  // Already locked (a browser restart keeps the alarm but not the entropy),
+  // the alarm just stops, without starting WebAssembly. A worker that can't
+  // start says why on the next request, not here.
+  void (async () => {
+    if (!(await hasEntropy(chromeArea(chrome.storage.session)))) return autoLock.stop();
+    await (await getContext()).wallet.state();
+  })().catch(() => undefined);
 });

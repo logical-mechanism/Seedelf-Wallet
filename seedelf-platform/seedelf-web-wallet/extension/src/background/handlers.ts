@@ -46,6 +46,8 @@ export interface Context {
   lovejoin: LovejoinService;
   /** Registers or removes the dApp connector's content scripts (connector.ts). */
   connector: (on: boolean) => Promise<boolean>;
+  /** Why the connector can't be turned on, when it can't (storage-access.ts). */
+  connectorBlocked?: Status["connectorBlocked"];
   version: string;
   network: NetworkName;
   networks: NetworkName[];
@@ -262,8 +264,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
   }
 }
 
-async function status({ wallet, version, network, networks }: Context): Promise<Status> {
+async function status({ wallet, version, network, networks, connectorBlocked }: Context): Promise<Status> {
   const state = await wallet.state();
   const retryAfterMs = state === "locked" ? await wallet.retryAfterMs() : 0;
-  return { state, version, network, networks, retryAfterMs };
+  return { state, version, network, networks, retryAfterMs, ...(connectorBlocked ? { connectorBlocked } : {}) };
 }

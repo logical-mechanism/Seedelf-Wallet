@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { test as base, chromium, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
 import { DAPP_ORIGINS } from "../src/shared/dapp";
+import { UI_PORT } from "../src/shared/rpc";
 import { txIdOf } from "../tests/fixtures/cbor";
 
 export { expect };
@@ -408,4 +409,25 @@ export async function setPassword(page: Page, submit: string) {
   await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByLabel("Confirm password").fill(PASSWORD);
   await page.getByRole("button", { name: submit }).click();
+}
+
+/**
+ * Asks the worker from a wallet page as the UI does, on a port of its own
+ * (ui/background.ts): its reply, and how long it took in the page (ms).
+ */
+export function askWorker(page: Page, message: { type: string } & Record<string, unknown>): Promise<{ reply: any; ms: number }> {
+  return page.evaluate(
+    ([m, name]) =>
+      new Promise<{ reply: any; ms: number }>((resolve, reject) => {
+        const started = performance.now();
+        const port = chrome.runtime.connect({ name });
+        port.onMessage.addListener((reply) => {
+          port.disconnect();
+          resolve({ reply, ms: performance.now() - started });
+        });
+        port.onDisconnect.addListener(() => reject(new Error("The worker didn't answer.")));
+        port.postMessage(m);
+      }),
+    [message, UI_PORT] as const,
+  );
 }

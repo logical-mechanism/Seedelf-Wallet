@@ -15,6 +15,13 @@ export interface Status {
   networks: NetworkName[];
   /** When locked: how long until another unlock attempt is allowed (ms). */
   retryAfterMs: number;
+  /**
+   * Set when the dApp connector can't be turned on, and why. "storage": this
+   * Chrome won't keep sites' scripts out of the wallet's local storage
+   * (`storage.local.setAccessLevel`), so the connector stays off; a newer
+   * Chrome fixes it.
+   */
+  connectorBlocked?: "storage";
 }
 
 export type UnlockResult =
@@ -1235,6 +1242,12 @@ export function isMessage(value: unknown): value is Message {
   const type = (value as { type?: unknown } | null)?.type;
   return typeof type === "string" && REQUESTS.has(type);
 }
+
+/**
+ * The port each UI request travels on (ui/background.ts): only the worker
+ * listens for it, so no other page sees a password or the phrase in one.
+ */
+export const UI_PORT = "seedelf.ui";
 
 /** Broadcast by the worker to open UI pages when the wallet state changes. */
 export const STATE_CHANGED = { event: "state-changed" } as const;

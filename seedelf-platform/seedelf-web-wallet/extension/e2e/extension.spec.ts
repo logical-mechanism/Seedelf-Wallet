@@ -8,6 +8,7 @@ import {
   accountMintPreprod,
   addTokens,
   appUrl,
+  askWorker,
   cardanoTab,
   dist,
   expect,
@@ -221,12 +222,8 @@ test("a browser restart comes back locked; unlock takes well under 1.5 s", async
     await expect(again.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 
     // Time the worker's unlock: Argon2id (pure JS) plus key derivation (WASM).
-    const millis = await again.evaluate(async (password) => {
-      const started = performance.now();
-      const reply = await chrome.runtime.sendMessage({ type: "unlock", password });
-      if (!reply?.ok || !reply.value.unlocked) throw new Error(JSON.stringify(reply));
-      return performance.now() - started;
-    }, PASSWORD);
+    const { reply, ms: millis } = await askWorker(again, { type: "unlock", password: PASSWORD });
+    if (!reply?.ok || !reply.value.unlocked) throw new Error(JSON.stringify(reply));
     test.info().annotations.push({ type: "unlock-ms", description: String(Math.round(millis)) });
     console.log(`unlock in the service worker: ${Math.round(millis)} ms`);
     expect(millis).toBeLessThan(1500);
@@ -2221,7 +2218,7 @@ test("the connector off keeps Chrome's access to Koios; without it, the wallet s
 
   // Off, as at every start: the scripts go, Chrome's access stays. Taking
   // back the optional https://*/* would take Koios's host with it.
-  const reply = await page.evaluate(() => chrome.runtime.sendMessage({ type: "preferences-set", dappConnector: false }));
+  const { reply } = await askWorker(page, { type: "preferences-set", dappConnector: false });
   expect(reply).toMatchObject({ ok: true });
   expect(await granted()).toEqual(expect.arrayContaining(services));
   await expect(page.getByTestId("service-access")).toHaveCount(0);
@@ -2311,11 +2308,11 @@ test.describe("the dApp connector", () => {
     expect(await cip30(dapp, "getCollateral")).toEqual({ value: null });
 
     // A transaction to sign: the wallet's own Send builds one to someone else.
-    const tx = await page.evaluate(async (to) => {
-      await chrome.runtime.sendMessage({ type: "send-build", payments: [{ to, lovelace: "3000000", tokens: [] }] });
+    await askWorker(page, { type: "send-build", payments: [{ to: vector(15).preprod.receive_0, lovelace: "3000000", tokens: [] }] });
+    const tx = await page.evaluate(async () => {
       const kept = await chrome.storage.session.get("seedelf.send.built");
       return (kept["seedelf.send.built"] as { txCbor: string }).txCbor;
-    }, vector(15).preprod.receive_0);
+    });
 
     let prompt = connectorWindow(context);
     let signing = cip30(dapp, "signTx", tx);
