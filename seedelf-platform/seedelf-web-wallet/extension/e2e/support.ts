@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 
 import { test as base, chromium, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
+import type { NetworkName } from "../src/networks";
 import { DAPP_ORIGINS } from "../src/shared/dapp";
+import { LOCAL_NETWORK } from "../src/shared/preferences";
 import { UI_PORT } from "../src/shared/rpc";
 import { txIdOf } from "../tests/fixtures/cbor";
 
@@ -43,6 +45,17 @@ export async function launch(
   });
   await extensionId(context);
   return context;
+}
+
+/**
+ * Puts the wallet in `context` on `network`, as Settings' switch does: the
+ * worker reads `seedelf.network` at every request. Set before a page opens,
+ * the wallet starts there. A preprod-only build has preprod alone, whatever
+ * is set; a mainnet build (the store's) starts on mainnet unless told.
+ */
+export async function chooseNetwork(context: BrowserContext, network: NetworkName): Promise<void> {
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  await worker.evaluate(([key, value]) => chrome.storage.local.set({ [key]: value }), [LOCAL_NETWORK, network] as const);
 }
 
 const ids = new WeakMap<BrowserContext, Promise<string>>();
@@ -274,6 +287,7 @@ function withSiteAccess(extension: string, into: string): string {
 export const test = base.extend<{
   scale: number;
   siteAccess: boolean;
+  network: NetworkName;
   userDataDir: string;
   koios: KoiosFake;
   swaps: MinswapFake;
@@ -283,6 +297,12 @@ export const test = base.extend<{
   scale: [1, { option: true }],
   /** Chrome's access to sites granted from install, for the dApp connector's tests. */
   siteAccess: [false, { option: true }],
+  /**
+   * The network the wallet starts on, set before any page opens. Preprod, as
+   * the fakes answer: the suite runs on a dev build and on the store's
+   * mainnet build alike.
+   */
+  network: ["preprod", { option: true }],
   userDataDir: async ({}, use) => {
     const dir = mkdtempSync(join(tmpdir(), "seedelf-e2e-"));
     await use(dir);
@@ -321,9 +341,10 @@ export const test = base.extend<{
       orders: [],
     });
   },
-  context: async ({ scale, siteAccess, userDataDir, koios, swaps }, use) => {
+  context: async ({ scale, siteAccess, network, userDataDir, koios, swaps }, use) => {
     const extension = siteAccess ? withSiteAccess(dist, `${userDataDir}-extension`) : dist;
     const context = await launch(userDataDir, { scale, extension });
+    await chooseNetwork(context, network);
     await fakeKoios(context, koios);
     await fakeMinswap(context, swaps);
     await use(context);

@@ -2679,3 +2679,40 @@ test.describe("the dApp connector", () => {
     expect(((await message).value as { signature: string }).signature).toMatch(/^84/);
   });
 });
+
+// The store's build has mainnet and preprod (docs/architecture.md, Networks):
+// Settings moves between them, saying first what the other network is, and
+// preprod is marked on every screen. A preprod-only dev build has no switch.
+test("a mainnet build switches networks in Settings, and marks preprod on every screen", async ({ context }) => {
+  const { host_permissions: hosts } = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as { host_permissions: string[] };
+  test.skip(!hosts.includes("https://api.koios.rest/*"), "a preprod-only build has no network switch");
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  // The harness chose preprod before the wallet started.
+  await expect(page.getByTestId("network")).toHaveText("PREPROD");
+  await expect(page.getByTestId("test-network")).toHaveText("Preprod, Cardano's test network: ADA here is test ADA, with no value.");
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  const choice = page.getByRole("group", { name: "Cardano network" });
+  await choice.getByRole("button", { name: "Mainnet" }).click();
+  await expect(page.getByTestId("network-confirm")).toContainText("ADA there is real money");
+  await snap(page, "network-switch");
+  // Staying changes nothing.
+  await page.getByRole("button", { name: "Stay on Preprod" }).click();
+  await expect(page.getByTestId("network")).toHaveText("PREPROD");
+
+  await choice.getByRole("button", { name: "Mainnet" }).click();
+  await page.getByRole("button", { name: "Switch to Mainnet" }).click();
+  await expect(page.getByTestId("network")).toHaveText("MAINNET");
+  await expect(page.getByTestId("test-network")).toHaveCount(0);
+  expect((await askWorker(page, { type: "status" })).reply.value).toMatchObject({ network: "mainnet", networks: ["mainnet", "preprod"] });
+  expect((await askWorker(page, { type: "account" })).reply.value.receiveAddress).toMatch(/^addr1/);
+
+  // Back to preprod: it says first that its ADA has no value.
+  await page.getByRole("group", { name: "Cardano network" }).getByRole("button", { name: "Preprod" }).click();
+  await expect(page.getByTestId("network-confirm")).toContainText("Preprod is Cardano's test network. ADA there is test ADA, with no value");
+  await page.getByRole("button", { name: "Switch to Preprod" }).click();
+  await expect(page.getByTestId("network")).toHaveText("PREPROD");
+  await expect(page.getByTestId("test-network")).toBeVisible();
+  expect((await askWorker(page, { type: "account" })).reply.value.receiveAddress).toBe(vector(12).preprod.receive_0);
+});

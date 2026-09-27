@@ -63,6 +63,12 @@ jobs:
         working-directory: seedelf-platform/seedelf-web-wallet/extension
         run: npm test
 
+      # Some of what's bundled depends on the build (mainnet's token list and
+      # DReps): the tests again, as the store's mainnet build sees it.
+      - name: Extension unit tests (mainnet build)
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: VITE_ENABLE_MAINNET=true npm test
+
       - name: Extension build
         working-directory: seedelf-platform/seedelf-web-wallet/extension
         run: npm run build:ext
@@ -73,11 +79,14 @@ jobs:
           npx playwright install --with-deps chromium
           npm run e2e
 
-      # The Web Store package: no dev key, the third-party notices (which fail
-      # on a crate with no licence), the zip, and the same tests on that build.
+      # The Web Store package, as `npm run package` makes it: the mainnet
+      # build, with no dev key, the third-party notices (which fail on a crate
+      # with no licence) and the zip, refused without mainnet's hosts. Then the
+      # same tests on that build, with preprod chosen (e2e/support.ts sets the
+      # network before the wallet starts), and the network switch's own test.
       - name: Store package and its end-to-end
         working-directory: seedelf-platform/seedelf-web-wallet/extension
         run: |
-          VITE_STORE_BUILD=true npm run build:ext
-          node scripts/package.mjs preprod
+          VITE_ENABLE_MAINNET=true VITE_STORE_BUILD=true npm run build:ext
+          node scripts/package.mjs mainnet
           npm run e2e

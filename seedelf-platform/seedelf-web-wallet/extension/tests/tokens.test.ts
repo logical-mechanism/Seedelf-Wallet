@@ -47,9 +47,13 @@ describe("the wallet's token registry", () => {
     expect(v.nft).toBe(false);
   });
 
-  it("carries only preprod unless it's a mainnet build", () => {
+  // Vitest builds with the extension's own flags: CI runs it both ways (`VITE_ENABLE_MAINNET=true npm test`).
+  it(__MAINNET_ENABLED__ ? "carries mainnet's list in a mainnet build" : "carries only preprod unless it's a mainnet build", () => {
     const snek = { policyId: "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f", assetName: "534e454b" };
-    expect(tokenInfo("mainnet", snek)).toBeUndefined();
+    if (__MAINNET_ENABLED__) expect(tokenInfo("mainnet", snek)?.ticker).toBe("SNEK");
+    else expect(tokenInfo("mainnet", snek)).toBeUndefined();
+    // Preprod's list is in every build.
+    expect(tokenInfo("preprod", TUSDM)?.ticker).toBe("tUSDM");
   });
 
   it("never gives a lookalike the listed token's logo", () => {
