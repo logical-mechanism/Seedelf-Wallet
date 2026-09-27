@@ -6,12 +6,13 @@
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
+import { SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { Koios } from "../src/background/koios";
 import { SESSION_PENDING } from "../src/background/pending";
 import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
 import { SEEDELF_NAME_RULE } from "../src/shared/seedelf-name";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
+import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const bytes = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
@@ -167,6 +168,23 @@ describe("transfer", () => {
     expect(t.koios.submitted).toHaveLength(0);
     expect(await t.session.get(SESSION_TRANSFER)).toBeDefined(); // Send can be tried again
     expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+  });
+
+  it("reads the contract in full for the next review once giveme.my refuses (launch review #53)", async () => {
+    const t = await unlocked();
+    const contract = `${SESSION_CONTRACT_PREFIX}preprod`;
+    const fullReads = () =>
+      t.koios.calls.filter(
+        (c) => c.path === "credential_utxos" && c.body._payment_credentials.includes(koiosPreprod.wallet_contract) && !c.query.includes("block_height"),
+      ).length;
+    await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    expect(fullReads()).toBe(1); // the second read only caught up
+    // giveme.my checks the chain first: a UTxO spent elsewhere, which the kept view still has, is one reason it refuses.
+    await expect(t.transfer.submit("preprod", summary.txHash)).rejects.toThrow("refused this transaction");
+    expect((await t.session.get<{ fullAt: number }>(contract))!.fullAt).toBe(0);
+    await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    expect(fullReads()).toBe(2);
   });
 
   it("submits exactly the signed transaction, then watches it", async () => {

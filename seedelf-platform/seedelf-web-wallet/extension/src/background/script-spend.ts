@@ -24,7 +24,7 @@ import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
 import type { ActivityService } from "./activity";
 import type { CoinControlService } from "./coin-control";
-import type { Collateral } from "./collateral";
+import { CollateralRefusedError, type Collateral } from "./collateral";
 import { forgetContractView, readContractView, type ContractView } from "./contract-scan";
 import { SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
@@ -163,7 +163,16 @@ export async function send(
 
   let txCbor = built.txCbor;
   if (built.seed !== undefined) {
-    const collateral = await deps.collateral(network).witness(built.txCbor);
+    let collateral: unknown;
+    try {
+      collateral = await deps.collateral(network).witness(built.txCbor);
+    } catch (e) {
+      // giveme.my checks the chain first, so this refusal may be a UTxO the
+      // kept view still has as ours: read the contract in full next time, as
+      // the "refresh, then review it again" it asks for expects.
+      if (e instanceof CollateralRefusedError) await forgetContractView(deps, network);
+      throw e;
+    }
     const signed = await wallet.withKeys(
       (keys) =>
         JSON.parse(
