@@ -20,6 +20,7 @@ fn fixture_params() -> ProtocolParameters {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_first_large_utxo() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
@@ -32,6 +33,7 @@ async fn find_first_large_utxo() {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_many_utxos() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
@@ -44,6 +46,7 @@ async fn find_many_utxos() {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_nft_and_ada() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();

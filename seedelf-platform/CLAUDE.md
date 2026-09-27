@@ -35,10 +35,16 @@ cargo install --path seedelf-cli --bin seedelf-cli
 cargo run -- help                    # from workspace root
 
 # tests
-cargo test                           # whole workspace
+cargo test --workspace --locked      # whole workspace, offline (as CI runs it)
 cargo test -p seedelf-crypto         # one crate
 cargo test -p seedelf-crypto schnorr # filter by name
+
+# the live Koios tests only (they need the network)
+cargo test -p seedelf-cli --test koios_test -- --ignored
+cargo test -p seedelf-core --test utxos_test -- --ignored
 ```
+
+Tests that ask the public Koios for real are marked `#[ignore = "live Koios"]` (seedelf-cli's [koios_test.rs](seedelf-cli/tests/koios_test.rs), and the `find_*` tests in seedelf-core's [utxos_test.rs](seedelf-core/tests/utxos_test.rs)), so the default run and CI stay offline. Run them on purpose with `cargo test -- --ignored`, named by file as above: they depend on what's on chain, so a change there can fail them. A bare `cargo test -- --ignored` at the workspace root runs every ignored test, seedelf-wasm's `record_the_extensions_session_swap_fixture` too, which rewrites an extension fixture. A new test that reaches the network gets the same mark, or goes through a mock (`wiremock`) as [tests/cli/](seedelf-cli/tests/cli/) does.
 
 Formatting is governed by [rustfmt.toml](rustfmt.toml). No project-level lint script — rely on `cargo clippy` if running lints.
 

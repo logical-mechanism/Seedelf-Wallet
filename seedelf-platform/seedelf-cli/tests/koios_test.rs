@@ -17,6 +17,7 @@ fn tx_hash_result() {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_ada_handle() {
     let config: Config = get_config(1, false).unwrap();
     let name: String = "logic.mech".to_string();
@@ -34,6 +35,7 @@ async fn find_ada_handle() {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_nft_utxo() {
     let asset_id: String = String::from(
         "b558ea5ecfa2a6e9701dab150248e94104402f789c090426eb60eb60536e656b6b696533363333",
@@ -58,6 +60,7 @@ async fn find_nft_utxo() {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_datum() {
     let datum_hash: String =
         String::from("21eed8a2f7e4298c95ded10c5d2544f3c24ac45396167d1024bb04e6720f5f6b");
@@ -66,6 +69,7 @@ async fn find_datum() {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn test_asset_history() {
     let pid: String = String::from("b3ad6187273d174b586b1c86d4c6c7eeefa7bdca6dd819f125d4dd06");
     let tkn: String = String::from("74494147");
