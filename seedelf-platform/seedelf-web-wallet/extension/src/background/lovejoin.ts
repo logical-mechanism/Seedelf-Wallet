@@ -53,7 +53,7 @@
 // giveme.my plus one submit.
 
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
-import type { NetworkName } from "../networks";
+import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
 import type {
   LeftOutUtxo,
   LovejoinFunding,
@@ -290,18 +290,8 @@ export function unknownInputs(answer: unknown): string[] | undefined {
   return named.flatMap((r) => (typeof r.transaction?.id === "string" && Number.isInteger(r.index) ? [`${r.transaction.id}#${r.index}`] : []));
 }
 
-/** Lovejoin's `mix_box` script hash: where every box sits. Preprod only, until Lovejoin launches on mainnet. */
-export const LOVEJOIN_MIX_BOX: Partial<Record<NetworkName, string>> = {
-  preprod: "67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5",
-};
-
-/**
- * The fewest real boxes that aren't the wallet's that Lovejoin's pool must
- * hold before a chain draws from it: a box is hidden only among others, and
- * a pool of a few hides little. Mainnet's is the owner's to tune; preprod
- * takes any pool, for testing.
- */
-export const POOL_FLOOR: Record<NetworkName, number> = { preprod: 0, mainnet: 30 };
+// Where Lovejoin sits on each network (its `mix_box` hash) and the pool's
+// floor come from networks.ts (`lovejoin`), which the UI reads too.
 
 /** Every box holds exactly this. */
 export const LOVEJOIN_DENOM = 10_000_000n;
@@ -542,9 +532,9 @@ export class LovejoinService {
     return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped } : null;
   }
 
-  /** Whether Lovejoin is deployed on `network`. */
+  /** Whether Lovejoin is deployed on `network` (networks.ts: the UI's gate is the same). */
   available(network: NetworkName): boolean {
-    return LOVEJOIN_MIX_BOX[network] !== undefined;
+    return lovejoinOn(network);
   }
 
   async settings(): Promise<{ depth: LovejoinDepth; delay: LovejoinDelay }> {
@@ -554,7 +544,7 @@ export class LovejoinService {
 
   /** The boxes in the pool, less any a sent transaction of ours spends. */
   async pool(network: NetworkName): Promise<KoiosUtxo[]> {
-    const hash = LOVEJOIN_MIX_BOX[network];
+    const hash = NETWORKS[network].lovejoin?.mixBox;
     if (!hash) throw new Error("Lovejoin isn't on this network yet.");
     const { wallet, session } = this.deps;
     const [rows, spent] = await Promise.all([
@@ -605,10 +595,10 @@ export class LovejoinService {
 
   /**
    * Why a chain can't draw from a pool with only `others` real boxes that
-   * aren't the wallet's (POOL_FLOOR), or undefined when it can.
+   * aren't the wallet's (the network's `lovejoin.poolFloor`), or undefined when it can.
    */
   private floorShort(network: NetworkName, others: number): string | undefined {
-    const floor = POOL_FLOOR[network];
+    const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
     if (others >= floor) return undefined;
     return `Lovejoin's pool holds ${others} ${others === 1 ? "box" : "boxes"} that aren't yours, and the wallet mixes only once it holds ${floor}, so yours hide among enough others`;
   }

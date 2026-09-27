@@ -9,7 +9,7 @@
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
-import { NETWORKS } from "../../networks";
+import { lovejoinOn, NETWORKS, type NetworkName } from "../../networks";
 import { DAPP_ORIGINS } from "../../shared/dapp";
 import { readOpenIn, type OpenIn } from "../../shared/open-in";
 import {
@@ -101,7 +101,7 @@ export function Settings({
       </section>
       <PreferencesSection network={status.network} />
       <DappConnector onSites={() => setPage("sites")} />
-      {status.network === "preprod" && <LovejoinSettings />}
+      {lovejoinOn(status.network) && <LovejoinSettings network={status.network} />}
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
         <h2 id="security-title">Security</h2>
@@ -210,24 +210,43 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
   );
 }
 
-/** About what a box's fan-out costs, at preprod's 0.877 ₳ a mix. */
-const DEPTH_COST: Record<LovejoinDepth, string> = { 1: "1 mix, about 0.9 ₳", 2: "4 mixes, about 3.5 ₳", 3: "13 mixes, about 11.4 ₳" };
+/**
+ * About what a box's fan-out costs on `network`: its mixes (1, 4 or 13, three
+ * wide), at what a mix measured there (networks.ts: 0.877 ₳ on preprod, about
+ * 0.82 ₳ on mainnet).
+ */
+export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
+  const mixes = (3 ** depth - 1) / 2;
+  const lovelace = mixes * (NETWORKS[network].lovejoin?.mixCost ?? 0);
+  return `${mixes} ${mixes === 1 ? "mix" : "mixes"}, about ${(lovelace / 1_000_000).toFixed(1)} ₳`;
+}
+
+/** Lovejoin's own words on its review (its README and SECURITY.md): no copy may say otherwise. */
+export const LOVEJOIN_UNAUDITED =
+  "Lovejoin hasn't had a third-party audit: its makers' own review is the only one it has had. Use it knowing that.";
 
 /**
  * Lovejoin, for a private session's return: how deep each box fans out, and
- * how long each waits before it comes back (roadmap chunk 16).
+ * how long each waits before it comes back (roadmap chunk 16). Shown where
+ * Lovejoin is deployed (networks.ts), as the worker uses it.
  */
-function LovejoinSettings() {
+export function LovejoinSettings({ network }: { network: NetworkName }) {
   const { prefs, loaded, set } = usePreferences();
   const [error, setError] = useState<string>();
   const fail = (err: Error) => setError(err.message);
+  const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
   return (
     <section className="section" aria-labelledby="lovejoin-settings-title">
       <h2 id="lovejoin-settings-title">Lovejoin</h2>
       <p className="note">
         When a private session comes back with ADA to spare, that ADA goes through Lovejoin first, in boxes of 10 ₳ mixed with
         other people's, so what comes back isn't tied to the session. The session pays for the mixes.
+        {floor > 0 &&
+          ` The wallet mixes only once Lovejoin's pool holds ${floor} boxes that aren't yours; until then a return comes back directly, and says so.`}
       </p>
+      <Callout tone="warn" testId="lovejoin-unaudited">
+        {LOVEJOIN_UNAUDITED}
+      </Callout>
       <div className="field">
         <label htmlFor="lovejoin-depth">Mixing, for each box</label>
         <select
@@ -238,7 +257,7 @@ function LovejoinSettings() {
         >
           {LOVEJOIN_DEPTHS.map((d) => (
             <option key={d} value={d}>
-              {d} {d === 1 ? "wave" : "waves"} deep: {DEPTH_COST[d]} (1 in {3 ** d})
+              {d} {d === 1 ? "wave" : "waves"} deep: {depthCost(network, d)} (1 in {3 ** d})
             </option>
           ))}
         </select>

@@ -1,7 +1,23 @@
-// Everything network-specific lives here. Preprod is the default; mainnet is
-// a build flag (VITE_ENABLE_MAINNET=true). See docs/architecture.md#networks.
+// Everything network-specific lives here. A dev build is preprod only; a
+// mainnet build (VITE_ENABLE_MAINNET=true, the store's) has both, mainnet
+// first, and Settings switches between them. See docs/architecture.md#networks.
 
 export type NetworkName = "preprod" | "mainnet";
+
+/** Lovejoin, the mixer, where it's deployed (docs/plans/chunk-16-lovejoin.md). */
+export interface LovejoinConfig {
+  /** Lovejoin's `mix_box` script hash: where every box sits. */
+  mixBox: string;
+  /**
+   * The fewest real boxes that aren't the wallet's that the pool must hold
+   * before a chain draws from it: a box is hidden only among others, and a
+   * pool of a few hides little. Mainnet's is the owner's to tune; preprod
+   * takes any pool, for testing.
+   */
+  poolFloor: number;
+  /** What a 3-box mix costs on this network's scripts, in lovelace, as measured: for the settings' words, never for a build. */
+  mixCost: number;
+}
 
 export interface NetworkConfig {
   name: NetworkName;
@@ -16,6 +32,8 @@ export interface NetworkConfig {
    * warning at install): only the pages' connect-src lists it.
    */
   swaps: string;
+  /** Lovejoin, where it's deployed. */
+  lovejoin?: LovejoinConfig;
 }
 
 export const NETWORKS: Record<NetworkName, NetworkConfig> = {
@@ -25,6 +43,12 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
     koios: "https://preprod.koios.rest/api/v1",
     collateral: "https://www.giveme.my/preprod/collateral/",
     swaps: "https://aggr.monorepo-testnet-preprod.minswap.org/aggregator",
+    lovejoin: {
+      mixBox: "67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5",
+      poolFloor: 0,
+      // 0.877 ₳, measured on preprod (chunk 16).
+      mixCost: 877_000,
+    },
   },
   mainnet: {
     name: "mainnet",
@@ -33,17 +57,34 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
     collateral: "https://www.giveme.my/mainnet/collateral/",
     prices: "https://api.coingecko.com/api/v3",
     swaps: "https://agg-api.minswap.org/aggregator",
+    // Live since 2026-09-26 (_reference/Lovejoin/artifacts/mainnet/addresses.json).
+    lovejoin: {
+      mixBox: "c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad",
+      poolFloor: 30,
+      // 0.822–0.828 ₳, measured against mainnet's scripts (the launch review).
+      mixCost: 825_000,
+    },
   },
 };
 
-/** Networks a build can use: preprod-only unless mainnet is enabled. */
+/** Whether Lovejoin is deployed on `network`: the worker's gate and the UI's, one source. */
+export function lovejoinOn(network: NetworkName): boolean {
+  return NETWORKS[network].lovejoin !== undefined;
+}
+
+/** Networks a build can use: preprod only unless mainnet is enabled, and then mainnet first. */
 export function enabledNetworks(mainnetEnabled: boolean): NetworkName[] {
   return mainnetEnabled ? ["mainnet", "preprod"] : ["preprod"];
 }
 
 /** The network a fresh install starts on. */
 export function defaultNetwork(mainnetEnabled: boolean): NetworkName {
-  return mainnetEnabled ? "mainnet" : "preprod";
+  return enabledNetworks(mainnetEnabled)[0]!;
+}
+
+/** Whether `value` names a network. */
+export function isNetworkName(value: unknown): value is NetworkName {
+  return value === "preprod" || value === "mainnet";
 }
 
 /** Origins the extension may talk to, e.g. `https://preprod.koios.rest`. */

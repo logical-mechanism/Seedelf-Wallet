@@ -17,11 +17,9 @@ import {
   CHAIN_RESEND_MS,
   CHAIN_WINDOW,
   chainRetryMs,
-  LOVEJOIN_MIX_BOX,
   LovejoinService,
   MAX_CHAIN_MIXES,
   mixesPerBox,
-  POOL_FLOOR,
   pumpChain,
   secureRandom,
   WITHDRAW_SPREAD_MS,
@@ -29,6 +27,7 @@ import {
 } from "../src/background/lovejoin";
 import { SESSION_PENDING } from "../src/background/pending";
 import { Minswap } from "../src/background/minswap";
+import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, loadTestWasm, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
@@ -102,6 +101,27 @@ async function withSession(lovelace: string) {
   });
   return { t, sessions };
 }
+
+describe("where Lovejoin is", () => {
+  it("is on both networks, from one source the worker and the UI read", () => {
+    expect(lovejoinOn("preprod")).toBe(true);
+    expect(lovejoinOn("mainnet")).toBe(true);
+    const t = testBalances();
+    expect(t.lovejoin.available("preprod")).toBe(true);
+    expect(t.lovejoin.available("mainnet")).toBe(true);
+  });
+
+  it("sits at each network's own mix_box, with mainnet's pool floor at 30 and preprod's at none", () => {
+    expect(NETWORKS.preprod.lovejoin).toMatchObject({ mixBox: "67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5", poolFloor: 0 });
+    expect(NETWORKS.mainnet.lovejoin).toMatchObject({ mixBox: "c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad", poolFloor: 30 });
+  });
+
+  it("builds a mainnet funding as it does preprod's", () => {
+    const wasm = loadTestWasm();
+    const ask = (network: string) => JSON.parse(wasm.lovejoinFunding(JSON.stringify({ network, boxes: 1, depth: 2, again: false })));
+    expect(ask("mainnet")).toEqual(ask("preprod"));
+  });
+});
 
 describe("a box's delay", () => {
   it("is drawn from the secure random source, uniformly in [0, 1)", () => {
@@ -233,7 +253,7 @@ describe("a session's return through Lovejoin", CHAINS, () => {
     // 40 ₳ spare pays for two boxes at depth 2: four mixes each.
     expect(review.lovejoin).toMatchObject({ boxes: 2, depth: 2, mixes: 8, txs: 10, delay: "1-6" });
     // One pool read for the chain.
-    expect(t.koios.calls.filter((c) => c.path === "credential_utxos" && c.body._payment_credentials[0] === LOVEJOIN_MIX_BOX.preprod)).toHaveLength(1);
+    expect(t.koios.calls.filter((c) => c.path === "credential_utxos" && c.body._payment_credentials[0] === NETWORKS.preprod.lovejoin!.mixBox)).toHaveLength(1);
     // And one evaluate: the network measures the first mix, given the unsent deposit's three outputs.
     const checks = t.koios.calls.filter((c) => c.path === "ogmios");
     expect(checks).toHaveLength(1);
@@ -415,7 +435,7 @@ describe("a session's return through Lovejoin", CHAINS, () => {
     const plain = await small.sessions.backBuild("preprod", 0);
     expect(plain.lovejoin).toBeUndefined();
     // No pool read: the plan said no box before anything was fetched.
-    expect(small.t.koios.calls.some((c) => c.path === "credential_utxos" && c.body._payment_credentials[0] === LOVEJOIN_MIX_BOX.preprod)).toBe(false);
+    expect(small.t.koios.calls.some((c) => c.path === "credential_utxos" && c.body._payment_credentials[0] === NETWORKS.preprod.lovejoin!.mixBox)).toBe(false);
     void t;
   });
 });
@@ -550,8 +570,9 @@ describe("the pool the chains draw from", CHAINS, () => {
 
   it("draws from a pool only once it holds the floor's worth of others' boxes, and says so", async () => {
     const { sessions } = await withSession("40000000");
-    const floor = POOL_FLOOR.preprod;
-    POOL_FLOOR.preprod = 25;
+    const preprod = NETWORKS.preprod.lovejoin!;
+    const floor = preprod.poolFloor;
+    preprod.poolFloor = 25;
     try {
       const review = await sessions.backBuild("preprod", 0);
       expect(review.lovejoin).toBeUndefined();
@@ -560,9 +581,21 @@ describe("the pool the chains draw from", CHAINS, () => {
       );
       await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("holds 20 boxes that aren't yours");
     } finally {
-      POOL_FLOOR.preprod = floor;
+      preprod.poolFloor = floor;
     }
-    expect(POOL_FLOOR.mainnet).toBe(30);
+  });
+
+  it("on mainnet, reads mainnet's mix_box and holds its pool to a floor of 30", async () => {
+    const { t } = await withSession("40000000");
+    // The recorded pool's 20 boxes, as if they sat at mainnet's mix_box.
+    const mainnetBox = NETWORKS.mainnet.lovejoin!.mixBox;
+    t.koios.addedToAccounts.push(...POOL.map((u) => ({ ...u, tx_hash: `f${u.tx_hash.slice(1)}`, payment_cred: mainnetBox })));
+    await expect(t.lovejoin.fits("mainnet", 1)).rejects.toThrow(
+      "Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 30, so yours hide among enough others. Try again later.",
+    );
+    expect(t.koios.calls.filter((c) => c.path === "credential_utxos").map((c) => c.body._payment_credentials[0])).toContain(mainnetBox);
+    // Preprod's pool of the same size has no floor.
+    await expect(t.lovejoin.fits("preprod", 1)).resolves.toBeUndefined();
   });
 
   it("makes one chain at most MAX_CHAIN_MIXES long, a return's too", async () => {

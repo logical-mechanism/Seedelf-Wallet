@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
+import { lovejoinOn } from "../../networks";
 import type { Balances, PendingTx, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
@@ -167,7 +168,7 @@ export function Dapps({
       )}
       {claimable.length > 0 && <ClaimCard sessions={claimable} onOpen={() => setClaiming(true)} />}
       <div className="dapp-grid" data-testid="dapps">
-        {DAPPS.filter((d) => d.id !== "lovejoin" || network === "preprod").map((d) => (
+        {DAPPS.filter((d) => d.id !== "lovejoin" || lovejoinOn(network)).map((d) => (
           <button key={d.id} type="button" className="dapp-tile" onClick={() => setOpen(d.id)}>
             <span className="dapp-tile__logo">{d.icon}</span>
             <span className="dapp-tile__name">{d.name}</span>
