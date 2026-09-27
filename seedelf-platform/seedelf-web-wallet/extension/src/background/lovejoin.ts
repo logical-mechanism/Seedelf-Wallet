@@ -55,7 +55,17 @@ import { SESSION_PENDING } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import type { ScriptSpendDeps } from "./script-spend";
-import { outpoint, rememberSpent, spentSet, unspent } from "./spent";
+import {
+  outpoint,
+  rememberSpent,
+  reservationOf,
+  reservations,
+  reservedSet,
+  SESSION_RESERVED_PREFIX,
+  spentSet,
+  unspent,
+  type Reservation,
+} from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 
 /** chrome.storage.session: a mix from the public account, built and signed, waiting for Send. */
@@ -360,7 +370,15 @@ interface Split {
   owned: OutRef[];
   /** The real boxes that aren't the wallet's: what a mix draws from. */
   others: OutRef[];
+  /** What the wallet's other chains, built or being sent, will spend: never drawn again (spent.ts). */
+  reserved: Set<string>;
 }
+
+/** `boxes` less those another chain of the wallet's will spend. */
+const free = (boxes: OutRef[], reserved: Set<string>) => boxes.filter((b) => !reserved.has(ref(b)));
+
+/** What a chain's reservation (spent.ts) and record are kept under: the session's, or the public account's. */
+export const chainOwner = (index?: number) => (index === undefined ? "public" : `session.${index}`);
 
 /** A whole number of boxes, one to MAX_MIX_BOXES, or why not. */
 export function checkBoxes(boxes: number): void {
@@ -372,6 +390,8 @@ export function checkBoxes(boxes: number): void {
 export class LovejoinService {
   /** A public mix is being sent right now: the Send, the page and the alarm never send it twice at once. */
   private pumping = false;
+  /** One task at a time on each record (inTurn). */
+  private turns = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: LovejoinDeps) {}
 
@@ -423,9 +443,9 @@ export class LovejoinService {
    * The wallet's own boxes don't count: a mix never takes two of them.
    */
   async fits(network: NetworkName, boxes: number): Promise<void> {
-    const { others } = await this.split(network);
+    const { others, reserved } = await this.split(network);
     this.floor(network, others.length);
-    await this.enough(others.length, boxes);
+    await this.enough(free(others, reserved).length, boxes);
   }
 
   /**
@@ -436,12 +456,12 @@ export class LovejoinService {
   async againBoxes(network: NetworkName): Promise<{ boxes: number; owned: number }> {
     const { depth } = await this.settings();
     const split = await this.split(network);
-    const { owned } = split;
+    const { owned, reserved } = split;
     if (!owned.length) throw new Error("None of your boxes is in Lovejoin's pool, so there's nothing to mix again.");
-    const others = split.others.length;
-    this.floor(network, others);
+    this.floor(network, split.others.length);
+    const others = free(split.others, reserved).length;
     const perBox = mixesPerBox(depth);
-    const boxes = Math.min(owned.length, Math.floor(others / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
+    const boxes = Math.min(free(owned, reserved).length, Math.floor(others / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
     // None fits: say what the pool has.
     if (boxes < 1) await this.enough(others, 1);
     return { boxes, owned: owned.length };
@@ -510,10 +530,14 @@ export class LovejoinService {
     let count = Math.min(plan.boxes, boxes ?? plan.boxes);
     if (count < 1) return undefined;
     const { depth } = await this.settings();
-    const split = await this.split(network);
-    const { owned, others } = split;
-    const short = this.floorShort(network, others.length);
+    const owner = chainOwner(index);
+    // Never what another chain of the wallet's will spend; this session's own
+    // built before is being built again.
+    const split = await this.split(network, owner);
+    const short = this.floorShort(network, split.others.length);
     if (short) throw new LovejoinSkipped(short);
+    const owned = free(split.owned, split.reserved);
+    const others = free(split.others, split.reserved);
     if (again) {
       if (!owned.length) throw new LovejoinSkipped("none of your boxes is in Lovejoin's pool anymore");
       count = Math.min(count, owned.length);
@@ -544,7 +568,49 @@ export class LovejoinService {
     );
     if (chain.skipped) throw new LovejoinSkipped(chain.skipped);
     await this.crossCheck(network, chain);
+    // Kept for Send (or sent at once): no other chain draws its boxes meanwhile.
+    await this.reserve(network, owner, chain.txs, this.deps.now() + BUILT_TTL_MS);
     return chain;
+  }
+
+  /**
+   * Reserves what chain `owner`'s transactions spend and put up as
+   * collateral (spent.ts), in place of its reservation before: kept for Send
+   * until `until`, or, without it, being sent.
+   */
+  reserve(network: NetworkName, owner: string, txs: LovejoinChain["txs"], until?: number): Promise<void> {
+    return this.reserving(network, (kept) => {
+      kept[owner] = reservationOf(txs, until);
+    });
+  }
+
+  /** Chain `owner` is all sent, stopped, or won't be sent: nothing is reserved for it. */
+  release(network: NetworkName, owner: string): Promise<void> {
+    return this.reserving(network, (kept) => {
+      delete kept[owner];
+    });
+  }
+
+  /** Changes the reservations, one change at a time, dropping those kept for Send past their time. */
+  private reserving(network: NetworkName, change: (kept: Record<string, Reservation>) => void): Promise<void> {
+    const { wallet, session, now } = this.deps;
+    return this.inTurn(`reserved.${network}`, () =>
+      wallet.withKeys(async () => {
+        const kept = await reservations(session, network, now());
+        change(kept);
+        await session.set(SESSION_RESERVED_PREFIX + network, kept);
+      }),
+    );
+  }
+
+  /** Runs `task` after every other task of `name`'s, so read-change-writes of one record never overlap. */
+  private inTurn<T>(name: string, task: () => Promise<T>): Promise<T> {
+    const run = (this.turns.get(name) ?? Promise.resolve()).then(task, task);
+    this.turns.set(
+      name,
+      run.catch(() => undefined),
+    );
+    return run;
   }
 
   /**
@@ -585,7 +651,7 @@ export class LovejoinService {
     }
     if (!utxos.length) throw nothingInAccount(held, "Your public account is empty, so there's nothing to mix.");
     const { depth, delay } = await this.settings();
-    const split = await this.split(network);
+    const split = await this.split(network, chainOwner());
     this.floor(network, split.others.length);
     const request = { network, params, utxos, collateral, pool: this.real(split), depth, boxes };
     const chain = await wallet.withKeys(
@@ -610,6 +676,7 @@ export class LovejoinService {
       change: chain.returned,
     };
     await wallet.withKeys(() => session.set(SESSION_LOVEJOIN_PUBLIC, { ...summary, chain: chain.txs, builtAt: now() } satisfies KeptPublic));
+    await this.reserve(network, chainOwner(), chain.txs, now() + BUILT_TTL_MS);
     return summary;
   }
 
@@ -631,6 +698,8 @@ export class LovejoinService {
       await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
       await session.remove(SESSION_LOVEJOIN_PUBLIC);
     });
+    // Being sent: its change to come and its collateral are the chain's too.
+    await this.reserve(network, chainOwner(), built.chain);
     await this.deps.alarm?.start();
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
     await this.pumpPublic(network, 0);
@@ -696,11 +765,15 @@ export class LovejoinService {
         },
         budgetMs,
       );
-      if (done) await wallet.withKeys(() => session.remove(SESSION_LOVEJOIN_SENDING + network));
+      if (done) {
+        await wallet.withKeys(() => session.remove(SESSION_LOVEJOIN_SENDING + network));
+        await this.release(network, chainOwner());
+      }
       return !done;
     } catch (e) {
       sending.stopped = e instanceof Error ? e.message : String(e);
       await save().catch(() => undefined);
+      await this.release(network, chainOwner()).catch(() => undefined);
       throw e;
     } finally {
       this.pumping = false;
@@ -832,17 +905,24 @@ export class LovejoinService {
     return pending;
   }
 
-  /** The pool (a read), the wallet's boxes in it, and the real boxes that aren't. */
-  private async split(network: NetworkName): Promise<Split> {
-    const pool = await this.pool(network);
+  /**
+   * The pool (a read), the wallet's boxes in it, the real boxes that aren't,
+   * and what the wallet's chains will spend, `except` one chain's own.
+   */
+  private async split(network: NetworkName, except?: string): Promise<Split> {
+    const { wallet, session, now } = this.deps;
+    const [pool, { inputs }] = await Promise.all([
+      this.pool(network),
+      wallet.withKeys(() => reservedSet(session, network, { except, now: now() })),
+    ]);
     const { boxes, otherBoxes } = await this.ownership(network, pool);
-    return { pool, owned: boxes, others: otherBoxes };
+    return { pool, owned: boxes, others: otherBoxes, reserved: inputs };
   }
 
-  /** The pool's real boxes alone, the wallet's and others': what a chain is built from. */
-  private real({ pool, owned, others }: Split): KoiosUtxo[] {
+  /** The pool's real boxes alone, the wallet's and others', that no other chain will spend: what a chain is built from. */
+  private real({ pool, owned, others, reserved }: Split): KoiosUtxo[] {
     const real = new Set([...owned, ...others].map(ref));
-    return pool.filter((u) => real.has(outpoint(u)));
+    return pool.filter((u) => real.has(outpoint(u)) && !reserved.has(outpoint(u)));
   }
 
   private async owned(network: NetworkName, pool: KoiosUtxo[]): Promise<OutRef[]> {

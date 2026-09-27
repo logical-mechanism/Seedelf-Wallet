@@ -66,6 +66,7 @@ import { SpentInputError, type KoiosUtxo } from "./koios";
 import type { Estimate, Minswap, PendingOrder } from "./minswap";
 import {
   CHAIN_PUMP_MS,
+  chainOwner,
   chainRetryMs,
   checkBoxes,
   LovejoinSkipped,
@@ -77,7 +78,7 @@ import {
 import type { PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
 import { keep, measureLocally, nothingToSpend, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
-import { outpoint, readFresh, rememberSpent, spentSet, unspent } from "./spent";
+import { outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 
 /** chrome.storage.session: a session's funding payment, built and waiting for Send. */
@@ -646,9 +647,19 @@ export class SessionService {
     return { address, reward, keyHash };
   }
 
-  /** What a session's account holds now, fresh from Koios, less what this wallet has spent. */
+  /**
+   * What a session's account holds now, fresh from Koios, less what this
+   * wallet has spent, and less what a return's chain being sent will spend
+   * (its change to come, its collateral): a site connected to it never
+   * spends those from under the chain.
+   */
   async accountUtxos(network: NetworkName, keyHash: string): Promise<KoiosUtxo[]> {
-    return this.utxosOf(network, keyHash);
+    const { wallet, session } = this.deps;
+    const [rows, reserved] = await Promise.all([
+      this.utxosOf(network, keyHash),
+      wallet.withKeys(() => reservedSet(session, network, { sending: true })),
+    ]);
+    return rows.filter((u) => !reserved.inputs.has(outpoint(u)) && !reserved.collateral.has(outpoint(u)));
   }
 
   /** A funding payment into `address` from the private balance (Make public's builder), measured and ready for Send. */
@@ -1249,6 +1260,8 @@ export class SessionService {
         };
       }
     }
+    // No chain this time: a chain built for it before won't be sent, so nothing stays reserved for it.
+    await lovejoin?.release(network, chainOwner(index));
     const result = await wallet.withKeys(
       (keys) =>
         JSON.parse(
@@ -1310,6 +1323,8 @@ export class SessionService {
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
     });
     await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
+    // Being sent: its change to come and its collateral are the chain's too.
+    await this.deps.lovejoin?.reserve(network, chainOwner(built.index), txs!);
     await this.deps.alarm?.start();
     await this.pump(network, built.index, budgetMs);
     return { kind: "session-back", network, txHash: built.txHash, submittedAt: this.deps.now(), confirmations: null };
@@ -1355,10 +1370,12 @@ export class SessionService {
       );
     } catch (e) {
       await this.dropPending(network, index);
+      await this.deps.lovejoin?.release(network, chainOwner(index)).catch(() => undefined);
       throw e;
     }
     if (!done) return;
     await this.dropPending(network, index);
+    await this.deps.lovejoin?.release(network, chainOwner(index));
     const last: PendingTx = {
       kind: "session-back",
       network,

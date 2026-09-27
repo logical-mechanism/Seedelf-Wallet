@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { readAccount, readAccountUtxos } from "../src/background/account";
+import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { KoiosError, SpentInputError, type KoiosUtxo } from "../src/background/koios";
 import {
@@ -505,6 +507,90 @@ describe("the pool the chains draw from", CHAINS, () => {
     });
     await lovejoin.chain("preprod", 0, [atSession("c1".repeat(32), 0, "40000000")], atSession("c2".repeat(32), 1, "5000000"), {});
     expect(asked).toBe(MAX_CHAIN_MIXES / mixesPerBox(3));
+  });
+});
+
+describe("chains the wallet sends at once", CHAINS, () => {
+  const hexBytes = (hex: string) => Uint8Array.from(Buffer.from(hex, "hex"));
+  const poolRefs = new Set(POOL.map((u) => `${u.tx_hash}#${u.tx_index}`));
+  /** The pool boxes a kept return's chain spends. */
+  const picks = (chain: Array<{ txCbor: string }>) =>
+    new Set(chain.flatMap((t) => txInputs(hexBytes(t.txCbor))).filter((o) => poolRefs.has(o)));
+
+  it("never draws the same pool box twice: Bring everything back reserves each chain's before building the next", async () => {
+    const { t, sessions } = await withSession("40000000");
+    // A second site session, as much in it.
+    const wasm = loadTestWasm();
+    const second = await t.wallet.withKeys((keys) => ({ address: keys.oneTime.address(wasm.Network.Preprod, 1), keyHash: keys.oneTime.keyHash(1) }));
+    const book = (await t.store.get<{ next: number; sessions: Array<Record<string, unknown>> }>("sessions.preprod"))!;
+    await t.store.set("sessions.preprod", { next: 2, sessions: [...book.sessions, { ...book.sessions[0]!, index: 1 }] });
+    const at = (tx: string, i: number, value: string) => ({ ...atSession(tx, i, value), address: second.address, payment_cred: second.keyHash });
+    t.koios.addedToAccounts.push(at("c5".repeat(32), 0, "40000000"), at("c6".repeat(32), 1, "5000000"));
+
+    // Twenty boxes: the first return's two boxes take 16, and leave the second only 4.
+    const { returns } = await sessions.claimBuild("preprod", [0, 1]);
+    expect(returns[0]!.lovejoin).toMatchObject({ boxes: 2 });
+    expect(returns[1]!.lovejoin).toBeUndefined();
+    expect(returns[1]!.lovejoinSkipped).toBe("Lovejoin's pool has 4 boxes to mix with, and this needs 8");
+  });
+
+  it("leaves a built chain's boxes out of the next chain's draw until it's sent or goes stale", async () => {
+    const { t, sessions } = await withSession("40000000");
+    await sessions.backBuild("preprod", 0);
+    const kept = (await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txCbor: string }> }>("seedelf.session.back")))!;
+    expect(picks(kept.chain).size).toBe(16);
+    // A box one wave deep takes two others: of the twenty, the four the kept return doesn't spend mix two.
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    await expect(t.lovejoin.fits("preprod", 2)).resolves.toBeUndefined();
+    await expect(t.lovejoin.fits("preprod", 3)).rejects.toThrow("pool has 4 boxes to mix with");
+    // Not sent within ten minutes, it can't be anymore: its boxes are free again.
+    t.clock.now += 10 * 60_000 + 1;
+    await expect(t.lovejoin.fits("preprod", 3)).resolves.toBeUndefined();
+  });
+
+  it("keeps a public mix's change to come, and its collateral, from other payments and sites until it's all sent", async () => {
+    const t = testBalances();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    t.koios.evaluation = AGREES;
+    t.koios.addedToAccounts.push(...POOL);
+    const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
+    const keyHash = await t.wallet.withKeys((keys) => keys.cardano.paymentKeyHash(0, 0));
+    const at = (tx: string, i: number, value: string) => ({ ...first!, tx_hash: tx, tx_index: i, value, payment_cred: keyHash, asset_list: [] });
+    t.koios.addedToAccounts.push(at("e5".repeat(32), 0, "5000000"), at("e6".repeat(32), 0, "30000000"));
+    const summary = await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicSubmit("preprod", summary.txHash);
+    // Four went; the fifth pays from the fourth's change at the account, which a block has taken.
+    const sending = (await t.wallet.withKeys(() => t.session.get<{ txs: Array<{ txHash: string; txCbor: string }> }>("seedelf.lovejoin.sending.preprod")))!;
+    const change = txInputs(hexBytes(sending.txs[4]!.txCbor)).find((o) => o.startsWith(sending.txs[3]!.txHash))!;
+    const [hash, index] = change.split("#");
+    t.koios.addedToAccounts.push(at(hash!, Number(index), "12000000"), at("e7".repeat(32), 0, "12000000"));
+    const listed = (await readAccountUtxos(t.deps, "preprod", new Set())).utxos.map((p) => `${p.utxo.tx_hash}#${p.utxo.tx_index}`);
+    expect(listed).toContain(`${"e7".repeat(32)}#0`);
+    expect(listed).not.toContain(change);
+    const payable = (await readAccount(t.deps, "preprod")).utxos.map((p) => `${p.utxo.tx_hash}#${p.utxo.tx_index}`);
+    expect(payable).not.toContain(change);
+    // Its collateral isn't paid with either, but still backs the account's scripts.
+    const paying = await readAccount(t.deps, "preprod");
+    expect(paying.collateral?.utxo.tx_hash).toBe("e5".repeat(32));
+    expect(payable).not.toContain(`${"e5".repeat(32)}#0`);
+    // Once it's all sent, nothing is kept back.
+    t.koios.confirmations = 1;
+    await t.lovejoin.pumpPublic("preprod");
+    const after = (await readAccountUtxos(t.deps, "preprod", new Set())).utxos.map((p) => `${p.utxo.tx_hash}#${p.utxo.tx_index}`);
+    expect(after).toContain(change);
+  });
+
+  it("keeps a session's return chain's change to come from the site connected to it", async () => {
+    const { t, sessions } = await withSession("40000000");
+    const review = await sessions.backBuild("preprod", 0);
+    await sessions.backSubmit("preprod", review.txHash);
+    const pending = (await t.wallet.withKeys(() => t.session.get<{ txs: Array<{ txHash: string; txCbor: string }> }>("seedelf.session.chain.preprod.0")))!;
+    const change = txInputs(hexBytes(pending.txs[4]!.txCbor)).find((o) => o.startsWith(pending.txs[3]!.txHash))!;
+    const [hash, index] = change.split("#");
+    t.koios.addedToAccounts.push(atSession(hash!, Number(index), "20000000"), atSession("c7".repeat(32), 0, "3000000"));
+    const rows = (await sessions.accountUtxos("preprod", sessionSwap.keyHash)).map((u) => `${u.tx_hash}#${u.tx_index}`);
+    expect(rows).toContain(`${"c7".repeat(32)}#0`);
+    expect(rows).not.toContain(change);
   });
 });
 

@@ -15,7 +15,8 @@
 // Lovejoin chain (four inputs a mix, up to 130 mixes) can't push out what
 // another feature spent a minute before it.
 
-import { txInputs } from "./cbor";
+import type { NetworkName } from "../networks";
+import { bodyOutpoints, txInputs } from "./cbor";
 import type { KoiosUtxo } from "./koios";
 import type { Area } from "./storage";
 
@@ -80,4 +81,60 @@ export async function readFresh<R>(
 /** `utxos` less the ones this wallet has already spent. */
 export function unspent(utxos: KoiosUtxo[], spent: ReadonlySet<string>): KoiosUtxo[] {
   return spent.size ? utxos.filter((u) => !spent.has(outpoint(u))) : utxos;
+}
+
+// What the wallet's Lovejoin chains will spend. A chain is signed whole
+// before any of it is sent (lovejoin.ts), and sent over many blocks: until
+// then its pool boxes, its change to come and its collateral are still
+// listed as unspent. So each chain reserves them, and nothing else takes
+// them meanwhile: another chain's draw from the pool, and, while it's being
+// sent, a payment from its account or a site connected to it. Reservations
+// are kept apart from what's spent: a reading that lists one isn't behind.
+
+/** chrome.storage.session: each chain's reservation, per network: `seedelf.reserved.<network>`, by chain. */
+export const SESSION_RESERVED_PREFIX = "seedelf.reserved.";
+
+/** What one chain's transactions spend and put up as collateral (`txhash#index`). */
+export interface Reservation {
+  inputs: string[];
+  collateral: string[];
+  /** Built and kept for Send until then (ms): its pool boxes alone count. None while it's being sent. */
+  until?: number;
+}
+
+/** A chain's reservation, from its transactions' CBOR (hex). */
+export function reservationOf(txs: Array<{ txCbor: string }>, until?: number): Reservation {
+  const inputs = new Set<string>();
+  const collateral = new Set<string>();
+  for (const { txCbor } of txs) {
+    const bytes = Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
+    for (const o of txInputs(bytes)) inputs.add(o);
+    for (const o of bodyOutpoints(bytes, 13) ?? []) collateral.add(o);
+  }
+  return { inputs: [...inputs], collateral: [...collateral], ...(until !== undefined ? { until } : {}) };
+}
+
+/** Every chain's reservation on `network`, less those kept for Send past their time. Call it while unlocked. */
+export async function reservations(session: Area, network: NetworkName, now: number): Promise<Record<string, Reservation>> {
+  const kept = (await session.get<Record<string, Reservation>>(SESSION_RESERVED_PREFIX + network)) ?? {};
+  return Object.fromEntries(Object.entries(kept).filter(([, r]) => r.until === undefined || r.until > now));
+}
+
+/**
+ * What the chains on `network` will spend: every chain's (`except` one, the
+ * chain being built again), or only those being sent (`sending`), with
+ * their collateral. Call it while unlocked.
+ */
+export async function reservedSet(
+  session: Area,
+  network: NetworkName,
+  { sending = false, except, now = Date.now() }: { sending?: boolean; except?: string; now?: number } = {},
+): Promise<{ inputs: Set<string>; collateral: Set<string> }> {
+  const kept = Object.entries(await reservations(session, network, now)).filter(
+    ([chain, r]) => chain !== except && (!sending || r.until === undefined),
+  );
+  return {
+    inputs: new Set(kept.flatMap(([, r]) => r.inputs)),
+    collateral: new Set(kept.flatMap(([, r]) => r.collateral)),
+  };
 }
