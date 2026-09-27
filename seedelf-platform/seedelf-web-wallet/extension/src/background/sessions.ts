@@ -164,6 +164,11 @@ interface SessionRecord {
   swap?: SessionView["swap"];
   /** Set on sessions started since swaps run themselves. */
   auto?: AutoRecord;
+  /**
+   * Its swap's orders, from the transaction that placed them (`txhash#index`
+   * of its outputs to the DEXes' contracts): a fill or a refund spends them.
+   */
+  orders?: string[];
   /** A site's private session (private CIP-30), rather than a swap. */
   site?: { origin: string };
   /**
@@ -1162,17 +1167,33 @@ export class SessionService {
       if (auto.stopping) await this.cancel(network, s, address, rows, orders);
       return;
     }
-    // A fill or a refund comes in a transaction the session didn't make; a cancel's refund in its own.
-    const own = new Set(s.txs.map((t) => t.txHash));
-    const arrived = rows.some((r) => !own.has(r.tx_hash));
-    // Minswap no longer lists the order, and nothing's here yet: one of them is behind.
-    if (!arrived && !kinds.has("cancel")) return;
-    if (arrived && !kinds.has("cancel") && !auto.filled) {
-      await this.update(network, s.index, (r) => {
-        r.auto!.filled = now();
-      });
+    // Minswap no longer lists the order. A fill or a refund spends it, and comes
+    // in a transaction the session didn't make; a cancel's refund in its own.
+    if (!kinds.has("cancel")) {
+      const own = new Set(s.txs.map((t) => t.txHash));
+      // Nothing's here yet: one of them is behind.
+      if (!rows.some((r) => !own.has(r.tx_hash))) return;
+      // Anyone can pay the account, and Minswap may not list a new order yet: what
+      // arrived is the fill only once the order itself is spent.
+      if (!(await this.ordersSpent(network, s))) return;
+      if (!auto.filled) {
+        await this.update(network, s.index, (r) => {
+          r.auto!.filled = now();
+        });
+      }
     }
     await this.bringBack(network, s.index, rows);
+  }
+
+  /**
+   * Whether every order session `s` placed is spent, by its fill or its
+   * refund (Koios `utxo_info`, which lists spent UTxOs too). A session from
+   * before kept no orders: whatever arrives counts, as it did.
+   */
+  private async ordersSpent(network: NetworkName, s: SessionRecord): Promise<boolean> {
+    if (!s.orders?.length) return true;
+    const rows = (await this.deps.koios(network).utxoInfo(s.orders)) as Array<KoiosUtxo & { is_spent?: boolean }>;
+    return s.orders.every((o) => rows.some((r) => outpoint(r) === o && r.is_spent));
   }
 
   /** Places the order: a fresh quote, Minswap's swap for the account, the checks, and the key's signature. */
@@ -1303,6 +1324,7 @@ export class SessionService {
       if (built.kind === "swap" && built.quote && s.swap) {
         s.swap = { ...s.swap, amountOut: built.quote.amountOut, minAmountOut: built.quote.minAmountOut };
       }
+      if (built.kind === "swap" && built.orders) s.orders = built.orders;
     });
   }
 

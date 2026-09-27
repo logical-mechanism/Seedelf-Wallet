@@ -578,6 +578,16 @@ describe("a swap that runs itself", () => {
     t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
   }
 
+  /** The swap lands: its order waits at the DEX's contract (output 0), and its change is at the account. */
+  function ordered(t: T) {
+    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
+    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"), {
+      ...atSession(SWAP_TX, 0, "14000000"),
+      address: bech32("addr_test", bytes(ORDER_ADDRESS)),
+      payment_cred: "a6".repeat(28),
+    });
+  }
+
   it("brings back what's left when its return through Lovejoin stopped partway, whatever Minswap still lists", async () => {
     // Found on preprod: a filled swap's return deposited its boxes and ran some
     // mixes, then a submit failed. What's at the account came from the chain
@@ -654,8 +664,7 @@ describe("a swap that runs itself", () => {
     expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "session-out" });
 
     // The order lands and waits for a batcher.
-    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
-    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"));
+    ordered(t);
     t.minswap.orders = [ORDER];
     t.clock.now += 15_000;
     view = await sessions.advance("preprod", 0);
@@ -669,7 +678,8 @@ describe("a swap that runs itself", () => {
     expect(view.auto).toMatchObject({ step: "filling", filled: false });
     expect(t.koios.submitted).toHaveLength(2);
 
-    // Filled: the proceeds arrive, and everything goes back into the private balance.
+    // Filled: the batcher spends the order and pays the proceeds, and everything goes back into the private balance.
+    t.koios.spent.add(`${SWAP_TX}#0`);
     t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
     t.clock.now += 15_000;
     view = await sessions.advance("preprod", 0);
@@ -686,6 +696,31 @@ describe("a swap that runs itself", () => {
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
     await sessions.runAll("preprod");
     expect(runner.on).toBe(false);
+  });
+
+  it("takes nothing a stranger pays the account for the fill while its order is still at the DEX's contract", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    await sessions.advance("preprod", 0);
+    ordered(t);
+    // Minswap hasn't listed the new order yet, and someone sends the account 1 ₳.
+    t.koios.addedToAccounts.push(atSession("dd".repeat(32), 0, "1000000"));
+    t.clock.now += 15_000;
+    let view = await sessions.advance("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "filling", filled: false });
+    expect(t.koios.submitted).toHaveLength(2);
+    // Asked about the order itself: the swap's output 0, where the batcher finds it.
+    expect(t.koios.calls.at(-1)).toMatchObject({ path: "utxo_info", body: { _utxo_refs: [`${SWAP_TX}#0`] } });
+
+    // Filled: the order is spent, and its proceeds come back with the rest.
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
+    expect(view.auto).toMatchObject({ step: "returning", filled: true });
+    expect(t.koios.submitted).toHaveLength(3);
   });
 
   it("pauses when the price moved past what was approved, and orders at least that when it's back within it", async () => {
@@ -809,12 +844,7 @@ describe("a swap that runs itself", () => {
       funded(t);
       await sessions.advance("preprod", 0);
       // The order waits at the DEX's contract; Stop asks Minswap to cancel it.
-      t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
-      t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"), {
-        ...atSession(SWAP_TX, 0, "14000000"),
-        address: bech32("addr_test", bytes(ORDER_ADDRESS)),
-        payment_cred: "a6".repeat(28),
-      });
+      ordered(t);
       t.minswap.orders = [{ ...ORDER, tx_in: `${SWAP_TX}#0` }];
       t.minswap.cancelCbor = cancelCbor;
       const view = await sessions.stop("preprod", 0);
@@ -962,8 +992,7 @@ describe("a swap that runs itself", () => {
     await started(sessions);
     funded(t);
     await sessions.advance("preprod", 0);
-    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
-    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"));
+    ordered(t);
     t.minswap.orders = [ORDER];
 
     // Ten minutes on, still not filled: the runner keeps waiting. (Past the 15 minutes auto-lock allows, it would wait for the unlock.)

@@ -268,7 +268,9 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
           ...Object.values(koiosPreprod.accounts).flatMap((a) => a.account_utxos),
           ...fake.addedToAccounts,
         ];
-        rows = every.filter((u) => refs.includes(`${u.tx_hash}#${u.tx_index}`));
+        rows = every
+          .filter((u) => refs.includes(`${u.tx_hash}#${u.tx_index}`))
+          .map((u) => ({ ...u, is_spent: fake.spent.has(`${u.tx_hash}#${u.tx_index}`) }));
       } else if (path === "account_addresses") {
         const asked: string[] = body._stake_addresses;
         rows = [
