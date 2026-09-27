@@ -2115,6 +2115,11 @@ fn select_script_inputs<T>(
     Err(last_error.unwrap_or_else(|| SEEDELF_SHORT.into()))
 }
 
+/// How many UTxOs holding tokens [`apart`] tries alone. Each is a question
+/// of its own (its change must carry its tokens), and a wallet can hold
+/// hundreds; past these, the later steps still find what pays.
+const MAX_TOKEN_SINGLES: usize = 12;
+
 /// One choice [`apart`] hands to `attempt`.
 enum Tried<T> {
     Built(T),
@@ -2177,10 +2182,17 @@ fn apart<T>(
     let mut singles: Vec<&UtxoResponse> = rest.iter().filter(|u| joins_base(u)).collect();
     singles.sort_by_key(|u| (purpose.rank(&class(u)), lovelace_of(u)));
     let mut short_at: Option<u64> = None;
+    let mut token_tries = 0;
     for u in singles {
         let ada_only = !holds_tokens(u);
         if ada_only && short_at.is_some_and(|at| lovelace_of(u) <= at) {
             continue;
+        }
+        if !ada_only {
+            if token_tries == MAX_TOKEN_SINGLES {
+                continue;
+            }
+            token_tries += 1;
         }
         match try_with(&[u]) {
             Tried::Built(built) => return Ok(built),
