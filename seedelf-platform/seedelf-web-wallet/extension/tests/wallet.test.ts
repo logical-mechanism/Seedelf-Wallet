@@ -1,17 +1,21 @@
 // The wallet state machine with the real WebAssembly module over in-memory
 // chrome.storage fakes: create, restore, lock and unlock, the back-off,
-// auto-lock, and a worker restart.
-import { describe, expect, it } from "vitest";
+// auto-lock, a worker restart, and WebAssembly that traps.
+import type * as Wasm from "@seedelf/wasm";
+import { describe, expect, it, vi } from "vitest";
 
 import { VAULT_KEY } from "../src/background/vault";
 import {
   AUTO_LOCK_MS,
+  hasEntropy,
   SESSION_ACTIVITY,
   SESSION_ENTROPY,
   UNLOCK_FAILURES,
   unlockBackoffMs,
   Wallet,
+  WASM_BROKEN,
 } from "../src/background/wallet";
+import { freshWasm, isTrap } from "../src/background/wasm";
 import { loadTestWasm, memoryArea, testWallet, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -319,5 +323,112 @@ describe("wallet", () => {
     // A new wallet can be created afterwards.
     await wallet.create(cardano[1]!.phrase, PASSWORD);
     expect(await wallet.state()).toBe("unlocked");
+  });
+
+  it("locks when the clock moved back past the last activity, rather than staying unlocked that much longer", async () => {
+    const { wallet, session, clock, events } = testWallet();
+    await wallet.create(cardano[0]!.phrase, PASSWORD);
+    clock.now -= 2 * 60 * 60_000;
+    expect(await wallet.state()).toBe("locked");
+    expect(session.data.size).toBe(0);
+    expect(events.alarm).toBe("stopped");
+  });
+
+  it("stops the auto-lock alarm Chrome kept across a browser restart, at its first check", async () => {
+    const first = testWallet();
+    await first.wallet.create(cardano[0]!.phrase, PASSWORD);
+    expect(await hasEntropy(first.session)).toBe(true);
+    first.session.data.clear();
+    expect(await hasEntropy(first.session)).toBe(false);
+
+    const restarted = testWallet(first);
+    restarted.events.alarm = "started";
+    expect(await restarted.wallet.state()).toBe("locked");
+    expect(restarted.events.alarm).toBe("stopped");
+  });
+});
+
+describe("a wallet whose WebAssembly breaks", () => {
+  /** A Register pointing far outside WebAssembly's memory: using it traps the instance. */
+  const outOfBounds = () => Object.assign(Object.create(loadTestWasm().Register.prototype), { __wbg_ptr: 0x7fff_fff0 }) as Wasm.Register;
+  // The glue can replace a trapped instance when built with wasm-bindgen's reset function (build.sh).
+  const canReset = "__wbg_reset_state" in loadTestWasm();
+
+  function breakable() {
+    const t = testWallet();
+    let fresh = 0;
+    const wallet = new Wallet({
+      wasm: loadTestWasm(),
+      local: t.local,
+      session: t.session,
+      now: () => t.clock.now,
+      autoLock: {
+        start: async () => void (t.events.alarm = "started"),
+        stop: async () => void (t.events.alarm = "stopped"),
+      },
+      changed: () => void t.events.changed++,
+      fresh: () => {
+        fresh++;
+        if (canReset) freshWasm();
+      },
+    });
+    return { ...t, wallet, fresh: () => fresh };
+  }
+
+  it("locks even when its keys can't be freed", async () => {
+    const { wallet, session, events } = testWallet();
+    await wallet.create(cardano[0]!.phrase, PASSWORD);
+    const keys = await wallet.withKeys((k) => k);
+    // What a trapped instance answers: the first free fails, and the others with it.
+    keys.seedelf.free = () => {
+      throw new WebAssembly.RuntimeError("memory access out of bounds");
+    };
+    keys.cardano.free = () => {
+      throw new Error("attempted to take ownership of Rust value while it was borrowed");
+    };
+    const oneTime = vi.spyOn(keys.oneTime, "free");
+
+    await wallet.lock();
+    expect(session.data.size).toBe(0);
+    expect(events.alarm).toBe("stopped");
+    expect(oneTime).toHaveBeenCalledOnce();
+    expect(await wallet.state()).toBe("locked");
+    // And again: nothing kept to fail twice.
+    await wallet.lock();
+    expect(await wallet.unlock(PASSWORD)).toEqual({ unlocked: true });
+    expect((await wallet.account("preprod")).receiveAddress).toBe(cardano[0]!.preprod.receive_0);
+  });
+
+  it("locks when a call traps, and starts on a fresh instance", async () => {
+    const { wallet, session, events, fresh } = breakable();
+    await wallet.create(cardano[0]!.phrase, PASSWORD);
+    const old = await wallet.withKeys((k) => k);
+
+    await expect(wallet.withKeys((k) => k.seedelf.isOwned(outOfBounds()))).rejects.toThrow(WASM_BROKEN);
+    expect(fresh()).toBe(1);
+    expect(session.data.size).toBe(0);
+    expect(events.alarm).toBe("stopped");
+    expect(await wallet.state()).toBe("locked");
+    if (canReset) expect(() => old.seedelf.baseRegister()).toThrow("stale");
+
+    expect(await wallet.unlock(PASSWORD)).toEqual({ unlocked: true });
+    expect((await wallet.account("preprod")).receiveAddress).toBe(cardano[0]!.preprod.receive_0);
+  });
+
+  it("locks for a trap outside its queue too, and tells a refusal from a trap", async () => {
+    const { wallet, session, fresh } = breakable();
+    await wallet.create(cardano[0]!.phrase, PASSWORD);
+    await wallet.trapped();
+    expect(fresh()).toBe(1);
+    expect(session.data.size).toBe(0);
+
+    // A refusal is only an error: the wallet stays as it was.
+    expect(await wallet.unlock(PASSWORD)).toEqual({ unlocked: true });
+    await expect(wallet.withKeys(() => loadTestWasm().validatePhrase("not a phrase"))).rejects.toThrow();
+    expect(await wallet.state()).toBe("unlocked");
+    expect(isTrap(new WebAssembly.RuntimeError("unreachable"))).toBe(true);
+    expect(isTrap(new Error("recursive use of an object detected which would lead to unsafe aliasing in rust"))).toBe(true);
+    expect(isTrap(new RangeError("Maximum call stack size exceeded"))).toBe(false);
+    expect(isTrap(new Error("Not enough ADA"))).toBe(false);
   });
 });

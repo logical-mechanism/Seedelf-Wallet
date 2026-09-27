@@ -19,6 +19,7 @@ import { fromBase64, toBase64, type Area } from "./storage";
 import { LOCAL_PREFERENCES } from "./preferences";
 import { PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
 import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord } from "./vault";
+import { isTrap } from "./wasm";
 
 /** HKDF salt of the key that seals private records on the device, v1. */
 const STORE_SALT = new TextEncoder().encode("seedelf-web-wallet-private-store-v1");
@@ -39,6 +40,19 @@ export const SESSION_ACTIVITY = "seedelf.lastActivity";
 export const SESSION_BALANCES_PREFIX = "seedelf.balances.";
 /** chrome.storage.local: consecutive failed unlocks, kept across restarts. */
 export const UNLOCK_FAILURES = "seedelf.unlockFailures";
+
+/** What a request gets when WebAssembly trapped under it: the wallet locked itself (see `broken`). */
+export const WASM_BROKEN = "The wallet's core stopped working, so the wallet locked itself. Unlock it to carry on.";
+
+/**
+ * Whether session storage holds an unlocked wallet's entropy. Without it
+ * there's nothing to lock, so the auto-lock alarm stops without starting
+ * WebAssembly (sw.ts): a browser restart drops session storage but keeps
+ * the alarm.
+ */
+export async function hasEntropy(session: Area): Promise<boolean> {
+  return (await session.get<string>(SESSION_ENTROPY)) !== undefined;
+}
 
 interface UnlockFailures {
   count: number;
@@ -67,6 +81,8 @@ export interface WalletDeps {
   lockAfterMs?: () => Promise<number>;
   /** Tells open UI pages the state changed. */
   changed: () => void;
+  /** Replaces a WebAssembly instance that trapped with a fresh one (wasm.ts `freshWasm`). */
+  fresh?: () => void;
 }
 
 export interface Keys {
@@ -301,11 +317,49 @@ export class Wallet {
     });
   }
 
-  /** Runs `task` after every earlier one, so unlocks, locks and resets never interleave. */
+  /**
+   * A WebAssembly call outside the wallet's queue trapped (sw.ts): lock, as a
+   * trap inside it does. Its keys lived in the broken instance.
+   */
+  trapped(): Promise<void> {
+    return this.serial(() => this.broken());
+  }
+
+  /**
+   * Runs `task` after every earlier one, so unlocks, locks and resets never
+   * interleave. WebAssembly that traps under it locks the wallet.
+   */
   private serial<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(task, task);
+    const guarded = async () => {
+      try {
+        return await task();
+      } catch (e) {
+        if (!isTrap(e)) throw e;
+        await this.broken();
+        throw new Error(WASM_BROKEN);
+      }
+    };
+    const run = this.queue.then(guarded, guarded);
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * WebAssembly trapped. Lock: clear session storage first, so the entropy
+   * can't outlive it, then free what can still be freed and start a fresh
+   * instance. The key objects went with the old one, so unlocking again is
+   * the only way on.
+   */
+  private async broken(): Promise<void> {
+    try {
+      await this.wipe();
+    } finally {
+      try {
+        this.deps.fresh?.();
+      } finally {
+        this.deps.changed();
+      }
+    }
   }
 
   /**
@@ -318,7 +372,10 @@ export class Wallet {
     if (stored) {
       const last = (await session.get<number>(SESSION_ACTIVITY)) ?? 0;
       const lockAfter = (await this.deps.lockAfterMs?.()) ?? AUTO_LOCK_MS;
-      if (now() - last < lockAfter) {
+      const idle = now() - last;
+      // Activity in the future means the clock moved back: that counts as
+      // expired, or the wallet would stay unlocked for as long as it moved.
+      if (idle >= 0 && idle < lockAfter) {
         if (!this.keys) {
           const entropy = fromBase64(stored);
           try {
@@ -331,9 +388,11 @@ export class Wallet {
       }
       await this.wipe();
       this.deps.changed();
-    } else if (this.keys) {
-      // Session storage was cleared under us: treat it as a lock.
+    } else {
+      // Session storage was cleared under us (a browser restart, say): treat
+      // it as a lock, and stop the alarm, which Chrome keeps.
       this.free();
+      await this.deps.autoLock.stop();
     }
     return (await local.get(VAULT_KEY)) ? "locked" : "no-wallet";
   }
@@ -354,29 +413,34 @@ export class Wallet {
       cardano = wasm.CardanoAccount.fromEntropy(entropy, 0);
       return { seedelf, cardano, oneTime: wasm.OneTimeAccounts.fromEntropy(entropy) };
     } catch (e) {
-      seedelf.free();
-      cardano?.free();
+      freeQuietly(seedelf, cardano);
       throw e;
     }
   }
 
   /**
-   * Lock: drop the keys from memory and clear session storage, which only
-   * ever holds unlocked state (the entropy, balances, a built or pending
-   * transaction). Stop the alarm.
+   * Lock: clear session storage, which only ever holds unlocked state (the
+   * entropy, balances, a built or pending transaction), stop the alarm, and
+   * drop the keys from memory. Storage goes first and the keys go whatever
+   * happens, so nothing WebAssembly does (a trapped instance, say) can keep
+   * the wallet unlocked.
    */
   private async wipe(): Promise<void> {
-    this.free();
-    await this.deps.session.clear();
-    await this.deps.autoLock.stop();
+    try {
+      await this.deps.session.clear();
+      await this.deps.autoLock.stop();
+    } finally {
+      this.free();
+    }
   }
 
+  /** Drops the keys, freeing each one it can: never throws, and never keeps one. */
   private free(): void {
-    // free() overwrites the secrets inside WebAssembly before releasing them.
-    this.keys?.seedelf.free();
-    this.keys?.cardano.free();
-    this.keys?.oneTime.free();
+    const keys = this.keys;
+    // Dropped first: a key whose free() failed can't be freed again (its
+    // pointer is already gone), so it's never kept to try.
     this.keys = undefined;
+    if (keys) freeQuietly(keys.seedelf, keys.cardano, keys.oneTime);
   }
 
   /**
@@ -410,5 +474,20 @@ export class Wallet {
     const elapsed = this.deps.now() - lastFailureAt;
     // A clock that moved backwards never shortens the wait below zero or past the cap.
     return Math.max(0, Math.min(backoff, backoff - elapsed));
+  }
+}
+
+/**
+ * Frees each of `objects` in its own try: free() overwrites the secrets
+ * inside WebAssembly before releasing them, and an instance that trapped
+ * refuses it, for one object or for all.
+ */
+function freeQuietly(...objects: Array<{ free(): void } | undefined>): void {
+  for (const object of objects) {
+    try {
+      object?.free();
+    } catch {
+      // Its instance is broken: freshWasm drops it, memory and all.
+    }
   }
 }

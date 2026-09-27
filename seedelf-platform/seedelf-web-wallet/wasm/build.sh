@@ -30,7 +30,9 @@ fi
 
 # wasm-release (the workspace Cargo.toml) is release built for size.
 cargo build --manifest-path "$here/Cargo.toml" --target wasm32-unknown-unknown --profile wasm-release
-wasm-bindgen --target web --out-dir "$here/pkg" \
+# The reset function lets the extension replace an instance that trapped
+# (extension/src/background/wasm.ts).
+wasm-bindgen --target web --experimental-reset-state-function --out-dir "$here/pkg" \
   "$workspace/target/wasm32-unknown-unknown/wasm-release/seedelf_wasm.wasm"
 
 wasm="$here/pkg/seedelf_wasm_bg.wasm"
