@@ -638,6 +638,12 @@ export interface SwapQuote {
   fund: { lovelace: string; tokens: TokenQuantity[] };
   /** Also moved: the account's own collateral, in lovelace. It comes back with the rest. */
   collateral: string;
+  /**
+   * Whether the token it gets is one the wallet swaps into: ADA, one on the
+   * wallet's own list, or one Minswap's verified list has, by its ID. Anyone
+   * can name a token like a known one: false, and the wallet won't fund it.
+   */
+  verified?: boolean;
 }
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */

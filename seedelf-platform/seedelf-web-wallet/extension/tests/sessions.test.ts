@@ -155,6 +155,33 @@ describe("a swap's quote", () => {
     });
   });
 
+  it("is verified only for ADA, a token the wallet lists, or one Minswap verifies by its ID; the wallet won't fund one that isn't", async () => {
+    const t = await unlocked();
+    // MIN is on the wallet's own list: nothing more is asked.
+    expect(await t.sessions.quote("preprod", ASK)).toMatchObject({ verified: true });
+    expect((await t.sessions.quote("preprod", { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500" })).verified).toBe(true);
+    expect(t.minswap.calls.map((c) => c.path)).toEqual(["estimate", "estimate"]);
+
+    // A token named like a known one, held in the private balance: Minswap's verified list has another by that name.
+    const fake = `${"0bad".repeat(14)}534e454b`;
+    const real = `${"279c".repeat(14)}534e454b`;
+    const verified: Array<{ token_id: string; ticker: string; is_verified: boolean }> = [{ token_id: real, ticker: "SNEK", is_verified: true }];
+    const fetch = t.minswap.fetch;
+    t.minswap.fetch = async (url, init) => {
+      if (!url.endsWith("/tokens")) return fetch(url, init);
+      t.minswap.calls.push({ path: "tokens", body: JSON.parse(String(init.body)) });
+      return Response.json({ tokens: verified });
+    };
+    const spoofed = await t.sessions.quote("preprod", { ...ASK, tokenOut: fake });
+    expect(spoofed.verified).toBe(false);
+    expect(t.minswap.calls.at(-1)).toMatchObject({ path: "tokens", body: { query: fake, only_verified: true } });
+    await expect(t.sessions.outBuild("preprod", spoofed)).rejects.toThrow("won't swap into it");
+    expect(t.koios.calls.some((c) => c.path === "account_addresses")).toBe(false);
+
+    // The real one, by its ID: verified.
+    expect((await t.sessions.quote("preprod", { ...ASK, tokenOut: real })).verified).toBe(true);
+  });
+
   it("leaves Splash out of routing on preprod, where Minswap builds its orders with a mainnet address", () => {
     expect(excludedProtocols("preprod")).toEqual([...DIRECT_PROTOCOLS, "Splash", "SplashStable"]);
     expect(excludedProtocols("mainnet")).toEqual(DIRECT_PROTOCOLS);

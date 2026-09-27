@@ -61,6 +61,7 @@ import type {
   SwapTokenInfo,
   TokenQuantity,
 } from "../shared/rpc";
+import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId } from "./cbor";
 import { KoiosError, SpentInputError, type KoiosUtxo } from "./koios";
 import type { Estimate, Minswap, PendingOrder } from "./minswap";
@@ -288,6 +289,16 @@ function tokenOf(id: string): Omit<TokenQuantity, "quantity"> {
   return { policyId: id.slice(0, 56), assetName: id.slice(56) };
 }
 
+/** The tokens the wallet knows by name (src/tokens/list.json, the registry's list), by Minswap's ID. */
+const LISTED: Record<NetworkName, ReadonlySet<string>> = {
+  preprod: new Set(tokenList.preprod.map((t) => t.policy + t.name)),
+  mainnet: new Set(tokenList.mainnet.map((t) => t.policy + t.name)),
+};
+
+/** Why a swap into a token that isn't verified isn't funded. */
+const UNVERIFIED =
+  "The token you'd get isn't on the wallet's list or verified by Minswap, so the wallet won't swap into it: anyone can give a token a known token's name.";
+
 /** An ask as the user typed it, checked before Minswap sees it. */
 export function checkAsk(ask: SwapAsk): SwapAsk {
   const token = (id: string) => id === "lovelace" || /^[0-9a-f]{56}([0-9a-f]{2}){0,32}$/.test(id);
@@ -370,6 +381,8 @@ export class SessionService {
   private readAt = new Map<string, number>();
   /** What each session's account held then. */
   private seen = new Map<string, KoiosUtxo[]>();
+  /** Tokens Minswap's verified list was found to have, by `network:id`. */
+  private verifiedIds = new Set<string>();
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -410,10 +423,26 @@ export class SessionService {
     }));
   }
 
-  /** Minswap's quote for `ask`. */
+  /** Minswap's quote for `ask`, and whether the token it gets is verified. */
   async quote(network: NetworkName, ask: SwapAsk): Promise<SwapQuote> {
     const checked = checkAsk(ask);
-    return quoteOf(network, checked, await this.deps.minswap(network).estimate(checked));
+    const quote = quoteOf(network, checked, await this.deps.minswap(network).estimate(checked));
+    return { ...quote, verified: await this.verified(network, checked.tokenOut) };
+  }
+
+  /**
+   * Whether the wallet swaps into `id`: ADA, a token on the wallet's own
+   * list, or one Minswap's verified list has, found by its exact ID. Anyone
+   * can put a token named like a known one in a private balance, and the
+   * picker offers what's held. Asking Minswap about the one token tells it
+   * nothing its quote doesn't.
+   */
+  private async verified(network: NetworkName, id: string): Promise<boolean> {
+    if (id === "lovelace" || LISTED[network].has(id) || this.verifiedIds.has(`${network}:${id}`)) return true;
+    const found = await this.deps.minswap(network).tokens(id, true);
+    const verified = found.some((t) => t.token_id === id && t.is_verified !== false);
+    if (verified) this.verifiedIds.add(`${network}:${id}`);
+    return verified;
   }
 
   /** Builds the payment that funds a new session for `quote`: the swap and its costs, and the account's collateral. */
@@ -423,6 +452,7 @@ export class SessionService {
     display?: { in: SwapSide; out: SwapSide },
   ): Promise<SessionOutSummary> {
     const ask = checkAsk(quote.ask);
+    if (!(await this.verified(network, ask.tokenOut))) throw new Error(UNVERIFIED);
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     const { summary, txCbor, seed } = await this.buildFunding(
