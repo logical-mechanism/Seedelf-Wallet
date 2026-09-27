@@ -129,6 +129,11 @@ export interface SeedelfInfo {
   label?: string;
   /** ADA locked with the token (lovelace string); only `remove` gets it back. */
   lovelace: string;
+  /**
+   * Who paid for it, when the wallet knows (background/minted-by.ts):
+   * Remove sends its ADA back to that side by default, and asks otherwise.
+   */
+  paidBy?: MintSource;
 }
 
 /** What's kept out of every payment on one side: locked UTxOs, and the Cardano account's collateral. */

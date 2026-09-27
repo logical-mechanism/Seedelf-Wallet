@@ -21,6 +21,7 @@ import type { NetworkName } from "../networks";
 import { MADE_PRIVATE, type HistoryClass } from "../shared/histories";
 import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
+import { rememberMint } from "./minted-by";
 import { settleMaybeSent } from "./pending";
 import {
   changeHistory,
@@ -114,8 +115,15 @@ export class MintService {
     return summary;
   }
 
-  /** For a stealth mint, giveme.my first witnesses the collateral; an account-paid one was signed at review. */
-  submit(network: NetworkName, txHash: string): Promise<PendingTx> {
+  /**
+   * For a stealth mint, giveme.my first witnesses the collateral; an
+   * account-paid one was signed at review. Who paid is kept first, sealed,
+   * so removing the Seedelf defaults to that side (minted-by.ts).
+   */
+  async submit(network: NetworkName, txHash: string): Promise<PendingTx> {
+    const { wallet, session, store } = this.deps;
+    const built = await wallet.withKeys(() => session.get<MintSummary>(SESSION_MINT));
+    if (built?.txHash === txHash && built.network === network) await rememberMint(store, network, built.tokenName, built.from);
     return send(this.deps, network, txHash, SESSION_MINT, "mint", "Seedelf");
   }
 }

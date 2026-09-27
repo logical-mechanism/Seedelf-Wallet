@@ -16,7 +16,8 @@
 //
 // What the user locked, and the Cardano account's collateral, are counted in
 // the balance and reported apart (coin-control.ts), fresh on every request,
-// since locking a UTxO doesn't read the chain again.
+// since locking a UTxO doesn't read the chain again. Each Seedelf says who
+// paid for it, when the device knows (minted-by.ts), for Remove's default.
 //
 // The reading is cached per network in chrome.storage.session and wiped on lock.
 // Session storage holds 10 MB for the whole extension, and anyone can pay
@@ -32,7 +33,12 @@ import type { NetworkName } from "../networks";
 import type { Balances, Locked, SeedelfInfo, StakeInfo } from "../shared/rpc";
 import { readAccountUtxos, type Account, type PathedUtxo } from "./account";
 import { registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
-import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses, type ActivityService } from "./activity";
+import {
+  SESSION_ACCOUNT_ACTIVITY_PREFIX,
+  SESSION_ACCOUNT_ADDRESSES_PREFIX,
+  type AccountAddresses,
+  type ActivityService,
+} from "./activity";
 import {
   SESSION_ACCOUNT_UTXOS_PREFIX,
   SESSION_TOO_LARGE_PREFIX,
@@ -41,6 +47,8 @@ import {
 } from "./coin-control";
 import { readContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
+import { mintedBy, paidByOf, type MintedBy } from "./minted-by";
+import type { PrivateStore } from "./private-store";
 import { spentSet } from "./spent";
 import { readStake } from "./staking";
 import type { Area } from "./storage";
@@ -73,7 +81,12 @@ export interface BalanceDeps {
   coins: CoinControlService;
   /** chrome.storage.local, where the pool list is kept: a pool's ticker is looked up there first. */
   local?: Area;
+  /** The sealed records: who paid for each Seedelf (minted-by.ts). */
+  store?: PrivateStore;
 }
+
+/** What the device holds that says who paid for each Seedelf (minted-by.ts `paidByOf`). */
+type Held = Omit<Parameters<typeof paidByOf>[2], "owned">;
 
 const NOTHING: Locked = { lovelace: "0", tokens: [], utxos: 0 };
 
@@ -139,13 +152,21 @@ export class BalanceService {
       readContractView(this.deps, network),
       readStake(this.deps, network, stake),
     ]);
+    // Read on the device alone, never asked of Koios.
+    const recorded: MintedBy = this.deps.store ? await mintedBy(this.deps.store, network).catch(() => ({})) : {};
 
     // The result is cached only while still unlocked.
     const reading = await wallet.withKeys(async (): Promise<Reading> => {
+      const activity = await session.get<{ entries: Array<{ txHash: string }> }>(SESSION_ACCOUNT_ACTIVITY_PREFIX + network);
+      const held: Held = {
+        recorded,
+        account: utxos.map((p) => p.utxo),
+        accountTxs: new Set(activity?.entries.map((e) => e.txHash)),
+      };
       const balances: Balances = {
         network,
         updatedAt: now(),
-        seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId),
+        seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held),
         cardano: this.cardanoSide(account, utxos, staking),
       };
       // Activity reads the account's transactions against these.
@@ -158,13 +179,16 @@ export class BalanceService {
     return reading;
   }
 
-  /** `owned`: this wallet's contract UTxOs. */
-  private seedelfSide(owned: KoiosUtxo[], policyId: string): Balances["seedelf"] {
+  /** `owned`: this wallet's contract UTxOs. `held`: what says who paid for each Seedelf. */
+  private seedelfSide(owned: KoiosUtxo[], policyId: string, held: Held): Balances["seedelf"] {
     const seedelfs: SeedelfInfo[] = [];
     const spendable: KoiosUtxo[] = [];
     for (const utxo of owned) {
       const name = seedelfTokenOf(utxo, policyId);
-      if (name) seedelfs.push({ assetName: name, label: seedelfLabel(name), lovelace: utxo.value });
+      if (name) {
+        const paidBy = paidByOf(utxo, name, { ...held, owned });
+        seedelfs.push({ assetName: name, label: seedelfLabel(name), lovelace: utxo.value, ...(paidBy ? { paidBy } : {}) });
+      }
       // One carrying a reference script can't be spent yet: see script-spend.ts's spendable.
       else if (!utxo.reference_script) spendable.push(utxo);
     }

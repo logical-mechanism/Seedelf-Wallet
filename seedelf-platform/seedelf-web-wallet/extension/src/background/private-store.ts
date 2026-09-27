@@ -1,7 +1,7 @@
 // Records this wallet keeps on the device that say something about its user
 // (contacts, the Seedelf history, which UTxOs are locked, the sites
 // connected to the public account, the private sessions, a payment that may
-// still go through): sealed in
+// still go through, who paid for each Seedelf): sealed in
 // chrome.storage.local with XChaCha20-Poly1305 under a key derived from the
 // recovery phrase's entropy (Wallet.withStoreKey). They can't be read while
 // the wallet is locked, or by anyone without the phrase, and removing the
@@ -30,6 +30,8 @@ export const PRIVATE_RECORDS = [
   "lovejoin.mainnet",
   "maybeSent.preprod",
   "maybeSent.mainnet",
+  "mintedBy.preprod",
+  "mintedBy.mainnet",
 ] as const;
 export type RecordName = (typeof PRIVATE_RECORDS)[number];
 
@@ -56,6 +58,8 @@ const WHAT: Record<RecordName, string> = {
   "lovejoin.mainnet": "your Lovejoin boxes",
   "maybeSent.preprod": "a payment that may still go through",
   "maybeSent.mainnet": "a payment that may still go through",
+  "mintedBy.preprod": "who paid for your Seedelfs",
+  "mintedBy.mainnet": "who paid for your Seedelfs",
 };
 
 /**

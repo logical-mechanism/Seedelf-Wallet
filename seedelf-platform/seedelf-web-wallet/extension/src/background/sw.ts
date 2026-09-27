@@ -152,7 +152,7 @@ function getContext(): Promise<Worker> {
     const activity = new ActivityService({ wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity });
-    const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins });
+    const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins, store });
     const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences, store });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
     const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins, preferences, store };

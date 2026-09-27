@@ -1914,11 +1914,15 @@ test("remove a Seedelf: where its ADA goes, review, and nothing sent without giv
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("seedelfs")).toContainText("web-wallet");
   await page.getByRole("button", { name: "Remove web-wallet" }).click();
+  // Found after a restore: the wallet doesn't know who paid for it, so nothing
+  // is chosen, and Review waits for a choice (privacy review §3.2).
   const note = page.getByTestId("remove-to-note");
-  await expect(note).toContainText("links nothing new");
+  await expect(note).toContainText("doesn't know who paid for this Seedelf");
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
   await page.getByRole("button", { name: "Private balance" }).click();
   await expect(note).toContainText("ties the Seedelf's name to the new UTxO");
   await page.getByRole("button", { name: "Public account" }).click();
+  await expect(note).toContainText("links nothing new only if your public account paid for this Seedelf");
   await snap(page, "remove-form");
   await page.getByRole("button", { name: "Review" }).click();
 
