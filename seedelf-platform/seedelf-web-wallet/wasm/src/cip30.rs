@@ -655,7 +655,11 @@ pub struct Cert {
     pub kind: String,
     /// It's about the account's own stake key.
     pub own: bool,
+    /// The pool it stakes with, or a stake pool's own certificate's pool.
     pub pool: Option<String>,
+    /// A stake pool's own certificate (kind "pool"): "register" (a new pool,
+    /// or new terms for one) or "retire".
+    pub pool_action: Option<String>,
     pub drep: Option<String>,
     pub deposit: Option<String>,
     pub refund: Option<String>,
@@ -1147,7 +1151,40 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 },
                 true,
             ),
-            C::PoolRegistration { .. } | C::PoolRetirement(..) => (None, cert_kind("pool"), true),
+            C::PoolRegistration {
+                operator,
+                pool_owners,
+                ..
+            } => {
+                // An owner's stake is the pool's pledge, and it earns an
+                // owner no rewards: the pool's reward account gets them.
+                // The stake key signing for anything else in the
+                // transaction would sign for this too.
+                if pool_owners.contains(&keys.stake) {
+                    bail!(
+                        "This transaction makes your stake key an owner of stake pool {}: your stake would count as its pledge, and the rewards it earns would go to the pool's reward account, not to you. The wallet won't sign it.",
+                        pool_id(operator)
+                    );
+                }
+                (
+                    None,
+                    Cert {
+                        pool: Some(pool_id(operator)),
+                        pool_action: Some("register".into()),
+                        ..cert_kind("pool")
+                    },
+                    true,
+                )
+            }
+            C::PoolRetirement(pool, _) => (
+                None,
+                Cert {
+                    pool: Some(pool_id(pool)),
+                    pool_action: Some("retire".into()),
+                    ..cert_kind("pool")
+                },
+                true,
+            ),
             C::AuthCommitteeHot(..) | C::ResignCommitteeCold(..) => {
                 (None, cert_kind("committee"), true)
             }

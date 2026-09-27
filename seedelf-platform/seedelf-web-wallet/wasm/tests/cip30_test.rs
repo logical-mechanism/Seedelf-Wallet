@@ -556,6 +556,75 @@ fn an_old_deregistration_of_the_accounts_stake_key_is_refused() {
     assert!(!summary.certificates[0].own);
 }
 
+/// Pool `[7; 28]`'s registration, owned by `owners`.
+fn pool_registration(owners: Vec<Hash<28>>) -> conway::Certificate {
+    conway::Certificate::PoolRegistration {
+        operator: Hash::new([7; 28]),
+        vrf_keyhash: Hash::new([8; 32]),
+        pledge: 0,
+        cost: 170_000_000,
+        margin: pallas_primitives::RationalNumber {
+            numerator: 1,
+            denominator: 100,
+        },
+        reward_account: Bytes::from(
+            CardanoAccount::from_phrase(PHRASE, 1)
+                .unwrap()
+                .stake_address(true)
+                .unwrap()
+                .to_vec(),
+        ),
+        pool_owners: Set::from(owners),
+        relays: vec![],
+        pool_metadata: Nullable::Null,
+    }
+}
+
+#[test]
+fn a_pool_that_makes_the_accounts_stake_key_its_owner_is_refused() {
+    // "Delegate to us", with the pool's registration naming the stake key an
+    // owner: the one stake signature would sign for both.
+    let (_, rows) = swap();
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 3_800_000, None)],
+    );
+    let stake = account().key_hash(Role::Staking, 0).unwrap();
+    b.certificates = NonEmptySet::try_from(vec![
+        conway::Certificate::StakeDelegation(stake_credential(), Hash::new([7; 28])),
+        pool_registration(vec![Hash::new([9; 28]), stake]),
+    ])
+    .ok();
+    let refused =
+        cip30::inspect_tx(&account(), &request(tx_hex(b.clone()), rows.clone(), true)).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("makes your stake key an owner of stake pool pool1")
+    );
+
+    // Someone else's pool, registered or retired, is named, and says which.
+    b.certificates = NonEmptySet::try_from(vec![
+        pool_registration(vec![Hash::new([9; 28])]),
+        conway::Certificate::PoolRetirement(Hash::new([7; 28]), 300),
+    ])
+    .ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    let pool = summary.certificates[0].pool.clone().unwrap();
+    assert!(pool.starts_with("pool1"));
+    assert_eq!(summary.certificates[0].kind, "pool");
+    assert_eq!(
+        summary.certificates[0].pool_action.as_deref(),
+        Some("register")
+    );
+    assert_eq!(summary.certificates[1].pool.as_deref(), Some(pool.as_str()));
+    assert_eq!(
+        summary.certificates[1].pool_action.as_deref(),
+        Some("retire")
+    );
+    assert!(!summary.complete, "the pool's keys sign it too");
+}
+
 #[test]
 fn a_collateral_return_to_someone_else_is_refused() {
     let (_, rows) = swap();
