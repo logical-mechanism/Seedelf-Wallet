@@ -21,11 +21,12 @@
 // alarm calls it every minute while a swap runs and the wallet is unlocked,
 // and unlocking calls it, so an interrupted swap carries on where it was. It
 // signs only within the approval: the session's UTxOs, its key alone, no more
-// paid out than was funded, paid only to the session, to an order made out to
-// it, and to Minswap's quoted fee. The order's minimum is what the wallet asks
-// Minswap for, at least the least approved; Minswap builds the order, and its
-// minimum isn't read back. Anything else pauses for the user. Stop is the
-// user's alone: an order that waits is cancelled, then everything comes back.
+// paid out than was funded, paid only to the session, to a script whose datum
+// names its key (an order), and to Minswap's quoted fee. The order's minimum
+// is what the wallet asks Minswap for, at least the least approved; Minswap
+// builds the order, and its minimum isn't read back. Anything else pauses for
+// the user. Stop is the user's alone: an order that waits is cancelled, then
+// everything comes back.
 // Every transaction is recorded before it's submitted.
 //
 // A site's private session (chunk 15c, private CIP-30) is the same account,
@@ -67,7 +68,7 @@ import type {
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosUtxo } from "./koios";
-import { builtOutputs, type BuiltOutput, type Estimate, type Minswap, type PendingOrder } from "./minswap";
+import { builtOutputs, uncheckedProtocols, type BuiltOutput, type Estimate, type Minswap, type PendingOrder } from "./minswap";
 import {
   CHAIN_CUT,
   CHAIN_PUMP_MS,
@@ -546,11 +547,20 @@ export class SessionService {
 
   /**
    * Minswap's quote for `ask`, whether the token it gets is verified, and
-   * what its return through Lovejoin is expected to take.
+   * what its return through Lovejoin is expected to take. A route through a
+   * DEX whose orders the wallet can't check (minswap.ts MAINNET_PROTOCOLS) is
+   * refused here, before anything is funded (final review sessions-4).
    */
   async quote(network: NetworkName, ask: SwapAsk): Promise<SwapQuote> {
     const checked = checkAsk(ask);
-    const quote = quoteOf(network, checked, await this.deps.minswap(network).estimate(checked));
+    const est = await this.deps.minswap(network).estimate(checked);
+    const unchecked = uncheckedProtocols(network, est);
+    if (unchecked.length) {
+      throw new Error(
+        `Minswap routes this swap through ${unchecked.join(" and ")}, whose orders the wallet can't check yet, so it won't swap this way. Try another amount or pair.`,
+      );
+    }
+    const quote = quoteOf(network, checked, est);
     const lovejoin = await this.lovejoinCost(network, quote);
     return { ...quote, verified: await this.verified(network, checked.tokenOut), ...(lovejoin ? { lovejoin } : {}) };
   }
@@ -2245,15 +2255,17 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
  * Where a swap Minswap built pays, before the session's key signs it (the
  * runner, or the user's review), from its bytes (`builtOutputs`):
  * - back to the session's own address;
- * - an order at a DEX's contract, staked with the session's stake key or
- *   none, whose details (its datum, inline or carried for its hash) name the
- *   session's key: a real order names its owner, who gets the proceeds or
- *   the refund. There's one at least;
+ * - an output at a script, staked with the session's stake key or none,
+ *   whose datum (inline, or carried for its hash) names the session's key:
+ *   a real order names its owner, who gets the proceeds or the refund.
+ *   There's one at least;
  * - at most one other output, Minswap's fee, wherever it goes: ADA alone,
  *   and no more than `aggregatorFee` quoted (none on preprod).
- * Anything else is refused. The order's minimum isn't read back: it's what
- * the wallet asks Minswap for, and Minswap builds the order. Returns the
- * orders' output indexes.
+ * Anything else is refused. Which script an order goes to isn't checked:
+ * no DEX's order contract is pinned, so that's Minswap's to build, as the
+ * order's receivers are. Nor is its minimum read back: it's what the wallet
+ * asks Minswap for, and Minswap builds the order. Returns the orders' output
+ * indexes.
  */
 export function checkOrder(outputs: BuiltOutput[], session: { address: string; keyHash: string }, aggregatorFee: bigint): number[] {
   // A base address's staking part: bytes 29 to 57, after the header and the payment part.

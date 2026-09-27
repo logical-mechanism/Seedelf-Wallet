@@ -103,9 +103,61 @@ export const DIRECT_PROTOCOLS = ["DanogoCLMMV1", "ChakraBondingCurve", "OpenDjed
  */
 const PREPROD_BROKEN = ["Splash", "SplashStable"];
 
+/**
+ * The DEXes a mainnet swap goes through: those whose orders the session's
+ * check (sessions.ts `checkOrder`) reads as the session's, by the order
+ * details each DEX publishes. Each order names its owner's key as a 28-byte
+ * field of its own (an address's payment part, or a signature's key), and
+ * sits at a script with no staking part or the sender's:
+ * - Minswap (V1) and MinswapStable: the sender's and the receiver's
+ *   addresses. V1's passes on a real order Minswap built on preprod.
+ * - MinswapV2: the canceller's key, and the refund and success receivers.
+ * - SundaeSwap: the destination address. SundaeSwapV3: the owner's key.
+ * - WingRiders, WingRidersV2 and WingRidersStableV2: the owner's and the
+ *   beneficiary's addresses.
+ * - Splash and SplashStable: the cancelling key and the redeemer's address.
+ *   Spectrum: the reward key.
+ * None was checked on a mainnet order yet: the owner's smoke test is one
+ * small swap through each before launch. A route through any other is
+ * refused before it's funded (quote), rather than pause once it is.
+ */
+export const MAINNET_PROTOCOLS: readonly string[] = [
+  "Minswap",
+  "MinswapV2",
+  "MinswapStable",
+  "SundaeSwap",
+  "SundaeSwapV3",
+  "WingRiders",
+  "WingRidersV2",
+  "WingRidersStableV2",
+  "Splash",
+  "SplashStable",
+  "Spectrum",
+];
+
+/**
+ * DEXes Minswap routes through on mainnet whose orders the session's check
+ * refuses, so routing leaves them out rather than have a funded swap pause,
+ * or a quote be refused (final review sessions-4): VyFinance names its
+ * owner as one 56-byte field, the key and the staking part together, and
+ * MuesliSwap's orders are staked to its own key, not the sender's.
+ */
+const MAINNET_REFUSED = ["VyFinance", "MuesliSwap"];
+
 /** What routing leaves out on `network`. */
 export function excludedProtocols(network: "preprod" | "mainnet"): string[] {
-  return network === "preprod" ? [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN] : DIRECT_PROTOCOLS;
+  return network === "preprod" ? [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN] : [...DIRECT_PROTOCOLS, ...MAINNET_REFUSED];
+}
+
+/**
+ * The DEXes of `est`'s route a swap on `network` doesn't go through: on
+ * mainnet, any not on MAINNET_PROTOCOLS (CswapV1, whose orders the wallet
+ * doesn't know, or one Minswap adds later); none on preprod, where only the
+ * check stands.
+ */
+export function uncheckedProtocols(network: "preprod" | "mainnet", est: Pick<Estimate, "paths">): string[] {
+  if (network !== "mainnet") return [];
+  return [...new Set(est.paths.flat().map((leg) => leg.protocol))].filter((p) => !MAINNET_PROTOCOLS.includes(p));
 }
 
 const TIMEOUT_MS = 20_000;

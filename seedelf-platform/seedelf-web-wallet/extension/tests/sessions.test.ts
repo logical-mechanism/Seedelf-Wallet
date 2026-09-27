@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
+import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
 import {
@@ -267,7 +267,29 @@ describe("a swap's quote", () => {
 
   it("leaves Splash out of routing on preprod, where Minswap builds its orders with a mainnet address", () => {
     expect(excludedProtocols("preprod")).toEqual([...DIRECT_PROTOCOLS, "Splash", "SplashStable"]);
-    expect(excludedProtocols("mainnet")).toEqual(DIRECT_PROTOCOLS);
+  });
+
+  it("leaves out of mainnet's routing the DEXes whose orders the check refuses, and won't quote a route through one it can't check (final review sessions-4)", async () => {
+    // VyFinance names its owner as one 56-byte field; MuesliSwap stakes its orders to its own key.
+    expect(excludedProtocols("mainnet")).toEqual([...DIRECT_PROTOCOLS, "VyFinance", "MuesliSwap"]);
+    expect(MAINNET_PROTOCOLS).not.toContain("VyFinance");
+    expect(MAINNET_PROTOCOLS).not.toContain("MuesliSwap");
+    const t = await unlocked();
+    const selling = { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500" };
+    const leg = minswapEstimate.estimate.paths[0]![0]!;
+    const via = (...protocols: string[]) => {
+      t.minswap.estimate = { ...minswapEstimate.estimate, paths: protocols.map((protocol) => [{ ...leg, protocol }]) };
+    };
+    // One Minswap routes through, but the wallet doesn't know its orders: refused before anything is funded.
+    via("MinswapV2", "CswapV1");
+    await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(
+      "Minswap routes this swap through CswapV1, whose orders the wallet can't check yet, so it won't swap this way.",
+    );
+    // On preprod, the check alone stands.
+    await expect(t.sessions.quote("preprod", selling)).resolves.toMatchObject({ route: ["MinswapV2", "CswapV1"] });
+    // Through DEXes whose orders name the owner's key as a field of its own: quoted.
+    via("MinswapV2", "SundaeSwapV3", "Splash");
+    await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["MinswapV2", "SundaeSwapV3", "Splash"] });
   });
 
   it("refuses an ask before Minswap sees it", () => {
