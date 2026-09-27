@@ -10,6 +10,7 @@ import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
 import { SESSION_PENDING } from "../src/background/pending";
+import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
 import { checkAsk, INDEX_PROBE, SESSION_BACK, SESSION_OUT, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
@@ -95,6 +96,33 @@ function signing(t: Awaited<ReturnType<typeof unlocked>>, runner = alarm()) {
     alarm: runner,
   });
 }
+
+describe("the record of sessions", () => {
+  it("is never written over when it won't open, so the sessions it lists aren't lost", async () => {
+    const t = await unlocked();
+    const quote = await t.sessions.quote("preprod", ASK);
+    const out = await t.sessions.outBuild("preprod", quote);
+    await t.sessions.outSubmit("preprod", out.txHash).catch(() => undefined);
+    expect(await t.sessions.list("preprod")).toHaveLength(1);
+
+    // Damaged on the device: it won't open, and it isn't taken for no sessions at all.
+    const key = `${PRIVATE_PREFIX}sessions.preprod`;
+    const sealed = (await t.local.get<{ data: string }>(key))!;
+    const damaged = { ...sealed, data: `${sealed.data[0] === "A" ? "B" : "A"}${sealed.data.slice(1)}` };
+    await t.local.set(key, damaged);
+    await expect(t.sessions.list("preprod")).rejects.toThrow(UnreadableRecordError);
+    await expect(t.sessions.outBuild("preprod", quote)).rejects.toThrow("couldn't open its record of your private sessions");
+    expect(await t.local.get(key)).toEqual(damaged);
+
+    // One built before it broke isn't sent over it either.
+    await t.local.set(key, sealed);
+    const next = await t.sessions.outBuild("preprod", quote);
+    await t.local.set(key, damaged);
+    await expect(t.sessions.outSubmit("preprod", next.txHash)).rejects.toThrow(UnreadableRecordError);
+    expect(await t.local.get(key)).toEqual(damaged);
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+});
 
 describe("a swap's quote", () => {
   it("funds the session with the swap, the DEX's fee and deposit, and room for the swap's fee", async () => {

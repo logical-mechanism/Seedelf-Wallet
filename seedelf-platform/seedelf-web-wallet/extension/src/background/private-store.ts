@@ -39,10 +39,38 @@ interface Sealed {
 /** The record's name is bound in as associated data, so records can't be swapped. */
 const aad = (name: RecordName) => new TextEncoder().encode(PRIVATE_PREFIX + name);
 
+/** What each record keeps, in the wallet's words. */
+const WHAT: Record<RecordName, string> = {
+  contacts: "your contacts",
+  "history.preprod": "your private history",
+  "history.mainnet": "your private history",
+  "coins.preprod": "your locked UTxOs",
+  "coins.mainnet": "your locked UTxOs",
+  dapps: "your connected sites",
+  "sessions.preprod": "your private sessions",
+  "sessions.mainnet": "your private sessions",
+  "lovejoin.preprod": "your Lovejoin boxes",
+  "lovejoin.mainnet": "your Lovejoin boxes",
+};
+
+/**
+ * A record that's there but won't open: another wallet's, damaged, or sealed
+ * in a way this version can't read. It never reads as empty, so nothing is
+ * written over it: what it holds may still come back (launch review #45).
+ */
+export class UnreadableRecordError extends Error {
+  constructor(readonly record: RecordName) {
+    super(`Seedelf Wallet couldn't open its record of ${WHAT[record]} on this device, so it won't write over it.`);
+  }
+}
+
 export class PrivateStore {
   constructor(private readonly deps: { wallet: Wallet; local: Area }) {}
 
-  /** The record, or undefined when there's none (or it isn't this wallet's). Throws if locked. */
+  /**
+   * The record, or undefined when there's none. Throws if locked, and
+   * UnreadableRecordError when it's there but won't open.
+   */
   async get<T>(name: RecordName): Promise<T | undefined> {
     const sealed = await this.deps.local.get<Sealed>(PRIVATE_PREFIX + name);
     return this.deps.wallet.withStoreKey((key) => {
@@ -51,7 +79,7 @@ export class PrivateStore {
         const plain = xchacha20poly1305(key, fromBase64(sealed.nonce), aad(name)).decrypt(fromBase64(sealed.data));
         return JSON.parse(new TextDecoder().decode(plain)) as T;
       } catch {
-        return undefined;
+        throw new UnreadableRecordError(name);
       }
     });
   }
