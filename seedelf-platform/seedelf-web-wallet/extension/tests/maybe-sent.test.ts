@@ -67,6 +67,25 @@ function privately(t: T) {
 
 const ids = (t: T) => t.koios.submitted.map((b) => txIdOf(b));
 
+/** Holds Koios's next request to `path` until `release`: `held` once it's there. */
+function hold(t: T, path: string) {
+  const real = t.koios.fetch;
+  let release!: () => void;
+  let reached!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const held = new Promise<void>((r) => (reached = r));
+  let armed = true;
+  t.koios.fetch = async (url, init) => {
+    if (armed && url.endsWith(`/${path}`)) {
+      armed = false;
+      reached();
+      await gate;
+    }
+    return real(url, init);
+  };
+  return { held, release };
+}
+
 describe("a payment Koios didn't answer", () => {
   it("comes back maybe sent, holds its UTxOs back, and stops new payments until it lands", async () => {
     const t = await unlocked();
@@ -277,6 +296,72 @@ describe("the watch of a payment that may still go through", () => {
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: payment.txHash, confirmations: 1 });
     await watchSent(t.deps, withdraw);
     expect(await t.session.get(pendingKey("preprod"))).toEqual(withdraw);
+  });
+});
+
+describe("the watch, asked about from several places at once (final review money-submit-3)", () => {
+  it("keeps a payment that went maybe sent while a slow look found the one before it landed", async () => {
+    const t = await unlocked();
+    const moveIn = await t.moveIn.build("preprod", "5000000", []);
+    const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    await t.send.submit("preprod", payment.txHash);
+    // Home looks for the payment, and Koios is slow to answer.
+    const slow = hold(t, "tx_status");
+    const poll = t.pending.pending("preprod");
+    await slow.held;
+    // Meanwhile the move-in goes unanswered: maybe sent.
+    unanswered(t);
+    expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ maybeSent: true });
+
+    // The payment landed; the move-in hasn't yet.
+    t.koios.confirmations = 1;
+    t.koios.missing.add(moveIn.txHash);
+    slow.release();
+    expect(await poll).toMatchObject({ txHash: payment.txHash, confirmations: 1 });
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: moveIn.txHash, maybeSent: true });
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+  });
+
+  it("never writes a slow resend of one back over the watch of another", async () => {
+    const t = await unlocked();
+    const moveIn = await t.moveIn.build("preprod", "5000000", []);
+    const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    unanswered(t);
+    await t.send.submit("preprod", payment.txHash);
+    // Two minutes on, the worker's run sends the payment again, and Koios is slow to answer.
+    await busyFor(t, 2 * 60_000);
+    const slow = hold(t, "submittx");
+    const watching = t.pending.watch("preprod");
+    await slow.held;
+    // Meanwhile the user sends it again, and the network takes it; then the move-in goes unanswered.
+    expect(await t.send.submit("preprod", payment.txHash)).not.toHaveProperty("maybeSent");
+    unanswered(t);
+    expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ maybeSent: true });
+
+    // The slow resend is refused as spent (by itself).
+    t.koios.rejectSubmit = SPENT;
+    slow.release();
+    expect(await watching).toBe(true);
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: moveIn.txHash, maybeSent: true });
+  });
+
+  it("asks Koios once, however many pages ask at the same time", async () => {
+    const t = await unlocked();
+    const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    unanswered(t);
+    await t.send.submit("preprod", payment.txHash);
+    await busyFor(t, 2 * 60_000);
+    const statuses = () => t.koios.calls.filter((c) => c.path === "tx_status").length;
+    const before = statuses();
+    const slow = hold(t, "tx_status");
+    const asked = [t.pending.pending("preprod"), t.pending.pending("preprod"), t.pending.watch("preprod")];
+    await slow.held;
+    await new Promise((r) => setTimeout(r, 20));
+    slow.release();
+    await Promise.all(asked);
+    expect(statuses() - before).toBe(1);
+    // Sent again once, not once a page.
+    expect(ids(t)).toEqual([payment.txHash, payment.txHash]);
   });
 });
 
