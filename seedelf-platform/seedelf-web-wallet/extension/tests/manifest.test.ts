@@ -36,10 +36,11 @@ describe("manifest", () => {
     expect(m.action.default_icon).toBe(m.icons);
   });
 
-  it("adds mainnet hosts only behind the flag", () => {
+  it("adds mainnet hosts only behind the flag, and keeps preprod's for the switch in Settings", () => {
     const m = buildManifest({ version: "1.0.0", mainnetEnabled: true, storeBuild: false });
     expect(m.name).toBe("Seedelf Wallet");
-    // CoinGecko for ADA's price: mainnet only.
+    // CoinGecko for ADA's price: mainnet only. Preprod's Koios: the network
+    // switch, and the worker's runs for what's on its way there.
     expect(m.host_permissions).toEqual([
       "https://api.koios.rest/*",
       "https://www.giveme.my/*",
@@ -56,7 +57,30 @@ describe("manifest", () => {
     expect(buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: true })).not.toHaveProperty("key");
   });
 
-  it("a store build: no key, the preprod hosts only, and the strict page CSP", () => {
+  it("the store's build (npm run package): no key, mainnet's hosts then preprod's, and the strict page CSP", () => {
+    const m = buildManifest({ version: "1.0.0", mainnetEnabled: true, storeBuild: true });
+    expect(m).not.toHaveProperty("key");
+    expect(m.permissions).toEqual(["storage", "alarms", "sidePanel", "scripting"]);
+    expect(m.host_permissions).toEqual([
+      "https://api.koios.rest/*",
+      "https://www.giveme.my/*",
+      "https://api.coingecko.com/*",
+      "https://preprod.koios.rest/*",
+    ]);
+    expect(m.content_security_policy.extension_pages).toBe(
+      [
+        "default-src 'self'",
+        "script-src 'self' 'wasm-unsafe-eval'",
+        "object-src 'none'",
+        "connect-src 'self' https://api.koios.rest https://www.giveme.my https://api.coingecko.com https://preprod.koios.rest https://agg-api.minswap.org https://aggr.monorepo-testnet-preprod.minswap.org",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+      ].join("; "),
+    );
+  });
+
+  it("a preprod store build (for tests): no key, the preprod hosts only, and the strict page CSP", () => {
     const m = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: true });
     expect(m).not.toHaveProperty("key");
     expect(m.name).toBe("Seedelf Wallet");

@@ -151,19 +151,35 @@ flowchart LR
 
 ## Networks
 
-**Preprod first. Mainnet is a build flag.**
+**One build, both networks: mainnet by default, preprod for testing (the owner's call, 2026-09-26).** The build flag `VITE_ENABLE_MAINNET=true` decides which networks a build has (`enabledNetworks` in `networks.ts`):
 
-**Default builds are preprod-only:**
+- **The store's build sets it** (`npm run package`). It has mainnet and preprod, in that order: the hosts of both are in the manifest, mainnet is the default, and Settings has a switch.
+- **A dev build without it is preprod only,** with no switch: only the preprod hosts are in the manifest. `npm run build:store:preprod` is the same as a store package, for tests.
 
-- Only the preprod hosts are in the manifest's host permissions.
-- There is no network switch.
-- The UI shows a permanent **PREPROD** badge.
+**The switch (launch review M3):**
 
-**Setting the flag** (for example `VITE_ENABLE_MAINNET=true`) makes three changes:
+- **The choice is `seedelf.network` in `chrome.storage.local`** (`NetworkChoice` in `background/preferences.ts`): a network the build doesn't have, or nothing, is the build's first. It's kept on its own, not with the settings, so it's read locked or unlocked, and removing the wallet keeps it, as it keeps where the wallet opens.
+- **The worker reads it for every request** (`answerUi` in `sw.ts` puts it on the request's context) **and every site's call** (`DappService`), so a switch needs no restart. Every service takes the network it's asked about; none holds one.
+- **Moving asks first** (Settings, *Network*), and says plainly what the other network is: preprod's ADA is test ADA, with no value; mainnet's is real money. The worker then broadcasts `state-changed` (it listens for the key's changes in local storage), and every open page starts afresh on the new network (App keys its screen by network), so nothing read or reviewed on the other stays on screen.
+- **A preprod strip on every screen.** Beside the top bar's badge, while preprod is on, a strip under it says it's Cardano's test network and that ADA there has no value (`components/NetworkBadge.tsx`), in the connector's window too. Test ADA is never taken for real.
+- **Nothing kept goes out on the other network.** Every transaction kept for Send records its network, and every submit refuses one built on another (`That payment isn't ready to send. Review it again.`).
+- **The dApp connector follows it.** `getNetworkId` answers the network the wallet is on as each call comes in; a site connected on one network isn't connected on the other (the `dapps` record is per network). What sites were asking on the network the wallet left is declined when it moves (`networkChanged`), and an approval shown for it signs nothing. A private session's funding already sent still connects its site on the network it was sent on.
+- **The worker's runs go through every network** (`runs.ts`, at unlock and on the sessions alarm): a swap that runs itself, a chain being sent, Lovejoin's boxes due back and a payment that may still go through carry on on their own network while the wallet shows the other. A network with nothing of the wallet's asks Koios nothing; one network's failure never stops the other's.
 
-- It adds the mainnet hosts to the manifest.
-- It makes mainnet the default.
-- It adds a network switch in settings, so preprod stays available for testing.
+**What's kept per network**, checked for the switch:
+
+| What | Where |
+|---|---|
+| Balances, the contract scan, the account's UTxOs, addresses and Activity pages | `seedelf.balances.<network>`, `seedelf.contract.<network>`, `seedelf.accountUtxos.<network>`, `seedelf.accountAddresses.<network>`, `seedelf.accountActivity.<network>` |
+| The Seedelf history, coin control, private sessions, Lovejoin's schedule and chains | sealed `history.<network>`, `coins.<network>`, `sessions.<network>`, `lovejoin.<network>` |
+| Contacts, connected sites | one sealed record each, every entry with its network |
+| The payment the pending watch follows, maybe sent or not | `seedelf.pendingTx.<network>`, one per network: a Send on one never drops the other's watch |
+| A chain being sent, and what chains reserve | `seedelf.session.chain.<network>.<index>`, `seedelf.lovejoin.sending.<network>`, `seedelf.reserved.<network>` |
+| Transactions kept for Send | one slot each, recording its network; the submit checks it |
+| The pool list, the dApp connector's reading | `seedelf.pools.<network>`, `seedelf.dapp.view.<network>`, `seedelf.dapp.signed.<network>` |
+| ADA's price | mainnet only; nothing is asked on preprod |
+
+What isn't per network: the vault (keys don't depend on the network), the settings, and the spent outpoints (`seedelf.spent`), which no two networks share.
 
 **One network value drives everything network-specific.** The Rust side already takes a `network_flag` everywhere (`true` = preprod), and the WebAssembly API passes it through. This is how the CLI's `--preprod` works.
 
@@ -173,9 +189,14 @@ flowchart LR
 | Collateral service | `https://www.giveme.my/preprod/collateral/` | `https://www.giveme.my/mainnet/collateral/` |
 | Contract config | `get_config(variant, true)` | `get_config(variant, false)` |
 | Addresses | `addr_test…` | `addr…` |
+| Minswap's aggregator | `aggr.monorepo-testnet-preprod.minswap.org` | `agg-api.minswap.org` |
+| Lovejoin's `mix_box` | `67ffe4ed…ecc5` | `c145c10f…1fad` |
+| Lovejoin's pool floor | none | 30 others' boxes |
+| ADA's price | none | CoinGecko |
 
 - **The contract config** covers reference UTxOs, the collateral UTxO and the shared staking hash. These differ per network. The script hashes are the same on both.
-- **Cached chain data is kept per network.** The vault is shared, because keys don't depend on the network. The CLI works the same way.
+- **Lovejoin's per-network facts come from one place** (`lovejoin` in `networks.ts`, launch review M1): its `mix_box`, the pool's floor and what a mix measured there. `lovejoinOn(network)` is the gate the worker (`LovejoinService.available`, `pool`) and the UI (the dApps tile, Settings) share. The core's `Protocol::of` holds each network's deployment.
+- **The vault is shared,** because keys don't depend on the network. The CLI works the same way.
 - **Addresses are checked against the active network** before anything is sent. This mirrors the CLI's `is_on_correct_network`.
 - **Preprod status on 2026-09-23:**
   - The wallet and Seedelf reference scripts are live and unspent.
@@ -253,7 +274,7 @@ flowchart LR
 
 ## Storage
 
-**Permissions:** `storage`, `alarms`, `sidePanel` and `scripting`, plus the host permissions for the enabled network's Koios and giveme.my. The sites (`https://*/*`, `http://localhost/*`, `http://127.0.0.1/*`) are optional host permissions, asked for when the dApp connector is first turned on and kept after (see [dApp connector](#dapp-connector)).
+**Permissions:** `storage`, `alarms`, `sidePanel` and `scripting`, plus the host permissions for the build's networks' Koios and giveme.my (and CoinGecko, in a mainnet build). The sites (`https://*/*`, `http://localhost/*`, `http://127.0.0.1/*`) are optional host permissions, asked for when the dApp connector is first turned on and kept after (see [dApp connector](#dapp-connector)).
 
 | Where | Key | What |
 |---|---|---|
@@ -266,6 +287,7 @@ flowchart LR
 | `chrome.storage.session` | `seedelf.accountAddresses.<network>`, `seedelf.accountActivity.<network>` | The account's stake address, addresses and payment keys (from the balance reading), and its Activity pages, only while unlocked |
 | `chrome.storage.session` | `seedelf.accountUtxos.<network>` | The account's UTxOs with their key paths, from the balance reading, for the UTxOs screen and what's locked; only while unlocked |
 | `chrome.storage.local` | `seedelf.preferences` | The user's settings: `spendRewards` (chunk 13); `hideBalances`, `lockAfterMinutes` and `currency` (chunk 14); `dappConnector` (chunk 15). Not sealed: nothing in it is about money. Deleted with the wallet. |
+| `chrome.storage.local` | `seedelf.network` | The network the wallet is on, in a build with both (see [Networks](#networks)). Kept when the wallet is removed. |
 | `chrome.storage.local` | `seedelf.pools.<network>` | Every live pool, for a day (chunk 13). The same for everyone, so it says nothing about the user. |
 | `chrome.storage.session` | `seedelf.poolRefs.<network>`, `seedelf.stake.built` | The tickers of pools read this session (the user's among them), and the staking transaction built last; only while unlocked |
 | `chrome.storage.local` | `seedelf.private.<record>` | **Sealed** private records: `contacts`, `history.<network>` (the Seedelf history), `coins.<network>` (the locked UTxOs and the collateral), and `dapps` (the sites connected to the public account, per network, chunk 15). See below. |
@@ -290,7 +312,7 @@ flowchart LR
 
 - **React + TypeScript, bundled with Vite 8 (Rolldown) (decided).**
   - One build emits the page (the tab and the side panel), `sw.js`, the WASM asset, and `manifest.json` (generated by `extension/src/manifest.ts`).
-  - The page CSP is `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'` plus the enabled network's Koios and giveme.my origins only. Styles, images and fonts come only from the extension itself.
+  - The page CSP is `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'` plus the build's networks' Koios and giveme.my origins (CoinGecko's in a mainnet build) and Minswap's aggregators only. Styles, images and fonts come only from the extension itself.
   - No component library, and nothing loaded from the web: the font and the icons ship inside the extension.
   - Not Lace's React Native / Expo stack.
 - **The look: Lace's dark mode in Seedelf's colours, dark only (chunk 11a, decided).**
@@ -439,7 +461,7 @@ flowchart LR
 
 ## Lovejoin
 
-Chunk 16: [Lovejoin](https://github.com/logical-mechanism/Lovejoin), a mixer of fixed 10 ₳ boxes, deployed on preprod only. The plan has the protocol and the decisions: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md).
+Chunk 16: [Lovejoin](https://github.com/logical-mechanism/Lovejoin), a mixer of fixed 10 ₳ boxes, on preprod and, since 2026-09-26, on mainnet, where a return goes through it too once its pool holds 30 boxes that aren't the wallet's (the pool floor; below it a return comes back directly and says why). It has had no third-party audit, only its makers' own review, and the wallet says so where Lovejoin is chosen. The plan has the protocol and the decisions: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md).
 
 ```mermaid
 flowchart LR

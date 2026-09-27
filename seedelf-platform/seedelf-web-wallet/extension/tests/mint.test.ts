@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
 import { MintService, SESSION_MINT } from "../src/background/mint";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { Wallet } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
 import { accountMintPreprod, loadTestWasm, testBalances, vectors } from "./fakes";
@@ -103,7 +103,7 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
 
     expect(t.koios.submitted).toHaveLength(0);
     expect(await t.session.get(SESSION_MINT)).toBeDefined(); // Send can be tried again
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
   });
 
   it("signs after a worker restart: the one-time key comes back from the seed", async () => {
@@ -146,12 +146,12 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([summary.txHash]);
     expect(pending).toEqual({ kind: "mint", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
     expect(await t.session.get(SESSION_MINT)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toEqual(pending);
+    expect(await t.session.get(pendingKey("preprod"))).toEqual(pending);
 
     // The shared watch reports it, and forgets it once confirmed.
     t.koios.confirmations = 1;
-    expect(await t.pending.pending()).toMatchObject({ kind: "mint", confirmations: 1 });
-    expect(await t.pending.pending()).toBeNull();
+    expect(await t.pending.pending("preprod")).toMatchObject({ kind: "mint", confirmations: 1 });
+    expect(await t.pending.pending("preprod")).toBeNull();
   });
 
   it("refuses to send anything but the reviewed transaction", async () => {

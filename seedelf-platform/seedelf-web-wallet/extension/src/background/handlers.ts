@@ -13,7 +13,7 @@ import type { DappService } from "./dapp";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
-import type { PreferencesService } from "./preferences";
+import type { NetworkChoice, PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
 import type { SendService } from "./send";
 import type { LovejoinService } from "./lovejoin";
@@ -49,8 +49,12 @@ export interface Context {
   /** Why the connector can't be turned on, when it can't (storage-access.ts). */
   connectorBlocked?: Status["connectorBlocked"];
   version: string;
+  /** The network this request is on: the user's choice as the request came in (sw.ts reads it for each one). */
   network: NetworkName;
+  /** The build's networks, its default first. */
   networks: NetworkName[];
+  /** The user's choice of network, which `network-set` changes. */
+  networkChoice: NetworkChoice;
 }
 
 export async function handle(message: Message, ctx: Context): Promise<Requests[Message["type"]]["result"]> {
@@ -112,7 +116,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "send-submit":
       return ctx.send.submit(ctx.network, message.txHash);
     case "pending-tx":
-      return ctx.pending.pending();
+      return ctx.pending.pending(ctx.network);
     case "reset-wallet":
       await wallet.reset();
       // The settings went with it: sites can't connect to a wallet that isn't there.
@@ -180,6 +184,14 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         if (prefs.dappConnector && !working) return ctx.preferences.set({ dappConnector: false });
       }
       return prefs;
+    }
+    case "network-set": {
+      // What's kept for Send stays tied to the network it was built on
+      // (every submit checks it), so nothing built here goes out there.
+      const network = await ctx.networkChoice.set(message.network);
+      // Sites asking on the network the wallet left hear no.
+      await ctx.dapp.networkChanged();
+      return status({ ...ctx, network });
     }
     case "price":
       return ctx.prices.get(ctx.network);

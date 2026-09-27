@@ -4,13 +4,15 @@
 import { describe, expect, it } from "vitest";
 
 import { handle, type Context } from "../src/background/handlers";
-import type { Account, Balances, Status, UnlockResult, UtxoLists } from "../src/shared/rpc";
+import { NetworkChoice } from "../src/background/preferences";
+import type { NetworkName } from "../src/networks";
+import type { Account, Balances, Message, Status, UnlockResult, UtxoLists } from "../src/shared/rpc";
 import { isMessage } from "../src/shared/rpc";
 import { loadTestWasm, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 
-function context(t = testBalances()): Context {
+function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Context {
   const { wallet, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, dapp, sessions, lovejoin } =
     t;
   return {
@@ -35,8 +37,14 @@ function context(t = testBalances()): Context {
     connector: async (on) => on,
     version: "1.0.0",
     network: "preprod",
-    networks: ["preprod"],
+    networks,
+    networkChoice: new NetworkChoice(t.local, networks),
   };
+}
+
+/** A request as the worker answers it (sw.ts `answerUi`): on the network chosen as it comes in. */
+async function ask(message: Message, ctx: Context) {
+  return handle(message, { ...ctx, network: await ctx.networkChoice.get() });
 }
 
 describe("handlers", () => {
@@ -130,6 +138,40 @@ describe("handlers", () => {
     });
     expect(await handle({ type: "price" }, ctx)).toBeNull();
     expect(t.coingecko.state.urls).toEqual([]);
+  });
+
+  it("switches networks in a mainnet build: mainnet first, every request on the one chosen, nothing kept sent on the other", async () => {
+    const t = testBalances();
+    const ctx = context(t, ["mainnet", "preprod"]);
+    expect(((await ask({ type: "status" }, ctx)) as Status).network).toBe("mainnet");
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    await ask({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    expect(((await ask({ type: "account" }, ctx)) as Account).receiveAddress).toBe(v.mainnet.receive_0);
+
+    const moved = (await ask({ type: "network-set", network: "preprod" }, ctx)) as Status;
+    expect(moved).toMatchObject({ network: "preprod", networks: ["mainnet", "preprod"], state: "unlocked" });
+    expect(await t.local.get("seedelf.network")).toBe("preprod");
+    expect(((await ask({ type: "account" }, ctx)) as Account).receiveAddress).toBe(v.preprod.receive_0);
+
+    // A payment built on preprod and kept for Send is never sent once the wallet is on mainnet.
+    const other = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!;
+    const built = (await ask({ type: "send-build", payments: [{ to: other.preprod.receive_0, lovelace: "2000000", tokens: [] }] }, ctx)) as {
+      txHash: string;
+    };
+    await ask({ type: "network-set", network: "mainnet" }, ctx);
+    await expect(ask({ type: "send-submit", txHash: built.txHash }, ctx)).rejects.toThrow("isn't ready to send");
+    expect(t.koios.submitted).toHaveLength(0);
+    // Back on preprod, it goes.
+    await ask({ type: "network-set", network: "preprod" }, ctx);
+    expect(await ask({ type: "send-submit", txHash: built.txHash }, ctx)).toMatchObject({ network: "preprod", txHash: built.txHash });
+  });
+
+  it("keeps a preprod build on preprod", async () => {
+    const t = testBalances();
+    const ctx = context(t);
+    await expect(ask({ type: "network-set", network: "mainnet" }, ctx)).rejects.toThrow("can't use Mainnet");
+    await t.local.set("seedelf.network", "mainnet");
+    expect(((await ask({ type: "status" }, ctx)) as Status).network).toBe("preprod");
   });
 
   it("reads balances once unlocked", async () => {

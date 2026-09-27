@@ -12,7 +12,7 @@ import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, Minswap } from "../src/background/minswap";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
 import {
   checkAsk,
@@ -432,7 +432,7 @@ describe("a private session", () => {
     const returned = await sessions.backSubmit("preprod", back.txHash);
     expect(returned).toMatchObject({ kind: "session-back", txHash: back.txHash });
     // Its page watches the return; Home's banner still has only the funding.
-    expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "session-out" });
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ kind: "session-out" });
     expect((await t.activity.seedelf("preprod"))[0]).toMatchObject({
       kind: "session-back",
       direction: "in",
@@ -730,7 +730,7 @@ describe("a swap that runs itself", () => {
     ]);
     expect(view.auto!.step).toBe("ordering");
     // Its page watches the swap: Home's banner still has only the funding.
-    expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "session-out" });
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ kind: "session-out" });
 
     // The order lands and waits for a batcher.
     ordered(t);

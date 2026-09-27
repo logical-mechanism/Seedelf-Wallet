@@ -1144,9 +1144,11 @@ export class SessionService {
   /**
    * Every running swap's next step, and more of every return's chain still
    * being sent (a site's session, a hand-run swap), for the alarm and for
-   * unlocking. The alarm stops once nothing runs.
+   * unlocking. The alarm stops once nothing runs. Returns whether something
+   * still runs on `network`: the worker runs every network in turn, and the
+   * last one's stop mustn't stop another's.
    */
-  async runAll(network: NetworkName): Promise<void> {
+  async runAll(network: NetworkName): Promise<boolean> {
     const book = await this.book(network);
     // A chain a lock or a closed browser cut says so now, not only once it's brought back.
     await this.serial(() => this.markCut(network)).catch(() => undefined);
@@ -1157,6 +1159,7 @@ export class SessionService {
     let still = (await this.book(network)).sessions.some(running);
     for (const s of book.sessions.filter((r) => !r.closedAt)) still ||= !!(await this.pendingChain(network, s.index));
     await (still ? this.deps.alarm?.start() : this.deps.alarm?.stop());
+    return still;
   }
 
   /**

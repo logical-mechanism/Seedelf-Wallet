@@ -49,7 +49,7 @@ After a rebuild, press the reload arrow on the extension's card.
 
 - **Stable ID:** the dev key in `src/manifest.ts` pins the ID to `jfekiogplaamnceifeehipmomhojngcb`, so the extension's storage survives moving the folder.
 - **Web Store builds** set `VITE_STORE_BUILD=true` to leave that key out. `npm run package` makes one and zips it (see [the release checklist](../docs/development.md#releasing-to-the-web-store)).
-- **Mainnet:** builds are preprod-only unless `VITE_ENABLE_MAINNET=true`.
+- **Mainnet:** a build is preprod only unless `VITE_ENABLE_MAINNET=true`. With it (the store's build, `npm run package`), it has mainnet and preprod, mainnet by default, and Settings switches between them.
 
 ## Scripts
 

@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ADA_HANDLE_POLICY } from "../src/background/destination";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { SESSION_SEND } from "../src/background/send";
 import { MAX_RECIPIENTS } from "../src/shared/recipients";
 import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NOT_AN_ADDRESS } from "../src/shared/seedelf-name";
@@ -192,7 +192,7 @@ describe("send", () => {
     expect(txIdOf(t.koios.submitted[0]!)).toBe(summary.txHash);
     expect(t.collateral.asked).toHaveLength(0);
     expect(await t.session.get(SESSION_SEND)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "send" });
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ kind: "send" });
     expect(await t.activity.seedelf("preprod")).toEqual([]);
     await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("isn't ready to send");
   });

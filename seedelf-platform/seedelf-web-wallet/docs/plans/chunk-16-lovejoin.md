@@ -224,7 +224,7 @@
 - **Hard forks:** they can change the cost model faster than `uplc` releases, as protocol 11 did. The cross-check stops the chain rather than risk the collateral.
 - **The pool's size:** the design assumes a healthy pool (decided). With too few fresh boxes for a tree, the return is plain and says why.
 - **Collateral:** whether the last transaction can name the UTxO it spends as its own collateral (see *Decided in the design*).
-- **Mainnet:** deployed on 2026-09-26, and `seedelf-core` and the WebAssembly build for it (launch review M1). The extension still opens the tile and the return step on preprod only until the owner decides how Lovejoin launches there. Its pool starts empty, and every mix needs boxes that aren't the wallet's (launch review M5).
+- **Mainnet:** deployed on 2026-09-26, and `seedelf-core` and the WebAssembly build for it (launch review M1). The extension opens it there too, from `networks.ts`'s `lovejoin` entry (the owner's call, 2026-09-26): returns go through it by default, as on preprod, once the pool holds 30 boxes that aren't the wallet's (the pool floor). Its pool started empty, and every mix needs boxes that aren't the wallet's (launch review M5), so until then a return comes back directly and says why.
 
 ## Built (2026-09-25, first session)
 

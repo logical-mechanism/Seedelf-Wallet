@@ -65,7 +65,7 @@ import type {
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
 import { KoiosBusyError, KoiosError, SpentInputError, type KoiosUtxo } from "./koios";
-import { SESSION_PENDING } from "./pending";
+import { pendingKey } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import type { ScriptSpendDeps } from "./script-spend";
@@ -893,7 +893,7 @@ export class LovejoinService {
     const pending: PendingTx = { kind: "lovejoin-mix", network, txHash, submittedAt: now(), confirmations: null };
     await wallet.withKeys(async () => {
       await session.remove(SESSION_BALANCES_PREFIX + network);
-      await session.set(SESSION_PENDING, pending);
+      await session.set(pendingKey(network), pending);
     });
     return pending;
   }
@@ -1304,7 +1304,7 @@ export class LovejoinService {
     }
     await dueGoes();
     // Home's banner watches it, as it does every send the user makes; the ones due by themselves stay out of it.
-    await this.deps.wallet.withKeys(() => this.deps.session.set(SESSION_PENDING, pending));
+    await this.deps.wallet.withKeys(() => this.deps.session.set(pendingKey(network), pending));
     return pending;
   }
 

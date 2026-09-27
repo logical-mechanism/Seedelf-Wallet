@@ -6,6 +6,10 @@
 //             (unlocking first if need be). Connected sites are a sealed
 //             private record (`dapps`), per network: which sites you use
 //             says something about you. Settings lists them, to disconnect.
+// Networks    Each call is on the network the wallet is on as it's made
+//             (Settings switches it): `getNetworkId` says which, and a site
+//             connected on one isn't on the other. What sites were asking
+//             on the network the wallet left is declined (`networkChanged`).
 // Locked      Everything but `isEnabled()` (false while locked) opens the
 //             window to unlock first. Closing it without unlocking refuses
 //             the calls, and that site's reads are refused without asking
@@ -144,7 +148,8 @@ export interface DappDeps extends AccountDeps {
   sessions: SessionService;
   /** How often a private session's funding is looked for (tests: at once). */
   fundingPollMs?: number;
-  network: NetworkName;
+  /** The network the wallet is on now: the user's choice (Settings), read for each call. */
+  network: () => NetworkName | Promise<NetworkName>;
   now: () => number;
   window: ApprovalWindow;
   /** Tells the connector's window that what's waiting changed. */
@@ -189,6 +194,8 @@ interface Signed {
 interface Waiting {
   approval: DappApproval;
   session: DappSession;
+  /** The network it was asked on: declined once the wallet moves to another (`networkChanged`). */
+  network: NetworkName;
   approve: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (error: DappError) => void;
@@ -205,6 +212,8 @@ interface Unlocking {
 type SignedTx = { witnessSet: string; summary: DappTxSummary };
 
 const ALREADY_CONNECTED = "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session.";
+/** What a site asking on the network the wallet left hears, and the window says. */
+const NETWORK_LEFT = "Seedelf Wallet moved to another network in its settings, so this request was declined. Ask again.";
 
 export class DappService {
   private readonly waiting: Waiting[] = [];
@@ -245,20 +254,22 @@ export class DappService {
     if (method === "isEnabled" && !on) return false;
     if (!on) throw refused("Connecting sites is off in Seedelf Wallet's settings.");
     if (method === "isEnabled") {
-      return (await this.deps.wallet.state()) === "unlocked" && (await this.connected(origin));
+      return (await this.deps.wallet.state()) === "unlocked" && (await this.connected(await this.deps.network(), origin));
     }
     await this.unlocked(session, method);
+    // The network the wallet is on as this call goes on: a site connected on
+    // one isn't on the other, and what it asks is answered, and signed, there.
+    const network = await this.deps.network();
     if (method === "enable") {
-      if (!(await this.connected(origin))) {
-        await this.ask(session, { kind: "connect", password: await this.needsPassword() }, APIError.Refused, () =>
-          this.connect(origin),
+      if (!(await this.connected(network, origin))) {
+        await this.ask(session, network, { kind: "connect", password: await this.needsPassword() }, APIError.Refused, () =>
+          this.connect(network, origin),
         );
       }
       return true;
     }
-    const site = await this.site(origin);
+    const site = await this.site(network, origin);
     if (!site) throw refused("This site isn't connected to Seedelf Wallet. Call enable() first.");
-    const network = this.deps.network;
     const holder = await this.holder(network, site);
     switch (method) {
       case "getNetworkId":
@@ -311,6 +322,11 @@ export class DappService {
     if (!asked) return { error: "The site stopped waiting for this." };
     const { approval } = asked;
     if (approval.kind === "connect" && approval.funding) return { error: "Its private session is funded already." };
+    // Asked on the network the wallet has left: never signed or connected on the one it's on.
+    if (asked.network !== (await this.deps.network())) {
+      await this.networkChanged();
+      return { error: NETWORK_LEFT };
+    }
     // A signature, or a private session's funding, needs the password when the setting says so.
     const guarded = approval.kind === "connect" ? !!fund : true;
     if (approve && guarded && approval.password) {
@@ -397,6 +413,23 @@ export class DappService {
     }
   }
 
+  /**
+   * The wallet moved to another network (Settings): what sites asked on the
+   * network it left is declined, as if the user had said no. A private
+   * session's funding that's sent isn't undone: its site connects on the
+   * network it was sent on, once it arrives, as when the window closes.
+   */
+  async networkChanged(): Promise<void> {
+    const network = await this.deps.network();
+    const left = this.waiting.filter((w) => w.network !== network && !funding(w));
+    if (!left.length) return;
+    for (const w of left) {
+      remove(this.waiting, (x) => x === w);
+      w.reject(new DappError({ ...w.declined, info: NETWORK_LEFT }));
+    }
+    this.deps.changed();
+  }
+
   /** A site's page went away: nothing it asked for waits any more. */
   gone(session: DappSession): void {
     const before = this.waiting.length + this.unlocking.length;
@@ -405,11 +438,16 @@ export class DappService {
     if (this.waiting.length + this.unlocking.length !== before) this.deps.changed();
   }
 
-  /** The sites connected on this network, each with its private session if it has one. Throws if locked. */
+  /** The sites connected on the network the wallet is on, each with its private session if it has one. Throws if locked. */
   async sites(): Promise<DappSite[]> {
+    return this.sitesOn(await this.deps.network());
+  }
+
+  /** The sites connected on `network`. */
+  private async sitesOn(network: NetworkName): Promise<DappSite[]> {
     const all = (await this.deps.store.get<Connected[]>("dapps")) ?? [];
     return all
-      .filter((s) => s.network === this.deps.network)
+      .filter((s) => s.network === network)
       .map(({ origin, connectedAt, session }) => ({ origin, connectedAt, ...(session === undefined ? {} : { session }) }))
       .sort((a, b) => a.origin.localeCompare(b.origin));
   }
@@ -419,10 +457,11 @@ export class DappService {
    * site's private session ends with it, and only once its account is empty.
    */
   async forget(origin: string): Promise<DappSite[]> {
-    const site = await this.site(origin);
-    if (site?.session !== undefined) await this.deps.sessions.disconnect(this.deps.network, site.session);
-    await this.changeSites((all) => all.filter((s) => !(s.origin === origin && s.network === this.deps.network)));
-    return this.sites();
+    const network = await this.deps.network();
+    const site = await this.site(network, origin);
+    if (site?.session !== undefined) await this.deps.sessions.disconnect(network, site.session);
+    await this.changeSites((all) => all.filter((s) => !(s.origin === origin && s.network === network)));
+    return this.sitesOn(network);
   }
 
   /**
@@ -431,8 +470,9 @@ export class DappService {
    * reached the chain has no connected site to disconnect.
    */
   async disconnectSession(index: number): Promise<void> {
-    await this.deps.sessions.disconnect(this.deps.network, index);
-    await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === this.deps.network)));
+    const network = await this.deps.network();
+    await this.deps.sessions.disconnect(network, index);
+    await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === network)));
   }
 
   /**
@@ -444,25 +484,26 @@ export class DappService {
     const w = this.waiting.find((x) => x.approval.id === id);
     if (!w || w.approval.kind !== "connect") throw new Error("The site stopped waiting for this.");
     if (w.approval.funding) throw new Error("Its private session is funded already.");
-    if (await this.connected(w.session.origin)) throw new Error(ALREADY_CONNECTED);
-    return this.deps.sessions.siteOutBuild(this.deps.network, w.session.origin, lovelace, tokens);
+    if (w.network !== (await this.deps.network())) throw new Error(NETWORK_LEFT);
+    if (await this.connected(w.network, w.session.origin)) throw new Error(ALREADY_CONNECTED);
+    return this.deps.sessions.siteOutBuild(w.network, w.session.origin, lovelace, tokens);
   }
 
-  private async site(origin: string): Promise<DappSite | undefined> {
-    return (await this.sites()).find((s) => s.origin === origin);
+  private async site(network: NetworkName, origin: string): Promise<DappSite | undefined> {
+    return (await this.sitesOn(network)).find((s) => s.origin === origin);
   }
 
-  private async connected(origin: string): Promise<boolean> {
-    return (await this.site(origin)) !== undefined;
+  private async connected(network: NetworkName, origin: string): Promise<boolean> {
+    return (await this.site(network, origin)) !== undefined;
   }
 
-  /** Records a site as connected, to `session` if given; false when it's connected already. */
-  private async connect(origin: string, session?: number): Promise<boolean> {
+  /** Records a site as connected on `network`, to `session` if given; false when it's connected already. */
+  private async connect(network: NetworkName, origin: string, session?: number): Promise<boolean> {
     let added = false;
     await this.changeSites((all) => {
-      if (all.some((s) => s.origin === origin && s.network === this.deps.network)) return all;
+      if (all.some((s) => s.origin === origin && s.network === network)) return all;
       added = true;
-      const site: Connected = { origin, network: this.deps.network, connectedAt: this.deps.now() };
+      const site: Connected = { origin, network, connectedAt: this.deps.now() };
       return [...all, session === undefined ? site : { ...site, session }];
     });
     return added;
@@ -498,17 +539,18 @@ export class DappService {
    * `enable()` answers. The window shows it waiting.
    */
   private async fundPrivate(w: Waiting, txHash: string): Promise<{ error?: string }> {
-    const network = this.deps.network;
+    // The network it was asked on, which `answer` checked the wallet is still on.
+    const network = w.network;
     // Another of its requests connected it meanwhile (two tabs, or enable() twice):
     // the session wouldn't be the one the site talks to, so it isn't funded.
-    if (await this.connected(w.session.origin)) return { error: ALREADY_CONNECTED };
+    if (await this.connected(network, w.session.origin)) return { error: ALREADY_CONNECTED };
     let index: number;
     try {
       ({ index } = await this.deps.sessions.siteOutSubmit(network, txHash, w.session.origin));
     } catch (e) {
       return { error: (e as Error).message };
     }
-    if (!(await this.connect(w.session.origin, index))) {
+    if (!(await this.connect(network, w.session.origin, index))) {
       // Connected while the funding was sent: the site talks to that, so its
       // enable() has its answer, and the session's money waits on the dApps page.
       remove(this.waiting, (x) => x === w);
@@ -526,7 +568,8 @@ export class DappService {
 
   /** Looks for a private session's funding every 10 s; once it's there, the site's `enable()` answers. */
   private async watchFunding(w: Waiting, index: number): Promise<void> {
-    const { sessions, now, network } = this.deps;
+    const { sessions, now } = this.deps;
+    const network = w.network;
     const started = now();
     const pause = this.deps.fundingPollMs ?? FUNDING_POLL_MS;
     const done = (settle: () => void) => {
@@ -576,7 +619,7 @@ export class DappService {
   }
 
   /** Puts a request in front of the user; `approve` runs if they say yes. */
-  private ask<T>(session: DappSession, request: DappAsk, declined: number, approve: () => Promise<T>): Promise<T> {
+  private ask<T>(session: DappSession, network: NetworkName, request: DappAsk, declined: number, approve: () => Promise<T>): Promise<T> {
     if (this.waiting.length >= MAX_WAITING) throw refused("Seedelf Wallet is busy with this site's other requests.");
     // Random, not a count: a count starts again when the worker restarts, and a
     // window still showing an older request would then answer a new one.
@@ -586,6 +629,7 @@ export class DappService {
       this.waiting.push({
         approval,
         session,
+        network,
         approve,
         resolve: resolve as (value: unknown) => void,
         reject,
@@ -931,7 +975,7 @@ export class DappService {
       ...sessionOf(holder),
       ...(collateralSpent ? { collateralSpent } : {}),
     };
-    return this.ask(session, ask, TxSignError.UserDeclined, async () => {
+    return this.ask(session, network, ask, TxSignError.UserDeclined, async () => {
       const signed = await wallet.withKeys(
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx,
@@ -1020,6 +1064,7 @@ export class DappService {
     const text = readableText(hex);
     return this.ask(
       session,
+      network,
       {
         kind: "sign-data",
         address: signer.address,

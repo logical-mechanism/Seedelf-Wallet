@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { Collateral } from "../src/background/collateral";
 import { SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { Koios } from "../src/background/koios";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
 import { SEEDELF_NAME_RULE } from "../src/shared/seedelf-name";
 import { txIdOf } from "./fixtures/cbor";
@@ -167,7 +167,7 @@ describe("transfer", () => {
     await expect(t.transfer.submit("preprod", summary.txHash)).rejects.toThrow("doesn't match this transaction");
     expect(t.koios.submitted).toHaveLength(0);
     expect(await t.session.get(SESSION_TRANSFER)).toBeDefined(); // Send can be tried again
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
   });
 
   it("reads the contract in full for the next review once giveme.my refuses (launch review #53)", async () => {
@@ -201,10 +201,10 @@ describe("transfer", () => {
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([summary.txHash]);
     expect(pending).toEqual({ kind: "transfer", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
     expect(await t.session.get(SESSION_TRANSFER)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toEqual(pending);
+    expect(await t.session.get(pendingKey("preprod"))).toEqual(pending);
 
     t.koios.confirmations = 2;
-    expect(await t.pending.pending()).toMatchObject({ kind: "transfer", confirmations: 2 });
+    expect(await t.pending.pending("preprod")).toMatchObject({ kind: "transfer", confirmations: 2 });
   });
 
   it("refuses to send anything but the reviewed transaction", async () => {

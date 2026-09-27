@@ -5,6 +5,15 @@
 /** chrome.storage.local: the user's settings. */
 export const LOCAL_PREFERENCES = "seedelf.preferences";
 
+/**
+ * chrome.storage.local: the network the wallet is on, in a build that has
+ * more than one (a mainnet build: mainnet, or preprod for testing). Kept on
+ * its own, not with the settings: the worker reads it for every request,
+ * locked or not, and removing the wallet keeps it, as it keeps where the
+ * wallet opens. Anything else there, or nothing, is the build's first network.
+ */
+export const LOCAL_NETWORK = "seedelf.network";
+
 /** How long without activity before the wallet locks, in minutes: Lace's choices, less "never". */
 export const LOCK_AFTER_MINUTES = [1, 5, 15, 30, 60] as const;
 export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number];

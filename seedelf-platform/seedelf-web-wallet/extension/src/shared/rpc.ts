@@ -11,7 +11,9 @@ export type WalletState = "no-wallet" | "locked" | "unlocked";
 export interface Status {
   state: WalletState;
   version: string;
+  /** The network the wallet is on: the user's choice, among `networks` (Settings). */
   network: NetworkName;
+  /** The networks this build has, its default first: preprod alone, or mainnet and preprod. */
   networks: NetworkName[];
   /** When locked: how long until another unlock attempt is allowed (ms). */
   retryAfterMs: number;
@@ -1075,6 +1077,12 @@ export interface Requests {
   "stake-submit": { payload: { txHash: string }; result: PendingTx };
   preferences: { payload: None; result: Preferences };
   "preferences-set": { payload: Partial<Preferences>; result: Preferences };
+  /**
+   * Puts the wallet on another of the build's networks (Settings): every
+   * page follows (state-changed), and what sites were asking on the other
+   * network is declined.
+   */
+  "network-set": { payload: { network: NetworkName }; result: Status };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
   /** What sites are waiting for the user to answer, oldest first. */
@@ -1244,6 +1252,7 @@ const REQUEST_LIST = [
   "stake-submit",
   "preferences",
   "preferences-set",
+  "network-set",
   "price",
   "dapp-approvals",
   "dapp-close",

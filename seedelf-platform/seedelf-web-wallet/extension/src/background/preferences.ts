@@ -20,20 +20,54 @@
 //                   default.
 //
 // Where the toolbar button opens the wallet isn't one of these: it's the
-// browser's, not the wallet's (shared/open-in.ts).
+// browser's, not the wallet's (shared/open-in.ts). Nor is the network, which
+// has a key of its own (`NetworkChoice`, below).
 
+import { isNetworkName, NETWORKS, type NetworkName } from "../networks";
 import {
   DEFAULT_PREFERENCES,
   isCurrency,
   isLockAfter,
   isLovejoinDelay,
   isLovejoinDepth,
+  LOCAL_NETWORK,
   LOCAL_PREFERENCES,
   type Preferences,
 } from "../shared/preferences";
 import type { Area } from "./storage";
 
-export { LOCAL_PREFERENCES };
+export { LOCAL_NETWORK, LOCAL_PREFERENCES };
+
+/**
+ * The network the wallet is on: the user's choice (`seedelf.network`), among
+ * the ones this build has, else the build's first (mainnet in a mainnet
+ * build). The worker reads it at every request, so a switch needs no restart,
+ * and every service takes the network it's asked about: what's kept per
+ * network stays apart (docs/architecture.md, Networks).
+ */
+export class NetworkChoice {
+  constructor(
+    private readonly local: Area,
+    /** The build's networks, the default first (networks.ts `enabledNetworks`). */
+    readonly networks: NetworkName[],
+  ) {}
+
+  async get(): Promise<NetworkName> {
+    const kept = await this.local.get<unknown>(LOCAL_NETWORK);
+    return isNetworkName(kept) && this.networks.includes(kept) ? kept : this.networks[0]!;
+  }
+
+  /** Puts the wallet on `network`; refused for a network this build doesn't have. */
+  async set(network: unknown): Promise<NetworkName> {
+    if (!isNetworkName(network) || !this.networks.includes(network)) {
+      throw new Error(
+        isNetworkName(network) ? `This build of Seedelf Wallet can't use ${NETWORKS[network].label}.` : "That isn't a network.",
+      );
+    }
+    await this.local.set(LOCAL_NETWORK, network);
+    return network;
+  }
+}
 
 export class PreferencesService {
   constructor(private readonly local: Area) {}

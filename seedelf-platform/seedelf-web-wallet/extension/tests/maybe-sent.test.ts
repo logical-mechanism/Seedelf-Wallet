@@ -12,7 +12,7 @@ import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { SESSION_BUILT } from "../src/background/move-in";
-import { EXPIRED_AFTER_SLOTS, MAYBE_SENT_WAIT, SESSION_PENDING, UNSEEN_AFTER_MS } from "../src/background/pending";
+import { EXPIRED_AFTER_SLOTS, MAYBE_SENT_WAIT, pendingKey, UNSEEN_AFTER_MS } from "../src/background/pending";
 import { SESSION_SEND } from "../src/background/send";
 import { spentSet } from "../src/background/spent";
 import { SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
@@ -81,7 +81,7 @@ describe("a payment Koios didn't answer", () => {
     expect(await spentSet(t.session)).toEqual(new Set(inputs));
     // Kept, signed as sent, for Send again.
     expect(await t.session.get(SESSION_SEND)).toMatchObject({ txHash: summary.txHash, sentCbor: Buffer.from(t.koios.submitted[0]!).toString("hex") });
-    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, maybeSent: true });
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
 
     // Review it again, and the wallet would pay again with other UTxOs: it waits instead.
     await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
@@ -99,8 +99,30 @@ describe("a payment Koios didn't answer", () => {
     delete t.koios.rejectSubmit;
     const next = await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
     expect(next.txHash).not.toBe(summary.txHash);
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
     expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
+  });
+
+  it("is watched on its own network: the other network's payments neither wait for it nor drop it", async () => {
+    const t = await unlocked();
+    const summary = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    unanswered(t);
+    await t.send.submit("preprod", summary.txHash);
+    // The wallet moves to mainnet: nothing there waits for it, and mainnet's Home shows nothing.
+    expect(await t.pending.pending("mainnet")).toBeNull();
+    expect(await t.pending.watch("mainnet")).toBe(false);
+    // A payment watched there has its own place, and never takes preprod's.
+    await t.session.set(pendingKey("mainnet"), { kind: "send", network: "mainnet", txHash: "cd".repeat(32), submittedAt: t.clock.now, confirmations: null });
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: summary.txHash, maybeSent: true });
+
+    // The worker's runs keep preprod's going meanwhile: looked for, then sent again after two minutes, and taken.
+    expect(await t.pending.watch("preprod")).toBe(true);
+    expect(ids(t)).toEqual([summary.txHash]);
+    t.clock.now += 2 * 60_000;
+    expect(await t.pending.watch("preprod")).toBe(false);
+    expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: summary.txHash, confirmations: null });
+    expect(await t.session.get(pendingKey("preprod"))).not.toHaveProperty("maybeSent");
   });
 
   it("makes a collateral payment the collateral on its way, as one Koios answered", async () => {
@@ -149,7 +171,7 @@ describe("a payment Koios didn't answer", () => {
     const real = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("", { status: 429 }) : real(url, init));
     await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("Koios is limiting requests");
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
     expect(await spentSet(t.session)).toEqual(new Set());
     expect(await t.session.get(SESSION_SEND)).not.toHaveProperty("sentCbor");
   });
@@ -159,11 +181,11 @@ describe("a payment Koios didn't answer", () => {
     const summary = await t.moveIn.build("preprod", "5000000", []);
     unanswered(t);
     await t.moveIn.submit("preprod", summary.txHash);
-    expect(await t.pending.pending()).toMatchObject({ maybeSent: true });
+    expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true });
     expect(ids(t)).toEqual([summary.txHash]);
 
     await busyFor(t, 2 * 60_000);
-    const pending = await t.pending.pending();
+    const pending = await t.pending.pending("preprod");
     expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
     expect(pending).toMatchObject({ txHash: summary.txHash, confirmations: null, submittedAt: t.clock.now });
     expect(pending!.maybeSent).toBeUndefined();
@@ -180,14 +202,14 @@ describe("a payment Koios didn't answer", () => {
     const { invalidHereafter } = await t.send.submit("preprod", summary.txHash);
     await busyFor(t, 2 * 60 * 60_000 + 60_000);
     t.koios.tip = invalidHereafter! + EXPIRED_AFTER_SLOTS - 1;
-    expect(await t.pending.pending()).toMatchObject({ maybeSent: true, confirmations: null });
-    expect(await t.pending.pending()).not.toHaveProperty("dropped");
+    expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true, confirmations: null });
+    expect(await t.pending.pending("preprod")).not.toHaveProperty("dropped");
 
     t.koios.tip = invalidHereafter! + EXPIRED_AFTER_SLOTS + 1;
-    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, dropped: "expired", confirmations: null });
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "expired", confirmations: null });
     expect(await spentSet(t.session)).toEqual(new Set());
     expect(await t.session.get(SESSION_SEND)).toBeUndefined();
-    expect(await t.pending.pending()).toBeNull();
+    expect(await t.pending.pending("preprod")).toBeNull();
     await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).resolves.toBeDefined();
   });
 });
@@ -209,7 +231,7 @@ describe("a private payment Koios didn't answer", () => {
     expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
 
     t.koios.confirmations = 1;
-    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, confirmations: 1 });
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: 1 });
     expect(await t.activity.seedelf("preprod")).toMatchObject([{ kind: "withdraw", txHash: summary.txHash }]);
     expect(await t.session.get(SESSION_WITHDRAW)).toBeUndefined();
   });
@@ -226,10 +248,10 @@ describe("a private payment Koios didn't answer", () => {
     expect([...(await spentSet(t.session))]).toEqual(inputs);
 
     await busyFor(t, UNSEEN_AFTER_MS - 60_000);
-    expect(await t.pending.pending()).toMatchObject({ maybeSent: true });
+    expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true });
     await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
     await busyFor(t, 2 * 60_000);
-    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, dropped: "unseen" });
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "unseen" });
     expect(await spentSet(t.session)).toEqual(new Set());
     expect(await t.session.get(SESSION_WITHDRAW)).toBeUndefined();
     expect((await t.activity.seedelf("preprod")).map((e) => e.txHash)).not.toContain(summary.txHash);

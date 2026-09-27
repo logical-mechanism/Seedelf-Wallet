@@ -25,7 +25,7 @@ import {
   WITHDRAW_SPREAD_MS,
   type ChainProgress,
 } from "../src/background/lovejoin";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SessionService } from "../src/background/sessions";
@@ -991,7 +991,7 @@ describe("the boxes' withdraws", CHAINS, () => {
     const pending = await lovejoin.withdrawNow("preprod");
     expect(pending).toMatchObject({ kind: "lovejoin-withdraw", confirmations: null });
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(pending.txHash);
-    expect(await t.wallet.withKeys(() => t.session.get(SESSION_PENDING))).toEqual(pending);
+    expect(await t.wallet.withKeys(() => t.session.get(pendingKey("preprod")))).toEqual(pending);
     // Its due time went with it.
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(0);
   });

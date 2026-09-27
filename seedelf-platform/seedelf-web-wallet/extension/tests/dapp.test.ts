@@ -254,6 +254,42 @@ describe("the dApp connector", () => {
     await expect(again).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
   });
 
+  it("follows the network the wallet is on: its ID, its own sites, and nothing asked on the one it left is signed", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const { tx } = await built(t);
+    expect(await t.dapp.call(s, "getNetworkId", [])).toBe(0);
+    const signing = t.dapp.call(s, "signTx", [tx, false]);
+    await until(() => t.dapp.approvals().length === 1);
+    const id = t.dapp.approvals()[0]!.id;
+    // Settings moves the wallet to mainnet while the window still shows the request: approving it signs nothing.
+    await t.networkChoice.set("mainnet");
+    expect(await t.dapp.answer(id, true, PASSWORD)).toEqual({ error: expect.stringContaining("moved to another network") });
+    await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+    expect(t.dapp.approvals()).toEqual([]);
+
+    // On mainnet the site isn't connected: it asks again, and hears mainnet's ID.
+    expect(await t.dapp.call(s, "isEnabled", [])).toBe(false);
+    expect(await t.dapp.sites()).toEqual([]);
+    await expect(t.dapp.call(s, "getNetworkId", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+    const enabling = t.dapp.call(s, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+    expect(await t.dapp.call(s, "getNetworkId", [])).toBe(1);
+
+    // A request waiting as the wallet moves back is declined at once.
+    const other = t.dapp.call(site("https://other.example"), "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.networkChoice.set("preprod");
+    await t.dapp.networkChanged();
+    await expect(other).rejects.toMatchObject({ failure: { code: APIError.Refused, info: expect.stringContaining("another network") } });
+    expect(t.dapp.approvals()).toEqual([]);
+    // Back on preprod, the site is connected as it was.
+    expect(await t.dapp.call(s, "getNetworkId", [])).toBe(0);
+    expect((await t.dapp.sites()).map((x) => x.origin)).toEqual(["https://app.example.com"]);
+  });
+
   it("refuses without asking a transaction that isn't the account's to sign, or can't be read", async () => {
     const { tx } = await built(await on());
     // Another wallet's connector: none of it is its to sign (its inputs are found through Koios).
@@ -709,7 +745,7 @@ describe("private CIP-30: a site connected to a private session", () => {
       store: t.store,
       sessions,
       fundingPollMs: 1,
-      network: "preprod",
+      network: () => "preprod",
       window: t.dappWindow,
       changed: () => undefined,
     });

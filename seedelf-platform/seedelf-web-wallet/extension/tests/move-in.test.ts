@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { SESSION_BUILT } from "../src/background/move-in";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { spentSet } from "../src/background/spent";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { ttlOf, txIdOf } from "./fixtures/cbor";
@@ -85,16 +85,16 @@ describe("move-in", () => {
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
 
     // Not on chain yet: still watching.
-    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, confirmations: null });
-    expect(await t.session.get(SESSION_PENDING)).toBeDefined();
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: null });
+    expect(await t.session.get(pendingKey("preprod"))).toBeDefined();
 
     // Confirmed: stop watching and drop the stale balances.
     await t.session.set(`${SESSION_BALANCES_PREFIX}preprod`, { stale: true });
     t.koios.confirmations = 1;
-    expect(await t.pending.pending()).toMatchObject({ confirmations: 1 });
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: 1 });
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
     expect(await t.session.get(`${SESSION_BALANCES_PREFIX}preprod`)).toBeUndefined();
-    expect(await t.pending.pending()).toBeNull();
+    expect(await t.pending.pending("preprod")).toBeNull();
   });
 
   it("watches until the chain passes its slot, then says it expired and frees its UTxOs", async () => {
@@ -103,29 +103,29 @@ describe("move-in", () => {
     const { invalidHereafter } = await t.moveIn.submit("preprod", summary.txHash);
     const inputs = txInputs(t.koios.submitted[0]!);
     await busyFor(t, 11 * 60_000);
-    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
-    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
     expect(t.koios.calls.some((c) => c.path === "tip")).toBe(false); // the device's clock says it can't have expired
 
     // Two hours on, the chain is past its slot, but not by enough to trust a Koios backend's tx_status.
     await busyFor(t, 2 * 60 * 60_000);
     t.koios.tip = invalidHereafter! + 60;
-    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
     expect(await spentSet(t.session)).toEqual(new Set(inputs));
     t.koios.tip = invalidHereafter! + 31 * 60;
     await t.session.set(`${SESSION_BALANCES_PREFIX}preprod`, { stale: true });
-    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, confirmations: null, dropped: "expired" });
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: null, dropped: "expired" });
     expect(await spentSet(t.session)).toEqual(new Set());
     expect(await t.session.get(`${SESSION_BALANCES_PREFIX}preprod`)).toBeUndefined();
-    expect(await t.pending.pending()).toBeNull();
+    expect(await t.pending.pending("preprod")).toBeNull();
   });
 
   it("stops watching a private payment, which has no slot, after 10 minutes", async () => {
     const t = await unlocked();
-    await t.session.set(SESSION_PENDING, { kind: "withdraw", network: "preprod", txHash: "ab".repeat(32), submittedAt: t.clock.now, confirmations: null });
+    await t.session.set(pendingKey("preprod"), { kind: "withdraw", network: "preprod", txHash: "ab".repeat(32), submittedAt: t.clock.now, confirmations: null });
     t.clock.now += 11 * 60_000;
-    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
-    expect(await t.pending.pending()).toBeNull();
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
+    expect(await t.pending.pending("preprod")).toBeNull();
   });
 
   it("refuses to send anything but the reviewed transaction", async () => {
@@ -144,7 +144,7 @@ describe("move-in", () => {
     t.koios.rejectSubmit = "ValueNotConservedUTxO";
     await expect(t.moveIn.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction: ValueNotConservedUTxO");
     expect(await t.session.get(SESSION_BUILT)).toBeDefined();
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
   });
 
   it("isn't stopped by a stranger's UTxO nested thousands of levels deep in the account (launch review H4)", async () => {
@@ -190,6 +190,6 @@ describe("move-in", () => {
     await t.wallet.lock();
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
     await expect(t.moveIn.build("preprod", "5000000", [])).rejects.toThrow("locked");
-    await expect(t.pending.pending()).rejects.toThrow("locked");
+    await expect(t.pending.pending("preprod")).rejects.toThrow("locked");
   });
 });

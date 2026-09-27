@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Koios, type FetchLike } from "../src/background/koios";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { LOCAL_POOLS_PREFIX, POOLS_TTL_MS, SESSION_STAKE, drepName, saturation } from "../src/background/staking";
 import { txIdOf } from "./fixtures/cbor";
 import { stakingPreprod, testBalances, vectors } from "./fakes";
@@ -186,7 +186,7 @@ describe("staking transactions", () => {
     expect(pending).toMatchObject({ kind: "stake", txHash: summary.txHash });
     expect(txIdOf(t.koios.submitted[0]!)).toBe(summary.txHash);
     expect(await t.session.get(SESSION_STAKE)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "stake" });
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ kind: "stake" });
     // Nothing of it goes into the Seedelf history, or to giveme.my.
     expect(await t.activity.seedelf("preprod")).toEqual([]);
     expect(t.collateral.asked).toHaveLength(0);

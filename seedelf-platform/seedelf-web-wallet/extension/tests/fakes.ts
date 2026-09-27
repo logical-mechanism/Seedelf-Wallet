@@ -24,7 +24,7 @@ import {
   type KoiosUtxo,
 } from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
-import { PreferencesService } from "../src/background/preferences";
+import { NetworkChoice, PreferencesService } from "../src/background/preferences";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
 import { LovejoinService } from "../src/background/lovejoin";
@@ -414,6 +414,8 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor, local: t.local });
   const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now });
   const preferences = new PreferencesService(t.local);
+  // Preprod first, as the fakes answer; a test can switch to mainnet as Settings does.
+  const networkChoice = new NetworkChoice(t.local, ["preprod", "mainnet"]);
   const coingecko = fakeCoinGecko();
   const minswap = fakeMinswap();
   const dappWindow = fakeWindow();
@@ -484,12 +486,13 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
     dappWindow,
     dappChanged: () => dappChanged,
+    networkChoice,
     dapp: new DappService({
       ...deps,
       store,
       sessions,
       fundingPollMs: 1,
-      network: "preprod",
+      network: () => networkChoice.get(),
       window: dappWindow,
       changed: () => void dappChanged++,
     }),

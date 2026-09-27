@@ -1,9 +1,13 @@
-// Settings' sections, rendered as the page renders them: Lovejoin's, on each
-// network it's on, with what a mix costs there and that it has had no
-// third-party audit.
+// Settings' sections, rendered as the page renders them: the network switch
+// of a build with both networks, the preprod strip every screen shows, and
+// Lovejoin's, on each network it's on, with what a mix costs there and that
+// it has had no third-party audit.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+
+import type { Status } from "../src/shared/rpc";
+import { NetworkBadge, TestNetworkStrip } from "../src/ui/components/NetworkBadge";
 
 let Settings: typeof import("../src/ui/screens/Settings");
 
@@ -15,6 +19,42 @@ beforeAll(async () => {
 
 /** The text a person reads, without the markup. */
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").replace(/&#x27;/g, "'");
+
+const status = (network: "mainnet" | "preprod", networks: Array<"mainnet" | "preprod">): Status => ({
+  state: "unlocked",
+  version: "1.0.0",
+  network,
+  networks,
+  retryAfterMs: 0,
+});
+
+describe("Settings' network switch", () => {
+  const render = (s: Status) => text(renderToStaticMarkup(createElement(Settings.NetworkSection, { status: s, onMoved: () => undefined })));
+
+  it("is there only in a build with both networks, mainnet first", () => {
+    expect(render(status("preprod", ["preprod"]))).toBe("");
+    const shown = render(status("mainnet", ["mainnet", "preprod"]));
+    expect(shown).toContain("Cardano network");
+    expect(shown.indexOf("Mainnet")).toBeLessThan(shown.indexOf("Preprod"));
+    expect(shown).toContain("ADA here is real money");
+  });
+
+  it("says on preprod, and before moving there, that its ADA has no value", () => {
+    expect(render(status("preprod", ["mainnet", "preprod"]))).toContain("ADA here is test ADA, with no value");
+    expect(Settings.MOVE_TO.preprod).toContain("Preprod is Cardano's test network. ADA there is test ADA, with no value");
+    expect(Settings.MOVE_TO.mainnet).toContain("ADA there is real money");
+  });
+});
+
+describe("the network on every screen", () => {
+  it("marks preprod with a strip that test ADA has no value, and mainnet with its badge alone", () => {
+    expect(text(renderToStaticMarkup(createElement(TestNetworkStrip, { network: "preprod" })))).toContain(
+      "Preprod, Cardano's test network: ADA here is test ADA, with no value.",
+    );
+    expect(renderToStaticMarkup(createElement(TestNetworkStrip, { network: "mainnet" }))).toBe("");
+    expect(text(renderToStaticMarkup(createElement(NetworkBadge, { network: "preprod" })))).toContain("PREPROD");
+  });
+});
 
 describe("Settings' Lovejoin section", () => {
   it("prices each depth at what a mix measured on that network", () => {

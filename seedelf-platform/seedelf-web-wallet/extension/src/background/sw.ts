@@ -1,7 +1,7 @@
 // Service worker entry. Listeners are registered synchronously, before any
 // await, so the event that woke the worker is never lost.
 
-import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
+import { enabledNetworks, NETWORKS } from "../networks";
 import { APIError, DAPP_ORIGINS, DAPP_PORT, isDappMethod, type DappAnswer, type DappCall } from "../shared/dapp";
 import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
 import { DAPP_CHANGED, STATE_CHANGED, type Message } from "../shared/rpc";
@@ -19,8 +19,9 @@ import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
-import { PreferencesService } from "./preferences";
+import { LOCAL_NETWORK, NetworkChoice, PreferencesService } from "./preferences";
 import { PriceService } from "./prices";
+import { runNetworks, type Runner } from "./runs";
 import { PrivateStore } from "./private-store";
 import { SendService } from "./send";
 import { SessionService } from "./sessions";
@@ -65,6 +66,13 @@ const sessionsAlarm = {
   },
 };
 
+/**
+ * The worker's services. The network isn't one of them: each request is on
+ * the network the user has chosen as it comes in (`answerUi`), and the
+ * background runs go through every network the build has.
+ */
+type Worker = Omit<Context, "network">;
+
 /** The run going on, if one is, and whether another is asked for after it (with a scan, if any asked for one). */
 let running: Promise<void> | undefined;
 let asked: { scan: boolean } | undefined;
@@ -75,7 +83,7 @@ let asked: { scan: boolean } | undefined;
  * send two withdraws seconds apart. Asked during a run, it runs once more
  * after it.
  */
-function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "network">, scan = false): Promise<void> {
+function runSessions(ctx: Runner, scan = false): Promise<void> {
   if (running) {
     asked = { scan: scan || !!asked?.scan };
     return running;
@@ -95,40 +103,27 @@ function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "ne
   return running;
 }
 
-/**
- * The next step of every swap that runs itself, and Lovejoin's boxes that are
- * due back, while the wallet is unlocked; locked, the alarm stops until
- * unlock. `scan`: read Lovejoin's pool even with nothing due (at unlock).
- */
-async function runSessionsNow(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "network">, scan = false): Promise<void> {
-  if ((await ctx.wallet.state()) !== "unlocked") {
-    await sessionsAlarm.stop();
-    return;
-  }
-  await ctx.sessions.runAll(ctx.network);
-  // A public mix still being sent keeps the alarm going too.
-  if (await ctx.lovejoin.pumpPublic(ctx.network).catch(() => false)) await sessionsAlarm.start();
-  await ctx.lovejoin.withdrawDue(ctx.network, scan).catch(() => undefined);
-  // So do Lovejoin's boxes on their way back: each comes back within a minute
-  // of its own due time while the wallet is unlocked, rather than all of them
-  // at the next unlock. A minute with nothing due asks Koios nothing.
-  if ((await ctx.lovejoin.held(ctx.network).catch(() => undefined))?.boxes) await sessionsAlarm.start();
+/** The next step of everything that runs itself, on every network (runs.ts). */
+function runSessionsNow(ctx: Runner, scan = false): Promise<void> {
+  return runNetworks(ctx, sessionsAlarm, scan);
 }
 
-let context: Promise<Context> | undefined;
+let context: Promise<Worker> | undefined;
 
-function getContext(): Promise<Context> {
+// No page open means nobody is listening; that's fine.
+const broadcast = (message: object) => void chrome.runtime.sendMessage(message).catch(() => undefined);
+
+function getContext(): Promise<Worker> {
   if (context) return context;
   context = Promise.all([loadWasm(), storageProtected]).then(([wasm, protectedStorage]) => {
     const session = chromeArea(chrome.storage.session);
     const local = chromeArea(chrome.storage.local);
     const preferences = new PreferencesService(local);
-    const network = defaultNetwork(__MAINNET_ENABLED__);
-    // No page open means nobody is listening; that's fine.
-    const broadcast = (message: object) => void chrome.runtime.sendMessage(message).catch(() => undefined);
+    const networks = enabledNetworks(__MAINNET_ENABLED__);
+    // The user's choice, read for each request and each site's call (Settings switches it).
+    const networkChoice = new NetworkChoice(local, networks);
+    let worker: Worker | undefined;
     let dapp: DappService | undefined;
-    let sessions: SessionService | undefined;
-    let lovejoin: LovejoinService | undefined;
     const wallet = new Wallet({
       wasm,
       local,
@@ -141,7 +136,7 @@ function getContext(): Promise<Context> {
         broadcast(STATE_CHANGED);
         // Sites waiting for an unlock go on, and so does a swap that runs itself.
         void dapp?.stateChanged();
-        if (sessions && lovejoin) void runSessions({ wallet, sessions, lovejoin, network }, true).catch(() => undefined);
+        if (worker) void runSessions(worker, true).catch(() => undefined);
       },
     });
     // Every request waits its turn under Koios's public-tier limit, whatever the network.
@@ -164,24 +159,24 @@ function getContext(): Promise<Context> {
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // No box is withdrawn while a chain mixing them again may still spend it.
-    lovejoin = new LovejoinService({
+    const lovejoin: LovejoinService = new LovejoinService({
       ...spends,
       store,
       preferences,
-      mixingAgain: (n) => sessions!.mixingAgain(n),
+      mixingAgain: (n) => sessions.mixingAgain(n),
       alarm: sessionsAlarm,
     });
-    sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
+    const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
     dapp = new DappService({
       ...spends,
       preferences,
       store,
       sessions,
-      network,
+      network: () => networkChoice.get(),
       window: approvalWindow,
       changed: () => broadcast(DAPP_CHANGED),
     });
-    return {
+    worker = {
       wasm,
       wallet,
       balances,
@@ -203,9 +198,10 @@ function getContext(): Promise<Context> {
       connector,
       ...(protectedStorage ? {} : { connectorBlocked: "storage" as const }),
       version: __VERSION__,
-      network,
-      networks: enabledNetworks(__MAINNET_ENABLED__),
+      networks,
+      networkChoice,
     };
+    return worker;
   });
   // Don't keep a failed start (the WASM didn't load): the next request tries again.
   context.catch(() => (context = undefined));
@@ -228,6 +224,16 @@ const applyKept = () => {
 };
 chrome.runtime.onInstalled.addListener(applyKept);
 chrome.runtime.onStartup.addListener(applyKept);
+
+// The network changed (Settings' switch, or a test harness before the wallet
+// starts): every open page follows, and what sites were asking on the network
+// the wallet left is declined. Local storage's own event: session storage's,
+// which carries the entropy, never reaches this listener.
+chrome.storage.local.onChanged.addListener((changes) => {
+  if (!(LOCAL_NETWORK in changes)) return;
+  broadcast(STATE_CHANGED);
+  void context?.then((ctx) => ctx.dapp.networkChanged()).catch(() => undefined);
+});
 
 // The user took the wallet's access to sites away in Chrome's own settings:
 // the connector is off.
@@ -255,7 +261,9 @@ function dappSession(sender: chrome.runtime.MessageSender | undefined): DappSess
  * outside the wallet's queue locks the wallet, as a trap inside does.
  */
 async function answerUi(message: Message): Promise<unknown> {
-  const ctx = await getContext();
+  const worker = await getContext();
+  // On the network the user has chosen as it comes in: a switch needs no restart.
+  const ctx: Context = { ...worker, network: await worker.networkChoice.get() };
   try {
     return await handle(message, ctx);
   } catch (e) {

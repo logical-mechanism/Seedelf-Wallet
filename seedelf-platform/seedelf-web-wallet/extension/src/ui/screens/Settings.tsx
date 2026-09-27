@@ -1,4 +1,5 @@
-// Settings, from the gear in the top bar: contacts, the Cardano account's
+// Settings, from the gear in the top bar: in a mainnet build, which network
+// the wallet is on (mainnet, or preprod for testing); contacts, the Cardano account's
 // collateral, where the wallet opens (a full tab or the side panel), ADA's
 // value in a currency, whether sites can connect (the dApp connector: each
 // to the public account or a private session) and which have, whether payments spend the staking rewards, how long
@@ -73,10 +74,13 @@ export function Settings({
   status,
   onBack,
   onRemoved,
+  onNetwork,
 }: {
   status: Status;
   onBack: () => void;
   onRemoved: (status: Status) => void;
+  /** The wallet moved to another network: the app starts afresh on it. */
+  onNetwork: (status: Status) => void;
 }) {
   const [page, setPage] = useState<Page>("menu");
   const { prefs } = usePreferences();
@@ -92,6 +96,7 @@ export function Settings({
 
   return (
     <Screen title="Settings" titleId="settings-title" onBack={onBack}>
+      <NetworkSection status={status} onMoved={onNetwork} />
       <section className="section" aria-labelledby="wallet-title">
         <h2 id="wallet-title">Wallet</h2>
         <ul className="list">
@@ -132,6 +137,86 @@ export function Settings({
         </p>
       </section>
     </Screen>
+  );
+}
+
+/** What moving to each network says first, before the wallet moves. */
+export const MOVE_TO: Record<NetworkName, string> = {
+  preprod:
+    "Preprod is Cardano's test network. ADA there is test ADA, with no value: it can't pay for anything, and real ADA sent to a preprod address is lost. " +
+    "Your wallet is the same there, with its own balances, history and connected sites.",
+  mainnet: "Mainnet is Cardano's real network: ADA there is real money. Check every address and amount before you send.",
+};
+
+/**
+ * Which network the wallet is on, in a build that has both (the store's:
+ * mainnet, and preprod for testing). Moving asks first, and says plainly what
+ * the other network is. The worker takes the choice at its next request, and
+ * every page starts afresh on it; swaps, Lovejoin and payments on their way
+ * carry on, on their own network.
+ */
+export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (status: Status) => void }) {
+  const [asking, setAsking] = useState<NetworkName>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  if (status.networks.length < 2) return null;
+  const current = NETWORKS[status.network];
+
+  async function move(network: NetworkName) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      onMoved(await call("network-set", { network }));
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+      setAsking(undefined);
+    }
+  }
+
+  return (
+    <section className="section" aria-labelledby="network-title">
+      <h2 id="network-title">Network</h2>
+      <Choice<NetworkName>
+        label="Cardano network"
+        id="network-label"
+        options={status.networks.map((n) => ({ value: n, label: NETWORKS[n].label, disabled: busy }))}
+        value={asking ?? status.network}
+        onChange={(n) => {
+          setError(undefined);
+          setAsking(n === status.network ? undefined : n);
+        }}
+      />
+      {!asking && (
+        <p className="note" data-testid="network-note">
+          {status.network === "preprod"
+            ? "Preprod: Cardano's test network, for trying the wallet out. ADA here is test ADA, with no value."
+            : "Mainnet: Cardano's real network. ADA here is real money."}
+        </p>
+      )}
+      {asking && (
+        <div className="stack" data-testid="network-confirm">
+          <Callout tone="warn">{MOVE_TO[asking]}</Callout>
+          <p className="note">
+            Anything on its way on {current.label} (a swap, Lovejoin, a payment) carries on there. A site asking something now
+            is declined.
+          </p>
+          <div className="actions">
+            <button type="button" className="secondary" onClick={() => setAsking(undefined)} disabled={busy}>
+              Stay on {current.label}
+            </button>
+            <button type="button" className="primary" onClick={() => void move(asking)} disabled={busy}>
+              {busy ? "Switching…" : `Switch to ${NETWORKS[asking].label}`}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 

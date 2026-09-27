@@ -2,7 +2,7 @@
 // (`status`) on open and refreshes it whenever the worker says it changed.
 // Navigation is plain state switching, no router.
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 import { enabledNetworks, NETWORKS, serviceHosts } from "../networks";
 import type { Status } from "../shared/rpc";
@@ -10,6 +10,7 @@ import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
 import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
 import { LockCountdown } from "./components/LockCountdown";
+import { NetworkBadge, TestNetworkStrip } from "./components/NetworkBadge";
 import { DappApprovals } from "./screens/DappApprovals";
 import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
@@ -112,6 +113,7 @@ export function App() {
           setSettings(false);
           setStatus(s);
         }}
+        onNetwork={setStatus}
       />
     );
   } else {
@@ -123,11 +125,7 @@ export function App() {
       <header className="topbar">
         <img className="topbar__mark" src="/icons/icon-48.png" alt="" width={28} height={28} />
         <span className="wordmark">Seedelf</span>
-        {network && (
-          <span className={`badge badge--${network.name}`} data-testid="network">
-            {network.label.toUpperCase()}
-          </span>
-        )}
+        {network && <NetworkBadge network={network.name} />}
         <span className="topbar__spacer" />
         {unlocked && !connectorWindow && (
           <button
@@ -151,13 +149,17 @@ export function App() {
           </button>
         )}
       </header>
+      {network && <TestNetworkStrip network={network.name} />}
 
       <main>
         {unlocked && <LockCountdown />}
         {lockError && unlocked && <LockFailed message={lockError} onRetry={lock} />}
         {reachable === false && <ServiceAccess />}
         <NetworkContext.Provider value={status?.network ?? "preprod"}>
-          <PreferencesProvider unlocked={unlocked}>{screen}</PreferencesProvider>
+          {/* A switch in Settings starts every screen afresh on the new network: nothing read or reviewed on the other stays. */}
+          <PreferencesProvider unlocked={unlocked}>
+            <Fragment key={status?.network}>{screen}</Fragment>
+          </PreferencesProvider>
         </NetworkContext.Provider>
       </main>
 

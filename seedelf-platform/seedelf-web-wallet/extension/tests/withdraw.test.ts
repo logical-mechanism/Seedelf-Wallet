@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { ADA_HANDLE_POLICY } from "../src/background/destination";
 import { SESSION_REMOVE, SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import { txIdOf } from "./fixtures/cbor";
@@ -205,7 +205,7 @@ describe("withdraw", () => {
     expect(pending).toMatchObject({ kind: "withdraw", txHash: summary.txHash, confirmations: null });
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([summary.txHash]);
     expect(await t.session.get(SESSION_WITHDRAW)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toEqual(pending);
+    expect(await t.session.get(pendingKey("preprod"))).toEqual(pending);
   });
 });
 
