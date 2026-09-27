@@ -103,6 +103,7 @@ import {
   sameAsk,
   SLIPPAGE_MAX,
   SLIPPAGE_MIN,
+  wholeUnits,
 } from "../swap";
 import { initials, sortTokens, tint, tokenAmountText, tokenDecimals, tokenInfo, tokenMark, tokenText, viewToken } from "../tokens";
 
@@ -522,7 +523,7 @@ function Detail({ label, value, tone }: { label: string; value: ReactNode; tone?
   );
 }
 
-function NewSwap({
+export function NewSwap({
   seedelf,
   onCancel,
   onStarted,
@@ -603,7 +604,9 @@ function NewSwap({
       ? quoted.quote
       : undefined;
   const short = current && !tooMuch ? adaShort(seedelf.lovelace, current) : undefined;
-  const max = pay.id === "lovelace" ? maxAdaIn(held, quoted?.quote) : held;
+  // In whole units, as if typed: Minswap sees the amount, and Max and Half are worked out from the private balance (§2.13).
+  const max = wholeUnits(pay.id === "lovelace" ? maxAdaIn(held, quoted?.quote) : held, pay.side.decimals);
+  const half = wholeUnits(halfOf(held, max), pay.side.decimals);
   // A token that's neither on the wallet's list nor verified by Minswap: anyone can name one like a known one (#20).
   const unverified = current?.verified === false;
   const ready = !!current && !tooMuch && !short && !unverified && !quoteError;
@@ -751,9 +754,10 @@ function NewSwap({
               <button
                 type="button"
                 className="link"
-                onClick={() => fill(halfOf(held, max))}
-                disabled={max === "0"}
+                onClick={() => fill(half)}
+                disabled={half === "0"}
                 aria-label={`Half of your ${nameOf(pay)}`}
+                title={pay.side.decimals ? "Half, in whole units" : "Half"}
               >
                 Half
               </button>
@@ -763,7 +767,13 @@ function NewSwap({
                 onClick={() => fill(max)}
                 disabled={max === "0"}
                 aria-label={`As much ${nameOf(pay)} as a swap can take`}
-                title={pay.id === "lovelace" ? "All of it, less the swap's costs and the collateral" : "All of it"}
+                title={
+                  pay.id === "lovelace"
+                    ? "All but what's under 1 ₳, less the swap's costs and the collateral"
+                    : pay.side.decimals
+                      ? `All but what's under 1 ${pay.side.label}`
+                      : "All of it"
+                }
               >
                 Max
               </button>
@@ -926,9 +936,10 @@ function NewSwap({
           the pool's price. A smaller amount moves it less.
         </Callout>
       )}
-      <Callout tone="privacy">
-        Quotes come from Minswap as you type: it sees the pair, the amount and your IP address, never your private balance
-        or your public account.
+      <Callout tone="privacy" testId="swap-quote-privacy">
+        Quotes come from Minswap as you type: it sees the pair, the amount and your IP address, never your public account.
+        Half and Max are worked out from what your private balance holds, so they tell Minswap roughly how much that is:
+        they round down to a whole unit, never to the last digit.
       </Callout>
       {picking && (
         <TokenSelect

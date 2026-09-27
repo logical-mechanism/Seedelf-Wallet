@@ -1,6 +1,7 @@
 // The swap form's arithmetic (screens/Swaps.tsx): how much Max and Half take,
-// the rate between the two sides, how loud a price impact is, and the
-// slippage a user types. Amounts are raw integer strings, as Minswap's.
+// in whole units, the rate between the two sides, how loud a price impact
+// is, and the slippage a user types. Amounts are raw integer strings, as
+// Minswap's.
 
 import type { SwapAsk, SwapQuote } from "../shared/rpc";
 import { formatQuantity } from "./format";
@@ -38,6 +39,18 @@ export function maxAdaIn(held: string, quote?: SwapQuote): string {
 export function halfOf(held: string, max = held): string {
   const half = BigInt(held) / 2n;
   return (half < BigInt(max) ? half : BigInt(max)).toString();
+}
+
+/**
+ * `quantity` rounded down to a whole unit of its token (`decimals`: 6 for
+ * ADA, a whole ₳). Max and Half fill the form with it, so the amount Minswap
+ * is asked about looks typed, and doesn't give the private balance away to
+ * its last digit (privacy review §2.13). What's left out, less than a unit,
+ * stays in the private balance.
+ */
+export function wholeUnits(quantity: string, decimals: number): string {
+  const unit = 10n ** BigInt(decimals);
+  return ((BigInt(quantity) / unit) * unit).toString();
 }
 
 /**

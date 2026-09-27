@@ -7,7 +7,10 @@
 // view of the chain, and the proceeds and any refund go back to the sender.
 // That's why a swap runs from a session's one-time account (sessions.ts),
 // funded and confirmed first. Minswap sees that account's address, the pair,
-// the amounts and the IP address; it never sees the private balance.
+// the amounts and the IP address, which lets it group the swaps made from
+// it. It's never given the private balance, though Max and Half, worked out
+// from it, tell it roughly how much that holds (Swaps.tsx rounds them down
+// to a whole unit, privacy review §2.13).
 //
 // It answers browsers with CORS headers, so the wallet needs no host
 // permission for it (networks.ts).

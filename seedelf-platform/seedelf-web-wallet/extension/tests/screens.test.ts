@@ -32,6 +32,7 @@ import {
   isRunningSwap,
   LovejoinChoice,
   LovejoinCost,
+  NewSwap,
   pairOf,
   pauseText,
   Plan,
@@ -218,6 +219,19 @@ describe("a swap's tokens (launch review #18, #20)", () => {
     expect(line).toContain("Not verified by Minswap");
     expect(line).toContain("the wallet won't swap into it: anyone can give a token a known token's name");
     expect(line).toMatch(/asset1\w{38}/);
+  });
+});
+
+describe("the swap form's privacy note (privacy review §2.13)", () => {
+  it("says Half and Max tell Minswap roughly what the private balance holds, and Max leaves what's under 1 ₳", () => {
+    const seedelf = { lovelace: "123456789", utxos: 1, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 }, tokens: [] };
+    const form = createElement(NewSwap, { seedelf, onCancel: () => undefined, onStarted: () => undefined });
+    const html = renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, form));
+    const line = text(form);
+    expect(line).toContain("it sees the pair, the amount and your IP address, never your public account");
+    expect(line).toContain("Half and Max are worked out from what your private balance holds, so they tell Minswap roughly how much that is");
+    expect(line).not.toContain("never your private balance");
+    expect(html).toContain("title=\"All but what&#x27;s under 1 ₳, less the swap&#x27;s costs and the collateral\"");
   });
 });
 

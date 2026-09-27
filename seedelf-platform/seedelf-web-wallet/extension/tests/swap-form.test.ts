@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SwapQuote } from "../src/shared/rpc";
-import { adaShort, halfOf, impactLevel, maxAdaIn, parseSlippage, rateOf, sameAsk } from "../src/ui/swap";
+import { adaShort, halfOf, impactLevel, maxAdaIn, parseSlippage, rateOf, sameAsk, wholeUnits } from "../src/ui/swap";
 
 /** 10 ₳ for MIN: 6 ₳ of costs on top, and 5 ₳ of collateral. */
 const quote: SwapQuote = {
@@ -36,6 +36,16 @@ describe("the swap form", () => {
     expect(halfOf("28000000", maxAdaIn("28000000"))).toBe("14000000");
     expect(halfOf("20000000", maxAdaIn("20000000"))).toBe("8000000");
     expect(halfOf("7")).toBe("3");
+  });
+
+  it("rounds Max and Half down to a whole unit, so the amount Minswap sees doesn't give the private balance away (privacy review §2.13)", () => {
+    // 123.456789 ₳ held: Max, less the usual 12 ₳, is 111 ₳, not 111.456789.
+    expect(wholeUnits(maxAdaIn("123456789"), 6)).toBe("111000000");
+    expect(wholeUnits(halfOf("123456789", maxAdaIn("123456789")), 6)).toBe("61000000");
+    // A token's whole units; one that comes in whole units is left as it is.
+    expect(wholeUnits("906594100", 6)).toBe("906000000");
+    expect(wholeUnits("700", 0)).toBe("700");
+    expect(wholeUnits("999999", 6)).toBe("0");
   });
 
   it("says what ADA is short for a quote's funding and collateral", () => {
