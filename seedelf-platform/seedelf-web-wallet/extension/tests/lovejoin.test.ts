@@ -28,7 +28,7 @@ import {
 import { MAYBE_SENT_WAIT, pendingKey } from "../src/background/pending";
 import { Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
-import { SessionService } from "../src/background/sessions";
+import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, loadTestWasm, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
@@ -423,6 +423,33 @@ describe("a session's return through Lovejoin", CHAINS, () => {
     expect(review.lovejoin).toMatchObject({ boxes: 2, depth: 2 });
     // It comes back with the return, which pays for its script's bytes.
     expect(review.leftOut).toEqual([]);
+  });
+
+  it("never sends a session's other kept return while its chain is on its way (final review lovejoin-4)", async () => {
+    const { t, sessions } = await withSession("40000000");
+    // Its page reviews a return, and Bring everything back reviews one too; that one is sent first.
+    const first = await sessions.backBuild("preprod", 0);
+    const { returns } = await sessions.claimBuild("preprod", [0]);
+    expect((await sessions.claimSubmit("preprod", [returns[0]!.txHash])).sent).toHaveLength(1);
+    const chain = returns[0]!.txHash;
+    const progress = () => t.wallet.withKeys(() => t.session.get<{ txs: Array<{ txHash: string }> }>(`${SESSION_CHAIN_PREFIX}preprod.0`));
+    expect((await progress())!.txs.at(-1)!.txHash).toBe(chain);
+
+    // The page's Send, within its ten minutes: refused, and the chain on its way stays as it is.
+    const before = t.koios.submitted.length;
+    await expect(sessions.backSubmit("preprod", first.txHash)).rejects.toThrow("still being sent");
+    expect(t.koios.submitted).toHaveLength(before);
+    expect((await progress())!.txs.at(-1)!.txHash).toBe(chain);
+    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 4, confirmed: 0, cut: false });
+    const { chains } = await t.lovejoin.status("preprod");
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toMatchObject({ session: 0, total: 10, sent: 4 });
+    expect(chains[0]!.stopped).toBeUndefined();
+
+    // It goes on to the end.
+    t.koios.confirmations = 1;
+    await sessions.runAll("preprod");
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(chain);
   });
 
   it("comes back directly when asked, or when the spare ADA doesn't pay for a box", async () => {

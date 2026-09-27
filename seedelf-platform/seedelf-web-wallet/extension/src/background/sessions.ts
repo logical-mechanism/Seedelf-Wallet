@@ -1756,6 +1756,11 @@ export class SessionService {
    */
   private async sendChain(network: NetworkName, built: KeptBack, kept: string, budgetMs: number): Promise<PendingTx> {
     const { chain: txs, leaves, txCbor: _txCbor, builtAt: _builtAt, ...summary } = built;
+    // Another return of the session kept for Send (its page's, Bring everything back's) never takes the place
+    // of a chain on its way: its progress, its reservation and its record stay as they are (final review lovejoin-4).
+    if (await this.pendingChain(network, built.index)) {
+      throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish.");
+    }
     await this.update(network, built.index, (s) => {
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
       delete s.lovejoinSkipped;
