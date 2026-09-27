@@ -27,7 +27,7 @@ describe("Koios client", () => {
     expect(await koios.credentialUtxos(["94bc"])).toHaveLength(2);
     expect(calls).toEqual([
       {
-        url: `${BASE}/credential_utxos?order=tx_hash.asc,tx_index.asc&offset=0&limit=1000`,
+        url: `${BASE}/credential_utxos?order=tx_hash.asc,tx_index.asc&limit=1000`,
         body: { _payment_credentials: ["94bc"], _extended: true },
       },
     ]);
@@ -37,16 +37,46 @@ describe("Koios client", () => {
     const { koios, calls } = scripted([Response.json(rows(1))]);
     await koios.credentialUtxos(["94bc"], 5214886);
     expect(calls[0]!.url).toBe(
-      `${BASE}/credential_utxos?block_height=gt.5214886&order=tx_hash.asc,tx_index.asc&offset=0&limit=1000`,
+      `${BASE}/credential_utxos?block_height=gt.5214886&order=tx_hash.asc,tx_index.asc&limit=1000`,
     );
   });
 
-  it("pages 1000 rows at a time until a short page", async () => {
+  it("pages 1000 rows at a time until a short page, each after the last row of the one before", async () => {
     const { koios, calls } = scripted([Response.json(rows(1000)), Response.json(rows(1000, 1000)), Response.json(rows(7, 2000))]);
-    const all = await koios.credentialUtxos(["94bc"]);
+    const all = await koios.credentialUtxos(["94bc"], 5214886);
     expect(all).toHaveLength(2007);
-    expect(calls.map((c) => new URL(c.url).searchParams.get("offset"))).toEqual(["0", "1000", "2000"]);
+    expect(calls.map((c) => new URL(c.url).searchParams.get("or"))).toEqual([
+      null,
+      "(tx_hash.gt.999,and(tx_hash.eq.999,tx_index.gt.0))",
+      "(tx_hash.gt.1999,and(tx_hash.eq.1999,tx_index.gt.0))",
+    ]);
+    expect(calls.every((c) => new URL(c.url).searchParams.get("block_height") === "gt.5214886")).toBe(true);
+    expect(calls.some((c) => new URL(c.url).searchParams.has("offset"))).toBe(false);
     expect(calls[0]!.body).toEqual({ _payment_credentials: ["94bc"], _extended: true });
+  });
+
+  it("misses no UTxO when one before the page's end is spent between pages, and counts each once (launch review #31)", async () => {
+    // A contract of 2,500 UTxOs, answered as PostgREST does: sorted, after the keyset, 1,000 at most.
+    const hash = (i: number) => i.toString(16).padStart(64, "0");
+    const chain = Array.from({ length: 2500 }, (_, i) => ({ tx_hash: hash(i), tx_index: 0 }));
+    let pages = 0;
+    const fetchFn: FetchLike = async (url) => {
+      const query = new URL(url).searchParams;
+      const after = /^\(tx_hash\.gt\.([0-9a-f]+),and\(tx_hash\.eq\.\1,tx_index\.gt\.(\d+)\)\)$/.exec(query.get("or") ?? "");
+      const offset = Number(query.get("offset") ?? 0);
+      const page = chain
+        .filter((u) => !after || u.tx_hash > after[1]! || (u.tx_hash === after[1] && u.tx_index > Number(after[2])))
+        .slice(offset, offset + Number(query.get("limit")));
+      // Between the first and second page, the UTxO at position 10 is spent.
+      if (++pages === 1) chain.splice(10, 1);
+      // And a backend a block behind repeats the last row of a page at the top of the next.
+      return Response.json(pages === 2 ? [chain[998]!, ...page.slice(0, -1), page.at(-1)!] : page);
+    };
+    const all = await new Koios(BASE, fetchFn, async () => undefined).credentialUtxos(["94bc"]);
+    // The UTxO at position 1,000 is there (an offset of 1,000 would have skipped it), and none twice.
+    expect(all.some((u) => u.tx_hash === hash(1000))).toBe(true);
+    expect(new Set(all.map((u) => `${u.tx_hash}#${u.tx_index}`)).size).toBe(all.length);
+    expect(all).toHaveLength(2500);
   });
 
   it("asks about at most 75 credentials a request, to stay under Koios's 5,120-byte body limit", async () => {

@@ -191,7 +191,7 @@ flowchart LR
 | `credential_utxos` with the account's payment key hashes in range (chunk 12) | Every UTxO under those keys, whatever the address's staking part. At most 75 keys a request (Koios's public tier refuses bodies over 5,120 bytes), so an account with more than about 35 used addresses takes more than one. |
 | `account_info` with the stake address (chunk 13) | Whether it's registered, its pool, its vote delegation, its rewards and its deposit. No row means never registered. The pool's ticker comes from what the session has read, the pool list on the device, or one `pool_info` a session. |
 
-- **Paging:** 1000 rows a page, in a fixed order (`order=tx_hash.asc,tx_index.asc`), until a short page.
+- **Paging:** 1000 rows a page, in a fixed order (`order=tx_hash.asc,tx_index.asc`), until a short page. Each page starts after the last row of the one before (`or=(tx_hash.gt.…,and(tx_hash.eq.…,tx_index.gt.…))`), not at an offset: a UTxO spent between two requests would shift an offset's rows and skip one. Each UTxO is kept once, by outpoint.
 - **Retries:** a rate limit (429), a server error (5xx) or a network failure is retried twice, after 1 s and 3 s. Anything else fails at once with Koios's status.
 - **Bursts:** every request the worker makes, each retry included, waits its turn under one shared limit of 60 every 10 s (`KOIOS_LIMIT` in `koios.ts`), under the public tier's 100. A long Lovejoin chain, or several screens reading at once, can't reach it.
 - **Submits:** a submit Koios doesn't answer (a timeout, a lost connection, 429, 5xx) throws `KoiosBusyError`, since the transaction may or may not have gone through. A Lovejoin chain sends it again later, which is safe: the ledger takes it once.

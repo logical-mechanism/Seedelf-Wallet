@@ -484,17 +484,28 @@ export class Koios {
     return new Map(rows.map((r) => [r.tx_hash, r.num_confirmations]));
   }
 
-  /** All the rows, 1,000 a request; `filter` narrows them on Koios's side (PostgREST, e.g. `block_height=gt.5`). */
-  private async paged<T>(path: string, body: unknown, filter = ""): Promise<T[]> {
-    const rows: T[] = [];
-    for (let offset = 0; ; offset += PAGE_SIZE) {
-      const page = await this.post<T>(
-        path,
-        body,
-        `${filter ? `${filter}&` : ""}order=tx_hash.asc,tx_index.asc&offset=${offset}&limit=${PAGE_SIZE}`,
-      );
-      rows.push(...page);
-      if (page.length < PAGE_SIZE) return rows;
+  /**
+   * All the rows, 1,000 a request, each UTxO once; `filter` narrows them on
+   * Koios's side (PostgREST, e.g. `block_height=gt.5`). A page starts after
+   * the last row of the one before, not at an offset: the UTxOs change
+   * between requests, and one spent before an offset would shift the rest,
+   * skipping a row, as one added would repeat a row.
+   */
+  private async paged<T extends { tx_hash: string; tx_index: number }>(path: string, body: unknown, filter = ""): Promise<T[]> {
+    const rows = new Map<string, T>();
+    let last: T | undefined;
+    for (;;) {
+      const after = last && `or=(tx_hash.gt.${last.tx_hash},and(tx_hash.eq.${last.tx_hash},tx_index.gt.${last.tx_index}))`;
+      const query = [filter, after, `order=tx_hash.asc,tx_index.asc&limit=${PAGE_SIZE}`].filter(Boolean).join("&");
+      const page = await this.post<T>(path, body, query);
+      const known = rows.size;
+      for (const row of page) {
+        const outpoint = `${row.tx_hash}#${row.tx_index}`;
+        if (!rows.has(outpoint)) rows.set(outpoint, row);
+      }
+      // A short page is the last. One with nothing new can't lead anywhere either.
+      if (page.length < PAGE_SIZE || rows.size === known) return [...rows.values()];
+      last = page.at(-1);
     }
   }
 
