@@ -11,6 +11,7 @@ import { Minswap } from "../src/background/minswap";
 import { SESSION_SEND } from "../src/background/send";
 import { recentlySent, rememberSent, SENT_KEEP_MS } from "../src/background/sent-txs";
 import { SessionService } from "../src/background/sessions";
+import { SESSION_RESERVED_PREFIX } from "../src/background/spent";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { APIError, DataSignError, TxSendError, TxSignError } from "../src/shared/dapp";
 import type { DappTxSummary } from "../src/shared/rpc";
@@ -441,6 +442,52 @@ describe("the dApp connector", () => {
     expect(t.dapp.approvals()[0]).not.toHaveProperty("collateralSpent");
     await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
     await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+  });
+
+  it("won't sign a site's transaction that uses what a Lovejoin chain still being sent needs, until it's done", async () => {
+    const t = await on();
+    withCollateral(t);
+    const s = await connected(t);
+    await t.balances.get("preprod");
+    const utxos = (await t.coins.lists("preprod")).cardano;
+    const ref = (u: { txHash: string; index: number }) => `${u.txHash}#${u.index}`;
+    const collateral = ref(utxos.find((u) => u.collateral)!);
+    const [held, free] = utxos.filter((u) => !u.collateral).map(ref);
+    const offered = ((await t.dapp.call(s, "getUtxos", [])) as string[]).length;
+
+    // A mix from the public account is being sent: its next step spends `held`, and puts up the collateral.
+    await t.session.set(SESSION_RESERVED_PREFIX + "preprod", { public: { inputs: [held!], collateral: [collateral] } });
+    t.clock.now += 31_000;
+    expect((await t.dapp.call(s, "getUtxos", [])) as string[]).toHaveLength(offered - 1);
+    // A site that names it anyway, as an input or as collateral, or spends the chain's collateral, is refused
+    // before anything is looked up or asked.
+    const calls = t.koios.calls.length;
+    for (const tx of [
+      siteTx({ inputs: [held!] }),
+      siteTx({ inputs: [free!], collateral: [held!] }),
+      siteTx({ inputs: [free!, collateral] }),
+    ]) {
+      await expect(t.dapp.call(s, "signTx", [tx, false])).rejects.toMatchObject({
+        failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("still being sent through Lovejoin") },
+      });
+    }
+    await expect(t.dapp.call(s, "signTx", [siteTx({ inputs: [held!] }), false])).rejects.toMatchObject({
+      failure: { info: `This transaction uses a UTxO (${held}) that a chain still being sent through Lovejoin needs, so the wallet won't sign it: the rest of that chain would be refused. Wait for it to finish, then try again.` },
+    });
+    expect(t.koios.calls.length).toBe(calls);
+    expect(t.dapp.approvals()).toEqual([]);
+
+    const asked = async (tx: string) => {
+      const signing = t.dapp.call(s, "signTx", [tx, false]);
+      await until(() => t.dapp.approvals().length === 1);
+      await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+      await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+    };
+    // The chain's collateral put up as collateral is what getCollateral gives a site: that's still asked.
+    await asked(siteTx({ inputs: [free!], collateral: [collateral] }));
+    // Once the chain is all sent, it lets go: the UTxO is the site's to spend again.
+    await t.lovejoin.release("preprod", "public");
+    await asked(siteTx({ inputs: [held!] }));
   });
 
   it("refuses a transaction over 64 KiB before reading any of it: no Koios request, no prompt", async () => {
@@ -962,6 +1009,18 @@ describe("private CIP-30: a site connected to a private session", () => {
     };
     expect(await spends(`${out.txHash}#1`)).toMatchObject({ kind: "sign-tx", session: 0, collateralSpent: true });
     expect(await spends(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`)).not.toHaveProperty("collateralSpent");
+  });
+
+  it("won't sign a site's transaction that spends what the session's return through Lovejoin still needs", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s } = await connectedPrivately(t, dapp);
+    const input = `${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`;
+    await t.session.set(SESSION_RESERVED_PREFIX + "preprod", { "session:0": { inputs: [input], collateral: [] } });
+    await expect(dapp.call(s, "signTx", [siteTx({ inputs: [input] }), false])).rejects.toMatchObject({
+      failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("still being sent through Lovejoin") },
+    });
+    expect(dapp.approvals()).toEqual([]);
   });
 
   it("won't register or delegate the session's stake key, which stays unregistered, but lets it stop", async () => {

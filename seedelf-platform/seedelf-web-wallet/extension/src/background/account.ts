@@ -15,9 +15,10 @@
 //
 // A public Lovejoin mix being sent pays each mix from the one before's change
 // at the account and puts up its collateral (lovejoin.ts). Until it's all
-// sent, that change is the chain's: it's left out here, so no payment, and no
-// site connected to the account, spends it from under the chain; neither is
-// its collateral spent (spent.ts's reservations).
+// sent, that change is the chain's: it's left out here, so no payment spends
+// it from under the chain, and no site connected to the account is offered
+// it; neither is its collateral spent (spent.ts's reservations). A site that
+// names it anyway is refused when it asks for a signature (dapp.ts).
 //
 // To spend, what the user locked and the collateral are left out
 // (coin-control.ts); the collateral comes back on its own, for a mint. When

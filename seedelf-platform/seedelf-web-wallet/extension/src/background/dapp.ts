@@ -32,7 +32,9 @@
 //             build its next transaction on them before they're on chain.
 //             What the user locked, and the collateral, stay out of a site's
 //             transaction as out of the wallet's own: one that uses them is
-//             refused (`keptApart`). `signData` is CIP-8, with the address's key.
+//             refused (`keptApart`), and so is one that uses what a Lovejoin
+//             chain still being sent needs (`heldForLovejoin`), on the public
+//             account and in a session. `signData` is CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts).
 // Limits      What a site asks for without the user costs the wallet little:
@@ -70,7 +72,7 @@ import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
-import { outpoint, rememberSpent, spentSet } from "./spent";
+import { outpoint, rememberSpent, reservedSet, spentSet } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 
 /** chrome.storage.session, per network: the account as the connector last read it. */
@@ -887,6 +889,34 @@ export class DappService {
   }
 
   /**
+   * What a Lovejoin chain still being sent needs stays out of a site's
+   * transaction, on the public account and in a session alike (spent.ts's
+   * reservations): its next step would be refused as a double spend, and the
+   * chain would stop partway, its boxes less mixed. The view leaves those
+   * UTxOs out already, but a site can still name one it read before, or found
+   * elsewhere. The chain's collateral may still be put up as collateral
+   * (`getCollateral` gives it on the public account), only never spent. A
+   * chain built and kept for Send holds nothing here, and one that's done or
+   * stopped lets go. Refused before anything is looked up.
+   */
+  private async heldForLovejoin(network: NetworkName, inputs: string[], collateral: string[]): Promise<void> {
+    const { wallet, session } = this.deps;
+    const held = await wallet.withKeys(() => reservedSet(session, network, { sending: true }));
+    const used = [
+      ...new Set([
+        ...inputs.filter((o) => held.inputs.has(o) || held.collateral.has(o)),
+        ...collateral.filter((o) => held.inputs.has(o)),
+      ]),
+    ];
+    if (!used.length) return;
+    const [first] = used;
+    throw new DappError({
+      code: TxSignError.ProofGeneration,
+      info: `This transaction uses ${used.length === 1 ? `a UTxO (${first})` : `${used.length} UTxOs (${first} and ${used.length - 1} more)`} that a chain still being sent through Lovejoin needs, so the wallet won't sign it: the rest of that chain would be refused. Wait for it to finish, then try again.`,
+    });
+  }
+
+  /**
    * The outputs among `refs` of transactions the wallet sent on `network` in
    * the last few minutes. Never the other network's: the account's keys are
    * the same on both, so its UTxO there would be signed for as the account's.
@@ -927,6 +957,7 @@ export class DappService {
     } catch {
       throw invalid("The wallet can't read this transaction.");
     }
+    await this.heldForLovejoin(network, inputs, collateral);
     const { view, rows } = await this.resolve(network, holder, session.origin, [...new Set([...inputs, ...collateral])]);
     const collateralSpent = await this.keptApart(network, holder, view, inputs, collateral);
     const request = JSON.stringify({
