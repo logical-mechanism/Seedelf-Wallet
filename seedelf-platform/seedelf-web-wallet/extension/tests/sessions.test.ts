@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { MAX_DEPOSIT_BOXES } from "../src/background/lovejoin";
+import { MAX_DEPOSIT_BOXES, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
@@ -29,6 +29,7 @@ import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, recordedSwap, 
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
+const HOUR = 3_600_000;
 /** A funding the chain doesn't have after this long never reached it (sessions.ts). */
 const FAILED_AFTER = 20 * 60_000 + 1;
 const account = (words: number) =>
@@ -1290,6 +1291,82 @@ describe("a swap that runs itself", () => {
     await t.wallet.unlock(PASSWORD);
     await sessions.runAll("preprod");
     expect(t.minswap.calls.slice(before).map((c) => c.path)).toEqual(["estimate", "build-tx"]);
+  });
+
+  it("sends no step the moment the wallet unlocks: one found then waits a fresh draw inside the unlocked stretch, and goes after (privacy review §3.1)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    // The funding lands while the wallet is locked, and it's unlocked hours later.
+    funded(t);
+    await t.wallet.lock();
+    t.clock.now += 3 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    const at = t.clock.now;
+    const sent = t.koios.submitted.length;
+    await sessions.runAll("preprod", true);
+    // The unlock's run reads the session, and sends nothing: Minswap isn't even asked to build the order.
+    expect(t.koios.submitted).toHaveLength(sent);
+    expect(t.minswap.calls.map((c) => c.path)).not.toContain("build-tx");
+    let [view] = await sessions.list("preprod");
+    const until = view!.auto!.waitsUntil!;
+    // Inside the stretch the unlock keeps the wallet open: 2 minutes on at least, 2 before the 15-minute auto-lock at most.
+    expect(until).toBeGreaterThanOrEqual(at + UNLOCK_WAIT_MS[0]);
+    expect(until).toBeLessThanOrEqual(at + 13 * 60_000);
+    // The alarm's runs, and the page watching it, wait for it.
+    await busy(t, 60_000);
+    await sessions.runAll("preprod");
+    t.clock.now += 20_000;
+    await sessions.advance("preprod", 0);
+    expect(t.koios.submitted).toHaveLength(sent);
+    // Once it's past, the next run places the order, and the wait is done with.
+    t.clock.now = until;
+    await t.wallet.touch();
+    await sessions.runAll("preprod");
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(SWAP_TX);
+    [view] = await sessions.list("preprod");
+    expect(view!.auto!.waitsUntil).toBeUndefined();
+  });
+
+  it("draws a step's wait at one unlock only: locked before it went, it goes at the run after the next unlock's", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    await t.wallet.lock();
+    t.clock.now += 3 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    const sent = t.koios.submitted.length;
+    await sessions.runAll("preprod", true);
+    const until = (await sessions.list("preprod"))[0]!.auto!.waitsUntil!;
+    // The wallet locks a minute later; hours on, the next unlock doesn't draw it again, nor sends it.
+    await busy(t, 60_000);
+    await t.wallet.lock();
+    t.clock.now += 3 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    await sessions.runAll("preprod", true);
+    expect(t.koios.submitted).toHaveLength(sent);
+    expect((await sessions.list("preprod"))[0]!.auto!.waitsUntil).toBe(until);
+    // The run after it places the order.
+    await busy(t, 60_000);
+    await sessions.runAll("preprod");
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(SWAP_TX);
+  });
+
+  it("takes a step at once when the user asks, whatever the wait after the unlock", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    await t.wallet.lock();
+    t.clock.now += 3 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    await sessions.runAll("preprod", true);
+    expect((await sessions.list("preprod"))[0]!.auto!.waitsUntil).toBeDefined();
+    // The page's Refresh.
+    const view = await sessions.advance("preprod", 0, true);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(SWAP_TX);
+    expect(view.auto!.waitsUntil).toBeUndefined();
   });
 
   it("waits after a failure and tries again, longer each time", async () => {

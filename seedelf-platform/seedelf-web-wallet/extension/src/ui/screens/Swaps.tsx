@@ -1054,7 +1054,7 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: NonNullable<Sw
         On the way back, {adaOut ? "the proceeds and ADA to spare go" : "ADA to spare goes"} through Lovejoin first: about{" "}
         {plural(l.boxes, "box", "boxes")} of 10 ₳ (at most: the pool may take fewer), mixed with other people's in{" "}
         {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳ in fees, which the session pays. Each box comes
-        back on its own after {delayText(l.delay)}, the first time the wallet is unlocked after that, for about{" "}
+        back on its own after {delayText(l.delay)}, a few minutes into the first time the wallet is unlocked after that, for about{" "}
         {formatAda(l.withdrawFees)} ₳ in fees all together. Less than a box's worth, and any tokens, come back at once.
         Settings, Lovejoin changes this.
       </p>

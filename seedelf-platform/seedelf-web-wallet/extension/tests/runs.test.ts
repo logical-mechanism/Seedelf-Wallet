@@ -51,12 +51,47 @@ describe("the worker's runs", () => {
   it("run every network, so a swap on preprod goes on while mainnet is shown, and keep the alarm for it", async () => {
     const { ctx, alarm } = runner({ preprod: { swaps: true } });
     await runNetworks(ctx, alarm, true);
-    expect(vi.mocked(ctx.sessions.runAll).mock.calls.map((c) => c[0])).toEqual(["mainnet", "preprod"]);
-    expect(vi.mocked(ctx.lovejoin.withdrawDue).mock.calls).toEqual([
+    expect(vi.mocked(ctx.sessions.runAll).mock.calls).toEqual([
       ["mainnet", true],
       ["preprod", true],
     ]);
+    expect(vi.mocked(ctx.lovejoin.withdrawDue).mock.calls).toEqual([
+      ["mainnet", true, expect.any(Number)],
+      ["preprod", true, expect.any(Number)],
+    ]);
     expect(alarm.start).toHaveBeenCalled();
+  });
+
+  it("bring Lovejoin's boxes back last, after every network's other work, saying when the run began (privacy review §3.1)", async () => {
+    const { ctx, alarm } = runner({ mainnet: { swaps: true, maybeSent: true }, preprod: { boxes: 1 } });
+    const order: string[] = [];
+    const log = (what: string) => async (n: NetworkName) => {
+      order.push(`${what} ${n}`);
+      return what === "withdraw" ? [] : false;
+    };
+    vi.mocked(ctx.sessions.runAll).mockImplementation(log("step") as never);
+    vi.mocked(ctx.lovejoin.pumpPublic).mockImplementation(log("pump") as never);
+    vi.mocked(ctx.pending.watch).mockImplementation(log("watch") as never);
+    vi.mocked(ctx.lovejoin.withdrawDue).mockImplementation(log("withdraw") as never);
+    const before = Date.now();
+    await runNetworks(ctx, alarm);
+    expect(order).toEqual([
+      "step mainnet",
+      "pump mainnet",
+      "watch mainnet",
+      "step preprod",
+      "pump preprod",
+      "watch preprod",
+      "withdraw mainnet",
+      "withdraw preprod",
+    ]);
+    // Not the unlock's run, and it began before any of it: a withdraw never goes in a run that sent something else.
+    for (const [, unlock, since] of vi.mocked(ctx.lovejoin.withdrawDue).mock.calls) {
+      expect(unlock).toBe(false);
+      expect(since).toBeGreaterThanOrEqual(before);
+      expect(since).toBeLessThanOrEqual(Date.now());
+    }
+    expect(vi.mocked(ctx.sessions.runAll).mock.calls.map((c) => c[1])).toEqual([false, false]);
   });
 
   it("never let the last network's quiet stop the alarm another's work needs", async () => {

@@ -66,6 +66,16 @@ export async function spentSet(session: Area, now = Date.now()): Promise<Set<str
   return new Set(Object.keys(spent).filter((o) => now - spent[o]! < SPENT_KEEP_MS));
 }
 
+/**
+ * When the wallet last sent a transaction, on either network, as what it
+ * spent says (ms): none since the unlock, undefined. Call it while unlocked.
+ * Lovejoin's withdraws keep away from it (lovejoin.ts QUIET_AFTER_SEND_MS).
+ */
+export async function lastSpentAt(session: Area, now = Date.now()): Promise<number | undefined> {
+  const at = Object.values(await kept(session, now)).filter((t) => now - t < SPENT_KEEP_MS);
+  return at.length ? at.reduce((a, b) => Math.max(a, b)) : undefined;
+}
+
 export const outpoint = (u: KoiosUtxo) => `${u.tx_hash}#${u.tx_index}`;
 
 /** How many times an answer behind this wallet's own spends is read again, and how long apart. */

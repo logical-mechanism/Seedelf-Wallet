@@ -16,6 +16,7 @@
    - Depth 2 is 4 mixes per box, about 3.5 ₳, and 9 leaves (a 1 in 9 chance of linking).
 4. **Each box is withdrawn on its own, after its own random delay.** The range is a setting, default **1–6 hours**.
    - The withdraw runs at the first unlock after the delay, since the proof needs the key.
+   - **Changed (the user, 2026-09-27, the privacy review §3.1):** never the moment the wallet unlocks. A box that came due while it was locked waits a fresh draw inside the stretch the unlock keeps it open (2 minutes on, at most 2 before the auto-lock, never past 20), once; nor in a run that sent anything else, nor within 5 minutes of the wallet's own send (pushed 3 to 10 minutes, 3 times at most). A swap's step found at unlock waits the same way.
    - giveme.my's collateral, fee paid from the box, into a **fresh Seedelf register** for each box.
    - The session is never on it.
 5. **The boxes are owned by the Seedelf key.** A Lovejoin box's datum `{a, b}` with `b = x·a` has the same shape and encoding as a `Register`. So the scan the wallet already runs finds its boxes anywhere in the pool, after other people's mixes too, and after a restore.

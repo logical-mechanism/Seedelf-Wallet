@@ -22,7 +22,12 @@ import {
   MAX_DEPOSIT_BOXES,
   mixesPerBox,
   pumpChain,
+  QUIET_AFTER_SEND_MS,
+  QUIET_PUSH_MS,
+  QUIET_PUSHES,
   secureRandom,
+  UNLOCK_WAIT_MS,
+  unlockWait,
   WITHDRAW_SPREAD_MS,
   type ChainProgress,
 } from "../src/background/lovejoin";
@@ -34,6 +39,7 @@ import { Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
+import { bytes, swapTx } from "./fixtures/swap-tx";
 import { koiosPreprod, loadTestWasm, sessionSwap, testBalances, testWallet, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -124,6 +130,24 @@ describe("where Lovejoin is", () => {
     const wasm = loadTestWasm();
     const ask = (network: string) => JSON.parse(wasm.lovejoinFunding(JSON.stringify({ network, boxes: 1, depth: 2, again: false })));
     expect(ask("mainnet")).toEqual(ask("preprod"));
+  });
+});
+
+describe("the wait after an unlock", () => {
+  it("falls inside the stretch the auto-lock keeps the wallet open: 2 minutes on at least, at most 2 before it locks, and never past 20", () => {
+    const min = 60_000;
+    for (const [lock, most] of [
+      [1, 2],
+      [5, 3],
+      [15, 13],
+      [30, 20],
+      [60, 20],
+    ] as const) {
+      expect(unlockWait(lock * min, () => 0)).toBe(2 * min);
+      const high = unlockWait(lock * min, () => 1 - 2 ** -53);
+      expect(high).toBeLessThanOrEqual(most * min);
+      expect(high).toBeGreaterThan(most * min - 1_000);
+    }
   });
 });
 
@@ -1193,8 +1217,11 @@ describe("a chain's boxes", CHAINS, () => {
     const lovejoin = witnessed(t);
     expect(await lovejoin.withdrawDue("preprod")).toEqual([]);
     expect(t.collateral.asked).toHaveLength(0);
-    // Its time moves to when it will have waited an hour.
-    expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toEqual([t.clock.now - 600_000 + HOUR]);
+    // Its time moves past when it will have waited an hour, by a fresh draw, so it isn't that very moment either.
+    const [due] = (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due;
+    const [low, high] = WITHDRAW_SPREAD_MS;
+    expect(due).toBeGreaterThanOrEqual(t.clock.now - 600_000 + HOUR + low);
+    expect(due).toBeLessThanOrEqual(t.clock.now - 600_000 + HOUR + high);
   });
 
   it("withdraws one box a run, however many runs overlap", async () => {
@@ -1295,32 +1322,126 @@ describe("the boxes' withdraws", CHAINS, () => {
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
   });
 
-  it("brings boxes due together back one a run, the others each a fresh delay later", async () => {
+  it("sends no box back the moment the wallet unlocks: each due waits a fresh draw inside the unlocked stretch, then one comes back a run, the others each a fresh delay later (privacy review §3.1)", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "e1"), await ownedBox(t, "e2"), await ownedBox(t, "e3"));
     await t.lovejoin.schedule("preprod", 3);
-    // Locked through all three delays: at unlock, one is tried (giveme.my's
-    // recorded answer is another transaction's, so it isn't sent), not three.
+    // Locked through all three delays: at unlock, none is tried. Each waits a
+    // fresh draw of its own, 2 minutes on at least, and 2 before the
+    // 15-minute auto-lock at most.
     t.clock.now += 7 * HOUR;
     await t.wallet.unlock(PASSWORD);
     const now = t.clock.now;
     expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
-    expect(t.collateral.asked).toHaveLength(1);
-    const due = (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due.sort((a, b) => a - b);
-    expect(due).toHaveLength(3);
-    // The one tried stays due; the other two each wait again, apart.
-    const [low, high] = WITHDRAW_SPREAD_MS;
-    expect(due[0]).toBeLessThanOrEqual(now);
-    for (const d of due.slice(1)) {
-      expect(d).toBeGreaterThanOrEqual(now + low);
-      expect(d).toBeLessThanOrEqual(now + high);
+    expect(t.collateral.asked).toHaveLength(0);
+    const due = async () => (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due.sort((a, b) => a - b);
+    const drawn = await due();
+    expect(drawn).toHaveLength(3);
+    for (const d of drawn) {
+      expect(d).toBeGreaterThanOrEqual(now + UNLOCK_WAIT_MS[0]);
+      expect(d).toBeLessThanOrEqual(now + 13 * 60_000);
     }
-    expect(due[1]).not.toBe(due[2]);
+    expect(new Set(drawn).size).toBe(3);
+
+    // The alarm's run once all three have come: one is tried (giveme.my's
+    // recorded answer is another transaction's, so it isn't sent), not
+    // three, and the other two each wait again, apart.
+    t.clock.now = drawn[2]!;
+    await t.wallet.touch();
+    await t.lovejoin.withdrawDue("preprod");
+    expect(t.collateral.asked).toHaveLength(1);
+    const after = await due();
+    const [low, high] = WITHDRAW_SPREAD_MS;
+    expect(after[0]).toBeLessThanOrEqual(t.clock.now);
+    for (const d of after.slice(1)) {
+      expect(d).toBeGreaterThanOrEqual(t.clock.now + low);
+      expect(d).toBeLessThanOrEqual(t.clock.now + high);
+    }
+    expect(after[1]).not.toBe(after[2]);
 
     // The next minute's alarm tries the one still due, and nothing else.
     t.clock.now += 60_000;
     await t.lovejoin.withdrawDue("preprod");
     expect(t.collateral.asked).toHaveLength(2);
+  });
+
+  it("draws a box's wait at one unlock only: locked before it went, it goes at the run after the next unlock's", async () => {
+    const { t } = await withSession("40000000");
+    t.koios.addedToAccounts.push(await ownedBox(t, "e4"));
+    await t.lovejoin.schedule("preprod", 1);
+    t.clock.now += 7 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    await t.lovejoin.withdrawDue("preprod", true);
+    const due = async () => (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due;
+    const [drawn] = await due();
+    // The wallet locks before it went. Unlocked hours on, it isn't drawn again, nor sent at that unlock.
+    t.clock.now += 3 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect(t.collateral.asked).toHaveLength(0);
+    expect(await due()).toEqual([drawn]);
+    // The next minute's run tries it.
+    t.clock.now += 60_000;
+    await t.lovejoin.withdrawDue("preprod");
+    expect(t.collateral.asked).toHaveLength(1);
+  });
+
+  it("brings no box back in a run that sent something else, nor minutes after the wallet's own send: it's pushed a fresh few minutes, a few times at most", async () => {
+    const { t } = await withSession("40000000");
+    t.koios.addedToAccounts.push(await ownedBox(t, "e6"));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
+    // What the wallet's last send spent, and when.
+    const sent = (at: number) => t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"9a".repeat(32)}#0`]: at }));
+    const due = async () => (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due;
+
+    // This run sent a payment a moment ago: nothing goes, and nothing's pushed; the next run takes it.
+    await sent(t.clock.now - 5_000);
+    expect(await t.lovejoin.withdrawDue("preprod", false, t.clock.now - 10_000)).toEqual([]);
+    expect(await due()).toEqual([t.clock.now - HOUR]);
+
+    // At each run after, the send was a minute before: the box waits a fresh 3 to 10 minutes.
+    for (let push = 1; push <= QUIET_PUSHES; push++) {
+      t.clock.now = Math.max(t.clock.now + 60_000, (await due())[0]!);
+      await t.wallet.touch();
+      await sent(t.clock.now - 60_000);
+      await t.lovejoin.withdrawDue("preprod", false, t.clock.now);
+      expect(t.collateral.asked).toHaveLength(0);
+      const [pushed] = await due();
+      expect(pushed).toBeGreaterThanOrEqual(t.clock.now + QUIET_PUSH_MS[0]);
+      expect(pushed).toBeLessThanOrEqual(t.clock.now + QUIET_PUSH_MS[1]);
+    }
+    // Pushed as often as it may be, it goes anyway, so it never waits for good.
+    t.clock.now = (await due())[0]!;
+    await t.wallet.touch();
+    await sent(t.clock.now - 60_000);
+    await t.lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.collateral.asked).toHaveLength(1);
+  });
+
+  it("brings a box back once the wallet's last send is a few minutes behind", async () => {
+    const { t } = await withSession("40000000");
+    t.koios.addedToAccounts.push(await ownedBox(t, "e9"));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
+    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"9b".repeat(32)}#0`]: t.clock.now - QUIET_AFTER_SEND_MS }));
+    await t.lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.collateral.asked).toHaveLength(1);
+  });
+
+  it("only looks for a withdraw that may have gone through at unlock, and sends it again at the next run", async () => {
+    const { t } = await withSession("40000000");
+    const cbor = swapTx();
+    const at = t.clock.now - 10 * 60_000;
+    const withdrawing = { txHash: txIdOf(bytes(cbor)), txCbor: cbor, lovelace: "9700000", fee: "300000", at, sentAt: at };
+    await t.store.set("lovejoin.preprod", { due: [], chains: [], withdrawing });
+    // Koios says it isn't on chain yet.
+    const submits = t.koios.submitted.length;
+    expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect(t.koios.submitted).toHaveLength(submits);
+    t.clock.now += 60_000;
+    await t.wallet.touch();
+    await t.lovejoin.withdrawDue("preprod");
+    expect(t.koios.submitted).toHaveLength(submits + 1);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(withdrawing.txHash);
   });
 
   it("watches a box brought back now in Home's banner, as every send the user makes", async () => {

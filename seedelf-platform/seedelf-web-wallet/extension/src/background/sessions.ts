@@ -65,6 +65,7 @@ import type {
   SwapTokenInfo,
   TokenQuantity,
 } from "../shared/rpc";
+import { DEFAULT_PREFERENCES } from "../shared/preferences";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosUtxo } from "./koios";
@@ -79,8 +80,10 @@ import {
   LovejoinSkipped,
   mayBeIn,
   pumpChain,
+  secureRandom,
   sentAlready,
   SpentUnread,
+  unlockWait,
   type ChainProgress,
   type LovejoinChain,
   type LovejoinService,
@@ -129,6 +132,13 @@ const REPLACED_WATCH_MS = 2 * 60 * 60_000;
 export const READ_EVERY_MS = 15_000;
 
 /**
+ * Who takes a session's step: the user (`asked`: now, whatever the last
+ * reading), the alarm or a page watching it (`run`), or the run as the
+ * wallet unlocks (`unlock`), which sends nothing (waits).
+ */
+type Run = "asked" | "run" | "unlock";
+
+/**
  * How long to wait after `tries` failures in a row: 30 s, doubling, and never
  * more than five minutes. Minswap's rate limit clears within a minute, and a
  * funding Minswap hasn't seen yet shows up within a block or two.
@@ -175,6 +185,14 @@ interface AutoRecord {
   filled?: number;
   /** When the runner found the funding never reached the chain. */
   failed?: number;
+  /**
+   * Its next step, found as the wallet unlocked, waits until then (ms): a
+   * fresh draw inside the stretch the unlock keeps the wallet open, so it
+   * doesn't go out the moment the wallet unlocks (privacy review §3.1). Kept
+   * if a lock comes first: a later unlock doesn't draw it again, and it goes
+   * at the next run after that unlock's, so it never waits for good.
+   */
+  unlockWait?: number;
 }
 
 interface SessionRecord {
@@ -298,6 +316,8 @@ export interface SessionDeps extends ScriptSpendDeps {
   alarm?: { start(): Promise<void> };
   /** Where a return's spare ADA goes first, when it pays for a box. */
   lovejoin?: LovejoinService;
+  /** In [0, 1): the wait's draw after an unlock, secureRandom unless a test pins it. */
+  random?: () => number;
 }
 
 /** What Minswap built failed a check: the swap pauses for the user instead of trying again. */
@@ -1182,7 +1202,7 @@ export class SessionService {
   /** The session's next step, if it's time (`now`: whatever the last reading), and how it is after. */
   advance(network: NetworkName, index: number, now = false): Promise<SessionView> {
     return this.serial(async () => {
-      await this.step(network, index, now);
+      await this.step(network, index, now ? "asked" : "run");
       return this.one(network, index);
     });
   }
@@ -1197,7 +1217,7 @@ export class SessionService {
         delete s.auto!.retry;
       });
       await this.deps.alarm?.start();
-      await this.step(network, index, true);
+      await this.step(network, index, "asked");
       return this.one(network, index);
     });
   }
@@ -1215,7 +1235,7 @@ export class SessionService {
         delete s.auto!.failed;
       });
       await this.deps.alarm?.start();
-      await this.step(network, index, true);
+      await this.step(network, index, "asked");
       return this.one(network, index);
     });
   }
@@ -1223,16 +1243,18 @@ export class SessionService {
   /**
    * Every running swap's next step, and more of every return's chain still
    * being sent (a site's session, a hand-run swap), for the alarm and for
-   * unlocking. Returns whether something still runs on `network`. It never
-   * stops the alarm: the worker runs every network in turn, and decides once
-   * after all of them (runs.ts), so one network's quiet never stops
-   * another's work, or a swap sent while the others ran.
+   * unlocking (`unlock`: a step found then waits, see `waits`). Returns
+   * whether something still runs on `network`. It never stops the alarm: the
+   * worker runs every network in turn, and decides once after all of them
+   * (runs.ts), so one network's quiet never stops another's work, or a swap
+   * sent while the others ran.
    */
-  async runAll(network: NetworkName): Promise<boolean> {
+  async runAll(network: NetworkName, unlock = false): Promise<boolean> {
     const book = await this.book(network);
     // A chain a lock or a closed browser cut says so now, not only once it's brought back.
     await this.serial(() => this.markCut(network)).catch(() => undefined);
-    for (const s of book.sessions.filter(running)) await this.serial(() => this.step(network, s.index, false)).catch(() => undefined);
+    const run: Run = unlock ? "unlock" : "run";
+    for (const s of book.sessions.filter(running)) await this.serial(() => this.step(network, s.index, run)).catch(() => undefined);
     for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt)) {
       if (await this.pendingChain(network, s.index)) await this.serial(() => this.pump(network, s.index)).catch(() => undefined);
     }
@@ -1259,15 +1281,15 @@ export class SessionService {
   }
 
   /** Takes the session's next step, if it's time. A failure waits and tries again; a failed check pauses. */
-  private async step(network: NetworkName, index: number, now: boolean): Promise<void> {
+  private async step(network: NetworkName, index: number, run: Run): Promise<void> {
     const at = this.deps.now();
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
     if (!s || !running(s)) return;
     const key = `${network}:${index}`;
-    if (!now && ((s.auto!.retry && at < s.auto!.retry.at) || at - (this.readAt.get(key) ?? 0) < READ_EVERY_MS)) return;
+    if (run !== "asked" && ((s.auto!.retry && at < s.auto!.retry.at) || at - (this.readAt.get(key) ?? 0) < READ_EVERY_MS)) return;
     this.readAt.set(key, at);
     try {
-      await this.act(network, s);
+      await this.act(network, s, run);
       if (s.auto!.retry) {
         await this.update(network, index, (r) => {
           delete r.auto!.retry;
@@ -1290,8 +1312,12 @@ export class SessionService {
     }
   }
 
-  /** Whatever comes next for a swap that runs itself, from its record and the chain. */
-  private async act(network: NetworkName, record: SessionRecord): Promise<void> {
+  /**
+   * Whatever comes next for a swap that runs itself, from its record and the
+   * chain. What it sends waits, as the wallet unlocks (waits); what it reads
+   * doesn't.
+   */
+  private async act(network: NetworkName, record: SessionRecord, run: Run): Promise<void> {
     const { wallet, session, now } = this.deps;
     // A return's chain still being sent: more of it, and nothing else meanwhile.
     if (await this.pendingChain(network, record.index)) return this.pump(network, record.index);
@@ -1368,14 +1394,18 @@ export class SessionService {
     }
     // Koios doesn't list what's there yet.
     if (!active.length) return;
+    // What it sends waits, as the wallet unlocks; what it reads doesn't.
+    const go = async (send: () => Promise<void>) => {
+      if (!(await this.waits(network, s, run))) await send();
+    };
     // A mix: once funded, its boxes go through Lovejoin and the rest comes back, one chain.
     // Stopped, it comes back directly: the way out of a mix whose chain can't go.
-    if (s.mix) return this.bringBack(network, s.index, rows, !!s.auto?.stopping);
+    if (s.mix) return go(() => this.bringBack(network, s.index, rows, !!s.auto?.stopping));
     // A return through Lovejoin that stopped partway (a transaction Koios
     // never took, a closed browser): what's at the account now came from the
     // chain itself, so nothing "arrives" from outside. What's left comes back
     // (directly: its deposit is in), whatever Minswap lists.
-    if (kinds.has("deposit") || kinds.has("mix")) return this.bringBack(network, s.index, rows);
+    if (kinds.has("deposit") || kinds.has("mix")) return go(() => this.bringBack(network, s.index, rows));
     const auto = s.auto!;
     // No order yet: place it, unless the user stopped, or brought the session back by hand.
     if (!kinds.has("swap")) {
@@ -1383,16 +1413,16 @@ export class SessionService {
       // lists one. After Stop, it's cancelled first, as one the runner saw land is (final review sessions-2).
       if (s.txs.some((t) => t.kind === "swap")) {
         const orders = await this.deps.minswap(network).pendingOrders(address);
-        if (orders.length) return auto.stopping ? this.cancel(network, s, address, rows, orders) : undefined;
+        if (orders.length) return auto.stopping ? go(() => this.cancel(network, s, address, rows, orders)) : undefined;
       }
-      if (auto.stopping || kinds.has("back")) return this.bringBack(network, s.index, rows);
-      return this.order(network, s, address, rows);
+      if (auto.stopping || kinds.has("back")) return go(() => this.bringBack(network, s.index, rows));
+      return go(() => this.order(network, s, address, rows));
     }
 
     const orders = await this.deps.minswap(network).pendingOrders(address);
     if (orders.length) {
       // Waiting for a batcher to fill it, unless the user stopped it.
-      if (auto.stopping) await this.cancel(network, s, address, rows, orders);
+      if (auto.stopping) await go(() => this.cancel(network, s, address, rows, orders));
       return;
     }
     // Minswap no longer lists the order. A fill or a refund spends it, and comes
@@ -1410,7 +1440,38 @@ export class SessionService {
         });
       }
     }
-    await this.bringBack(network, s.index, rows);
+    await go(() => this.bringBack(network, s.index, rows));
+  }
+
+  /**
+   * Whether a step about to be sent waits (privacy review §3.1): nothing
+   * goes out the moment the wallet unlocks, when the user is about to act,
+   * and a site connected to the account sees it. Found then, it waits a
+   * fresh draw inside the stretch the unlock keeps the wallet open
+   * (lovejoin.ts unlockWait), and the alarm takes it after. One drawn at an
+   * unlock before, whose wallet locked before it went, isn't drawn again:
+   * it goes at the next run. The user's own ask (Refresh, Stop, Try now)
+   * goes at once.
+   */
+  private async waits(network: NetworkName, s: SessionRecord, run: Run): Promise<boolean> {
+    const until = s.auto?.unlockWait;
+    if (run === "unlock") {
+      if (until === undefined) {
+        const lockAfter = (await this.deps.preferences?.lockAfterMs()) ?? DEFAULT_PREFERENCES.lockAfterMinutes * 60_000;
+        const at = this.deps.now() + unlockWait(lockAfter, this.deps.random ?? secureRandom);
+        await this.update(network, s.index, (r) => {
+          r.auto!.unlockWait = at;
+        });
+      }
+      return true;
+    }
+    if (run === "run" && until !== undefined && this.deps.now() < until) return true;
+    if (until !== undefined) {
+      await this.update(network, s.index, (r) => {
+        delete r.auto!.unlockWait;
+      });
+    }
+    return false;
   }
 
   /**
@@ -2275,6 +2336,7 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     approvedMinOut: auto.approved.minAmountOut,
     ...(auto.paused ? { paused: auto.paused } : {}),
     ...(auto.retry ? { retry: { at: auto.retry.at, error: auto.retry.error } } : {}),
+    ...(auto.unlockWait !== undefined ? { waitsUntil: auto.unlockWait } : {}),
   };
 }
 

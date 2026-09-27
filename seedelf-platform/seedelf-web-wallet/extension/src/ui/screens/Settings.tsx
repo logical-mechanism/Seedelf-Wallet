@@ -360,7 +360,10 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
             </option>
           ))}
         </select>
-        <p className="note">A box comes back the first time the wallet is unlocked after its wait.</p>
+        <p className="note">
+          A box comes back a few minutes into the first time the wallet is unlocked after its wait: never the moment you
+          unlock, nor right after the wallet sends something else.
+        </p>
       </div>
       {error && (
         <p className="error" role="alert">

@@ -635,7 +635,8 @@ export function PublicMixHolding({ progress, onOpen }: { progress: NonNullable<M
  */
 export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
   const amounts = useAmounts();
-  const next = held.next === null ? "" : held.next <= now ? "Next back at the next unlock" : `Next back ${whenOf(held.next, new Date(now))}`;
+  // Due, it goes a few minutes on: never the moment the wallet unlocks, nor right after it sends something else.
+  const next = held.next === null ? "" : held.next <= now ? "Next back in a few minutes" : `Next back ${whenOf(held.next, new Date(now))}`;
   // Boxes not mixed yet have no due time: they're the row's own when none is on its way back.
   const boxes = held.boxes || held.notMixed;
   const lovelace = held.boxes ? held.lovelace : (BigInt(held.notMixed) * LOVEJOIN_BOX).toString();

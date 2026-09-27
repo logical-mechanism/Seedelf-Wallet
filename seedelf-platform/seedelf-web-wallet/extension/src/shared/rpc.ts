@@ -753,6 +753,11 @@ export interface SessionAuto {
   filled: boolean;
   /** The least the user approved receiving. */
   approvedMinOut: string;
+  /**
+   * Its next step, found as the wallet unlocked, waits until then (ms), so
+   * it doesn't go out the moment the wallet unlocks (privacy review §3.1).
+   */
+  waitsUntil?: number;
 }
 
 /**

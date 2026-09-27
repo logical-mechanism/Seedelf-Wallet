@@ -93,6 +93,12 @@ describe("Home's Lovejoin row (launch review H2)", () => {
     expect(line).toContain("•••• ₳");
     expect(line).not.toContain("20 ₳");
   });
+
+  it("says a box that's due comes back in a few minutes, not at the next unlock (privacy review §3.1)", () => {
+    const line = row({ ...held, next: -1 });
+    expect(line).toContain("Next back in a few minutes");
+    expect(line).not.toContain("unlock");
+  });
 });
 
 describe("the public account while a mix from it is sent (launch review #47)", () => {
@@ -453,6 +459,13 @@ describe("a mix from the private balance (launch review H2, H8, #11)", () => {
     mix: { boxes: 2 },
     auto: { step: "done", stopping: false, filled: false, approvedMinOut: "0" },
     ...over,
+  });
+
+  it("says a mix found as the wallet unlocked goes on a few minutes after, not at once (privacy review §3.1)", () => {
+    const waiting = mix({ stage: "open", auto: { step: "returning", stopping: false, filled: false, approvedMinOut: "0", waitsUntil: 60_000 } });
+    expect(lovejoinSub(waiting, 0)).toBe("Funded: it goes on a few minutes after the unlock");
+    // Past it, it's under way.
+    expect(lovejoinSub(waiting, 120_000)).toBe("Funded: the mixes are built and sent next");
   });
 
   it("says in full why Lovejoin was left out: the pool below its floor", () => {

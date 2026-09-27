@@ -96,6 +96,8 @@ export function subOf(s: SessionView, now: number): string {
   if (s.chain) return chainText(s.chain);
   if (s.auto?.stopping) return "Stopping: it all comes back directly";
   if (s.auto?.retry) return "Something went wrong: it tries again by itself";
+  // Found as the wallet unlocked, its next step waits a few minutes (privacy review §3.1).
+  if (s.auto?.waitsUntil !== undefined && s.auto.waitsUntil > now) return "Funded: it goes on a few minutes after the unlock";
   return "Funded: the mixes are built and sent next";
 }
 
@@ -391,7 +393,7 @@ export function Lovejoin({
           <Row label="Your boxes in the pool" value={owned ? `${plural(owned, "box", "boxes")}, ${amounts.ada(status.lovelace)} ₳` : "None"} strong />
           {notMixed > 0 && <Row label="Not mixed yet" value={plural(notMixed, "box", "boxes")} />}
           {owned > notMixed && next !== undefined && (
-            <Row label="Next one back" value={next <= Date.now() ? "At the next unlock" : whenOf(next, new Date())} />
+            <Row label="Next one back" value={next <= Date.now() ? "In a few minutes" : whenOf(next, new Date())} />
           )}
         </ReviewRows>
       )}
@@ -610,8 +612,8 @@ function PrivateReview({ summary }: { summary: SessionOutSummary & { mix: Lovejo
       </ReviewRows>
       <p className="note">
         Once the funding lands, the account deposits the boxes and pays every mix, all in one go, and what the mixes
-        don't use comes back with its collateral into the private UTxO this payment leaves. Each box comes back the first
-        time the wallet is unlocked after its wait.
+        don't use comes back with its collateral into the private UTxO this payment leaves. Each box comes back a few
+        minutes into the first time the wallet is unlocked after its wait.
       </p>
       <Callout tone="privacy">
         This payment links the private UTxOs it spends to the one-time account, and the account to the boxes going in. The
@@ -682,8 +684,8 @@ function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
       </ReviewRows>
       <p className="note">
         Send sends the deposit and every mix, one after another, each on the one before's change. Your public account
-        pays them, and its collateral backs every mix. Each box comes back into your private balance the first time the
-        wallet is unlocked after its wait.
+        pays them, and its collateral backs every mix. Each box comes back into your private balance a few minutes into
+        the first time the wallet is unlocked after its wait.
       </p>
       <Callout tone="privacy">
         The deposit comes from your public account, so the boxes going in are tied to it. The mixes hide which boxes coming
