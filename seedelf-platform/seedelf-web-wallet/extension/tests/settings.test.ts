@@ -46,6 +46,24 @@ describe("Settings' network switch", () => {
   });
 });
 
+describe("Settings' dApp connector", () => {
+  const html = (blocked?: "storage") => renderToStaticMarkup(createElement(Settings.DappConnector, { blocked, onSites: () => undefined }));
+  const connectorSwitch = (h: string) => /<button[^>]*aria-labelledby="dapp-connector-label"[^>]*>/.exec(h)![0];
+
+  it("says why it stays off where Chrome won't protect the wallet's storage, and can't be turned on", () => {
+    const blocked = html("storage");
+    expect(text(blocked)).toContain("it stays off in this version of Chrome: it can't keep websites away from the wallet's storage");
+    expect(connectorSwitch(blocked)).toContain('aria-checked="false"');
+    expect(connectorSwitch(blocked)).toContain("disabled");
+  });
+
+  it("is off, and says what turning it on does, elsewhere", () => {
+    const off = html();
+    expect(text(off)).toContain("Off: sites can't see Seedelf Wallet.");
+    expect(text(off)).not.toContain("this version of Chrome");
+  });
+});
+
 describe("the network on every screen", () => {
   it("marks preprod with a strip that test ADA has no value, and mainnet with its badge alone", () => {
     expect(text(renderToStaticMarkup(createElement(TestNetworkStrip, { network: "preprod" })))).toContain(

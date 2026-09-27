@@ -105,7 +105,7 @@ export function Settings({
         </ul>
       </section>
       <PreferencesSection network={status.network} />
-      <DappConnector onSites={() => setPage("sites")} />
+      <DappConnector blocked={status.connectorBlocked} onSites={() => setPage("sites")} />
       {lovejoinOn(status.network) && <LovejoinSettings network={status.network} />}
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
@@ -409,18 +409,23 @@ function LockAfter() {
  * click itself (Chrome asks only then); off removes the scripts but keeps
  * Chrome's access (background/connector.ts says why). Under it, whether a
  * site's signature needs the password too (on by default).
+ *
+ * `blocked` (the status's `connectorBlocked`): this Chrome won't keep sites'
+ * scripts out of the wallet's local storage, where the sealed vault is, so
+ * the worker keeps the connector off (launch review #60). The switch is off
+ * and can't be turned on, and the note says why.
  */
-function DappConnector({ onSites }: { onSites: () => void }) {
+export function DappConnector({ blocked, onSites }: { blocked?: Status["connectorBlocked"]; onSites: () => void }) {
   const { prefs, loaded, set } = usePreferences();
   const [allowed, setAllowed] = useState<boolean>();
   const [error, setError] = useState<string>();
   useEffect(() => {
     chrome.permissions.contains({ origins: DAPP_ORIGINS }).then(setAllowed, () => setAllowed(false));
   }, [prefs.dappConnector]);
-  const on = loaded && prefs.dappConnector && allowed === true;
+  const on = !blocked && loaded && prefs.dappConnector && allowed === true;
 
   function toggle() {
-    if (!loaded || allowed === undefined) return;
+    if (blocked || !loaded || allowed === undefined) return;
     setError(undefined);
     if (on) {
       set({ dappConnector: false }).then(
@@ -450,9 +455,11 @@ function DappConnector({ onSites }: { onSites: () => void }) {
         <span className="stack-tight">
           <span id="dapp-connector-label">Let sites connect to Seedelf Wallet</span>
           <span className="note" id="dapp-connector-note" data-testid="dapp-connector-note">
-            {on
-              ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. When one asks, you choose what it sees: your public account, or a private session. Nothing is signed without you."
-              : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. That's all it adds."}
+            {blocked
+              ? CONNECTOR_BLOCKED
+              : on
+                ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. When one asks, you choose what it sees: your public account, or a private session. Nothing is signed without you."
+                : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. That's all it adds."}
           </span>
         </span>
         <button
@@ -463,7 +470,7 @@ function DappConnector({ onSites }: { onSites: () => void }) {
           aria-labelledby="dapp-connector-label"
           aria-describedby="dapp-connector-note"
           onClick={toggle}
-          disabled={!loaded || allowed === undefined}
+          disabled={!!blocked || !loaded || allowed === undefined}
         />
       </div>
       <div className="setting-row">
@@ -500,6 +507,10 @@ function DappConnector({ onSites }: { onSites: () => void }) {
     </section>
   );
 }
+
+/** Why the connector stays off on a Chrome that won't protect the wallet's storage from sites (`connectorBlocked: "storage"`). */
+export const CONNECTOR_BLOCKED =
+  "Off, and it stays off in this version of Chrome: it can't keep websites away from the wallet's storage, where your encrypted wallet is. Update Chrome to let sites connect.";
 
 /** The sites connected to the public account, each with Disconnect. The list is sealed on the device. */
 function ConnectedSites({ onBack }: { onBack: () => void }) {
