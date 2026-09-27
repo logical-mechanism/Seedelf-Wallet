@@ -5,7 +5,9 @@
 // details, with the transaction on Cardanoscan. Refresh reads again: the
 // balances, for the Seedelf side's arrivals; what's newer, for the account's.
 // Export saves what's listed as CSV, on the device: the file isn't
-// encrypted, and the screen says so.
+// encrypted, and the screen says so. On the private side it says what the
+// file ties together, for whoever has it: each row's transaction ID finds it
+// on the chain (privacy review §2.21).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -83,6 +85,20 @@ function day(at: number, now: Date): string {
 }
 
 const time = (at: number) => (at ? new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "");
+
+/** What Save as CSV's file holds, said under it: on the private side, all that it ties together. */
+export function ExportNote({ of, listed, more }: { of: Of; listed: number; more: boolean }) {
+  return (
+    <p className="note" data-testid="export-note">
+      {of === "cardano" && more ? `It has the ${plural(listed, "transaction")} read so far: Load more first to include older ones. ` : ""}
+      {of === "seedelf"
+        ? "The file isn't encrypted. Each row has its transaction's ID, so whoever has it can find every one on the chain. " +
+          "It ties your private payments, your private sessions and your Lovejoin boxes to each other and to your public " +
+          "account, and shows which Seedelf each payment went to. Give it only to someone you'd show all of that."
+        : "The file isn't encrypted, though everything in it is on the chain anyway."}
+    </p>
+  );
+}
 
 export function Activity({
   of,
@@ -203,14 +219,7 @@ export function Activity({
             <DownloadIcon size={16} />
             Save as CSV
           </button>
-          <p className="note" data-testid="export-note">
-            {of === "cardano" && more
-              ? `It has the ${plural(entries.length, "transaction")} read so far: Load more first to include older ones. `
-              : ""}
-            {of === "seedelf"
-              ? "The file isn't encrypted: anyone who has it can read these private payments."
-              : "The file isn't encrypted, though everything in it is on the chain anyway."}
-          </p>
+          <ExportNote of={of} listed={entries.length} more={more} />
         </section>
       )}
       {open && (
