@@ -4,11 +4,12 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 
 **Decided for launch (2026-09-26, the launch review):**
 
-- **Mainnet, with preprod for testing.** The store's build (`npm run package`) opens on Cardano mainnet, where ADA is real money. Settings can switch it to preprod, Cardano's test network, and a strip on every screen says so while it's there.
-- **Lovejoin is on,** on both networks, and says where it's chosen that it has had no third-party audit.
+- **Mainnet, with preprod for testing.** The store's build (`npm run package`) opens on Cardano mainnet, where ADA is real money. The welcome screen, before a wallet exists, and Settings can switch it to preprod, Cardano's test network, and a strip on every screen says so while it's there.
+- **Lovejoin is on,** on both networks, for private sessions' returns (a Settings switch turns it off), and says where it's chosen that it has had no third-party audit.
 - **The privacy policy** is [privacy-policy.md](privacy-policy.md) on the `seedelf-web-wallet` branch.
 - **The Privacy practices form** declares *Authentication information* and *Financial and payment information*.
-- **Still the owner's call:** a new listing, or an update of the unlisted preprod item (chunk 11c). An update keeps the testers' installs, which then open on mainnet with their test phrases: they choose preprod in Settings to go on testing. Chrome disables the update until each tester accepts the new hosts (mainnet's Koios and CoinGecko).
+- **Still the owner's call:** a new listing, or an update of the unlisted preprod item (chunk 11c). An update keeps the testers' installs, which stay on preprod: a wallet made before the switch, with no network chosen, is a preprod wallet (`NetworkChoice`), so an update never moves a test wallet to mainnet. Chrome disables the update until each tester accepts the new hosts (mainnet's Koios and CoinGecko).
+- **Privacy review (2026-09-27):** the description, the justifications and the policy say that giveme.my is ours, and what Koios and giveme.my, sites and Minswap can still see ([plans/privacy-review.md](../plans/privacy-review.md), §2.4, §2.5, §2.12). Recheck the data usage answers below before submitting.
 
 ## Before you upload
 
@@ -38,7 +39,7 @@ A Cardano wallet with a private balance built in. Stake and send in public, or p
 ```text
 Seedelf Wallet is a Cardano wallet with a private balance built in: Seedelf, the stealth wallet on Cardano. It's one wallet with two sides: a public account for everyday Cardano, and a private balance where no UTxO says who owns the money.
 
-It runs on Cardano mainnet, with real ADA. To try it without real money, switch it to preprod, Cardano's test network, in Settings: ADA there is test ADA, from the Cardano testnet faucet, with no value. The wallet marks preprod on every screen.
+It runs on Cardano mainnet, with real ADA. To try it without real money, switch it to preprod, Cardano's test network, on the welcome screen or in Settings, with a recovery phrase you don't use on mainnet: the same phrase has the same keys on both networks, so anyone comparing them can tell they're one wallet's. ADA there is test ADA, from the Cardano testnet faucet, with no value. The wallet marks preprod on every screen.
 
 Seedelf hides who owns money. Each payment to a Seedelf reaches its owner under a fresh copy of their key, so no UTxO says who owns it, and payments to the same Seedelf can't be linked to each other. Spending is proven with a zero-knowledge proof and a one-time key, so it doesn't reveal the spender either.
 
@@ -51,13 +52,15 @@ What you can do:
 • Make ADA and tokens private: move them from the public account into your private balance.
 • Send privately to any Seedelf by its name, several at once.
 • Make money public: pay any Cardano address or ADA Handle from the private balance. Or remove a Seedelf.
-• Connect Cardano sites (dApps) to the public account, as with any Cardano wallet, or to a private session: a one-time account funded from your private balance, so the site never sees your public account either. It's off until you turn it on in Settings, and sites never see the private balance.
-• Swap privately through Minswap: each swap runs from a new one-time account, funded from your private balance, and everything comes back into it afterwards. Your public account never appears. The wallet asks Minswap for an order with the least you'll accept, checks where the transaction Minswap builds pays, and shows what the swap will cost before you approve it.
-• Mix through Lovejoin: the spare ADA a private session brings back goes through Lovejoin, a mixer of 10 ADA boxes on Cardano, so what comes back isn't tied to the session. You can also mix from the Lovejoin tile. Lovejoin has had no third-party audit, only its makers' own review, and the wallet says so where you choose it. On mainnet the wallet mixes only once Lovejoin's pool holds enough other people's boxes to hide yours; until then a return comes back directly and says why.
+• Connect Cardano sites (dApps) to the public account, as with any Cardano wallet, or to a private session: a one-time account funded from your private balance, so the wallet gives the site only that account, not your public account. Its funding is public, though, and money you made private yourself leads back to your public account. It's off until you turn it on in Settings, and sites are never given the private balance.
+• Swap privately through Minswap: each swap runs from a new one-time account, funded from your private balance, and everything comes back into it afterwards. Your public account isn't in the swap's transactions, though anyone can follow the money back through its funding. The wallet asks Minswap for an order with the least you'll accept, checks where the transaction Minswap builds pays, and shows what the swap will cost before you approve it.
+• Mix through Lovejoin: the spare ADA a private session brings back goes through Lovejoin, a mixer of 10 ADA boxes on Cardano, so what comes back is harder to tie to the session on chain. You can turn that off in Settings, or bring any one back directly. You can also mix from the Lovejoin tile. Lovejoin has had no third-party audit, only its makers' own review, and the wallet says so where you choose it. On mainnet the wallet mixes only once Lovejoin's pool holds 30 boxes that aren't yours, so there are enough other boxes to mix with; until then a return comes back directly and says why.
 
 What it doesn't hide:
 • Amounts, tokens, timing and which transactions spend which outputs are public, as with any Cardano wallet.
 • Making money private, and making it public again, link your public account to what you move. Each screen says what it links, and the wallet warns you before a step ties your accounts together.
+• Koios sends every transaction, and giveme.my, the collateral service we run, sees every private one, both from your IP address. So they can tie your private payments and Lovejoin boxes to your public account: Seedelf and Lovejoin hide them from people reading the chain, not from the services that carry them.
+• A Lovejoin box hides only among other people's boxes that come back into a Seedelf around the same time, one of up to 9 at the default depth, and fewer while few people use it.
 • Privacy grows with the number of people who use Seedelf and Lovejoin, and today there are few.
 
 Private money earns no staking rewards: it has no staking part, which is what keeps your Seedelfs from being linked together. Money that sits can stay staked in the public account, and be made private when it should move privately.
@@ -65,8 +68,8 @@ Private money earns no staking rewards: it has no staking part, which is what ke
 How it works:
 • Everything is built and signed inside the extension. The cryptography and the transaction building are Rust, compiled to WebAssembly and shipped in the package.
 • Your recovery phrase never leaves your device. It's encrypted with your password (Argon2id and ChaCha20-Poly1305).
-• The wallet talks to a few services, and each sees your IP address. Koios reads the chain and submits your transactions. giveme.my adds shared collateral to private payments, so your own address stays out of them. CoinGecko gives ADA's price on mainnet, unless you choose no currency. Minswap quotes and builds your swaps, only when you swap. Lovejoin is a contract on the chain, reached through Koios: nothing goes to its makers.
-• It adds nothing to web pages unless you turn on connecting sites. Then it adds only the standard Cardano wallet entry (window.cardano) to https pages, and asks you before anything is signed.
+• The wallet talks to a few services, and each sees your IP address. Koios reads the chain and submits your transactions. giveme.my, which we run, adds shared collateral to private payments, so your own address stays out of them, and sees each one. CoinGecko gives ADA's price on mainnet, unless you choose no currency. Minswap quotes and builds your swaps, only when you swap. Lovejoin is a contract on the chain, reached through Koios.
+• It adds nothing to web pages unless you turn on connecting sites. Then it adds only the standard Cardano wallet entry (window.cardano) to https pages, so any https site can see you use Seedelf Wallet, as with any Cardano wallet, and it asks you before anything is signed.
 • There are no accounts, analytics or tracking.
 
 Open source (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
@@ -109,12 +112,12 @@ Seedelf Wallet is a Cardano wallet with the Seedelf stealth wallet contract buil
 | `storage` | `Keeps the wallet on the user's device: the recovery phrase, encrypted with the user's password, in chrome.storage.local, and the unlocked session in chrome.storage.session, which is memory-only and cleared when the wallet locks or the browser closes. Nothing is synced.` |
 | `alarms` | `Locks the wallet automatically after a time without use that the user sets (15 minutes unless changed). A one-minute alarm checks the time since the user last did something, and, while the wallet is unlocked, carries on what the user started: a swap's next step, a Lovejoin mix being sent, and a Lovejoin box due back.` |
 | `sidePanel` | `Lets the user open the wallet in Chrome's side panel instead of a tab, a choice in its Settings. The side panel shows only the extension's own page.` |
-| `scripting` | `Adds the standard Cardano wallet entry (window.cardano.seedelf, CIP-30) to https pages, only after the user turns on "Let sites connect to Seedelf Wallet" in Settings, and removes it when they turn it off. The scripts ship in the package; the page's own content is never read.` |
+| `scripting` | `Adds the standard Cardano wallet entry (window.cardano.seedelf, CIP-30) to https pages, only after the user turns on "Let sites connect to Seedelf Wallet" in Settings, and removes it when they turn it off. The scripts ship in the package; the page's own content is never read. While it's on, a page can see the wallet is installed, as with any CIP-30 wallet; the user is told so before turning it on.` |
 | Optional host `https://*/*`, `http://localhost/*`, `http://127.0.0.1/*` | `Asked for only when the user turns on connecting sites in Settings. It lets the wallet offer itself to Cardano sites (dApps) as a CIP-30 wallet: a site can then ask to connect, and to have transactions or messages signed, each approved by the user in the wallet's own window. localhost is for sites in development.` |
-| Host `https://api.koios.rest/*` | `Koios is the public Cardano API the wallet reads Cardano mainnet through: the user's balances, UTxOs and staking, the stake pools and DReps, and Lovejoin's pool. It also evaluates scripts and submits the transactions the user approves. Koios's public tier doesn't answer web pages (no CORS headers), so the wallet can reach it only with this host permission.` |
+| Host `https://api.koios.rest/*` | `Koios is the public Cardano API the wallet reads Cardano mainnet through: the user's balances, UTxOs and staking, the stake pools and DReps, and Lovejoin's pool. It also evaluates scripts (for two reviews: creating a Seedelf paid by the public account, and a Lovejoin chain's first mix) and submits the transactions the user approves. Koios's public tier doesn't answer web pages (no CORS headers), so the wallet can reach it only with this host permission.` |
 | Host `https://preprod.koios.rest/*` | `The same Koios API for Cardano's preprod test network, which the user can switch to in Settings to try the wallet with test ADA. While the wallet is on mainnet, it asks preprod only to finish what the user started there (a payment on its way, a swap, a Lovejoin mix).` |
-| Host `https://www.giveme.my/*` | `giveme.my adds shared collateral to Seedelf script transactions, on mainnet (/mainnet/collateral/) and on preprod (/preprod/collateral/). The wallet sends it each such transaction to witness, so that the user's own address never appears as collateral.` |
-| Host `https://api.coingecko.com/*` | `CoinGecko's public API gives ADA's price in the currency the user chooses in Settings, on mainnet only: one request for ADA alone, when Home opens, at most every five minutes. Choosing no currency stops it. It's never told what the wallet holds.` |
+| Host `https://www.giveme.my/*` | `giveme.my, a collateral service run by the developer (Logical Mechanism), adds shared collateral to Seedelf script transactions, on mainnet (/mainnet/collateral/) and on preprod (/preprod/collateral/). The wallet sends it each such transaction to witness, so that the user's own address never appears as collateral. It sees the transaction and the user's IP address, as the privacy policy says.` |
+| Host `https://api.coingecko.com/*` | `CoinGecko's public API gives ADA's price in the currency the user chooses in Settings, on mainnet only: one request for ADA alone, when Home or the swap form opens, at most every five minutes. Choosing no currency stops it. It's never told what the wallet holds.` |
 
 **Minswap's aggregators need no host permission.** They answer extension pages with CORS headers, so only the pages' CSP (`connect-src`) names them: `agg-api.minswap.org` for mainnet and `aggr.monorepo-testnet-preprod.minswap.org` for preprod. The wallet reaches them only when the user swaps. If a reviewer asks, the same words go in the description of data use below.
 
@@ -127,7 +130,9 @@ All code ships in the package, including the WebAssembly module (Rust compiled t
 **Data usage.** Check these two, and leave the rest unchecked:
 
 - **Authentication information:** the recovery phrase and the password. The phrase is kept encrypted on the device; the password is never stored.
-- **Financial and payment information:** the wallet's addresses, balances, staking and transactions, sent to Koios and giveme.my to read the chain and to send transactions. When the user connects a site, it sees the public account's addresses, balance and UTxOs, and what the user signs for it. For a swap, Minswap's aggregator gets the one-time account's address and the tokens and amounts, and builds the swap for it. CoinGecko is asked only for ADA's price, and gets nothing about the wallet.
+- **Financial and payment information:** the wallet's addresses, balances, staking and transactions, sent to Koios and giveme.my to read the chain and to send transactions. giveme.my is the developer's own service: it receives each private transaction, with the IP address. When the user connects a site, it sees the public account's addresses, balance and UTxOs, and what the user signs for it. For a swap, Minswap's aggregator gets the one-time account's address and the tokens and amounts, and builds the swap for it. CoinGecko is asked only for ADA's price, and gets nothing about the wallet.
+
+**To decide before this submission (privacy review §2.5):** whether giveme.my, the developer's own service, receiving the IP address with each private transaction means checking **Location** (Google lists the IP address under it). Its own logs leave out raw IP addresses.
 
 **To decide at the next submission (chunk 15):** whether to check **Web history** as well. The wallet keeps the list of sites the user connected (their addresses and when), sealed on the device, and Google's FAQ counts data handled only on the device.
 
@@ -152,14 +157,16 @@ When `seedelf-web-wallet` merges into `main`, change `seedelf-web-wallet` in thi
 Paste this if the dashboard asks for test instructions:
 
 ```text
-The wallet opens on Cardano mainnet, where ADA is real money. Nothing needs an account, a server of ours or real funds to review: everything below works on preprod, Cardano's test network.
+The wallet opens on Cardano mainnet, where ADA is real money. Nothing needs an account or real funds to review: everything below works on preprod, Cardano's test network.
 
 1. Click the toolbar icon: the wallet opens in a tab.
-2. To see a wallet with test funds: choose "Restore wallet" and paste the standard public BIP39 test phrase:
+2. On the welcome screen, under Create and Restore, set Network to Preprod. Every screen then shows a PREPROD badge and a strip saying its ADA has no value.
+3. To see a wallet with test funds: choose "Restore wallet" and paste the standard public BIP39 test phrase:
    abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
    Set any password.
-3. Open Settings (the gear), and under Network choose Preprod, then "Switch to Preprod". The wallet says first that preprod is the test network, where ADA has no value. Every screen then shows a PREPROD badge and a strip saying so.
 4. Home now shows the phrase's preprod balances. The phrase is public, so its funds are shared test ADA: never send real funds to it on mainnet.
+
+Settings (the gear) switches the network too, under Network: it says first what the other network is.
 
 To see an empty wallet instead, choose "Create new wallet": reveal and write down the phrase, confirm three of its words, then set a password.
 
