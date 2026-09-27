@@ -44,6 +44,24 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-27: launch review and its fixes** (`web-wallet/crypto-review`). The findings, the owner's calls, what's fixed and what's still open are in [plans/launch-review.md](plans/launch-review.md) (see its *Status*).
+  - **What landed:** every finding of the launch review, and of a second review of the fixes.
+    - Lovejoin on mainnet.
+    - One build with both networks.
+    - A Send Koios didn't answer is maybe sent, never paid twice.
+    - Strangers' UTxOs (deep datums, reference scripts, huge token totals, identity registers) can't break or fool the wallet.
+    - The dApp prompt counts staking money, and refuses unfound inputs and other-network UTxOs.
+    - Lovejoin never brings back a box it didn't mix.
+    - Sessions can't be stranded by Disconnect or a lost submit.
+    - The mainnet store package.
+    - `Cargo.lock` tracked and Rust pinned.
+  - **Surprises:**
+    - The bundler had put runtime helpers in `sw.js`, so every page ran a second worker. It's fixed, and a build now fails if it happens again.
+    - seedelf-contracts' `hashes/` is a later, undeployed build: never copy it into the constants.
+  - **Next:**
+    - the privacy-by-default analysis ([plans/privacy-review.md](plans/privacy-review.md));
+    - then the by-hand mainnet checks and the store in *Still open*.
+
 - **2026-09-25: crypto review** (`web-wallet/crypto-review`, from `web-wallet/lovejoin`). The findings, what's fixed, and what's left to decide are in [plans/crypto-review.md](plans/crypto-review.md).
   - **What landed:**
     - A one-time session account is never reused: the chain is asked first.

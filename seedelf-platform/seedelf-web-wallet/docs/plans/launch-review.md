@@ -24,6 +24,65 @@ A review of the whole web wallet before mainnet, after the [crypto review](crypt
   - Mainnet Lovejoin isn't wired in, and the release path builds preprod.
   - There are 9 high bugs. Most can be set off by a stranger with one cheap transaction.
 
+## Status (2026-09-27)
+
+**Every item below is fixed on `web-wallet/crypto-review`**, except what *Still open* lists. That's M1–M6, H1–H9 and #10–#62.
+
+A second adversarial review, of the fixes themselves, found 30 more issues, all now fixed. The worst five:
+- a preprod site could get a mainnet output signed, through the cache of recent sends, which wasn't kept per network;
+- a Lovejoin Bring back, or a public mix, could overwrite the watch on a payment that may still go through, which lifted the guard against paying twice;
+- two ways a session could close with its money still at its account.
+
+**Checked on the branch** (2026-09-27):
+- Rust: `cargo test --workspace --locked`, 424 passed (the 8 live Koios tests are `#[ignore]`d); clippy and fmt clean.
+- WebAssembly: the Node tests, 37 passed.
+- Vitest: 552 passed on the preprod build and on the mainnet build.
+- Playwright: 58 passed on the dev build, and 59 on the packaged mainnet store build.
+
+**The owner's calls** (2026-09-26):
+- Lovejoin is on for mainnet, and returns go through it by default, with a pool floor of 30 real boxes that aren't the wallet's, and a no-audit note wherever Lovejoin is chosen.
+- A token→ADA swap's proceeds go through Lovejoin too, with the cost shown in the approval.
+- The swap runner checks where Minswap's order pays. Mainnet swaps route only through DEXes whose orders name the owner's key (`MAINNET_PROTOCOLS`); VyFinance is excluded.
+- One build holds both networks: mainnet by default, and preprod behind a Settings switch, with a badge on every screen.
+- The contracts aren't rebuilt: the wallet uses the live preprod and mainnet deployments. seedelf-contracts' `hashes/` is a later, undeployed build (see its README).
+
+**Beyond the table's fixes:**
+- **A build bug** found by the end-to-end suite: the bundler put shared runtime helpers in `sw.js`, so every wallet page ran a second copy of the worker. A build now fails if a page imports `sw.js`.
+- **H1's legacy deregistration** is refused only when the site's transaction comes without its deposit. The worker passes the stake key's recorded deposit from Koios `account_info`.
+- **The supply chain:**
+  - `Cargo.lock` is tracked, and Rust is pinned to 1.98.1.
+  - The WebAssembly carries no local paths.
+  - The advisories for `bytes`, `slab`, `anyhow` and `keccak` are cleared.
+
+**Still open:**
+1. **By hand, on a mainnet build, with small amounts:**
+   - **Minswap:**
+     - that `agg-api.minswap.org` answers the extension's origin with CORS (checked only on preprod's aggregator);
+     - that `aggregator_fee` is a lovelace string;
+     - that `exclude_protocols` accepts VyFinance and MuesliSwap;
+     - one swap through each protocol in `MAINNET_PROTOCOLS`, so `checkOrder` is known to pass real orders;
+     - Stop.
+   - **Lovejoin:** seed the pool from identities unrelated to any Seedelf key, then run one box at depth 1.
+   - **Seedelf:** every flow.
+2. **A validity interval on private spends:** they still have no expiry, until a live check shows giveme.my accepts one.
+3. **The store:**
+   - a new listing, or an update of the unlisted preprod item;
+   - screenshots from mainnet-shaped fixtures (today's show the preprod strip);
+   - a version bump, and the new zip's SHA-256 in the roadmap.
+4. **Upstream:** Lovejoin's config and SDK swap Seedelf's preprod and mainnet reference UTxOs.
+5. **Smaller items, left for later:**
+   - A certificate carries no network, so a site can still ask for a stake-key-only signature over the other network's transaction.
+   - #21: the order's minimum and receiver fields aren't decoded, so Minswap is trusted for them.
+   - #14 and #15's refusals reach only the site, not the user.
+   - A chain's last window isn't watched until it lands.
+   - Chain records live only on this device.
+   - The Lovejoin page's buttons aren't disabled while a payment may still go through. The worker refuses them, and the page shows why.
+   - One maybe-sent watch per network.
+   - A resend's "not on chain" count isn't kept across pump calls.
+   - The CLI-only advisories for `h2` and `spin`.
+   - The restore scan (known).
+6. **A privacy-by-default analysis,** at the owner's ask. Its report goes in [privacy-review.md](privacy-review.md).
+
 ## Mainnet
 
 **Lovejoin's contracts.** Mainnet runs the same logic the wallet was built against (Lovejoin fa5b605), recompiled with Aiken 1.1.24 and stdlib v4.0.0, so the hashes are new.
