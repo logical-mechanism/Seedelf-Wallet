@@ -15,7 +15,7 @@ A verifier re-traced every finding against the committed code. The settled decis
 
 **Everything in §2 is done, and so is most of §3 and §4.1**, as the owner decided below. The owner declined §3.5, §3.8, §3.9, §4.2 and §4.3. §3.10 and §4.4–§4.9 are still open, with the smaller items under *Still open*. §5's limits are said plainly in [privacy.md](../privacy.md) and the [privacy policy](../store/privacy-policy.md), and §6's docs are corrected.
 
-Two parts were built in parallel worktrees and are **committed on their own branches, waiting to be merged into `web-wallet/crypto-review`**. They're marked *(connector)* and *(small items)* below. The docs already describe them.
+Two parts were built in parallel worktrees, marked *(connector)* and *(small items)* below, and are merged into `web-wallet/crypto-review` (the hashes below are the merged commits).
 
 **The owner's decisions** (2026-09-27), which the work follows where they differ from the review:
 - **Defaults:** only §3.1 changes: nothing goes out at the moment of unlock. §3.5 (the delay), §3.8 (the price lookup) and §3.9 (hide balances) are declined: the delay stays "1-6", the currency "usd", and Hide balances off.
@@ -24,35 +24,39 @@ Two parts were built in parallel worktrees and are **committed on their own bran
 - **§4.1:** a Settings switch turns Lovejoin returns off (on by default), and each flow can come back directly.
 - **Settled before:** Lovejoin is on for mainnet, and returns go through it by default; a token→ADA swap's proceeds go through it, with the cost shown; one build has both networks. The live contracts are used as deployed, and the frozen key derivation never changes. The launch review's fixes stay.
 
-**Checked on `web-wallet/crypto-review`** at the docs commit: `npm run typecheck`, and Vitest's full suite (623 passed, 2 skipped). The Rust and WebAssembly checks ran with each code commit before it. The two worktree branches ran their own.
+**Checked on `web-wallet/crypto-review`** once everything was merged (2026-09-27):
+- Rust: `cargo test --workspace --locked`, 434 passed; clippy and fmt clean.
+- WebAssembly: the Node tests, 37 passed.
+- Vitest: 674 passed on the default build (both networks) and on a preprod-only build.
+- Playwright: 60 passed on the dev build, and 60 on the packaged mainnet store build.
 
 | § | Status | What was done | Commits |
 |---|---|---|---|
-| 2.1 | Done *(connector)* | A signature checks only its own account's Lovejoin chain; another account's UTxO takes the stranger's path and words. | b431f29 |
-| 2.2 | Done *(connector)* | A site finds only the outputs that pay its own account among the wallet's recent sends; the rest go through its budget and Koios. A site's own submits are kept for it alone, so it still chains on them (launch review #13). | 14262ab |
+| 2.1 | Done *(connector)* | A signature checks only its own account's Lovejoin chain; another account's UTxO takes the stranger's path and words. | 0012e2f |
+| 2.2 | Done *(connector)* | A site finds only the outputs that pay its own account among the wallet's recent sends; the rest go through its budget and Koios. A site's own submits are kept for it alone, so it still chains on them (launch review #13). | 8ec902b |
 | 2.3 | Done, best effort | Each private UTxO has a history class from the sealed Seedelf history (made private, each payment received, each box back from Lovejoin, each session, Unknown). WebAssembly tries one UTxO alone, then one class, then merges, boxes last and one at a time, ordered by purpose (Send and Make public, a stealth mint, a funding). It never refuses: a merge gets a plain note in the review, and a funding names another session's money. The UTxOs screen tags each UTxO. No gate and no switch (the owner). | 366cd5c, d5710a2, 055fea0 |
 | 2.4 | Done | The welcome line, Collateral, Settings' About and Lovejoin section, and Lovejoin's page say what's hidden is hidden on chain, and that Lovejoin hides boxes from people reading the chain, not from Koios or giveme.my. The policy, privacy.md and the listing say Koios sends every transaction from the IP that reads the public account. | adbe02e, 4fb0ad8 |
 | 2.5 | Done, two checks open | giveme.my is named as ours (Logical Mechanism's) in the policy, About, Collateral, the listing, its host justification, the test instructions and the root README, with what it sees and what its logs leave out. **Open:** check the host's own log retention before promising more; decide the Web Store's *Location* answer (store README). | adbe02e, 4fb0ad8 |
 | 2.6 | Done | "isn't tied", "(1 in 9)", "nothing ties it", "the mixes hide which boxes are yours" and the floor's "so yours hide among enough others" are gone. One helper says how far a box hides (`lovejoinHides`), and the public mix's review says its box can be picked out while few people bring boxes into a Seedelf. chunk-16 notes that "1 in 9" assumes the exits look alike. | be6024b, 3e0a795, adbe02e |
 | 2.7 | Done | A swap's approval reads the pool once at Review (kept five minutes), caps the boxes, and says when the ADA would come back directly. | b972461 |
 | 2.8 | Done | An ADA→token swap's approval prices what a stop or refund sends through Lovejoin, with the no-audit note; Stop shows the live estimate and offers *Stop and bring it back directly*. Capping a refund's chain at the approved boxes wasn't built (optional). | b972461 |
-| 2.9 | Done *(small items)* | A private spend that lands marks only the private side behind; the next reading keeps the account's. Home's `tx_status` polling stays (the review's "better" option, spotting it in the contract scan, wasn't built). | 7b64bb0 |
+| 2.9 | Done *(small items)* | A private spend that lands marks only the private side behind; the next reading keeps the account's. Home's `tx_status` polling stays (the review's "better" option, spotting it in the contract scan, wasn't built). | be26bc0 |
 | 2.10 | Done | A public mix's boxes are mixed again by *Mix again from my public account*, paid by the account; *Mix my boxes again* leaves them out; *Pay from my private balance anyway* warns. | 1c054c3, afb87d4 |
-| 2.11 | Done *(connector)* | `isEnabled` answers whether the site is connected, locked or not; reads while locked are refused in a stranger's words, with no window; the unlock window names the sites waiting, and closing it answers "The user declined." | 9a03d58 |
-| 2.12 | Done | The connect window, a site's session, the Minswap and dApps pages, the funding review and Disconnect say what the site is given and what it can still learn; the policy, privacy.md, the listing and the plans say it too. The optional warning for a site that once had a private session wasn't built. | 3e0a795, 32efe36 *(connector)*, 4fb0ad8 |
+| 2.11 | Done *(connector)* | `isEnabled` answers whether the site is connected, locked or not; reads while locked are refused in a stranger's words, with no window; the unlock window names the sites waiting, and closing it answers "The user declined." | 9973116 |
+| 2.12 | Done | The connect window, a site's session, the Minswap and dApps pages, the funding review and Disconnect say what the site is given and what it can still learn; the policy, privacy.md, the listing and the plans say it too. The optional warning for a site that once had a private session wasn't built. | 3e0a795, edc20c8 *(connector)*, 4fb0ad8 |
 | 2.13 | Done | Half and Max round down to a whole unit and say they tell Minswap roughly what's held; minswap.ts, privacy.md and the policy say Minswap groups swaps by IP. | f9093a3, 4fb0ad8 |
-| 2.14 | Done *(small items)* | Every service fetch has `credentials: "omit"` and `referrerPolicy: "no-referrer"`, with a unit test. The e2e check that no Cookie header goes out wasn't added. | aa73a2d |
+| 2.14 | Done *(small items)* | Every service fetch has `credentials: "omit"` and `referrerPolicy: "no-referrer"`, with a unit test. The e2e check that no Cookie header goes out wasn't added. | 5f3dd4b |
 | 2.15 | Done | A return takes the collateral its funding paid; with none left it says Lovejoin was left out. | d319d9f |
 | 2.16 | Done | Hide balances masks how many Lovejoin boxes there are. | 47c7504 |
-| 2.17 | Done *(small items)* | The own-account warning matches the account's payment keys too. | 342b7b2 |
+| 2.17 | Done *(small items)* | The own-account warning matches the account's payment keys too. | bbde341 |
 | 2.18 | Done | The unlock reads the pool only on a network with something open, and `status()` writes no empty record. | 57c767e |
-| 2.19 | Done *(small items)* | Spell check is off on `<body>`, so on every field; the public note stays off on purpose. | d0d75b1 |
-| 2.20 | Done *(connector)* | Settings' connector note says every https site, and its scripts, can see the wallet once it's on. | 32efe36 |
-| 2.21 | Done *(small items)* | The private CSV's note says what the file ties together. | cb2c80e |
+| 2.19 | Done *(small items)* | Spell check is off on `<body>`, so on every field; the public note stays off on purpose. | fdc7dc2 |
+| 2.20 | Done *(connector)* | Settings' connector note says every https site, and its scripts, can see the wallet once it's on. | edc20c8 |
+| 2.21 | Done *(small items)* | The private CSV's note says what the file ties together. | c06572d |
 | 3.1 | Done | The unlock's run sends nothing: each box due waits a fresh draw inside the unlocked stretch, a swap's step too; no withdraw in a run that sent anything else, or within 5 minutes of the wallet's own send. | d74677a, 1860244, c58be9c |
-| 3.2 | Done *(small items)* | Remove defaults to who paid (`mintedBy.<network>`, sealed, or worked out from what's held); unknown, nothing is chosen. | 2df3883 |
-| 3.3 | Done *(connector)*, option (a) | Nothing preselected; each option says its cost; Connect waits for the public account to be chosen. | 8c286c2 |
-| 3.4 | Done *(small items)* | One `ExplorerLink`; private-side links carry the warning. | 1a931d4, fd14a85 |
+| 3.2 | Done *(small items)* | Remove defaults to who paid (`mintedBy.<network>`, sealed, or worked out from what's held); unknown, nothing is chosen. | 8edd702 |
+| 3.3 | Done *(connector)*, option (a) | Nothing preselected; each option says its cost; Connect waits for the public account to be chosen. | b80497b |
+| 3.4 | Done *(small items)* | One `ExplorerLink`; private-side links carry the warning. | cb5109b, e6e0d9e |
 | 3.5 | **Declined** | The delay stays "1-6" (the owner). chunk-16 and the docs say so. | |
 | 3.6 | Done | The box that goes is one someone else's mix has moved since, when there is one; leaves are kept while their boxes sit. | 5364a60 |
 | 3.7 | Done | A Seedelf spend's outputs are shuffled. | 366cd5c |
@@ -60,8 +64,8 @@ Two parts were built in parallel worktrees and are **committed on their own bran
 | 3.9 | **Declined** | Hide balances stays off by default (the owner). | |
 | 3.10 | **Open** | Not built: the account-paid mint's draft and a Lovejoin chain's first mix still go to Ogmios at review. The docs-only minimum is done: privacy.md, the policy, the listing's Koios justification and CreateSeedelf's header say so. | adbe02e, 4fb0ad8 |
 | 3.11 | Done | The swap picker searches the wallet's own list first, and Minswap only when nothing matches or on *Search Minswap*. Telling a pending order from `utxo_info` (optional) wasn't built. | 87c8bbc |
-| 3.12 | Done *(connector)* | A disconnected site's session record goes, unless something was left behind at its account. | 192dc2e |
-| 3.13 | Done *(small items)*, one part left | Sealed records padded; no `vault.createdAt`; prices in session storage; Remove wallet clears the pools and old prices. Sealing every record empty at creation was left out: the "has used" checks (§2.18) must read content first. | 946f93f |
+| 3.12 | Done *(connector)* | A disconnected site's session record goes, unless something was left behind at its account. | 6bef75b |
+| 3.13 | Done *(small items)*, one part left | Sealed records padded; no `vault.createdAt`; prices in session storage; Remove wallet clears the pools and old prices. Sealing every record empty at creation was left out: the "has used" checks (§2.18) must read content first. | 74a0ffc |
 | 4.1 | Done | Settings' *Bring private sessions back through Lovejoin* (on by default); a swap's approval switch (`auto.direct`), Stop's direct option, each return's *Bring it back directly instead*, and Bring everything back's *Bring them back directly instead*. | be6024b, b972461, 40f7c3f |
 | 4.2 | **Declined** | No switch and no per-payment confirmation (the owner): §2.3 is best effort. | |
 | 4.3 | **Declined** | Not needed: the connect window preselects nothing (§3.3). | |

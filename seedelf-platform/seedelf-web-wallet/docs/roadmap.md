@@ -44,6 +44,18 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-27: privacy by default** (`web-wallet/crypto-review`). The owner's rule is "the most private by default, with the ability to turn it down". A review against it, and its fixes, are in [plans/privacy-review.md](plans/privacy-review.md) (see its *Status*).
+  - **What landed:**
+    - Sites can no longer tell whether a UTxO or a recent transaction is the wallet's, or when it's locked.
+    - The connect window chooses nothing.
+    - Coin selection keeps money with different histories apart where it can (best effort, no gate), and the UTxOs screen tags each UTxO's origin.
+    - Nothing goes out at the moment of unlock.
+    - A Settings switch turns Lovejoin returns off, and each flow can come back directly.
+    - The copy and the privacy policy say what Koios, giveme.my (ours), sites and Minswap can still see.
+    - Also: every build has both networks; the welcome screen chooses one (a small dropdown); a wallet from before the switch stays on preprod.
+  - **Declined by the owner:** a longer default delay, the price lookup off, Hide balances on, a keep-apart switch, and a default account for new sites.
+  - **Next: a fresh, independent review in a new context,** before mainnet. See the PR into `seedelf-web-wallet`.
+
 - **2026-09-27: launch review and its fixes** (`web-wallet/crypto-review`). The findings, the owner's calls, what's fixed and what's still open are in [plans/launch-review.md](plans/launch-review.md) (see its *Status*).
   - **What landed:** every finding of the launch review, and of a second review of the fixes.
     - Lovejoin on mainnet.

@@ -81,7 +81,7 @@ A second adversarial review, of the fixes themselves, found 30 more issues, all 
    - A resend's "not on chain" count isn't kept across pump calls.
    - The CLI-only advisories for `h2` and `spin`.
    - The restore scan (known).
-6. **A privacy-by-default analysis,** at the owner's ask. Its report goes in [privacy-review.md](privacy-review.md).
+6. **A privacy-by-default analysis,** at the owner's ask: done. See [privacy-review.md](privacy-review.md) and its *Status*, which lists what's fixed, what the owner declined, and what's still open.
 
 ## Mainnet
 
