@@ -736,8 +736,8 @@ export class LovejoinService {
    * Builds with `build` until the network knows every input its chain's
    * first mix spends. A read of the pool that was behind isn't a reason to
    * leave Lovejoin out: the boxes the network names are left out of the next
-   * read (`avoid`), STALE_POOL_TRIES times, then it's an error to try again
-   * later, never a skip.
+   * read (`avoid`), STALE_POOL_TRIES times, then it's Koios's error, to try
+   * again later, never a skip.
    */
   private async unstale<T>(build: (avoid: Set<string>) => Promise<T>): Promise<T> {
     const avoid = new Set<string>();
@@ -747,7 +747,8 @@ export class LovejoinService {
       } catch (e) {
         if (!(e instanceof StalePool)) throw e;
         if (tries >= STALE_POOL_TRIES) {
-          throw new Error("Lovejoin's pool changed while the wallet read it: a box it drew isn't there anymore. Try again in a minute.");
+          // Koios is behind: another try, later, may find it caught up.
+          throw new KoiosError("Lovejoin's pool changed while the wallet read it: a box it drew isn't there anymore. Try again in a minute.");
         }
         for (const o of e.unknown) avoid.add(o);
       }

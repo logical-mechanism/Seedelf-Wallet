@@ -62,7 +62,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { bodyOutpoints, txId } from "./cbor";
-import { SpentInputError, type KoiosUtxo } from "./koios";
+import { KoiosError, SpentInputError, type KoiosUtxo } from "./koios";
 import type { Estimate, Minswap, PendingOrder } from "./minswap";
 import {
   CHAIN_CUT,
@@ -1067,7 +1067,8 @@ export class SessionService {
     // Koios doesn't list what's there yet.
     if (!rows.length) return;
     // A mix: once funded, its boxes go through Lovejoin and the rest comes back, one chain.
-    if (s.mix) return this.bringBack(network, s.index, rows);
+    // Stopped, it comes back directly: the way out of a mix whose chain can't go.
+    if (s.mix) return this.bringBack(network, s.index, rows, !!s.auto?.stopping);
     // A return through Lovejoin that stopped partway (a transaction Koios
     // never took, a closed browser): what's at the account now came from the
     // chain itself, so nothing "arrives" from outside. What's left comes back
@@ -1130,10 +1131,10 @@ export class SessionService {
     await this.signAndSend(network, built);
   }
 
-  /** Brings everything at the session's account back into the private balance. */
-  private async bringBack(network: NetworkName, index: number, rows: KoiosUtxo[]): Promise<void> {
+  /** Brings everything at the session's account back into the private balance (`direct`: not through Lovejoin). */
+  private async bringBack(network: NetworkName, index: number, rows: KoiosUtxo[], direct = false): Promise<void> {
     // The runner's step sends the chain's first block's worth; its next steps the rest.
-    await this.sendBack(network, await this.buildBack(network, index, rows), SESSION_BACK, CHAIN_PUMP_MS);
+    await this.sendBack(network, await this.buildBack(network, index, rows, undefined, direct), SESSION_BACK, CHAIN_PUMP_MS);
   }
 
   // -------------------------------------------------------------------------
@@ -1252,8 +1253,7 @@ export class SessionService {
       try {
         chain = await lovejoin.chain(network, index, rows, collateral, params, merge, record?.mix?.boxes, record?.mix?.again, own);
       } catch (e) {
-        if (!(e instanceof LovejoinSkipped)) throw e;
-        skipped = e.reason;
+        skipped = leftOut(e);
       }
       // A mix that can't pay for its boxes anymore (the fees went up) says so too.
       if (!chain && !skipped && record?.mix) skipped = "its ADA doesn't pay for a box and its mixes anymore";
@@ -1291,6 +1291,13 @@ export class SessionService {
           builtAt: now(),
         };
       }
+    }
+    // A mix stopped before its boxes went in: it's all coming back, unmixed.
+    if (direct && !started && record?.mix && !record.mix.skipped) {
+      skipped = "you stopped it before its boxes went in";
+      await this.update(network, index, (r) => {
+        r.mix!.skipped = skipped;
+      });
     }
     // No chain this time: a chain built for it before won't be sent, so nothing stays reserved for it.
     await lovejoin?.release(network, chainOwner(index));
@@ -1732,6 +1739,20 @@ export class SessionService {
     this.queue = run.catch(() => undefined);
     return run;
   }
+}
+
+/**
+ * Why a return leaves Lovejoin out, after its chain failed: any failure of
+ * Lovejoin's own (the pool, the build, the network's measure) sends the rest
+ * back directly, so no return is ever stuck on it. What another try may
+ * mend is thrown as it is: Koios not answering, or behind (a stale pool
+ * read), and a lock.
+ */
+function leftOut(e: unknown): string {
+  if (e instanceof LovejoinSkipped) return e.reason;
+  const message = e instanceof Error ? e.message : String(e);
+  if (e instanceof KoiosError || /locked/i.test(message)) throw e;
+  return `the wallet couldn't build its chain: ${message.charAt(0).toLowerCase()}${message.slice(1).replace(/\.$/, "")}`;
 }
 
 /**

@@ -481,6 +481,33 @@ describe("the network's check", CHAINS, () => {
     expect(t.koios.calls.filter((c) => c.path === "ogmios")).toHaveLength(3);
   });
 
+  it("comes back directly when the chain can't be built, rather than stay stuck", async () => {
+    const { t } = await withSession("40000000");
+    const wasm = loadTestWasm();
+    const lovejoin = new LovejoinService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      wasm: {
+        ...wasm,
+        buildLovejoinChain: () => {
+          throw new Error("Something WebAssembly refuses.");
+        },
+      } as typeof wasm,
+    });
+    const direct = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin,
+      sleep: async () => undefined,
+    });
+    const review = await direct.backBuild("preprod", 0);
+    expect(review.lovejoin).toBeUndefined();
+    expect(review.lovejoinSkipped).toBe("the wallet couldn't build its chain: something WebAssembly refuses");
+  });
+
   it("says on the session when its return, sent, left Lovejoin out", async () => {
     const { t, sessions } = await withSession("40000000");
     t.koios.evaluation = { jsonrpc: "2.0", error: { code: 3010, message: "Some scripts of the transaction terminated with error(s).", data: [] } };
@@ -1080,6 +1107,31 @@ describe("mixing from the tile", CHAINS, () => {
     expect(view).toMatchObject({ mix: { boxes: 2, again: true }, auto: { step: "returning" } });
     // Sent: the boxes may be withdrawn again, when they're due.
     expect(await sessions.mixingAgain("preprod")).toBe(false);
+  });
+
+  it("brings a mix back directly when it's stopped, the way out of one whose chain can't go", async () => {
+    const t = await wallet();
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const { sessions } = mixRunner(t);
+    const out = await sessions.mixOutBuild("preprod", 1);
+    await sessions.mixOutSubmit("preprod", out.txHash);
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace), atSession(out.txHash, 1, "5000000"));
+    t.koios.confirmations = 1;
+    // Koios's view of the pool stays behind: the chain can't be built, and the runner tries again later.
+    t.koios.evaluation = (body: { params: { transaction: { cbor: string } } }) => {
+      const poolRefs = new Set(POOL.map((u) => `${u.tx_hash}#${u.tx_index}`));
+      const [id, index] = txInputs(Uint8Array.from(Buffer.from(body.params.transaction.cbor, "hex"))).find((o) => poolRefs.has(o))!.split("#");
+      return { jsonrpc: "2.0", error: { code: 3117, message: "Unknown", data: { unknownOutputReferences: [{ transaction: { id }, index: Number(index) }] } } };
+    };
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.auto?.retry?.error).toMatch("pool changed");
+    // Stop: it all comes back directly, and says Lovejoin was left out.
+    const before = t.koios.submitted.length;
+    view = await sessions.stop("preprod", 0);
+    expect(t.koios.submitted.slice(before)).toHaveLength(1);
+    const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }> }> }>("sessions.preprod"))!;
+    expect(book.sessions[0]!.txs.map((x) => x.kind)).toEqual(["out", "back"]);
+    expect(view.mix).toEqual({ boxes: 1, skipped: "you stopped it before its boxes went in" });
   });
 
   it("brings a mix-again back directly when its boxes have left the pool since", async () => {
