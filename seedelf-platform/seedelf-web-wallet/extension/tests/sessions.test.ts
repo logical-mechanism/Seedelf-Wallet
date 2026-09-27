@@ -672,14 +672,15 @@ describe("a swap that runs itself", () => {
     expect(t.koios.submitted).toHaveLength(3);
     expect((await t.activity.seedelf("preprod"))[0]).toMatchObject({ kind: "session-back", direction: "in" });
 
-    // The return lands and the account is empty: done, and the alarm stops.
+    // The return lands and the account is empty: done, and nothing runs, so the worker's run stops the alarm (runs.ts).
     t.koios.spent.add(`${SWAP_TX}#1`).add(`${"aa".repeat(32)}#0`);
     t.clock.now += 15_000;
     view = await sessions.advance("preprod", 0);
     expect(view).toMatchObject({ stage: "closed", auto: { step: "done" }, holding: { utxos: 0 } });
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
-    await sessions.runAll("preprod");
-    expect(runner.on).toBe(false);
+    expect(await sessions.runAll("preprod")).toBe(false);
+    // Only that run stops it, once for every network: runAll leaves it alone.
+    expect(runner.on).toBe(true);
   });
 
   it("takes nothing a stranger pays the account for the fill while its order is still at the DEX's contract", async () => {
@@ -739,8 +740,9 @@ describe("a swap that runs itself", () => {
       expect(view.stage).toBe("failed");
       // Not seen isn't turned away: it may still land, so the page offers Try again.
       expect(view.unsent).toBeUndefined();
-      await sessions.runAll("preprod");
-      expect(runner.on).toBe(false);
+      expect(await sessions.runAll("preprod")).toBe(false);
+      // Nothing runs, so the worker's run stops the alarm (runs.ts).
+      await runner.stop();
 
       // It lands late.
       funded(t);
@@ -844,11 +846,11 @@ describe("a swap that runs itself", () => {
     let view = await sessions.advance("preprod", 0);
     expect(view.auto!.paused).toEqual({ at: t.clock.now, why: "price", amountOut: "900000000" });
     expect(t.minswap.calls.map((c) => c.path)).not.toContain("build-tx");
-    // Paused, it waits for the user: the runner leaves it, and the alarm stops.
+    // Paused, it waits for the user: the runner leaves it, and the worker's run stops the alarm (runs.ts).
     t.clock.now += 60_000;
-    await sessions.runAll("preprod");
+    expect(await sessions.runAll("preprod")).toBe(false);
     expect(t.minswap.calls.filter((c) => c.path === "estimate")).toHaveLength(2);
-    expect(runner.on).toBe(false);
+    await runner.stop();
 
     // Expected above the approved minimum again, though its own minimum is under it: the order asks for the approved one.
     t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "904000000", min_amount_out: "899960000" };

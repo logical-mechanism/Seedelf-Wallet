@@ -56,14 +56,18 @@ const autoLock = {
 };
 
 // Chrome 116's shortest period is a minute. Asking again doesn't restart the
-// clock: an alarm that's there is left alone.
+// clock: an alarm that's there is left alone. Each start is counted, so a run
+// never stops what was started while it went on (runs.ts).
+let sessionsStarts = 0;
 const sessionsAlarm = {
   start: async () => {
+    sessionsStarts++;
     if (!(await chrome.alarms.get(SESSIONS_ALARM))) await chrome.alarms.create(SESSIONS_ALARM, { periodInMinutes: 1 });
   },
   stop: async () => {
     await chrome.alarms.clear(SESSIONS_ALARM);
   },
+  starts: () => sessionsStarts,
 };
 
 /**

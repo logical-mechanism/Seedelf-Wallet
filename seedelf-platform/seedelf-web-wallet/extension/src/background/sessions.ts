@@ -278,8 +278,11 @@ interface PendingChain extends ChainProgress {
 export interface SessionDeps extends ScriptSpendDeps {
   store: PrivateStore;
   minswap: (network: NetworkName) => Minswap;
-  /** Wakes the runner every minute while a swap runs (chrome.alarms). */
-  alarm?: { start(): Promise<void>; stop(): Promise<void> };
+  /**
+   * Wakes the runner every minute while a swap runs (chrome.alarms). Only the
+   * worker's run stops it, once for every network (runs.ts).
+   */
+  alarm?: { start(): Promise<void> };
   /** Where a return's spare ADA goes first, when it pays for a box. */
   lovejoin?: LovejoinService;
 }
@@ -1144,9 +1147,10 @@ export class SessionService {
   /**
    * Every running swap's next step, and more of every return's chain still
    * being sent (a site's session, a hand-run swap), for the alarm and for
-   * unlocking. The alarm stops once nothing runs. Returns whether something
-   * still runs on `network`: the worker runs every network in turn, and the
-   * last one's stop mustn't stop another's.
+   * unlocking. Returns whether something still runs on `network`. It never
+   * stops the alarm: the worker runs every network in turn, and decides once
+   * after all of them (runs.ts), so one network's quiet never stops
+   * another's work, or a swap sent while the others ran.
    */
   async runAll(network: NetworkName): Promise<boolean> {
     const book = await this.book(network);
@@ -1158,7 +1162,6 @@ export class SessionService {
     }
     let still = (await this.book(network)).sessions.some(running);
     for (const s of book.sessions.filter((r) => !r.closedAt)) still ||= !!(await this.pendingChain(network, s.index));
-    await (still ? this.deps.alarm?.start() : this.deps.alarm?.stop());
     return still;
   }
 

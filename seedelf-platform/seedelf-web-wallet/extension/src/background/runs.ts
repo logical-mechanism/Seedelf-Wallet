@@ -14,18 +14,27 @@ export type Runner = Pick<Context, "wallet" | "sessions" | "lovejoin" | "pending
 export interface Alarm {
   start(): Promise<void>;
   stop(): Promise<void>;
+  /** How many times it's been started, by anything: a run stops it only if nothing did while the run went on. */
+  starts(): number;
 }
 
 /**
  * One run over every network. Locked, the alarm stops until unlock. `scan`:
  * read Lovejoin's pool even with nothing due (at unlock), on a network where
  * the wallet has used it.
+ *
+ * The alarm is decided once, after every network: it goes on if any of them
+ * has something running, and stops only if none has and nothing started it
+ * meanwhile. A swap or a chain the user sends while a run reads Koios starts
+ * it, and the run never stops it from under them: it's left on for one more
+ * run, which stops it if nothing runs by then.
  */
 export async function runNetworks(ctx: Runner, alarm: Alarm, scan = false): Promise<void> {
   if ((await ctx.wallet.state()) !== "unlocked") {
     await alarm.stop();
     return;
   }
+  const started = alarm.starts();
   let busy = false;
   for (const network of ctx.networks) {
     // One network's failure (Koios down, a record that won't open) never stops the other's.
@@ -40,6 +49,6 @@ export async function runNetworks(ctx: Runner, alarm: Alarm, scan = false): Prom
     // And a payment that may still go through, sent again now and then until it's settled.
     if (await ctx.pending.watch(network).catch(() => false)) busy = true;
   }
-  // runAll stops the alarm when its own network has nothing running: another's work starts it again.
   if (busy) await alarm.start();
+  else if (alarm.starts() === started) await alarm.stop();
 }
