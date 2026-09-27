@@ -56,10 +56,12 @@ After a rebuild, press the reload arrow on the extension's card.
 | Script | What it does |
 |---|---|
 | `npm run build` | WASM plus the extension (`build:wasm`, then `build:ext`) |
-| `npm run build:store` | The same with `VITE_STORE_BUILD=true`: no dev key, so Chrome or the store picks the ID |
+| `npm run build:store` | The store's build: `VITE_ENABLE_MAINNET=true` and `VITE_STORE_BUILD=true`, so mainnet with preprod in Settings, and no dev key (Chrome or the store picks the ID) |
+| `npm run build:store:preprod` | The same, preprod only, for tests |
 | `npm run tokens` | Rebuilds the wallet's token list (`src/tokens/registry.<network>.json`) from `src/tokens/list.json` and the Cardano token registry, through Koios. Run at each release. |
 | `npm run dreps` | Rebuilds the wallet's list of named DReps (`src/dreps/<network>.json`) from Koios, for the vote page's search. Run at each release. |
-| `npm run package` | A store build, plus `licenses/THIRD-PARTY.txt`, zipped reproducibly into `release/seedelf-wallet-<version>.zip` for the Web Store (`scripts/package.mjs`, `scripts/third-party.mjs`) |
+| `npm run package` | The store's build (mainnet, with preprod in Settings), plus `licenses/THIRD-PARTY.txt`, zipped reproducibly into `release/seedelf-wallet-<version>-mainnet.zip` for the Web Store (`scripts/package.mjs`, `scripts/third-party.mjs`). It refuses a build without mainnet's hosts. |
+| `npm run package:preprod` | A preprod-only store build, zipped as `-preprod.zip`, for tests. Never uploaded. |
 | `npm run dev` | Rebuilds the extension into `dist/` on change (development mode, with source maps) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Vitest: the manifest, SecretBox against independent vectors, the wallet state machine, the Koios and giveme.my clients, the balance scan over recorded preprod responses, move-in, mint, transfer and withdraw (measured in the wallet, against real preprod fees), the handlers (all with the real WASM and the shared vectors), and formatting |

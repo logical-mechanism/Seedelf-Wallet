@@ -30,7 +30,7 @@ This is how we run and test the extension before it's in the Chrome Web Store. T
 
 Chrome runs an extension straight from a folder once developer mode is on. There is no store and no packaging.
 
-1. Build it: `cd seedelf-web-wallet/extension && npm install && npm run build`. This builds the Rust core to WebAssembly and then the extension into `dist/`. The default build targets preprod.
+1. Build it: `cd seedelf-web-wallet/extension && npm install && npm run build`. This builds the Rust core to WebAssembly and then the extension into `dist/`. The default build is preprod only. `VITE_ENABLE_MAINNET=true npm run build` builds what the store ships: mainnet by default, and preprod in Settings (see [architecture.md](architecture.md#networks)).
 2. Open `chrome://extensions` and turn on **Developer mode** (top right).
 3. Click **Load unpacked** and choose the `dist/` folder.
 4. Pin the extension, then click its icon: the wallet opens in a tab, or in the side panel once Settings says so.
@@ -70,7 +70,7 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 | Rust | `seedelf-crypto`, `seedelf-core`, and the wasm crate | `cargo test`. The CLI's offline integration tests (`seedelf-cli/tests/cli/`) guard the builder extraction. |
 | Key derivation | The frozen v1 Seedelf key vectors, and the Cardano account vectors (verified against `@cardano-sdk`, Lace's library) | Checked in Rust, and again from JS through WebAssembly, so both sides agree |
 | TypeScript | The manifest, the vault and wallet state, the Koios and giveme.my clients, and the worker's services and handlers against the real WASM, over recorded preprod answers | Vitest (`npm test`) |
-| End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the side panel's layout and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. The dApp connector's tests (chunk 15) load a copy of the build whose manifest grants the sites from install, because Chrome's own dialog for an optional permission can't be answered from automation (`withSiteAccess` in `e2e/support.ts`); their dApp is a page served at `https://dapp.example/`. |
+| End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the side panel's layout and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. The dApp connector's tests (chunk 15) load a copy of the build whose manifest grants the sites from install, because Chrome's own dialog for an optional permission can't be answered from automation (`withSiteAccess` in `e2e/support.ts`); their dApp is a page served at `https://dapp.example/`. The harness sets the network before the wallet starts (`network`, preprod by default, as the fakes answer), so the suite runs on a dev build and on the store's mainnet build alike. |
 | Live reads | The balance scan and the ADA Handle lookup against the real preprod Koios | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`; skipped otherwise |
 | Probes | Transactions checked against preprod's node and scripts, submitting nothing | `node tests/fixtures/probe-staking.mjs`: every staking transaction through Ogmios's decoder, and an account-paid mint with the rewards through the real policy. The `record-*.mjs` scripts do the same for the Seedelf spends, and keep what they recorded as fixtures. |
 | Live | Real preprod transactions from the built extension, by hand, never in CI | `node e2e/live/run.mjs all` runs every Seedelf flow in one browser session on the private test wallet, waiting for each to confirm, and prints the hashes. `node e2e/live/run.mjs staking` stakes, delegates the vote and changes pool; `withdraw-rewards` and `unstake` wait until rewards arrive. `run.mjs` also takes single flows: `mint live-1 account + move-in 25.5`. |
@@ -80,7 +80,7 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 
 On the built extension (`npm run build`, then load `dist/` unpacked), in the side panel and in a tab.
 
-1. **The automated layers:** `cargo test --workspace`, the WASM tests, `npm test` and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
+1. **The automated layers:** `cargo test --workspace --locked`, the WASM tests, `npm test` and `VITE_ENABLE_MAINNET=true npm test`, and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
 2. **Onboarding:** create a wallet from the toolbar button (it opens a tab), and once from the side panel (it opens one too): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match. Restore a 12- or 15-word phrase from Lace or Eternl, and check its account.
 3. **Locking:**
    - the lock button;
@@ -106,7 +106,13 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - Koios blocked (offline, or an ad blocker) says why, and recovers on Refresh;
    - amounts: more than the balance, seven decimals, letters;
    - a mistyped Seedelf name, and a `$handle` that doesn't exist.
-7. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my`.
+7. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my` (and Minswap's preprod aggregator from the page, for a swap).
+8. **The store's build, both networks** (`npm run package`, `dist/` loaded unpacked in a fresh profile):
+   - it opens on **MAINNET**, with no preprod strip;
+   - Settings, Network: moving to preprod says first that its ADA has no value; then every screen, and the connector's window, shows the **PREPROD** badge and strip, and Home the preprod balances;
+   - a payment reviewed on one network and sent after a switch is refused ("isn't ready to send");
+   - a site connected on one network asks again on the other, and one waiting as you switch is declined;
+   - on mainnet, the worker's network panel shows only `api.koios.rest`, `www.giveme.my` and `api.coingecko.com` (and `agg-api.minswap.org` from the page, for a swap), plus `preprod.koios.rest` only for something still on its way on preprod.
 
 ## Web Store release: copy/paste procedure
 
@@ -118,7 +124,7 @@ From the repository root:
 
 ```bash
 cd seedelf-platform
-cargo test --workspace
+cargo test --workspace --locked
 cd seedelf-web-wallet/extension
 npm install
 release_version=1.0.0
@@ -127,6 +133,7 @@ npm run tokens
 npm run dreps
 npm run build
 npm test
+VITE_ENABLE_MAINNET=true npm test
 npm run e2e
 LIVE_KOIOS=1 npx vitest run tests/live.test.ts
 node e2e/live/run.mjs all
@@ -140,25 +147,27 @@ Then complete the manual [preprod checklist](#preprod-checklist-before-a-release
 ```bash
 npm run package
 npm run e2e
-sha256sum "release/seedelf-wallet-$release_version.zip"
+sha256sum "release/seedelf-wallet-$release_version-mainnet.zip"
 ```
 
 The package to upload is:
 
 ```text
-seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version.zip
+seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-For the current release, that file is `extension/release/seedelf-wallet-1.0.0.zip`.
+For the current release, that file is `extension/release/seedelf-wallet-1.0.0-mainnet.zip`.
 
-The second `npm run e2e` runs against the store build created by `npm run package`. Keep the SHA-256 output for the release record.
+`npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 8 by hand on it. Keep the SHA-256 output for the release record.
+
+`npm run package:preprod` makes a preprod-only store build (`-preprod.zip`) for tests. Never upload it.
 
 ### 3. Upload and submit
 
 1. Open the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole).
 2. Choose **Add new item** for the first release, or open the existing item for an update. Upload `extension/release/seedelf-wallet-$release_version.zip`.
 3. Complete the **Store Listing**, **Privacy**, **Distribution**, and **Test instructions** tabs using [store/README.md](store/README.md).
-4. Set visibility to **Unlisted**, keep the listing **preprod-only**, and verify the privacy-policy URL resolves.
+4. Set visibility (**Public** for launch, or **Unlisted** for a quieter start), check the host justifications match the manifest's four hosts, and verify the privacy-policy URL resolves.
 5. Submit for review.
 6. After approval, record the version, ZIP SHA-256, submission date, and approval date in the roadmap, then share the store link with the intended users.
 
@@ -173,18 +182,20 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 3. **Refresh the DRep list:** `npm run dreps` in `extension/`. It rewrites `src/dreps/<network>.json` with every registered DRep that has a name; skim the diff for anything odd before committing it.
 4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
 5. **Build the package:** `npm run package` in `extension/`.
-   - It builds with `VITE_STORE_BUILD=true`, so there's no dev key.
-   - It refuses a `dist/` with a key, or one whose version doesn't match `package.json`.
+   - It builds with `VITE_ENABLE_MAINNET=true` and `VITE_STORE_BUILD=true`: mainnet by default, preprod in Settings, and no dev key.
+   - It refuses a `dist/` with a key, one whose version doesn't match `package.json`, and one whose manifest lacks `https://api.koios.rest/*` (a preprod-only build).
+   - The WebAssembly is built from the tracked `Cargo.lock` (`--locked`) with the pinned Rust (`rust-toolchain.toml`), and carries no local path.
    - It adds `licenses/THIRD-PARTY.txt`: every Rust crate compiled into the WebAssembly, every bundled npm package, and SecretBox, each with its licence text. It fails if one of them ships no licence and has no known fallback (`scripts/third-party.mjs`).
-   - It writes `release/seedelf-wallet-<version>.zip` and prints its SHA-256. The zip is reproducible: the same sources and toolchain give the same bytes.
-6. **Test the store build:** `npm run e2e` runs every end-to-end test on it. Load `dist/` unpacked in a fresh Chrome profile once, and click through onboarding and Home.
-7. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`.
-8. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
-9. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
+   - It writes `release/seedelf-wallet-<version>-mainnet.zip` and prints its SHA-256. The zip is reproducible: the same commit and toolchain give the same bytes.
+6. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 8](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
+7. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([plans/launch-review.md](plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
+8. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made on preprod's fixtures, so they show its badge and strip ([store/README.md](store/README.md), *Graphic assets*).
+9. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
+10. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
 
 ## Sharing with testers before launch
 
-**Decided (chunk 11c): an unlisted, preprod-only Web Store listing.** See [store/README.md](store/README.md).
+**Decided (chunk 11c): an unlisted, preprod-only Web Store listing.** Superseded at launch (2026-09-26): the store's build is mainnet, with preprod in Settings for testing. See [store/README.md](store/README.md).
 
 - **Zip of `dist/`:** testers load it unpacked the same way we do. It works, but it's clunky and gets no automatic updates.
 - **Chrome Web Store, unlisted or private (recommended for the first testers):**

@@ -144,7 +144,7 @@ export function Settings({
 export const MOVE_TO: Record<NetworkName, string> = {
   preprod:
     "Preprod is Cardano's test network. ADA there is test ADA, with no value: it can't pay for anything, and real ADA sent to a preprod address is lost. " +
-    "Your wallet is the same there, with its own balances, history and connected sites.",
+    "Your wallet is the same there, with its own balances, history and connected sites, and the same keys: anyone comparing the two networks can tell they're one wallet's.",
   mainnet: "Mainnet is Cardano's real network: ADA there is real money. Check every address and amount before you send.",
 };
 
