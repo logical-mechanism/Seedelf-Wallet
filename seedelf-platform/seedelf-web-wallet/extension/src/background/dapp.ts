@@ -32,9 +32,11 @@
 //             build its next transaction on them before they're on chain.
 //             What the user locked, and the collateral, stay out of a site's
 //             transaction as out of the wallet's own: one that uses them is
-//             refused (`keptApart`), and so is one that uses what a Lovejoin
-//             chain still being sent needs (`heldForLovejoin`), on the public
-//             account and in a session. `signData` is CIP-8, with the address's key.
+//             refused (`keptApart`), and so is one that uses what the site's
+//             own account's Lovejoin chain still being sent needs
+//             (`heldForLovejoin`): the public account's, or the session's.
+//             Another's is left to the stranger's path, never named.
+//             `signData` is CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts).
 // Limits      What a site asks for without the user costs the wallet little:
@@ -72,6 +74,7 @@ import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } fro
 import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
 import type { CoinControlService } from "./coin-control";
 import { SpentInputError, type KoiosUtxo } from "./koios";
+import { chainOwner } from "./lovejoin";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
@@ -900,19 +903,28 @@ export class DappService {
   }
 
   /**
-   * What a Lovejoin chain still being sent needs stays out of a site's
-   * transaction, on the public account and in a session alike (spent.ts's
-   * reservations): its next step would be refused as a double spend, and the
-   * chain would stop partway, its boxes less mixed. The view leaves those
-   * UTxOs out already, but a site can still name one it read before, or found
-   * elsewhere. The chain's collateral may still be put up as collateral
-   * (`getCollateral` gives it on the public account), only never spent. A
-   * chain built and kept for Send holds nothing here, and one that's done or
-   * stopped lets go. Refused before anything is looked up.
+   * What the holder's own Lovejoin chain still being sent needs stays out of
+   * its site's transaction (spent.ts's reservations, by `chainOwner`): the
+   * public account's mix for a site on the account, the session's return or
+   * mix for a site on a session. Its next step would be refused as a double
+   * spend, and the chain would stop partway, its boxes less mixed. The view
+   * leaves those UTxOs out already, but a site can still name one it read
+   * before, or found elsewhere. The chain's collateral may still be put up as
+   * collateral (`getCollateral` gives it on the public account), only never
+   * spent. A chain built and kept for Send holds nothing here, and one that's
+   * done or stopped lets go. Refused before anything is looked up.
+   *
+   * Only the holder's own chain: another's UTxOs aren't this holder's to sign
+   * anyway (another account's key, a Seedelf UTxO's proof, a Lovejoin box's),
+   * and refusing them here, by name and count, would tell a site which UTxOs
+   * the wallet's other accounts, or its private balance, are moving, and so
+   * tie its account to them (privacy review §2.1). One of those goes the way
+   * a stranger's does.
    */
-  private async heldForLovejoin(network: NetworkName, inputs: string[], collateral: string[]): Promise<void> {
+  private async heldForLovejoin(network: NetworkName, holder: Holder, inputs: string[], collateral: string[]): Promise<void> {
     const { wallet, session } = this.deps;
-    const held = await wallet.withKeys(() => reservedSet(session, network, { sending: true }));
+    const only = chainOwner(holder?.index);
+    const held = await wallet.withKeys(() => reservedSet(session, network, { sending: true, only }));
     const used = [
       ...new Set([
         ...inputs.filter((o) => held.inputs.has(o) || held.collateral.has(o)),
@@ -1091,7 +1103,7 @@ export class DappService {
     } catch {
       throw invalid("The wallet can't read this transaction.");
     }
-    await this.heldForLovejoin(network, inputs, collateral);
+    await this.heldForLovejoin(network, holder, inputs, collateral);
     const { request, summary, collateralSpent } = await this.readInTurn(session.origin, () =>
       this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign),
     );

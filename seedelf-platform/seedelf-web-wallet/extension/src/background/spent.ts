@@ -148,16 +148,21 @@ export async function reservations(session: Area, network: NetworkName, now: num
 
 /**
  * What the chains on `network` will spend: every chain's (`except` one, the
- * chain being built again), or only those being sent (`sending`), with
- * their collateral. Call it while unlocked.
+ * chain being built again), or `only` one chain's, and of those only the
+ * ones being sent (`sending`), with their collateral. Call it while unlocked.
  */
 export async function reservedSet(
   session: Area,
   network: NetworkName,
-  { sending = false, except, now = Date.now() }: { sending?: boolean; except?: string; now?: number } = {},
+  {
+    sending = false,
+    except,
+    only,
+    now = Date.now(),
+  }: { sending?: boolean; except?: string; only?: string; now?: number } = {},
 ): Promise<{ inputs: Set<string>; collateral: Set<string> }> {
   const kept = Object.entries(await reservations(session, network, now)).filter(
-    ([chain, r]) => chain !== except && (!sending || r.until === undefined),
+    ([chain, r]) => chain !== except && (only === undefined || chain === only) && (!sending || r.until === undefined),
   );
   return {
     inputs: new Set(kept.flatMap(([, r]) => r.inputs)),

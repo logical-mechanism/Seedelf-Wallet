@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { Collateral } from "../src/background/collateral";
 import { DappService, SESSION_DAPP_SIGNED, type DappSession } from "../src/background/dapp";
 import type { KoiosUtxo } from "../src/background/koios";
+import { chainOwner } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
 import { SESSION_SEND } from "../src/background/send";
 import { recentlySent, rememberSent, SENT_KEEP_MS } from "../src/background/sent-txs";
@@ -1158,11 +1159,45 @@ describe("private CIP-30: a site connected to a private session", () => {
     const { dapp } = privately(t);
     const { s } = await connectedPrivately(t, dapp);
     const input = `${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`;
-    await t.session.set(SESSION_RESERVED_PREFIX + "preprod", { "session:0": { inputs: [input], collateral: [] } });
+    await t.session.set(SESSION_RESERVED_PREFIX + "preprod", { [chainOwner(0)]: { inputs: [input], collateral: [] } });
     await expect(dapp.call(s, "signTx", [siteTx({ inputs: [input] }), false])).rejects.toMatchObject({
       failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("still being sent through Lovejoin") },
     });
     expect(dapp.approvals()).toEqual([]);
+  });
+
+  it("never says what another account's Lovejoin chain holds: a site on a session, or on the public account, hears what a stranger's UTxO gets", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s } = await connectedPrivately(t, dapp);
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    const account = `${own!.txHash}#${own!.index}`;
+    const contract = `${ownedUtxos[0]!.tx_hash}#${ownedUtxos[0]!.tx_index}`;
+    const stranger = `${"cd".repeat(32)}#0`;
+    // The public account's mix and another session's return are being sent: one spends the account's UTxO, the other a Seedelf UTxO.
+    await t.session.set(SESSION_RESERVED_PREFIX + "preprod", {
+      [chainOwner()]: { inputs: [account], collateral: [] },
+      [chainOwner(1)]: { inputs: [contract], collateral: [] },
+    });
+    const answer = (dapp: DappService, s: DappSession, inputs: string[]) =>
+      dapp.call(s, "signTx", [siteTx({ inputs }), false]).then(
+        () => undefined,
+        (e: { failure: unknown }) => e.failure,
+      );
+    const sessionHears = { code: TxSignError.ProofGeneration, info: "Nothing in this transaction is this private session's to sign." };
+    expect(await answer(dapp, s, [stranger])).toEqual(sessionHears);
+    for (const inputs of [[account], [contract], [account, contract]]) expect(await answer(dapp, s, inputs)).toEqual(sessionHears);
+
+    // A site on the public account names the session's: the same.
+    const publicSite = await connected(t, site("https://public.example"));
+    const publicHears = { code: TxSignError.ProofGeneration, info: "Nothing in this transaction is the public account's to sign." };
+    expect(await answer(t.dapp, publicSite, [stranger])).toEqual(publicHears);
+    expect(await answer(t.dapp, publicSite, [contract])).toEqual(publicHears);
+    // Its own account's chain is still kept whole.
+    expect(await answer(t.dapp, publicSite, [account])).toMatchObject({ info: expect.stringContaining("still being sent through Lovejoin") });
+    expect(dapp.approvals()).toEqual([]);
+    expect(t.dapp.approvals()).toEqual([]);
   });
 
   it("won't register or delegate the session's stake key, which stays unregistered, but lets it stop", async () => {
