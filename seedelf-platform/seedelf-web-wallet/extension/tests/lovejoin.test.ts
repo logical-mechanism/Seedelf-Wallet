@@ -26,6 +26,7 @@ import {
   type ChainProgress,
 } from "../src/background/lovejoin";
 import { MAYBE_SENT_WAIT, pendingKey } from "../src/background/pending";
+import { SESSION_SPENT } from "../src/background/spent";
 import { Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
@@ -828,6 +829,54 @@ describe("a chain's boxes", CHAINS, () => {
     await expect(lovejoin.withdrawNow("preprod", { txHash: record!.deposit, txIndex: 3 })).rejects.toThrow("wasn't mixed");
     await lovejoin.withdrawNow("preprod", { txHash: record!.deposit, txIndex: 3 }, true);
     expect(withdrawn(t).at(-1)).toBe(`${record!.deposit}#3`);
+  });
+
+  it("keeps a stopped chain's record while a spend that may never land hides its box, so the box never comes back by itself (final review lovejoin-1)", async () => {
+    const { t } = await withSession("40000000");
+    const lovejoin = witnessed(t);
+    // A chain cut a day ago, after its deposit: its box is still the deposit's own output.
+    const D = "d0".repeat(32);
+    t.koios.addedToAccounts.push(await ownedBox(t, D, 3, t.clock.now / 1000 - 24 * 3600));
+    const S = {
+      id: "5e".repeat(32),
+      session: 0,
+      progress: "seedelf.session.chain.preprod.0",
+      deposit: D,
+      mixes: ["a1".repeat(32), "a2".repeat(32)],
+      leaves: [{ txHash: "a2".repeat(32), txIndex: 0 }],
+      boxes: 1,
+      total: 4,
+      sent: 1,
+      at: t.clock.now - 24 * HOUR,
+      scheduled: true,
+      stopped: CHAIN_CUT,
+      ended: t.clock.now - 24 * HOUR,
+    };
+    await t.store.set("lovejoin.preprod", { due: [], chains: [S] });
+    expect((await lovejoin.status("preprod")).notMixed).toEqual([{ txHash: D, txIndex: 3 }]);
+    const kept = async () => (await t.store.get<{ chains: Array<{ id: string }> }>("lovejoin.preprod"))!.chains.map((c) => c.id);
+
+    // Mix my boxes again's first mix spends it, and the Lovejoin page reads the pool meanwhile: the record stays.
+    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${D}#3`]: Date.now() }));
+    await lovejoin.status("preprod");
+    expect(await kept()).toEqual([S.id]);
+
+    // That mix never lands, and a lock forgets the spend: the box shows again, not mixed yet, and hours of runs never bring it back.
+    await t.wallet.lock();
+    t.clock.now += HOUR;
+    await t.wallet.unlock(PASSWORD);
+    for (let run = 0; run < 6; run++) {
+      await lovejoin.withdrawDue("preprod", run === 0);
+      t.clock.now += 2 * HOUR;
+      await t.wallet.unlock(PASSWORD);
+    }
+    expect(withdrawn(t)).toEqual([]);
+    expect((await lovejoin.status("preprod")).notMixed).toEqual([{ txHash: D, txIndex: 3 }]);
+
+    // Once the box has really left the pool, the record goes.
+    t.koios.spent.add(`${D}#3`);
+    await lovejoin.status("preprod");
+    expect(await kept()).toEqual([]);
   });
 
   it("withdraws nothing while a chain is being sent, and the box that has waited longest once it's done", async () => {

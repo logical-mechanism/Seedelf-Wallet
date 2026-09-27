@@ -388,10 +388,12 @@ interface ChainRecord {
 export const CHAIN_CUT = "The wallet locked, or the browser closed, while its chain was being sent.";
 
 /**
- * A chain's record is kept this long after it ended, even holding no box: a
- * transaction of it a node dropped after the wallet sent it leaves a box
- * unmixed, and that box only shows again once the wallet forgets having
- * spent it (spent.ts).
+ * A chain's record is kept this long after it ended, even when the pool
+ * lists no box of it: a transaction of it a node dropped after the wallet
+ * sent it leaves a box unmixed, and a listing that's behind (a Koios backend
+ * lagging) may not show that box yet. The listing is read with what the
+ * wallet spent (sortOut), so a box a sent transaction spends keeps its record
+ * however long it's hidden.
  */
 const RECORD_KEEP_MS = SPENT_KEEP_MS + 60 * 60_000;
 
@@ -544,6 +546,12 @@ export class LovejoinService {
 
   /** The boxes in the pool, less any a sent transaction of ours spends. */
   async pool(network: NetworkName): Promise<KoiosUtxo[]> {
+    const { rows, spent } = await this.listing(network);
+    return unspent(rows, spent);
+  }
+
+  /** The pool as Koios lists it (a read), and what the wallet's sent transactions spend. */
+  private async listing(network: NetworkName): Promise<{ rows: KoiosUtxo[]; spent: Set<string> }> {
     const hash = NETWORKS[network].lovejoin?.mixBox;
     if (!hash) throw new Error("Lovejoin isn't on this network yet.");
     const { wallet, session } = this.deps;
@@ -551,7 +559,21 @@ export class LovejoinService {
       this.deps.koios(network).credentialUtxos([hash]),
       wallet.withKeys(() => spentSet(session)),
     ]);
-    return unspent(rows, spent);
+    return { rows, spent };
+  }
+
+  /**
+   * The pool (a read) less what a sent transaction of the wallet's spends,
+   * the wallet's boxes in it, and its boxes as Koios lists them, those spent
+   * included (`listed`). A box a sent transaction spends may never go: that
+   * transaction can be dropped, and Mix my boxes again's first mix spends
+   * boxes an older chain left not mixed yet. Until it's gone from the
+   * listing, the record that says it isn't mixed stays (sortOut).
+   */
+  private async ours(network: NetworkName): Promise<{ pool: KoiosUtxo[]; owned: OutRef[]; listed: OutRef[] }> {
+    const { rows, spent } = await this.listing(network);
+    const listed = await this.owned(network, rows);
+    return { pool: unspent(rows, spent), owned: listed.filter((b) => !spent.has(ref(b))), listed };
   }
 
   /** How many boxes session `index`'s `rows` pay for at the set depth (`again`: the mixes alone). */
@@ -1090,15 +1112,18 @@ export class LovejoinService {
   /**
    * The wallet's boxes, as its recorded chains leave them: not mixed yet (a
    * chain that ended left them so; one being sent is still mixing its own),
-   * or free to come back. A record that ended long enough ago and holds no
-   * box anymore goes, and Home's count of boxes not mixed yet follows.
+   * or free to come back. `owned` leaves out what a sent transaction of the
+   * wallet's spends; `listed` doesn't. A record that ended long enough ago
+   * and holds no box in the listing anymore goes, and Home's count of boxes
+   * not mixed yet follows. A box only hidden by a spend that may never land
+   * keeps its record (final review lovejoin-1).
    */
-  private async sortOut(network: NetworkName, owned: OutRef[]): Promise<{ unmixed: OutRef[]; free: OutRef[] }> {
+  private async sortOut(network: NetworkName, owned: OutRef[], listed: OutRef[]): Promise<{ unmixed: OutRef[]; free: OutRef[] }> {
     const now = this.deps.now();
     const { chains } = await this.read(network);
     const unmixed = unmixedOf(chains.filter((c) => c.ended), owned);
     await this.update(network, (s) => {
-      s.chains = s.chains.filter((c) => !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], owned).length > 0);
+      s.chains = s.chains.filter((c) => !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], listed).length > 0);
       s.notMixed = unmixed.length;
     });
     const held = new Set(unmixedOf(chains, owned).map(ref));
@@ -1119,8 +1144,8 @@ export class LovejoinService {
   async status(network: NetworkName): Promise<LovejoinStatus> {
     if (!this.available(network)) return { available: false, boxes: [], lovelace: "0", due: [], notMixed: [], chains: [] };
     await this.cuts(network);
-    const owned = await this.owned(network, await this.pool(network));
-    const { unmixed, free: back } = await this.sortOut(network, owned);
+    const { owned, listed } = await this.ours(network);
+    const { unmixed, free: back } = await this.sortOut(network, owned, listed);
     const known = (await this.read(network)).due.length;
     if (back.length > known) await this.schedule(network, back.length - known);
     const { due, chains } = await this.read(network);
@@ -1183,11 +1208,10 @@ export class LovejoinService {
     const { due } = await this.read(network);
     const now = this.deps.now();
     if (!(scan && used) && !due.some((t) => t <= now)) return [];
-    const pool = await this.pool(network);
-    const owned = await this.owned(network, pool);
+    const { pool, owned, listed } = await this.ours(network);
     // A box a chain of the wallet's made and hadn't finished mixing never
     // comes back by itself: it waits, not mixed yet, for Mix my boxes again.
-    const { free: back } = await this.sortOut(network, owned);
+    const { free: back } = await this.sortOut(network, owned, listed);
     // A box with no due time (a restore) gets one; a due time with no box
     // (withdrawn by hand, or a chain that didn't go through) goes.
     if (back.length > due.length) await this.schedule(network, back.length - due.length);
@@ -1267,9 +1291,8 @@ export class LovejoinService {
     }
     // Nor while a payment may still go through: Home's banner watches that one until it's settled (pending.ts).
     await settleMaybeSent(this.deps, network);
-    const pool = await this.pool(network);
-    const owned = await this.owned(network, pool);
-    const { unmixed, free: back } = await this.sortOut(network, owned);
+    const { pool, owned, listed } = await this.ours(network);
+    const { unmixed, free: back } = await this.sortOut(network, owned, listed);
     const reserved = await this.reservedBoxes(network);
     let chosen: OutRef | undefined;
     if (box) {
