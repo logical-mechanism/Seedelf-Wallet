@@ -2944,3 +2944,12 @@ button.dapp-tile:hover {
   font-family: var(--mono);
   font-size: 12px;
 }
+
+/* A name another DRep, or a ticker another pool, uses too: flagged in the
+   warning's colour beside it (Voting, Pools). */
+
+.utxo-tag--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: var(--warn-line);
+}

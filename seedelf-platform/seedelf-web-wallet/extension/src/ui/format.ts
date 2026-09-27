@@ -328,9 +328,16 @@ export function rewardsAside(rewards?: string): string {
   return rewards ? `, with ${formatAda(rewards)} ₳ of rewards` : "";
 }
 
+/**
+ * An ID shortened so its hash shows, not only its prefix: "pool1" and
+ * CIP-129's "drep1y2" say nothing about whose it is, and a lookalike can be
+ * ground to match a few characters after them (launch review #59).
+ */
+export const shortId = (id: string) => shortHex(id, 16, 6);
+
 /** A pool by its ticker, else its name, else its shortened ID. */
 export function poolLabel(pool: PoolRef): string {
-  return pool.ticker ?? pool.name ?? shortHex(pool.id, 10, 6);
+  return pool.ticker ?? pool.name ?? shortId(pool.id);
 }
 
 /** Where the vote goes, in words: a pinned choice, the DRep's name or shortened ID, or nowhere. */
@@ -338,8 +345,27 @@ export function voteLabel(drep: string | null, name?: string): string {
   if (!drep) return "Not delegated";
   if (drep === ALWAYS_ABSTAIN) return "Always abstain";
   if (drep === ALWAYS_NO_CONFIDENCE) return "Always no confidence";
-  return name ?? shortHex(drep, 10, 6);
+  return name ?? shortId(drep);
 }
+
+/**
+ * How many of `items` share each name, as it looks (`nameSkeleton`): two
+ * DReps both called "8Ball", or pools with the same ticker. Anyone can
+ * choose any name, so a shared one is flagged and the ID shown.
+ */
+export function sharedNames<T>(items: T[], name: (item: T) => string | undefined): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const n = name(item);
+    const key = n === undefined ? "" : nameSkeleton(n);
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** How many share `name` in `counts` (sharedNames): 1 or 0 when it's its own. */
+export const sharing = (counts: Map<string, number>, name: string | undefined) =>
+  (name === undefined ? 0 : counts.get(nameSkeleton(name))) ?? 0;
 
 /** An ADA amount's value at `price`, in its currency: "$12.34", "€0.22", "¥397". */
 export function formatFiat(lovelace: string, price: AdaPrice): string {

@@ -5,19 +5,20 @@
 // its metadata: two requests), since the ledger refuses one that isn't
 // registered. Conway pays out no rewards from an account whose vote isn't
 // delegated, so the Staking page and Home send the user here when rewards
-// are locked.
+// are locked. Names are the DReps' own: two with the same one (or one that
+// only looks the same) are flagged, and every row shows enough of the ID to
+// tell them apart (launch review #59).
 
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 
 import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CheckIcon, LandmarkIcon, SearchIcon } from "../components/Icons";
-import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { drepList, isDrepId, searchDreps, type DrepEntry } from "../dreps";
-import { formatAda, plural, shortHex, voteLabel } from "../format";
+import { formatAda, plainName, plural, sharedNames, sharing, shortId, voteLabel } from "../format";
 import { useNetwork } from "../network";
 import { initials, tint } from "../tokens";
 
@@ -64,9 +65,12 @@ export function Voting({
   busy: boolean;
   error?: string;
   onBack: () => void;
-  /** The vote as Koios names it, and the DRep's name. */
-  onVote: (drep: string, name?: string) => void;
+  /** The vote as Koios names it, the DRep's name, and how many DReps on the list share that name. */
+  onVote: (drep: string, name?: string, shared?: number) => void;
 }) {
+  const network = useNetwork();
+  const { dreps } = drepList(network);
+  const shared = useMemo(() => sharedNames(dreps, (d) => d.name), [dreps]);
   const [pick, setPick] = useState<Pick>(pickOf(current));
   const [drep, setDrep] = useState<DrepDetails>();
   const [looking, setLooking] = useState(false);
@@ -76,6 +80,9 @@ export function Voting({
     pick === "abstain" ? ALWAYS_ABSTAIN : pick === "no-confidence" ? ALWAYS_NO_CONFIDENCE : drep?.id;
   const same = chosen !== undefined && chosen === current;
   const retired = pick === "drep" && drep?.status === "retired";
+  // The name the list has for the DRep picked, else its own: how many on the list share it.
+  const listed = drep ? dreps.find((d) => d.id === drep.id) : undefined;
+  const drepShared = drep ? sharing(shared, listed?.name ?? drep.name) : 0;
   const why = blocked ?? (same ? "Your voting power already goes there" : retired ? "That DRep has retired" : undefined);
 
   async function lookUp(id: string) {
@@ -104,7 +111,9 @@ export function Voting({
         <button
           type="button"
           className="primary"
-          onClick={() => chosen && onVote(chosen, pick === "drep" ? drep?.name : undefined)}
+          onClick={() =>
+            chosen && onVote(chosen, pick === "drep" && drep?.name ? plainName(drep.name) : undefined, pick === "drep" ? drepShared : undefined)
+          }
           disabled={!chosen || !!why || busy}
           title={why}
         >
@@ -143,13 +152,13 @@ export function Voting({
       {pick === "drep" &&
         (drep ? (
           <div className="stack-tight">
-            <DrepCard drep={drep} />
+            <DrepCard drep={drep} shared={drepShared} />
             <button type="button" className="link align-start" onClick={() => setDrep(undefined)} disabled={busy}>
               Choose another DRep
             </button>
           </div>
         ) : (
-          <DrepSearch looking={looking} error={lookError} onPick={(id) => void lookUp(id)} />
+          <DrepSearch shared={shared} looking={looking} error={lookError} onPick={(id) => void lookUp(id)} />
         ))}
 
       {!registered && (
@@ -161,7 +170,17 @@ export function Voting({
 }
 
 /** The wallet's list of named DReps, searched on the device, or an ID pasted in. */
-function DrepSearch({ looking, error, onPick }: { looking: boolean; error?: string; onPick: (id: string) => void }) {
+function DrepSearch({
+  shared,
+  looking,
+  error,
+  onPick,
+}: {
+  shared: Map<string, number>;
+  looking: boolean;
+  error?: string;
+  onPick: (id: string) => void;
+}) {
   const { recorded, dreps } = drepList(useNetwork());
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
@@ -205,7 +224,7 @@ function DrepSearch({ looking, error, onPick }: { looking: boolean; error?: stri
       ) : found.length ? (
         <ul className="list" data-testid="drep-results">
           {found.slice(0, limit).map((d) => (
-            <DrepRow key={d.id} drep={d} disabled={looking} onPick={onPick} />
+            <DrepRow key={d.id} drep={d} shared={sharing(shared, d.name) > 1} disabled={looking} onPick={onPick} />
           ))}
         </ul>
       ) : (
@@ -228,22 +247,45 @@ function DrepSearch({ looking, error, onPick }: { looking: boolean; error?: stri
 const dateOf = (day: string) =>
   day ? new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "no date";
 
-function DrepRow({ drep, disabled, onPick }: { drep: DrepEntry; disabled: boolean; onPick: (id: string) => void }) {
+/** One DRep on the list: its name, flagged when another uses it too, and enough of its ID to tell them apart. */
+export function DrepRow({
+  drep,
+  shared,
+  disabled,
+  onPick,
+}: {
+  drep: DrepEntry;
+  /** Another DRep on the list has this name, or one that looks the same. */
+  shared: boolean;
+  disabled: boolean;
+  onPick: (id: string) => void;
+}) {
+  const name = plainName(drep.name);
   return (
     <li>
-      <button type="button" className="token-row" onClick={() => onPick(drep.id)} disabled={disabled} aria-label={drep.name}>
+      <button
+        type="button"
+        className="token-row"
+        onClick={() => onPick(drep.id)}
+        disabled={disabled}
+        aria-label={`${name}${shared ? ", a name another DRep uses too" : ""}, ${shortId(drep.id)}`}
+      >
         <span className={`avatar avatar--tint-${tint(drep.id)}`} aria-hidden="true">
-          {initials(drep.name)}
+          {initials(name)}
         </span>
-        <span className="token-row__label">{drep.name}</span>
+        <span className="token-row__label">
+          {name}
+          {shared && <span className="utxo-tag utxo-tag--warn"> Shared name</span>}
+        </span>
         <span />
-        <span className="token-row__sub">{shortHex(drep.id, 12, 6)}</span>
+        <span className="token-row__sub mono-id">{shortId(drep.id)}</span>
       </button>
     </li>
   );
 }
 
-function DrepCard({ drep }: { drep: DrepDetails }) {
+/** The DRep picked, looked up live; `shared`: how many DReps on the list use its name. */
+export function DrepCard({ drep, shared = 0 }: { drep: DrepDetails; shared?: number }) {
   const status =
     drep.status === "retired"
       ? "Retired"
@@ -253,12 +295,20 @@ function DrepCard({ drep }: { drep: DrepDetails }) {
   return (
     <div className="stack-tight" data-testid="drep-details">
       <ReviewRows testId="drep-facts">
-        <Row label="Name" value={drep.name ?? "No name given"} strong />
+        <Row label="Name" value={drep.name ? plainName(drep.name) : "No name given"} strong />
         <Row label="Status" value={status} />
         <Row label="Voting power" value={`${formatAda(drep.votingPower)} ₳`} />
         <Row label="Delegators" value={drep.delegators.toLocaleString("en-US")} />
       </ReviewRows>
-      <MiddleEllipsis text={drep.id} />
+      <p className="note mono-id" data-testid="drep-id">
+        {drep.id}
+      </p>
+      {shared > 1 && (
+        <Callout tone="warn" testId="drep-shared-name">
+          {shared} DReps on the wallet's list use this name, or one that looks the same. Anyone can take any name: only
+          the ID tells them apart. Check it against the one the DRep publishes before you delegate.
+        </Callout>
+      )}
       {drep.status !== "retired" && !drep.active && (
         <Callout tone="warn">
           This DRep hasn't voted lately, so its votes don't count until it does. Your rewards unlock either way.

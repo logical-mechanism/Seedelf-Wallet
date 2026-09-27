@@ -1,7 +1,7 @@
 // Smaller safety points on the wallet's screens, rendered as the page shows
 // them: a banner's detail line has a style of its own, the To field asks for
-// the network's own addresses, and Max and the UTxOs screen say what no
-// payment takes.
+// the network's own addresses, Max and the UTxOs screen say what no payment
+// takes, and DReps and pools that share a name are flagged, with their IDs.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -11,6 +11,9 @@ import { LeftOutNote } from "../src/ui/components/LeftOut";
 import { TxBanner } from "../src/ui/components/TxBanner";
 import { NetworkContext } from "../src/ui/network";
 import { UtxoDetails, utxoTag } from "../src/ui/screens/Utxos";
+import { PoolListRow, SharedTicker } from "../src/ui/screens/Pools";
+import { DrepCard, DrepRow } from "../src/ui/screens/Voting";
+import { poolLabel, sharedNames, sharing, shortId, voteLabel } from "../src/ui/format";
 
 describe("a transaction's banner", () => {
   it("gives what it means a line of its own, quieter than the title", () => {
@@ -79,5 +82,55 @@ describe("the UTxOs screen", () => {
     // No Lock for it: there's nothing to keep it out of.
     expect(priv).not.toContain(">Lock<");
     expect(details("cardano")).toContain("Koios doesn&#x27;t give the wallet");
+  });
+});
+
+describe("DReps and pools that share a name (launch review #59)", () => {
+  const drep = (id: string, name: string) => ({ id, name });
+  const EIGHT_A = "drep1y296z8tm7y7elwsmsewn4q2tdr5gu0fqztq97yttlpv7zycvsl554";
+  const EIGHT_B = "drep1y296zyw2r8rcsy7slkd7l687hh88xc0m6ac2y3h2r3mvsdgc9q6yy";
+
+  it("counts names as they look, so 8Ball and 8 BALL are one name", () => {
+    const counts = sharedNames([drep(EIGHT_A, "8Ball"), drep(EIGHT_B, "8 BALL"), drep("drep1x", "Other")], (d) => d.name);
+    expect(sharing(counts, "8ball")).toBe(2);
+    expect(sharing(counts, "Other")).toBe(1);
+    expect(sharing(counts, undefined)).toBe(0);
+  });
+
+  it("shows enough of an ID for its hash to tell two apart, where 10 characters didn't", () => {
+    expect(EIGHT_A.slice(0, 10)).toBe(EIGHT_B.slice(0, 10));
+    expect(shortId(EIGHT_A).split("…")[0]).not.toBe(shortId(EIGHT_B).split("…")[0]);
+    expect(voteLabel(EIGHT_A)).toBe(shortId(EIGHT_A));
+    expect(poolLabel({ id: "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" })).toBe(shortId("pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"));
+  });
+
+  it("flags a shared name in the list, and shows the ID", () => {
+    const row = (shared: boolean) =>
+      renderToStaticMarkup(createElement(DrepRow, { drep: drep(EIGHT_A, "8Ball"), shared, disabled: false, onPick: () => undefined }));
+    expect(row(true)).toContain("Shared name");
+    expect(row(true)).toContain(shortId(EIGHT_A));
+    expect(row(false)).not.toContain("Shared name");
+    // Invisible characters that could reorder a name are dropped from what's shown.
+    const hidden = renderToStaticMarkup(
+      createElement(DrepRow, { drep: drep(EIGHT_A, "‮LLAB8"), shared: false, disabled: false, onPick: () => undefined }),
+    );
+    expect(hidden).not.toContain("‮");
+  });
+
+  it("warns on the card of a DRep whose name others use, and shows its whole ID", () => {
+    const details = { id: EIGHT_A, name: "8Ball", status: "registered", active: true, expiresEpoch: null, votingPower: "1", delegators: 1 };
+    const card = renderToStaticMarkup(createElement(DrepCard, { drep: details as never, shared: 2 }));
+    expect(card).toContain('data-testid="drep-shared-name"');
+    expect(card).toContain(EIGHT_A);
+    expect(renderToStaticMarkup(createElement(DrepCard, { drep: details as never, shared: 1 }))).not.toContain("drep-shared-name");
+  });
+
+  it("flags a pool's shared ticker in the list and on its page", () => {
+    const pool = { id: "pool1abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklm", ticker: "LOGIC", margin: 0.01, cost: "340000000", pledge: "0", saturation: 10 };
+    const row = renderToStaticMarkup(createElement(PoolListRow, { pool: pool as never, current: false, shared: true, onOpen: () => undefined }));
+    expect(row).toContain("Shared ticker");
+    expect(row).toContain(shortId(pool.id));
+    expect(renderToStaticMarkup(createElement(SharedTicker, { shared: 3 }))).toContain("3 live pools use this ticker");
+    expect(renderToStaticMarkup(createElement(SharedTicker, { shared: 1 }))).toBe("");
   });
 });
