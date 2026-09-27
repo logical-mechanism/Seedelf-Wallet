@@ -982,19 +982,6 @@ export class LovejoinService {
     return this.deps.wallet.withKeys(() => this.deps.session.get<SendingPublic>(SESSION_LOVEJOIN_SENDING + network));
   }
 
-  /**
-   * `boxes` boxes were mixed again: the earliest due times go, and each box
-   * waits again, a fresh delay from now, as a deposit's boxes do.
-   */
-  async reschedule(network: NetworkName, boxes: number): Promise<void> {
-    const due = await this.draw(boxes);
-    await this.update(network, (s) => {
-      s.due.sort((a, b) => a - b);
-      s.due.splice(0, boxes);
-      s.due.push(...due);
-    });
-  }
-
   /** Sets `boxes` withdraws to come, each after its own random delay. */
   async schedule(network: NetworkName, boxes: number): Promise<void> {
     const due = await this.draw(boxes);
