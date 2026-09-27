@@ -754,13 +754,14 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   await expect(list.getByRole("listitem")).toHaveCount(3);
   await expect(list).toContainText("Seedelf");
   await snap(page, "utxos-seedelf");
-  await list.getByRole("button", { name: /^25 ₳, a1a1/ }).click();
+  // Each row names where its money came from (privacy review §2.3) before its outpoint.
+  await list.getByRole("button", { name: /^25 ₳, (?:[^,]+, )?a1a1/ }).click();
   const details = page.getByRole("dialog", { name: "25 ₳" });
   await expect(details.getByTestId("utxo-state")).toHaveText("Spent by payments as needed.");
   await details.getByRole("button", { name: "Lock", exact: true }).click();
   await expect(details.getByTestId("utxo-state")).toHaveText("Locked: left out of every payment.");
   await details.getByRole("button", { name: "Close" }).click();
-  await expect(list.getByRole("button", { name: /^25 ₳, Locked, a1a1/ })).toBeVisible();
+  await expect(list.getByRole("button", { name: /^25 ₳, Locked, (?:[^,]+, )?a1a1/ })).toBeVisible();
   await expect(page.getByText("3 UTxOs · 1 locked")).toBeVisible();
   // A seedelf's UTxO only moves when the seedelf is removed: nothing to lock.
   await list.getByRole("button", { name: /Seedelf/ }).click();
@@ -1533,9 +1534,11 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await expect(page.getByRole("region", { name: "Past swaps" })).toContainText("10 ₳ → MINDone");
   await expect(page.getByRole("region", { name: "In progress" })).toHaveCount(0);
   await snap(page, "swaps");
-  // One quote for 30 ₳, one for 10 ₳, one at 2% slippage, the order's fresh one refused by the rate limit, then again; never a cancel.
+  // MIN is on the wallet's own list, so Minswap is never asked to search (privacy review §3.11). One quote for
+  // 30 ₳, one for 10 ₳, one at 2% slippage, the order's fresh one refused by the rate limit, then again; never a cancel.
   const paths = swaps.calls.map((c) => c.path);
-  expect(paths.slice(0, 8)).toEqual(["tokens", "estimate", "estimate", "estimate", "estimate", "estimate", "build-tx", "pending-orders"]);
+  expect(paths).not.toContain("tokens");
+  expect(paths.slice(0, 7)).toEqual(["estimate", "estimate", "estimate", "estimate", "estimate", "build-tx", "pending-orders"]);
   expect(paths).not.toContain("cancel-tx");
 });
 

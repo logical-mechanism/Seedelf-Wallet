@@ -17,6 +17,7 @@ import type { Balances, DappApproval, DappToken, DappTxSummary, SessionOutSummar
 import { call, onDappChanged } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { HistoriesNote } from "../components/HistoriesNote";
 import { Choice } from "../components/Choice";
 import { ExplorerLink } from "../components/ExplorerLink";
 import { GlobeIcon, SpinnerIcon } from "../components/Icons";
@@ -414,6 +415,7 @@ export function ConnectRequest({
           <Callout tone="privacy" testId="dapp-funding-privacy">
             {fundingPrivacy(review.changeLovelace)}
           </Callout>
+          <HistoriesNote histories={review.histories} session={review.index} testId="dapp-funding-histories" />
           <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
           {approval.password && (
             <PasswordField id="dapp-funding-password" label="Your password, to send" value={password} onChange={setPassword} />
