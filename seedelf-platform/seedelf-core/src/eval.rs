@@ -13,7 +13,7 @@
 //! withdraws) under both the 297- and 350-parameter V3 cost models; 1.1.21
 //! didn't, which is why it must be kept current across hard forks.
 
-use crate::references;
+use crate::{cbor, references};
 use anyhow::{Context, Result, anyhow, bail};
 use pallas_addresses::Address;
 use pallas_codec::minicbor;
@@ -48,7 +48,9 @@ impl Resolved {
 
 /// A Koios UTxO row as the evaluator needs it. A reference script on the row
 /// isn't carried over (the wallet's own UTxOs don't hold one), so such a row
-/// is refused rather than evaluated wrongly.
+/// is refused rather than evaluated wrongly. So is a row whose datum is nested
+/// past [`cbor::MAX_DEPTH`]: the evaluator's decoder would overflow the stack
+/// on it.
 pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
     let tx_hash: [u8; 32] = hex::decode(&row.tx_hash)?
         .try_into()
@@ -97,6 +99,16 @@ pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
         .as_ref()
         .map(|d| hex::decode(&d.bytes))
         .transpose()?;
+    if inline
+        .as_ref()
+        .is_some_and(|datum| !cbor::within_depth(datum, cbor::MAX_DEPTH))
+    {
+        bail!(
+            "UTxO {}#{} holds a datum the wallet can't read",
+            row.tx_hash,
+            row.tx_index
+        );
+    }
     let datum_hash = row.datum_hash.as_ref().map(hex::decode).transpose()?;
 
     let mut e = minicbor::Encoder::new(Vec::new());

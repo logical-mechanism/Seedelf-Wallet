@@ -28,6 +28,7 @@ use crate::build::{
     Budget, Budgets, DRAFT_BUDGET, MAX_TX_BUDGET, collateral_output, even, fake_signer, linear_fee,
     settle_fee,
 };
+use crate::cbor;
 use crate::constants::{COLLATERAL_HASH, VARIANT, get_config};
 use crate::eval::{self, Resolved};
 use crate::references;
@@ -163,9 +164,14 @@ pub fn mix_datum(a: &[u8; 48], b: &[u8; 48]) -> Vec<u8> {
     e.into_writer()
 }
 
-/// `{a, b}` from a box's datum, if it's the well-formed shape.
-fn parse_mix_datum(cbor: &[u8]) -> Option<([u8; 48], [u8; 48])> {
-    let PlutusData::Constr(constr) = PlutusData::decode_fragment(cbor).ok()? else {
+/// `{a, b}` from a box's datum, if it's the well-formed shape. Anyone can pay
+/// `mix_box` any datum, so one nested too deeply to decode safely is skipped
+/// unread.
+fn parse_mix_datum(datum: &[u8]) -> Option<([u8; 48], [u8; 48])> {
+    if !cbor::within_depth(datum, cbor::MAX_DEPTH) {
+        return None;
+    }
+    let PlutusData::Constr(constr) = PlutusData::decode_fragment(datum).ok()? else {
         return None;
     };
     if constr.tag != 121 || constr.any_constructor.is_some() {
