@@ -44,6 +44,7 @@ import type {
 import { call } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
+import { ExplorerLink, ExplorerNote } from "../components/ExplorerLink";
 import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import {
@@ -64,7 +65,6 @@ import {
   CheckIcon,
   ChevronDownIcon,
   CloseIcon,
-  ExternalIcon,
   PlusIcon,
   RefreshIcon,
   SearchIcon,
@@ -82,7 +82,6 @@ import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import {
   ADA_RULES,
   type AmountRules,
-  explorerUrl,
   formatAda,
   formatFiat,
   formatPercent,
@@ -2085,10 +2084,9 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
               </span>
               <span className="timeline__title">{step.title}</span>
               {step.tx && st === "done" && (
-                <a className="timeline__link" href={explorerUrl(network, step.tx.txHash)} target="_blank" rel="noreferrer">
+                <ExplorerLink network={network} tx={step.tx.txHash} private note={false} className="timeline__link">
                   Cardanoscan
-                  <ExternalIcon size={12} />
-                </a>
+                </ExplorerLink>
               )}
               <p className="timeline__sub">{step.sub}</p>
             </li>
@@ -2113,6 +2111,8 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
           </p>
         )
       )}
+      {/* Each step's link is to a transaction only this wallet can tell is the user's. */}
+      {steps.some((step, i) => step.tx && state(i) === "done") && <ExplorerNote what="transactions" />}
     </div>
   );
 }

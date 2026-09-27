@@ -10,6 +10,26 @@
 import type { PendingTx } from "../../shared/rpc";
 import { TxBanner } from "./TxBanner";
 
+/**
+ * The kinds whose transaction only this wallet can tell is the user's: a
+ * Seedelf spend, a session's step, a Lovejoin box or mix. Their banner's
+ * link says what opening it tells (ExplorerLink). A move-in, an
+ * account-paid mint and the public account's own payments are signed by
+ * the account in the open, so theirs stay plain. Not the worker's
+ * SEEDELF_KINDS, which says what the private history notes.
+ */
+export const PRIVATE_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
+  "transfer",
+  "withdraw",
+  "remove",
+  "session-out",
+  "session-swap",
+  "session-cancel",
+  "session-back",
+  "lovejoin-withdraw",
+  "lovejoin-mix",
+]);
+
 /** How the banner names a sent transaction, and says it's confirmed. */
 export const SENT: Record<PendingTx["kind"], string> = {
   "move-in": "Payment into your private balance",
@@ -103,7 +123,12 @@ function maybeSentDetail(pending: PendingTx): string {
  */
 export function PendingBanner({ pending, watching, onDismiss }: { pending: PendingTx; watching: boolean; onDismiss: () => void }) {
   const what = SENT[pending.kind];
-  const shared = { network: pending.network, txHash: pending.txHash, testId: "pending-tx" };
+  const shared = {
+    network: pending.network,
+    txHash: pending.txHash,
+    testId: "pending-tx",
+    private: PRIVATE_KINDS.has(pending.kind),
+  };
   if (pending.confirmations !== null) {
     return <TxBanner {...shared} state="done" title={CONFIRMED[pending.kind]} onDismiss={watching ? undefined : onDismiss} />;
   }

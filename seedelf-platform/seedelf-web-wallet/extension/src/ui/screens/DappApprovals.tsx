@@ -18,14 +18,15 @@ import { call, onDappChanged } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
-import { ExternalIcon, GlobeIcon, SpinnerIcon } from "../components/Icons";
+import { ExplorerLink } from "../components/ExplorerLink";
+import { GlobeIcon, SpinnerIcon } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
 import { certificateLine, paidTo, stakingComesBack, withdrawalLine } from "../dapp";
-import { explorerUrl, formatAda, formatQuantity, plural, shortHex } from "../format";
+import { formatAda, formatQuantity, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { tokenDecimals, tokenText } from "../tokens";
 
@@ -333,9 +334,9 @@ export function ConnectRequest({
             Waiting for the network to confirm the funding of private session {approval.funding.index + 1}. It usually
             takes about a minute; the site connects once the money is there.
           </p>
-          <a className="menu-link" href={explorerUrl(network, approval.funding.txHash)} target="_blank" rel="noreferrer">
-            The funding on Cardanoscan <ExternalIcon size={12} />
-          </a>
+          <ExplorerLink network={network} tx={approval.funding.txHash} private>
+            The funding on Cardanoscan
+          </ExplorerLink>
           <p className="note">You can close this window: the payment is sent, and closing doesn't undo it.</p>
         </div>
       </Screen>

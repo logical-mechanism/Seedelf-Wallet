@@ -1,14 +1,16 @@
 // A sent transaction, as a banner: what's happening with a spinner or a
 // tick, what it means when that needs saying, the transaction on
-// Cardanoscan, and Dismiss once there's nothing to wait for. Centred, after
+// Cardanoscan (a private one's with what opening it tells, ExplorerLink),
+// and Dismiss once there's nothing to wait for. Centred, after
 // Lace's toasts. Home's pending banner and the collateral's "waiting" both
 // use it.
 
 import type { ReactNode } from "react";
 
 import type { NetworkName } from "../../networks";
-import { explorerUrl, shortHex } from "../format";
-import { DoneIcon, ExternalIcon, InfoIcon, SpinnerIcon } from "./Icons";
+import { shortHex } from "../format";
+import { ExplorerLink } from "./ExplorerLink";
+import { DoneIcon, InfoIcon, SpinnerIcon } from "./Icons";
 
 export function TxBanner({
   state,
@@ -18,6 +20,7 @@ export function TxBanner({
   txHash,
   onDismiss,
   testId,
+  private: isPrivate = false,
 }: {
   /** Waiting for the network, confirmed, or no longer watched. */
   state: "waiting" | "done" | "stale";
@@ -28,6 +31,8 @@ export function TxBanner({
   txHash: string;
   onDismiss?: () => void;
   testId: string;
+  /** A private transaction: its link says what opening it tells Cardanoscan. */
+  private?: boolean;
 }) {
   return (
     <section className={`callout tx-banner${state === "done" ? " callout--done" : ""}`} role="status" data-testid={testId}>
@@ -50,10 +55,9 @@ export function TxBanner({
           {detail}
         </span>
       )}
-      <a href={explorerUrl(network, txHash)} target="_blank" rel="noreferrer" className="banner__link">
+      <ExplorerLink network={network} tx={txHash} private={isPrivate} className="banner__link">
         {shortHex(txHash, 10, 6)} on Cardanoscan
-        <ExternalIcon size={12} />
-      </a>
+      </ExplorerLink>
       {onDismiss && (
         <button type="button" className="tx-banner__dismiss" onClick={onDismiss}>
           Dismiss

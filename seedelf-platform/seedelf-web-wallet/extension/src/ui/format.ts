@@ -156,9 +156,14 @@ function editOf(previous: string, typed: string): { start: number; text: string 
   return { start, text: typed.slice(start, typed.length - end) };
 }
 
-/** A block explorer link for a transaction. */
+/** A block explorer link for a transaction. Shown through ExplorerLink, which warns on the private side. */
 export function explorerUrl(network: "preprod" | "mainnet", txHash: string): string {
   return `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/transaction/${txHash}`;
+}
+
+/** A block explorer link for an address: everything it did. */
+export function explorerAddressUrl(network: "preprod" | "mainnet", address: string): string {
+  return `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/address/${address}`;
 }
 
 /** All the ADA there will ever be: 45 billion ₳, in lovelace. */

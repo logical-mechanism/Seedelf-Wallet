@@ -2631,6 +2631,18 @@ button.dapp-tile:hover {
   font: 12px var(--mono);
 }
 
+/* What opening a private transaction on Cardanoscan tells (components/ExplorerLink.tsx):
+   under a banner's link, as quiet as its detail; under a swap's timeline, after the now line. */
+.tx-banner .explorer-note {
+  max-width: 34em;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.timeline .explorer-note {
+  font-size: 12px;
+}
+
 /* Receive */
 
 .qr-wrap {

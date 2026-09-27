@@ -2,7 +2,8 @@
 // Activity tab. The Seedelf history comes from the device (no requests); the
 // Cardano account's, a page of 20 at a time from Koios, with what each
 // transaction did with the stake key and its note. An entry opens its
-// details, with the transaction on Cardanoscan. Refresh reads again: the
+// details, with the transaction on Cardanoscan: on the private side, with
+// what opening it tells (ExplorerLink). Refresh reads again: the
 // balances, for the Seedelf side's arrivals; what's newer, for the account's.
 // Export saves what's listed as CSV, on the device: the file isn't
 // encrypted, and the screen says so. On the private side it says what the
@@ -16,10 +17,10 @@ import { activityCsv, activityTitle as title, poolOf, signedQuantity, stakingLin
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
+import { ExplorerLink } from "../components/ExplorerLink";
 import {
   ArrowUpRightIcon,
   DownloadIcon,
-  ExternalIcon,
   MoveInIcon,
   PieIcon,
   ReceiveIcon,
@@ -32,7 +33,7 @@ import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmountRow } from "../components/TokenList";
-import { explorerUrl, formatAda, plural, shortHex } from "../format";
+import { formatAda, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 
@@ -263,9 +264,9 @@ export function Activity({
             <code className="note">{shortHex(open.txHash, 14, 8)}</code>
             <CopyButton value={open.txHash} label="Copy the transaction id" />
           </div>
-          <a className="menu-link" href={explorerUrl(network, open.txHash)} target="_blank" rel="noreferrer">
-            View on Cardanoscan <ExternalIcon size={12} />
-          </a>
+          <ExplorerLink network={network} tx={open.txHash} private={of === "seedelf"}>
+            View on Cardanoscan
+          </ExplorerLink>
         </Modal>
       )}
     </Screen>

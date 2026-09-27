@@ -30,7 +30,8 @@ import {
   useSendingLabel,
 } from "../components/LovejoinReturn";
 import { CopyButton } from "../components/CopyButton";
-import { ExternalIcon, GlobeIcon } from "../components/Icons";
+import { ExplorerLink, ExplorerNote } from "../components/ExplorerLink";
+import { GlobeIcon } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -93,10 +94,6 @@ function tagOf(s: SessionView, attached?: boolean): { tone: SwapTone; label: str
   if (attached === false) return { tone: "wait", label: "Not connected" };
   return { tone: "done", label: "Connected" };
 }
-
-/** The account on Cardanoscan, where what the site did with it shows. */
-const addressUrl = (network: "preprod" | "mainnet", address: string) =>
-  `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/address/${address}`;
 
 /** A site's private session in the dApps page's list: the site, the session, and its tag. */
 export function SiteRow({ session: s, attached, onOpen }: { session: SessionView; attached?: boolean; onOpen: () => void }) {
@@ -284,10 +281,12 @@ export function SiteSession({
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={onRefresh} />
       <div className="field-row">
         <SwapTag {...tagOf(s, attached)} />
-        <a className="menu-link" href={addressUrl(network, s.address)} target="_blank" rel="noreferrer">
-          On Cardanoscan <ExternalIcon size={12} />
-        </a>
+        {/* The account on Cardanoscan, where what the site did with it shows: the note goes under the row. */}
+        <ExplorerLink network={network} address={s.address} private note={false}>
+          On Cardanoscan
+        </ExplorerLink>
       </div>
+      <ExplorerNote what="account" />
       <ReviewRows testId="site-session-rows">
         {/* A balance: hidden while balances are (launch review #56). */}
         <Row label="It holds" value={holding ? `${amounts.ada(holding.lovelace)} ₳` : "Refresh to read it"} strong />
