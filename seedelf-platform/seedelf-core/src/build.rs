@@ -34,7 +34,7 @@ use crate::transaction::{
     decode_tx_hash, reference_utxo, seedelf_minimum_lovelace, seedelf_token_name,
     wallet_minimum_lovelace_with_assets,
 };
-use crate::utxos::assets_of;
+use crate::utxos::{assets_of, fitting};
 
 /// A throwaway ed25519 key, used to sign a draft so its size includes a
 /// realistic witness. The signature is discarded.
@@ -526,6 +526,9 @@ pub struct AccountPayment {
     /// What goes back to the Cardano account.
     pub change_lovelace: u64,
     pub change_tokens: Assets,
+    /// What Max couldn't spend with the rest, in the order given: see
+    /// [`fitting`]. Empty for an amount.
+    pub left_out: Vec<UtxoResponse>,
 }
 
 /// Move-in: the Cardano account pays into the wallet contract under fresh
@@ -540,6 +543,8 @@ pub struct AccountPayment {
 /// - Otherwise pure-ADA UTxOs are spent first, largest first, then other
 ///   token UTxOs, until the amount, the fee and valid change are covered.
 ///   Tokens that aren't picked go back with the change.
+/// - A UTxO whose tokens would push a total past what one output holds is
+///   never spent with the rest ([`fitting`]); Max says which it left out.
 /// - Change goes to `change_addr`. There is no change output when nothing is left.
 /// - `staking` rides along: a reward withdrawal adds to what pays
 ///   ([`Staking::withdraw`]), and it's patched into the transaction.
@@ -686,7 +691,6 @@ fn account_payment(
         let total = picked.entry((policy, name)).or_default();
         *total = total.saturating_add(*quantity);
     }
-    let eligible: Vec<UtxoResponse> = available.to_vec();
     let holds_picked = |u: &UtxoResponse| {
         u.asset_list.as_ref().is_some_and(|assets| {
             assets
@@ -694,6 +698,8 @@ fn account_payment(
                 .any(|a| picked.contains_key(&(a.policy_id.as_str(), a.asset_name.as_str())))
         })
     };
+    // What one transaction can hold together, the UTxOs with picked tokens first.
+    let (eligible, overflowing) = fitting(available, &Assets::new(), holds_picked)?;
     for ((policy, name), quantity) in &picked {
         let held: u64 = eligible
             .iter()
@@ -727,7 +733,9 @@ fn account_payment(
         if all.is_empty() {
             bail!("There is nothing in the Cardano account to spend");
         }
-        return attempt(&all);
+        let mut built = attempt(&all)?;
+        built.left_out = overflowing;
+        return Ok(built);
     }
 
     let mut last_error = None;
@@ -861,6 +869,7 @@ fn build_account_payment(
         outputs,
         change_lovelace: change,
         change_tokens: staying,
+        left_out: Vec::new(),
     })
 }
 
@@ -1778,12 +1787,25 @@ fn policy_hash(config: &Config) -> Result<Hash<28>> {
 /// Picks as few of `available` as it can. First the UTxOs holding the tokens
 /// in `needed` (see [`holding`]), then pure-ADA UTxOs, largest first, then
 /// other token UTxOs, adding one at a time until `attempt` succeeds. Only
-/// "not enough" failures move on to more inputs.
+/// "not enough" failures move on to more inputs. A UTxO whose tokens would
+/// push a total past what one output holds is never picked with the rest
+/// ([`fitting`]).
 fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
     mut attempt: impl FnMut(&[UtxoResponse]) -> Result<T>,
 ) -> Result<T> {
+    let holds_needed = |u: &UtxoResponse| {
+        needed.items.iter().any(|want| {
+            quantity_in(
+                u,
+                &hex::encode(want.policy_id),
+                &hex::encode(&want.token_name),
+            ) > 0
+        })
+    };
+    let (available, _) = fitting(available, &Assets::new(), holds_needed)?;
+    let available = available.as_slice();
     let mandatory = holding(available, needed)?;
     let mut rest: Vec<UtxoResponse> = available
         .iter()
@@ -2502,11 +2524,12 @@ pub fn account_mint(
     let same =
         |a: &UtxoResponse, b: &UtxoResponse| a.tx_hash == b.tx_hash && a.tx_index == b.tx_index;
 
-    let mut spendable: Vec<UtxoResponse> = available
+    let spendable: Vec<UtxoResponse> = available
         .iter()
         .filter(|u| collateral.is_none_or(|c| !same(u, c)))
         .cloned()
         .collect();
+    let (mut spendable, _) = fitting(&spendable, &Assets::new(), |_| false)?;
     if spendable.is_empty() {
         bail!("There is nothing in the Cardano account to pay for a Seedelf");
     }

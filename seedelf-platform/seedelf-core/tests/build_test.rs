@@ -770,6 +770,69 @@ fn send_max_pays_everything_but_the_fee_and_the_change_floor() {
     assert_eq!(built.change_tokens.items.len(), 1, "the token stays");
 }
 
+/// 2^63 − 1: three of these of one token add up past what an output can hold.
+const JUNK: u64 = (1 << 63) - 1;
+
+#[test]
+fn max_leaves_out_a_utxo_whose_tokens_would_overflow_the_rest() {
+    let w = world();
+    let to = elsewhere();
+    let mut available = vec![
+        utxo(&w, 1, 0, 20_000_000, vec![]),
+        utxo(&w, 2, 0, 3_000_000, vec![token("mine", 40)]),
+    ];
+    // A stranger's three UTxOs of 2^63 − 1 of one token each.
+    for n in 7..10 {
+        available.push(utxo(&w, n, 0, 1_500_000, vec![token("junk", JUNK)]));
+    }
+    let send = |amount| {
+        build::account_send(
+            &w.params,
+            &available,
+            amount,
+            &[],
+            &to,
+            true,
+            &w.change,
+            &Staking::none(),
+        )
+    };
+    let built = send(AccountAmount::Max).unwrap();
+    let tx = assert_paid(&w, &available, &built, Some(&to));
+    assert_eq!(tx.inputs.len(), 4);
+    assert_eq!(built.left_out.len(), 1);
+    assert_eq!(built.left_out[0].tx_hash, hex::encode([9u8; 32]));
+    assert_eq!(
+        built.lovelace,
+        26_000_000 - built.fee - built.change_lovelace
+    );
+    // Everything that can go together went: the change keeps the tokens.
+    let junk = built
+        .change_tokens
+        .quantity_of(POLICY.to_string(), hex::encode("junk"))
+        .unwrap();
+    assert_eq!(junk, Some(2 * JUNK));
+    // An amount never needed them.
+    let some = send(AccountAmount::Lovelace(10_000_000)).unwrap();
+    assert_paid(&w, &available, &some, Some(&to));
+    assert!(some.left_out.is_empty());
+
+    // Make private's Max too.
+    let moved = build::move_in(
+        &w.params,
+        &available,
+        AccountAmount::Max,
+        &[],
+        &w.owner,
+        &w.wallet,
+        &w.change,
+        &Staking::none(),
+    )
+    .unwrap();
+    let tx = assert_sound(&w, &available, &moved);
+    assert_eq!((tx.inputs.len(), moved.left_out.len()), (4, 1));
+}
+
 #[test]
 fn send_refuses_what_would_lose_money() {
     let w = world();

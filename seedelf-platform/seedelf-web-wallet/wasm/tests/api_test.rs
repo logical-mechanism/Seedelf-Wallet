@@ -2047,6 +2047,38 @@ mod withdraw {
     }
 
     #[test]
+    fn max_leaves_out_a_utxo_whose_tokens_would_overflow_the_rest() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let base = owned().into_iter().next().unwrap();
+        // Three UTxOs of 2^63 − 1 of one token, paid into the Seedelf by a stranger.
+        let junk: Vec<UtxoResponse> = (0..3u8)
+            .map(|i| UtxoResponse {
+                tx_hash: hex::encode([0x70 + i; 32]),
+                tx_index: 0,
+                value: "2000000".into(),
+                asset_list: serde_json::from_value(json!([{
+                    "policy_id": "ab".repeat(28), "asset_name": "6a756e6b",
+                    "quantity": ((1u64 << 63) - 1).to_string(), "decimals": 0, "fingerprint": "",
+                }]))
+                .unwrap(),
+                ..base.clone()
+            })
+            .collect();
+        let mut r = request("max");
+        let mine = r.utxos.len();
+        r.utxos.extend(junk);
+        let result = api::build_withdraw(sk, r).unwrap();
+        assert!(result.max);
+        assert_eq!((result.inputs.len(), result.left), (mine + 2, 1));
+        assert!(
+            result
+                .inputs
+                .iter()
+                .all(|i| i.tx_hash != hex::encode([0x72u8; 32]))
+        );
+    }
+
+    #[test]
     fn removes_its_own_seedelf_to_an_address_or_back_to_seedelf() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let rec = recorded();

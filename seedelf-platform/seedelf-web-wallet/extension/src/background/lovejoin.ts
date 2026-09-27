@@ -40,7 +40,15 @@
 
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
 import type { NetworkName } from "../networks";
-import type { LovejoinFunding, LovejoinHeld, LovejoinPublicSummary, LovejoinStatus, PendingTx, TokenQuantity } from "../shared/rpc";
+import type {
+  LeftOutUtxo,
+  LovejoinFunding,
+  LovejoinHeld,
+  LovejoinPublicSummary,
+  LovejoinStatus,
+  PendingTx,
+  TokenQuantity,
+} from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
 import { KoiosBusyError, SpentInputError, type KoiosUtxo } from "./koios";
 import { SESSION_PENDING } from "./pending";
@@ -201,6 +209,8 @@ export interface LovejoinChain {
   /** How many of the funding's Seedelf UTxOs the return merged into. */
   merged: number;
   leaves: Array<{ txHash: string; txIndex: number }>;
+  /** The session's UTxOs the return leaves at its account (SessionBackSummary's `leftOut`). */
+  leftOut: LeftOutUtxo[];
 }
 
 /** What the review shows before a chain is built (`lovejoin::PlanResult`). */
@@ -387,7 +397,8 @@ export class LovejoinService {
    * The return at its end merges into `merge`, the funding's change. `boxes`:
    * at most this many (a mix session's), else all the spare ADA pays for.
    * `again`: the wallet's boxes in the pool mixed again, with no deposit.
-   * Throws LovejoinSkipped when the network measures its first mix
+   * `own`: the session's own transactions, whose UTxOs the return takes
+   * first. Throws LovejoinSkipped when the network measures its first mix
    * differently.
    */
   async chain(
@@ -399,6 +410,7 @@ export class LovejoinService {
     merge: KoiosUtxo[] = [],
     boxes?: number,
     again = false,
+    own: string[] = [],
   ): Promise<LovejoinChain | undefined> {
     if (!this.available(network) || !collateral) return undefined;
     const plan = await this.plan(network, index, rows, collateral, again);
@@ -424,6 +436,7 @@ export class LovejoinService {
       boxes: count,
       merge,
       again,
+      own,
     };
     const chain = await this.deps.wallet.withKeys(
       (keys) =>

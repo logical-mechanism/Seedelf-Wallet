@@ -1885,20 +1885,21 @@ mod withdraw {
         let lovelace_in: u64 = spent.iter().map(|u| u.value.parse::<u64>().unwrap()).sum();
         let lovelace_out: u64 = tx.outputs.iter().map(|o| o.lovelace).sum();
         assert_eq!(lovelace_in, lovelace_out + tx.fee, "lovelace conserved");
-        let mut tokens: BTreeMap<(String, String), i64> = BTreeMap::new();
+        // In i128: a token can total up to a u64 across the inputs.
+        let mut tokens: BTreeMap<(String, String), i128> = BTreeMap::new();
         for a in spent.iter().flat_map(|u| u.asset_list.iter().flatten()) {
             *tokens
                 .entry((a.policy_id.clone(), a.asset_name.clone()))
-                .or_default() += a.quantity.parse::<i64>().unwrap();
+                .or_default() += a.quantity.parse::<i128>().unwrap();
         }
         for (k, v) in &tx.mint {
-            *tokens.entry(k.clone()).or_default() += v;
+            *tokens.entry(k.clone()).or_default() += i128::from(*v);
         }
         tokens.retain(|_, v| *v != 0);
-        let mut out: BTreeMap<(String, String), i64> = BTreeMap::new();
+        let mut out: BTreeMap<(String, String), i128> = BTreeMap::new();
         for o in &tx.outputs {
             for (k, v) in &o.assets {
-                *out.entry(k.clone()).or_default() += *v as i64;
+                *out.entry(k.clone()).or_default() += i128::from(*v);
             }
         }
         assert_eq!(tokens, out, "tokens conserved");
@@ -2049,6 +2050,54 @@ mod withdraw {
             .unwrap()
             .to_string();
         assert!(e.contains("at least one address"), "{e}");
+    }
+
+    #[test]
+    fn never_picks_a_utxo_whose_tokens_would_overflow_the_rest() {
+        let w = world();
+        let to = key_address(Network::Testnet);
+        // Three UTxOs of 2^63 − 1 of one token, paid in by a stranger: all
+        // three can't sit in one output.
+        let junk = (1u64 << 63) - 1;
+        let available = [
+            owned(&w, 0x01, 0, 4_000_000, &[]),
+            owned(&w, 0x07, 0, 3_000_000, &[("junk", junk)]),
+            owned(&w, 0x08, 0, 3_000_000, &[("junk", junk)]),
+            owned(&w, 0x09, 0, 3_000_000, &[("junk", junk)]),
+        ];
+        // More than the ADA-only UTxO holds, so selection reaches the token UTxOs.
+        let spend = build::sweep(
+            &w.chain,
+            &available,
+            &to,
+            8_000_000,
+            &Assets::new(),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let spent = spend.inputs();
+        assert_eq!(spent.len(), 3);
+        assert!(spent.iter().all(|u| u.tx_hash != hex::encode([0x09; 32])));
+        let built = finish(&w, spend, &spends_only(3));
+        assert_spend(&w, &spent, &built, 629);
+        // More than the two that fit hold: not enough, in words.
+        let err = build::sweep(
+            &w.chain,
+            &available,
+            &to,
+            10_000_000,
+            &Assets::new(),
+            &w.owner,
+            w.signer,
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            err.contains("Not enough ADA in the Seedelf balance"),
+            "{err}"
+        );
     }
 
     #[test]

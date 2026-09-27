@@ -754,6 +754,19 @@ export interface SessionBackSummary {
    * wallet, so the chain doesn't start, and it all comes back directly.
    */
   lovejoinSkipped?: string;
+  /**
+   * The session's UTxOs this return leaves at its account: `tokens`, one of
+   * its tokens would total more with the rest than an output can hold, so a
+   * later return takes it.
+   */
+  leftOut?: LeftOutUtxo[];
+}
+
+/** A UTxO a transaction that takes everything leaves where it is, and why. */
+export interface LeftOutUtxo {
+  txHash: string;
+  txIndex: number;
+  reason: "tokens";
 }
 
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */

@@ -138,6 +138,31 @@ pub mod api {
         pub change_lovelace: String,
         pub change_tokens: usize,
         pub inputs: usize,
+        /// The UTxOs Max couldn't take with the rest (empty for an amount).
+        pub left_out: Vec<LeftOut>,
+    }
+
+    /// A UTxO a transaction that would take everything leaves where it is.
+    #[derive(Serialize, Debug, Clone, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct LeftOut {
+        pub tx_hash: String,
+        pub tx_index: u64,
+        /// Why: `tokens`, one of its tokens would total more with the rest
+        /// than an output can hold (`seedelf_core::utxos::fitting`), so it
+        /// waits for the next transaction, which can take it.
+        pub reason: String,
+    }
+
+    fn left_out(utxos: &[UtxoResponse]) -> Vec<LeftOut> {
+        utxos
+            .iter()
+            .map(|u| LeftOut {
+                tx_hash: u.tx_hash.clone(),
+                tx_index: u.tx_index,
+                reason: "tokens".to_string(),
+            })
+            .collect()
     }
 
     /// All the ADA there will ever be, in lovelace: 45 billion ADA.
@@ -391,6 +416,7 @@ pub mod api {
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             inputs: built.inputs.len(),
+            left_out: left_out(&built.left_out),
         })
     }
 
@@ -463,6 +489,10 @@ pub mod api {
         /// return makes new ones.
         #[serde(default)]
         pub merge: Vec<UtxoResponse>,
+        /// The session's own transactions, by hash: what they left at the
+        /// account comes back first when not everything can at once.
+        #[serde(default)]
+        pub own: Vec<String>,
     }
 
     /// A signed return, ready to submit, and what it moves.
@@ -477,9 +507,12 @@ pub mod api {
         pub tokens: Vec<TokenAmount>,
         /// The contract outputs holding it (tokens go a limited number to one).
         pub deposit_outputs: usize,
+        /// How many of the account's UTxOs it spends.
         pub inputs: usize,
         /// How many of the funding's Seedelf UTxOs it merged into (0: new ones).
         pub merged: usize,
+        /// The account's UTxOs it leaves there, for a later return.
+        pub left_out: Vec<LeftOut>,
     }
 
     /// The most funding changes one return merges into.
@@ -501,6 +534,41 @@ pub mod api {
                     .filter(|u| lovelace(u) >= 2_000_000)
                     .max_by_key(|u| lovelace(u))
             })
+    }
+
+    /// What a session's return takes of its account's `rows`, and whether it
+    /// can merge into `merge`: the funding's change, when it holds tokens,
+    /// counts towards every token's total ([`seedelf_core::utxos::fitting`]).
+    /// The rest waits for a later return. `own` are the session's own
+    /// transactions: what they left comes first.
+    pub(crate) struct ReturnPlan {
+        pub taken: Vec<UtxoResponse>,
+        pub left_out: Vec<LeftOut>,
+        /// Whether the return merges into `merge` (see [`merged_return`]).
+        pub merged: bool,
+    }
+
+    pub(crate) fn plan_return(
+        rows: &[UtxoResponse],
+        merge: &[UtxoResponse],
+        own: &[String],
+    ) -> Result<ReturnPlan> {
+        let base = if merge.is_empty() || session_collateral(rows).is_none() {
+            None
+        } else {
+            // The funding's change is this wallet's own; if even it can't be
+            // added up, the return makes new UTxOs instead.
+            utxo_assets(merge.to_vec()).ok().map(|(_, tokens)| tokens)
+        };
+        let (taken, left) =
+            seedelf_core::utxos::fitting(rows, base.as_ref().unwrap_or(&Assets::new()), |u| {
+                own.contains(&u.tx_hash)
+            })?;
+        Ok(ReturnPlan {
+            merged: base.is_some(),
+            taken,
+            left_out: left_out(&left),
+        })
     }
 
     /// The return of `rows`, UTxOs under session `index`'s key, merged into
@@ -575,16 +643,16 @@ pub mod api {
                 );
             }
         }
-        let (total, tokens) = utxo_assets(request.utxos.clone())?;
-        let collateral = session_collateral(&request.utxos);
-        if let (false, Some(collateral)) = (request.merge.is_empty(), collateral) {
+        let plan = plan_return(&request.utxos, &request.merge, &request.own)?;
+        let (total, tokens) = utxo_assets(plan.taken.clone())?;
+        if let (true, Some(collateral)) = (plan.merged, session_collateral(&plan.taken)) {
             let chain = chain_of(&request.network, &request.params)?;
             let (signed, built) = merged_return(
                 accounts,
                 sk,
                 &chain,
                 request.index,
-                &request.utxos,
+                &plan.taken,
                 collateral,
                 &request.merge,
                 &[],
@@ -596,14 +664,15 @@ pub mod api {
                 lovelace: (total - built.fee.total).to_string(),
                 tokens: tokens.items.iter().map(token_amount).collect(),
                 deposit_outputs: built.change_outputs,
-                inputs: request.utxos.len(),
+                inputs: plan.taken.len(),
                 merged: request.merge.len(),
+                left_out: plan.left_out,
             });
         }
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
         let owner = Register::create(sk)?;
-        let (tx, fee) = build::external_sweep(&params, &request.utxos, &owner, &wallet, key)?;
+        let (tx, fee) = build::external_sweep(&params, &plan.taken, &owner, &wallet, key)?;
         let signed = tx
             .sign(
                 accounts
@@ -625,8 +694,9 @@ pub mod api {
             lovelace: (total - fee).to_string(),
             tokens: tokens.items.iter().map(token_amount).collect(),
             deposit_outputs,
-            inputs: request.utxos.len(),
+            inputs: plan.taken.len(),
             merged: 0,
+            left_out: plan.left_out,
         })
     }
 
@@ -716,6 +786,8 @@ pub mod api {
         pub change_lovelace: String,
         pub change_tokens: usize,
         pub inputs: usize,
+        /// The UTxOs Max couldn't take with the rest (empty for amounts).
+        pub left_out: Vec<LeftOut>,
     }
 
     /// Where a send from the Cardano account goes.
@@ -828,6 +900,7 @@ pub mod api {
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             inputs: built.inputs.len(),
+            left_out: left_out(&built.left_out),
         })
     }
 
@@ -1667,7 +1740,10 @@ pub mod api {
         pub change_tokens: usize,
         pub change_outputs: usize,
         pub inputs: Vec<OutRef>,
-        /// Spendable UTxOs Max left for another withdrawal.
+        /// Spendable UTxOs Max left for another withdrawal: past the
+        /// [`MAX_WITHDRAW_UTXOS`] largest, or holding a token that would total
+        /// more with the rest than an output can hold
+        /// (`seedelf_core::utxos::fitting`).
         pub left: usize,
     }
 
@@ -1693,10 +1769,11 @@ pub mod api {
                 if request.utxos.is_empty() {
                     bail!("There's nothing in the Seedelf balance to withdraw");
                 }
-                // The largest first, as many as fit.
-                let mut utxos = request.utxos.clone();
+                // Of those whose tokens add up, the largest first, as many as fit.
+                let (mut utxos, overflowing) =
+                    seedelf_core::utxos::fitting(&request.utxos, &Assets::new(), |_| false)?;
                 utxos.sort_by_key(|u| std::cmp::Reverse(u.value.parse::<u64>().unwrap_or(0)));
-                let left = utxos.len().saturating_sub(MAX_WITHDRAW_UTXOS);
+                let left = overflowing.len() + utxos.len().saturating_sub(MAX_WITHDRAW_UTXOS);
                 utxos.truncate(MAX_WITHDRAW_UTXOS);
                 (
                     build::sweep_all(&chain, &utxos, &to, &owner, signer)?,

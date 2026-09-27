@@ -347,6 +347,62 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> Result<(u64, Assets)> {
     Ok((current_lovelace_sum, found_assets))
 }
 
+/// Which of `utxos` one transaction can spend together (`taken`), and which
+/// it leaves out (`left`), each in the order given.
+///
+/// - A UTxO is left out when its tokens, added to `base`'s and to those of
+///   the UTxOs taken before it, would push a token's total past a u64. No
+///   output can hold more of one token than that, so totalling in u128
+///   wouldn't help: anyone can send three UTxOs of 2^63 of one token to an
+///   address, and nothing holding all three could be built.
+/// - The order they're taken in: ADA-only first (they never conflict), then
+///   those `first` picks (a session's own), then the most lovelace first,
+///   ties by outpoint, so the same UTxOs split the same way every time.
+/// - Every UTxO fits on its own, so spending again from `left` always takes
+///   at least one.
+pub fn fitting(
+    utxos: &[UtxoResponse],
+    base: &Assets,
+    first: impl Fn(&UtxoResponse) -> bool,
+) -> Result<(Vec<UtxoResponse>, Vec<UtxoResponse>)> {
+    let mut order: Vec<(usize, &UtxoResponse, u64, Assets)> = utxos
+        .iter()
+        .enumerate()
+        .map(|(i, utxo)| {
+            let (lovelace, tokens) = assets_of(vec![utxo.clone()])?;
+            Ok((i, utxo, lovelace, tokens))
+        })
+        .collect::<Result<_>>()?;
+    order.sort_by(
+        |(_, a, a_lovelace, a_tokens), (_, b, b_lovelace, b_tokens)| {
+            (
+                !a_tokens.is_empty(),
+                !first(a),
+                std::cmp::Reverse(*a_lovelace),
+            )
+                .cmp(&(
+                    !b_tokens.is_empty(),
+                    !first(b),
+                    std::cmp::Reverse(*b_lovelace),
+                ))
+                .then_with(|| (&a.tx_hash, a.tx_index).cmp(&(&b.tx_hash, b.tx_index)))
+        },
+    );
+    let mut total = base.clone();
+    let mut fits = vec![false; utxos.len()];
+    for (i, _, _, tokens) in order {
+        if let std::result::Result::Ok(more) = total.merge(tokens) {
+            total = more;
+            fits[i] = true;
+        }
+    }
+    let (taken, left): (Vec<_>, Vec<_>) = utxos.iter().zip(fits).partition(|(_, fits)| *fits);
+    Ok((
+        taken.into_iter().map(|(u, _)| u.clone()).collect(),
+        left.into_iter().map(|(u, _)| u.clone()).collect(),
+    ))
+}
+
 /// Find a seedelf that contains the label and print the match.
 pub fn find_all_seedelfs(
     label: String,

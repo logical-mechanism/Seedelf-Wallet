@@ -190,6 +190,9 @@ pub struct ChainRequest {
     /// first mix, and its other ADA UTxOs come back with the return.
     #[serde(default)]
     pub again: bool,
+    /// The session's own transactions (`api::SessionReturnRequest::own`).
+    #[serde(default)]
+    pub own: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -220,6 +223,9 @@ pub struct ChainResult {
     pub merged: usize,
     /// Where our boxes end up, to be withdrawn later.
     pub leaves: Vec<OutRef>,
+    /// The session's UTxOs the return leaves at its account, for a later
+    /// return (`api::SessionReturnResult::left_out`).
+    pub left_out: Vec<api::LeftOut>,
 }
 
 fn sign(tx: BuiltTransaction, accounts: &CardanoAccount, index: u32) -> Result<BuiltTransaction> {
@@ -314,8 +320,11 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
     rows.push(held.collateral.clone());
     rows.extend(unused);
     rows.extend(held.kept.iter().cloned());
+    // Token UTxOs that can't be held with the rest wait for a later return.
+    let plan = api::plan_return(&rows, &request.merge, &request.own)?;
+    let rows = plan.taken;
     let (total, tokens) = seedelf_core::utxos::assets_of(rows.clone())?;
-    let (back, back_fee) = if request.merge.is_empty() {
+    let (back, back_fee) = if !plan.merged {
         let key = accounts.key_hash(Role::Receive, request.index)?;
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
@@ -375,8 +384,9 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
                 quantity: a.amount.to_string(),
             })
             .collect(),
-        merged: request.merge.len(),
+        merged: if plan.merged { request.merge.len() } else { 0 },
         leaves: built.leaves.iter().map(OutRef::of_box).collect(),
+        left_out: plan.left_out,
     })
 }
 
@@ -573,6 +583,7 @@ pub fn chain_from_account(
         tokens: Vec::new(),
         merged: 0,
         leaves: built.leaves.iter().map(OutRef::of_box).collect(),
+        left_out: Vec::new(),
     })
 }
 

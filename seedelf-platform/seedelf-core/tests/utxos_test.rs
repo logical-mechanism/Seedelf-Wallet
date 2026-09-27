@@ -305,3 +305,91 @@ fn select_does_not_panic_when_change_min_exceeds_gathered_lovelace() {
         "should bail out cleanly instead of underflowing"
     );
 }
+
+// ---------------------------------------------------------------------------
+// utxos::fitting: what one transaction can hold together
+//
+// Anyone can send an address UTxOs whose tokens add past a u64, and no output
+// can hold that much of one token: three of 2^63 − 1, or 2^64 − 1 and 1.
+// ---------------------------------------------------------------------------
+
+const JUNK: u64 = (1 << 63) - 1;
+
+fn outpoints(utxos: &[UtxoResponse]) -> Vec<String> {
+    utxos.iter().map(|u| u.tx_hash[..2].to_string()).collect()
+}
+
+#[test]
+fn fitting_leaves_out_what_would_push_a_token_past_a_u64() {
+    let rows = vec![
+        token_utxo(0x01, 1_500_000, &[(PID_EXTRA, "aa", JUNK)]),
+        ada_utxo(0x02, 20_000_000),
+        token_utxo(0x03, 1_500_000, &[(PID_EXTRA, "aa", JUNK)]),
+        token_utxo(0x04, 1_500_000, &[(PID_EXTRA, "aa", JUNK)]),
+        token_utxo(0x05, 2_000_000, &[(PID_NEEDED, "aa", 7)]),
+    ];
+    // What adding them all up does, and what the builders used to.
+    assert!(utxos::assets_of(rows.clone()).is_err());
+
+    let (taken, left) = utxos::fitting(&rows, &Assets::new(), |_| false).unwrap();
+    // Two of 2^63 − 1 fit (2^64 − 2); the third doesn't. Ties go by outpoint.
+    assert_eq!(outpoints(&taken), vec!["01", "02", "03", "05"]);
+    assert_eq!(outpoints(&left), vec!["04"]);
+    let (lovelace, tokens) = utxos::assets_of(taken).unwrap();
+    assert_eq!(lovelace, 25_000_000);
+    assert_eq!(
+        tokens
+            .quantity_of(PID_EXTRA.to_string(), "aa".to_string())
+            .unwrap(),
+        Some(2 * JUNK)
+    );
+    // What's left fits on its own: a second transaction takes it.
+    let (again, none) = utxos::fitting(&left, &Assets::new(), |_| false).unwrap();
+    assert_eq!((again.len(), none.len()), (1, 0));
+
+    // The pair that's as bad: 2^64 − 1 and 1.
+    let pair = vec![
+        token_utxo(0x06, 1_500_000, &[(PID_EXTRA, "aa", u64::MAX)]),
+        token_utxo(0x07, 1_500_000, &[(PID_EXTRA, "aa", 1)]),
+    ];
+    let (taken, left) = utxos::fitting(&pair, &Assets::new(), |_| false).unwrap();
+    assert_eq!(
+        (outpoints(&taken), outpoints(&left)),
+        (vec!["06".into()], vec!["07".into()])
+    );
+
+    // Nothing that adds up is ever left out.
+    let fine = vec![
+        ada_utxo(0x08, 5_000_000),
+        token_utxo(0x09, 2_000_000, &[(PID_EXTRA, "aa", 5)]),
+    ];
+    let (taken, left) = utxos::fitting(&fine, &Assets::new(), |_| false).unwrap();
+    assert_eq!((taken.len(), left.len()), (2, 0));
+}
+
+#[test]
+fn fitting_takes_ada_only_then_its_own_then_the_most_lovelace() {
+    let rows = vec![
+        token_utxo(0x01, 9_000_000, &[(PID_EXTRA, "aa", JUNK)]),
+        token_utxo(0x02, 1_500_000, &[(PID_EXTRA, "aa", JUNK)]),
+        token_utxo(0x03, 1_200_000, &[(PID_EXTRA, "aa", JUNK)]),
+    ];
+    // By lovelace: the smallest is left.
+    let (_, left) = utxos::fitting(&rows, &Assets::new(), |_| false).unwrap();
+    assert_eq!(outpoints(&left), vec!["03"]);
+    // Its own come first, whatever they hold.
+    let own = |u: &UtxoResponse| u.tx_hash.starts_with("03");
+    let (taken, left) = utxos::fitting(&rows, &Assets::new(), own).unwrap();
+    assert_eq!(outpoints(&taken), vec!["01", "03"], "in the order given");
+    assert_eq!(outpoints(&left), vec!["02"]);
+
+    // What's there already (a Seedelf UTxO a return merges into) counts too.
+    let base = Assets::new()
+        .add(Asset::new(PID_EXTRA.to_string(), "aa".to_string(), JUNK).unwrap())
+        .unwrap();
+    let (taken, left) = utxos::fitting(&rows, &base, |_| false).unwrap();
+    assert_eq!(
+        (outpoints(&taken), outpoints(&left).len()),
+        (vec!["01".into()], 2)
+    );
+}

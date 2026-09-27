@@ -184,6 +184,7 @@ fn a_session_comes_back_whole_into_seedelf_signed_by_its_key() {
             index: 3,
             utxos: utxos.clone(),
             merge: vec![],
+            own: vec![],
         },
     )
     .unwrap();
@@ -286,6 +287,7 @@ fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
             index: 3,
             utxos: utxos.clone(),
             merge: vec![change.clone()],
+            own: vec![],
         },
     )
     .unwrap();
@@ -347,10 +349,106 @@ fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
             index: 3,
             utxos,
             merge: vec![foreign],
+            own: vec![],
         },
     )
     .unwrap_err();
     assert!(err.to_string().contains("isn't this wallet's"), "{err}");
+}
+
+/// 2^63 − 1 of one token: three of these add up past what an output can hold.
+const JUNK: u64 = (1 << 63) - 1;
+const JUNK_POLICY: &str = "abababababababababababababababababababababababababababab";
+
+#[test]
+fn a_return_leaves_out_what_would_overflow_a_token_and_brings_back_the_rest() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    // The session's own: its ADA, a token, and its collateral.
+    let mut utxos = vec![
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(2, 1, &at, 2_500_000, &[(POLICY, MIN, 906_594_100)]),
+        utxo(3, 0, &at, 5_000_000, &[]),
+    ];
+    // A stranger's three UTxOs of 2^63 − 1 of one token, about 5 ₳ in all.
+    for tx in 7..10 {
+        utxos.push(utxo(
+            tx,
+            0,
+            &at,
+            1_500_000,
+            &[(JUNK_POLICY, "6a756e6b", JUNK)],
+        ));
+    }
+    let request =
+        |utxos: &[UtxoResponse], merge: Vec<UtxoResponse>, own: Vec<String>| SessionReturnRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 3,
+            utxos: utxos.to_vec(),
+            merge,
+            own,
+        };
+    let junk_back = |result: &api::SessionReturnResult| {
+        result
+            .tokens
+            .iter()
+            .find(|t| t.policy_id == JUNK_POLICY)
+            .map(|t| t.quantity.parse::<u64>().unwrap())
+    };
+
+    // Made new: everything but one junk UTxO comes back, the session's own whole.
+    let result = api::session_return(&accounts, sk, request(&utxos, vec![], vec![])).unwrap();
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert_eq!((tx.inputs().len(), result.inputs), (5, 5));
+    assert_eq!(result.left_out.len(), 1);
+    assert_eq!(result.left_out[0].tx_hash, hex::encode([9u8; 32]));
+    assert_eq!(result.left_out[0].reason, "tokens");
+    let fee: u64 = result.fee.parse().unwrap();
+    assert_eq!(result.lovelace, (30_500_000 - fee).to_string());
+    assert!(
+        result
+            .tokens
+            .iter()
+            .any(|t| t.asset_name == MIN && t.quantity == "906594100")
+    );
+    assert_eq!(junk_back(&result), Some(2 * JUNK));
+
+    // Merged into the funding's change: the same.
+    let change = funding_change(9, 2, sk, 40_000_000);
+    let merged = api::session_return(&accounts, sk, request(&utxos, vec![change], vec![])).unwrap();
+    assert_eq!(
+        (merged.merged, merged.inputs, merged.left_out.len()),
+        (1, 5, 1)
+    );
+
+    // The session's own transaction's UTxO comes first, whatever it holds.
+    let own = vec![hex::encode([9u8; 32])];
+    let result = api::session_return(&accounts, sk, request(&utxos, vec![], own)).unwrap();
+    assert_eq!(result.left_out[0].tx_hash, hex::encode([8u8; 32]));
+
+    // Two are enough to freeze it too: 2^64 − 1 and 1.
+    let mut pair = utxos[..3].to_vec();
+    pair.push(utxo(
+        7,
+        0,
+        &at,
+        3_000_000,
+        &[(JUNK_POLICY, "6a756e6b", u64::MAX)],
+    ));
+    pair.push(utxo(8, 0, &at, 3_000_000, &[(JUNK_POLICY, "6a756e6b", 1)]));
+    let result = api::session_return(&accounts, sk, request(&pair, vec![], vec![])).unwrap();
+    assert_eq!((result.inputs, result.left_out.len()), (4, 1));
+    // What's left comes back in the next return, when it pays for its own deposit.
+    let left: Vec<UtxoResponse> = pair
+        .iter()
+        .filter(|u| u.tx_hash == result.left_out[0].tx_hash)
+        .cloned()
+        .collect();
+    let next = api::session_return(&accounts, sk, request(&left, vec![], vec![])).unwrap();
+    assert_eq!((next.inputs, next.left_out.len()), (1, 0));
 }
 
 #[test]
@@ -362,6 +460,7 @@ fn a_return_takes_only_the_sessions_own_utxos() {
         index,
         utxos,
         merge: vec![],
+        own: vec![],
     };
     let sk = random_scalar();
     let err = api::session_return(

@@ -181,6 +181,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             boxes: None,
             merge: vec![],
             again: false,
+            own: vec![],
         },
     )
     .unwrap();
@@ -255,6 +256,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             boxes: Some(1),
             merge: vec![funding_change(sk)],
             again: false,
+            own: vec![],
         },
     )
     .unwrap();
@@ -298,6 +300,59 @@ fn a_chains_return_merges_into_the_funding_change() {
 }
 
 #[test]
+fn a_chains_return_leaves_out_what_would_overflow_a_token() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(4322u64);
+    let at = session();
+    // A stranger's three UTxOs of 2^63 − 1 of one token at the session.
+    let junk = (1u64 << 63) - 1;
+    let mut utxos = holdings();
+    for tx in 7..10 {
+        utxos.push(row(
+            tx,
+            0,
+            &at,
+            1_500_000,
+            &[(&"ab".repeat(28), "6a756e6b", junk)],
+        ));
+    }
+    let chain = |merge: Vec<UtxoResponse>| {
+        lovejoin::chain(
+            &accounts(),
+            sk,
+            ChainRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 0,
+                utxos: utxos.clone(),
+                collateral: collateral(),
+                pool: pool(&protocol),
+                depth: 1,
+                boxes: Some(1),
+                merge,
+                again: false,
+                own: vec![],
+            },
+        )
+        .unwrap()
+    };
+    for (merge, merged) in [(vec![], 0), (vec![funding_change(sk)], 1)] {
+        let result = chain(merge);
+        assert_eq!(result.merged, merged);
+        let back = result.txs.last().unwrap();
+        let bytes = hex::decode(&back.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        // The session's token UTxO and two of the three come back; one waits.
+        assert!(spends(&tx, [3; 32], 0));
+        assert!(spends(&tx, [7; 32], 0) && spends(&tx, [8; 32], 0));
+        assert!(!spends(&tx, [9; 32], 0));
+        assert_eq!(result.left_out.len(), 1);
+        assert_eq!(result.left_out[0].tx_hash, hex::encode([9u8; 32]));
+        assert_eq!(result.tokens.len(), 2);
+    }
+}
+
+#[test]
 fn the_boxes_come_back_one_by_one_through_giveme_my() {
     let protocol = Protocol::of(true).unwrap();
     let sk = Scalar::from(5678u64);
@@ -315,6 +370,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             boxes: Some(1),
             merge: vec![],
             again: false,
+            own: vec![],
         },
     )
     .unwrap();
@@ -432,6 +488,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             boxes: None,
             merge: vec![],
             again: false,
+            own: vec![],
         },
     )
     .unwrap_err();
@@ -706,6 +763,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             boxes: Some(2),
             merge: vec![],
             again: true,
+            own: vec![],
         },
     )
     .unwrap();
@@ -775,6 +833,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             boxes: Some(2),
             merge: vec![],
             again: true,
+            own: vec![],
         },
     )
     .unwrap_err();

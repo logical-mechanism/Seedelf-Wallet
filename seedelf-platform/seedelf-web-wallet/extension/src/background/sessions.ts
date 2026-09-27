@@ -1199,13 +1199,15 @@ export class SessionService {
         r.chain!.stopped = "The wallet locked, or the browser closed, while its chain was being sent.";
       });
     }
+    // What the session's own transactions left at the account comes back first when not everything can at once.
+    const own = record?.txs.map((t) => t.txHash) ?? [];
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
     if (!direct && !started && lovejoin?.available(network)) {
       const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length);
       let chain: LovejoinChain | undefined;
       try {
-        chain = await lovejoin.chain(network, index, rows, collateral, params, merge, record?.mix?.boxes, record?.mix?.again);
+        chain = await lovejoin.chain(network, index, rows, collateral, params, merge, record?.mix?.boxes, record?.mix?.again, own);
       } catch (e) {
         if (!(e instanceof LovejoinSkipped)) throw e;
         skipped = e.reason;
@@ -1231,6 +1233,7 @@ export class SessionService {
           depositOutputs: 1,
           inputs: rows.length,
           merged: chain.merged,
+          leftOut: chain.leftOut,
           lovejoin: {
             boxes: chain.boxes,
             depth: chain.depth,
@@ -1248,7 +1251,7 @@ export class SessionService {
     const result = await wallet.withKeys(
       (keys) =>
         JSON.parse(
-          wasm.buildSessionReturn(keys.oneTime, keys.seedelf, JSON.stringify({ network, params, index, utxos: rows, merge })),
+          wasm.buildSessionReturn(keys.oneTime, keys.seedelf, JSON.stringify({ network, params, index, utxos: rows, merge, own })),
         ) as Omit<SessionBackSummary, "network" | "index"> & { txCbor: string },
     );
     return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
