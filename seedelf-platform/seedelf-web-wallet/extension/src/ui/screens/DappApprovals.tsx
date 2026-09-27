@@ -497,11 +497,12 @@ function SignTx({
           <h2 id="dapp-paid-title">Pays</h2>
           <ul className="list" data-testid="dapp-paid">
             {s.paid.map((p, i) => (
-              <li key={i} className="list__row">
-                <span className="stack-tight">
-                  <MiddleEllipsis text={p.address} />
-                  <span className="note">{paidTo(p)}</span>
+              // The whole address on its own line: shortened, a lookalike's could read the same.
+              <li key={i} className="list__row dapp-paid">
+                <span className="dapp-address" data-value={p.address}>
+                  {p.address}
                 </span>
+                <span className="note">{paidTo(p)}</span>
                 <span className="dapp-amount">
                   {formatAda(p.lovelace)} ₳
                   {p.tokens.map((t) => (

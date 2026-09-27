@@ -2543,6 +2543,54 @@ test.describe("the dApp connector", () => {
     expect(koios.submitted).toHaveLength(4);
   });
 
+  test("a Pays row shows the whole address and its ADA, however long a token's name", async ({ context }) => {
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const dapp = await openDapp(context);
+    let opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
+    const connect = await opened;
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe(true);
+    await closed;
+
+    // A site's transaction, by hand: one of the account's UTxOs, and 1,234.567891 ₳ with a token named
+    // with 32 W's to the account's payment key under another stake part.
+    const [utxo] = (await cip30(dapp, "getUtxos")).value as string[];
+    const index = Number.parseInt(utxo!.slice(72, 74), 16) < 24 ? utxo!.slice(72, 74) : utxo!.slice(72, 76);
+    const input = `825820${utxo!.slice(8, 72)}${index}`;
+    const change = (await cip30(dapp, "getChangeAddress")).value as string;
+    const to = `${change.slice(0, 58)}${"ab".repeat(28)}`;
+    const output = `825839${to}821a499602d3a1581c${"cd".repeat(28)}a15820${"57".repeat(32)}01`;
+    const tx = `84a30081${input}0181${output}021a00029810a0f5f6`;
+
+    opened = connectorWindow(context);
+    const signing = cip30(dapp, "signTx", tx, false);
+    const sign = await opened;
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    const address = sign.getByTestId("dapp-paid").locator("[data-value]");
+    const shown = await address.evaluate((el) => ({
+      text: el.textContent,
+      value: el.getAttribute("data-value"),
+      clipped: el.scrollWidth > el.clientWidth,
+    }));
+    expect(shown.text).toBe(shown.value);
+    expect(shown.clipped).toBe(false);
+    const amount = sign.getByTestId("dapp-paid").locator(".dapp-amount");
+    await expect(amount).toContainText("1,234.567891 ₳");
+    expect(await amount.evaluate((el) => el.getBoundingClientRect().right <= window.innerWidth)).toBe(true);
+    expect(await sign.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await expect(sign.getByTestId("dapp-own-key")).toContainText("your payment key with a stake part that isn't yours");
+    await snap(sign, "dapp-sign-tx-long-token");
+    await sign.getByRole("button", { name: "Decline" }).click();
+    expect((await signing).error?.code).toBe(2);
+  });
+
   test("a locked wallet asks for the password in the connector's window first", async ({ context }) => {
     const page = await openApp(context);
     await restore(page, vector(12).phrase);
