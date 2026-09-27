@@ -342,6 +342,29 @@ describe("the dApp connector", () => {
     );
   });
 
+  it("never reads a site's transaction on one network from the wallet's own Send on the other", async () => {
+    const t = await on();
+    // A Send on preprod, sent: its change isn't on chain yet.
+    const { summary: sent, tx: sendTx } = await built(t);
+    await t.send.submit("preprod", sent.txHash);
+    const outputs = JSON.parse(t.deps.wasm.ogmiosUtxos(sendTx)) as Array<{ index: number; address: string }>;
+    const change = `${sent.txHash}#${outputs.find((o) => o.address !== THEIRS)!.index}`;
+
+    // The wallet moves to mainnet. The account's keys are the same there, and
+    // a signature binds nothing to a network: a site there that spends the
+    // change must never have it read as the account's.
+    await t.networkChoice.set("mainnet");
+    await t.dapp.networkChanged();
+    const s = await connected(t);
+    const pays = [{ address: t.deps.wasm.cip30Address(account(15).mainnet.receive_0 as string), lovelace: 4_000_000n }];
+    await expect(t.dapp.call(s, "signTx", [siteTx({ inputs: [change], pays }), false])).rejects.toMatchObject({
+      failure: { code: TxSignError.ProofGeneration },
+    });
+    expect(t.dapp.approvals()).toEqual([]);
+    // Looked for on mainnet's Koios, which hasn't got it, rather than read from the preprod Send.
+    expect(t.koios.calls.filter((c) => c.path === "utxo_info").flatMap((c) => c.body._utxo_refs)).toContain(change);
+  });
+
   it("says in its prompt where the account's rewards go, what pays its key under another stake part, and a pool's certificate", async () => {
     const t = await on();
     const s = await connected(t);
@@ -1047,18 +1070,31 @@ describe("the wallet's own transactions, kept a while for sites to build on", ()
 
   it("keeps the newest 16 for 20 minutes, and none it can't read or too big to be on chain", async () => {
     const session = memoryArea();
-    for (let i = 0; i < 20; i++) await rememberSent(session, tx(i), 1_000 * i);
-    const kept = await recentlySent(session, 20_000);
+    for (let i = 0; i < 20; i++) await rememberSent(session, "preprod", tx(i), 1_000 * i);
+    const kept = await recentlySent(session, "preprod", 20_000);
     expect(kept.map((s) => s.txHash)).toEqual(Array.from({ length: 16 }, (_, i) => txIdOf(tx(i + 4))));
     expect(kept[0]!.txCbor).toBe(Buffer.from(tx(4)).toString("hex"));
     // Twenty minutes after the oldest kept, it's gone.
-    expect(await recentlySent(session, 4_000 + SENT_KEEP_MS)).toHaveLength(15);
+    expect(await recentlySent(session, "preprod", 4_000 + SENT_KEEP_MS)).toHaveLength(15);
 
-    await rememberSent(session, bytes("00"), 20_000);
+    await rememberSent(session, "preprod", bytes("00"), 20_000);
     const big = new Uint8Array(16_385);
     big.set(tx(99));
-    await rememberSent(session, big, 20_000);
-    expect(await recentlySent(session, 20_000)).toHaveLength(16);
+    await rememberSent(session, "preprod", big, 20_000);
+    expect(await recentlySent(session, "preprod", 20_000)).toHaveLength(16);
+  });
+
+  it("keeps each network's apart, and never reads what was kept for both before", async () => {
+    const session = memoryArea();
+    await rememberSent(session, "mainnet", tx(1), 1_000);
+    await rememberSent(session, "preprod", tx(2), 1_000);
+    expect((await recentlySent(session, "mainnet", 2_000)).map((s) => s.txHash)).toEqual([txIdOf(tx(1))]);
+    expect((await recentlySent(session, "preprod", 2_000)).map((s) => s.txHash)).toEqual([txIdOf(tx(2))]);
+    // Kept under the one key for both networks, before: no network says whose it is, so neither reads it.
+    await session.set("seedelf.sent", [{ txHash: txIdOf(tx(3)), txCbor: Buffer.from(tx(3)).toString("hex"), sentAt: 1_000 }]);
+    for (const network of ["mainnet", "preprod"] as const) {
+      expect((await recentlySent(session, network, 2_000)).map((s) => s.txHash)).not.toContain(txIdOf(tx(3)));
+    }
   });
 });
 

@@ -55,10 +55,10 @@ describe("spent UTxOs", () => {
     const session = memoryArea();
     const at = 1_800_000_000_000;
     const transfer = hexBytes(transferPreprod.draft.draftCbor);
-    await rememberSpent(session, transfer, at);
-    // A long Lovejoin chain after it: 130 mixes of four inputs each, and more.
+    await rememberSpent(session, "preprod", transfer, at);
+    // A long Lovejoin chain after it, on the other network (what's spent is kept for both together): 130 mixes of four inputs each, and more.
     const mix = (i: number) => hexBytes(`84a100d9010284${[0, 1, 2, 3].map((k) => `825820${i.toString(16).padStart(64, "0")}0${k}`).join("")}a0f5f6`);
-    for (let i = 0; i < 200; i++) await rememberSpent(session, mix(i + 1), at + 60_000);
+    for (let i = 0; i < 200; i++) await rememberSpent(session, "mainnet", mix(i + 1), at + 60_000);
     const inputs = transferPreprod.draft.inputs.map((i) => `${i.txHash}#${i.txIndex}`);
     const spent = await spentSet(session, at + 60_000);
     expect(spent.size).toBe(inputs.length + 800);

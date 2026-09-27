@@ -36,8 +36,12 @@ async function kept(session: Area, now: number): Promise<Record<string, number>>
   return raw ?? {};
 }
 
-/** Remembers the inputs of a transaction about to be submitted. Call it while unlocked. */
-export async function rememberSpent(session: Area, tx: Uint8Array, now = Date.now()): Promise<void> {
+/**
+ * Remembers the inputs of a transaction about to be submitted on `network`.
+ * Call it while unlocked. What's spent is kept for both networks together
+ * (an outpoint is never on both); the transaction itself, on its own.
+ */
+export async function rememberSpent(session: Area, network: NetworkName, tx: Uint8Array, now = Date.now()): Promise<void> {
   const spent = await kept(session, now);
   for (const o of txInputs(tx)) spent[o] = now;
   const fresh = Object.entries(spent)
@@ -45,8 +49,8 @@ export async function rememberSpent(session: Area, tx: Uint8Array, now = Date.no
     .sort(([, a], [, b]) => a - b)
     .slice(-SPENT_MOST);
   await session.set(SESSION_SPENT, Object.fromEntries(fresh));
-  // And the transaction itself, a while: a site may build on its outputs (sent-txs.ts).
-  await rememberSent(session, tx);
+  // And the transaction itself, a while: a site on its network may build on its outputs (sent-txs.ts).
+  await rememberSent(session, network, tx, now);
 }
 
 /** Forgets `outpoints`: a transaction that never landed spent nothing (pending.ts). Call it while unlocked. */

@@ -1824,7 +1824,7 @@ export class SessionService {
         delete t.sending;
         if (!maybe) t.unsent = true;
       });
-      if (maybe) await wallet.withKeys(() => rememberSpent(session, bytes));
+      if (maybe) await wallet.withKeys(() => rememberSpent(session, network, bytes));
       // A return merged into the funding's change, which was spent elsewhere: the kept view of the contract is behind, so read it in full next time.
       if (kind === "back" && e instanceof SpentInputError) await forgetContractView(this.deps, network).catch(() => undefined);
       throw e;
@@ -1837,7 +1837,7 @@ export class SessionService {
       after?.(s);
     });
     await wallet.withKeys(async () => {
-      await rememberSpent(session, bytes);
+      await rememberSpent(session, network, bytes);
       await clearKept(session, kept, keptHash);
       await session.remove(SESSION_BALANCES_PREFIX + network);
     });

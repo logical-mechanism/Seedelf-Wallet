@@ -174,7 +174,7 @@ async function restoreNow(deps: PendingDeps, network: NetworkName): Promise<Watc
   const w = await sealed(deps, network);
   if (!unsettled(w) || w.network !== network || !w.txCbor) return undefined;
   await wallet.withKeys(async () => {
-    await rememberSpent(session, hexBytes(w.txCbor!));
+    await rememberSpent(session, network, hexBytes(w.txCbor!));
     await session.set(key, w);
   });
   // What the kept view has of the contract is behind whatever happened meanwhile.
@@ -260,7 +260,7 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   // The inputs of one that can expire, to free them if it does.
   const watched: Watched = s.invalidHereafter === undefined ? pending : { ...pending, inputs: txInputs(bytes) };
   await take(deps, watched, async () => {
-    await rememberSpent(session, bytes);
+    await rememberSpent(session, s.network, bytes);
     await session.remove(s.key);
   });
   await deps.activity?.sent(s.network, pending, s.summary).catch(() => undefined);
@@ -291,7 +291,7 @@ async function maybeSent(deps: PendingDeps, s: Sending): Promise<PendingTx> {
   // once, from two windows): new payments wait for it, and this one is held
   // back all the same.
   const watched = await take(deps, record, async () => {
-    await rememberSpent(session, bytes);
+    await rememberSpent(session, s.network, bytes);
     // Send sends these very bytes again, and asks giveme.my nothing.
     await session.set(s.key, { ...s.kept, sentCbor: s.txCbor });
   });
@@ -401,7 +401,7 @@ async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undef
         // Taken after the watch let it go (unseen meanwhile): on its way after
         // all, so its UTxOs are held back again, and it's watched if nothing
         // else is.
-        await rememberSpent(session, hexBytes(w.txCbor!));
+        await rememberSpent(session, w.network, hexBytes(w.txCbor!));
         if (cur && !ours(cur)) return cur;
         await session.set(key, current);
         return current;

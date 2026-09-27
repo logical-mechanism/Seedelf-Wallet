@@ -940,7 +940,7 @@ export class LovejoinService {
                 await sleep(wait);
               }
             }
-            await wallet.withKeys(() => rememberSpent(session, bytes));
+            await wallet.withKeys(() => rememberSpent(session, network, bytes));
             await this.chainSent(network, id, i);
           },
           onChain: async (hashes) => {
@@ -1371,7 +1371,7 @@ export class LovejoinService {
     } catch (e) {
       if (!(e instanceof KoiosBusyError)) throw e;
       // It may be in: its box counts as spent, and it's kept, sealed, to be looked for (settleWithdrawing).
-      await wallet.withKeys(() => rememberSpent(session, bytes));
+      await wallet.withKeys(() => rememberSpent(session, network, bytes));
       const at = now();
       await this.update(network, (s) => {
         s.withdrawing = { txHash: built.txHash, txCbor: finished.txCbor, lovelace: built.lovelace, fee: built.fee, at, sentAt: at };
@@ -1380,7 +1380,7 @@ export class LovejoinService {
     }
     if (submitted !== built.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
     await wallet.withKeys(async () => {
-      await rememberSpent(session, bytes);
+      await rememberSpent(session, network, bytes);
       await session.remove(SESSION_BALANCES_PREFIX + network);
     });
     const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: built.txHash, submittedAt: now(), confirmations: null };

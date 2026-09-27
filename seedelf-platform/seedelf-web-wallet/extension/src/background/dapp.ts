@@ -28,11 +28,11 @@
 //             won't have a payment key sign over an input nobody can find,
 //             so the outputs of every transaction it signs are kept (the
 //             account's for the last 32, every one for 20 minutes), and the
-//             wallet's own sends' (sent-txs.ts): a dApp can build its next
-//             transaction on them before they're on chain. What the user
-//             locked, and the collateral, stay out of a site's transaction
-//             as out of the wallet's own: one that uses them is refused
-//             (`keptApart`). `signData` is CIP-8, with the address's key.
+//             wallet's own sends' on that network (sent-txs.ts): a dApp can
+//             build its next transaction on them before they're on chain.
+//             What the user locked, and the collateral, stay out of a site's
+//             transaction as out of the wallet's own: one that uses them is
+//             refused (`keptApart`). `signData` is CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts).
 // Limits      What a site asks for without the user costs the wallet little:
@@ -804,10 +804,10 @@ export class DappService {
   /**
    * The UTxOs a transaction spends, as far as the wallet can find them: the
    * account's, the outputs of transactions it signed for the site, and of
-   * those the wallet sent itself in the last few minutes (sent-txs.ts: a
-   * Send's change, a session's funding or top-up), none of which Koios
-   * lists before they're on chain; then the account read again if one is
-   * missing, and Koios for the rest (one request). The WebAssembly won't
+   * those the wallet sent itself on this network in the last few minutes
+   * (sent-txs.ts: a Send's change, a session's funding or top-up), none of
+   * which Koios lists before they're on chain; then the account read again
+   * if one is missing, and Koios for the rest (one request). The WebAssembly won't
    * have a payment key sign over one it can't find. A site gets a few fresh
    * readings and lookups a minute (`PER_MINUTE`): past them, the kept
    * reading does, and a lookup is refused.
@@ -823,7 +823,7 @@ export class DappService {
       ...(s.signedAt !== undefined && s.signedAt > since ? (s.every ?? []) : []),
       ...s.outputs.map((p) => p.utxo),
     ]);
-    const sent = await this.sentOutputs(refs);
+    const sent = await this.sentOutputs(network, refs);
     const find = (view: View) => {
       // What Koios lists wins over what the wallet kept.
       const known = new Map([...sent, ...signed, ...view.utxos.map((p) => p.utxo)].map((u) => [outpoint(u), u]));
@@ -886,11 +886,15 @@ export class DappService {
     return false;
   }
 
-  /** The outputs among `refs` of transactions the wallet sent in the last few minutes. */
-  private async sentOutputs(refs: string[]): Promise<KoiosUtxo[]> {
+  /**
+   * The outputs among `refs` of transactions the wallet sent on `network` in
+   * the last few minutes. Never the other network's: the account's keys are
+   * the same on both, so its UTxO there would be signed for as the account's.
+   */
+  private async sentOutputs(network: NetworkName, refs: string[]): Promise<KoiosUtxo[]> {
     const { wallet, session, wasm } = this.deps;
     const hashes = new Set(refs.map((r) => r.slice(0, r.indexOf("#"))));
-    const sent = (await wallet.withKeys(() => recentlySent(session))).filter((s) => hashes.has(s.txHash));
+    const sent = (await wallet.withKeys(() => recentlySent(session, network))).filter((s) => hashes.has(s.txHash));
     // A site's own submit is kept there too: WebAssembly's decoder reads it only if it isn't nested too deep.
     return sent.flatMap((s) => (nestsWithin(hexBytes(s.txCbor)) ? outputsOf(wasm, s.txCbor) : []));
   }
@@ -1109,7 +1113,7 @@ export class DappService {
     }
     const { wallet, session, now } = this.deps;
     await wallet.withKeys(async () => {
-      await rememberSpent(session, bytes);
+      await rememberSpent(session, network, bytes);
       const key = SESSION_DAPP_SIGNED + network + suffix(holder);
       const kept = (await session.get<Signed[]>(key)) ?? [];
       await session.set(
