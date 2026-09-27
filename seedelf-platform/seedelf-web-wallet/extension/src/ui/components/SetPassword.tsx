@@ -53,6 +53,8 @@ export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }:
           id="new-password"
           type={show ? "text" : "password"}
           autoComplete="new-password"
+          autoCapitalize="off"
+          spellCheck={false}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           autoFocus
@@ -77,6 +79,8 @@ export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }:
           id="confirm-password"
           type={show ? "text" : "password"}
           autoComplete="new-password"
+          autoCapitalize="off"
+          spellCheck={false}
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
           aria-invalid={mismatch || undefined}

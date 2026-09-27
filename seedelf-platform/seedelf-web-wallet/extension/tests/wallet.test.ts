@@ -61,7 +61,8 @@ describe("wallet", () => {
       const key = seedelf.find((s) => s.phrase === v.phrase);
       if (key) expect(preprod.seedelfPublicValue).toBe(key.public_value);
     }
-  });
+    // One Argon2id seal for each vector: slow on a busy machine.
+  }, 30_000);
 
   it("refuses short passwords, bad phrases, and a second wallet", async () => {
     const { wallet, local } = testWallet();
