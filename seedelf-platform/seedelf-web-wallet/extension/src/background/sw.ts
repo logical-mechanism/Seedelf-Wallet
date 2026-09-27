@@ -77,9 +77,9 @@ const sessionsAlarm = {
  */
 type Worker = Omit<Context, "network">;
 
-/** The run going on, if one is, and whether another is asked for after it (with a scan, if any asked for one). */
+/** The run going on, if one is, and whether another is asked for after it (the unlock's, if any asked for one). */
 let running: Promise<void> | undefined;
-let asked: { scan: boolean } | undefined;
+let asked: { unlock: boolean } | undefined;
 
 /**
  * One run of runSessionsNow at a time: the alarm and an unlock can both ask
@@ -87,18 +87,18 @@ let asked: { scan: boolean } | undefined;
  * send two withdraws seconds apart. Asked during a run, it runs once more
  * after it.
  */
-function runSessions(ctx: Runner, scan = false): Promise<void> {
+function runSessions(ctx: Runner, unlock = false): Promise<void> {
   if (running) {
-    asked = { scan: scan || !!asked?.scan };
+    asked = { unlock: unlock || !!asked?.unlock };
     return running;
   }
   running = (async () => {
     try {
-      await runSessionsNow(ctx, scan);
+      await runSessionsNow(ctx, unlock);
       while (asked) {
         const next = asked;
         asked = undefined;
-        await runSessionsNow(ctx, next.scan);
+        await runSessionsNow(ctx, next.unlock);
       }
     } finally {
       running = undefined;
@@ -107,9 +107,9 @@ function runSessions(ctx: Runner, scan = false): Promise<void> {
   return running;
 }
 
-/** The next step of everything that runs itself, on every network (runs.ts). */
-function runSessionsNow(ctx: Runner, scan = false): Promise<void> {
-  return runNetworks(ctx, sessionsAlarm, scan);
+/** The next step of everything that runs itself, on every network (runs.ts); `unlock`: the run as the wallet unlocks, which sends nothing. */
+function runSessionsNow(ctx: Runner, unlock = false): Promise<void> {
+  return runNetworks(ctx, sessionsAlarm, unlock);
 }
 
 let context: Promise<Worker> | undefined;
@@ -138,7 +138,9 @@ function getContext(): Promise<Worker> {
       fresh: freshWasm,
       changed: () => {
         broadcast(STATE_CHANGED);
-        // Sites waiting for an unlock go on, and so does a swap that runs itself.
+        // Sites waiting for an unlock go on. A swap that runs itself, and
+        // Lovejoin's boxes due back, go on a few minutes in: nothing goes out
+        // the moment the wallet unlocks (runs.ts, privacy review §3.1).
         void dapp?.stateChanged();
         if (worker) void runSessions(worker, true).catch(() => undefined);
       },
