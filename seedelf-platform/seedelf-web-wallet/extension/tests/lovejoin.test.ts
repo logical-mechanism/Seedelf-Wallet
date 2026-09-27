@@ -16,6 +16,9 @@ import {
   chainRetryMs,
   LOVEJOIN_MIX_BOX,
   LovejoinService,
+  MAX_CHAIN_MIXES,
+  mixesPerBox,
+  POOL_FLOOR,
   pumpChain,
   secureRandom,
   WITHDRAW_SPREAD_MS,
@@ -442,6 +445,66 @@ describe("the network's check", CHAINS, () => {
     expect(review.lovejoin).toBeUndefined();
     expect(review.lovejoinSkipped).toBe("Lovejoin's pool has 7 boxes to mix with, and this needs 8");
     expect(review.inputs).toBe(2);
+  });
+});
+
+describe("the pool the chains draw from", CHAINS, () => {
+  /** Seven real boxes and one UTxO that isn't a box: 12 ₳ under a box's datum. */
+  const junked = (t: ReturnType<typeof testBalances>) => {
+    const junk = { ...POOL[0]!, tx_hash: "e1".repeat(32), value: "12000000" };
+    t.koios.addedToAccounts = [...t.koios.addedToAccounts.filter((u) => !POOL.slice(7).includes(u)), junk];
+  };
+
+  it("counts only real boxes before a mix is funded, never what else sits at mix_box", async () => {
+    const { t, sessions } = await withSession("40000000");
+    junked(t);
+    // A box two waves deep takes eight others, and only seven are boxes.
+    await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("pool has 7 boxes to mix with, and a box 2 waves deep needs 8");
+    // Nor are the boxes mixed again counted against the junk.
+    t.koios.addedToAccounts.push(await ownedBox(t, "d9"));
+    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("pool has 7 boxes to mix with");
+  });
+
+  it("draws from a pool only once it holds the floor's worth of others' boxes, and says so", async () => {
+    const { sessions } = await withSession("40000000");
+    const floor = POOL_FLOOR.preprod;
+    POOL_FLOOR.preprod = 25;
+    try {
+      const review = await sessions.backBuild("preprod", 0);
+      expect(review.lovejoin).toBeUndefined();
+      expect(review.lovejoinSkipped).toBe(
+        "Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 25, so yours hide among enough others",
+      );
+      await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("holds 20 boxes that aren't yours");
+    } finally {
+      POOL_FLOOR.preprod = floor;
+    }
+    expect(POOL_FLOOR.mainnet).toBe(30);
+  });
+
+  it("makes one chain at most MAX_CHAIN_MIXES long, a return's too", async () => {
+    const { t } = await withSession("40000000");
+    await t.deps.preferences.set({ lovejoinDepth: 3 });
+    const wasm = loadTestWasm();
+    // The spare ADA would pay for 30 boxes, and the pool has others enough for 20.
+    const others = Array.from({ length: 20 * 26 }, (_, i) => ({ txHash: i.toString(16).padStart(64, "0"), txIndex: 0 }));
+    let asked: number | undefined;
+    const lovejoin = new LovejoinService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      wasm: {
+        ...wasm,
+        planLovejoin: () => JSON.stringify({ boxes: 30, spare: "0", mixes: 390, mixFees: "0" }),
+        lovejoinOwned: () => JSON.stringify({ boxes: [], lovelace: "0", others: others.length, otherBoxes: others }),
+        buildLovejoinChain: (_one: unknown, _key: unknown, request: string) => {
+          asked = (JSON.parse(request) as { boxes: number }).boxes;
+          return JSON.stringify({ txs: [], boxes: asked, depth: 3, fees: "0", returned: "0", tokens: [], merged: 0, leaves: [], leftOut: [] });
+        },
+      } as typeof wasm,
+    });
+    await lovejoin.chain("preprod", 0, [atSession("c1".repeat(32), 0, "40000000")], atSession("c2".repeat(32), 1, "5000000"), {});
+    expect(asked).toBe(MAX_CHAIN_MIXES / mixesPerBox(3));
   });
 });
 

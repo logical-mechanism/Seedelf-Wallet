@@ -55,7 +55,7 @@ import { SESSION_PENDING } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import type { ScriptSpendDeps } from "./script-spend";
-import { rememberSpent, spentSet, unspent } from "./spent";
+import { outpoint, rememberSpent, spentSet, unspent } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 
 /** chrome.storage.session: a mix from the public account, built and signed, waiting for Send. */
@@ -234,6 +234,14 @@ export const LOVEJOIN_MIX_BOX: Partial<Record<NetworkName, string>> = {
   preprod: "67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5",
 };
 
+/**
+ * The fewest real boxes that aren't the wallet's that Lovejoin's pool must
+ * hold before a chain draws from it: a box is hidden only among others, and
+ * a pool of a few hides little. Mainnet's is the owner's to tune; preprod
+ * takes any pool, for testing.
+ */
+export const POOL_FLOOR: Record<NetworkName, number> = { preprod: 0, mainnet: 30 };
+
 /** Every box holds exactly this. */
 export const LOVEJOIN_DENOM = 10_000_000n;
 
@@ -336,6 +344,24 @@ export const MAX_MIX_BOXES = 10;
  */
 export const MAX_CHAIN_MIXES = MAX_MIX_BOXES * mixesPerBox(3);
 
+/** A box in the pool, or anywhere: where it sits. */
+export interface OutRef {
+  txHash: string;
+  txIndex: number;
+}
+
+const ref = (r: OutRef) => `${r.txHash}#${r.txIndex}`;
+
+/** The pool as WebAssembly reads it (`lovejoin::OwnedResult`): only real boxes count, never junk left at mix_box. */
+interface Split {
+  /** Every UTxO at mix_box, less any a sent transaction of ours spends. */
+  pool: KoiosUtxo[];
+  /** The wallet's boxes in it. */
+  owned: OutRef[];
+  /** The real boxes that aren't the wallet's: what a mix draws from. */
+  others: OutRef[];
+}
+
 /** A whole number of boxes, one to MAX_MIX_BOXES, or why not. */
 export function checkBoxes(boxes: number): void {
   if (!Number.isInteger(boxes) || boxes < 1 || boxes > MAX_MIX_BOXES) {
@@ -397,8 +423,9 @@ export class LovejoinService {
    * The wallet's own boxes don't count: a mix never takes two of them.
    */
   async fits(network: NetworkName, boxes: number): Promise<void> {
-    const { pool, owned } = await this.split(network);
-    await this.enough(pool.length - owned.length, boxes);
+    const { others } = await this.split(network);
+    this.floor(network, others.length);
+    await this.enough(others.length, boxes);
   }
 
   /**
@@ -408,14 +435,32 @@ export class LovejoinService {
    */
   async againBoxes(network: NetworkName): Promise<{ boxes: number; owned: number }> {
     const { depth } = await this.settings();
-    const { pool, owned } = await this.split(network);
+    const split = await this.split(network);
+    const { owned } = split;
     if (!owned.length) throw new Error("None of your boxes is in Lovejoin's pool, so there's nothing to mix again.");
-    const others = pool.length - owned.length;
+    const others = split.others.length;
+    this.floor(network, others);
     const perBox = mixesPerBox(depth);
     const boxes = Math.min(owned.length, Math.floor(others / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
     // None fits: say what the pool has.
     if (boxes < 1) await this.enough(others, 1);
     return { boxes, owned: owned.length };
+  }
+
+  /**
+   * Why a chain can't draw from a pool with only `others` real boxes that
+   * aren't the wallet's (POOL_FLOOR), or undefined when it can.
+   */
+  private floorShort(network: NetworkName, others: number): string | undefined {
+    const floor = POOL_FLOOR[network];
+    if (others >= floor) return undefined;
+    return `Lovejoin's pool holds ${others} ${others === 1 ? "box" : "boxes"} that aren't yours, and the wallet mixes only once it holds ${floor}, so yours hide among enough others`;
+  }
+
+  /** Throws why, when the pool is below its floor (floorShort). */
+  private floor(network: NetworkName, others: number): void {
+    const short = this.floorShort(network, others);
+    if (short) throw new Error(`${short}. Try again later.`);
   }
 
   /** Whether `others` boxes in the pool mix `boxes` boxes at the set depth, or why not. */
@@ -465,21 +510,28 @@ export class LovejoinService {
     let count = Math.min(plan.boxes, boxes ?? plan.boxes);
     if (count < 1) return undefined;
     const { depth } = await this.settings();
-    const { pool, owned } = await this.split(network);
+    const split = await this.split(network);
+    const { owned, others } = split;
+    const short = this.floorShort(network, others.length);
+    if (short) throw new LovejoinSkipped(short);
     if (again) {
       if (!owned.length) throw new LovejoinSkipped("none of your boxes is in Lovejoin's pool anymore");
       count = Math.min(count, owned.length);
     }
     // Each mix takes two boxes from the pool, never one twice, and never one of ours.
-    count = Math.min(count, Math.floor((pool.length - owned.length) / (mixesPerBox(depth) * 2)));
-    if (count < 1) throw new LovejoinSkipped("Lovejoin's pool has too few boxes to mix with right now");
+    const perBox = mixesPerBox(depth);
+    if (others.length < perBox * 2) {
+      throw new LovejoinSkipped(`Lovejoin's pool has ${others.length} boxes to mix with, and this needs ${perBox * 2}`);
+    }
+    // One chain is at most MAX_CHAIN_MIXES long, whatever the spare ADA pays for: what's left comes back with the return.
+    count = Math.min(count, Math.floor(others.length / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
     const request = {
       network,
       params,
       index,
       utxos: rows,
       collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index },
-      pool,
+      pool: this.real(split),
       depth,
       boxes: count,
       merge,
@@ -533,8 +585,9 @@ export class LovejoinService {
     }
     if (!utxos.length) throw nothingInAccount(held, "Your public account is empty, so there's nothing to mix.");
     const { depth, delay } = await this.settings();
-    const pool = await this.pool(network);
-    const request = { network, params, utxos, collateral, pool, depth, boxes };
+    const split = await this.split(network);
+    this.floor(network, split.others.length);
+    const request = { network, params, utxos, collateral, pool: this.real(split), depth, boxes };
     const chain = await wallet.withKeys(
       (keys) => JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
     );
@@ -779,18 +832,29 @@ export class LovejoinService {
     return pending;
   }
 
-  /** The pool (a read), and the wallet's boxes in it. */
-  private async split(network: NetworkName): Promise<{ pool: KoiosUtxo[]; owned: Array<{ txHash: string; txIndex: number }> }> {
+  /** The pool (a read), the wallet's boxes in it, and the real boxes that aren't. */
+  private async split(network: NetworkName): Promise<Split> {
     const pool = await this.pool(network);
-    return { pool, owned: await this.owned(network, pool) };
+    const { boxes, otherBoxes } = await this.ownership(network, pool);
+    return { pool, owned: boxes, others: otherBoxes };
   }
 
-  private async owned(network: NetworkName, pool: KoiosUtxo[]): Promise<Array<{ txHash: string; txIndex: number }>> {
+  /** The pool's real boxes alone, the wallet's and others': what a chain is built from. */
+  private real({ pool, owned, others }: Split): KoiosUtxo[] {
+    const real = new Set([...owned, ...others].map(ref));
+    return pool.filter((u) => real.has(outpoint(u)));
+  }
+
+  private async owned(network: NetworkName, pool: KoiosUtxo[]): Promise<OutRef[]> {
+    return (await this.ownership(network, pool)).boxes;
+  }
+
+  /** WebAssembly's reading of the pool: the wallet's boxes, and the real boxes that aren't. */
+  private ownership(network: NetworkName, pool: KoiosUtxo[]): Promise<{ boxes: OutRef[]; otherBoxes: OutRef[] }> {
     const request = JSON.stringify({ network, pool });
-    const found = await this.deps.wallet.withKeys(
-      (keys) => JSON.parse(this.deps.wasm.lovejoinOwned(keys.seedelf, request)) as { boxes: Array<{ txHash: string; txIndex: number }> },
+    return this.deps.wallet.withKeys(
+      (keys) => JSON.parse(this.deps.wasm.lovejoinOwned(keys.seedelf, request)) as { boxes: OutRef[]; otherBoxes: OutRef[] },
     );
-    return found.boxes;
   }
 
   private async withdrawOne(network: NetworkName, pool: KoiosUtxo[], box: { txHash: string; txIndex: number }): Promise<PendingTx> {
