@@ -151,6 +151,8 @@ export function ContactEditor({
             onKeyDown={(e) => e.key === "Enter" && save()}
             maxLength={40}
             autoComplete="off"
+            // Chrome's enhanced spell check sends what's typed to Google: a name stays on the device.
+            spellCheck={false}
             autoFocus
           />
         </div>

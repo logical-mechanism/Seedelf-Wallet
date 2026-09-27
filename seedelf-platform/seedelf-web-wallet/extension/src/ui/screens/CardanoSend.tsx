@@ -263,6 +263,10 @@ export function CardanoSend({
           // Characters, as core counts them: an input's maxLength counts UTF-16 units, so an emoji would count twice.
           onChange={(e) => setNote([...e.target.value].slice(0, NOTE_MAX).join(""))}
           autoComplete="off"
+          // Not spell-checked, as no field in the wallet is: Chrome's enhanced
+          // spell check would send the note to Google before it's sent, even
+          // one never sent, and a note is unique enough to find its payment.
+          spellCheck={false}
           placeholder="What it's for"
           aria-describedby="send-note-hint"
         />
