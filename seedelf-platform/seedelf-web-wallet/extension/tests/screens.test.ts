@@ -8,11 +8,13 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { LovejoinHeld, PendingTx, SessionView } from "../src/shared/rpc";
 import { HandleWarning } from "../src/ui/components/HandleWarning";
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
 import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
 import { NetworkContext } from "../src/ui/network";
+import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimCard } from "../src/ui/screens/Dapps";
 import { Chains, detailOf as lovejoinDetail, NotMixed, subOf as lovejoinSub } from "../src/ui/screens/Lovejoin";
@@ -39,6 +41,14 @@ function text(element: ReactElement, network: "preprod" | "mainnet" = "preprod")
     .replace(/\s+/g, " ")
     .trim();
 }
+
+/** `element` with the balances shown: the settings read, Hide balances off. */
+const shown = (element: ReactElement) =>
+  createElement(
+    PreferencesContext.Provider,
+    { value: { prefs: { ...DEFAULT_PREFERENCES, hideBalances: false }, loaded: true, set: async () => undefined } },
+    element,
+  );
 
 describe("Home's banner for a payment Koios didn't answer (launch review #10)", () => {
   const at = new Date(2026, 8, 27, 14, 5).getTime();
@@ -73,7 +83,8 @@ describe("Home's banner for a payment Koios didn't answer (launch review #10)", 
 
 describe("Home's Lovejoin row (launch review H2)", () => {
   const held: LovejoinHeld = { boxes: 2, lovelace: "20000000", next: null, notMixed: 0, stopped: 0 };
-  const row = (h: LovejoinHeld) => text(createElement(InLovejoin, { held: h, now: 0, onOpen: () => undefined }));
+  const element = (h: LovejoinHeld) => createElement(InLovejoin, { held: h, now: 0, onOpen: () => undefined });
+  const row = (h: LovejoinHeld) => text(shown(element(h)));
 
   it("says how many boxes aren't mixed yet, and that a mix stopped, and sends the user to Lovejoin", () => {
     expect(row(held)).not.toContain("not mixed yet");
@@ -88,10 +99,13 @@ describe("Home's Lovejoin row (launch review H2)", () => {
     expect(line).toContain("Not on their way back");
   });
 
-  it("keeps hidden balances hidden", () => {
-    const line = row(held);
+  it("keeps hidden balances hidden, and how many boxes, each of 10 ₳ (privacy review §2.16)", () => {
+    const line = text(element({ ...held, notMixed: 3, stopped: 2 }));
     expect(line).toContain("•••• ₳");
     expect(line).not.toContain("20 ₳");
+    expect(line).toContain("•••• boxes of 10 ₳");
+    expect(line).toContain("Some not mixed yet, and 2 mixes stopped partway");
+    expect(line).not.toMatch(/\d+ box|\d+ not mixed/);
   });
 
   it("says a box that's due comes back in a few minutes, not at the next unlock (privacy review §3.1)", () => {
@@ -424,25 +438,36 @@ describe("Bring everything back's review (launch review #57, H6, #23)", () => {
 
 describe("Lovejoin's page (launch review H2)", () => {
   it("says boxes not mixed yet never come back by themselves, and offers to bring one back anyway", () => {
-    const line = text(createElement(NotMixed, { count: 3, busy: false, onAnyway: () => undefined }));
+    const line = text(shown(createElement(NotMixed, { count: 3, busy: false, onAnyway: () => undefined })));
     expect(line).toContain("3 of your boxes aren't mixed yet: a chain stopped before mixing them.");
     expect(line).toContain("They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first.");
     expect(line).toContain("Bring one back anyway");
     expect(renderToStaticMarkup(createElement(NotMixed, { count: 0, busy: false, onAnyway: () => undefined }))).toBe("");
   });
 
+  const chains = createElement(Chains, {
+    chains: [
+      { session: 1, boxes: 3, total: 13, sent: 5, at: 1 },
+      { boxes: 2, total: 9, sent: 4, at: 2, stopped: "The wallet locked, or the browser closed, while its chain was being sent." },
+    ],
+  });
+
   it("lists a chain being sent, which holds withdraws, and one stopped partway, with why", () => {
-    const line = text(
-      createElement(Chains, {
-        chains: [
-          { session: 1, boxes: 3, total: 13, sent: 5, at: 1 },
-          { boxes: 2, total: 9, sent: 4, at: 2, stopped: "The wallet locked, or the browser closed, while its chain was being sent." },
-        ],
-      }),
-    );
+    const line = text(shown(chains));
     expect(line).toContain("Private session 2, 3 boxes Sending 5 of 13 transactions sent Withdraws wait until it's all sent.");
     expect(line).toContain(
       "From your public account, 2 boxes Stopped Stopped after 4 of 9 transactions Why it stopped: The wallet locked, or the browser closed, while its chain was being sent. The boxes it didn't mix wait, not mixed yet, for Mix my boxes again.",
+    );
+  });
+
+  it("hides how many boxes with the balances, each being 10 ₳, but not how far a chain has got (privacy review §2.16)", () => {
+    const line = text(chains);
+    expect(line).toContain("Private session 2, •••• boxes Sending 5 of 13 transactions sent");
+    expect(line).not.toMatch(/\d+ box/);
+    const callout = text(createElement(NotMixed, { count: 1, busy: false, onAnyway: () => undefined }));
+    expect(callout).toContain("Some of your boxes aren't mixed yet: a chain stopped before mixing them. They never come back by themselves");
+    expect(text(shown(createElement(NotMixed, { count: 1, busy: false, onAnyway: () => undefined })))).toContain(
+      "One of your boxes isn't mixed yet: a chain stopped before mixing it. It never comes back by itself",
     );
   });
 });

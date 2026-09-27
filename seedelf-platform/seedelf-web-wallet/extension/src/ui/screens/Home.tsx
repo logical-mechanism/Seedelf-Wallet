@@ -632,6 +632,7 @@ export function PublicMixHolding({ progress, onOpen }: { progress: NonNullable<M
  * own wait: not counted in the balance until they're here. Boxes a chain cut
  * short didn't mix never come back by themselves, and a mix that stopped
  * partway needs looking at: both are said under it. Opens Lovejoin's page.
+ * Every box is 10 ₳, so the counts are hidden with the balances.
  */
 export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
   const amounts = useAmounts();
@@ -640,8 +641,9 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
   // Boxes not mixed yet have no due time: they're the row's own when none is on its way back.
   const boxes = held.boxes || held.notMixed;
   const lovelace = held.boxes ? held.lovelace : (BigInt(held.notMixed) * LOVEJOIN_BOX).toString();
+  // How many aren't mixed yet is an amount too: said without the number while balances are hidden (privacy review §2.16).
   const flags = [
-    held.notMixed ? `${held.notMixed} not mixed yet` : "",
+    held.notMixed ? `${amounts.hidden ? "some" : held.notMixed} not mixed yet` : "",
     held.stopped ? (held.stopped === 1 ? "a mix stopped partway" : `${held.stopped} mixes stopped partway`) : "",
   ].filter(Boolean);
   const flagged = flags.join(", and ");
@@ -652,7 +654,7 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
         <span className="avatar avatar--contact" aria-hidden="true">
           <ShieldIcon size={16} />
         </span>
-        <span className="token-row__label">{boxes ? `${plural(boxes, "box", "boxes")} of 10 ₳` : "Your mixes"}</span>
+        <span className="token-row__label">{boxes ? `${amounts.count(boxes, "box", "boxes")} of 10 ₳` : "Your mixes"}</span>
         <span className="token-row__amount">{boxes ? `${amounts.ada(lovelace)} ₳` : ""}</span>
         <span className="token-row__sub">{held.boxes ? next : held.notMixed ? "Not on their way back" : ""}</span>
         {flagged && (

@@ -26,8 +26,10 @@
 // The chains that aren't all sent are listed: being sent (no box comes back
 // meanwhile), or stopped partway, and why. A mix from the private balance
 // can be stopped before its boxes go in: it then comes back directly. What
-// the wallet has in the pool is hidden with the balances (#56), and the page
-// says Lovejoin has had no third-party audit.
+// the wallet has in the pool is hidden with the balances (#56), and so is
+// how many boxes, since every box is 10 ₳ (privacy review §2.16); the Mix
+// form and the reviews show what's being sent. The page says Lovejoin has
+// had no third-party audit.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import type {
@@ -130,6 +132,7 @@ const chainName = (c: LovejoinChainView) => (c.session === undefined ? "From you
  * and the boxes it didn't mix wait for Mix my boxes again.
  */
 export function Chains({ chains }: { chains: LovejoinChainView[] }) {
+  const amounts = useAmounts();
   if (!chains.length) return null;
   return (
     <section className="section" aria-labelledby="lovejoin-chains-title">
@@ -141,7 +144,7 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
               <ShieldIcon size={16} />
             </span>
             <span className="token-row__label">
-              {chainName(c)}, {plural(c.boxes, "box", "boxes")}
+              {chainName(c)}, {amounts.count(c.boxes, "box", "boxes")}
             </span>
             <SwapTag {...(c.stopped ? { tone: "off" as const, label: "Stopped" } : { tone: "live" as const, label: "Sending" })} />
             <span className="token-row__sub">
@@ -165,15 +168,18 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
  * it back anyway takes one as it is.
  */
 export function NotMixed({ count, busy, onAnyway }: { count: number; busy: boolean; onAnyway: () => void }) {
+  const amounts = useAmounts();
   if (!count) return null;
+  // How many is an amount too: while balances are hidden, it's "some" (privacy review §2.16).
+  const many = amounts.hidden || count > 1;
+  const which = amounts.hidden ? "Some of your boxes aren't" : count === 1 ? "One of your boxes isn't" : `${count} of your boxes aren't`;
   return (
     <Callout tone="warn" testId="lovejoin-not-mixed">
       <div className="stack-tight">
         <span>
-          {count === 1 ? "One of your boxes isn't" : `${count} of your boxes aren't`} mixed yet: a chain stopped before
-          mixing {count === 1 ? "it" : "them"}. {count === 1 ? "It never comes" : "They never come"} back by{" "}
-          {count === 1 ? "itself" : "themselves"}, since each still shows where it went in. Mix my boxes again takes{" "}
-          {count === 1 ? "it" : "them"} first.
+          {which} mixed yet: a chain stopped before mixing {many ? "them" : "it"}. {many ? "They never come" : "It never comes"} back
+          by {many ? "themselves" : "itself"}, since each still shows where it went in. Mix my boxes again takes{" "}
+          {many ? "them" : "it"} first.
         </span>
         <button type="button" className="link align-start" onClick={onAnyway} disabled={busy} data-testid="lovejoin-anyway">
           Bring one back anyway
@@ -389,9 +395,9 @@ export function Lovejoin({
       {status && !status.available && <p className="note">Lovejoin isn't on this network yet.</p>}
       {status?.available && (
         <ReviewRows testId="lovejoin-status">
-          {/* What the wallet has in the pool is a balance: hidden while balances are (launch review #56). */}
-          <Row label="Your boxes in the pool" value={owned ? `${plural(owned, "box", "boxes")}, ${amounts.ada(status.lovelace)} ₳` : "None"} strong />
-          {notMixed > 0 && <Row label="Not mixed yet" value={plural(notMixed, "box", "boxes")} />}
+          {/* What the wallet has in the pool is a balance, and so is how many boxes: hidden while balances are (launch review #56, privacy review §2.16). */}
+          <Row label="Your boxes in the pool" value={owned ? `${amounts.count(owned, "box", "boxes")}, ${amounts.ada(status.lovelace)} ₳` : "None"} strong />
+          {notMixed > 0 && <Row label="Not mixed yet" value={amounts.count(notMixed, "box", "boxes")} />}
           {owned > notMixed && next !== undefined && (
             <Row label="Next one back" value={next <= Date.now() ? "In a few minutes" : whenOf(next, new Date())} />
           )}
@@ -493,7 +499,7 @@ export function Lovejoin({
                   <ShieldIcon size={16} />
                 </span>
                 <span className="token-row__label">
-                  {plural(m.mix!.boxes, "box", "boxes")} {m.mix!.again ? "mixed again" : "of 10 ₳"}
+                  {amounts.count(m.mix!.boxes, "box", "boxes")} {m.mix!.again ? "mixed again" : "of 10 ₳"}
                 </span>
                 <SwapTag {...tagOf(m)} />
                 <span className="token-row__sub">{subOf(m, Date.now())}</span>
