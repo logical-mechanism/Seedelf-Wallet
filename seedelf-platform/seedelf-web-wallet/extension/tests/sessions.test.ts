@@ -283,15 +283,32 @@ describe("a private session", () => {
     const quote = await t.sessions.quote("preprod", ASK);
     const probes = () => t.koios.calls.filter((c) => c.path === "account_addresses");
     expect((await t.sessions.outBuild("preprod", quote)).index).toBe(3);
-    // One request asks about INDEX_PROBE accounts at once: 0 to 19.
-    expect(probes().map((c) => c.body._stake_addresses.length)).toEqual([INDEX_PROBE]);
-    expect(probes()[0]!.body._stake_addresses[4]).toBe(await reward(4));
+    // The next index alone first; it was used, so the INDEX_PROBE after it at once: 1 to 20.
+    expect(probes().map((c) => c.body._stake_addresses.length)).toEqual([1, INDEX_PROBE]);
+    expect(probes()[0]!.body._stake_addresses).toEqual([await reward(0)]);
+    expect(probes()[1]!.body._stake_addresses[3]).toBe(await reward(4));
 
     // A whole batch used: it asks about the next one.
     for (let i = 0; i <= INDEX_PROBE; i++) t.koios.usedStakes.add(await reward(i));
     expect((await t.sessions.outBuild("preprod", quote)).index).toBe(INDEX_PROBE + 1);
-    expect(probes()).toHaveLength(3);
-    expect(probes()[2]!.body._stake_addresses[0]).toBe(await reward(INDEX_PROBE));
+    expect(probes().map((c) => c.body._stake_addresses.length)).toEqual([1, INDEX_PROBE, 1, INDEX_PROBE, INDEX_PROBE]);
+    expect(probes()[4]!.body._stake_addresses[0]).toBe(await reward(INDEX_PROBE + 1));
+  });
+
+  it("asks Koios about the next one-time account alone, never the ones to come", async () => {
+    // Overlapping windows would tie every session the wallet opens together, whatever the IP address.
+    const t = await unlocked();
+    moreFunds(t, 1);
+    const sessions = signing(t);
+    const net = loadTestWasm().Network.Preprod;
+    const reward = (i: number) => t.wallet.withKeys((keys) => keys.oneTime.rewardAddress(net, i));
+    const probes = () => t.koios.calls.filter((c) => c.path === "account_addresses").map((c) => c.body._stake_addresses);
+    const quote = await sessions.quote("preprod", ASK);
+    await sessions.outBuild("preprod", quote);
+    const out = await sessions.outBuild("preprod", quote);
+    await sessions.outSubmit("preprod", out.txHash);
+    await sessions.outBuild("preprod", quote);
+    expect(probes()).toEqual([[await reward(0)], [await reward(0)], [await reward(1)]]);
   });
 
   it("won't sign a swap that spends anything but the session's, or bring a session back with an order waiting", async () => {

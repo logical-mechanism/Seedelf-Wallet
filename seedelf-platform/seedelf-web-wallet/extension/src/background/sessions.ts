@@ -119,7 +119,7 @@ export const READ_EVERY_MS = 15_000;
  * more than five minutes. Minswap's rate limit clears within a minute, and a
  * funding Minswap hasn't seen yet shows up within a block or two.
  */
-/** How many one-time accounts one probe for a new session's index asks Koios about (freshIndex). */
+/** How many one-time accounts a probe for a new session's index asks Koios about once the next is used (freshIndex). */
 export const INDEX_PROBE = 20;
 
 export const retryAfterMs = (tries: number) => Math.min(30_000 * 2 ** (tries - 1), 5 * 60_000);
@@ -1695,20 +1695,26 @@ export class SessionService {
   /**
    * The index for a new session: the book's next, moved past any the chain
    * has seen used. The book is only on this device, so a restored wallet, one
-   * removed and restored, the same phrase in another browser, or a book that
-   * failed to open starts again at 0; taking its index blindly would put two
-   * sessions on one key and link them on chain. Every session since chunk 15b
-   * has its own stake key (2/i), and any payment to its address carries it,
-   * so one `account_addresses` request says which of INDEX_PROBE indexes were
-   * ever paid, and the first that wasn't is the one. (Sessions from before then used a shared stake part: a few on
-   * preprod, from before any release.)
+   * removed and restored, or the same phrase in another browser starts again
+   * at 0; taking its index blindly would put two sessions on one key and link
+   * them on chain. Every session since chunk 15b has its own stake key (2/i),
+   * and any payment to its address carries it, so an `account_addresses`
+   * request says whether an index was ever paid. (Sessions from before then
+   * used a shared stake part: a few on preprod, from before any release.)
+   *
+   * `next` is asked about alone: the one stake address its funding is about
+   * to put on chain anyway. A window of them would show Koios the stake keys
+   * of sessions to come, and successive windows overlap, tying every session
+   * the wallet opens together, whatever the IP address.
+   * Only once `next` turns out used does it ask about INDEX_PROBE more at a
+   * time.
    */
   private async freshIndex(network: NetworkName): Promise<number> {
     const { wasm, wallet } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-    for (let first = (await this.book(network)).next; ; first += INDEX_PROBE) {
+    for (let first = (await this.book(network)).next, size = 1; ; first += size, size = INDEX_PROBE) {
       const probe = await wallet.withKeys((keys) =>
-        Array.from({ length: INDEX_PROBE }, (_, i) => ({ index: first + i, reward: keys.oneTime.rewardAddress(net, first + i) })),
+        Array.from({ length: size }, (_, i) => ({ index: first + i, reward: keys.oneTime.rewardAddress(net, first + i) })),
       );
       const used = await this.deps.koios(network).usedStakeAddresses(probe.map((p) => p.reward));
       const fresh = probe.find((p) => !used.has(p.reward));
