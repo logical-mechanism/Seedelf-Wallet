@@ -357,14 +357,54 @@ fn someone_elses_input_needs_partial_signing() {
 
 #[test]
 fn an_input_the_wallet_cant_find_is_unknown() {
+    // Signed for by the stake key alone, which spends nothing.
     let (_, rows) = swap();
-    let tx = tx_hex(body(
-        vec![input(TX_A, 0), input(TX_B, 7)],
-        vec![out(&theirs(), 1_000_000, None)],
-    ));
-    let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    let mut b = body(vec![input(TX_B, 7)], vec![out(&theirs(), 1_000_000, None)]);
+    b.withdrawals =
+        NonEmptyKeyValuePairs::try_from(vec![(Bytes::from(stake_account_bytes()), 0)]).ok();
+    let tx = tx_hex(b);
+    let summary = cip30::inspect_tx(&account(), &request(tx.clone(), rows.clone(), true)).unwrap();
     assert_eq!(summary.unknown_inputs, vec![format!("{TX_B}#7")]);
     assert!(!summary.complete);
+    let signed = cip30::sign_tx(&account(), &request(tx, rows, true)).unwrap();
+    assert_eq!(signed.summary.signs, vec!["stake"]);
+}
+
+#[test]
+fn a_payment_key_never_signs_for_an_input_the_wallet_cant_find() {
+    // It may be the account's own, not on chain yet (a Send's change, a
+    // top-up): the key's signature would let the site take it once it lands.
+    let (_, rows) = swap();
+    let refused = |b: conway::TransactionBody| {
+        let tx = tx_hex(b);
+        for partial_sign in [true, false] {
+            let request = request(tx.clone(), rows.clone(), partial_sign);
+            let inspected = cip30::inspect_tx(&account(), &request).unwrap_err();
+            assert!(inspected.to_string().contains("can't find yet"));
+            assert!(cip30::sign_tx(&account(), &request).is_err());
+        }
+    };
+
+    // Beside one of the account's own inputs.
+    refused(body(
+        vec![input(TX_A, 1), input(TX_B, 7)],
+        vec![out(&ours(Role::Receive, 0), 3_800_000, None)],
+    ));
+
+    // Alone, with the account's key named as a required signer.
+    let mut b = body(vec![input(TX_B, 7)], vec![out(&theirs(), 50_000_000, None)]);
+    b.required_signers =
+        NonEmptySet::try_from(vec![account().key_hash(Role::Receive, 0).unwrap()]).ok();
+    refused(b);
+
+    // As collateral beside the account's own, returned to someone else.
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 3_800_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_B, 7)]).ok();
+    b.collateral_return = Some(out(&theirs(), 49_000_000, None));
+    refused(b);
 }
 
 #[test]

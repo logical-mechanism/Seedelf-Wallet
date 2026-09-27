@@ -729,7 +729,9 @@ pub struct TxSummary {
     pub valid_until: Option<u64>,
     /// The account's keys that sign: "0/3", "1/0", "stake".
     pub signs: Vec<String>,
-    /// Inputs the wallet couldn't find anywhere (`txhash#index`).
+    /// Inputs and collateral the wallet couldn't find anywhere
+    /// (`txhash#index`). Only ever with the stake key signing alone: with
+    /// any, a payment key's signature is refused.
     pub unknown_inputs: Vec<String>,
     /// Signatures it needs from keys that aren't the account's.
     pub others_sign: usize,
@@ -1254,6 +1256,23 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     // covers datums in the witness set, as a DEX order's is: nothing runs.
     let scripts = witnesses.redeemer.is_some();
 
+    // A payment key's signature spends every UTxO under that key, one the
+    // wallet couldn't find too, whatever partialSign says: the account's own
+    // that isn't on chain yet (a Send's change, a top-up) is one. A stake
+    // key's signature spends nothing.
+    let payment_signs = signers.iter().any(|s| matches!(s, Signer::Payment(_)));
+    if let (Some(first), true) = (unknown.first(), payment_signs) {
+        bail!(match unknown.len() {
+            1 => format!(
+                "This transaction spends a UTxO the wallet can't find yet ({first}). It could be yours and not on chain yet, and signing would let it be spent, so the wallet won't sign it. Try again once it's on chain."
+            ),
+            n => format!(
+                "This transaction spends {n} UTxOs the wallet can't find yet ({first} and {} more). They could be yours and not on chain yet, and signing would let them be spent, so the wallet won't sign it. Try again once they're on chain.",
+                n - 1
+            ),
+        });
+    }
+
     let put_in = Amount {
         lovelace: add_staking(spent.lovelace, staking)?,
         ..spent.clone()
@@ -1305,7 +1324,8 @@ fn cert_kind(kind: &str) -> Cert {
 }
 
 /// What a dApp's transaction does to the public account, for the prompt.
-/// Refuses one for the other network, or one it can't read.
+/// Refuses one for the other network, one it can't read, and one the wallet
+/// won't sign whatever the user says.
 pub fn inspect_tx(account: &CardanoAccount, request: &TxRequest) -> Result<TxSummary> {
     Ok(inspect(account, request)?.summary)
 }
@@ -1324,6 +1344,8 @@ pub struct Signed {
 /// Without `partial_sign`, refuses one that needs anyone else's signature
 /// too, or spends a UTxO the wallet couldn't find (CIP-30's
 /// `ProofGeneration`), as it does one with nothing of the account's to sign.
+/// With it too, a payment key never signs one that spends a UTxO the wallet
+/// couldn't find ([`inspect_tx`] refuses it).
 pub fn sign_tx(account: &CardanoAccount, request: &TxRequest) -> Result<Signed> {
     let Inspection {
         summary,
