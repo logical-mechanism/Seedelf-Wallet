@@ -631,6 +631,124 @@ pub fn chain_from_account(
     })
 }
 
+/// The wallet's boxes in `pool` mixed again, paid by the public account
+/// (the Lovejoin page's "Mix again from my public account", privacy review
+/// §2.10): for boxes a mix from the account put in, which it paid for in the
+/// open already, so paying again ties nothing new, where the private
+/// balance would tie itself to the account. The same chain as a mix
+/// session's again ([`chain`]), with no deposit and no return: its first mix
+/// spends the account's largest ADA-only UTxO (never the collateral, nor one
+/// carrying a reference script) and takes `boxes` of the wallet's boxes in
+/// `pool`'s order, each mix after it paid from the one before's change at
+/// the account's `0/0`, all put up against its collateral. The last change
+/// stays in the account (`returned`). Signed here: the first mix by the
+/// paying UTxO's key and the collateral's, the rest by the change's and the
+/// collateral's.
+pub fn again_from_account(
+    account: &CardanoAccount,
+    sk: Scalar,
+    request: AccountChainRequest,
+) -> Result<ChainResult> {
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    let protocol = Protocol::of(network_flag)?;
+    check_mix(request.boxes, request.depth)?;
+    let mut every = request.utxos.clone();
+    every.push(request.collateral.clone());
+    let paths = api::check_paths(account, network_flag, &every)?;
+    let collateral_ref = (
+        request.collateral.utxo.tx_hash.clone(),
+        request.collateral.utxo.tx_index,
+    );
+    let collateral = Coin::from_row(&request.collateral.utxo)?;
+    let (ours, pool): (Vec<PoolBox>, Vec<PoolBox>) = request
+        .pool
+        .iter()
+        .filter_map(|row| PoolBox::from_row(row, &protocol))
+        .partition(|b| b.is_owned(&sk));
+    let boxes = request.boxes.min(ours.len());
+    if boxes == 0 {
+        bail!("None of this wallet's boxes is in Lovejoin's pool to mix again");
+    }
+
+    // One UTxO pays for every mix: the largest of ADA alone.
+    let needed = lovejoin::again_funding(boxes, request.depth);
+    let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
+    let paying = request
+        .utxos
+        .iter()
+        .filter(|p| p.utxo.asset_list.as_ref().is_none_or(|a| a.is_empty()))
+        .filter(|p| seedelf_core::eval::refusal(&p.utxo).is_none())
+        .filter(|p| (p.utxo.tx_hash.clone(), p.utxo.tx_index) != collateral_ref)
+        .max_by_key(|p| lovelace(p));
+    let Some(paying) = paying.filter(|p| lovelace(p) >= needed) else {
+        bail!(
+            "Your public account's ADA doesn't pay for mixing {} again: that takes {} ₳ in one UTxO of ADA alone, besides the collateral",
+            if boxes == 1 {
+                "a box".to_string()
+            } else {
+                format!("{boxes} boxes")
+            },
+            needed.div_ceil(1_000_000)
+        );
+    };
+    let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
+    let collateral_key = path_of(&request.collateral.utxo);
+    let keys = |first: (Role, u32)| {
+        let mut keys = vec![first];
+        if collateral_key != first {
+            keys.push(collateral_key);
+        }
+        keys
+    };
+    let first_keys = keys(path_of(&paying.utxo));
+    let mix_keys = keys((Role::Receive, 0));
+    let payer = lovejoin::Payer {
+        fee: Coin::from_row(&paying.utxo)?,
+        collateral,
+        address: account.base_address(network_flag, Role::Receive, 0)?,
+        signers: first_keys.len().max(mix_keys.len()),
+    };
+    let built = lovejoin::again(
+        &params,
+        &protocol,
+        &payer,
+        &ours[..boxes],
+        request.depth,
+        &pool,
+    )?;
+
+    let mut txs = Vec::with_capacity(built.txs.len());
+    let mut fees = 0u64;
+    for (i, step) in built.txs.into_iter().enumerate() {
+        fees += step.fee;
+        let mut signed = step.tx;
+        for (role, index) in if i == 0 { &first_keys } else { &mix_keys } {
+            signed = signed
+                .sign(account.private_key(*role, *index)?.to_ed25519_private_key())
+                .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
+        }
+        txs.push(ChainTxOut {
+            kind: step.kind.to_string(),
+            tx_cbor: hex::encode(&signed.tx_bytes.0),
+            tx_hash: hex::encode(signed.tx_hash.0),
+            fee: step.fee.to_string(),
+        });
+    }
+    Ok(ChainResult {
+        txs,
+        boxes,
+        depth: request.depth,
+        fees: fees.to_string(),
+        returned: built.change.lovelace.to_string(),
+        tokens: Vec::new(),
+        merged: 0,
+        leaves: built.leaves.iter().map(OutRef::of_box).collect(),
+        left_out: Vec::new(),
+        skipped: None,
+    })
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedRequest {

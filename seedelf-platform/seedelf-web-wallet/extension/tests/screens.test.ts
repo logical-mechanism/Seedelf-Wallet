@@ -17,7 +17,7 @@ import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimCard } from "../src/ui/screens/Dapps";
-import { Chains, detailOf as lovejoinDetail, NotMixed, subOf as lovejoinSub } from "../src/ui/screens/Lovejoin";
+import { Chains, detailOf as lovejoinDetail, NotMixed, PrivateReview, PublicReview, subOf as lovejoinSub } from "../src/ui/screens/Lovejoin";
 import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
 import {
   isRunningSwap,
@@ -469,6 +469,49 @@ describe("Lovejoin's page (launch review H2)", () => {
     expect(text(shown(createElement(NotMixed, { count: 1, busy: false, onAnyway: () => undefined })))).toContain(
       "One of your boxes isn't mixed yet: a chain stopped before mixing it. It never comes back by itself",
     );
+  });
+});
+
+describe("mixing a public mix's boxes again (privacy review §2.10)", () => {
+  const notMixed = (count: number, fromPublic: number) =>
+    text(shown(createElement(NotMixed, { count, fromPublic, busy: false, onAnyway: () => undefined })));
+
+  it("sends boxes a mix from the public account left to Mix again from my public account, which ties nothing new", () => {
+    expect(notMixed(2, 2)).toContain(
+      "They came from your public account, so Mix again from my public account takes them first: paid by the account, which ties nothing new.",
+    );
+    expect(notMixed(3, 1)).toContain(
+      "Mix again from my public account takes those your public account put in first, and Mix my boxes again the others.",
+    );
+    expect(notMixed(2, 0)).toContain("Mix my boxes again takes them first.");
+  });
+
+  const payments = [
+    { to: "addr_test1", lovelace: "9100000", tokens: [] },
+    { to: "addr_test1", lovelace: "5000000", tokens: [] },
+  ];
+  const funding = { boxes: 2, again: true, owned: 2, lovelace: "9100000", mixes: 8, mixFees: "6600000", depth: 2, delay: "1-6" };
+
+  it("says what paying from the private balance anyway ties, on its review", () => {
+    const summary = { index: 4, address: "addr_test1" + "q".repeat(50), payments, fee: { total: "200000" }, changeLovelace: "1000000" };
+    const review = (publicToo: boolean) =>
+      text(createElement(PrivateReview, { summary: { ...summary, mix: { ...funding, ...(publicToo ? { publicToo } : {}) } } as never }));
+    expect(review(true)).toContain(
+      "Some of these boxes came from a mix from your public account: paying for their mixes from here ties the private UTxOs this payment spends to your public account.",
+    );
+    expect(review(false)).not.toContain("public account");
+  });
+
+  it("reviews mixing them again from the public account: no deposit, and nothing new tied", () => {
+    const line = text(
+      createElement(PublicReview, {
+        summary: { network: "preprod", txHash: "ab".repeat(32), boxes: 2, depth: 2, delay: "1-6", mixes: 8, txs: 8, fees: "6600000", change: "40000000", again: true },
+      }),
+    );
+    expect(line).toContain("Mixed again 2 boxes your public account put in");
+    expect(line).toContain("Stays in your public account 40 ₳");
+    expect(line).toContain("paying for their mixes from it ties nothing new, and your private balance stays out of it");
+    expect(line).not.toContain("Into Lovejoin");
   });
 });
 

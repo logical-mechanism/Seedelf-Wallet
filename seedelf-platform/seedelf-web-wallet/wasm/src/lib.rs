@@ -2543,6 +2543,21 @@ pub fn build_lovejoin_from_account(
     )
 }
 
+/// The wallet's boxes in the pool mixed again, paid by the public account:
+/// every mix built, measured and signed with the account's keys, no deposit
+/// (`lovejoin::AccountChainRequest` → `lovejoin::ChainResult`).
+#[wasm_bindgen(js_name = buildLovejoinAgainFromAccount)]
+pub fn build_lovejoin_again_from_account(
+    account: &WasmCardanoAccount,
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<String, JsError> {
+    to_json(
+        &lovejoin::again_from_account(&account.inner, key.sk, from_json(request)?)
+            .map_err(js_error)?,
+    )
+}
+
 /// A transaction's outputs as Ogmios v6 UTxOs (JSON), for `evaluateTransaction`'s
 /// `additionalUtxo`: the network can then measure a child of it before it's on chain.
 #[wasm_bindgen(js_name = ogmiosUtxos)]

@@ -26,6 +26,7 @@ import {
   QUIET_PUSH_MS,
   QUIET_PUSHES,
   secureRandom,
+  SESSION_LOVEJOIN_PUBLIC,
   UNLOCK_WAIT_MS,
   unlockWait,
   WITHDRAW_SPREAD_MS,
@@ -1081,6 +1082,57 @@ describe("a chain's boxes", CHAINS, () => {
     expect(withdrawn(t).at(-1)).toBe(`${record!.deposit}#3`);
   });
 
+  it("mixes again from the public account the boxes a mix from it left, which ties nothing new, and keeps the private balance out of it (privacy review §2.10)", async () => {
+    const t = await funded();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    // A mix from the public account a lock cut after its deposit: both its boxes are still the deposit's.
+    const D = "d9".repeat(32);
+    const cut = {
+      id: "a9".repeat(32),
+      progress: "seedelf.lovejoin.sending.preprod",
+      deposit: D,
+      mixes: ["a8".repeat(32), "a9".repeat(32)],
+      leaves: [
+        { txHash: "a8".repeat(32), txIndex: 0 },
+        { txHash: "a9".repeat(32), txIndex: 0 },
+      ],
+      boxes: 2,
+      total: 3,
+      sent: 1,
+      at: t.clock.now - 2 * HOUR,
+      scheduled: true,
+      stopped: CHAIN_CUT,
+      ended: t.clock.now - 2 * HOUR,
+    };
+    t.koios.addedToAccounts.push(await ownedBox(t, D, 0), await ownedBox(t, D, 1));
+    await t.store.set("lovejoin.preprod", { due: [], chains: [cut] });
+    const status = await t.lovejoin.status("preprod");
+    expect(status.notMixed).toHaveLength(2);
+    expect(status.fromPublic).toEqual(status.notMixed);
+    // The private balance won't pay for their mixes: that would tie it to the account.
+    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("came from a mix from your public account");
+    expect(await t.lovejoin.againBoxes("preprod", true)).toEqual({ boxes: 2, owned: 2 });
+
+    // The account pays: no deposit, every mix signed by its keys, the change left in it.
+    const summary = await t.lovejoin.publicAgainBuild("preprod");
+    expect(summary).toMatchObject({ again: true, boxes: 2, depth: 1, mixes: 2, txs: 2 });
+    const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ kind: string; txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC));
+    expect(kept!.chain.map((c) => c.kind)).toEqual(["mix", "mix"]);
+    const inputs = kept!.chain.map((c) => txInputs(bytes(c.txCbor)));
+    expect(inputs.map((i) => i.filter((o) => o.startsWith(D)).length)).toEqual([1, 1]);
+    // The first is paid from the account, the next from its change.
+    const account = new Set((await readAccountUtxos(t.deps, "preprod", new Set())).utxos.map((p) => `${p.utxo.tx_hash}#${p.utxo.tx_index}`));
+    expect(inputs[0]!.some((o) => account.has(o))).toBe(true);
+    expect(inputs[1]).toContain(`${txIdOf(bytes(kept!.chain[0]!.txCbor))}#3`);
+
+    // Sent as a mix from the account is, and recorded as its boxes mixed again: they wait afresh once its first mix is in.
+    await t.lovejoin.publicSubmit("preprod", summary.txHash);
+    const { chains, due } = (await t.store.get<{ chains: Array<{ again?: boolean; session?: number }>; due: number[] }>("lovejoin.preprod"))!;
+    expect(chains.find((c) => c.again)).toMatchObject({ again: true });
+    expect(chains.find((c) => c.again)!.session).toBeUndefined();
+    expect(due).toHaveLength(2);
+  });
+
   it("counts on Home only boxes that can come back: none of a mix that stopped after its deposit", async () => {
     const t = await funded();
     const summary = await t.lovejoin.publicBuild("preprod", 1);
@@ -1719,6 +1771,90 @@ describe("mixing from the tile", CHAINS, () => {
     expect(view).toMatchObject({ mix: { boxes: 2, again: true }, auto: { step: "returning" } });
     // Sent: the boxes may be withdrawn again, when they're due.
     expect(await sessions.mixingAgain("preprod")).toBe(false);
+  });
+
+  it("leaves the boxes a mix from the public account put in out of Mix my boxes again, unless asked (privacy review §2.10)", async () => {
+    const t = await wallet();
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    // A box a cut mix from the public account left at its deposit, not mixed yet, and a leaf of a session's chain.
+    const [D, S] = ["d9", "f9"].map((h) => h.repeat(32));
+    const cut = {
+      id: "a9".repeat(32),
+      progress: "seedelf.lovejoin.sending.preprod",
+      deposit: D,
+      mixes: ["a9".repeat(32)],
+      leaves: [{ txHash: "a9".repeat(32), txIndex: 0 }],
+      boxes: 1,
+      total: 2,
+      sent: 1,
+      at: t.clock.now - 2 * HOUR,
+      scheduled: true,
+      stopped: CHAIN_CUT,
+      ended: t.clock.now - 2 * HOUR,
+    };
+    const done = {
+      id: S!,
+      session: 3,
+      progress: "seedelf.session.chain.preprod.3",
+      deposit: "c9".repeat(32),
+      mixes: [S!],
+      leaves: [{ txHash: S!, txIndex: 0 }],
+      boxes: 1,
+      total: 3,
+      sent: 3,
+      at: t.clock.now - HOUR,
+      scheduled: true,
+      done: true,
+      ended: t.clock.now - HOUR,
+    };
+    t.koios.addedToAccounts.push(await ownedBox(t, D!, 1), await ownedBox(t, S!, 0));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR], chains: [cut, done] });
+    const { lovejoin, sessions } = mixRunner(t);
+    expect((await lovejoin.status("preprod")).fromPublic).toEqual([{ txHash: D, txIndex: 1 }]);
+    expect(await lovejoin.againBoxes("preprod", true)).toEqual({ boxes: 2, owned: 2 });
+
+    // From the private balance: the session's box alone.
+    const out = await sessions.againBuild("preprod");
+    expect(out.mix).toMatchObject({ boxes: 1, again: true, owned: 1 });
+    expect(out.mix.publicToo).toBeUndefined();
+    await sessions.mixOutSubmit("preprod", out.txHash);
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace), atSession(out.txHash, 1, "5000000"));
+    t.koios.confirmations = 1;
+    t.koios.evaluation = AGREES;
+    const before = t.koios.submitted.length;
+    await sessions.advance("preprod", 0, true);
+    const spent = t.koios.submitted.slice(before).flatMap((tx) => txInputs(tx));
+    expect(spent).toContain(`${S}#0`);
+    expect(spent).not.toContain(`${D}#1`);
+  });
+
+  it("mixes the public account's boxes again from the private balance only when asked, and records that it was", async () => {
+    const t = await wallet();
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const D = "d9".repeat(32);
+    const cut = {
+      id: "a9".repeat(32),
+      progress: "seedelf.lovejoin.sending.preprod",
+      deposit: D,
+      mixes: ["a9".repeat(32)],
+      leaves: [{ txHash: "a9".repeat(32), txIndex: 0 }],
+      boxes: 1,
+      total: 2,
+      sent: 1,
+      at: t.clock.now - 2 * HOUR,
+      scheduled: true,
+      stopped: CHAIN_CUT,
+      ended: t.clock.now - 2 * HOUR,
+    };
+    t.koios.addedToAccounts.push(await ownedBox(t, D, 1));
+    await t.store.set("lovejoin.preprod", { due: [], chains: [cut] });
+    const { sessions } = mixRunner(t);
+    await expect(sessions.againBuild("preprod")).rejects.toThrow("Mix them again from your public account instead");
+    const out = await sessions.againBuild("preprod", true);
+    expect(out.mix).toMatchObject({ boxes: 1, again: true, publicToo: true });
+    await sessions.mixOutSubmit("preprod", out.txHash);
+    const book = (await t.store.get<{ sessions: Array<{ mix?: unknown }> }>("sessions.preprod"))!;
+    expect(book.sessions[0]!.mix).toEqual({ boxes: 1, again: true, publicToo: true });
   });
 
   it("brings a mix back directly when it's stopped, the way out of one whose chain can't go", async () => {

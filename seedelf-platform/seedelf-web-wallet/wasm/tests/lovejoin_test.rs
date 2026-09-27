@@ -915,6 +915,133 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
 }
 
 #[test]
+fn the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends() {
+    let protocol = Protocol::of(true).unwrap();
+    let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let sk = Scalar::from(2468u64);
+    let key = |role: Role, index: u32| public.key_hash(role, index).unwrap();
+    let ours = our_box_rows(sk, 3, &protocol);
+    let mut every = pool(&protocol);
+    every.extend(ours.iter().cloned());
+    let funded = seedelf_core::lovejoin::again_funding(2, 1);
+    let build = |utxos: Vec<api::PathedUtxo>, pool: Vec<UtxoResponse>| {
+        lovejoin::again_from_account(
+            &public,
+            sk,
+            AccountChainRequest {
+                network: "preprod".into(),
+                params: params(),
+                utxos,
+                collateral: public_utxo(0x5d, Role::Receive, 7, 5_000_000),
+                pool,
+                depth: 1,
+                boxes: 2,
+            },
+        )
+    };
+    let signers = |t: &lovejoin::ChainTxOut| -> Vec<pallas_crypto::hash::Hash<28>> {
+        let bytes = hex::decode(&t.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        let mut keys: Vec<_> = tx
+            .vkey_witnesses()
+            .iter()
+            .map(|w| pallas_crypto::hash::Hasher::<224>::hash(&w.vkey))
+            .collect();
+        keys.sort();
+        keys
+    };
+    let sorted = |mut v: Vec<pallas_crypto::hash::Hash<28>>| {
+        v.sort();
+        v
+    };
+
+    // The largest ADA-only UTxO pays, at 0/4; the smaller one stays.
+    let result = build(
+        vec![
+            public_utxo(0x61, Role::Receive, 4, funded + 1_000_000),
+            public_utxo(0x62, Role::Change, 0, 3_000_000),
+        ],
+        every.clone(),
+    )
+    .unwrap();
+    let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        vec!["mix", "mix"],
+        "no deposit, and no return: the change stays"
+    );
+    assert_eq!((result.boxes, result.leaves.len()), (2, 2));
+    // The first mix is signed by the paying UTxO's key and the collateral's, the next by the change's (0/0) and the collateral's.
+    assert_eq!(
+        signers(&result.txs[0]),
+        sorted(vec![key(Role::Receive, 4), key(Role::Receive, 7)])
+    );
+    assert_eq!(
+        signers(&result.txs[1]),
+        sorted(vec![key(Role::Receive, 0), key(Role::Receive, 7)])
+    );
+    let bytes: Vec<Vec<u8>> = result
+        .txs
+        .iter()
+        .map(|t| hex::decode(&t.tx_cbor).unwrap())
+        .collect();
+    let txs: Vec<MultiEraTx> = bytes
+        .iter()
+        .map(|b| MultiEraTx::decode(b).unwrap())
+        .collect();
+    let ours_spent = |tx: &MultiEraTx| {
+        ours.iter()
+            .filter(|r| {
+                spends(
+                    tx,
+                    hex::decode(&r.tx_hash).unwrap().try_into().unwrap(),
+                    r.tx_index,
+                )
+            })
+            .count()
+    };
+    assert!(spends(&txs[0], [0x61; 32], 0));
+    assert!(spends(&txs[1], *txs[0].hash(), 3), "the first mix's change");
+    assert_eq!((ours_spent(&txs[0]), ours_spent(&txs[1])), (1, 1));
+    for tx in &txs {
+        assert!(!spends(tx, [0x62; 32], 0) && !spends(tx, [0x5d; 32], 0));
+    }
+    for (mix, bytes) in result.txs.iter().zip(&bytes) {
+        let fee: u64 = mix.fee.parse().unwrap();
+        assert!(
+            fee >= 44 * bytes.len() as u64 + 155_381,
+            "the fee covers the signed size"
+        );
+    }
+    assert!(result.returned.parse::<u64>().unwrap() > 1_000_000);
+
+    // No one UTxO pays for it, though two together would: it says so.
+    let err = build(
+        vec![
+            public_utxo(0x61, Role::Receive, 4, funded / 2 + 1),
+            public_utxo(0x62, Role::Change, 0, funded / 2 + 1),
+        ],
+        every.clone(),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("doesn't pay for mixing 2 boxes again"),
+        "{err}"
+    );
+    // None of the wallet's boxes in the pool: nothing to mix again.
+    let err = build(
+        vec![public_utxo(0x61, Role::Receive, 4, funded + 1_000_000)],
+        pool(&protocol),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("None of this wallet's boxes"),
+        "{err}"
+    );
+}
+
+#[test]
 fn mixing_again_is_funded_for_the_mixes_alone() {
     let funded = lovejoin::funding(FundingRequest {
         network: "preprod".into(),

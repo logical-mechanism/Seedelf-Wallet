@@ -51,7 +51,11 @@
 // chain cut short, or boxes nobody has mixed since), with no deposit, paid
 // from the private balance through a mix session. While one runs, no box is
 // withdrawn: its chain spends them. Once its first mix is in, those boxes
-// wait again, each a fresh delay.
+// wait again, each a fresh delay. A box a mix from the public account put in
+// is the account's, which paid for that mix in the open: paying for its
+// mixes from the private balance would tie the two, so it's left out unless
+// the user asks, and the public account pays to mix it again instead, no
+// new tie (publicAgainBuild, privacy review §2.10).
 //
 // Koios requests: one pool read and one evaluate for a chain; one pool read
 // at each unlock, only on a network where the wallet has something open in
@@ -469,6 +473,9 @@ interface KeptPublic extends LovejoinPublicSummary {
   builtAt: number;
 }
 
+/** The public account's own boxes mixed again, as a chain's review has them. */
+type PublicAgain = LovejoinPublicSummary & { again: true };
+
 /** A public mix being sent: its chain, how far it has got, and why it stopped, if it did. */
 interface SendingPublic extends ChainProgress {
   network: NetworkName;
@@ -655,6 +662,19 @@ function backOrder(boxes: OutRef[], rows: Map<string, KoiosUtxo>, leaves: Set<st
   return [...boxes].sort((a, b) => early(a) - early(b) || own(a) - own(b) || since(a) - since(b) || ref(a).localeCompare(ref(b)));
 }
 
+/**
+ * Whose chain put box `b` where it is (chainOwner): the public account's, or
+ * a session's; undefined when none of the wallet's recorded chains did (a
+ * restore, or someone else's mix moved it since).
+ */
+function originOf(b: OutRef, s: Schedule): string | undefined {
+  const made = s.chains.find((c) => c.deposit === b.txHash || c.mixes.includes(b.txHash));
+  return made ? chainOwner(made.session) : s.leaves?.[ref(b)];
+}
+
+/** The boxes of `boxes` a mix from the public account put where they are. */
+const fromPublic = (boxes: OutRef[], s: Schedule) => boxes.filter((b) => originOf(b, s) === chainOwner());
+
 /** Where the wallet's own chains left its boxes, mixed all the way: each recorded chain's leaves, and those kept after its record went. */
 const ownLeaves = (s: Schedule) => new Set([...s.chains.flatMap((c) => c.leaves.map(ref)), ...Object.keys(s.leaves ?? {})]);
 
@@ -769,13 +789,22 @@ export class LovejoinService {
   /**
    * How many of the wallet's boxes Mix my boxes again takes (a pool read), of
    * how many it has there: every one, as far as the pool has other boxes to
-   * mix them with and one chain goes (MAX_CHAIN_MIXES).
+   * mix them with and one chain goes (MAX_CHAIN_MIXES). Paid from the private
+   * balance, it leaves out the boxes a mix from the public account put in
+   * (privacy review §2.10), unless `publicToo`: the user asked, knowing it
+   * ties the two.
    */
-  async againBoxes(network: NetworkName): Promise<{ boxes: number; owned: number }> {
+  async againBoxes(network: NetworkName, publicToo = false): Promise<{ boxes: number; owned: number }> {
     const { depth } = await this.settings();
     const split = await this.split(network);
-    const { owned, reserved } = split;
-    if (!owned.length) throw new Error("None of your boxes is in Lovejoin's pool, so there's nothing to mix again.");
+    const { reserved } = split;
+    if (!split.owned.length) throw new Error("None of your boxes is in Lovejoin's pool, so there's nothing to mix again.");
+    const owned = publicToo ? split.owned : this.privately(split.owned, await this.read(network));
+    if (!owned.length) {
+      throw new Error(
+        "Your boxes in Lovejoin's pool came from a mix from your public account: mixing them again from your private balance would tie the two. Mix them again from your public account instead.",
+      );
+    }
     this.floor(network, split.others.length);
     const others = free(split.others, reserved).length;
     const perBox = mixesPerBox(depth);
@@ -783,6 +812,12 @@ export class LovejoinService {
     // None fits: say what the pool has.
     if (boxes < 1) await this.enough(others, 1);
     return { boxes, owned: owned.length };
+  }
+
+  /** `boxes` less those a mix from the public account put in: what the private balance mixes again without tying itself to the account. */
+  private privately(boxes: OutRef[], s: Schedule): OutRef[] {
+    const theirs = new Set(fromPublic(boxes, s).map(ref));
+    return boxes.filter((b) => !theirs.has(ref(b)));
   }
 
   /**
@@ -829,8 +864,9 @@ export class LovejoinService {
    * at most this many (a mix session's), else all the spare ADA pays for.
    * `again`: the wallet's boxes in the pool mixed again, with no deposit.
    * `own`: the session's own transactions, whose UTxOs the return takes
-   * first. Throws LovejoinSkipped when the network measures its first mix
-   * differently.
+   * first. `publicToo`: mixing again takes the boxes a mix from the public
+   * account put in too (againBoxes). Throws LovejoinSkipped when the network
+   * measures its first mix differently.
    */
   async chain(
     network: NetworkName,
@@ -842,6 +878,7 @@ export class LovejoinService {
     boxes?: number,
     again = false,
     own: string[] = [],
+    publicToo = false,
   ): Promise<LovejoinChain | undefined> {
     if (!this.available(network) || !collateral) return undefined;
     const plan = await this.plan(network, index, rows, collateral, again);
@@ -853,7 +890,7 @@ export class LovejoinService {
       // Never what another chain of the wallet's will spend (this session's own
       // built before is being built again), nor a box the network didn't know.
       const split = await this.split(network, owner, avoid);
-      return this.fanOut(network, split, { owner, index, rows, collateral, params, merge, count, depth, again, own });
+      return this.fanOut(network, split, { owner, index, rows, collateral, params, merge, count, depth, again, own, publicToo });
     });
   }
 
@@ -872,13 +909,17 @@ export class LovejoinService {
       depth: number;
       again: boolean;
       own: string[];
+      publicToo: boolean;
     },
   ): Promise<LovejoinChain> {
-    const { owner, index, rows, collateral, params, merge, depth, again, own } = c;
+    const { owner, index, rows, collateral, params, merge, depth, again, own, publicToo } = c;
     let { count } = c;
     const short = this.floorShort(network, split.others.length);
     if (short) throw new LovejoinSkipped(short);
-    const owned = free(split.owned, split.reserved);
+    // Mixing again from the private balance never takes a box a mix from the public account put in, unless asked (againBoxes).
+    const schedule = await this.read(network);
+    const left = new Set(again && !publicToo ? fromPublic(split.owned, schedule).map(ref) : []);
+    const owned = free(split.owned, split.reserved).filter((b) => !left.has(ref(b)));
     const others = free(split.others, split.reserved);
     if (again) {
       if (!owned.length) throw new LovejoinSkipped("none of your boxes is in Lovejoin's pool anymore");
@@ -894,7 +935,7 @@ export class LovejoinService {
     const most = again ? Math.floor(MAX_CHAIN_MIXES / perBox) : chainBoxes(depth);
     count = Math.min(count, Math.floor(others.length / (perBox * 2)), most);
     // Mixing again takes the wallet's boxes in the pool's order: the ones not mixed yet go first.
-    const unmixed = new Set(unmixedOf((await this.read(network)).chains, owned).map(ref));
+    const unmixed = new Set(unmixedOf(schedule.chains, owned).map(ref));
     const first = (u: KoiosUtxo) => (unmixed.has(outpoint(u)) ? 0 : 1);
     const request = {
       network,
@@ -902,7 +943,9 @@ export class LovejoinService {
       index,
       utxos: rows,
       collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index },
-      pool: this.real(split).sort((a, b) => first(a) - first(b)),
+      pool: this.real(split)
+        .filter((u) => !left.has(outpoint(u)))
+        .sort((a, b) => first(a) - first(b)),
       depth,
       boxes: count,
       merge,
@@ -1058,6 +1101,78 @@ export class LovejoinService {
   }
 
   /**
+   * Mixes the wallet's boxes that a mix from the public account put in again,
+   * paid by the account (privacy review §2.10): it paid for their deposit and
+   * mixes in the open already, so paying again ties nothing new, where the
+   * private balance would tie itself to the account. Every mix built, signed
+   * by the account's keys and checked against the network, kept for Send as
+   * a mix from it is (publicSubmit); no deposit, and the change stays in the
+   * account. The boxes not mixed yet go first.
+   */
+  async publicAgainBuild(network: NetworkName): Promise<PublicAgain> {
+    if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
+    const sending = await this.sendingOf(network);
+    if (sending && !sending.stopped) throw new Error("Your last mix from the public account is still being sent. Wait for it to finish.");
+    // It spends the account: not while a payment from it may still go through (pending.ts).
+    await settleMaybeSent(this.deps, network);
+    const { wasm, wallet, session, now } = this.deps;
+    const { params, utxos, collateral, held } = await readAccount(this.deps, network);
+    if (!collateral) {
+      throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
+    }
+    if (!utxos.length) throw nothingInAccount(held, "Your public account is empty, so there's nothing to pay for the mixes with.");
+    const { depth, delay } = await this.settings();
+    const chain = await this.unstale(async (avoid) => {
+      const split = await this.split(network, chainOwner(), avoid);
+      this.floor(network, split.others.length);
+      const schedule = await this.read(network);
+      const theirs = free(fromPublic(split.owned, schedule), split.reserved);
+      if (!theirs.length) throw new Error("None of your boxes in Lovejoin's pool came from a mix from your public account.");
+      const others = free(split.others, split.reserved).length;
+      const perBox = mixesPerBox(depth);
+      const boxes = Math.min(theirs.length, Math.floor(others / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
+      if (boxes < 1) await this.enough(others, 1);
+      // Only the account's own boxes are the wallet's in what it's given, the ones not mixed yet first.
+      const mine = new Set(split.owned.map(ref));
+      const taken = new Set(theirs.map(ref));
+      const unmixed = new Set(unmixedOf(schedule.chains, theirs).map(ref));
+      const first = (u: KoiosUtxo) => (unmixed.has(outpoint(u)) ? 0 : 1);
+      const pool = this.real(split)
+        .filter((u) => !mine.has(outpoint(u)) || taken.has(outpoint(u)))
+        .sort((a, b) => first(a) - first(b));
+      const request = { network, params, utxos, collateral, pool, depth, boxes };
+      const built = await wallet.withKeys(
+        (keys) => JSON.parse(wasm.buildLovejoinAgainFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
+      );
+      try {
+        await this.crossCheck(network, built);
+      } catch (e) {
+        if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
+        throw e;
+      }
+      return built;
+    });
+    const last = chain.txs.at(-1)!;
+    const summary: PublicAgain = {
+      network,
+      txHash: last.txHash,
+      boxes: chain.boxes,
+      depth: chain.depth,
+      delay,
+      mixes: chain.txs.length,
+      txs: chain.txs.length,
+      fees: chain.fees,
+      change: chain.returned,
+      again: true,
+    };
+    await wallet.withKeys(() =>
+      session.set(SESSION_LOVEJOIN_PUBLIC, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() } satisfies KeptPublic),
+    );
+    await this.reserve(network, chainOwner(), chain.txs, now() + BUILT_TTL_MS);
+    return summary;
+  }
+
+  /**
    * Sends the public account's mix built last, in order, each transaction on
    * the one before's change; a child Koios hasn't seen the parent of yet is
    * tried again a little later. The boxes' withdraws are set once the
@@ -1073,6 +1188,7 @@ export class LovejoinService {
     // A payment may have gone maybe sent since the review: nothing of the mix goes, or is kept for it, meanwhile.
     await settleMaybeSent(this.deps, network);
     const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
+    // Its own boxes mixed again: they wait afresh once its first mix is in (chainSent).
     await wallet.withKeys(async () => {
       await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
       await session.remove(SESSION_LOVEJOIN_PUBLIC);
@@ -1084,6 +1200,7 @@ export class LovejoinService {
       txs: built.chain,
       leaves: built.leaves ?? [],
       boxes: built.boxes,
+      ...(built.again ? { again: true } : {}),
     });
     await this.deps.alarm?.start();
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
@@ -1338,19 +1455,21 @@ export class LovejoinService {
    * partway. A box found with no due time (a restore) gets one here.
    */
   async status(network: NetworkName): Promise<LovejoinStatus> {
-    if (!this.available(network)) return { available: false, boxes: [], lovelace: "0", due: [], notMixed: [], chains: [] };
+    if (!this.available(network)) return { available: false, boxes: [], lovelace: "0", due: [], notMixed: [], fromPublic: [], chains: [] };
     await this.cuts(network);
     const { owned, listed } = await this.ours(network);
     const { unmixed, free: back } = await this.sortOut(network, owned, listed);
     const known = (await this.read(network)).due.length;
     if (back.length > known) await this.schedule(network, back.length - known);
-    const { due, chains } = await this.read(network);
+    const schedule = await this.read(network);
+    const { due, chains } = schedule;
     return {
       available: true,
       boxes: owned,
       lovelace: (BigInt(owned.length) * LOVEJOIN_DENOM).toString(),
       due: [...due].sort((a, b) => a - b),
       notMixed: unmixed,
+      fromPublic: fromPublic(owned, schedule),
       chains: chains
         .filter((c) => !c.done)
         .map((c) => ({

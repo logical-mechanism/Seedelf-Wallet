@@ -217,10 +217,11 @@ interface SessionRecord {
   /**
    * A mix from the Lovejoin tile, rather than a swap: once funded, its boxes
    * go through Lovejoin and the rest comes back, one chain, run by itself.
-   * `again`: the wallet's boxes in the pool, mixed again with no deposit.
-   * `skipped`: why Lovejoin was left out, when it was.
+   * `again`: the wallet's boxes in the pool, mixed again with no deposit;
+   * `publicToo`, those a mix from the public account put in too (the user
+   * asked). `skipped`: why Lovejoin was left out, when it was.
    */
-  mix?: { boxes: number; again?: boolean; skipped?: string };
+  mix?: { boxes: number; again?: boolean; publicToo?: boolean; skipped?: string };
   /**
    * The latest return through Lovejoin: how many transactions its chain has,
    * the return last (`last`), and when it began to be sent (`at`), recorded
@@ -736,14 +737,16 @@ export class SessionService {
    * Mix my boxes again: the funding of a new one-time account that pays for
    * every box of the wallet's in the pool to be fanned out again (as many as
    * the pool has others for), with no deposit, and its own collateral. One at
-   * a time: two would spend the same boxes.
+   * a time: two would spend the same boxes. The boxes a mix from the public
+   * account put in only when asked `anyway`: paid from here, they tie the
+   * private balance to the account (lovejoin.ts againBoxes).
    */
-  async againBuild(network: NetworkName): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+  async againBuild(network: NetworkName, anyway = false): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
     if (await this.mixingAgain(network)) throw new Error("Your boxes are being mixed again already.");
-    const { boxes, owned } = await lovejoin.againBoxes(network);
-    return this.mixFunding(network, { ...(await lovejoin.funding(network, boxes, true)), owned });
+    const { boxes, owned } = await lovejoin.againBoxes(network, anyway);
+    return this.mixFunding(network, { ...(await lovejoin.funding(network, boxes, true)), owned, ...(anyway ? { publicToo: true } : {}) });
   }
 
   /** Whether a mix of the wallet's boxes again may still spend them: Lovejoin withdraws none meanwhile. */
@@ -788,7 +791,7 @@ export class SessionService {
         ownStake: true,
         createdAt: now(),
         txs: [{ kind: "out", txHash, at: now() }],
-        mix: { boxes: built.mix.boxes, ...(built.mix.again ? { again: true } : {}) },
+        mix: { boxes: built.mix.boxes, ...(built.mix.again ? { again: true } : {}), ...(built.mix.publicToo ? { publicToo: true } : {}) },
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
       };
       await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
@@ -1685,7 +1688,18 @@ export class SessionService {
       const collateral = rows.find((u) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script);
       let chain: LovejoinChain | undefined;
       try {
-        chain = await lovejoin.chain(network, index, rows, collateral, params, merge, record?.mix?.boxes, record?.mix?.again, own);
+        chain = await lovejoin.chain(
+          network,
+          index,
+          rows,
+          collateral,
+          params,
+          merge,
+          record?.mix?.boxes,
+          record?.mix?.again,
+          own,
+          record?.mix?.publicToo,
+        );
       } catch (e) {
         skipped = leftOut(e);
       }

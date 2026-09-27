@@ -903,6 +903,12 @@ export interface LovejoinFunding {
   again?: boolean;
   /** Mixing again: how many boxes the wallet has in the pool (`boxes` is how many go this time). */
   owned?: number;
+  /**
+   * Mixing again from the private balance takes the boxes a mix from the
+   * public account put in too: the user asked, knowing it ties the private
+   * balance to the account (privacy review §2.10).
+   */
+  publicToo?: boolean;
   /** What pays for the boxes, every mix, and the deposit and its change: what the mixes don't use comes back. */
   lovelace: string;
   mixes: number;
@@ -927,6 +933,8 @@ export interface LovejoinPublicSummary {
   fees: string;
   /** What stays in the public account after the last mix. */
   change: string;
+  /** Its own boxes a mix from it put in, mixed again: no deposit (privacy review §2.10). */
+  again?: boolean;
 }
 
 /** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
@@ -942,6 +950,12 @@ export interface LovejoinStatus {
    * takes them first; bringing one back takes `anyway`.
    */
   notMixed: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Its boxes a mix from the public account put where they are: the
+   * account's, which paid for it in the open. Mixed again, the account pays,
+   * or the private balance ties itself to it (privacy review §2.10).
+   */
+  fromPublic: Array<{ txHash: string; txIndex: number }>;
   /** Its chains that aren't all sent: being sent (no withdraw meanwhile), or stopped partway. */
   chains: LovejoinChainView[];
 }
@@ -1171,7 +1185,10 @@ export interface Requests {
    * wallet's in the pool again (as many as the pool has others for), with no
    * deposit, and runs itself once sent. Sent with lovejoin-mix-private-submit.
    */
-  "lovejoin-again-build": { payload: None; result: SessionOutSummary & { mix: LovejoinFunding } };
+  /** `anyway`: the boxes a mix from the public account put in too, paid from the private balance (privacy review §2.10). */
+  "lovejoin-again-build": { payload: { anyway?: boolean }; result: SessionOutSummary & { mix: LovejoinFunding } };
+  /** Builds the mixes of the boxes a mix from the public account put in, paid by the account: sent as a mix from it is. */
+  "lovejoin-again-public-build": { payload: None; result: LovejoinPublicSummary };
   /** Records the mix session, then sends its funding. */
   "lovejoin-mix-private-submit": { payload: { txHash: string }; result: { index: number; pending: PendingTx } };
   /** Builds `boxes` boxes from the public account straight into Lovejoin: the deposit and every mix. */
@@ -1295,6 +1312,7 @@ const REQUEST_LIST = [
   "lovejoin-funding",
   "lovejoin-mix-private-build",
   "lovejoin-again-build",
+  "lovejoin-again-public-build",
   "lovejoin-mix-private-submit",
   "lovejoin-mix-public-build",
   "lovejoin-mix-public-submit",

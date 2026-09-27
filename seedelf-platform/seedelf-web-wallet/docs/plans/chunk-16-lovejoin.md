@@ -399,6 +399,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 1. **Mix my boxes again**, on the Lovejoin page: every box of the wallet's in the pool, fanned out again at the Settings depth.
    - **Paid from the private balance through a fresh one-time account**, like *Mix from the private balance*: one review, then it runs by itself, and what's left merges back.
    - The user chose this over the public account, which would tie it to boxes that may trace back to private sessions.
+   - **That covers boxes from private sessions only (the privacy review §2.10, 2026-09-27).** A box a mix from the public account put in is the account's, which paid for that mix in the open: the private balance paying to mix it again would tie itself to the account. So Mix my boxes again leaves those out, *Mix again from my public account* mixes them paid by the account (no deposit, no new tie), and *Pay from my private balance anyway* takes them all after a warning.
    - A sketch:
      - core: a chain that starts from the wallet's own `PoolBox`es, with no deposit;
      - WebAssembly: a call for it;
