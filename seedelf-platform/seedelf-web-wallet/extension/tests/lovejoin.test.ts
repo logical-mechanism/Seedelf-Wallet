@@ -439,6 +439,59 @@ describe("the network's check", CHAINS, () => {
     expect((await sessions.backBuild("preprod", 0)).lovejoinSkipped).toMatch(/refused|couldn't evaluate/);
   });
 
+  /** Ogmios's answer naming the first pool box a transaction spends as unknown: a pool read that was behind. */
+  const unknownBox = (cbor: string) => {
+    const poolRefs = new Set(POOL.map((u) => `${u.tx_hash}#${u.tx_index}`));
+    const box = txInputs(Uint8Array.from(Buffer.from(cbor, "hex"))).find((o) => poolRefs.has(o))!;
+    const [id, index] = box.split("#");
+    return {
+      box,
+      answer: {
+        jsonrpc: "2.0",
+        method: "evaluateTransaction",
+        error: { code: 3117, message: "Unknown transaction input", data: { unknownOutputReferences: [{ transaction: { id }, index: Number(index) }] } },
+      },
+    };
+  };
+
+  it("builds the chain again from a fresh read when the network doesn't know a pool box it drew, rather than leave Lovejoin out", async () => {
+    const { t, sessions } = await withSession("40000000");
+    let gone: string | undefined;
+    t.koios.evaluation = (body: { params: { transaction: { cbor: string } } }) => {
+      if (gone) return AGREES;
+      const stale = unknownBox(body.params.transaction.cbor);
+      gone = stale.box;
+      return stale.answer;
+    };
+    // Koios still lists it: the backend answering is behind.
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoinSkipped).toBeUndefined();
+    // Nineteen boxes left: still two boxes' worth.
+    expect(review.lovejoin).toMatchObject({ boxes: 2 });
+    expect(t.koios.calls.filter((c) => c.path === "ogmios")).toHaveLength(2);
+    const kept = (await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txCbor: string }> }>("seedelf.session.back")))!;
+    const spends = kept.chain.flatMap((x) => txInputs(Uint8Array.from(Buffer.from(x.txCbor, "hex"))));
+    expect(spends).not.toContain(gone);
+  });
+
+  it("says to try again later, and doesn't leave Lovejoin out, when the pool stays behind", async () => {
+    const { t, sessions } = await withSession("40000000");
+    t.koios.evaluation = (body: { params: { transaction: { cbor: string } } }) => unknownBox(body.params.transaction.cbor).answer;
+    await expect(sessions.backBuild("preprod", 0)).rejects.toThrow("Lovejoin's pool changed while the wallet read it");
+    expect(t.koios.calls.filter((c) => c.path === "ogmios")).toHaveLength(3);
+  });
+
+  it("says on the session when its return, sent, left Lovejoin out", async () => {
+    const { t, sessions } = await withSession("40000000");
+    t.koios.evaluation = { jsonrpc: "2.0", error: { code: 3010, message: "Some scripts of the transaction terminated with error(s).", data: [] } };
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoinSkipped).toBeDefined();
+    // Only reviewed: nothing is said yet.
+    expect((await sessions.list("preprod"))[0]!.lovejoinSkipped).toBeUndefined();
+    await sessions.backSubmit("preprod", review.txHash);
+    expect((await sessions.list("preprod"))[0]!.lovejoinSkipped).toBe(review.lovejoinSkipped);
+  });
+
   it("leaves it out too when a UTxO at mix_box that isn't a box made the pool look big enough", async () => {
     const { t, sessions } = await withSession("40000000");
     // Seven boxes and 12 ₳ under a box's datum: eight at mix_box, and a box two waves deep takes eight others.

@@ -254,6 +254,39 @@ export class LovejoinSkipped extends Error {
   }
 }
 
+/**
+ * The network doesn't know an input a chain's first mix spends: the pool
+ * read was behind (a Koios backend lagging, or a box someone mixed since).
+ * `unknown`: the inputs it names, when it does.
+ */
+class StalePool extends Error {
+  constructor(readonly unknown: string[]) {
+    super("Lovejoin's pool changed while the wallet read it.");
+  }
+}
+
+/** How many times a chain is built again, from a fresh pool read, when the network doesn't know a box it drew. */
+export const STALE_POOL_TRIES = 2;
+
+/**
+ * The inputs Ogmios's answer says it doesn't know (`txhash#index`): its
+ * error 3117, or 3110 for a redeemer on one. Undefined when it says
+ * nothing of the kind; empty when it doesn't name them.
+ */
+export function unknownInputs(answer: unknown): string[] | undefined {
+  type Failure = { code?: unknown; data?: unknown };
+  const error = (answer as { error?: Failure } | null)?.error;
+  if (!error || typeof error !== "object") return undefined;
+  const items = (Array.isArray(error.data) ? error.data : []) as Array<{ error?: Failure } | null>;
+  const stale = error.code === 3117 || items.some((i) => i?.error?.code === 3110 || i?.error?.code === 3117);
+  if (!stale) return undefined;
+  const named = [error.data, ...items.map((i) => i?.error?.data)].flatMap((d) => {
+    const refs = (d as { unknownOutputReferences?: unknown } | null)?.unknownOutputReferences;
+    return Array.isArray(refs) ? (refs as Array<{ transaction?: { id?: unknown }; index?: unknown }>) : [];
+  });
+  return named.flatMap((r) => (typeof r.transaction?.id === "string" && Number.isInteger(r.index) ? [`${r.transaction.id}#${r.index}`] : []));
+}
+
 /** Lovejoin's `mix_box` script hash: where every box sits. Preprod only, until Lovejoin launches on mainnet. */
 export const LOVEJOIN_MIX_BOX: Partial<Record<NetworkName, string>> = {
   preprod: "67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5",
@@ -626,13 +659,37 @@ export class LovejoinService {
   ): Promise<LovejoinChain | undefined> {
     if (!this.available(network) || !collateral) return undefined;
     const plan = await this.plan(network, index, rows, collateral, again);
-    let count = Math.min(plan.boxes, boxes ?? plan.boxes);
+    const count = Math.min(plan.boxes, boxes ?? plan.boxes);
     if (count < 1) return undefined;
     const { depth } = await this.settings();
     const owner = chainOwner(index);
-    // Never what another chain of the wallet's will spend; this session's own
-    // built before is being built again.
-    const split = await this.split(network, owner);
+    return this.unstale(async (avoid) => {
+      // Never what another chain of the wallet's will spend (this session's own
+      // built before is being built again), nor a box the network didn't know.
+      const split = await this.split(network, owner, avoid);
+      return this.fanOut(network, split, { owner, index, rows, collateral, params, merge, count, depth, again, own });
+    });
+  }
+
+  /** Session `owner`'s chain, built from `split` and checked by the network (chain). */
+  private async fanOut(
+    network: NetworkName,
+    split: Split,
+    c: {
+      owner: string;
+      index: number;
+      rows: KoiosUtxo[];
+      collateral: KoiosUtxo;
+      params: unknown;
+      merge: KoiosUtxo[];
+      count: number;
+      depth: number;
+      again: boolean;
+      own: string[];
+    },
+  ): Promise<LovejoinChain> {
+    const { owner, index, rows, collateral, params, merge, depth, again, own } = c;
+    let { count } = c;
     const short = this.floorShort(network, split.others.length);
     if (short) throw new LovejoinSkipped(short);
     const owned = free(split.owned, split.reserved);
@@ -673,6 +730,28 @@ export class LovejoinService {
     // Kept for Send (or sent at once): no other chain draws its boxes meanwhile.
     await this.reserve(network, owner, chain.txs, this.deps.now() + BUILT_TTL_MS);
     return chain;
+  }
+
+  /**
+   * Builds with `build` until the network knows every input its chain's
+   * first mix spends. A read of the pool that was behind isn't a reason to
+   * leave Lovejoin out: the boxes the network names are left out of the next
+   * read (`avoid`), STALE_POOL_TRIES times, then it's an error to try again
+   * later, never a skip.
+   */
+  private async unstale<T>(build: (avoid: Set<string>) => Promise<T>): Promise<T> {
+    const avoid = new Set<string>();
+    for (let tries = 0; ; tries++) {
+      try {
+        return await build(avoid);
+      } catch (e) {
+        if (!(e instanceof StalePool)) throw e;
+        if (tries >= STALE_POOL_TRIES) {
+          throw new Error("Lovejoin's pool changed while the wallet read it: a box it drew isn't there anymore. Try again in a minute.");
+        }
+        for (const o of e.unknown) avoid.add(o);
+      }
+    }
   }
 
   /**
@@ -729,6 +808,9 @@ export class LovejoinService {
     if (!first) return;
     const additional = deposit ? (JSON.parse(wasm.ogmiosUtxos(deposit.txCbor)) as unknown[]) : [];
     const answer = await this.deps.koios(network).evaluate(first.txCbor, additional);
+    // An input it doesn't know is a pool read that was behind, not a disagreement: built again.
+    const unknown = unknownInputs(answer);
+    if (unknown) throw new StalePool(unknown);
     const checked = JSON.parse(wasm.declaredCovers(first.txCbor, JSON.stringify(answer))) as { covers: boolean; reason?: string };
     if (!checked.covers) throw new LovejoinSkipped(checked.reason ?? "the network measured its scripts differently");
   }
@@ -750,18 +832,21 @@ export class LovejoinService {
     }
     if (!utxos.length) throw nothingInAccount(held, "Your public account is empty, so there's nothing to mix.");
     const { depth, delay } = await this.settings();
-    const split = await this.split(network, chainOwner());
-    this.floor(network, split.others.length);
-    const request = { network, params, utxos, collateral, pool: this.real(split), depth, boxes };
-    const chain = await wallet.withKeys(
-      (keys) => JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
-    );
-    try {
-      await this.crossCheck(network, chain);
-    } catch (e) {
-      if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
-      throw e;
-    }
+    const chain = await this.unstale(async (avoid) => {
+      const split = await this.split(network, chainOwner(), avoid);
+      this.floor(network, split.others.length);
+      const request = { network, params, utxos, collateral, pool: this.real(split), depth, boxes };
+      const built = await wallet.withKeys(
+        (keys) => JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
+      );
+      try {
+        await this.crossCheck(network, built);
+      } catch (e) {
+        if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
+        throw e;
+      }
+      return built;
+    });
     const last = chain.txs.at(-1)!;
     const summary: LovejoinPublicSummary = {
       network,
@@ -1238,16 +1323,17 @@ export class LovejoinService {
 
   /**
    * The pool (a read), the wallet's boxes in it, the real boxes that aren't,
-   * and what the wallet's chains will spend, `except` one chain's own.
+   * and what the wallet's chains will spend, `except` one chain's own, with
+   * the boxes to `avoid` (the network didn't know them).
    */
-  private async split(network: NetworkName, except?: string): Promise<Split> {
+  private async split(network: NetworkName, except?: string, avoid: Set<string> = new Set()): Promise<Split> {
     const { wallet, session, now } = this.deps;
     const [pool, { inputs }] = await Promise.all([
       this.pool(network),
       wallet.withKeys(() => reservedSet(session, network, { except, now: now() })),
     ]);
     const { boxes, otherBoxes } = await this.ownership(network, pool);
-    return { pool, owned: boxes, others: otherBoxes, reserved: inputs };
+    return { pool, owned: boxes, others: otherBoxes, reserved: new Set([...inputs, ...avoid]) };
   }
 
   /** The pool's real boxes alone, the wallet's and others', that no other chain will spend: what a chain is built from. */

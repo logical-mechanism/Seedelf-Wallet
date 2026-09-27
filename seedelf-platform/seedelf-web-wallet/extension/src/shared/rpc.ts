@@ -704,6 +704,12 @@ export interface SessionView {
    * directly. `stopped`: why a transaction of it couldn't be sent.
    */
   chain?: { total: number; sent: number; confirmed: number; cut: boolean; stopped?: string };
+  /**
+   * Why its latest return came back directly, leaving Lovejoin out, though
+   * its spare ADA would have paid for a box: a swap that runs itself says so
+   * here (a mix, in `mix.skipped`).
+   */
+  lovejoinSkipped?: string;
 }
 
 /** A funding payment into a new session, built and waiting for Send. */

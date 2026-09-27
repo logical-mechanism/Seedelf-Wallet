@@ -173,6 +173,12 @@ interface SessionRecord {
    * couldn't.
    */
   chain?: { total: number; last: string; at: number; stopped?: string };
+  /**
+   * Why its latest return left Lovejoin out, though its spare ADA would have
+   * paid for a box (a mix's is `mix.skipped`): set when that return is sent,
+   * cleared when one goes through Lovejoin.
+   */
+  lovejoinSkipped?: string;
   closedAt?: number;
 }
 
@@ -1328,7 +1334,11 @@ export class SessionService {
    */
   private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK, budgetMs = 0): Promise<PendingTx> {
     if (built.chain) return this.sendChain(network, built, kept, budgetMs);
-    const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), kept);
+    // Lovejoin was left out: the session says so, a swap that ran itself too.
+    const skipped = built.lovejoinSkipped;
+    const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), kept, (s) => {
+      if (skipped && !s.mix) s.lovejoinSkipped = skipped;
+    });
     await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
     return pending;
   }
@@ -1347,6 +1357,7 @@ export class SessionService {
     const { chain: txs, leaves, txCbor: _txCbor, builtAt: _builtAt, ...summary } = built;
     await this.update(network, built.index, (s) => {
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
+      delete s.lovejoinSkipped;
     });
     await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
     // Being sent: its change to come and its collateral are the chain's too.
@@ -1622,6 +1633,7 @@ export class SessionService {
       ...(s.site ? { site: s.site } : {}),
       ...(s.mix ? { mix: s.mix } : {}),
       ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
+      ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}),
     };
   }
 
