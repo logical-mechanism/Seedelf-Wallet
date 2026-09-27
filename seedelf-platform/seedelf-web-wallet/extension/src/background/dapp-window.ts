@@ -1,7 +1,8 @@
 // The dApp connector's window: a small popup the worker opens when a site
 // needs the user (to unlock, connect, or sign), as Lace and Eternl do. One at
 // a time: a second request brings back the one already open, which shows
-// everything waiting, oldest first.
+// everything waiting, oldest first. The worker closes it once nothing's left
+// (dapp.ts `closeWindow`), so a request that just came in isn't lost.
 
 import type { ApprovalWindow } from "./dapp";
 
@@ -32,5 +33,10 @@ export const approvalWindow: ApprovalWindow = {
   },
   async isOpen() {
     return (await openPage()) !== undefined;
+  },
+  async close() {
+    const open = await openPage();
+    // Closed since it was found: nothing to do.
+    if (open) await chrome.windows.remove(open.windowId).catch(() => undefined);
   },
 };

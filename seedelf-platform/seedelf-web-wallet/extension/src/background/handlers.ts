@@ -185,6 +185,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.prices.get(ctx.network);
     case "dapp-approvals":
       return ctx.dapp.approvals();
+    case "dapp-close":
+      return ctx.dapp.closeWindow();
     case "dapp-answer":
       return ctx.dapp.answer(message.id, message.approve, message.password, message.fund);
     case "dapp-private-build":

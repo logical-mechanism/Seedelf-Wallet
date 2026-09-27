@@ -132,6 +132,8 @@ export interface ApprovalWindow {
   show(): Promise<void>;
   /** Whether it's still open. */
   isOpen(): Promise<boolean>;
+  /** Closes it, if it's open. */
+  close(): Promise<void>;
 }
 
 export interface DappDeps extends AccountDeps {
@@ -217,6 +219,8 @@ export class DappService {
   private readonly reading = new Map<string, Promise<View>>();
   /** The last change to the `dapps` record, which the next waits for (`changeSites`). */
   private sitesQueue: Promise<unknown> = Promise.resolve();
+  /** The worker is closing the connector's window (`closeWindow`), not the user. */
+  private closing = false;
 
   constructor(private readonly deps: DappDeps) {}
 
@@ -344,10 +348,43 @@ export class DappService {
     this.deps.changed();
   }
 
-  /** A window closed: if it was the connector's, everything waiting is declined. */
+  /**
+   * The connector's window has nothing left to show: the worker closes it,
+   * unless something came in since it looked (false: it shows that). The
+   * worker decides, as only it knows what's waiting this moment.
+   */
+  async closeWindow(): Promise<boolean> {
+    if (this.waiting.length || this.unlocking.length) return false;
+    this.closing = true;
+    try {
+      await this.deps.window.close();
+    } catch (e) {
+      this.closing = false;
+      throw e;
+    }
+    return true;
+  }
+
+  /**
+   * A window closed. If the user closed the connector's, everything waiting
+   * is declined. If the worker did (`closeWindow`), what came in as it
+   * closed is shown in a new one: a request is never declined unseen.
+   */
   async windowClosed(): Promise<void> {
-    if (!this.waiting.length && !this.unlocking.length) return;
+    if (!this.waiting.length && !this.unlocking.length) {
+      if (this.closing && !(await this.deps.window.isOpen())) this.closing = false;
+      return;
+    }
     if (await this.deps.window.isOpen()) return;
+    if (this.closing) {
+      this.closing = false;
+      try {
+        await this.deps.window.show();
+        return;
+      } catch {
+        // No window to show them in: they're declined, as if closed.
+      }
+    }
     const until = this.deps.now() + REFUSE_MS;
     for (const u of this.unlocking.splice(0)) {
       this.refusedUntil.set(u.session.origin, until);

@@ -507,6 +507,44 @@ describe("the dApp connector", () => {
     await off;
   });
 
+  it("closes its window only with nothing waiting, and never declines unseen what came in as it closed", async () => {
+    const t = await on();
+    const s = await connected(t);
+    // Nothing left: the worker closes it.
+    expect(await t.dapp.closeWindow()).toBe(true);
+    expect(t.dappWindow).toMatchObject({ closed: 1, open: false });
+    await t.dapp.windowClosed();
+
+    // A request came in before the window asked: it stays, and shows it.
+    const message = [t.deps.wasm.cip30Address(OWN), hex("Sign in")];
+    const first = t.dapp.call(s, "signData", message);
+    await until(() => t.dapp.approvals().length === 1);
+    expect(await t.dapp.closeWindow()).toBe(false);
+    expect(t.dappWindow).toMatchObject({ closed: 1, open: true });
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await expect(first).rejects.toMatchObject({ failure: { code: DataSignError.UserDeclined } });
+
+    // One comes in as the worker closes it: the window it was shown in goes, and a new one shows it.
+    expect(await t.dapp.closeWindow()).toBe(true);
+    const second = t.dapp.call(s, "signData", message);
+    await until(() => t.dapp.approvals().length === 1);
+    t.dappWindow.open = false;
+    const shown = t.dappWindow.shown;
+    await t.dapp.windowClosed();
+    expect(t.dappWindow.shown).toBe(shown + 1);
+    expect(t.dapp.approvals()).toHaveLength(1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await expect(second).rejects.toMatchObject({ failure: { code: DataSignError.UserDeclined } });
+
+    // The user closing it declines what's waiting, as before.
+    const third = t.dapp.call(s, "signData", message);
+    await until(() => t.dapp.approvals().length === 1);
+    t.dappWindow.open = false;
+    await t.dapp.windowClosed();
+    await expect(third).rejects.toMatchObject({ failure: { code: DataSignError.UserDeclined } });
+    expect(t.dapp.approvals()).toEqual([]);
+  });
+
   it("keeps every connection when several are answered at once", async () => {
     const t = await on();
     const origins = ["https://a.example", "https://b.example", "https://c.example"];

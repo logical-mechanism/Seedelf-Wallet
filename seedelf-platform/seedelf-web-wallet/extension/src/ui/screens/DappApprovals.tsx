@@ -3,7 +3,8 @@
 // what it does to the account, as WebAssembly read it), or signing its data
 // (CIP-8). Nothing is signed until the user presses Sign, with the password
 // typed too unless Settings says otherwise; closing the window declines
-// everything. It closes itself once nothing's left.
+// everything. Once nothing's left, the worker closes it (it knows whether a
+// request just came in).
 //
 // Connecting offers the public account or a private session (chunk 15c): a
 // one-time account funded from the private balance, here, before the site
@@ -45,11 +46,19 @@ export function DappApprovals() {
     return onDappChanged(load);
   }, [load]);
 
+  // Empty: the worker closes the window, unless a request came in meanwhile,
+  // which it would otherwise decline unseen; then it's shown.
   useEffect(() => {
     clearTimeout(closing.current);
-    if (approvals?.length === 0 && !error) closing.current = setTimeout(() => window.close(), CLOSE_AFTER_MS);
+    if (approvals?.length === 0 && !error) {
+      closing.current = setTimeout(() => {
+        call("dapp-close", {}).then((closed) => {
+          if (!closed) load();
+        }, load);
+      }, CLOSE_AFTER_MS);
+    }
     return () => clearTimeout(closing.current);
-  }, [approvals, error]);
+  }, [approvals, error, load]);
 
   const current = approvals?.[0];
   const needsPassword = !!current && current.kind !== "connect" && current.password;

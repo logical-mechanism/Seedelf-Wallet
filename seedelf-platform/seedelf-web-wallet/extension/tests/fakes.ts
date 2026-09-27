@@ -496,10 +496,11 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   };
 }
 
-/** The connector's window: counts how often it's shown, and whether it's open. */
-export function fakeWindow(): ApprovalWindow & { shown: number; open: boolean } {
+/** The connector's window: counts how often it's shown and closed, and whether it's open. */
+export function fakeWindow(): ApprovalWindow & { shown: number; closed: number; open: boolean } {
   const fake = {
     shown: 0,
+    closed: 0,
     open: false,
     async show() {
       fake.shown++;
@@ -507,6 +508,10 @@ export function fakeWindow(): ApprovalWindow & { shown: number; open: boolean } 
     },
     async isOpen() {
       return fake.open;
+    },
+    async close() {
+      fake.closed++;
+      fake.open = false;
     },
   };
   return fake;

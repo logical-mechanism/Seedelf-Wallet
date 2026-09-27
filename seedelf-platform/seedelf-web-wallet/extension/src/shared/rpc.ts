@@ -1037,6 +1037,8 @@ export interface Requests {
   price: { payload: None; result: AdaPrice | null };
   /** What sites are waiting for the user to answer, oldest first. */
   "dapp-approvals": { payload: None; result: DappApproval[] };
+  /** The connector's window has nothing left: the worker closes it, or answers false when something came in meanwhile. */
+  "dapp-close": { payload: None; result: boolean };
   /**
    * Answers one: `error` says why an approved one couldn't be done (the site hears it too).
    * A signature that needs the password takes it here; a wrong one leaves it waiting.
@@ -1202,6 +1204,7 @@ const REQUEST_LIST = [
   "preferences-set",
   "price",
   "dapp-approvals",
+  "dapp-close",
   "dapp-answer",
   "dapp-private-build",
   "dapp-disconnect-session",
