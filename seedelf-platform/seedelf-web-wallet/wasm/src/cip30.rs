@@ -9,7 +9,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, anyhow, bail};
-use pallas_addresses::{Address, Network as AddressNetwork, ShelleyPaymentPart, StakePayload};
+use pallas_addresses::{
+    Address, Network as AddressNetwork, ShelleyDelegationPart, ShelleyPaymentPart, StakePayload,
+};
 use pallas_codec::minicbor::{self, Encoder};
 use pallas_codec::utils::Nullable;
 use pallas_crypto::hash::Hash;
@@ -420,6 +422,32 @@ impl Keys {
         }
         self.payment.get(hash).copied().map(Signer::Payment)
     }
+
+    /// The key path of an address that's the account's: one of its payment
+    /// keys, with its stake key as the staking part, as every address the
+    /// wallet hands out has. Its payment key under anyone else's staking
+    /// part, none or a pointer is someone else's address: the account could
+    /// spend what's there, but its stake would earn and vote for them.
+    fn own_address(&self, address: &Address) -> Option<KeyPath> {
+        let Address::Shelley(s) = address else {
+            return None;
+        };
+        match (s.payment(), s.delegation()) {
+            (ShelleyPaymentPart::Key(h), ShelleyDelegationPart::Key(stake))
+                if *stake == self.stake =>
+            {
+                self.payment.get(h).copied()
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether an address has one of the account's payment keys, whatever
+    /// its staking part.
+    fn has_payment_key(&self, address: &Address) -> bool {
+        matches!(address, Address::Shelley(s)
+            if matches!(s.payment(), ShelleyPaymentPart::Key(h) if self.payment.contains_key(h)))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +656,11 @@ pub struct Paid {
     /// Into Seedelf Wallet's contract: "register" when its datum is a
     /// register someone can spend, "none" when it isn't (anyone could take it).
     pub seedelf: Option<String>,
+    /// The address has one of the account's payment keys, but someone
+    /// else's staking part, or none: the account could spend what's there,
+    /// but its stake would earn and vote for whoever holds that part. So
+    /// it's paid, not the account's.
+    pub own_payment_key: bool,
 }
 
 /// One of the account's outputs, kept by the extension until it's on chain,
@@ -962,8 +995,8 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         let returned = match &body.collateral_return {
             Some(out) => {
                 let (address, amount, _, _) = output_parts(out)?;
-                let ours = matches!(Address::from_bytes(&address), Ok(Address::Shelley(s))
-                    if matches!(s.payment(), ShelleyPaymentPart::Key(h) if keys.payment.contains_key(h)));
+                let ours =
+                    Address::from_bytes(&address).is_ok_and(|a| keys.own_address(&a).is_some());
                 if !ours && own > 0 {
                     bail!(
                         "If a contract refused this transaction, your collateral would go to someone else, so the wallet won't sign it."
@@ -1019,14 +1052,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             );
         }
         let bech32 = address.to_bech32().unwrap_or_else(|_| address.to_hex());
-        let own_key = match &address {
-            Address::Shelley(s) => match s.payment() {
-                ShelleyPaymentPart::Key(h) => keys.payment.get(h).copied(),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(path) = own_key {
+        if let Some(path) = keys.own_address(&address) {
             returned.add(&amount)?;
             own_outputs.push(OwnOutput {
                 tx_index: i as u64,
@@ -1063,6 +1089,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             },
             script,
             seedelf,
+            own_payment_key: keys.has_payment_key(&address),
         });
     }
 

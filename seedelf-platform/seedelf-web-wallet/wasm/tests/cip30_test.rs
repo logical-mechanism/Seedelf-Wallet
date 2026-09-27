@@ -3,7 +3,9 @@
 //! CIP-8 data signatures, checked against Pallas's own decoders and
 //! Ed25519 verification.
 
-use pallas_addresses::Address;
+use pallas_addresses::{
+    Address, Network, Pointer, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+};
 use pallas_codec::minicbor;
 use pallas_codec::utils::{Bytes, CborWrap, NonEmptyKeyValuePairs, NonEmptySet, Nullable, Set};
 use pallas_crypto::hash::Hash;
@@ -554,6 +556,61 @@ fn an_old_deregistration_of_the_accounts_stake_key_is_refused() {
     let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
     assert_eq!(summary.staking_lovelace, "0");
     assert!(!summary.certificates[0].own);
+}
+
+/// The account's payment key `0/0` under another staking part.
+fn our_key_with(delegation: ShelleyDelegationPart) -> Address {
+    Address::Shelley(ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::key_hash(account().key_hash(Role::Receive, 0).unwrap()),
+        delegation,
+    ))
+}
+
+#[test]
+fn the_accounts_key_under_someone_elses_staking_is_someone_elses_address() {
+    // The ADA there is the account's to spend, but its stake earns and votes
+    // for whoever holds the staking part, so it's paid, not change.
+    let (_, rows) = swap();
+    let franken = [
+        our_key_with(ShelleyDelegationPart::Key(Hash::new([9; 28]))),
+        our_key_with(ShelleyDelegationPart::Null),
+        our_key_with(ShelleyDelegationPart::Pointer(Pointer::new(1, 2, 3))),
+    ];
+    let mut outputs: Vec<_> = franken.iter().map(|a| out(a, 1_000_000, None)).collect();
+    outputs.push(out(&ours(Role::Receive, 0), 800_000, None));
+    let tx = tx_hex(body(vec![input(TX_A, 1)], outputs));
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows.clone(), false)).unwrap();
+    assert_eq!(summary.paid.len(), 3);
+    for (paid, address) in summary.paid.iter().zip(&franken) {
+        assert_eq!(paid.address, address.to_bech32().unwrap());
+        assert!(paid.own_payment_key);
+    }
+    assert_eq!(summary.own_outputs.len(), 1);
+    assert_eq!(summary.returned_lovelace, "800000");
+    assert_eq!(summary.net_lovelace, "-3200000");
+
+    // Someone else's address is just someone else's.
+    let tx = tx_hex(body(
+        vec![input(TX_A, 1)],
+        vec![out(&theirs(), 3_800_000, None)],
+    ));
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows.clone(), false)).unwrap();
+    assert!(!summary.paid[0].own_payment_key);
+
+    // A collateral return there would hand the collateral's stake away too.
+    let mut b = body(
+        vec![input(TX_A, 0)],
+        vec![out(&ours(Role::Receive, 0), 5_000_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_A, 1)]).ok();
+    b.collateral_return = Some(out(&franken[0], 3_700_000, None));
+    let refused = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("collateral would go to someone else")
+    );
 }
 
 /// Pool `[7; 28]`'s registration, owned by `owners`.
