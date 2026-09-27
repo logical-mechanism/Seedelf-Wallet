@@ -29,15 +29,19 @@ const outpoint = (u: { txHash: string; txIndex: number }) => (
   </code>
 );
 
-/** A session's page: what stays at its account, UTxO by UTxO; nothing when no return leaves anything. */
-export function LeftBehindNote({ leftBehind }: { leftBehind?: LeftBehindUtxo[] }) {
+/**
+ * A session's page: what stays at its account, UTxO by UTxO; nothing when no
+ * return leaves anything. `name` names the session ("private session 3"),
+ * where a page has several.
+ */
+export function LeftBehindNote({ leftBehind, name }: { leftBehind?: LeftBehindUtxo[]; name?: string }) {
   const amounts = useAmounts();
   if (!leftBehind?.length) return null;
   const one = leftBehind.length === 1;
   return (
     <Callout tone="info" testId="session-left-behind">
-      {one ? "One UTxO stays" : `${leftBehind.length} UTxOs stay`} at the session's account: no return takes{" "}
-      {one ? "it" : "them"}, and {one ? "it doesn't" : "they don't"} keep the session open.
+      {one ? "One UTxO stays" : `${leftBehind.length} UTxOs stay`} at {name ? `${name}'s` : "the session's"} account: no
+      return takes {one ? "it" : "them"}, and {one ? "it doesn't" : "they don't"} keep the session open.
       <ul className="dapp-points left-out">
         {leftBehind.map((u) => (
           <li key={`${u.txHash}#${u.txIndex}`}>
@@ -52,15 +56,16 @@ export function LeftBehindNote({ leftBehind }: { leftBehind?: LeftBehindUtxo[] }
 /**
  * A return's review: what it leaves at the session's account this time, and
  * why. A swap that runs itself brings the rest back by itself; a return the
- * user reviews needs another. `name` names the session, where a review has
- * several.
+ * user reviews needs another. `name` names the session ("private session
+ * 3"), where a review has several.
  */
 export function ReturnLeftOut({ leftOut, name }: { leftOut?: LeftOutUtxo[]; name?: string }) {
   if (!leftOut?.length) return null;
   const tokens = leftOut.some((u) => u.reason === "tokens");
   return (
     <Callout tone="info" testId="return-left-out">
-      {name ? `${name}'s return` : "This return"} leaves {plural(leftOut.length, "UTxO")} at the session's account:
+      {name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}'s return` : "This return"} leaves{" "}
+      {plural(leftOut.length, "UTxO")} at {name ? "its" : "the session's"} account:
       <ul className="dapp-points left-out">
         {leftOut.map((u) => (
           <li key={`${u.txHash}#${u.txIndex}`}>

@@ -4,6 +4,12 @@
 // spending several one-time accounts would show on chain that they share an
 // owner. They're sent one after another, so their times tie them loosely.
 // Swaps that run themselves come back by themselves and aren't here.
+//
+// The review says what each return leaves at its account (a token that
+// comes with the next return, a UTxO no return takes: launch review H6),
+// why a return leaves Lovejoin out (another's chain may have taken the
+// pool's boxes: #23), and warns before an ADA Handle comes into the private
+// balance (#57).
 
 import { useEffect, useState } from "react";
 
@@ -11,10 +17,12 @@ import type { NetworkName } from "../../networks";
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
+import { HandleWarning } from "../components/HandleWarning";
 import { delayText } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { formatAda, plural } from "../format";
 import { useNetwork } from "../network";
 import { pairOf } from "./Swaps";
@@ -174,6 +182,8 @@ export function ClaimAll({
                       Private session {r.index + 1}
                       {r.tokens.length ? ` · and ${plural(r.tokens.length, "token")}` : ""}
                       {r.lovejoin ? ` · and ${plural(r.lovejoin.boxes, "box", "boxes")} of 10 ₳ through Lovejoin` : ""}
+                      {r.lovejoinSkipped ? " · Lovejoin left out" : ""}
+                      {r.leftOut?.length ? ` · leaves ${plural(r.leftOut.length, "UTxO")}` : ""}
                     </span>
                   </button>
                 </li>
@@ -197,6 +207,28 @@ export function ClaimAll({
           </ul>
         </section>
       )}
+      {picked.some((r) => r.lovejoinSkipped) && (
+        <Callout tone="warn" testId="claim-lovejoin-skipped">
+          Lovejoin is left out of{" "}
+          {picked.filter((r) => r.lovejoinSkipped).length === 1 ? "one return" : "some returns"}, which come back directly:
+          <ul className="dapp-points">
+            {picked
+              .filter((r) => r.lovejoinSkipped)
+              .map((r) => (
+                <li key={r.index}>
+                  {nameOf(network, byIndex.get(r.index))}: {r.lovejoinSkipped!.trim().replace(/\.$/, "")}.
+                </li>
+              ))}
+          </ul>
+        </Callout>
+      )}
+      {picked.map((r) => (
+        <ReturnLeftOut key={r.index} leftOut={r.leftOut} name={`private session ${r.index + 1}`} />
+      ))}
+      {sessions.map((s) => (
+        <LeftBehindNote key={s.index} leftBehind={s.leftBehind} name={`private session ${s.index + 1}`} />
+      ))}
+      <HandleWarning tokens={picked.flatMap((r) => r.tokens)} returning />
       {built && (
         <ReviewRows testId="claim-total">
           <Row label={boxes ? "Back now" : "Into your private balance"} value={`${formatAda(total.toString())} ₳`} strong />

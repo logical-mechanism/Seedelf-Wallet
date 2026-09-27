@@ -9,7 +9,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { LovejoinHeld, PendingTx, SessionView } from "../src/shared/rpc";
+import { HandleWarning } from "../src/ui/components/HandleWarning";
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
+import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
 import { NetworkContext } from "../src/ui/network";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimCard } from "../src/ui/screens/Dapps";
@@ -361,5 +363,32 @@ describe("a site's private session (launch review H7, #43, H6, #23, #56)", () =>
     const line = text(createElement(ClaimCard, { sessions: [siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 1 } })], onOpen: () => undefined }));
     expect(line).toContain("•••• ₳");
     expect(line).not.toContain("25 ₳");
+  });
+});
+
+describe("Bring everything back's review (launch review #57, H6, #23)", () => {
+  it("warns before an ADA Handle comes back into the private balance", () => {
+    const handle = { policyId: "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a", assetName: "000de140" + hex("alice") };
+    const line = text(createElement(HandleWarning, { tokens: [handle], returning: true }));
+    expect(line).toContain("$alice is an ADA Handle, and this return brings it into your private balance.");
+    expect(line).toContain("Once it's back, make it public to your public account.");
+    // Elsewhere it says what it said.
+    expect(text(createElement(HandleWarning, { tokens: [handle] }))).toContain("Keep handles in a public account.");
+  });
+
+  it("says what a return leaves for the next one, by session", () => {
+    const line = text(
+      createElement(ReturnLeftOut, {
+        name: "private session 3",
+        leftOut: [
+          { txHash: "34".repeat(32), txIndex: 2, reason: "tokens" },
+          { txHash: "56".repeat(32), txIndex: 0, reason: "script" },
+        ],
+      }),
+    );
+    expect(line).toContain("Private session 3's return leaves 2 UTxOs at its account:");
+    expect(line).toContain("#2 comes back with the next return");
+    expect(line).toContain("#0 holds a reference script the wallet can't spend, so it stays there");
+    expect(line).toContain("Once this return lands, bring the session back again for the rest.");
   });
 });
