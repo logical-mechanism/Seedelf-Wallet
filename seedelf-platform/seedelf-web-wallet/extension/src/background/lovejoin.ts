@@ -64,7 +64,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
-import { KoiosBusyError, KoiosError, SpentInputError, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
@@ -143,6 +143,39 @@ export function chainRetryMs(i: number, tries: ChainTries, e: unknown): number |
 }
 
 /**
+ * A chained transaction refused as spending what's spent while Koios
+ * couldn't say whether it's on chain (tx_status didn't answer). Sent before,
+ * it may be this very transaction, landed or waiting in a mempool (mayBeIn).
+ */
+export class SpentUnread extends SpentInputError {}
+
+/**
+ * After a submit of `txHash` refused as spending what's spent (`e`): returns
+ * when it's on chain after all (sent already, by a Send pressed twice or a
+ * try that got through), else throws `e`, or SpentUnread when Koios couldn't
+ * say.
+ */
+export async function sentAlready(koios: Koios, txHash: string, e: SpentInputError): Promise<void> {
+  const status = await koios.txStatus([txHash]).catch(() => undefined);
+  if (!status) throw new SpentUnread(e.message);
+  if (status.get(txHash) == null) throw e;
+}
+
+/**
+ * Whether a send of a chain's transaction that ended in `e` may have gone in
+ * after all: refused as spending what's spent while Koios couldn't say
+ * whether it's on chain (SpentUnread), when it was sent before or a try
+ * Koios didn't answer may have sent it. Then it's taken as sent, never
+ * counted against CHAIN_SPENT_TRIES: the chain goes back to looking for it
+ * on chain, and sends it again after CHAIN_RESEND_MS, however long tx_status
+ * is down (final review lovejoin-6). Only a read that says it isn't on chain
+ * counts, so one that can't land still stops its chain.
+ */
+export function mayBeIn(tries: ChainTries, e: unknown): boolean {
+  return e instanceof SpentUnread && (tries.maybeSent === true || tries.busy > 0);
+}
+
+/**
  * The most transactions of a chain waiting in the mempool at once. A block
  * may use 20 billion CPU steps in scripts and a mix uses about 5.8 billion
  * (5.73 measured on preprod, 5.80 on mainnet), so a block takes 3 mixes, and
@@ -194,7 +227,9 @@ export interface ChainProgress {
  * `i` (its retries included; `maybeSent`: it may be in the mempool already),
  * `onChain` says which hashes are on chain, and `save` keeps the progress
  * after each change. A read of what's on chain that Koios doesn't answer sees
- * nothing yet; the oldest in the mempool is sent again after CHAIN_RESEND_MS.
+ * nothing yet; the oldest in the mempool is sent again after CHAIN_RESEND_MS,
+ * and a resend refused as spent while Koios still can't say is looked for
+ * again, not a failure (`send` returns: mayBeIn).
  */
 export async function pumpChain(
   chain: ChainProgress,
@@ -963,14 +998,17 @@ export class LovejoinService {
             const tries = { busy: 0, spent: 0, maybeSent };
             for (;;) {
               try {
-                const submitted = await koios.submitTx(bytes);
-                if (submitted !== step.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
+                try {
+                  const submitted = await koios.submitTx(bytes);
+                  if (submitted !== step.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
+                } catch (e) {
+                  if (!(e instanceof SpentInputError)) throw e;
+                  await sentAlready(koios, step.txHash, e);
+                }
                 break;
               } catch (e) {
-                // Sent already (a Send pressed twice, or a retry that got through).
-                if (e instanceof SpentInputError && (await koios.txStatus([step.txHash]).catch(() => undefined))?.get(step.txHash) != null) {
-                  break;
-                }
+                // Refused while Koios couldn't say whether it's on chain, and it may be: looked for again (final review lovejoin-6).
+                if (mayBeIn(tries, e)) break;
                 const wait = chainRetryMs(i, tries, e);
                 if (wait === undefined) throw e;
                 await sleep(wait);

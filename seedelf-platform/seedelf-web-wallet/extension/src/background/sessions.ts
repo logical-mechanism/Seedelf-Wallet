@@ -77,7 +77,10 @@ import {
   chainRetryMs,
   checkBoxes,
   LovejoinSkipped,
+  mayBeIn,
   pumpChain,
+  sentAlready,
+  SpentUnread,
   type ChainProgress,
   type LovejoinChain,
   type LovejoinService,
@@ -1859,6 +1862,8 @@ export class SessionService {
         await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept, { keptHash: pending.txs.at(-1)!.txHash });
         break;
       } catch (e) {
+        // Refused while Koios couldn't say whether it's on chain, and it may be: looked for again (final review lovejoin-6).
+        if (mayBeIn(tries, e)) break;
         const wait = chainRetryMs(i, tries, e);
         if (wait === undefined) {
           // Said on the session, where its page shows it in full.
@@ -1910,9 +1915,11 @@ export class SessionService {
   ): Promise<PendingTx> {
     const { wallet, session, now } = this.deps;
     const mine = (s: SessionRecord) => s.txs.find((t) => t.txHash === txHash);
+    let sentBefore = false;
     await this.update(network, index, (s) => {
       const again = mine(s);
       if (again) {
+        sentBefore = !again.unsent;
         delete again.unsent;
         again.sending = true;
       } else {
@@ -1925,14 +1932,16 @@ export class SessionService {
       // Koios didn't answer: it may be on its way, so it's looked for as one Koios took is (lost), and
       // what it spends counts as spent meanwhile, recorded with it to be freed if its step is built again.
       const maybe = maybeSent(e);
+      // Sent before, and refused while Koios couldn't say whether it's on chain: it may be (final review lovejoin-6).
+      const unread = sentBefore && e instanceof SpentUnread;
       await this.update(network, index, (s) => {
         const t = mine(s);
         if (!t) return;
         delete t.sending;
         if (maybe) t.inputs = txInputs(bytes);
-        else t.unsent = true;
+        else if (!unread) t.unsent = true;
       });
-      if (maybe) await wallet.withKeys(() => rememberSpent(session, network, bytes));
+      if (maybe || unread) await wallet.withKeys(() => rememberSpent(session, network, bytes));
       // A return merged into the funding's change, which was spent elsewhere: the kept view of the contract is behind, so read it in full next time.
       if (kind === "back" && e instanceof SpentInputError) await forgetContractView(this.deps, network).catch(() => undefined);
       throw e;
@@ -1959,8 +1968,8 @@ export class SessionService {
       const submitted = await koios.submitTx(bytes);
       if (submitted !== txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
     } catch (e) {
-      const status = e instanceof SpentInputError ? await koios.txStatus([txHash]).catch(() => undefined) : undefined;
-      if (status?.get(txHash) == null) throw e;
+      if (!(e instanceof SpentInputError)) throw e;
+      await sentAlready(koios, txHash, e);
     }
   }
 

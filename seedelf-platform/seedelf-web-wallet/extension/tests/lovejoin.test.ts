@@ -832,6 +832,134 @@ describe("chains the wallet sends at once", CHAINS, () => {
   });
 });
 
+describe("a chain's resend while tx_status is down", CHAINS, () => {
+  const BAD_INPUTS = "ConwayUtxowFailure (UtxoFailure (BadInputsUTxO (fromList [])))";
+
+  /**
+   * Koios where each transaction lands at its first submit (none does when
+   * `lands` is false: a pool box someone else's mix took first), a submit of
+   * one sent before is refused as spent, and tx_status answers 502 while
+   * `down()`, while submits still go through.
+   */
+  function statusDown(t: ReturnType<typeof testBalances>, down: () => boolean, lands = true) {
+    const fetch = t.koios.fetch;
+    const sent = new Set<string>();
+    const landed = new Set<string>();
+    let refused = 0;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx")) {
+        const id = txIdOf(new Uint8Array(init!.body as Uint8Array));
+        if (sent.has(id)) {
+          refused++;
+          return new Response(BAD_INPUTS, { status: 400 });
+        }
+        sent.add(id);
+        if (lands) landed.add(id);
+        return fetch(url, init);
+      }
+      if (url.endsWith("/tx_status")) {
+        if (down()) return new Response("", { status: 502 });
+        const { _tx_hashes } = JSON.parse(String(init!.body)) as { _tx_hashes: string[] };
+        return Response.json(_tx_hashes.map((tx_hash) => ({ tx_hash, num_confirmations: landed.has(tx_hash) ? 1 : null })));
+      }
+      return fetch(url, init);
+    };
+    return { landed, refused: () => refused };
+  }
+
+  /** A wait that lets time go by, the user still there. */
+  const passing = (t: ReturnType<typeof testBalances>) => async (ms: number) => {
+    t.clock.now += ms;
+    await t.wallet.touch();
+  };
+
+  /** The sessions alarm, every minute, `minutes` times. */
+  async function alarm(t: ReturnType<typeof testBalances>, sessions: SessionService, minutes: number) {
+    for (let m = 0; m < minutes; m++) {
+      t.clock.now += 60_000;
+      await t.wallet.touch();
+      await sessions.runAll("preprod");
+    }
+  }
+
+  function runner(t: ReturnType<typeof testBalances>) {
+    return new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin: t.lovejoin,
+      sleep: passing(t),
+    });
+  }
+
+  it("keeps a session's chain going when its resend is refused as spent while tx_status can't say (final review lovejoin-6)", async () => {
+    const { t } = await withSession("40000000");
+    const sessions = runner(t);
+    const review = await sessions.backBuild("preprod", 0);
+    let down = true;
+    const net = statusDown(t, () => down);
+    await sessions.backSubmit("preprod", review.txHash);
+    // Blocks take the first window, and tx_status answers 502 for eight minutes: the oldest is sent again, and refused.
+    await alarm(t, sessions, 8);
+    expect(net.refused()).toBeGreaterThan(0);
+    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 10, sent: 4 });
+    expect((await sessions.list("preprod"))[0]!.chain?.stopped).toBeUndefined();
+    // Nothing that went is marked as never sent.
+    const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ unsent?: boolean }> }> }>("sessions.preprod"))!;
+    expect(book.sessions[0]!.txs.filter((x) => x.unsent)).toEqual([]);
+    // tx_status answers again: the rest goes.
+    down = false;
+    await alarm(t, sessions, 3);
+    const view = (await sessions.list("preprod"))[0]!;
+    expect(view.chain).toMatchObject({ total: 10, sent: 10 });
+    expect(view.chain?.stopped).toBeUndefined();
+    expect(net.landed.size).toBe(10);
+  });
+
+  it("still stops a session's chain whose resend is refused while tx_status says it isn't on chain", async () => {
+    const { t } = await withSession("40000000");
+    const sessions = runner(t);
+    const review = await sessions.backBuild("preprod", 0);
+    statusDown(t, () => false, false);
+    await sessions.backSubmit("preprod", review.txHash);
+    await alarm(t, sessions, 8);
+    expect((await sessions.list("preprod"))[0]!.chain?.stopped).toMatch("already spent");
+    expect((await t.lovejoin.held("preprod")).stopped).toBe(1);
+  });
+
+  it("keeps a mix from the public account going the same way (final review lovejoin-6)", async () => {
+    const t = testBalances();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    t.koios.evaluation = AGREES;
+    t.koios.addedToAccounts.push(...POOL);
+    const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
+    const at = (tx: string, value: string) => ({ ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] });
+    t.koios.addedToAccounts.push(at("e5", "5000000"), at("e6", "30000000"));
+    const lovejoin = new LovejoinService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      sleep: passing(t),
+    });
+    const summary = await lovejoin.publicBuild("preprod", 1);
+    let down = true;
+    const net = statusDown(t, () => down);
+    await lovejoin.publicSubmit("preprod", summary.txHash);
+    // Three minutes on, the oldest is sent again and refused, while tx_status still can't say: it's looked for again.
+    t.clock.now += CHAIN_RESEND_MS;
+    await t.wallet.touch();
+    expect(await lovejoin.pumpPublic("preprod")).toBe(true);
+    expect(net.refused()).toBe(1);
+    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4 });
+    // tx_status answers again: the last mix goes.
+    down = false;
+    expect(await lovejoin.pumpPublic("preprod")).toBe(false);
+    expect(net.landed.size).toBe(5);
+    expect(await lovejoin.progress("preprod")).toBeNull();
+  });
+});
+
 /** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */
 async function ownedBox(t: ReturnType<typeof testBalances>, tx: string, txIndex = 0, blockTime?: number): Promise<KoiosUtxo> {
   const wasm = loadTestWasm();
