@@ -449,11 +449,13 @@ function LockAfter() {
 }
 
 /**
- * Whether sites can find the wallet (CIP-30) and connect to the public
- * account. Turning it on asks Chrome to let the wallet onto sites, from the
- * click itself (Chrome asks only then); off removes the scripts but keeps
- * Chrome's access (background/connector.ts says why). Under it, whether a
- * site's signature needs the password too (on by default).
+ * Whether sites can find the wallet (CIP-30) and connect, to the public
+ * account or a private session. Turning it on asks Chrome to let the wallet
+ * onto sites, from the click itself (Chrome asks only then); off removes the
+ * scripts but keeps Chrome's access (background/connector.ts says why). Its
+ * note says what it shows every https site, connected or not (privacy review
+ * §2.20). Under it, whether a site's signature needs the password too (on by
+ * default).
  *
  * `blocked` (the status's `connectorBlocked`): this Chrome won't keep sites'
  * scripts out of the wallet's local storage, where the sealed vault is, so
@@ -503,8 +505,8 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
             {blocked
               ? CONNECTOR_BLOCKED
               : on
-                ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. When one asks, you choose what it sees: your public account, or a private session. Nothing is signed without you."
-                : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. That's all it adds."}
+                ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. When one asks, you choose what it sees: your public account, or a private session. Nothing is signed without you. Every https site you open, and scripts on it, can see that you use Seedelf Wallet, even one you never connect: not your addresses or balance until you connect it."
+                : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. Then every https site you open, and scripts on it, can see that you use Seedelf Wallet, even sites you never connect (not your addresses or balance until you connect)."}
           </span>
         </span>
         <button
@@ -607,8 +609,8 @@ function ConnectedSites({ onBack }: { onBack: () => void }) {
       )}
       {!!sites?.length && <SiteRows sites={sites} sessions={sessions} busy={busy} onDisconnect={setAsking} />}
       <p className="note">
-        A disconnected site has to ask again before it sees anything. A private session is disconnected once everything in
-        it is brought back, from the dApps page.
+        A disconnected site has to ask again before it sees anything more, and it keeps what it already saw. A private
+        session is disconnected once everything in it is brought back, from the dApps page.
       </p>
       {asking && (
         <Modal
@@ -697,8 +699,8 @@ export function SiteRows({
 /** What disconnecting a site does, said before it's done: to the public account, or ending its private session `session`. */
 export function disconnectText(site: string, session?: number): string {
   return session === undefined
-    ? `${site} has to ask again before it sees anything.`
-    : `Private session ${session + 1} ends, and ${site} has to ask again before it sees anything. The wallet stops reading the session's account: anything the site pays it later, or leaves open on it, isn't looked for again.`;
+    ? `${site} has to ask again before it sees anything more. It keeps what it already saw.`
+    : `Private session ${session + 1} ends, and ${site} has to ask again before it sees anything more. It keeps what it already saw. The wallet stops reading the session's account: anything the site pays it later, or leaves open on it, isn't looked for again.`;
 }
 
 /** Whether a payment from the Cardano account withdraws the staking rewards too. */

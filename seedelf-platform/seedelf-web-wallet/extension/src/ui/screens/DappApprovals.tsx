@@ -249,6 +249,28 @@ function Site({ origin, title, session }: { origin: string; title?: string; sess
 
 type Connection = "public" | "private";
 
+// What each connection lets a site learn (privacy review §2.12): what the
+// wallet gives it, and what it can find out anyway, on chain or from the
+// browser. Exported for their tests.
+
+/** Under "Your public account". */
+export const PUBLIC_PRIVACY =
+  "Your private balance stays out of it: the site never sees your Seedelfs or their UTxOs. It does learn your public account, as any site you pay from it does, and it can recognize this browser later, even if you connect it to a private session then.";
+
+/** Under "A private session". */
+export const PRIVATE_SESSION_PRIVACY =
+  "Your public account isn't in these transactions, but anyone, the site included, can follow the money back into your private balance, and money you made private yourself leads on to your public account. The site still sees this browser: if it has seen your public account here, it can tell the session is yours. A separate Chrome profile and a VPN keep them apart.";
+
+/** On a private session's funding, which leaves `changeLovelace` in the private balance. */
+export function fundingPrivacy(changeLovelace: string): string {
+  const change = BigInt(changeLovelace) > 0n;
+  return `This payment links the private UTxOs it spends to the one-time account, as Make public does${
+    change ? `, and so does the ${formatAda(changeLovelace)} ₳ it leaves in your private balance as change` : ""
+  }. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain${
+    change ? " and follow that change" : ""
+  }.`;
+}
+
 /**
  * A site asks to connect: to the public account, or to a private session
  * funded here first. Neither is chosen for the user (privacy review §3.3):
@@ -389,8 +411,7 @@ export function ConnectRequest({
             The collateral comes back with it.
           </p>
           <Callout tone="privacy" testId="dapp-funding-privacy">
-            This payment links the private UTxOs it spends to the one-time account, as Make public does. The site then sees
-            that account, never your public account or your private balance.
+            {fundingPrivacy(review.changeLovelace)}
           </Callout>
           <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
           {approval.password && (
@@ -475,14 +496,16 @@ export function ConnectRequest({
               <li>It can ask you to sign transactions and messages. Nothing is signed without you.</li>
             </ul>
             <Callout tone="privacy" testId="dapp-connect-privacy">
-              Your private balance stays out of it: the site never sees your Seedelfs or their UTxOs. It does learn your
-              public account, as any site you pay from it does.
+              {PUBLIC_PRIVACY}
             </Callout>
           </>
         ) : (
           <>
             <ul className="dapp-points" data-testid="dapp-private-points">
-              <li>A new one-time account, funded from your private balance with what you choose here. The site sees only it.</li>
+              <li>
+                A new one-time account, funded from your private balance with what you choose here. The wallet gives the
+                site only this account.
+              </li>
               <li>It stays this site's until you disconnect it. Top it up or bring it back from the dApps page.</li>
             </ul>
             <div className="field">
@@ -507,8 +530,7 @@ export function ConnectRequest({
             {withTokens && <MinimumHint />}
             {seedelf && <TokenAmounts held={seedelf.tokens} typed={typed} onChange={setTyped} />}
             <Callout tone="privacy" testId="dapp-private-privacy">
-              Your public account never appears. Anyone can follow the money from your private balance into the one-time
-              account, though, and what the site does with it is public, as any wallet's is.
+              {PRIVATE_SESSION_PRIVACY}
             </Callout>
           </>
         )}

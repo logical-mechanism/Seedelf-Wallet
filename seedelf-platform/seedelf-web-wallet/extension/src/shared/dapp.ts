@@ -4,8 +4,9 @@
 // two content scripts are registered for them. One puts
 // `window.cardano.seedelf` on the page (the page's own world); the other
 // relays its calls to the worker over a port (an isolated world). The
-// worker answers with the public account only: nothing about the private
-// balance ever reaches a site.
+// worker answers with the public account, or with a private session's
+// one-time account the user funded for the site: never the private balance
+// itself, though a session's funding is on chain for anyone to follow.
 
 /** The port the bridge opens to the worker. */
 export const DAPP_PORT = "seedelf.cip30";

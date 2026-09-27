@@ -242,7 +242,8 @@ interface Unlocking {
 
 type SignedTx = { witnessSet: string; summary: DappTxSummary };
 
-const ALREADY_CONNECTED = "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session.";
+const ALREADY_CONNECTED =
+  "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session: it keeps what it already saw.";
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
 const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable() first.";
 /** What a site asking on the network the wallet left hears, and the window says. */

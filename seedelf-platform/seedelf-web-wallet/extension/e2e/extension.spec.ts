@@ -2586,7 +2586,7 @@ test.describe("the dApp connector", () => {
     await page.getByRole("button", { name: "Connected sites" }).click();
     await expect(page.getByTestId("sites")).toContainText("dapp.example");
     await page.getByTestId("sites-disconnect").click();
-    await expect(page.getByRole("dialog")).toContainText("dapp.example has to ask again before it sees anything.");
+    await expect(page.getByRole("dialog")).toContainText("dapp.example has to ask again before it sees anything more. It keeps what it already saw.");
     await page.getByTestId("sites-disconnect-confirm").click();
     await expect(page.getByTestId("sites-empty")).toBeVisible();
     expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(false);

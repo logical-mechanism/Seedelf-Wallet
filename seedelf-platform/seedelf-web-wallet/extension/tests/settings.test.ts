@@ -90,6 +90,14 @@ describe("Settings' dApp connector", () => {
     expect(text(off)).toContain("Off: sites can't see Seedelf Wallet.");
     expect(text(off)).not.toContain("this version of Chrome");
   });
+
+  it("says that once it's on, every https site can see the wallet is there, connected or not (privacy review §2.20)", () => {
+    const off = text(html());
+    expect(off).toContain(
+      "Then every https site you open, and scripts on it, can see that you use Seedelf Wallet, even sites you never connect (not your addresses or balance until you connect).",
+    );
+    expect(off).not.toContain("That's all it adds");
+  });
 });
 
 describe("the network on every screen", () => {
@@ -224,10 +232,13 @@ describe("Settings' Connected sites (launch review H7)", () => {
     expect(priv).toContain("disabled");
   });
 
-  it("says, before disconnecting, whether a private session ends with it", () => {
-    expect(Settings.disconnectText("pay.example")).toBe("pay.example has to ask again before it sees anything.");
+  it("says, before disconnecting, whether a private session ends with it, and that the site keeps what it saw", () => {
+    expect(Settings.disconnectText("pay.example")).toBe(
+      "pay.example has to ask again before it sees anything more. It keeps what it already saw.",
+    );
     const ending = Settings.disconnectText("app.example", 4);
     expect(ending).toContain("Private session 5 ends, and app.example has to ask again");
+    expect(ending).toContain("It keeps what it already saw.");
     expect(ending).toContain("The wallet stops reading the session's account");
   });
 });

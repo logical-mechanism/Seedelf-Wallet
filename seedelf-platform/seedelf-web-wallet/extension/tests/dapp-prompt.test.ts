@@ -7,7 +7,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { DappTxSummary } from "../src/shared/rpc";
-import { ConnectRequest, SignData, SignTx } from "../src/ui/screens/DappApprovals";
+import {
+  ConnectRequest,
+  fundingPrivacy,
+  PRIVATE_SESSION_PRIVACY,
+  PUBLIC_PRIVACY,
+  SignData,
+  SignTx,
+} from "../src/ui/screens/DappApprovals";
 import { assetFingerprint } from "../src/ui/tokens";
 
 const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
@@ -123,5 +130,18 @@ describe("a site's connect window", () => {
     // What each shows once chosen isn't said yet.
     expect(html).not.toContain('data-testid="dapp-connect-privacy"');
     expect(html).not.toContain('data-testid="dapp-private-points"');
+  });
+
+  it("says what a site can still find out: the browser, the funding on chain, and its change (privacy review §2.12)", () => {
+    expect(PUBLIC_PRIVACY).toContain("it can recognize this browser later, even if you connect it to a private session then");
+    expect(PRIVATE_SESSION_PRIVACY).toContain("Your public account isn't in these transactions, but anyone, the site included, can follow the money back");
+    expect(PRIVATE_SESSION_PRIVACY).toContain("if it has seen your public account here, it can tell the session is yours");
+    expect(PRIVATE_SESSION_PRIVACY).not.toContain("never appears");
+    expect(fundingPrivacy("12300000")).toBe(
+      "This payment links the private UTxOs it spends to the one-time account, as Make public does, and so does the 12.3 ₳ it leaves in your private balance as change. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain and follow that change.",
+    );
+    expect(fundingPrivacy("0")).toBe(
+      "This payment links the private UTxOs it spends to the one-time account, as Make public does. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain.",
+    );
   });
 });
