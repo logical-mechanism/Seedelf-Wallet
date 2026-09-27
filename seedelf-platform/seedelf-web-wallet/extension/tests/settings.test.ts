@@ -47,6 +47,31 @@ describe("Settings' network switch", () => {
     expect(Settings.MOVE_TO.preprod).toContain("Preprod is Cardano's test network. ADA there is test ADA, with no value");
     expect(Settings.MOVE_TO.mainnet).toContain("ADA there is real money");
   });
+
+  it("says before moving to preprod to test with a phrase not used on mainnet (privacy review §6)", () => {
+    expect(Settings.MOVE_TO.preprod).toContain("To keep them apart, test with a recovery phrase you don't use on mainnet.");
+  });
+});
+
+describe("Settings' About (privacy review §2.4, §2.5)", () => {
+  it("names each service, and that giveme.my is the makers' own", () => {
+    for (const prices of [true, false]) {
+      const shown = Settings.talksTo(prices, true);
+      expect(shown).toContain("giveme.my is run by Logical Mechanism, who make Seedelf Wallet");
+      expect(shown).toContain("it sees each payment from your private balance");
+      expect(shown).toContain("Koios sends every transaction, from the same IP address that reads your public account.");
+      expect(shown).not.toContain("third-party");
+    }
+    expect(Settings.talksTo(true, true)).toContain("Koios and giveme.my, to CoinGecko for ADA's price, and to Minswap when you swap.");
+    expect(Settings.talksTo(false, true)).toContain("Koios and giveme.my, and to Minswap when you swap. It has");
+  });
+
+  it("says Lovejoin hides boxes from the chain's readers, not from Koios or giveme.my, where Lovejoin is", () => {
+    expect(Settings.talksTo(false, true)).toContain(
+      "Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my, which see your device send both ends.",
+    );
+    expect(Settings.talksTo(false, false)).not.toContain("Lovejoin");
+  });
 });
 
 describe("Settings' dApp connector", () => {
@@ -123,8 +148,10 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     const shown = text(html);
     expect(shown).toContain("Bring private sessions back through Lovejoin");
     expect(shown).toContain("each return you review can still bring that one back directly");
-    expect(shown).toContain("so what comes back is harder to tie to the session");
+    expect(shown).toContain("so what comes back is harder to tie to the session on chain");
     expect(shown).not.toContain("isn't tied");
+    // Not from the services that carry both ends (privacy review §2.4).
+    expect(shown).toContain("Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my");
     expect(shown).toContain("(up to 1 in 9)");
     expect(shown).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep), fewer while few people use Lovejoin");
   });

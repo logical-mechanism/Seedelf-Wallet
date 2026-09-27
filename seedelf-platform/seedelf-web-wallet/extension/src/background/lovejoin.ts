@@ -9,7 +9,10 @@
 // The boxes come back later, each on its own, after a random delay (the
 // settings' range). Then, on the minute's alarm while the wallet is unlocked,
 // a box of ours in the pool is withdrawn into a fresh register, paid from
-// itself, with giveme.my's collateral: nothing ties it to the session.
+// itself, with giveme.my's collateral: nothing on its way back names the
+// session or an account, though Koios and giveme.my see this device send
+// both ends, and a box hides only among the fan-out's leaves whose owners
+// also bring them back into a Seedelf (privacy review §2.6, §5.3).
 // Never the moment the wallet unlocks (privacy review §3.1): a box that came
 // due while it was locked waits a fresh draw inside the stretch the unlock
 // keeps it open (UNLOCK_WAIT_MS), once, so a short unlock never holds it for
@@ -854,7 +857,7 @@ export class LovejoinService {
   private floorShort(network: NetworkName, others: number): string | undefined {
     const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
     if (others >= floor) return undefined;
-    return `Lovejoin's pool holds ${others} ${others === 1 ? "box" : "boxes"} that aren't yours, and the wallet mixes only once it holds ${floor}, so yours hide among enough others`;
+    return `Lovejoin's pool holds ${others} ${others === 1 ? "box" : "boxes"} that aren't yours, and the wallet mixes only once it holds ${floor}, so there's enough to mix with`;
   }
 
   /** Throws why, when the pool is below its floor (floorShort). */

@@ -44,7 +44,7 @@ import {
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
-import { delayText, LOVEJOIN_UNAUDITED, lovejoinHides } from "../components/LovejoinReturn";
+import { delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides } from "../components/LovejoinReturn";
 import { Modal } from "../components/Modal";
 import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -136,20 +136,34 @@ export function Settings({
           Privacy policy <ExternalIcon size={12} />
         </a>
         <p className="note" data-testid="talks-to">
-          {prices
-            ? "The wallet only ever talks to Koios and giveme.my, to CoinGecko for ADA's price, and to Minswap when you swap. It has no accounts, analytics or tracking."
-            : "The wallet only ever talks to Koios and giveme.my, and to Minswap when you swap. It has no accounts, analytics or tracking."}
+          {talksTo(prices, lovejoinOn(status.network))}
         </p>
       </section>
     </Screen>
   );
 }
 
+/**
+ * Whom the wallet talks to, and what each sees, under About (privacy review
+ * §2.4, §2.5): `prices` when it asks CoinGecko for ADA's price, `lovejoin`
+ * where Lovejoin is. giveme.my is the makers' own service, and Koios sends
+ * every transaction from the IP address that reads the public account.
+ */
+export function talksTo(prices: boolean, lovejoin: boolean): string {
+  return [
+    `The wallet only ever talks to Koios and giveme.my, ${prices ? "to CoinGecko for ADA's price, " : ""}and to Minswap when you swap. It has no accounts, analytics or tracking.`,
+    "Each of them sees your IP address. Koios sends every transaction, from the same IP address that reads your public account.",
+    "giveme.my is run by Logical Mechanism, who make Seedelf Wallet: to lend its collateral, it sees each payment from your private balance.",
+    ...(lovejoin ? [LOVEJOIN_SEEN] : []),
+  ].join(" ");
+}
+
 /** What moving to each network says first, before the wallet moves. */
 export const MOVE_TO: Record<NetworkName, string> = {
   preprod:
     "Preprod is Cardano's test network. ADA there is test ADA, with no value: it can't pay for anything, and real ADA sent to a preprod address is lost. " +
-    "Your wallet is the same there, with its own balances, history and connected sites, and the same keys: anyone comparing the two networks can tell they're one wallet's.",
+    "Your wallet is the same there, with its own balances, history and connected sites, and the same keys: anyone comparing the two networks can tell they're one wallet's. " +
+    "To keep them apart, test with a recovery phrase you don't use on mainnet.",
   mainnet: "Mainnet is Cardano's real network: ADA there is real money. Check every address and amount before you send.",
 };
 
@@ -327,9 +341,10 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
       <h2 id="lovejoin-settings-title">Lovejoin</h2>
       <p className="note">
         When a private session comes back with ADA to spare, that ADA goes through Lovejoin first, in boxes of 10 ₳ mixed with
-        other people's, so what comes back is harder to tie to the session. The session pays for the mixes.
+        other people's, so what comes back is harder to tie to the session on chain. The session pays for the mixes.
         {floor > 0 &&
-          ` The wallet mixes only once Lovejoin's pool holds ${floor} boxes that aren't yours; until then a return comes back directly, and says so.`}
+          ` The wallet mixes only once Lovejoin's pool holds ${floor} boxes that aren't yours; until then a return comes back directly, and says so.`}{" "}
+        {LOVEJOIN_SEEN}
       </p>
       <Callout tone="warn" testId="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED}

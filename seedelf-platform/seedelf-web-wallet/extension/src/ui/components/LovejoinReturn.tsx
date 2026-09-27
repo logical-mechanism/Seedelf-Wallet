@@ -15,13 +15,25 @@ import { Callout } from "./Callout";
 import { Row } from "./ReviewRows";
 
 /**
- * Lovejoin's standing, said wherever the user chooses it (the Lovejoin page,
- * a swap's approval, a return's review, Settings), all from this one
- * source: the protocol's own review is the only one it has had. Lovejoin's
- * own words (its README and SECURITY.md); no copy may say otherwise.
+ * Lovejoin's standing, said wherever the user chooses it, all from this one
+ * source: the Lovejoin page and its mix reviews, a swap's approval (an
+ * ADA→token swap's too, for what a stop or a refund sends through it), a
+ * return's review, Bring everything back's review, and Settings. The
+ * protocol's own review is the only one it has had: Lovejoin's own words
+ * (its README and SECURITY.md); no copy may say otherwise.
  */
 export const LOVEJOIN_UNAUDITED =
   "Lovejoin hasn't had a third-party audit: its makers' own review is the only one it has had. Use it knowing that.";
+
+/**
+ * Whom Lovejoin hides a box from (privacy review §2.4, §5.1, §5.2): people
+ * reading the chain. Koios sends every transaction the wallet makes and
+ * giveme.my lends every Seedelf spend its collateral, both from this
+ * device's IP address, so each sees a box go in and come back. Said in
+ * Settings (About, and Lovejoin's section) and on Lovejoin's page.
+ */
+export const LOVEJOIN_SEEN =
+  "Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my, which see your device send both ends.";
 
 /**
  * How well Lovejoin hides a box at `depth`, said wherever the user chooses
@@ -113,7 +125,7 @@ export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummar
   return (
     <>
       <Callout tone="privacy">
-        The spare ADA goes through Lovejoin first, so what comes back is harder to tie to this session:{" "}
+        The spare ADA goes through Lovejoin first, so what comes back is harder to tie to this session on chain:{" "}
         {plural(l.boxes, "box", "boxes")} of 10 ₳, each mixed with other people's boxes, {l.depth}{" "}
         {l.depth === 1 ? "wave" : "waves"} deep. {lovejoinHides(l.depth)} This session pays every mix ({formatAda(l.fees)} ₳
         in fees, all {l.txs} transactions together). Each box comes back into your private balance on its own, after a

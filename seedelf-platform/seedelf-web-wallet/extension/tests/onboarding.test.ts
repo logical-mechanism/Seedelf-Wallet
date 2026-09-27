@@ -61,6 +61,19 @@ describe("the welcome screen's network", () => {
     expect(Picker.NETWORK_NOTE.mainnet).toBe("Mainnet: Cardano's real network. ADA here is real money.");
     expect(Picker.NETWORK_NOTE.preprod).toContain("Preprod: Cardano's test network");
   });
+
+  it("says preprod is for a phrase not used on mainnet, since the keys are the same (privacy review §6)", () => {
+    expect(Picker.NETWORK_NOTE.preprod).toContain(
+      "with a recovery phrase you don't use on mainnet: the same phrase has the same keys on both networks, so anyone comparing them can tell they're one wallet's",
+    );
+  });
+});
+
+describe("the welcome screen's promise (privacy review §2.4)", () => {
+  it("says what can't be linked is on chain, not to every service the wallet uses", () => {
+    const shown = text(welcome(status("mainnet", ["mainnet", "preprod"])));
+    expect(shown).toContain("On chain, payments to your Seedelfs can't be linked to you, and spending them doesn't reveal who you are.");
+  });
 });
 
 describe("Create and Restore say which network", () => {

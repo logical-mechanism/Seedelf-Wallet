@@ -681,7 +681,7 @@ describe("the pool the chains draw from", CHAINS, () => {
       const review = await sessions.backBuild("preprod", 0);
       expect(review.lovejoin).toBeUndefined();
       expect(review.lovejoinSkipped).toBe(
-        "Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 25, so yours hide among enough others",
+        "Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 25, so there's enough to mix with",
       );
       await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("holds 20 boxes that aren't yours");
     } finally {
@@ -695,7 +695,7 @@ describe("the pool the chains draw from", CHAINS, () => {
     const mainnetBox = NETWORKS.mainnet.lovejoin!.mixBox;
     t.koios.addedToAccounts.push(...POOL.map((u) => ({ ...u, tx_hash: `f${u.tx_hash.slice(1)}`, payment_cred: mainnetBox })));
     await expect(t.lovejoin.fits("mainnet", 1)).rejects.toThrow(
-      "Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 30, so yours hide among enough others. Try again later.",
+      "Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with. Try again later.",
     );
     expect(t.koios.calls.filter((c) => c.path === "credential_utxos").map((c) => c.body._payment_credentials[0])).toContain(mainnetBox);
     // Preprod's pool of the same size has no floor.

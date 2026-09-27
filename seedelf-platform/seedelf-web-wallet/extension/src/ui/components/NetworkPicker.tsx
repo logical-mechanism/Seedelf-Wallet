@@ -14,7 +14,8 @@ import { call } from "../background";
 
 /** What each network is, said under the choice here and in Settings. */
 export const NETWORK_NOTE: Record<NetworkName, string> = {
-  preprod: "Preprod: Cardano's test network, for trying the wallet out. ADA here is test ADA, with no value.",
+  preprod:
+    "Preprod: Cardano's test network, for trying the wallet out with a recovery phrase you don't use on mainnet: the same phrase has the same keys on both networks, so anyone comparing them can tell they're one wallet's. ADA here is test ADA, with no value.",
   mainnet: "Mainnet: Cardano's real network. ADA here is real money.",
 };
 

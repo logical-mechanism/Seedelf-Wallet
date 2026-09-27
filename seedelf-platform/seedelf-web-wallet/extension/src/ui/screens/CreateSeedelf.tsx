@@ -3,8 +3,11 @@
 // linked to the account openly, and money moved in afterwards isn't tied to
 // it. The Seedelf balance can pay instead (a stealth mint), which only hides
 // the payer when that balance came from other people's Seedelf payments. The
-// worker builds it, with Ogmios measuring its script, and nothing is sent
-// until the user has reviewed it and pressed Send.
+// worker builds it at review. An account-paid mint's draft goes to Koios's
+// Ogmios then, to measure the policy, so Koios sees the tag and the account's
+// inputs even for a review that's never sent (privacy review §3.10); a
+// stealth mint is measured in the wallet. Nothing is submitted until the
+// user has reviewed it and pressed Send.
 
 import { useState, type FormEvent } from "react";
 

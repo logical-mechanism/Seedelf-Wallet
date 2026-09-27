@@ -49,7 +49,7 @@ import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { ShieldIcon } from "../components/Icons";
-import { chainText, delayText, LOVEJOIN_UNAUDITED, useSessionsWhile } from "../components/LovejoinReturn";
+import { chainText, delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides, useSessionsWhile } from "../components/LovejoinReturn";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -596,11 +596,7 @@ export function Lovejoin({
         </section>
       )}
 
-      <Callout tone="privacy">
-        A box waits in the pool while other people's mixes move it, and comes back into your private balance on its own,
-        paid from itself, with giveme.my's collateral: nothing ties it to where it came from. Bringing one back early
-        shortens that wait, which makes it easier to match by its timing.
-      </Callout>
+      <WayBack />
       {status?.available && (
         <Callout tone="warn" testId="lovejoin-unaudited">
           {LOVEJOIN_UNAUDITED}
@@ -678,6 +674,31 @@ export function Lovejoin({
   );
 }
 
+/**
+ * How a box comes back, on Lovejoin's page (privacy review §2.4, §2.6): into
+ * a private UTxO of its own, with nothing on the way back naming where it
+ * went in, and hidden from people reading the chain, not from the services
+ * that carry both ends. Exported for its test.
+ */
+export function WayBack() {
+  return (
+    <Callout tone="privacy" testId="lovejoin-way-back">
+      A box waits in the pool while other people's mixes move it, and comes back into your private balance on its own,
+      paid from itself, with giveme.my's collateral: nothing on its way back names a session or an account. Bringing one
+      back early shortens that wait, which makes it easier to match by its timing. {LOVEJOIN_SEEN}
+    </Callout>
+  );
+}
+
+/**
+ * What a mix from the public account hides (privacy review §2.6, §5.3): the
+ * account paid its mixes in the open, and while few people bring Lovejoin
+ * boxes back into a Seedelf, the wallet's way back stands out among the
+ * boxes those mixes made.
+ */
+const PUBLIC_MIX_WAY_BACK =
+  "Each box comes back into a new private UTxO of its own, but while few people bring Lovejoin boxes into a Seedelf, the box coming back can be picked out among those your account's mixes made.";
+
 /** A mix from the private balance: the one-time account's funding, then what runs by itself. */
 export function PrivateReview({ summary }: { summary: SessionOutSummary & { mix: LovejoinFunding } }) {
   const [boxesPart, collateral] = summary.payments;
@@ -706,8 +727,8 @@ export function PrivateReview({ summary }: { summary: SessionOutSummary & { mix:
         minutes into the first time the wallet is unlocked after its wait.
       </p>
       <Callout tone="privacy">
-        This payment links the private UTxOs it spends to the one-time account, and the account to the boxes going in. The
-        mixes hide which boxes coming out are yours: each comes back into a new private UTxO of its own.
+        This payment links the private UTxOs it spends to the one-time account, and the account to the boxes going in.
+        Each box comes back into a new private UTxO of its own. {lovejoinHides(mix.depth)}
       </Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
       <p className="note">Send asks giveme.my to lend the funding's collateral, then submits.</p>
@@ -753,8 +774,8 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
       )}
       <Callout tone="privacy">
         This payment links the private UTxOs it spends to the one-time account, and the account to the mixes it pays for:
-        one of the three boxes going into each first mix is likely yours. The mixes after hide which boxes coming out are
-        yours, and each still comes back into a new private UTxO of its own.
+        one of the three boxes going into each first mix is likely yours. Each still comes back into a new private UTxO of
+        its own. {lovejoinHides(mix.depth)}
         {mix.publicToo &&
           " Some of these boxes came from a mix from your public account: paying for their mixes from here ties the private UTxOs this payment spends to your public account."}
       </Callout>
@@ -783,8 +804,8 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
         the first time the wallet is unlocked after its wait.
       </p>
       <Callout tone="privacy">
-        The deposit comes from your public account, so the boxes going in are tied to it. The mixes hide which boxes coming
-        out are yours: each comes back into a new private UTxO of its own.
+        The deposit comes from your public account, so the boxes going in are tied to it, and anyone can see your account
+        paid for these mixes. {PUBLIC_MIX_WAY_BACK}
       </Callout>
     </>
   );
@@ -809,8 +830,7 @@ function PublicAgainReview({ summary }: { summary: LovejoinPublicSummary }) {
       </p>
       <Callout tone="privacy">
         These boxes came from a mix from your public account, which paid for it in the open, so paying for their mixes from
-        it ties nothing new, and your private balance stays out of it. The mixes hide which boxes coming out are yours: each
-        comes back into a new private UTxO of its own.
+        it ties nothing new, and your private balance stays out of it. {PUBLIC_MIX_WAY_BACK}
       </Callout>
     </>
   );

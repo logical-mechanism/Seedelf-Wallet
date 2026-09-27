@@ -27,7 +27,15 @@ import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimReview } from "../src/ui/screens/ClaimAll";
 import { ClaimCard, Dapps } from "../src/ui/screens/Dapps";
-import { Chains, detailOf as lovejoinDetail, NotMixed, PrivateReview, PublicReview, subOf as lovejoinSub } from "../src/ui/screens/Lovejoin";
+import {
+  Chains,
+  detailOf as lovejoinDetail,
+  NotMixed,
+  PrivateReview,
+  PublicReview,
+  subOf as lovejoinSub,
+  WayBack,
+} from "../src/ui/screens/Lovejoin";
 import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
 import {
   isRunningSwap,
@@ -458,12 +466,12 @@ describe("a swap's page (launch review #23, H6, #56)", () => {
     const done = swapSession({
       stage: "closed",
       auto: { ...swapSession().auto!, step: "done", filled: true },
-      lovejoinSkipped: "Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so yours hide among enough others",
+      lovejoinSkipped: "Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with",
     });
     const line = page(done);
     expect(line).toContain("Directly: Lovejoin was left out");
     expect(line).toContain(
-      "Lovejoin was left out of its return: Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so yours hide among enough others. So it comes back directly",
+      "Lovejoin was left out of its return: Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with. So it comes back directly",
     );
   });
 
@@ -538,7 +546,7 @@ describe("what the swap and session screens say sites and chain watchers see (pr
       lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6" },
     };
     const line = text(createElement(LovejoinNote, { back, busy: false, onDirect: () => undefined }));
-    expect(line).toContain("so what comes back is harder to tie to this session");
+    expect(line).toContain("so what comes back is harder to tie to this session on chain");
     expect(line).not.toContain("isn't tied");
     expect(line).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep), fewer while few people use Lovejoin");
     expect(line).toContain("Spending boxes that came back together, or with the change the session's funding left, narrows it.");
@@ -769,6 +777,42 @@ describe("mixing a public mix's boxes again (privacy review §2.10)", () => {
   });
 });
 
+describe("what Lovejoin's page says a box's way back hides (privacy review §2.4, §2.6, §5.3)", () => {
+  const payments = [
+    { to: "addr_test1", lovelace: "20400000", tokens: [] },
+    { to: "addr_test1", lovelace: "5000000", tokens: [] },
+  ];
+  const summary = { index: 4, address: "addr_test1" + "q".repeat(50), payments, fee: { total: "200000" }, changeLovelace: "1000000" };
+  const funding = { boxes: 2, lovelace: "20400000", mixes: 8, mixFees: "6600000", depth: 2, delay: "1-6" };
+  const publicMix = { network: "preprod", txHash: "ab".repeat(32), boxes: 2, depth: 2, delay: "1-6", mixes: 8, txs: 9, fees: "6600000", change: "40000000" } as const;
+
+  it("says nothing on a box's way back names a session or an account, and that Koios and giveme.my see both ends", () => {
+    const line = text(createElement(WayBack));
+    expect(line).toContain("nothing on its way back names a session or an account");
+    expect(line).toContain("not from Koios or giveme.my, which see your device send both ends");
+    expect(line).not.toContain("nothing ties it");
+  });
+
+  it("says how far a box hides on a mix's review, never that the mixes hide which boxes are yours", () => {
+    const reviews = [
+      text(createElement(PrivateReview, { summary: { ...summary, mix: funding } as never })),
+      text(createElement(PrivateReview, { summary: { ...summary, mix: { ...funding, again: true, owned: 2 } } as never })),
+    ];
+    for (const line of reviews) {
+      expect(line).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep), fewer while few people use Lovejoin");
+      expect(line).not.toContain("hide which boxes");
+    }
+    for (const again of [false, true]) {
+      const line = text(createElement(PublicReview, { summary: { ...publicMix, ...(again ? { again } : {}) } }));
+      expect(line).toContain(
+        "while few people bring Lovejoin boxes into a Seedelf, the box coming back can be picked out among those your account's mixes made",
+      );
+      expect(line).not.toContain("hide which boxes");
+    }
+    expect(text(createElement(PublicReview, { summary: publicMix }))).toContain("anyone can see your account paid for these mixes");
+  });
+});
+
 describe("a mix from the private balance (launch review H2, H8, #11)", () => {
   const mix = (over: Partial<SessionView>): SessionView => ({
     index: 7,
@@ -794,12 +838,12 @@ describe("a mix from the private balance (launch review H2, H8, #11)", () => {
     const skipped = mix({
       mix: {
         boxes: 2,
-        skipped: "Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so yours hide among enough others",
+        skipped: "Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with",
       },
     });
     expect(lovejoinSub(skipped, 0)).toBe("Came back without going into Lovejoin");
     expect(lovejoinDetail(skipped)).toBe(
-      "Lovejoin was left out: Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so yours hide among enough others.",
+      "Lovejoin was left out: Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with.",
     );
   });
 
