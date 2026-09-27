@@ -17,14 +17,16 @@ import { Screen } from "../components/Screen";
 import { adaWithTokens, formatAda, formatPercent, poolLabel, rewardsLocked, shortId, voteLabel } from "../format";
 import { useAmounts } from "../preferences";
 import { Pools, SharedTicker } from "./Pools";
-import { Voting } from "./Voting";
+import { sharedDrepName, Voting } from "./Voting";
 
 /** What a review shows besides the summary: the pool's or DRep's name, and how many others share it. */
 interface Chosen {
   pool?: PoolRef;
   drepName?: string;
-  /** Live pools using the pool's ticker, or DReps on the list using the DRep's name. */
+  /** Live pools using the pool's ticker, or DReps using the DRep's name (Voting.tsx `drepSharing`). */
   shared?: number;
+  /** The list has the DRep under that name; when it doesn't, `shared` counts it too. */
+  drepListed?: boolean;
 }
 
 type Page = "overview" | "pools" | "vote";
@@ -128,7 +130,9 @@ export function Staking({
         busy={busy}
         error={error}
         onBack={back("overview")}
-        onVote={(drep, drepName, shared) => void build({ kind: "vote", drep }, { drepName, shared })}
+        onVote={(drep, drepName, shared) =>
+          void build({ kind: "vote", drep }, { drepName, shared: shared?.shared, drepListed: shared?.listed })
+        }
       />
     );
   }
@@ -302,11 +306,12 @@ const TITLES: Record<StakingAction["kind"], string> = {
   stop: "Review stopping",
 };
 
-function StakingReview({
+export function StakingReview({
   summary,
   pool,
   drepName,
   shared = 0,
+  drepListed = true,
   busy,
   error,
   onBack,
@@ -350,8 +355,7 @@ function StakingReview({
       {action.kind === "vote" && summary.drep?.startsWith("drep1") && <ReviewId label="DRep ID" id={summary.drep} />}
       {action.kind === "vote" && shared > 1 && (
         <Callout tone="warn" testId="drep-shared-name">
-          {shared} DReps on the wallet's list use this name, or one that looks the same: only the ID above tells them
-          apart.
+          {sharedDrepName({ shared, listed: drepListed })}: only the ID above tells them apart.
         </Callout>
       )}
       {nonzero(summary.deposit) && (

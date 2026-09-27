@@ -12,7 +12,8 @@ import { TxBanner } from "../src/ui/components/TxBanner";
 import { NetworkContext } from "../src/ui/network";
 import { MixHolding, UtxoDetails, utxoTag } from "../src/ui/screens/Utxos";
 import { PoolListRow, SharedTicker } from "../src/ui/screens/Pools";
-import { DrepCard, DrepRow } from "../src/ui/screens/Voting";
+import { StakingReview } from "../src/ui/screens/Staking";
+import { DrepCard, DrepRow, drepSharing, sharedDrepName } from "../src/ui/screens/Voting";
 import { poolLabel, sharedNames, sharing, shortId, voteLabel } from "../src/ui/format";
 
 describe("a transaction's banner", () => {
@@ -132,6 +133,74 @@ describe("DReps and pools that share a name (launch review #59)", () => {
     expect(card).toContain('data-testid="drep-shared-name"');
     expect(card).toContain(EIGHT_A);
     expect(renderToStaticMarkup(createElement(DrepCard, { drep: details as never, shared: 1 }))).not.toContain("drep-shared-name");
+  });
+
+  describe("a DRep picked by a pasted ID, or whose name changed since the list", () => {
+    const OTHER = "drep1y2rkxlpexklnr37x7gsu9m8tuxpc6pjpeje6h87pfqctpkgpx5kfm";
+    const list = [drep(EIGHT_A, "8Ball"), drep(OTHER, "Other")];
+    const counts = sharedNames(list, (d) => d.name);
+    const live = (id: string, name?: string) =>
+      ({ id, name, status: "registered", active: true, expiresEpoch: null, votingPower: "1", delegators: 1 }) as const;
+
+    it("is flagged when it uses the name of one on the list: it counts itself", () => {
+      // Not on the list, named like one that is.
+      const impostor = drepSharing(list, counts, live(EIGHT_B, "8BALL"));
+      expect(impostor).toEqual({ shared: 2, listed: false });
+      const card = renderToStaticMarkup(createElement(DrepCard, { drep: live(EIGHT_B, "8BALL"), ...impostor }));
+      expect(card).toContain('data-testid="drep-shared-name"');
+      expect(card).toContain("A DRep on the wallet&#x27;s list uses this name, or one that looks the same, under another ID.");
+      // On the list under another name, now using a listed one's.
+      expect(drepSharing(list, counts, live(OTHER, "8 Ball"))).toEqual({ shared: 2, listed: false });
+    });
+
+    it("isn't flagged for its own name, a name nobody on the list uses, or no name", () => {
+      expect(drepSharing(list, counts, live(EIGHT_A, "8Ball"))).toEqual({ shared: 1, listed: true });
+      expect(drepSharing(list, counts, live(EIGHT_B, "Someone new"))).toEqual({ shared: 1, listed: false });
+      expect(drepSharing(list, counts, live(EIGHT_B))).toEqual({ shared: 0, listed: true });
+      // Two on the list with one name: each is flagged, with the list's count.
+      const twins = [drep(EIGHT_A, "Twin"), drep(EIGHT_B, "Twin")];
+      expect(drepSharing(twins, sharedNames(twins, (d) => d.name), live(EIGHT_A, "Twin"))).toEqual({ shared: 2, listed: true });
+    });
+
+    it("says how many on the list use the name, leaving the DRep itself out when it isn't among them", () => {
+      expect(sharedDrepName({ shared: 3, listed: true })).toBe("3 DReps on the wallet's list use this name, or one that looks the same");
+      expect(sharedDrepName({ shared: 3, listed: false })).toBe(
+        "2 DReps on the wallet's list use this name, or one that looks the same, each under another ID",
+      );
+    });
+
+    it("warns on the review too, with the same count", () => {
+      const summary = {
+        network: "preprod",
+        txHash: "ab".repeat(32),
+        action: { kind: "vote", drep: EIGHT_B },
+        pool: null,
+        drep: EIGHT_B,
+        fee: "180000",
+        deposit: "0",
+        refund: "0",
+        withdrawal: "0",
+        changeLovelace: "1000000",
+        changeTokens: 0,
+        inputs: 1,
+      } as const;
+      const review = (shared: number, drepListed: boolean) =>
+        renderToStaticMarkup(
+          createElement(StakingReview, {
+            summary,
+            drepName: "8BALL",
+            shared,
+            drepListed,
+            busy: false,
+            onBack: () => undefined,
+            onSend: () => undefined,
+          }),
+        );
+      const flagged = review(2, false);
+      expect(flagged).toContain('data-testid="drep-shared-name"');
+      expect(flagged).toContain("A DRep on the wallet&#x27;s list uses this name, or one that looks the same, under another ID: only the ID above");
+      expect(review(1, false)).not.toContain("drep-shared-name");
+    });
   });
 
   it("flags a pool's shared ticker in the list and on its page", () => {

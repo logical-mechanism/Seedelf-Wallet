@@ -6,8 +6,9 @@
 // registered. Conway pays out no rewards from an account whose vote isn't
 // delegated, so the Staking page and Home send the user here when rewards
 // are locked. Names are the DReps' own: two with the same one (or one that
-// only looks the same) are flagged, and every row shows enough of the ID to
-// tell them apart (launch review #59).
+// only looks the same) are flagged, so is a DRep off the list using a listed
+// one's name, and every row shows enough of the ID to tell them apart
+// (launch review #59).
 
 import { useMemo, useState, type FormEvent } from "react";
 
@@ -18,7 +19,7 @@ import { CheckIcon, LandmarkIcon, SearchIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { drepList, isDrepId, searchDreps, type DrepEntry } from "../dreps";
-import { formatAda, plainName, plural, sharedNames, sharing, shortId, voteLabel } from "../format";
+import { formatAda, nameSkeleton, plainName, plural, sharedNames, sharing, shortId, voteLabel } from "../format";
 import { useNetwork } from "../network";
 import { initials, tint } from "../tokens";
 
@@ -65,8 +66,8 @@ export function Voting({
   busy: boolean;
   error?: string;
   onBack: () => void;
-  /** The vote as Koios names it, the DRep's name, and how many DReps on the list share that name. */
-  onVote: (drep: string, name?: string, shared?: number) => void;
+  /** The vote as Koios names it, the DRep's name, and how many DReps share that name (`drepSharing`). */
+  onVote: (drep: string, name?: string, shared?: DrepShared) => void;
 }) {
   const network = useNetwork();
   const { dreps } = drepList(network);
@@ -80,9 +81,7 @@ export function Voting({
     pick === "abstain" ? ALWAYS_ABSTAIN : pick === "no-confidence" ? ALWAYS_NO_CONFIDENCE : drep?.id;
   const same = chosen !== undefined && chosen === current;
   const retired = pick === "drep" && drep?.status === "retired";
-  // The name the list has for the DRep picked, else its own: how many on the list share it.
-  const listed = drep ? dreps.find((d) => d.id === drep.id) : undefined;
-  const drepShared = drep ? sharing(shared, listed?.name ?? drep.name) : 0;
+  const drepShared = drep ? drepSharing(dreps, shared, drep) : NOT_SHARED;
   const why = blocked ?? (same ? "Your voting power already goes there" : retired ? "That DRep has retired" : undefined);
 
   async function lookUp(id: string) {
@@ -152,7 +151,7 @@ export function Voting({
       {pick === "drep" &&
         (drep ? (
           <div className="stack-tight">
-            <DrepCard drep={drep} shared={drepShared} />
+            <DrepCard drep={drep} shared={drepShared.shared} listed={drepShared.listed} />
             <button type="button" className="link align-start" onClick={() => setDrep(undefined)} disabled={busy}>
               Choose another DRep
             </button>
@@ -284,8 +283,40 @@ export function DrepRow({
   );
 }
 
-/** The DRep picked, looked up live; `shared`: how many DReps on the list use its name. */
-export function DrepCard({ drep, shared = 0 }: { drep: DrepDetails; shared?: number }) {
+/** How many DReps use the name the picked one shows (`drepSharing`). */
+export interface DrepShared {
+  shared: number;
+  /** The list has the DRep under that name. When it doesn't, `shared` counts the DRep too. */
+  listed: boolean;
+}
+
+const NOT_SHARED: DrepShared = { shared: 0, listed: true };
+
+/**
+ * How many DReps use the name the picked one shows, its live one, for its
+ * card and review: those on the list, and the DRep itself when the list
+ * doesn't have it under that name (one registered since, or one that took
+ * another's name since). So one that copies the name of a DRep on the list
+ * is flagged too. None for a DRep with no name.
+ */
+export function drepSharing(dreps: DrepEntry[], shared: Map<string, number>, drep: DrepDetails): DrepShared {
+  if (!drep.name) return NOT_SHARED;
+  const entry = dreps.find((d) => d.id === drep.id);
+  const listed = entry !== undefined && nameSkeleton(entry.name) === nameSkeleton(drep.name);
+  return { shared: sharing(shared, drep.name) + (listed ? 0 : 1), listed };
+}
+
+/** Who else uses a DRep's name, for its card's and review's warning: "2 DReps on the wallet's list use this name…". */
+export function sharedDrepName({ shared, listed }: DrepShared): string {
+  if (listed) return `${shared} DReps on the wallet's list use this name, or one that looks the same`;
+  const others = shared - 1;
+  return others === 1
+    ? "A DRep on the wallet's list uses this name, or one that looks the same, under another ID"
+    : `${others} DReps on the wallet's list use this name, or one that looks the same, each under another ID`;
+}
+
+/** The DRep picked, looked up live; `shared` and `listed`: `drepSharing`'s. */
+export function DrepCard({ drep, shared = 0, listed = true }: { drep: DrepDetails; shared?: number; listed?: boolean }) {
   const status =
     drep.status === "retired"
       ? "Retired"
@@ -305,8 +336,8 @@ export function DrepCard({ drep, shared = 0 }: { drep: DrepDetails; shared?: num
       </p>
       {shared > 1 && (
         <Callout tone="warn" testId="drep-shared-name">
-          {shared} DReps on the wallet's list use this name, or one that looks the same. Anyone can take any name: only
-          the ID tells them apart. Check it against the one the DRep publishes before you delegate.
+          {sharedDrepName({ shared, listed })}. Anyone can take any name: only the ID tells them apart. Check it against
+          the one the DRep publishes before you delegate.
         </Callout>
       )}
       {drep.status !== "retired" && !drep.active && (
