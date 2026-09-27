@@ -1,15 +1,16 @@
 // The network a wallet is created or restored on, chosen on the welcome
-// screen before any phrase, in a build that has both (the store's). Nothing
-// is on either network yet, so it moves at once; Settings' switch
-// (NetworkSection) asks first, because there it moves a wallet that has
-// balances, history and sites.
+// screen before any phrase, in a build that has both. It's a small dropdown
+// under Create and Restore: few people change it, but it must be there before
+// a phrase goes in. Nothing is on either network yet, so it moves at once;
+// Settings' switch (NetworkSection) asks first, because there it moves a
+// wallet that has balances, history and sites. On preprod the strip under the
+// top bar says its ADA has no value.
 
 import { useState } from "react";
 
 import { NETWORKS, type NetworkName } from "../../networks";
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
-import { Choice } from "./Choice";
 
 /** What each network is, said under the choice here and in Settings. */
 export const NETWORK_NOTE: Record<NetworkName, string> = {
@@ -35,19 +36,26 @@ export function NetworkPicker({ status, onChanged }: { status: Status; onChanged
   }
 
   return (
-    <div className="stack network-picker" data-testid="onboarding-network">
-      <Choice<NetworkName>
-        label="Cardano network"
-        id="onboarding-network-label"
-        options={status.networks.map((n) => ({ value: n, label: NETWORKS[n].label, disabled: busy }))}
+    <div className="network-picker" data-testid="onboarding-network">
+      <label className="network-picker__label" htmlFor="onboarding-network-select">
+        Network
+      </label>
+      <select
+        id="onboarding-network-select"
+        aria-label="Cardano network"
         value={status.network}
-        onChange={(n) => {
+        disabled={busy}
+        onChange={(e) => {
+          const n = e.target.value as NetworkName;
           if (n !== status.network) void move(n);
         }}
-      />
-      <p className="note" data-testid="onboarding-network-note">
-        {NETWORK_NOTE[status.network]}
-      </p>
+      >
+        {status.networks.map((n) => (
+          <option key={n} value={n}>
+            {NETWORKS[n].label}
+          </option>
+        ))}
+      </select>
       {error && (
         <p className="error" role="alert">
           {error}

@@ -36,20 +36,19 @@ const welcome = (s: Status, start?: "create" | "restore") =>
   );
 
 describe("the welcome screen's network", () => {
-  it("is asked before Create and Restore in a build with both networks, mainnet first", () => {
+  it("is a small dropdown under Create and Restore in a build with both networks, mainnet first", () => {
     const html = welcome(status("mainnet", ["mainnet", "preprod"]));
     expect(html).toContain('data-testid="onboarding-network"');
+    expect(html).toContain('aria-label="Cardano network"');
     const shown = text(html);
-    expect(shown.indexOf("Cardano network")).toBeLessThan(shown.indexOf("Create new wallet"));
+    // Below the two actions: most people never change it.
+    expect(shown.indexOf("Restore wallet")).toBeLessThan(shown.indexOf("Network"));
     expect(shown.indexOf("Mainnet")).toBeLessThan(shown.indexOf("Preprod"));
-    expect(shown).toContain("ADA here is real money");
-    // The chosen one is pressed.
-    expect(html).toMatch(/aria-pressed="true"[^>]*>Mainnet</);
+    expect(html).toMatch(/<option value="mainnet" selected="">Mainnet<\/option>/);
   });
 
-  it("says on preprod that its ADA has no value", () => {
-    const shown = text(welcome(status("preprod", ["mainnet", "preprod"])));
-    expect(shown).toContain("ADA here is test ADA, with no value");
+  it("shows preprod chosen when it is", () => {
+    expect(welcome(status("preprod", ["mainnet", "preprod"]))).toMatch(/<option value="preprod" selected="">Preprod<\/option>/);
   });
 
   it("isn't there in a preprod-only build", () => {
@@ -58,7 +57,7 @@ describe("the welcome screen's network", () => {
     expect(text(html)).toContain("Restore wallet");
   });
 
-  it("is the same note Settings gives", () => {
+  it("keeps the note Settings gives about each network", () => {
     expect(Picker.NETWORK_NOTE.mainnet).toBe("Mainnet: Cardano's real network. ADA here is real money.");
     expect(Picker.NETWORK_NOTE.preprod).toContain("Preprod: Cardano's test network");
   });

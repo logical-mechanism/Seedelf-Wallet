@@ -51,7 +51,6 @@ export function Onboarding({
       <p className="note welcome__text">
         Payments to your Seedelfs can't be linked to you, and spending them doesn't reveal who you are.
       </p>
-      <NetworkPicker status={status} onChanged={onNetwork} />
       <div className="stack welcome__actions">
         <button className="primary" onClick={() => go("create")}>
           Create new wallet
@@ -60,6 +59,7 @@ export function Onboarding({
           Restore wallet
         </button>
       </div>
+      <NetworkPicker status={status} onChanged={onNetwork} />
     </section>
   );
 }

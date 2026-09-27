@@ -2957,24 +2957,20 @@ test.describe("a mainnet build's welcome", () => {
     test.skip(!hosts.includes("https://api.koios.rest/*"), "a preprod-only build has one network");
     const page = await openApp(context);
     await expect(page.getByTestId("network")).toHaveText("MAINNET");
-    const choice = page.getByRole("group", { name: "Cardano network" });
-    await expect(choice.getByRole("button", { name: "Mainnet" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("onboarding-network-note")).toHaveText("Mainnet: Cardano's real network. ADA here is real money.");
+    const picker = page.getByLabel("Cardano network");
+    await expect(picker).toHaveValue("mainnet");
 
     // Preprod, before any phrase: nothing to confirm, since there's no wallet yet.
-    await choice.getByRole("button", { name: "Preprod" }).click();
+    await picker.selectOption("preprod");
     await expect(page.getByTestId("network")).toHaveText("PREPROD");
     await expect(page.getByTestId("test-network")).toBeVisible();
-    await expect(page.getByTestId("onboarding-network-note")).toContainText("ADA here is test ADA, with no value");
+    await expect(page.getByLabel("Cardano network")).toHaveValue("preprod");
 
     // Restore says where it's restoring, and Change network goes back to the choice.
     await page.getByRole("button", { name: "Restore wallet" }).click();
     await expect(page.getByTestId("onboarding-on-network")).toContainText("Restoring a wallet on Preprod.");
     await page.getByRole("button", { name: "Change network" }).click();
-    await expect(page.getByRole("group", { name: "Cardano network" }).getByRole("button", { name: "Preprod" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await expect(page.getByLabel("Cardano network")).toHaveValue("preprod");
 
     await restore(page, vector(12).phrase);
     await expect(page.getByTestId("network")).toHaveText("PREPROD");

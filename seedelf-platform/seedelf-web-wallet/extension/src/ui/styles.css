@@ -873,10 +873,23 @@ main {
 
 /* Which network a new wallet is on, chosen before its phrase (a build with both). */
 .network-picker {
-  width: 100%;
-  max-width: 340px;
-  margin-top: var(--s4);
-  text-align: left;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.network-picker select {
+  width: auto;
+  padding: 4px 8px;
+  font-size: var(--text-sm);
+}
+
+.network-picker .error {
+  flex-basis: 100%;
 }
 
 .onboarding-on-network {
