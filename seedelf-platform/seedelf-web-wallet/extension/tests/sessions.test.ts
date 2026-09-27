@@ -21,6 +21,7 @@ import {
   SESSION_OUT,
   SessionService,
 } from "../src/background/sessions";
+import { SESSION_SPENT } from "../src/background/spent";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, recordedSwap, SENDER, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
@@ -776,10 +777,8 @@ describe("a swap that runs itself", () => {
     await sessions.advance("preprod", 0, true);
     expect(t.koios.submitted).toHaveLength(2);
 
-    // Unseen for 15 minutes, and what it spends free again (a lock forgets what was spent): it's built again.
+    // Unseen for 15 minutes: it's built again, from what it spent, free again now (final review sessions-1).
     await busy(t, 13 * 60_000);
-    await t.wallet.lock();
-    await t.wallet.unlock(PASSWORD);
     await sessions.advance("preprod", 0, true);
     expect(t.koios.submitted).toHaveLength(3);
     const second = txIdOf(t.koios.submitted.at(-1)!);
@@ -794,6 +793,238 @@ describe("a swap that runs itself", () => {
     expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
       ["out", expect.any(String)],
       ["back", first],
+    ]);
+  });
+
+  /** Session 0's funding UTxO the recorded swap spends, and its 5 ₳ collateral, as `txhash#index`. */
+  const FUNDING = `${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`;
+  const COLLATERAL = `${"0c".repeat(32)}#1`;
+
+  /** A running swap, funded with the recorded swap's UTxO and 5 ₳ of collateral, whose order's submit gets a 504 and never reaches a node. */
+  async function unanswered504(t: T, sessions: SessionService) {
+    await started(sessions);
+    funded(t);
+    t.koios.addedToAccounts.push(atSession("0c".repeat(32), 1, "5000000"));
+    t.koios.missing.add(SWAP_TX);
+    const undo = unanswered(t);
+    const view = await sessions.advance("preprod", 0);
+    undo();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+  }
+
+  it("builds a swap Koios didn't answer again from the funding it spent, once it's gone unseen (final review sessions-1)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await unanswered504(t, sessions);
+    // Unseen for 15 minutes. Minswap builds it again with a later validity, so another id, from the same funding.
+    await busy(t, 16 * 60_000);
+    t.minswap.swapCbor = swapTx({ ttl: 134_700_000 });
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toBeUndefined();
+    const again = t.koios.submitted.at(-1)!;
+    expect(txIdOf(again)).not.toBe(SWAP_TX);
+    expect(bodyOutpoints(again, 0)).toEqual([FUNDING]);
+  });
+
+  it("brings the funding back when Stop comes while an order Koios didn't answer is unseen, and isn't over while that copy may land (final review sessions-1, sessions-2)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await unanswered504(t, sessions);
+    // Stop, five minutes on: it waits for the order, which Koios may have.
+    await busy(t, 5 * 60_000);
+    await sessions.stop("preprod", 0);
+    expect(t.koios.submitted).toHaveLength(2);
+
+    // Unseen for 15 minutes, and Minswap lists no order of it: everything comes back, the funding it spent too.
+    await busy(t, 11 * 60_000);
+    await sessions.advance("preprod", 0, true);
+    expect(t.minswap.calls.at(-1)!.path).toBe("pending-orders");
+    const back = t.koios.submitted.at(-1)!;
+    expect(bodyOutpoints(back, 0)!.sort()).toEqual([FUNDING, COLLATERAL].sort());
+
+    // The return lands. The order's copy is still looked for its two hours: over only after them.
+    t.koios.spent.add(FUNDING).add(COLLATERAL);
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view).toMatchObject({ stage: "open", holding: { utxos: 0 } });
+    await busy(t, 2 * 60 * 60_000);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.stage).toBe("closed");
+  });
+
+  it("isn't over while Koios still lists what a step that never landed spent, though the wallet counts it spent (final review sessions-1)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const now = t.clock.now;
+    const done = (kind: string, txHash: string) => ({ kind, txHash, at: now, confirmed: true });
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [done("out", "01".repeat(32)), done("back", "05".repeat(32))],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } }, stopping: now },
+        },
+      ],
+    });
+    // A transaction Koios didn't answer spent it, and never landed: it's still at the account.
+    t.koios.addedToAccounts.push(atSession("01".repeat(32), 0, "16000000"));
+    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"01".repeat(32)}#0`]: Date.now() }));
+    expect((await sessions.list("preprod", true))[0]!.stage).toBe("open");
+    expect((await sessions.advance("preprod", 0, true)).stage).toBe("open");
+    // Gone from the account: over.
+    t.koios.spent.add(`${"01".repeat(32)}#0`);
+    expect((await sessions.advance("preprod", 0, true)).stage).toBe("closed");
+  });
+
+  it("takes a swap that went unseen and lands late, with no copy after it, for the step: Stop cancels its order, Try again waits for its fill (final review sessions-2)", async () => {
+    for (const how of ["stop", "stop before tx_status shows it", "resume"] as const) {
+      const t = await unlocked();
+      const sessions = signing(t);
+      await started(sessions);
+      funded(t);
+      t.koios.addedToAccounts.push(atSession("0c".repeat(32), 1, "5000000"));
+      // Sent, but tx_status doesn't show it for 16 minutes. Its copy built again spends what the first did,
+      // counted spent still: refused, so it pauses.
+      t.koios.missing.add(SWAP_TX);
+      await sessions.advance("preprod", 0);
+      await busy(t, 16 * 60_000);
+      let view = await sessions.advance("preprod", 0, true);
+      expect(view.auto!.paused).toMatchObject({ why: "refused" });
+      const builds = t.minswap.calls.filter((c) => c.path === "build-tx").length;
+
+      // It shows up after all, and Minswap lists its order (tx_status, behind, may not show it yet).
+      if (how !== "stop before tx_status shows it") t.koios.missing.delete(SWAP_TX);
+      ordered(t);
+      t.minswap.orders = [{ ...ORDER, tx_in: `${SWAP_TX}#0` }];
+      if (how !== "resume") {
+        view = await sessions.stop("preprod", 0);
+        // Its order is cancelled, never left at the DEX for a session that's over.
+        expect(t.minswap.calls.map((c) => c.path)).toContain("cancel-tx");
+        expect(view.txs.map((x) => x.kind)).not.toContain("back");
+        expect(view.stage).toBe("open");
+      } else {
+        view = await sessions.resume("preprod", 0);
+        expect(view.auto).toMatchObject({ step: "filling" });
+        // Filled: its proceeds come back, with no second order.
+        t.minswap.orders = [];
+        t.koios.spent.add(`${SWAP_TX}#0`);
+        t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
+        view = await sessions.advance("preprod", 0, true);
+        expect(view.auto).toMatchObject({ step: "returning", filled: true });
+        expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
+      }
+    }
+  });
+
+  it("is over once a return that went unseen lands late, with no copy after it (final review sessions-2)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    await sessions.stop("preprod", 0);
+    funded(t);
+    await sessions.advance("preprod", 0, true);
+    const back = txIdOf(t.koios.submitted.at(-1)!);
+    // tx_status doesn't show it for 16 minutes; its copy built again finds nothing to spend.
+    t.koios.missing.add(back);
+    await busy(t, 16 * 60_000);
+    await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(2);
+    // It shows up after all: it's the return, and the session is over.
+    t.koios.missing.delete(back);
+    t.koios.spent.add(FUNDING);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.stage).toBe("closed");
+    expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
+      ["out", expect.any(String)],
+      ["back", back],
+    ]);
+    expect(await sessions.runAll("preprod")).toBe(false);
+  });
+
+  it("looks only at the orders of the swap's copy that landed, recorded before it was sent (final review sessions-3)", async () => {
+    /** The swap `txHash` landed: its order waits at the DEX's contract (output 0), and its change is at the account. */
+    const landed = (t: T, txHash: string) => {
+      t.koios.spent.add(FUNDING);
+      t.koios.addedToAccounts.push(atSession(txHash, 1, "131585414"), {
+        ...atSession(txHash, 0, "14000000"),
+        address: bech32("addr_test", bytes(ORDER_ADDRESS)),
+        payment_cred: "a6".repeat(28),
+      });
+    };
+    /** A batcher fills the order at `txHash`#0, and pays the proceeds. */
+    const fill = (t: T, txHash: string) => {
+      t.koios.spent.add(`${txHash}#0`);
+      t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
+    };
+    const LATER = swapTx({ ttl: 134_700_000 });
+    const later = txIdOf(bytes(LATER));
+
+    // A swap Koios didn't answer that went in: a stranger's 1 ₳ while Minswap lists nothing isn't its fill.
+    let t = await unlocked();
+    let sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    let undo = unanswered(t);
+    await sessions.advance("preprod", 0);
+    undo();
+    landed(t, SWAP_TX);
+    t.koios.addedToAccounts.push(atSession("dd".repeat(32), 0, "1000000"));
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ step: "filling", filled: false });
+    expect(t.koios.submitted).toHaveLength(2);
+
+    // The copy Koios didn't answer lands, after one built again was sent: its fill is taken.
+    t = await unlocked();
+    sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    t.koios.missing.add(SWAP_TX);
+    undo = unanswered(t);
+    await sessions.advance("preprod", 0);
+    undo();
+    await busy(t, 16 * 60_000);
+    t.minswap.swapCbor = LATER;
+    t.koios.missing.add(later);
+    await sessions.advance("preprod", 0, true);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(later);
+    t.koios.missing.delete(SWAP_TX);
+    landed(t, SWAP_TX);
+    fill(t, SWAP_TX);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ step: "returning", filled: true });
+    expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
+      ["out", expect.any(String)],
+      ["swap", SWAP_TX],
+      ["back", expect.any(String)],
+    ]);
+
+    // The copy built again, which Koios didn't answer, lands instead: its fill is taken.
+    t = await unlocked();
+    sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    t.koios.missing.add(SWAP_TX);
+    await sessions.advance("preprod", 0);
+    // Sent cleanly, it's counted spent until a lock: built again after one.
+    await busy(t, 16 * 60_000);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    t.minswap.swapCbor = LATER;
+    undo = unanswered(t);
+    await sessions.advance("preprod", 0, true);
+    undo();
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(later);
+    landed(t, later);
+    fill(t, later);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ step: "returning", filled: true });
+    expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
+      ["out", expect.any(String)],
+      ["swap", later],
+      ["back", expect.any(String)],
     ]);
   });
 

@@ -1180,6 +1180,42 @@ describe("mixing from the tile", CHAINS, () => {
     expect(view.mix).toEqual({ boxes: 1, skipped: "you stopped it before its boxes went in" });
   });
 
+  it("mixes what a deposit Koios never answered spent, once it's gone unseen, rather than bring back only the collateral (final review sessions-1)", async () => {
+    const t = await wallet();
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const { sessions } = mixRunner(t);
+    const out = await sessions.mixOutBuild("preprod", 1);
+    await sessions.mixOutSubmit("preprod", out.txHash);
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace), atSession(out.txHash, 1, "5000000"));
+    t.koios.confirmations = 1;
+    t.koios.evaluation = AGREES;
+    // Every try of the chain's deposit gets a 503, and none reaches a node: the chain stops.
+    const fetch = t.koios.fetch;
+    const lost = new Set<string>();
+    t.koios.fetch = async (url, init) => {
+      if (!url.endsWith("/submittx")) return fetch(url, init);
+      lost.add(txIdOf(init!.body as Uint8Array));
+      return new Response("", { status: 503 });
+    };
+    const before = t.koios.submitted.length;
+    let view = await sessions.advance("preprod", 0, true);
+    t.koios.fetch = fetch;
+    expect(lost.size).toBe(1);
+    for (const h of lost) t.koios.missing.add(h);
+    expect(view.chain?.stopped).toBeTruthy();
+
+    // Sixteen minutes on, unseen: dropped, and what it spent is free again. It goes through Lovejoin again, funding and all.
+    for (const step of [8, 8]) {
+      t.clock.now += step * 60_000;
+      await t.wallet.touch();
+    }
+    view = await sessions.advance("preprod", 0, true);
+    const sent = t.koios.submitted.slice(before);
+    expect(sent.length).toBeGreaterThan(1);
+    expect(txInputs(sent[0]!)).toContain(`${out.txHash}#0`);
+    expect(view.mix!.skipped).toBeUndefined();
+  });
+
   it("brings a mix-again back directly when its boxes have left the pool since", async () => {
     const t = await wallet();
     t.collateral.answer = { status: 200, body: { witness: "a1008182" } };

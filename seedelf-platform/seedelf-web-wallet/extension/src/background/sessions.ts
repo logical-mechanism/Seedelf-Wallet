@@ -65,7 +65,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import tokenList from "../tokens/list.json";
-import { bodyOutpoints, txId } from "./cbor";
+import { bodyOutpoints, txId, txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosUtxo } from "./koios";
 import { builtOutputs, type BuiltOutput, type Estimate, type Minswap, type PendingOrder } from "./minswap";
 import {
@@ -85,7 +85,7 @@ import {
 import type { PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
 import { keep, measureLocally, nothingToSpend, readContract, send, spendable, type ScriptSpendDeps } from "./script-spend";
-import { outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
+import { forgetSpent, outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 
 /** chrome.storage.session: a session's funding payment, built and waiting for Send. */
@@ -145,6 +145,15 @@ type RecordedTx = SessionTx & {
    * for: if it lands, it's the step, and the copy built after it can't land.
    */
   replaced?: boolean;
+  /**
+   * What it spends (`txhash#index`), when Koios didn't answer it: counted as
+   * spent meanwhile, and freed once its step is built again or it's dropped
+   * (act), so the next copy, or a return, can take them. The ledger lets only
+   * one of the two land.
+   */
+  inputs?: string[];
+  /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`), recorded before it's sent. */
+  orders?: string[];
 };
 
 /** The steps whose transaction is built again when it goes unseen (a chain's own are sent again as they are). */
@@ -177,8 +186,8 @@ interface SessionRecord {
   /** Set on sessions started since swaps run themselves. */
   auto?: AutoRecord;
   /**
-   * Its swap's orders, from the transaction that placed them (`txhash#index`
-   * of its outputs to the DEXes' contracts): a fill or a refund spends them.
+   * Its swap's orders, from a session from before each copy of a swap kept
+   * its own (RecordedTx `orders`): those of the copy sent last.
    */
   orders?: string[];
   /** A site's private session (private CIP-30), rather than a swap. */
@@ -432,9 +441,9 @@ function maybeSent(e: unknown): boolean {
 /**
  * Marks `r`'s transactions the chain has (`on`) confirmed. A step built
  * again after it went unseen has copies: the replaced ones, then the one
- * after them. Once one of them lands, the others can't (they spend the
- * same), so they go, and the one that landed is the step. Returns whether
- * anything changed.
+ * after them, if one was built. Once one of them lands, the others can't
+ * (they spend the same), so they go, and the one that landed is the step,
+ * even a replaced one alone. Returns whether anything changed.
  */
 function settle(r: SessionRecord, on: ReadonlySet<string>): boolean {
   let changed = false;
@@ -451,22 +460,39 @@ function settle(r: SessionRecord, on: ReadonlySet<string>): boolean {
     for (const t of r.txs.filter((x) => x.kind === kind)) {
       copies.push(t);
       if (t.replaced) continue;
-      landed(copies, gone);
+      changed = landed(copies, gone) || changed;
       copies = [];
     }
-    landed(copies, gone);
+    changed = landed(copies, gone) || changed;
   }
   if (!gone.size) return changed;
   r.txs = r.txs.filter((t) => !gone.has(t.txHash));
   return true;
 }
 
-/** One step's copies: once one has landed, it's the step and the rest go (settle). */
-function landed(copies: RecordedTx[], gone: Set<string>): void {
+/**
+ * One step's copies: once one has landed, it's the step and the rest go
+ * (settle). A replaced copy that lands with none built after it is the step
+ * too: its swap's order waits at the DEX, or its return is in (final review
+ * sessions-2). Returns whether it changed anything.
+ */
+function landed(copies: RecordedTx[], gone: Set<string>): boolean {
   const step = copies.find((t) => t.confirmed);
-  if (!step || copies.length < 2) return;
+  if (!step) return false;
+  const was = !!step.replaced;
   delete step.replaced;
   for (const t of copies) if (t !== step) gone.add(t.txHash);
+  return was;
+}
+
+/**
+ * Whether a copy of a step built again may still land: the chain hasn't
+ * shown it, and it's still looked for (REPLACED_WATCH_MS). The session isn't
+ * over while one may: its order, or its return, would come to an account
+ * nothing reads again.
+ */
+function mayStillLand(s: SessionRecord, now: number): boolean {
+  return s.txs.some((t) => t.replaced && !t.confirmed && now - t.at < REPLACED_WATCH_MS);
 }
 
 export class SessionService {
@@ -1245,8 +1271,12 @@ export class SessionService {
         }
       }
       if (on.size || gone.size || stale.length || neverFunded) {
+        let freed: string[] = [];
         s = await this.update(network, s.index, (r) => {
           settle(r, on);
+          // What the copies going unseen now spent, as far as Koios didn't answer them: exactly these, now,
+          // before their step is built again (and its copy counts them as spent again), never later.
+          freed = r.txs.filter((t) => gone.has(t.txHash)).flatMap((t) => t.inputs ?? []);
           r.txs = r.txs.filter(
             (t) => !stale.some((x) => x.txHash === t.txHash) && !(gone.has(t.txHash) && (t.unsent || !REBUILT.has(t.kind))),
           );
@@ -1257,6 +1287,9 @@ export class SessionService {
           }
           if (neverFunded) r.auto!.failed = now();
         });
+        // Free again: the step built again spends them, or a return takes them, and the ledger lets only one
+        // of it and the unseen copy land (final review sessions-1).
+        if (freed.length) await wallet.withKeys(() => forgetSpent(session, freed));
         if (waiting.some((t) => t.kind === "back" && on.has(t.txHash))) {
           // The private balance has new UTxOs: the next reading should see them.
           await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
@@ -1266,15 +1299,18 @@ export class SessionService {
     }
 
     const { address, keyHash } = (await this.accounts(network, [s])).get(s.index)!;
-    const rows = await this.utxosOf(network, keyHash);
+    const { listed, rows } = await this.listing(network, keyHash);
     this.seen.set(`${network}:${s.index}`, rows);
     // A copy that went unseen isn't a step taken: its step is taken again.
     const taken = s.txs.filter((t) => !t.replaced);
     const kinds = new Set(taken.map((t) => t.kind));
     // What no return takes stays, and holds nothing open.
     const active = returnable(s, rows);
-    // Brought back, and nothing has arrived since: it's over.
-    if (taken.at(-1)!.kind === "back" && !active.length) {
+    // Brought back, and nothing has arrived since: it's over. The account as
+    // Koios lists it, what this wallet spent included: a step that never
+    // lands leaves its inputs there. And not while a copy of a step built
+    // again may still land (final review sessions-1, sessions-2).
+    if (taken.at(-1)!.kind === "back" && !returnable(s, listed).length && !mayStillLand(s, now())) {
       await this.update(network, s.index, (r) => {
         r.closedAt = now();
       });
@@ -1293,9 +1329,13 @@ export class SessionService {
     const auto = s.auto!;
     // No order yet: place it, unless the user stopped, or brought the session back by hand.
     if (!kinds.has("swap")) {
+      // A swap that went unseen may have landed after all: never a second order, or a return, while Minswap
+      // lists one. After Stop, it's cancelled first, as one the runner saw land is (final review sessions-2).
+      if (s.txs.some((t) => t.kind === "swap")) {
+        const orders = await this.deps.minswap(network).pendingOrders(address);
+        if (orders.length) return auto.stopping ? this.cancel(network, s, address, rows, orders) : undefined;
+      }
       if (auto.stopping || kinds.has("back")) return this.bringBack(network, s.index, rows);
-      // A swap that went unseen may have landed after all: never a second order while Minswap lists one.
-      if (s.txs.some((t) => t.kind === "swap" && t.replaced) && (await this.deps.minswap(network).pendingOrders(address)).length) return;
       return this.order(network, s, address, rows);
     }
 
@@ -1324,14 +1364,20 @@ export class SessionService {
   }
 
   /**
-   * Whether every order session `s` placed is spent, by its fill or its
-   * refund (Koios `utxo_info`, which lists spent UTxOs too). A session from
-   * before kept no orders: whatever arrives counts, as it did.
+   * Whether every order the swap that landed placed is spent, by its fill or
+   * its refund (Koios `utxo_info`, which lists spent UTxOs too): that copy's
+   * own orders, recorded before it was sent, whichever copy it is (final
+   * review sessions-3). A session from before each copy kept its own has
+   * those of the copy sent last, which count only if that's the one that
+   * landed. Orders it doesn't know: whatever arrives counts, as it did.
    */
   private async ordersSpent(network: NetworkName, s: SessionRecord): Promise<boolean> {
-    if (!s.orders?.length) return true;
-    const rows = (await this.deps.koios(network).utxoInfo(s.orders)) as Array<KoiosUtxo & { is_spent?: boolean }>;
-    return s.orders.every((o) => rows.some((r) => outpoint(r) === o && r.is_spent));
+    const swap = s.txs.find((t) => t.kind === "swap" && t.confirmed && !t.replaced);
+    if (!swap) return true;
+    const orders = swap.orders ?? s.orders?.filter((o) => o.startsWith(`${swap.txHash}#`));
+    if (!orders?.length) return true;
+    const rows = (await this.deps.koios(network).utxoInfo(orders)) as Array<KoiosUtxo & { is_spent?: boolean }>;
+    return orders.every((o) => rows.some((r) => outpoint(r) === o && r.is_spent));
   }
 
   /** Places the order: a fresh quote, Minswap's swap for the account, the checks, and the key's signature. */
@@ -1469,11 +1515,14 @@ export class SessionService {
     });
     const bytes = hexBytes(whole);
     if (txId(bytes) !== built.txHash) throw new Error("Putting the signature in changed the transaction, so it wasn't sent.");
-    return this.sendRecorded(network, built.index, built.kind, built.txHash, bytes, SESSION_TX, (s) => {
-      if (built.kind === "swap" && built.quote && s.swap) {
-        s.swap = { ...s.swap, amountOut: built.quote.amountOut, minAmountOut: built.quote.minAmountOut };
-      }
-      if (built.kind === "swap" && built.orders) s.orders = built.orders;
+    return this.sendRecorded(network, built.index, built.kind, built.txHash, bytes, SESSION_TX, {
+      // Recorded with it, before it's sent: whichever copy of the swap lands, its own orders are the ones looked at.
+      orders: built.kind === "swap" ? built.orders : undefined,
+      after: (s) => {
+        if (built.kind === "swap" && built.quote && s.swap) {
+          s.swap = { ...s.swap, amountOut: built.quote.amountOut, minAmountOut: built.quote.minAmountOut };
+        }
+      },
     });
   }
 
@@ -1638,8 +1687,10 @@ export class SessionService {
     if (built.chain) return this.sendChain(network, built, kept, budgetMs);
     // Lovejoin was left out: the session says so, a swap that ran itself too.
     const skipped = built.lovejoinSkipped;
-    const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), kept, (s) => {
-      if (skipped && !s.mix) s.lovejoinSkipped = skipped;
+    const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), kept, {
+      after: (s) => {
+        if (skipped && !s.mix) s.lovejoinSkipped = skipped;
+      },
     });
     await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
     return pending;
@@ -1753,7 +1804,7 @@ export class SessionService {
     for (;;) {
       try {
         // What was kept for Send is the chain, under its return's hash.
-        await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept, undefined, pending.txs.at(-1)!.txHash);
+        await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept, { keptHash: pending.txs.at(-1)!.txHash });
         break;
       } catch (e) {
         const wait = chainRetryMs(i, tries, e);
@@ -1792,7 +1843,9 @@ export class SessionService {
    * Records a session's transaction, then submits it, so the record always
    * knows what may be on its way. Its page watches it, not Home's banner.
    * `kept`: where it was kept for Send, cleared once it's sent if that still
-   * holds `keptHash` (this transaction, or the chain it's part of).
+   * holds `keptHash` (this transaction, or the chain it's part of). `orders`:
+   * a swap's, recorded with it. `after`: what else the record gains once
+   * it's sent.
    */
   private async sendRecorded(
     network: NetworkName,
@@ -1801,8 +1854,7 @@ export class SessionService {
     txHash: string,
     bytes: Uint8Array<ArrayBuffer>,
     kept: string,
-    after?: (s: SessionRecord) => void,
-    keptHash = txHash,
+    { after, keptHash = txHash, orders }: { after?: (s: SessionRecord) => void; keptHash?: string; orders?: string[] } = {},
   ): Promise<PendingTx> {
     const { wallet, session, now } = this.deps;
     const mine = (s: SessionRecord) => s.txs.find((t) => t.txHash === txHash);
@@ -1812,20 +1864,21 @@ export class SessionService {
         delete again.unsent;
         again.sending = true;
       } else {
-        s.txs.push({ kind, txHash, at: now(), sending: true });
+        s.txs.push({ kind, txHash, at: now(), sending: true, ...(orders ? { orders } : {}) });
       }
     });
     try {
       await this.submit(network, bytes, txHash);
     } catch (e) {
       // Koios didn't answer: it may be on its way, so it's looked for as one Koios took is (lost), and
-      // what it spends counts as spent meanwhile.
+      // what it spends counts as spent meanwhile, recorded with it to be freed if its step is built again.
       const maybe = maybeSent(e);
       await this.update(network, index, (s) => {
         const t = mine(s);
         if (!t) return;
         delete t.sending;
-        if (!maybe) t.unsent = true;
+        if (maybe) t.inputs = txInputs(bytes);
+        else t.unsent = true;
       });
       if (maybe) await wallet.withKeys(() => rememberSpent(session, network, bytes));
       // A return merged into the funding's change, which was spent elsewhere: the kept view of the contract is behind, so read it in full next time.
@@ -1869,8 +1922,11 @@ export class SessionService {
       const koios = this.deps.koios(network);
       const spent = await wallet.withKeys(() => spentSet(session));
       const creds = live.map((s) => keys.get(s.index)!.keyHash);
-      const rows = unspent(await readFresh(spent, () => koios.credentialUtxos(creds), (r) => r, this.deps.sleep), spent);
-      holdings = new Map(live.map((s) => [s.index, rows.filter((r) => r.payment_cred === keys.get(s.index)!.keyHash)]));
+      // As Koios lists them, what this wallet spent included (the close reads that), and less it (shown, built on).
+      const listed = await readFresh(spent, () => koios.credentialUtxos(creds), (r) => r, this.deps.sleep);
+      const rows = unspent(listed, spent);
+      const of = (all: KoiosUtxo[], index: number) => all.filter((r) => r.payment_cred === keys.get(index)!.keyHash);
+      holdings = new Map(live.map((s) => [s.index, of(rows, s.index)]));
       for (const [index, held] of holdings) this.seen.set(`${network}:${index}`, held);
       let changed = false;
       let returned = false;
@@ -1899,7 +1955,15 @@ export class SessionService {
         const last = s.txs.filter((t) => !t.replaced).at(-1)!;
         // Brought back, and nothing has arrived since: the session is over. A
         // site's goes on until it's disconnected: the site may pay it later.
-        if (!s.site && last.kind === "back" && last.confirmed && !returnable(s, held).length) {
+        // As act closes it: the account as Koios lists it, and no copy of a
+        // step that may still land (final review sessions-1).
+        if (
+          !s.site &&
+          last.kind === "back" &&
+          last.confirmed &&
+          !returnable(s, of(listed, s.index)).length &&
+          !mayStillLand(s, now())
+        ) {
           s.closedAt = now();
           changed = true;
         }
@@ -1945,7 +2009,7 @@ export class SessionService {
       address,
       createdAt: s.createdAt,
       stage,
-      txs: txs.map(({ unsent: _unsent, sending: _sending, replaced: _replaced, ...t }) => t),
+      txs: txs.map(({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, ...t }) => t),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(returnable(s, utxos)) : null,
       ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
@@ -1976,10 +2040,20 @@ export class SessionService {
 
   /** The session's account's UTxOs, fresh, less what this wallet has spent. */
   private async utxosOf(network: NetworkName, keyHash: string): Promise<KoiosUtxo[]> {
+    return (await this.listing(network, keyHash)).rows;
+  }
+
+  /**
+   * The session's account, fresh: as Koios lists it (`listed`, what this
+   * wallet spent included), and less what this wallet has spent (`rows`),
+   * what's built on and shown.
+   */
+  private async listing(network: NetworkName, keyHash: string): Promise<{ listed: KoiosUtxo[]; rows: KoiosUtxo[] }> {
     const { wallet, session } = this.deps;
     const koios = this.deps.koios(network);
     const spent = await wallet.withKeys(() => spentSet(session));
-    return unspent(await readFresh(spent, () => koios.credentialUtxos([keyHash]), (r) => r, this.deps.sleep), spent);
+    const listed = await readFresh(spent, () => koios.credentialUtxos([keyHash]), (r) => r, this.deps.sleep);
+    return { listed, rows: unspent(listed, spent) };
   }
 
   /**

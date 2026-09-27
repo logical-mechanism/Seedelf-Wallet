@@ -64,13 +64,15 @@ export const ORDER_DATUM = builtOutputs(bytes(recordedSwap.cbor))[0]!
  * session 0's funding (the recorded one, session-swap.json, with its order's
  * details carried): the order at a DEX's contract, kept by its datum's hash,
  * and the change back. `outputs` in their place, each `[address, lovelace,
- * datum]`; `donation` to the treasury.
+ * datum]`; `donation` to the treasury; `ttl`, the slot it's valid until
+ * (Minswap's, built again later, has a later one, so another id).
  */
 export function swapTx({
   datum = ORDER_DATUM,
   outputs,
   donation,
-}: { datum?: string; outputs?: Array<[string, number, string?]>; donation?: number } = {}): string {
+  ttl = 134_639_865,
+}: { datum?: string; outputs?: Array<[string, number, string?]>; donation?: number; ttl?: number } = {}): string {
   const hashOf = (d: string) => blake2b(bytes(d), { dkLen: 32 });
   const paid = outputs ?? [
     [ORDER_ADDRESS, 14_000_000, datum],
@@ -90,7 +92,7 @@ export function swapTx({
       }),
     ],
     [2, 205_189],
-    [3, 134_639_865],
+    [3, ttl],
   ]);
   if (donation) body.set(22, donation);
   // The datums its orders name by hash, carried in the witness set, as Minswap's are.
