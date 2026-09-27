@@ -49,8 +49,8 @@ pub mod api {
     use seedelf_core::address::{dapp_address, wallet_contract};
     use seedelf_core::assets::{Asset, Assets};
     use seedelf_core::build::{
-        self, AccountAmount, AccountPay, AddressPayment, Budgets, Chain, Payee, Payment,
-        ScriptSpend,
+        self, AccountAmount, AccountPay, AddressPayment, Budgets, Chain, Class, Histories, Origin,
+        Payee, Payment, Purpose, ScriptSpend,
     };
     use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
     use seedelf_core::note::Note;
@@ -1173,6 +1173,57 @@ pub mod api {
         Ok(())
     }
 
+    /// A Seedelf UTxO's history, as the extension reads it from its sealed
+    /// history (activity.ts): its class, and where its money came from:
+    /// `own`, `received`, `session`, `lovejoin` or `unknown`. Selection keeps
+    /// different classes apart where it can (`build::Histories`).
+    #[derive(Deserialize, Clone, Debug)]
+    pub struct ClassIn {
+        pub id: String,
+        pub origin: String,
+    }
+
+    /// Each UTxO's class, by outpoint (`txHash#index`): none for the ones
+    /// with no history, which are Unknown.
+    pub type Classes = HashMap<String, ClassIn>;
+
+    /// What selection knows of the UTxOs a spend for `purpose` picks from.
+    pub fn histories(purpose: Purpose, classes: &Classes) -> Result<Histories> {
+        classes
+            .iter()
+            .try_fold(Histories::new(purpose), |h, (at, class)| {
+                let (hash, index) = at
+                    .split_once('#')
+                    .and_then(|(h, i)| Some((h, i.parse::<u64>().ok()?)))
+                    .ok_or_else(|| anyhow!("{at} isn't a UTxO's txHash#index"))?;
+                let origin = match class.origin.as_str() {
+                    "own" => Origin::Own,
+                    "received" => Origin::Received,
+                    "session" => Origin::Session,
+                    "lovejoin" => Origin::Lovejoin,
+                    "unknown" => Origin::Unknown,
+                    other => bail!("{other} isn't where a UTxO's money came from"),
+                };
+                Ok(h.with(
+                    hash,
+                    index,
+                    Class {
+                        id: class.id.clone(),
+                        origin,
+                    },
+                ))
+            })
+    }
+
+    /// The classes `spend` merges, by id: none when its inputs share a history.
+    fn classes_mixed(classes: &Classes, spend: &ScriptSpend) -> Result<Vec<String>> {
+        Ok(histories(Purpose::Pay, classes)?
+            .merged(&spend.inputs())
+            .into_iter()
+            .map(|c| c.id)
+            .collect())
+    }
+
     /// Creating a seedelf, as JSON from the extension.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -1185,6 +1236,9 @@ pub mod api {
         pub utxos: Vec<UtxoResponse>,
         /// The personal tag; see [`check_label`].
         pub label: String,
+        /// Each UTxO's history: a stealth mint takes received money first.
+        #[serde(default)]
+        pub classes: Classes,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
@@ -1233,6 +1287,9 @@ pub mod api {
         pub change_tokens: usize,
         pub change_outputs: usize,
         pub inputs: Vec<OutRef>,
+        /// The classes of money it spends together, when they're more than
+        /// one: nothing else paid ([`classes_mixed`]).
+        pub classes_mixed: Vec<String>,
     }
 
     // Every Seedelf spend (a stealth mint, a transfer) shares these steps:
@@ -1344,9 +1401,10 @@ pub mod api {
         let owner = Register::create(sk)?;
         let seedelf = owner.clone().rerandomize()?;
         let signer = key_hash(&one_time_key(&sk, seed));
-        let mut minted = build::mint(
+        let mut minted = build::mint_apart(
             &chain,
             &request.utxos,
+            &histories(Purpose::Mint, &request.classes)?,
             &request.label,
             &seedelf,
             &owner,
@@ -1382,28 +1440,24 @@ pub mod api {
         let (seed, budgets) =
             finishing("mint", request.seed.as_deref(), request.evaluation.as_ref())?;
         let (spend, minted) = mint_spend(sk, &request, &seed)?;
-        Ok(mint_result(
-            &spend,
-            &minted,
-            &spend.finalize(&budgets)?,
-            &seed,
-        ))
+        mint_result(&request, &spend, &minted, &spend.finalize(&budgets)?, &seed)
     }
 
     /// Creating a seedelf in one step, measured in the wallet ([`measured`]).
     pub fn build_mint(sk: Scalar, request: MintRequest) -> Result<MintResult> {
         let seed = new_seed();
         let (spend, minted) = mint_spend(sk, &request, &seed)?;
-        Ok(mint_result(&spend, &minted, &measured(&spend)?, &seed))
+        mint_result(&request, &spend, &minted, &measured(&spend)?, &seed)
     }
 
     fn mint_result(
+        request: &MintRequest,
         spend: &ScriptSpend,
         minted: &build::SeedelfMint,
         built: &build::FinalSpend,
         seed: &[u8; 32],
-    ) -> MintResult {
-        MintResult {
+    ) -> Result<MintResult> {
+        Ok(MintResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
@@ -1414,7 +1468,8 @@ pub mod api {
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
             inputs: out_refs(spend),
-        }
+            classes_mixed: classes_mixed(&request.classes, spend)?,
+        })
     }
 
     /// Creating a seedelf paid by the Cardano account, as JSON from the
@@ -1580,6 +1635,9 @@ pub mod api {
         pub utxos: Vec<UtxoResponse>,
         /// The Seedelfs paid, in order: one to [`MAX_RECIPIENTS`].
         pub payments: Vec<SeedelfPayment>,
+        /// Each UTxO's history: a payment takes own money first, a box last.
+        #[serde(default)]
+        pub classes: Classes,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
@@ -1631,6 +1689,8 @@ pub mod api {
         pub change_tokens: usize,
         pub change_outputs: usize,
         pub inputs: Vec<OutRef>,
+        /// The classes of money it spends together, when they're more than one.
+        pub classes_mixed: Vec<String>,
     }
 
     /// Whether `name` is a whole seedelf token name: 32 bytes of lowercase
@@ -1698,9 +1758,10 @@ pub mod api {
             });
         }
         let signer = key_hash(&one_time_key(&sk, seed));
-        let spend = build::transfer(
+        let spend = build::transfer_apart(
             &chain,
             &request.utxos,
+            &histories(Purpose::Pay, &request.classes)?,
             &payments,
             &Register::create(sk)?,
             signer,
@@ -1728,7 +1789,7 @@ pub mod api {
         )?;
         let (spend, payments) = transfer_spend(sk, &request, &seed)?;
         let built = spend.finalize(&budgets)?;
-        Ok(transfer_result(&spend, payments, &built, &seed))
+        transfer_result(&request, &spend, payments, &built, &seed)
     }
 
     /// Paying Seedelfs in one step, measured in the wallet ([`measured`]).
@@ -1736,16 +1797,17 @@ pub mod api {
         let seed = new_seed();
         let (spend, payments) = transfer_spend(sk, &request, &seed)?;
         let built = measured(&spend)?;
-        Ok(transfer_result(&spend, payments, &built, &seed))
+        transfer_result(&request, &spend, payments, &built, &seed)
     }
 
     fn transfer_result(
+        request: &TransferRequest,
         spend: &ScriptSpend,
         payments: Vec<SeedelfPaid>,
         built: &build::FinalSpend,
         seed: &[u8; 32],
-    ) -> TransferResult {
-        TransferResult {
+    ) -> Result<TransferResult> {
+        Ok(TransferResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
@@ -1755,7 +1817,8 @@ pub mod api {
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
             inputs: out_refs(spend),
-        }
+            classes_mixed: classes_mixed(&request.classes, spend)?,
+        })
     }
 
     /// The most UTxOs Max spends at once: the CLI's `MAXIMUM_WALLET_UTXOS`.
@@ -1788,10 +1851,26 @@ pub mod api {
         pub utxos: Vec<UtxoResponse>,
         /// The addresses paid, in order: one to [`MAX_RECIPIENTS`].
         pub payments: Vec<WithdrawPayment>,
+        /// Each UTxO's history: see [`WithdrawRequest::funding`].
+        #[serde(default)]
+        pub classes: Classes,
+        /// A private session's funding or top-up, rather than a payment:
+        /// received money, or a box that pays alone, goes first, and another
+        /// session's money last.
+        #[serde(default)]
+        pub funding: Option<Funding>,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
         pub evaluation: Option<serde_json::Value>,
+    }
+
+    /// The session a withdrawal funds.
+    #[derive(Deserialize, Clone, Debug, Default)]
+    pub struct Funding {
+        /// Its own class, for a top-up: what its funding left pays first.
+        #[serde(default)]
+        pub session: Option<String>,
     }
 
     /// One address a withdrawal pays.
@@ -1831,6 +1910,8 @@ pub mod api {
         /// more with the rest than an output can hold
         /// (`seedelf_core::utxos::fitting`).
         pub left: usize,
+        /// The classes of money it spends together, when they're more than one.
+        pub classes_mixed: Vec<String>,
     }
 
     /// The withdrawal, proven; how many UTxOs Max left out; and, for
@@ -1890,7 +1971,20 @@ pub mod api {
                         tokens,
                     });
                 }
-                let spend = build::sweep_many(&chain, &request.utxos, &to_pay, &owner, signer)?;
+                let purpose = match &request.funding {
+                    Some(f) => Purpose::Fund {
+                        session: f.session.clone(),
+                    },
+                    None => Purpose::Pay,
+                };
+                let spend = build::sweep_many_apart(
+                    &chain,
+                    &request.utxos,
+                    &histories(purpose, &request.classes)?,
+                    &to_pay,
+                    &owner,
+                    signer,
+                )?;
                 (spend, 0, Some(paid))
             }
         };
@@ -1914,7 +2008,7 @@ pub mod api {
         )?;
         let (spend, left, paid) = withdraw_spend(sk, &request, &seed)?;
         let built = spend.finalize(&budgets)?;
-        Ok(withdraw_result(&request, &spend, left, paid, &built, &seed))
+        withdraw_result(&request, &spend, left, paid, &built, &seed)
     }
 
     /// Paying addresses from the Seedelf balance in one step, measured in the
@@ -1923,7 +2017,7 @@ pub mod api {
         let seed = new_seed();
         let (spend, left, paid) = withdraw_spend(sk, &request, &seed)?;
         let built = measured(&spend)?;
-        Ok(withdraw_result(&request, &spend, left, paid, &built, &seed))
+        withdraw_result(&request, &spend, left, paid, &built, &seed)
     }
 
     fn withdraw_result(
@@ -1933,7 +2027,7 @@ pub mod api {
         paid: Option<Vec<Paid>>,
         built: &build::FinalSpend,
         seed: &[u8; 32],
-    ) -> WithdrawResult {
+    ) -> Result<WithdrawResult> {
         let max = paid.is_none();
         // Max's one payment is everything the inputs held, less the fee.
         let payments = paid.unwrap_or_else(|| {
@@ -1944,7 +2038,7 @@ pub mod api {
                 tokens: built.change_tokens.items.iter().map(token_amount).collect(),
             }]
         });
-        WithdrawResult {
+        Ok(WithdrawResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
@@ -1964,7 +2058,8 @@ pub mod api {
             change_outputs: if max { 0 } else { built.change_outputs },
             inputs: out_refs(spend),
             left,
-        }
+            classes_mixed: classes_mixed(&request.classes, spend)?,
+        })
     }
 
     /// Removing one of this wallet's seedelfs, as JSON from the extension.

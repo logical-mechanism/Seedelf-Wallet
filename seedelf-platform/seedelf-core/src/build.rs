@@ -1789,7 +1789,14 @@ impl ScriptSpend {
         for (_, input) in self.account.iter().flat_map(|a| &a.inputs) {
             tx = tx.input(input.clone());
         }
-        for output in self.outputs.iter().cloned().chain(change) {
+        // The payments and the change in a random order, drawn afresh each
+        // time: in a transfer both are contract outputs under fresh
+        // registers, so a fixed order was all that said which one is the
+        // change (privacy review §3.7). No redeemer points at an output, and
+        // the order changes neither the size nor the fee.
+        let mut outputs: Vec<Output> = self.outputs.iter().cloned().chain(change).collect();
+        crate::lovejoin::shuffle(&mut outputs);
+        for output in outputs {
             tx = tx.output(output);
         }
         tx = match &self.account {
@@ -1854,16 +1861,217 @@ fn policy_hash(config: &Config) -> Result<Hash<28>> {
     Ok(Hash::new(bytes))
 }
 
-/// Picks as few of `available` as it can. First the UTxOs holding the tokens
-/// in `needed` (see [`holding`]), then pure-ADA UTxOs, largest first, then
-/// other token UTxOs, adding one at a time until `attempt` succeeds. Only
-/// "not enough" failures move on to more inputs. Never picked: a UTxO the
-/// wallet's evaluator can't take ([`crate::eval::refusal`]: one holding a
-/// reference script, which anyone can pay a Seedelf), and one whose tokens
-/// would push a total past what one output holds ([`fitting`]).
+// ---------------------------------------------------------------------------
+// Keeping histories apart
+//
+// Two contract UTxOs spent in one transaction can be taken to share an owner,
+// so a spend ties together the histories of everything it spends. Two boxes
+// back from Lovejoin spent together undo much of the mixing; the change a
+// session's funding left, spent in another session's funding, ties the two
+// sessions; money made private from the public account, spent on a stealth
+// mint, ties the new Seedelf to the account (privacy review §2.3).
+//
+// The web wallet knows where each of its UTxOs came from (its sealed
+// history), and gives each a class. Selection keeps classes apart whenever a
+// selection that doesn't merge them pays, and when none does it merges them
+// anyway, never refusing: the review then says what was merged. The CLI
+// knows nothing of the sort: every UTxO is Unknown, and it picks as it
+// always has.
+// ---------------------------------------------------------------------------
+
+/// Where a UTxO's money came from, as far as the wallet knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Origin {
+    /// Nothing is known: the CLI's UTxOs, a restored wallet's.
+    #[default]
+    Unknown,
+    /// Made private from the wallet's own public account, or its change.
+    Own,
+    /// Paid by someone else.
+    Received,
+    /// What a private session's funding left, or its return.
+    Session,
+    /// A box back from Lovejoin: each is a class of its own.
+    Lovejoin,
+}
+
+/// The class every UTxO with no history is in.
+pub const UNKNOWN_CLASS: &str = "unknown";
+
+/// A UTxO's history: UTxOs of one class share it, and spending them together
+/// ties nothing new. `id` names it; a class whose histories were merged
+/// before names each of them, joined by `+`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Class {
+    pub id: String,
+    pub origin: Origin,
+}
+
+impl Default for Class {
+    fn default() -> Self {
+        Class {
+            id: UNKNOWN_CLASS.to_string(),
+            origin: Origin::Unknown,
+        }
+    }
+}
+
+impl Class {
+    /// Whether this class's history includes `part`'s.
+    pub fn has(&self, part: &str) -> bool {
+        self.id.split('+').any(|p| p == part)
+    }
+}
+
+/// What a spend is for, which orders the classes it would rather take.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Purpose {
+    /// Send or Make public: own money first, a box back from Lovejoin last.
+    #[default]
+    Pay,
+    /// A stealth mint: received money first, since the new Seedelf is tied to
+    /// whatever pays for it.
+    Mint,
+    /// A private session's funding or top-up: received money, or a box that
+    /// pays alone, first; another session's money last. `session` is the
+    /// session's own class, whose money a top-up may take first.
+    Fund { session: Option<String> },
+}
+
+impl Purpose {
+    /// How much this spend would rather take money of `class`: lowest first.
+    fn rank(&self, class: &Class) -> u8 {
+        use Origin::*;
+        match self {
+            Purpose::Pay => match class.origin {
+                Own => 0,
+                Session => 1,
+                Received => 2,
+                Unknown => 3,
+                Lovejoin => 4,
+            },
+            Purpose::Mint => match class.origin {
+                Received => 0,
+                Lovejoin => 1,
+                Unknown => 2,
+                Own => 3,
+                Session => 4,
+            },
+            Purpose::Fund { session } => {
+                if session.as_deref().is_some_and(|s| class.has(s)) {
+                    return 0;
+                }
+                match class.origin {
+                    Received => 1,
+                    Lovejoin => 2,
+                    Unknown => 3,
+                    Own => 4,
+                    Session => 5,
+                }
+            }
+        }
+    }
+
+    /// When merging: 0 for what's taken first, 1 for what's taken only when
+    /// nothing else pays (another session's money, for a funding), 2 for a
+    /// box, taken last and one at a time.
+    fn tier(&self, class: &Class) -> u8 {
+        match (self, class.origin) {
+            (_, Origin::Lovejoin) => 2,
+            (Purpose::Fund { .. }, Origin::Session) if self.rank(class) > 0 => 1,
+            _ => 0,
+        }
+    }
+}
+
+/// What selection knows of the UTxOs it picks from: each one's class, by
+/// outpoint, and what the spend is for. [`Histories::default`] knows
+/// nothing, and picks as the CLI always has.
+#[derive(Debug, Clone, Default)]
+pub struct Histories {
+    classes: BTreeMap<(String, u64), Class>,
+    purpose: Purpose,
+}
+
+impl Histories {
+    /// Nothing known yet, for a spend that's for `purpose`.
+    pub fn new(purpose: Purpose) -> Self {
+        Histories {
+            classes: BTreeMap::new(),
+            purpose,
+        }
+    }
+
+    /// The UTxO `tx_hash#tx_index` is of `class`.
+    pub fn with(mut self, tx_hash: &str, tx_index: u64, class: Class) -> Self {
+        self.classes.insert((tx_hash.to_string(), tx_index), class);
+        self
+    }
+
+    /// `utxo`'s class: Unknown when none was given.
+    pub fn class_of(&self, utxo: &UtxoResponse) -> Class {
+        self.classes
+            .get(&(utxo.tx_hash.clone(), utxo.tx_index))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The classes `inputs` merge: each one once, in the order first spent,
+    /// when there's more than one; none when they share a history.
+    pub fn merged(&self, inputs: &[UtxoResponse]) -> Vec<Class> {
+        let mut classes: Vec<Class> = Vec::new();
+        for class in inputs.iter().map(|u| self.class_of(u)) {
+            if !classes.iter().any(|c| c.id == class.id) {
+                classes.push(class);
+            }
+        }
+        if classes.len() > 1 {
+            classes
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Whether nothing is known of any of `utxos`.
+    fn blind(&self, utxos: &[UtxoResponse]) -> bool {
+        utxos
+            .iter()
+            .all(|u| self.class_of(u).origin == Origin::Unknown)
+    }
+}
+
+fn lovelace_of(utxo: &UtxoResponse) -> u64 {
+    utxo.value.parse::<u64>().unwrap_or(0)
+}
+
+fn holds_tokens(utxo: &UtxoResponse) -> bool {
+    utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty())
+}
+
+/// Picks as few of `available` as it can, keeping different histories apart
+/// when it can (see the section comment above), and hands each choice to
+/// `attempt` until one succeeds. Only "not enough" failures move on. Never
+/// picked: a UTxO the wallet's evaluator can't take
+/// ([`crate::eval::refusal`]: one holding a reference script, which anyone
+/// can pay a Seedelf), and one whose tokens would push a total past what one
+/// output holds ([`fitting`]). `floor` is the lovelace the spend pays out:
+/// inputs holding no more can't pay, and aren't tried.
+///
+/// First the UTxOs holding the tokens in `needed` ([`holding`]). When nothing
+/// is known of any UTxO's history, then pure-ADA UTxOs, largest first, then
+/// other token UTxOs, adding one at a time: the CLI's way. Otherwise, in turn:
+///
+/// 1. one UTxO that pays on its own (a token-bearing one counts), by the
+///    purpose's order, the smallest first;
+/// 2. UTxOs of one class, by the purpose's order, the largest first;
+/// 3. merging classes: the purpose's last resorts after the rest, and boxes
+///    back from Lovejoin last of all, one at a time, so two are spent together
+///    only when nothing else pays.
 fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
+    floor: u64,
+    histories: &Histories,
     mut attempt: impl FnMut(&[UtxoResponse]) -> Result<T>,
 ) -> Result<T> {
     let holds_needed = |u: &UtxoResponse| {
@@ -1888,11 +2096,10 @@ fn select_script_inputs<T>(
         .filter(|u| !mandatory.iter().any(|m| same_utxo(m, u)))
         .cloned()
         .collect();
-    rest.sort_by_key(|u| {
-        let tokens = u.asset_list.as_ref().is_some_and(|a| !a.is_empty());
-        let lovelace = u.value.parse::<u64>().unwrap_or(0);
-        (tokens, std::cmp::Reverse(lovelace))
-    });
+    if !histories.blind(available) {
+        return apart(mandatory, rest, floor, histories, attempt);
+    }
+    rest.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut last_error = None;
     for k in 0..=rest.len() {
         let selected: Vec<UtxoResponse> = mandatory.iter().chain(&rest[..k]).cloned().collect();
@@ -1906,6 +2113,138 @@ fn select_script_inputs<T>(
         }
     }
     Err(last_error.unwrap_or_else(|| SEEDELF_SHORT.into()))
+}
+
+/// One choice [`apart`] hands to `attempt`.
+enum Tried<T> {
+    Built(T),
+    /// These inputs don't hold enough.
+    Short,
+    /// They failed otherwise (too much computation, say).
+    Failed,
+    /// Not tried: they can't pay what the spend pays out.
+    Skipped,
+}
+
+/// [`select_script_inputs`] with histories known: `base` are the UTxOs
+/// holding the tokens sent, which every choice spends, and `rest` the others.
+fn apart<T>(
+    base: Vec<UtxoResponse>,
+    rest: Vec<UtxoResponse>,
+    floor: u64,
+    histories: &Histories,
+    mut attempt: impl FnMut(&[UtxoResponse]) -> Result<T>,
+) -> Result<T> {
+    let purpose = &histories.purpose;
+    let class = |u: &UtxoResponse| histories.class_of(u);
+    let base_lovelace: u64 = base.iter().map(lovelace_of).sum();
+    let base_classes: Vec<String> = base.iter().map(|u| class(u).id).collect();
+    // Money that adds no history to what the tokens sent bring.
+    let joins_base = |u: &UtxoResponse| base.is_empty() || base_classes.contains(&class(u).id);
+
+    let mut not_enough: Option<anyhow::Error> = None;
+    let mut other: Option<anyhow::Error> = None;
+    let mut try_with = |extra: &[&UtxoResponse]| -> Tried<T> {
+        let lovelace = base_lovelace + extra.iter().map(|u| lovelace_of(u)).sum::<u64>();
+        if lovelace <= floor || (base.is_empty() && extra.is_empty()) {
+            return Tried::Skipped;
+        }
+        let selected: Vec<UtxoResponse> = base
+            .iter()
+            .cloned()
+            .chain(extra.iter().map(|u| (*u).clone()))
+            .collect();
+        match attempt(&selected) {
+            Ok(built) => Tried::Built(built),
+            Err(e) if e.downcast_ref::<NotEnough>().is_some() => {
+                not_enough = Some(e);
+                Tried::Short
+            }
+            Err(e) => {
+                other = Some(e);
+                Tried::Failed
+            }
+        }
+    };
+
+    // The tokens' own UTxOs, alone.
+    if let Tried::Built(built) = try_with(&[]) {
+        return Ok(built);
+    }
+
+    // 1. One more UTxO: by the purpose's order, the smallest first. One of
+    // ADA alone that was short says no smaller one of ADA alone will do.
+    let mut singles: Vec<&UtxoResponse> = rest.iter().filter(|u| joins_base(u)).collect();
+    singles.sort_by_key(|u| (purpose.rank(&class(u)), lovelace_of(u)));
+    let mut short_at: Option<u64> = None;
+    for u in singles {
+        let ada_only = !holds_tokens(u);
+        if ada_only && short_at.is_some_and(|at| lovelace_of(u) <= at) {
+            continue;
+        }
+        match try_with(&[u]) {
+            Tried::Built(built) => return Ok(built),
+            Tried::Short if ada_only => short_at = short_at.max(Some(lovelace_of(u))),
+            _ => {}
+        }
+    }
+
+    // 2. UTxOs of one class: the classes by the purpose's order (the most
+    // money first among equals), each one's largest first, pure ADA before
+    // tokens.
+    let mut classes: Vec<(Class, Vec<&UtxoResponse>)> = Vec::new();
+    for u in rest.iter().filter(|u| joins_base(u)) {
+        let c = class(u);
+        match classes.iter_mut().find(|(k, _)| k.id == c.id) {
+            Some((_, rows)) => rows.push(u),
+            None => classes.push((c, vec![u])),
+        }
+    }
+    classes.sort_by_key(|(c, rows)| {
+        let total: u64 = rows.iter().map(|u| lovelace_of(u)).sum();
+        (purpose.rank(c), std::cmp::Reverse(total), c.id.clone())
+    });
+    for (_, rows) in &mut classes {
+        rows.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+        for k in 2..=rows.len() {
+            match try_with(&rows[..k]) {
+                Tried::Built(built) => return Ok(built),
+                // More of this class won't mend it.
+                Tried::Failed => break,
+                _ => {}
+            }
+        }
+    }
+
+    // 3. Merging, as the CLI would, but the purpose's last resorts after the
+    // rest, and boxes after everything, one at a time.
+    let mut order: Vec<&UtxoResponse> = rest.iter().collect();
+    order.sort_by_key(|u| {
+        (
+            purpose.tier(&class(u)),
+            !joins_base(u),
+            holds_tokens(u),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    let mut failed = false;
+    for k in 1..=order.len() {
+        match try_with(&order[..k]) {
+            Tried::Built(built) => return Ok(built),
+            // More inputs won't mend what isn't "not enough".
+            Tried::Failed => {
+                failed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    Err(match (failed, other, not_enough) {
+        (true, Some(e), _) => e,
+        (_, _, Some(e)) => e,
+        (_, Some(e), None) => e,
+        _ => SEEDELF_SHORT.into(),
+    })
 }
 
 fn same_utxo(a: &UtxoResponse, b: &UtxoResponse) -> bool {
@@ -1976,7 +2315,29 @@ pub fn mint(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<SeedelfMint> {
-    select_script_inputs(available, &Assets::new(), |inputs| {
+    mint_apart(
+        chain,
+        available,
+        &Histories::default(),
+        label,
+        seedelf,
+        change_owner,
+        signer,
+    )
+}
+
+/// [`mint`], keeping the `histories` of `available` apart where it can.
+pub fn mint_apart(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    histories: &Histories,
+    label: &str,
+    seedelf: &Register,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<SeedelfMint> {
+    let floor = seedelf_minimum_lovelace(&chain.params)?;
+    select_script_inputs(available, &Assets::new(), floor, histories, |inputs| {
         let built = mint_from(chain, inputs, label, seedelf, change_owner, signer)?;
         built.spend.estimate()?;
         Ok(built)
@@ -2079,15 +2440,45 @@ pub fn transfer(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<ScriptSpend> {
+    transfer_apart(
+        chain,
+        available,
+        &Histories::default(),
+        payments,
+        change_owner,
+        signer,
+    )
+}
+
+/// [`transfer`], keeping the `histories` of `available` apart where it can.
+pub fn transfer_apart(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    histories: &Histories,
+    payments: &[Payment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
     let outputs = payment_outputs(chain, payments)?;
     let needed = payments
         .iter()
         .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
-    select_script_inputs(available, &needed, |inputs| {
-        let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
-        spend.estimate()?;
-        Ok(spend)
-    })
+    select_script_inputs(
+        available,
+        &needed,
+        paid_out(&outputs),
+        histories,
+        |inputs| {
+            let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
+            spend.estimate()?;
+            Ok(spend)
+        },
+    )
+}
+
+/// The lovelace `outputs` carry.
+fn paid_out(outputs: &[(Output, Assets)]) -> u64 {
+    outputs.iter().map(|(o, _)| o.lovelace).sum()
 }
 
 /// A transfer spending exactly `inputs`. They must hold the tokens being
@@ -2272,11 +2663,31 @@ pub struct AddressPayment {
     pub tokens: Assets,
 }
 
-/// [`sweep`] to several: pays each of `payments`, in the order given, from
-/// as few owned UTxOs as can pay them all. The change comes last.
+/// [`sweep`] to several: pays each of `payments` from as few owned UTxOs as
+/// can pay them all. The outputs, change included, go in a random order
+/// ([`ScriptSpend`]).
 pub fn sweep_many(
     chain: &Chain,
     available: &[UtxoResponse],
+    payments: &[AddressPayment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    sweep_many_apart(
+        chain,
+        available,
+        &Histories::default(),
+        payments,
+        change_owner,
+        signer,
+    )
+}
+
+/// [`sweep_many`], keeping the `histories` of `available` apart where it can.
+pub fn sweep_many_apart(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    histories: &Histories,
     payments: &[AddressPayment],
     change_owner: &Register,
     signer: Hash<28>,
@@ -2296,11 +2707,17 @@ pub fn sweep_many(
     let needed = payments
         .iter()
         .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
-    select_script_inputs(available, &needed, |inputs| {
-        let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
-        spend.estimate()?;
-        Ok(spend)
-    })
+    select_script_inputs(
+        available,
+        &needed,
+        paid_out(&outputs),
+        histories,
+        |inputs| {
+            let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
+            spend.estimate()?;
+            Ok(spend)
+        },
+    )
 }
 
 /// A sweep spending exactly `inputs`. They must hold the tokens being sent.

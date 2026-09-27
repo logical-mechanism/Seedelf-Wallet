@@ -1149,8 +1149,9 @@ fn fan_out(
     })
 }
 
-/// Shuffles in place, uniformly (Fisher–Yates).
-fn shuffle<T>(items: &mut [T]) {
+/// Shuffles in place, uniformly (Fisher–Yates). A Seedelf spend's outputs
+/// go in this order too ([`crate::build::ScriptSpend`]).
+pub(crate) fn shuffle<T>(items: &mut [T]) {
     for i in (1..items.len()).rev() {
         let j = (OsRng.next_u64() % (i as u64 + 1)) as usize;
         items.swap(i, j);

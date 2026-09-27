@@ -840,6 +840,7 @@ mod mint {
             params: params(),
             utxos,
             label: label.into(),
+            classes: Default::default(),
             seed: None,
             evaluation: None,
         }
@@ -1382,6 +1383,7 @@ mod transfer {
                 lovelace: r["lovelace"].as_str().unwrap().into(),
                 tokens: serde_json::from_value(r["tokens"].clone()).unwrap(),
             }],
+            classes: Default::default(),
             seed: None,
             evaluation: None,
         }
@@ -1520,15 +1522,16 @@ mod transfer {
 
         // The payment is a new copy of the recipient's register, never the one found.
         let found = register_from_utxo(&their_utxo());
+        // The two outputs go in a random order: the change is the one that's ours.
         let outs = outputs(&result.tx_cbor);
         assert_eq!(outs.len(), 2);
-        let (paid, lovelace, tokens) = &outs[0];
+        let (ours, theirs): (Vec<_>, Vec<_>) = outs.iter().partition(|o| o.0.is_owned(sk).unwrap());
+        assert_eq!((ours.len(), theirs.len()), (1, 1), "the change is ours");
+        let (paid, lovelace, tokens) = theirs[0];
         assert!(build::is_payable(paid));
         assert_ne!(paid, &found);
         assert_ne!(paid.generator, found.generator);
-        assert!(!paid.is_owned(sk).unwrap());
         assert_eq!((*lovelace, *tokens), (5_000_000, 1));
-        assert!(outs[1].0.is_owned(sk).unwrap(), "the change is ours");
         assert!(!result.tx_cbor.contains(&found.public_value));
     }
 
@@ -1546,7 +1549,11 @@ mod transfer {
                 result.payments[0].lovelace, result.payments[0].minimum,
                 "{asked} goes up to the minimum"
             );
-            assert_eq!(outputs(&result.tx_cbor)[0].1, minimum);
+            let paid = outputs(&result.tx_cbor)
+                .into_iter()
+                .find(|o| !o.0.is_owned(sk).unwrap())
+                .unwrap();
+            assert_eq!(paid.1, minimum);
         }
         // More than the minimum is paid as asked.
         let result = finish(sk, request());
@@ -1572,9 +1579,10 @@ mod transfer {
         r.payments[0].recipient = under(&Register::create(bob).unwrap().rerandomize().unwrap());
         let result = finish(sk, r);
         assert!(!result.payments[0].to_self);
-        let paid = &outputs(&result.tx_cbor)[0].0;
-        assert!(paid.is_owned(bob).unwrap());
-        assert!(!paid.is_owned(sk).unwrap());
+        let outs = outputs(&result.tx_cbor);
+        let paid: Vec<_> = outs.iter().filter(|o| o.0.is_owned(bob).unwrap()).collect();
+        assert_eq!(paid.len(), 1);
+        assert!(!paid[0].0.is_owned(sk).unwrap());
 
         // Your own seedelf: allowed, flagged, and the payment comes back.
         let mine = owned().pop().unwrap();
@@ -1583,7 +1591,11 @@ mod transfer {
         r.payments[0].recipient = mine;
         let result = finish(sk, r);
         assert!(result.payments[0].to_self);
-        assert!(outputs(&result.tx_cbor)[0].0.is_owned(sk).unwrap());
+        assert!(
+            outputs(&result.tx_cbor)
+                .iter()
+                .all(|o| o.0.is_owned(sk).unwrap())
+        );
     }
 
     #[test]
@@ -1600,14 +1612,21 @@ mod transfer {
         assert_eq!(result.payments.len(), 2);
         assert_eq!(result.payments[1].lovelace, "2000000");
         assert!(!result.payments[1].to_self);
-        // Each Seedelf as asked, in order, under a fresh copy of its register; then our change.
+        // Each Seedelf as asked, under a fresh copy of its register, and our
+        // change, in a random order.
         let outs = outputs(&result.tx_cbor);
-        assert_eq!((outs[0].1, outs[0].2), (5_000_000, 1));
-        assert_eq!((outs[1].1, outs[1].2), (2_000_000, 0));
-        assert!(outs[1].0.is_owned(bob).unwrap());
-        assert!(!outs[0].0.is_owned(bob).unwrap() && !outs[0].0.is_owned(sk).unwrap());
-        assert!(
-            outs[2..].iter().all(|o| o.0.is_owned(sk).unwrap()),
+        let first: Vec<_> = outs
+            .iter()
+            .filter(|o| !o.0.is_owned(bob).unwrap() && !o.0.is_owned(sk).unwrap())
+            .collect();
+        assert_eq!(first.len(), 1);
+        assert_eq!((first[0].1, first[0].2), (5_000_000, 1));
+        let to_bob: Vec<_> = outs.iter().filter(|o| o.0.is_owned(bob).unwrap()).collect();
+        assert_eq!(to_bob.len(), 1);
+        assert_eq!((to_bob[0].1, to_bob[0].2), (2_000_000, 0));
+        assert_eq!(
+            outs.iter().filter(|o| o.0.is_owned(sk).unwrap()).count(),
+            outs.len() - 2,
             "the change is ours"
         );
 
@@ -1893,6 +1912,67 @@ mod withdraw {
     }
 
     #[test]
+    fn says_which_histories_a_withdrawal_spends_together() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let [ada, token] =
+            [&owned()[0], &owned()[1]].map(|u| format!("{}#{}", u.tx_hash, u.tx_index));
+        let class = |id: &str, origin: &str| api::ClassIn {
+            id: id.into(),
+            origin: origin.into(),
+        };
+        let with = |classes: Vec<(String, api::ClassIn)>| {
+            let mut r = request("amount");
+            r.classes = classes.into_iter().collect();
+            r
+        };
+
+        // The token sent sits in one UTxO whose ADA doesn't pay: both go, and
+        // the result says whose histories they were.
+        let result = api::build_withdraw(
+            sk,
+            with(vec![
+                (ada.clone(), class("public", "own")),
+                (token.clone(), class("received:a2", "received")),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(result.inputs.len(), 2);
+        let mut mixed = result.classes_mixed.clone();
+        mixed.sort();
+        assert_eq!(mixed, vec!["public", "received:a2"]);
+
+        // One history, or none known: nothing to say.
+        let result = api::build_withdraw(
+            sk,
+            with(vec![
+                (ada.clone(), class("public", "own")),
+                (token.clone(), class("public", "own")),
+            ]),
+        )
+        .unwrap();
+        assert!(result.classes_mixed.is_empty());
+        let result = api::build_withdraw(sk, request("amount")).unwrap();
+        assert!(result.classes_mixed.is_empty());
+
+        // A funding is read too, and a UTxO given no class is Unknown.
+        let mut r = with(vec![(ada.clone(), class("session:0", "session"))]);
+        r.funding = Some(api::Funding {
+            session: Some("session:0".into()),
+        });
+        assert_eq!(api::build_withdraw(sk, r).unwrap().classes_mixed.len(), 2);
+
+        // What the wallet can't read is refused, not guessed at.
+        let e = api::build_withdraw(sk, with(vec![(ada.clone(), class("public", "nowhere"))]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("isn't where a UTxO's money came from"), "{e}");
+        let e = api::build_withdraw(sk, with(vec![("a1".into(), class("public", "own"))]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("txHash#index"), "{e}");
+    }
+
+    #[test]
     fn builds_a_withdrawal_and_a_removal_measured_in_the_wallet() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let amount = api::build_withdraw(sk, request("amount")).unwrap();
@@ -1943,7 +2023,7 @@ mod withdraw {
             (1, 1, 0)
         );
         let outs = outputs(&result.tx_cbor);
-        assert_eq!(outs[0], (theirs(), 5_000_000));
+        assert!(outs.contains(&(theirs(), 5_000_000)));
 
         // Max: every UTxO and token to the address, nothing back.
         let result = api::finish_withdraw(
@@ -1986,11 +2066,13 @@ mod withdraw {
         assert!(!result.max);
         assert_eq!(result.payments.len(), 2);
         assert_eq!(result.payments[1].lovelace, "2000000");
+        // Each address as asked, and the change back in, in a random order.
         let outs = outputs(&result.tx_cbor);
-        assert_eq!(outs[0], (theirs(), 5_000_000));
-        assert_eq!(outs[1], (theirs(), 2_000_000));
-        assert!(
-            outs[2..].iter().all(|(a, _)| *a == contract()),
+        assert!(outs.contains(&(theirs(), 5_000_000)));
+        assert!(outs.contains(&(theirs(), 2_000_000)));
+        assert_eq!(
+            outs.iter().filter(|(a, _)| *a == contract()).count(),
+            outs.len() - 2,
             "the change goes back in"
         );
 
@@ -2025,7 +2107,7 @@ mod withdraw {
             );
             let minimum: u64 = minimum.parse().unwrap();
             assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
-            assert_eq!(outputs(&result.tx_cbor)[0], (theirs(), minimum));
+            assert!(outputs(&result.tx_cbor).contains(&(theirs(), minimum)));
         }
         let result = finish("5000000");
         assert_eq!(result.payments[0].lovelace, "5000000");
