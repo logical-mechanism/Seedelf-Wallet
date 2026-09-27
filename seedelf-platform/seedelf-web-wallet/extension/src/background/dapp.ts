@@ -41,7 +41,11 @@
 //             calls at the same time share one reading of the account; a
 //             site gets a few fresh readings, UTxO lookups and submits a
 //             minute (`PER_MINUTE`) and 32 calls running at once; and a
-//             transaction or data over 64 KiB is refused unread.
+//             transaction or data over 64 KiB is refused unread. Its
+//             transactions are read one at a time, a few a minute that the
+//             user is never asked about, and none while the window's queue is
+//             full: WebAssembly's reading takes up to half a second, in the
+//             wallet's one queue, which the user's own requests and Lock wait on.
 // Private     A site can connect to a private session instead (chunk 15c,
 //             private CIP-30): a one-time account funded from the private
 //             balance (sessions.ts), chosen in the window. The funding is
@@ -112,9 +116,14 @@ const MAX_SITE_CALLS = 32;
  * What one site may make the worker ask Koios for, per minute, with nobody
  * asked: a fresh reading of the account (a transaction spends a UTxO the kept
  * one hasn't got), a lookup of UTxOs the account doesn't hold, a submit. A
- * site asking for more would use up the wallet's own share of Koios.
+ * site asking for more would use up the wallet's own share of Koios. And how
+ * many of its transactions WebAssembly reads that are refused without asking
+ * the user (`unprompted`: nothing to sign, or unreadable): each can take half
+ * a second of the wallet's queue. Those put in front of the user never count.
  */
-const PER_MINUTE = { fresh: 4, lookup: 6, submit: 10 } as const;
+const PER_MINUTE = { fresh: 4, lookup: 6, submit: 10, unprompted: 20 } as const;
+/** What a site hears when the window's queue is full. */
+const BUSY = "Seedelf Wallet is busy with this site's other requests.";
 
 /** A CIP-30 error, as the site sees it. */
 export class DappError extends Error {
@@ -228,6 +237,8 @@ export class DappService {
   private readonly asked = new Map<string, number[]>();
   /** Readings of an account under way, by its storage key: calls at the same time share one. */
   private readonly reading = new Map<string, Promise<View>>();
+  /** Each site's last transaction being read (`readInTurn`), which its next waits for. */
+  private readonly txReads = new Map<string, Promise<unknown>>();
   /** The last change to the `dapps` record, which the next waits for (`changeSites`). */
   private sitesQueue: Promise<unknown> = Promise.resolve();
   /** The worker is closing the connector's window (`closeWindow`), not the user. */
@@ -239,7 +250,7 @@ export class DappService {
   async call(session: DappSession, method: DappMethod, args: unknown[]): Promise<unknown> {
     const { origin } = session;
     const running = this.running.get(origin) ?? 0;
-    if (running >= MAX_SITE_CALLS) throw refused("Seedelf Wallet is busy with this site's other requests.");
+    if (running >= MAX_SITE_CALLS) throw refused(BUSY);
     this.running.set(origin, running + 1);
     try {
       return await this.run(session, method, args);
@@ -606,7 +617,7 @@ export class DappService {
     if ((await this.deps.wallet.state()) === "unlocked") return;
     const refusedUntil = this.refusedUntil.get(session.origin) ?? 0;
     if (method !== "enable" && this.deps.now() < refusedUntil) throw refused("Seedelf Wallet is locked.");
-    if (this.unlocking.length + this.waiting.length >= MAX_WAITING) throw refused("Seedelf Wallet is busy with this site's other requests.");
+    if (this.unlocking.length + this.waiting.length >= MAX_WAITING) throw refused(BUSY);
     let waiter: Unlocking | undefined;
     const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, resolve, reject })));
     try {
@@ -622,7 +633,7 @@ export class DappService {
 
   /** Puts a request in front of the user; `approve` runs if they say yes. */
   private ask<T>(session: DappSession, network: NetworkName, request: DappAsk, declined: number, approve: () => Promise<T>): Promise<T> {
-    if (this.waiting.length >= MAX_WAITING) throw refused("Seedelf Wallet is busy with this site's other requests.");
+    if (this.waiting.length >= MAX_WAITING) throw refused(BUSY);
     // Random, not a count: a count starts again when the worker restarts, and a
     // window still showing an older request would then answer a new one.
     const approval = { ...request, id: crypto.randomUUID(), origin: session.origin, title: session.title } as DappApproval;
@@ -931,13 +942,109 @@ export class DappService {
 
   /** Whether a site may make the worker ask Koios for `what` now, and counts it if so. */
   private allow(origin: string, what: keyof typeof PER_MINUTE): boolean {
+    const recent = this.lastMinute(origin, what);
+    const allowed = recent.length < PER_MINUTE[what];
+    if (allowed) recent.push(this.deps.now());
+    return allowed;
+  }
+
+  /** When a site made the worker do `what` in the last minute (`PER_MINUTE`), kept to count more. */
+  private lastMinute(origin: string, what: keyof typeof PER_MINUTE): number[] {
     const key = `${what} ${origin}`;
     const now = this.deps.now();
     const recent = (this.asked.get(key) ?? []).filter((t) => now - t < 60_000);
-    const allowed = recent.length < PER_MINUTE[what];
-    if (allowed) recent.push(now);
     this.asked.set(key, recent);
-    return allowed;
+    return recent;
+  }
+
+  /**
+   * Runs `read` once the site's transaction before this one has been read:
+   * however many it sends at once, the wallet's queue holds one of its
+   * readings at a time, so the user's own requests and Lock wait for one at most.
+   */
+  private readInTurn<T>(origin: string, read: () => Promise<T>): Promise<T> {
+    const run = (this.txReads.get(origin) ?? Promise.resolve()).then(read, read);
+    const done = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.txReads.set(origin, done);
+    void done.then(() => {
+      if (this.txReads.get(origin) === done) this.txReads.delete(origin);
+    });
+    return run;
+  }
+
+  /**
+   * Reads a site's transaction in WebAssembly, for the user to be asked: one
+   * nothing of the wallet's signs, or that it can't read, is refused here.
+   * Nothing is read while the window's queue is full (`ask` would refuse it
+   * anyway), and a site that has had too many refused this minute has no more
+   * read (`PER_MINUTE`), before any Koios request.
+   */
+  private async readTx(
+    origin: string,
+    network: NetworkName,
+    holder: Holder,
+    tx: unknown,
+    inputs: string[],
+    collateral: string[],
+    partialSign: boolean,
+  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean }> {
+    if (this.waiting.length >= MAX_WAITING) throw refused(BUSY);
+    if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
+      throw refused("This site asks too often for signatures Seedelf Wallet can't give. Try again in a minute.");
+    }
+    const { view, rows } = await this.resolve(network, holder, origin, [...new Set([...inputs, ...collateral])]);
+    const collateralSpent = await this.keptApart(network, holder, view, inputs, collateral);
+    const request = JSON.stringify({
+      network,
+      txCbor: tx,
+      keys: view.keys,
+      inputs: rows,
+      partialSign,
+      stakeIndex: holder?.index ?? 0,
+    });
+    const { wasm, wallet } = this.deps;
+    const whose = holder ? "this private session's" : "the public account's";
+    const refuse = (failure: DappFailure) => {
+      // Read, and refused without asking the user: it counts.
+      this.lastMinute(origin, "unprompted").push(this.deps.now());
+      return new DappError(failure);
+    };
+    let summary: DappTxSummary;
+    try {
+      summary = await wallet.withKeys(
+        ({ cardano, oneTime }) =>
+          JSON.parse(holder ? wasm.inspectSessionTx(oneTime, request) : wasm.inspectDappTx(cardano, request)) as DappTxSummary,
+      );
+    } catch (e) {
+      const info = (e as Error).message;
+      throw refuse(
+        info.startsWith("The wallet can't read") || info.startsWith("bad request")
+          ? { code: APIError.InvalidRequest, info }
+          : { code: TxSignError.ProofGeneration, info },
+      );
+    }
+    if (!summary.signs.length) {
+      throw refuse({ code: TxSignError.ProofGeneration, info: `Nothing in this transaction is ${whose} to sign.` });
+    }
+    if (!partialSign && !summary.complete) {
+      throw refuse({
+        code: TxSignError.ProofGeneration,
+        info: `This transaction needs signatures the wallet can't give: it spends or is signed for by keys that aren't ${whose}.`,
+      });
+    }
+    // A session's stake key is never registered (privacy.md): its return and
+    // Disconnect read UTxOs only, so a deposit or rewards under it would be
+    // left behind for good. Stopping it stays possible.
+    if (holder && summary.certificates.some((c) => c.own && c.kind !== "unregister")) {
+      throw refuse({
+        code: TxSignError.ProofGeneration,
+        info: "This transaction registers or delegates this private session's stake key, which stays unregistered: its deposit and any rewards would be left behind when the session ends, so the wallet won't sign it. Stake, or delegate your vote, from your public account instead.",
+      });
+    }
+    return { request, summary, collateralSpent };
   }
 
   private async signTx(
@@ -958,50 +1065,10 @@ export class DappService {
       throw invalid("The wallet can't read this transaction.");
     }
     await this.heldForLovejoin(network, inputs, collateral);
-    const { view, rows } = await this.resolve(network, holder, session.origin, [...new Set([...inputs, ...collateral])]);
-    const collateralSpent = await this.keptApart(network, holder, view, inputs, collateral);
-    const request = JSON.stringify({
-      network,
-      txCbor: tx,
-      keys: view.keys,
-      inputs: rows,
-      partialSign,
-      stakeIndex: holder?.index ?? 0,
-    });
+    const { request, summary, collateralSpent } = await this.readInTurn(session.origin, () =>
+      this.readTx(session.origin, network, holder, tx, inputs, collateral, partialSign),
+    );
     const { wasm, wallet } = this.deps;
-    const whose = holder ? "this private session's" : "the public account's";
-    let summary: DappTxSummary;
-    try {
-      summary = await wallet.withKeys(
-        ({ cardano, oneTime }) =>
-          JSON.parse(holder ? wasm.inspectSessionTx(oneTime, request) : wasm.inspectDappTx(cardano, request)) as DappTxSummary,
-      );
-    } catch (e) {
-      const info = (e as Error).message;
-      throw new DappError(
-        info.startsWith("The wallet can't read") || info.startsWith("bad request")
-          ? { code: APIError.InvalidRequest, info }
-          : { code: TxSignError.ProofGeneration, info },
-      );
-    }
-    if (!summary.signs.length) {
-      throw new DappError({ code: TxSignError.ProofGeneration, info: `Nothing in this transaction is ${whose} to sign.` });
-    }
-    if (!partialSign && !summary.complete) {
-      throw new DappError({
-        code: TxSignError.ProofGeneration,
-        info: `This transaction needs signatures the wallet can't give: it spends or is signed for by keys that aren't ${whose}.`,
-      });
-    }
-    // A session's stake key is never registered (privacy.md): its return and
-    // Disconnect read UTxOs only, so a deposit or rewards under it would be
-    // left behind for good. Stopping it stays possible.
-    if (holder && summary.certificates.some((c) => c.own && c.kind !== "unregister")) {
-      throw new DappError({
-        code: TxSignError.ProofGeneration,
-        info: "This transaction registers or delegates this private session's stake key, which stays unregistered: its deposit and any rewards would be left behind when the session ends, so the wallet won't sign it. Stake, or delegate your vote, from your public account instead.",
-      });
-    }
     const ask: DappAsk = {
       kind: "sign-tx",
       partial: partialSign,

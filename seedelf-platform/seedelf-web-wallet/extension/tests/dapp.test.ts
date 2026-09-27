@@ -579,6 +579,86 @@ describe("the dApp connector", () => {
     expect(typeof (await t.dapp.call(s, "getBalance", []))).toBe("string");
   });
 
+  it("reads a site's transactions one at a time, a few a minute it won't sign, and none while the window's queue is full", async () => {
+    const t = await on();
+    // WebAssembly's reading of a site's transaction, counted: it can take half a second of the wallet's queue.
+    const wasm = t.deps.wasm;
+    let reads = 0;
+    const dapp = new DappService({
+      ...t.deps,
+      wasm: {
+        ...wasm,
+        inspectDappTx: (keys: Parameters<typeof wasm.inspectDappTx>[0], request: string) => {
+          reads++;
+          return wasm.inspectDappTx(keys, request);
+        },
+      } as typeof wasm,
+      store: t.store,
+      sessions: t.sessions,
+      network: () => "preprod",
+      window: t.dappWindow,
+      changed: () => undefined,
+    });
+    const connect = async (s: DappSession) => {
+      const enabling = dapp.call(s, "enable", []);
+      await until(() => dapp.approvals().length === 1);
+      await dapp.answer(dapp.approvals()[0]!.id, true);
+      await enabling;
+      return s;
+    };
+    const [s, other] = [await connect(site()), await connect(site("https://other.example"))];
+    await dapp.call(s, "getBalance", []);
+    // Nothing of the account's to sign in it.
+    const nothing = siteTx({ inputs: [] });
+    const nothingToSign = { failure: { code: TxSignError.ProofGeneration, info: "Nothing in this transaction is the public account's to sign." } };
+
+    // One at a time: the site's first spends a UTxO nobody has, and Koios holds its lookup; its next waits
+    // for it, unread, while another site's is read.
+    let release!: () => void;
+    t.koios.hold = new Promise((r) => (release = r));
+    const first = dapp.call(s, "signTx", [`84a30081825820${"cd".repeat(32)}0001800200a0f5f6`, true]);
+    const next = dapp.call(s, "signTx", [nothing, false]);
+    await expect(dapp.call(other, "signTx", [nothing, false])).rejects.toMatchObject(nothingToSign);
+    expect(reads).toBe(1);
+    release();
+    t.koios.hold = undefined;
+    await expect(first).rejects.toMatchObject({ failure: { code: TxSignError.ProofGeneration } });
+    await expect(next).rejects.toMatchObject(nothingToSign);
+    expect(reads).toBe(3);
+
+    // A few a minute it won't sign; those put in front of the user never count.
+    t.clock.now += 60_000;
+    const { tx } = await built(t);
+    const asked = async () => {
+      const signing = dapp.call(s, "signTx", [tx, false]);
+      await until(() => dapp.approvals().length === 1);
+      await dapp.answer(dapp.approvals()[0]!.id, false);
+      await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+    };
+    for (let i = 0; i < 3; i++) await asked();
+    for (let i = 0; i < 20; i++) await expect(dapp.call(s, "signTx", [nothing, false])).rejects.toMatchObject(nothingToSign);
+    const tooOften = { failure: { code: APIError.Refused, info: expect.stringContaining("too often") } };
+    await expect(dapp.call(s, "signTx", [nothing, false])).rejects.toMatchObject(tooOften);
+    await expect(dapp.call(s, "signTx", [tx, false])).rejects.toMatchObject(tooOften);
+    expect(reads).toBe(3 + 3 + 20);
+    // Another site has its own; a minute later this one does again.
+    await expect(dapp.call(other, "signTx", [nothing, false])).rejects.toMatchObject(nothingToSign);
+    t.clock.now += 60_000;
+    await asked();
+    expect(reads).toBe(3 + 3 + 20 + 2);
+
+    // Twenty wait for the user: the next is refused unread, as the window would refuse it.
+    const waiting = Array.from({ length: 20 }, () => dapp.call(s, "signTx", [tx, false]));
+    await until(() => dapp.approvals().length === 20);
+    const before = reads;
+    await expect(dapp.call(other, "signTx", [tx, false])).rejects.toMatchObject({
+      failure: { code: APIError.Refused, info: "Seedelf Wallet is busy with this site's other requests." },
+    });
+    expect(reads).toBe(before);
+    for (const approval of dapp.approvals()) await dapp.answer(approval.id, false);
+    for (const w of waiting) await expect(w).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+  });
+
   it("sends through Koios, and counts what comes back until it's on chain", async () => {
     const t = await on();
     const s = await connected(t);
