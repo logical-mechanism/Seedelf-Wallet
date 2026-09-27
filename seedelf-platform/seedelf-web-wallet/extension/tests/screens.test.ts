@@ -30,6 +30,7 @@ import { Chains, detailOf as lovejoinDetail, NotMixed, PrivateReview, PublicRevi
 import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
 import {
   isRunningSwap,
+  localMatches,
   LovejoinChoice,
   LovejoinCost,
   NewSwap,
@@ -142,6 +143,7 @@ describe("the public account while a mix from it is sent (launch review #47)", (
 
 const hex = (s: string) => Buffer.from(s, "utf8").toString("hex");
 const TUSDM = "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde" + "0014df10745553444d";
+const MIN_PREPROD = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72" + "4d494e";
 const STRANGER = "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9";
 
 /** A swap that runs itself, funded and ordering: what the Minswap page shows. */
@@ -211,6 +213,37 @@ describe("a swap's tokens (launch review #18, #20)", () => {
     const pay = picker("pay");
     expect(pay).not.toContain("Also in your private balance");
     expect(pay.slice(pay.indexOf('data-testid="swap-own-tokens"'))).toContain("SNEAK");
+  });
+
+  it("finds the wallet's own list on the device, and asks Minswap only when nothing here matches (privacy review §3.11)", () => {
+    const seedelf = {
+      lovelace: "50000000",
+      utxos: 1,
+      seedelfs: [],
+      locked: { lovelace: "0", tokens: [], utxos: 0 },
+      tokens: [{ policyId: TUSDM.slice(0, 56), assetName: TUSDM.slice(56), quantity: "5000000", decimals: 6, fingerprint: "" }],
+    };
+    const html = renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        createElement(TokenSelect, { which: "get", seedelf, onPick: () => undefined, onClose: () => undefined }),
+      ),
+    );
+    // Preprod's list: tUSDM is held, so MIN is the one offered from it, before anything is asked.
+    const listed = html.slice(html.indexOf("On the wallet&#x27;s list"), html.indexOf("On Minswap"));
+    expect(listed).toContain("MIN");
+    expect(listed).toContain("Minswap (preprod)");
+    expect(listed).not.toContain("tUSDM");
+    expect(html).toContain("The wallet&#x27;s own list is searched here first.");
+    // Matched here: no need to ask Minswap. Only a query nothing here matches goes to it.
+    const own = [{ id: "lovelace", side: { label: "₳", decimals: 6 }, sub: "Cardano", held: "50000000", listed: true }];
+    expect(localMatches("preprod", own, "min", "get").listed.map((p) => p.id)).toEqual([MIN_PREPROD]);
+    expect(localMatches("preprod", own, "Minswap", "get").listed).toHaveLength(1);
+    const none = localMatches("preprod", own, "SNEK", "get");
+    expect(none.held.length + none.listed.length).toBe(0);
+    // What's paid is what's held: the list isn't offered there.
+    expect(localMatches("preprod", own, "", "pay").listed).toEqual([]);
   });
 
   it("says a quote's token isn't verified by Minswap, with its fingerprint", () => {

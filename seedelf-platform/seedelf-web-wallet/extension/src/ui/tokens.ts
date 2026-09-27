@@ -34,6 +34,18 @@ export function tokenInfo(network: NetworkName, t: { policyId: string; assetName
 }
 
 /**
+ * Every token on the wallet's list for `network`, with what the list says of
+ * it: the swap picker finds these on the device before it asks Minswap
+ * (privacy review §3.11).
+ */
+export function listedTokens(network: NetworkName): Array<{ policyId: string; assetName: string; info: TokenInfo }> {
+  return Object.entries(REGISTRY[network]).map(([key, info]) => {
+    const [policyId, assetName] = key.split(".");
+    return { policyId: policyId!, assetName: assetName ?? "", info };
+  });
+}
+
+/**
  * A token's name alone: `tokenText`'s label. Where the text can say more,
  * `tokenAmountText` (or TokenAmountText) also marks a token that isn't on
  * the wallet's list.

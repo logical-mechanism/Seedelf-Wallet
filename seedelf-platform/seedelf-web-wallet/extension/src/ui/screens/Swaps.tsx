@@ -105,7 +105,18 @@ import {
   SLIPPAGE_MIN,
   wholeUnits,
 } from "../swap";
-import { initials, sortTokens, tint, tokenAmountText, tokenDecimals, tokenInfo, tokenMark, tokenText, viewToken } from "../tokens";
+import {
+  initials,
+  listedTokens,
+  sortTokens,
+  tint,
+  tokenAmountText,
+  tokenDecimals,
+  tokenInfo,
+  tokenMark,
+  tokenText,
+  viewToken,
+} from "../tokens";
 
 const ADA: SwapSide = { label: "₳", decimals: 6 };
 
@@ -1230,12 +1241,41 @@ function fundText(lovelace: string, tokens: TokenQuantity[], side: SwapSide, net
   return `${ada} and ${tokens.map((t) => tokenAmountText(network, { ...t, decimals: side.decimals })).join(", ")}`;
 }
 
+/** A token on the wallet's list that isn't held, as the picker offers it: its ticker, and the list's name under it. */
+type ListedPick = Pick & { sub: string };
+
+/**
+ * What the picker finds for `query` without asking anyone (privacy review
+ * §3.11): what's held (`own`) and, for what's received, the tokens on the
+ * wallet's list that aren't held, by ticker, name or ID. Minswap is asked
+ * only when neither has a match, or when the user asks it.
+ */
+export function localMatches(
+  network: NetworkName,
+  own: OwnPick[],
+  query: string,
+  which: "pay" | "get",
+): { held: OwnPick[]; listed: ListedPick[] } {
+  const lower = query.trim().toLowerCase();
+  const hit = (p: Pick & { sub: string }) => !lower || [nameOf(p), p.sub, p.id].some((s) => s.toLowerCase().includes(lower));
+  const listed =
+    which === "get"
+      ? listedTokens(network)
+          .map((t) => ({ id: t.policyId + t.assetName, side: { label: t.info.ticker, decimals: t.info.decimals }, sub: t.info.name }))
+          .filter((p) => !own.some((o) => o.id === p.id))
+      : [];
+  return { held: own.filter(hit), listed: listed.filter(hit) };
+}
+
 /**
  * Picks one side's token: ADA or one in the private balance, and for what's
- * received, any on Minswap's list too. Minswap sees what's searched for.
- * What's received lists held tokens that are neither on the wallet's list
- * nor found on Minswap's verified list apart, after Minswap's, never first:
- * anyone can put a token named like a known one in a private balance (#20).
+ * received, one on the wallet's list, or any on Minswap's. The wallet's own
+ * list is matched first, on the device; Minswap is asked only when nothing
+ * here matches, or on Search Minswap, and then sees what's searched for
+ * (privacy review §3.11). What's received lists held tokens that are
+ * neither on the wallet's list nor found on Minswap's verified list apart,
+ * after Minswap's, never first: anyone can put a token named like a known
+ * one in a private balance (#20).
  */
 export function TokenSelect({
   which,
@@ -1255,8 +1295,11 @@ export function TokenSelect({
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<SwapTokenInfo[]>();
   const [error, setError] = useState<string>();
+  // The query the user asked Minswap about (Search Minswap), though something here matched it.
+  const [asked, setAsked] = useState<string>();
   const q = query.trim();
-  const search = which === "get" && q.length >= 2;
+  const { held: matching, listed } = useMemo(() => localMatches(network, own, q, which), [network, own, q, which]);
+  const search = which === "get" && q.length >= 2 && (asked === q || (!matching.length && !listed.length));
 
   useEffect(() => {
     setFound(undefined);
@@ -1276,13 +1319,11 @@ export function TokenSelect({
     };
   }, [search, q]);
 
-  const lower = q.toLowerCase();
-  const matching = lower ? own.filter((p) => [nameOf(p), p.sub, p.id].some((s) => s.toLowerCase().includes(lower))) : own;
   // Minswap's search lists verified tokens only: one of those held is as good as listed.
   const vouched = (p: OwnPick) => p.listed || !!found?.some((t) => t.id === p.id);
   const mine = which === "get" ? matching.filter(vouched) : matching;
   const others = which === "get" ? matching.filter((p) => !vouched(p)) : [];
-  const theirs = found?.filter((t) => !own.some((p) => p.id === t.id));
+  const theirs = found?.filter((t) => !own.some((p) => p.id === t.id) && !listed.some((p) => p.id === t.id));
 
   const row = (p: Pick, sub: string, held?: string) => (
     <li key={p.id}>
@@ -1315,7 +1356,12 @@ export function TokenSelect({
           autoFocus
         />
       </label>
-      {which === "get" && <p className="field-note">Searching asks Minswap, which then knows what you looked for.</p>}
+      {which === "get" && (
+        <p className="field-note">
+          The wallet's own list is searched here first. Minswap is asked only when nothing here matches, or when you search
+          it, and then knows what you looked for.
+        </p>
+      )}
       <h3 className="swap-pick__heading">In your private balance</h3>
       {mine.length ? (
         <ul className="list" data-testid="swap-own-tokens">
@@ -1324,10 +1370,25 @@ export function TokenSelect({
       ) : (
         <p className="note">{others.length ? "Nothing else you hold is listed or verified." : `Nothing you hold matches “${q}”.`}</p>
       )}
+      {listed.length > 0 && (
+        <>
+          <h3 className="swap-pick__heading">On the wallet's list</h3>
+          <ul className="list" data-testid="swap-listed-tokens">
+            {listed.map((p) => row(p, p.sub))}
+          </ul>
+        </>
+      )}
       {which === "get" && (
         <>
           <h3 className="swap-pick__heading">On Minswap</h3>
-          {!search && <p className="note">Search to find any token Minswap lists.</p>}
+          {!search &&
+            (q.length >= 2 ? (
+              <button type="button" className="link align-start" onClick={() => setAsked(q)} data-testid="swap-search-minswap">
+                Search Minswap for “{q}”
+              </button>
+            ) : (
+              <p className="note">Search to find any token Minswap lists.</p>
+            ))}
           {search && error && <p className="error">{error}</p>}
           {search && !found && !error && <p className="note">Searching…</p>}
           {theirs?.length === 0 && <p className="note">Minswap lists nothing else by that name.</p>}

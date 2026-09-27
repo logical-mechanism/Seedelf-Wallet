@@ -1380,13 +1380,15 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await page.getByLabel("You pay", { exact: true }).fill("30");
   await page.getByTestId("swap-to").click();
 
-  // MIN, found on Minswap's list.
+  // MIN, found on the wallet's own list: Minswap isn't asked what was searched for (privacy review §3.11).
   const picker = page.getByRole("dialog", { name: "You receive" });
   await expect(picker.getByTestId("swap-own-tokens")).toContainText("ADA");
   await picker.getByLabel("Search tokens").fill("MIN");
-  await expect(picker.getByTestId("swap-tokens")).toContainText("MIN");
+  await expect(picker.getByTestId("swap-listed-tokens")).toContainText("MIN");
+  await expect(picker.getByTestId("swap-search-minswap")).toHaveText("Search Minswap for “MIN”");
   await snap(page, "swap-picker");
-  await picker.getByTestId("swap-tokens").getByRole("button", { name: /MIN/ }).click();
+  await picker.getByTestId("swap-listed-tokens").getByRole("button", { name: /MIN/ }).click();
+  expect(swaps.calls.map((c) => c.path)).not.toContain("tokens");
   await expect(picker).toBeHidden();
   await expect(page.getByTestId("swap-to")).toContainText("MIN");
   await expect(page.getByRole("button", { name: "Not enough ADA" })).toBeDisabled();
@@ -1805,7 +1807,7 @@ test("a private swap paused by a price move, then stopped: everything comes back
   await page.getByTestId("swap-to").click();
   const picker = page.getByRole("dialog", { name: "You receive" });
   await picker.getByLabel("Search tokens").fill("MIN");
-  await picker.getByTestId("swap-tokens").getByRole("button", { name: /MIN/ }).click();
+  await picker.getByTestId("swap-listed-tokens").getByRole("button", { name: /MIN/ }).click();
   await page.getByRole("button", { name: "Review swap" }).click();
   // giveme.my refuses, as recorded: say the funding reached the chain anyway.
   await page.getByRole("button", { name: "Send", exact: true }).click();
