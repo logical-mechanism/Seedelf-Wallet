@@ -180,7 +180,9 @@ function byWorker(request: Request, strays: string[]): boolean {
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
   let submits = 0;
-  await context.route("https://preprod.koios.rest/**", async (route) => {
+  // Mainnet's Koios answers from the same recordings: a phrase's keys are the same on both networks, so a test
+  // that switches to mainnet sees the recorded account there too.
+  await context.route(/^https:\/\/(preprod|api)\.koios\.rest\//, async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").pop()!;
     if (byWorker(request, koios.strays)) koios.calls.push(path);
@@ -292,7 +294,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
   });
   // Nothing else leaves the browser.
   await context.route(
-    /^https?:\/\/(?!preprod\.koios\.rest|www\.giveme\.my\/preprod\/collateral\/$|aggr\.monorepo-testnet-preprod\.minswap\.org)/,
+    /^https?:\/\/(?!(preprod|api)\.koios\.rest\/|www\.giveme\.my\/preprod\/collateral\/$|aggr\.monorepo-testnet-preprod\.minswap\.org)/,
     (route) => route.abort(),
   );
 }

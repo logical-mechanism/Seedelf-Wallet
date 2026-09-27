@@ -2933,6 +2933,13 @@ test("a mainnet build switches networks in Settings, and marks preprod on every 
   await expect(page.getByTestId("test-network")).toHaveCount(0);
   expect((await askWorker(page, { type: "status" })).reply.value).toMatchObject({ network: "mainnet", networks: ["mainnet", "preprod"] });
   expect((await askWorker(page, { type: "account" })).reply.value.receiveAddress).toMatch(/^addr1/);
+  // Send asks for mainnet's addresses.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "Send publicly" }).click();
+  await expect(page.getByLabel("To", { exact: true })).toHaveAttribute("placeholder", "addr1…, $handle or 5eed0e1f…");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Settings" }).click();
 
   // Back to preprod: it says first that its ADA has no value.
   await page.getByRole("group", { name: "Cardano network" }).getByRole("button", { name: "Preprod" }).click();
