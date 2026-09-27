@@ -1710,15 +1710,18 @@ test("Lovejoin: a mix that stopped partway leaves its box not mixed yet, said so
   await expect(chains).toContainText("Why it stopped: The network rejected the transaction");
   const notMixed = page.getByTestId("lovejoin-not-mixed");
   await expect(notMixed).toContainText("One of your boxes isn't mixed yet");
-  // Mixing it again comes first.
-  await expect(page.getByTestId("lovejoin-again")).toHaveClass(/primary/);
+  // Mixing it again comes first, paid by the public account that put it in: never the private balance unless asked (privacy review §2.10).
+  await expect(notMixed).toContainText("It came from your public account, so Mix again from my public account takes it first");
+  await expect(page.getByTestId("lovejoin-again-public")).toHaveClass(/primary/);
+  await expect(page.getByTestId("lovejoin-again")).toHaveCount(0);
+  await expect(page.getByTestId("lovejoin-again-anyway")).toBeVisible();
   await snap(page, "lovejoin-not-mixed");
 
   // Bring one back anyway asks first: it shows where the box went in. Keep it keeps it.
   const asked = koios.collateralAsked;
   await notMixed.getByTestId("lovejoin-anyway").click();
   const ask = page.getByRole("dialog", { name: "Bring back a box that wasn't mixed?" });
-  await expect(ask).toContainText("anyone can tie that deposit to your private balance");
+  await expect(ask).toContainText("anyone can tie your public account to your private balance");
   await snap(page, "lovejoin-anyway");
   await ask.getByRole("button", { name: "Keep it" }).click();
   await expect(ask).toHaveCount(0);
