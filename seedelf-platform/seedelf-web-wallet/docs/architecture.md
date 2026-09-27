@@ -47,7 +47,7 @@ flowchart LR
   - **Lock** (manual or auto-lock) clears the entropy from session storage and frees the keys in memory. Wiping memory is best effort (see *Build settings* under [Crypto](#crypto)).
     - Storage goes first, and the keys are dropped whatever happens, each freed in its own `try`: a WebAssembly instance that trapped refuses `free()`, and nothing it does can keep the wallet unlocked (the launch review, #17).
     - A call that traps (`isTrap` in `wasm.ts`) locks the wallet and replaces the instance with a fresh one in place (`freshWasm`, wasm-bindgen's reset function, which `wasm/build.sh` asks for). The old instance's key objects stop working, so the user unlocks again.
-    - Auto-lock counts an activity time in the future (a clock that moved back) as expired, and its alarm stops once there's no entropy, as after a browser restart, without loading WebAssembly.
+    - Auto-lock counts an activity time more than 30 s in the future (a clock that moved back further than a time service's usual correction) as expired, and its alarm stops once there's no entropy, as after a browser restart, without loading WebAssembly.
   - The result: the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every idle restart.
 
 ## Crypto

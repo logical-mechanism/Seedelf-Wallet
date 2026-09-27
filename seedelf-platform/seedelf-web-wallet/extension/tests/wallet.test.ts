@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { VAULT_KEY } from "../src/background/vault";
 import {
   AUTO_LOCK_MS,
+  CLOCK_STEP_TOLERANCE_MS,
   hasEntropy,
   SESSION_ACTIVITY,
   SESSION_ENTROPY,
@@ -333,6 +334,40 @@ describe("wallet", () => {
     expect(await wallet.state()).toBe("locked");
     expect(session.data.size).toBe(0);
     expect(events.alarm).toBe("stopped");
+  });
+
+  it("stays unlocked when a time service steps the clock back a little just after activity", async () => {
+    const { wallet, session, clock, events } = testWallet();
+    await wallet.create(cardano[0]!.phrase, PASSWORD);
+    clock.now += 60_000;
+    await wallet.touch();
+    await session.set("seedelf.balances.preprod", { kept: true });
+
+    // Back 2 s, then back the whole tolerance: still unlocked, and nothing wiped.
+    clock.now -= 2000;
+    expect(await wallet.state()).toBe("unlocked");
+    await expect(wallet.account("preprod")).resolves.toBeDefined();
+    clock.now -= CLOCK_STEP_TOLERANCE_MS - 2000;
+    expect(await wallet.state()).toBe("unlocked");
+    expect(await session.get("seedelf.balances.preprod")).toEqual({ kept: true });
+    expect(events).toEqual({ changed: 1, alarm: "started" });
+
+    // Any further back, it locks.
+    clock.now -= 1;
+    expect(await wallet.state()).toBe("locked");
+    expect(session.data.size).toBe(0);
+    expect(events.alarm).toBe("stopped");
+  });
+
+  it("puts the lock off by no more than the step back", async () => {
+    const { wallet, clock } = testWallet();
+    await wallet.create(cardano[0]!.phrase, PASSWORD);
+    clock.now -= CLOCK_STEP_TOLERANCE_MS;
+    expect(await wallet.state()).toBe("unlocked");
+    clock.now += CLOCK_STEP_TOLERANCE_MS + AUTO_LOCK_MS - 1;
+    expect(await wallet.state()).toBe("unlocked");
+    clock.now += 1;
+    expect(await wallet.state()).toBe("locked");
   });
 
   it("stops the auto-lock alarm Chrome kept across a browser restart, at its first check", async () => {

@@ -28,6 +28,13 @@ const STORE_INFO = new TextEncoder().encode("records");
 /** Lock after this long without UI activity, unless the settings say otherwise (`lockAfterMs`). */
 export const AUTO_LOCK_MS = 15 * 60_000;
 
+/**
+ * How far the clock may step back after activity with the wallet staying
+ * unlocked: a time service's usual correction. A step this size only puts
+ * the lock off by as much.
+ */
+export const CLOCK_STEP_TOLERANCE_MS = 30_000;
+
 /** chrome.storage.session: the vault entropy (base64) while unlocked. */
 export const SESSION_ENTROPY = "seedelf.entropy";
 /** chrome.storage.session: when the user last did something (ms since the epoch). */
@@ -388,9 +395,10 @@ export class Wallet {
       const last = (await session.get<number>(SESSION_ACTIVITY)) ?? 0;
       const lockAfter = (await this.deps.lockAfterMs?.()) ?? AUTO_LOCK_MS;
       const idle = now() - last;
-      // Activity in the future means the clock moved back: that counts as
-      // expired, or the wallet would stay unlocked for as long as it moved.
-      if (idle >= 0 && idle < lockAfter) {
+      // Activity in the future means the clock moved back. A step past the
+      // tolerance counts as expired, or the wallet would stay unlocked for
+      // as long as it moved.
+      if (idle >= -CLOCK_STEP_TOLERANCE_MS && idle < lockAfter) {
         if (!this.keys) {
           const entropy = fromBase64(stored);
           try {
