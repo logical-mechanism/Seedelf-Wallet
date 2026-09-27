@@ -97,9 +97,12 @@ export class SendService {
     key: string,
     note?: string,
   ): Promise<SendSummary> {
-    const { wasm, wallet, now } = this.deps;
+    const { wasm, wallet } = this.deps;
     await settleMaybeSent(this.deps, network);
-    const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
+    const [{ params, utxos, held, withdrawal }, invalidHereafter] = await Promise.all([
+      readAccount(this.deps, network),
+      validUntil(this.deps.koios(network)),
+    ]);
     if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to send.");
 
     const payments = destinations.map((d, i) => ({
@@ -116,7 +119,7 @@ export class SendService {
       payments,
       withdrawal,
       note: note || undefined,
-      invalidHereafter: validUntil(wasm, network, now()),
+      invalidHereafter,
     };
     const result = await wallet.withKeys(
       (keys) => JSON.parse(wasm.buildAccountSend(keys.cardano, JSON.stringify(request))) as SendResult,

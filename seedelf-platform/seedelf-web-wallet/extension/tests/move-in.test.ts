@@ -38,6 +38,7 @@ describe("move-in", () => {
       "account_info",
       "credential_utxos",
       "epoch_params",
+      "tip",
     ]);
     // The account's staking rewards go in too (preferences.ts).
     expect(summary.withdrawal).toBe("57475311");
@@ -102,10 +103,12 @@ describe("move-in", () => {
     const summary = await t.moveIn.build("preprod", "5000000", []);
     const { invalidHereafter } = await t.moveIn.submit("preprod", summary.txHash);
     const inputs = txInputs(t.koios.submitted[0]!);
+    const tips = () => t.koios.calls.filter((c) => c.path === "tip").length;
+    const built = tips();
     await busyFor(t, 11 * 60_000);
     expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
     expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
-    expect(t.koios.calls.some((c) => c.path === "tip")).toBe(false); // the device's clock says it can't have expired
+    expect(tips()).toBe(built); // the device's clock says it can't have expired
 
     // Two hours on, the chain is past its slot, but not by enough to trust a Koios backend's tx_status.
     await busyFor(t, 2 * 60 * 60_000);

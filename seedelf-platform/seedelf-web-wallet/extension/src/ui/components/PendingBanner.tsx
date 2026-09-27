@@ -66,14 +66,17 @@ const DROPPED: Record<NonNullable<PendingTx["dropped"]>, { title: (what: string)
 
 /**
  * How long a payment from the public account stays valid once it's built
- * (background/account.ts VALID_FOR_MS): the slot it carries.
+ * (background/account.ts VALID_FOR_MS): the slot it carries, that long past
+ * the chain's tip.
  */
 const VALID_FOR_MS = 2 * 60 * 60_000;
 
 /**
  * About when a payment from the public account stops being able to land
- * ("16:05"): its slot, two hours from when it was built, read from when it
- * was sent. None for a private one, which carries no slot yet.
+ * ("16:05"): its slot, two hours on by the chain's clock from when it was
+ * built, read from when it was sent. Time passes the same here, so this
+ * device's clock says it right even when it's off. None for a private one,
+ * which carries no slot yet.
  */
 export function validUntil(pending: PendingTx): string | undefined {
   if (pending.invalidHereafter === undefined) return undefined;

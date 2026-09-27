@@ -179,7 +179,7 @@ describe("staking transactions", () => {
       refund: "0",
       withdrawal: "0",
     });
-    expect(paths(t)).toEqual(["account_addresses", "account_info", "credential_utxos", "epoch_params"]);
+    expect(paths(t)).toEqual(["account_addresses", "account_info", "credential_utxos", "epoch_params", "tip"]);
     expect(t.koios.submitted).toHaveLength(0);
 
     const pending = await t.staking.submit("preprod", summary.txHash);
@@ -246,7 +246,7 @@ describe("spending rewards", () => {
     const off = await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
     expect(off.withdrawal).toBe("0");
     // Off, the stake key isn't even read.
-    expect(paths(t)).toEqual(["account_addresses", "credential_utxos", "epoch_params"]);
+    expect(paths(t)).toEqual(["account_addresses", "credential_utxos", "epoch_params", "tip"]);
   });
 
   it("waits, and the payment goes ahead, while the vote isn't delegated", async () => {

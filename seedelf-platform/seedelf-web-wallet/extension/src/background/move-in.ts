@@ -67,11 +67,13 @@ export class MoveInService {
   async build(network: NetworkName, lovelace: string | null, tokens: TokenQuantity[]): Promise<MoveInSummary> {
     const { wasm, wallet, session, now } = this.deps;
     await settleMaybeSent(this.deps, network);
-    const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
+    const [{ params, utxos, held, withdrawal }, invalidHereafter] = await Promise.all([
+      readAccount(this.deps, network),
+      validUntil(this.deps.koios(network)),
+    ]);
     if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to make private.");
 
     return wallet.withKeys(async (keys) => {
-      const invalidHereafter = validUntil(wasm, network, now());
       const request = { network, params, utxos, lovelace, tokens, withdrawal, invalidHereafter };
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
       const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };

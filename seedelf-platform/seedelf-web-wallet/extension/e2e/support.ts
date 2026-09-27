@@ -201,6 +201,12 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     if (path === "epoch_params") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(epochParams) });
     }
+    if (path === "tip") {
+      // The chain's slot now: a second each since preprod's start, or mainnet's Shelley start.
+      const since = new URL(request.url()).host.startsWith("preprod.") ? 1_655_683_200 : 1_591_566_291;
+      const rows = [{ abs_slot: Math.floor(Date.now() / 1000) - since }];
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
     if (path === "pool_list" || path === "totals") {
       const rows = path === "pool_list" ? stakingPreprod.pool_list : stakingPreprod.totals;
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });

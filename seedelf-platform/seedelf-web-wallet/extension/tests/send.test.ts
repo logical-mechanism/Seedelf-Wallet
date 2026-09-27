@@ -50,6 +50,7 @@ describe("send", () => {
       "account_info",
       "credential_utxos",
       "epoch_params",
+      "tip",
     ]);
     // The account's staking rewards pay for it too (preferences.ts).
     expect(summary.withdrawal).toBe("57475311");
@@ -154,6 +155,7 @@ describe("send", () => {
       "credential_utxos",
       "credential_utxos",
       "epoch_params",
+      "tip",
     ]);
 
     // Max pays one recipient; and there's a limit to how many.

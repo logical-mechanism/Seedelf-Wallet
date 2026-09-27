@@ -42,10 +42,13 @@ export class MintService {
   }
 
   private async buildFromAccount(network: NetworkName, label: string): Promise<MintSummary> {
-    const { wasm, now } = this.deps;
-    const { params, utxos, collateral, held, withdrawal } = await readAccount(this.deps, network);
+    const { wasm } = this.deps;
+    const [{ params, utxos, collateral, held, withdrawal }, invalidHereafter] = await Promise.all([
+      readAccount(this.deps, network),
+      validUntil(this.deps.koios(network)),
+    ]);
     // The draft Ogmios measures and the finish hold the same slot.
-    const request = { network, params, label, utxos, collateral, withdrawal, invalidHereafter: validUntil(wasm, network, now()) };
+    const request = { network, params, label, utxos, collateral, withdrawal, invalidHereafter };
     if (request.utxos.length === 0) {
       throw nothingInAccount(held, "Your public account is empty. Fund it first; the Seedelf is paid from there.");
     }

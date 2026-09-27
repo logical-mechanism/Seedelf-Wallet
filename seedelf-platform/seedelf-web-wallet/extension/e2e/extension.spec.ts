@@ -942,7 +942,7 @@ test("send from the public account: a token with only the ADA it needs, review, 
   expect(koios.collateralAsked).toBe(0);
   await expect(page.getByRole("button", { name: "Send publicly" })).toBeDisabled();
   // Reading $bob once as typed; each review read it again, and the account and its stake key; then the submit.
-  const review1 = ["asset_nft_address", "account_addresses", "account_info", "credential_utxos", "epoch_params"];
+  const review1 = ["asset_nft_address", "account_addresses", "account_info", "credential_utxos", "epoch_params", "tip"];
   const sent = koios.calls.slice(reads, koios.calls.indexOf("submittx") + 1);
   expect(sent.sort()).toEqual(["asset_nft_address", ...review1, ...review1, "submittx"].sort());
 
@@ -1042,7 +1042,7 @@ test("send from the public account to a Seedelf: paste its name, see it found, r
   expect(koios.collateralAsked).toBe(0);
   // Both names were in the contract as Home's reading kept it: no requests. Review read what's new, and the account; then the submit.
   const contract = "credential_utxos";
-  const account = ["account_addresses", "account_info", "credential_utxos", "epoch_params"];
+  const account = ["account_addresses", "account_info", "credential_utxos", "epoch_params", "tip"];
   const sent = koios.calls.slice(reads, koios.calls.indexOf("submittx") + 1);
   expect(sent.sort()).toEqual([contract, ...account, "submittx"].sort());
 });
@@ -1986,7 +1986,7 @@ test("staking: the page, the pool browser, a change of pool reviewed and sent, t
   await expect(review).toContainText("Stake withTPREP");
   await expect(review).not.toContainText("Deposit");
   await expect(review).not.toContainText("Rewards withdrawn");
-  expect(koios.calls.slice(reads).sort()).toEqual(["account_addresses", "account_info", "credential_utxos", "epoch_params"]);
+  expect(koios.calls.slice(reads).sort()).toEqual(["account_addresses", "account_info", "credential_utxos", "epoch_params", "tip"]);
   await snap(page, "staking-review");
   expect(koios.submitted).toHaveLength(0);
 

@@ -2,7 +2,9 @@
 // after it's built (launch review #28): a move-in, a send, the collateral
 // payment, a staking transaction and an account-paid mint. Past that slot, one
 // that never landed can't land any more, so paying again can't pay twice.
-// Seedelf spends, which giveme.my co-signs, don't carry one yet.
+// Seedelf spends, which giveme.my co-signs, don't carry one yet. Two hours by
+// the chain's clock, from its tip, whatever this device's clock says (final
+// review money-submit-5).
 import { describe, expect, it } from "vitest";
 
 import { VALID_FOR_MS } from "../src/background/account";
@@ -22,9 +24,14 @@ const TWO_HOURS = 2 * 60 * 60_000;
 
 /** Preprod's slot at `ms`: slot 86,400 began 2022-06-21 00:00 UTC, and each lasts a second. */
 const preprodSlot = (ms: number) => 86_400 + Math.floor((ms - 1_655_769_600_000) / 1000);
+/** Two hours of slots. */
+const TWO_HOURS_OF_SLOTS = 2 * 60 * 60;
 
-async function unlocked() {
+/** An unlocked wallet on a device whose clock is `off` ms ahead of the chain's (behind, below zero). */
+async function unlocked(off = 0) {
   const t = testBalances();
+  t.koios.tip = preprodSlot(t.clock.now);
+  t.clock.now += off;
   await t.wallet.create(account(12).phrase, PASSWORD);
   return t;
 }
@@ -44,6 +51,7 @@ describe("the public account's transactions", () => {
     expect(VALID_FOR_MS).toBe(TWO_HOURS);
     const t = await unlocked();
     const slot = preprodSlot(t.clock.now + TWO_HOURS);
+    expect(slot).toBe(t.koios.tip + TWO_HOURS_OF_SLOTS);
 
     await t.moveIn.build("preprod", "5000000", []);
     expect(await keptUntil(t, SESSION_BUILT)).toBe(slot);
@@ -65,8 +73,25 @@ describe("the public account's transactions", () => {
   it("count the two hours from when each is built", async () => {
     const t = await unlocked();
     t.clock.now += 10 * 60_000;
+    t.koios.tip += 10 * 60;
     await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
     expect(await keptUntil(t, SESSION_SEND)).toBe(preprodSlot(t.clock.now + TWO_HOURS));
+  });
+
+  it("count them by the chain's clock, however far off this device's is", async () => {
+    for (const off of [6 * 60 * 60_000, -3 * 60 * 60_000]) {
+      const t = await unlocked(off);
+      const tip = t.koios.tip;
+      await t.moveIn.build("preprod", "5000000", []);
+      expect(await keptUntil(t, SESSION_BUILT)).toBe(tip + TWO_HOURS_OF_SLOTS);
+      await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
+      expect(await keptUntil(t, SESSION_SEND)).toBe(tip + TWO_HOURS_OF_SLOTS);
+      await t.staking.build("preprod", { kind: "withdraw" });
+      expect(await keptUntil(t, SESSION_STAKE)).toBe(tip + TWO_HOURS_OF_SLOTS);
+      t.koios.evaluation = accountMintPreprod.evaluation;
+      await t.mint.build("preprod", "", "account");
+      expect(await keptUntil(t, SESSION_MINT)).toBe(tip + TWO_HOURS_OF_SLOTS);
+    }
   });
 
   it("leave a Seedelf spend, which giveme.my co-signs, as it was", async () => {

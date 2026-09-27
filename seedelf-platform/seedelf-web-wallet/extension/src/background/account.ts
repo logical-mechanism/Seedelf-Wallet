@@ -10,7 +10,8 @@
 // the addresses Koios lists under the account's stake key
 // (`account_addresses`); then every payment key in that range is asked about
 // by credential (`credential_utxos`). Two requests, one after the other, and a
-// move-in, mint or send adds `epoch_params` alongside.
+// move-in, mint or send adds `epoch_params` alongside, and the chain's `tip`
+// for its slot (`validUntil`).
 //
 // A public Lovejoin mix being sent pays each mix from the one before's change
 // at the account and puts up its collateral (lovejoin.ts). Until it's all
@@ -176,10 +177,13 @@ export async function readAccount(
 export const VALID_FOR_MS = 2 * 60 * 60_000;
 
 /**
- * The slot a transaction built from the account at `now` stops being valid
- * at, two hours on: its `invalidHereafter`. Past it, one that never landed
- * can't land any more, so paying again can't pay twice.
+ * The slot a transaction built from the account now stops being valid at,
+ * two hours on: its `invalidHereafter`. Past it, one that never landed can't
+ * land any more, so paying again can't pay twice. Two hours on by the
+ * chain's clock, from its tip (a slot a second on both networks), not this
+ * device's: one hours off would have it valid for hours more than Home says,
+ * and payments held back as long (final review money-submit-5).
  */
-export function validUntil(wasm: typeof Wasm, network: NetworkName, now: number): number {
-  return wasm.slotAt(network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod, now + VALID_FOR_MS);
+export async function validUntil(koios: Koios): Promise<number> {
+  return (await koios.tipSlot()) + VALID_FOR_MS / 1000;
 }

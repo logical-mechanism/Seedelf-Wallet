@@ -195,6 +195,7 @@ describe("mint paid by the Cardano account (mint first, then move in)", () => {
       "credential_utxos",
       "epoch_params",
       "ogmios",
+      "tip",
     ]);
     // The account's staking rewards pay for it too (preferences.ts).
     expect(summary.withdrawal).toBe("57475311");

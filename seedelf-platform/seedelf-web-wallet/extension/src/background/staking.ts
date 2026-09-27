@@ -237,9 +237,12 @@ export class StakingService {
    * cost a fee.
    */
   async build(network: NetworkName, action: StakingAction): Promise<StakingSummary> {
-    const { wasm, wallet, now } = this.deps;
+    const { wasm, wallet } = this.deps;
     await settleMaybeSent(this.deps, network);
-    const { params, utxos, held, stake } = await readAccount(this.deps, network, { stake: true });
+    const [{ params, utxos, held, stake }, invalidHereafter] = await Promise.all([
+      readAccount(this.deps, network, { stake: true }),
+      validUntil(this.deps.koios(network)),
+    ]);
     if (utxos.length === 0) {
       throw nothingInAccount(held, "Your public account is empty. Staking needs ADA for the fee, and a 2 ₳ deposit the first time.");
     }
@@ -257,7 +260,7 @@ export class StakingService {
       utxos,
       action,
       state: { registered: state.registered, deposit: state.deposit, rewards: state.rewards, drep: state.drep },
-      invalidHereafter: validUntil(wasm, network, now()),
+      invalidHereafter,
     };
     const result = await wallet.withKeys(
       (keys) => JSON.parse(wasm.buildStaking(keys.cardano, JSON.stringify(request))) as StakingSummary & { txCbor: string },
