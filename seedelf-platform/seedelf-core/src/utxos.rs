@@ -37,11 +37,11 @@ pub fn collect_all_wallet_utxos(
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
     for utxo in utxos {
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scalar
-            if inline_datum
-                .is_owned(sk)
-                .context("Failed To Construct Points")?
-            {
+            // utxo must be owned by this secret scalar. A register whose
+            // points don't decompress is nobody's: anyone can pay the
+            // contract under one, so it's skipped, never an error that
+            // stops the scan.
+            if inline_datum.is_owned(sk).unwrap_or(false) {
                 // its owned but lets not count the seedelf in the balance
                 if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                     all_utxos.push(utxo.clone());
@@ -119,11 +119,9 @@ pub fn collect_wallet_utxos(
     for utxo in utxos {
         // Extract bytes
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scalar
-            if inline_datum
-                .is_owned(sk)
-                .context("Failed To Construct Points")?
-            {
+            // utxo must be owned by this secret scalar. A register whose
+            // points don't decompress is nobody's, and doesn't stop the scan.
+            if inline_datum.is_owned(sk).unwrap_or(false) {
                 // its owned but it can't hold a seedelf
                 if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                     if number_of_utxos >= MAXIMUM_WALLET_UTXOS {

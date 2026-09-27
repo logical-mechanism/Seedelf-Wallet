@@ -486,6 +486,20 @@ fn register_utxo(tx_hash_byte: u8, register: &Register) -> UtxoResponse {
     }
 }
 
+/// A compressed point on the curve but outside the prime-order subgroup:
+/// `from_compressed` refuses it, as the wallet contract does.
+fn torsion_point() -> String {
+    (1u8..=u8::MAX)
+        .find_map(|x| {
+            let mut bytes = [0u8; 48];
+            bytes[0] = 0x80;
+            bytes[47] = x;
+            let point = blstrs::G1Affine::from_compressed_unchecked(&bytes).into_option()?;
+            (!bool::from(point.is_torsion_free())).then(|| hex::encode(bytes))
+        })
+        .expect("a small x off the subgroup")
+}
+
 #[test]
 fn wallet_scans_skip_an_identity_register() {
     // Anyone can pay the contract under (identity, identity), and anyone can
@@ -504,4 +518,46 @@ fn wallet_scans_skip_an_identity_register() {
     assert_eq!(hashes(all), owned);
     let usable = utxos::collect_wallet_utxos(sk, PID_EXTRA, rows).unwrap();
     assert_eq!(hashes(usable), owned);
+}
+
+#[test]
+fn wallet_scans_skip_a_register_whose_points_dont_decompress() {
+    // Anyone can pay the contract under any 48 bytes. No key owns such a
+    // register and nobody can spend it, so it mustn't stop the scan either.
+    let sk = random_scalar();
+    let zeros = "00".repeat(48);
+    let random: String = hex::encode(
+        (0u8..48)
+            .map(|i| i.wrapping_mul(97) ^ 0x5a)
+            .collect::<Vec<u8>>(),
+    );
+    let torsion = torsion_point();
+    let ours = Register::create(sk).unwrap().rerandomize().unwrap();
+    let junk = [
+        Register::new(zeros.clone(), zeros),
+        Register::new(random.clone(), random),
+        Register::new(torsion, ours.public_value.clone()),
+    ];
+    for register in &junk {
+        // Each one reaches the error, not just `false`.
+        assert!(register.is_owned(sk).is_err(), "{register:?}");
+    }
+    let owned = vec![hex::encode([0x10; 32])];
+    let hashes = |found: Vec<UtxoResponse>| -> Vec<String> {
+        found.into_iter().map(|u| u.tx_hash).collect()
+    };
+    // The junk before the owned row, and after it.
+    let before: Vec<UtxoResponse> = junk
+        .iter()
+        .enumerate()
+        .map(|(i, r)| register_utxo(i as u8 + 1, r))
+        .chain([register_utxo(0x10, &ours)])
+        .collect();
+    let after: Vec<UtxoResponse> = before.iter().cloned().rev().collect();
+    for rows in [before, after] {
+        let all = utxos::collect_all_wallet_utxos(sk, PID_EXTRA, rows.clone()).unwrap();
+        assert_eq!(hashes(all), owned);
+        let usable = utxos::collect_wallet_utxos(sk, PID_EXTRA, rows).unwrap();
+        assert_eq!(hashes(usable), owned);
+    }
 }
