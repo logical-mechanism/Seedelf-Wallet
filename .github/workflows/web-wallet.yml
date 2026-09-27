@@ -79,5 +79,5 @@ jobs:
         working-directory: seedelf-platform/seedelf-web-wallet/extension
         run: |
           VITE_STORE_BUILD=true npm run build:ext
-          node scripts/package.mjs
+          node scripts/package.mjs preprod
           npm run e2e
