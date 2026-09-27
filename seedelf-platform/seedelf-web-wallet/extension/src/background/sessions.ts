@@ -2179,9 +2179,9 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
  * - an order at a DEX's contract, staked with the session's stake key or
  *   none, whose details (its datum, inline or carried for its hash) name the
  *   session's key: a real order names its owner, who gets the proceeds or
- *   the refund;
- * - at most one other address, Minswap's fee: ADA alone, and no more than
- *   `aggregatorFee` quoted (none on preprod).
+ *   the refund. There's one at least;
+ * - at most one other output, Minswap's fee, wherever it goes: ADA alone,
+ *   and no more than `aggregatorFee` quoted (none on preprod).
  * Anything else is refused. The order's minimum isn't read back: it's what
  * the wallet asks Minswap for, and Minswap builds the order. Returns the
  * orders' output indexes.
@@ -2195,19 +2195,25 @@ export function checkOrder(outputs: BuiltOutput[], session: { address: string; k
     if (o.address === session.address) return;
     // The header's high four bits: 0 to 7 are Shelley addresses, an odd one paying a script.
     const type = Number.parseInt(o.address.charAt(0), 16);
-    if (type > 7) throw new Refused("it pays an address that isn't this session's.");
-    if (type % 2 === 0) {
-      if (o.address.slice(2, 58) === session.keyHash) throw new Refused("it pays this session's key under someone else's staking part.");
-      if (fee || o.tokens || o.lovelace > aggregatorFee) throw new Refused("it pays an address that isn't this session's.");
+    const script = type <= 7 && type % 2 === 1;
+    if (!script && o.address.slice(2, 58) === session.keyHash) {
+      throw new Refused("it pays this session's key under someone else's staking part.");
+    }
+    const staked = type === 1 ? o.address.slice(58, 114) === stake : type === 7;
+    if (script && staked && o.datum && names(o.datum, session.keyHash)) {
+      orders.push(i);
+      return;
+    }
+    if (!fee && !o.tokens && o.lovelace <= aggregatorFee) {
       fee = true;
       return;
     }
-    const staked = type === 1 ? o.address.slice(58, 114) === stake : type === 7;
+    if (!script) throw new Refused("it pays an address that isn't this session's.");
     if (!staked) throw new Refused("it pays a contract under someone else's staking part.");
     if (!o.datum) throw new Refused("it pays a contract without saying who the order is for.");
-    if (!names(o.datum, session.keyHash)) throw new Refused("its order isn't for this session.");
-    orders.push(i);
+    throw new Refused("its order isn't for this session.");
   });
+  if (!orders.length) throw new Refused("it places no order.");
   return orders;
 }
 

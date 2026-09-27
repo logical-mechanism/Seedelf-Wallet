@@ -987,11 +987,19 @@ describe("a swap that runs itself", () => {
       "it pays a contract under someone else's staking part.",
     );
 
-    // Minswap's fee: one more address, ADA alone, no more than the fee approved with the funding.
+    // Minswap's fee: one more output, ADA alone, no more than the fee approved with the funding, wherever it goes.
     const withFee = swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [other, 1_000_000], [SESSION_ADDRESS, 130_585_414]] });
     expect(await refused(withFee, "1000000")).toBeUndefined();
     expect(await refused(withFee, "999999")).toBe("it pays an address that isn't this session's.");
     expect(await refused(withFee)).toBe("it pays an address that isn't this session's.");
+    const contract = `70${"f0".repeat(28)}`;
+    const toContract = swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [contract, 1_000_000], [SESSION_ADDRESS, 130_585_414]] });
+    expect(await refused(toContract, "1000000")).toBeUndefined();
+    expect(await refused(toContract)).toBe("it pays a contract without saying who the order is for.");
+    // No order at all, only the fee: nothing a swap would sign.
+    expect(await refused(swapTx({ outputs: [[other, 1_000_000], [SESSION_ADDRESS, 144_585_414]] }), "1000000")).toBe(
+      "it places no order.",
+    );
   });
 
   it("pauses rather than sign a swap that gives ADA to the treasury, which no output shows", async () => {
