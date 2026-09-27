@@ -867,8 +867,7 @@ main {
 .welcome__actions {
   width: 100%;
   max-width: 340px;
-  margin-top: auto;
-  padding-top: var(--s6);
+  margin-top: var(--s5);
 }
 
 /* Which network a new wallet is on, chosen before its phrase (a build with both). */
