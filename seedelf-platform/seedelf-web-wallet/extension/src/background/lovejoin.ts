@@ -1591,8 +1591,13 @@ export class LovejoinService {
       return [];
     }
     if (ready.length > 1) {
+      // A fresh draw each, and a fresh start: a later unlock may draw it again.
+      const fresh = (m: DueMark) => {
+        delete m.unlock;
+        delete m.pushes;
+      };
       await this.update(network, (s) => {
-        for (const t of ready.slice(1)) moveDue(s, t, now + within(WITHDRAW_SPREAD_MS, random));
+        for (const t of ready.slice(1)) moveDue(s, t, now + within(WITHDRAW_SPREAD_MS, random), fresh);
       });
     }
     try {

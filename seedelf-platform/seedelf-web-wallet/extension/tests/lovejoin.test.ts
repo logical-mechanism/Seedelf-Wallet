@@ -1487,6 +1487,16 @@ describe("the boxes' withdraws", CHAINS, () => {
     t.clock.now += 60_000;
     await t.lovejoin.withdrawDue("preprod");
     expect(t.collateral.asked).toHaveLength(2);
+
+    // The wallet locks with the other two waiting their fresh delays, and unlocks hours later: they were drawn
+    // afresh since the last unlock, so this one draws them again rather than let them go a minute in.
+    t.clock.now += 3 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    const unlocked = t.clock.now;
+    await t.lovejoin.withdrawDue("preprod", true);
+    const redrawn = (await due()).filter((d) => d !== after[0]);
+    expect(redrawn).toHaveLength(2);
+    for (const d of redrawn) expect(d).toBeGreaterThanOrEqual(unlocked + UNLOCK_WAIT_MS[0]);
   });
 
   it("draws a box's wait at one unlock only: locked before it went, it goes at the run after the next unlock's", async () => {
