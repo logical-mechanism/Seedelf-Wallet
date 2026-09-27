@@ -18,18 +18,38 @@
 // private balance through a one-time account, as a mix from it is, with no
 // deposit. Its boxes wait again, a fresh delay each; none comes back while
 // it runs.
+//
+// Every chain the wallet sends is recorded (launch review H2). A box one of
+// them made and didn't finish mixing is "not mixed yet": it never comes back
+// by itself, since it still shows where it went in. Mix my boxes again takes
+// those first; Bring it back anyway takes one as it is, after a warning.
+// The chains that aren't all sent are listed: being sent (no box comes back
+// meanwhile), or stopped partway, and why. A mix from the private balance
+// can be stopped before its boxes go in: it then comes back directly. What
+// the wallet has in the pool is hidden with the balances (#56), and the page
+// says Lovejoin has had no third-party audit.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
-import type { LovejoinFunding, LovejoinPublicSummary, LovejoinStatus, PendingTx, SessionOutSummary, SessionView } from "../../shared/rpc";
+import type {
+  LovejoinChainView,
+  LovejoinFunding,
+  LovejoinPublicSummary,
+  LovejoinStatus,
+  PendingTx,
+  SessionOutSummary,
+  SessionView,
+} from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ShieldIcon } from "../components/Icons";
-import { chainText, delayText, useSessionsWhile } from "../components/LovejoinReturn";
+import { chainText, delayText, LOVEJOIN_UNAUDITED, useSessionsWhile } from "../components/LovejoinReturn";
+import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { Tabs } from "../components/Tabs";
 import { formatAda, plural, shortHex, whenOf } from "../format";
+import { useAmounts } from "../preferences";
 import { SwapTag, type SwapTone } from "./Swaps";
 
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
@@ -51,33 +71,114 @@ const isOver = (s: SessionView) => s.stage === "closed" || s.stage === "failed";
 /** A mix of the wallet's boxes again that may still spend them: no box comes back meanwhile. */
 const isMixingAgain = (s: SessionView) => !!s.mix?.again && !isOver(s) && !s.txs.some((t) => t.kind === "back");
 
+/** A mix whose funding the chain hasn't shown, but which may still land: it can be looked for again. */
+const unseen = (s: SessionView) => s.stage === "failed" && !s.unsent;
+
+/** A mix that runs and hasn't started its chain: Stop brings it back directly, with no box going in. */
+const stoppable = (s: SessionView) => !isOver(s) && !s.chain && !s.auto?.stopping;
+
 /** A mix's tag. */
 function tagOf(s: SessionView): { tone: SwapTone; label: string } {
-  if (s.stage === "failed") return { tone: "bad", label: "Not funded" };
+  if (s.stage === "failed") return unseen(s) ? { tone: "wait", label: "Not seen" } : { tone: "bad", label: "Not funded" };
   if (s.stage === "closed") return s.mix?.skipped ? { tone: "off", label: "Not mixed" } : { tone: "done", label: "Done" };
+  if (s.auto?.stopping) return { tone: "live", label: "Stopping" };
   if (s.auto?.retry) return { tone: "wait", label: "Retrying" };
   return { tone: "live", label: "Running" };
 }
 
 /** What a mix is doing, in a line: its chain sent, then on chain. A reason in full goes under it (detailOf). */
-function subOf(s: SessionView, now: number): string {
-  if (s.stage === "failed") return "Its funding didn't go through";
+export function subOf(s: SessionView, now: number): string {
+  if (s.stage === "failed") return unseen(s) ? "The chain hasn't shown its funding yet" : "Its funding didn't go through";
   if (s.stage === "funding") return "Its one-time account is being funded";
-  if (s.mix?.skipped) return `Lovejoin was left out: ${s.mix.skipped}`;
+  if (s.mix?.skipped) return "Came back without going into Lovejoin";
   if (s.chain?.cut || s.chain?.stopped) return chainText(s.chain);
   if (s.stage === "closed") return `In Lovejoin since ${whenOf(s.createdAt, new Date(now))}`;
   if (s.chain) return chainText(s.chain);
+  if (s.auto?.stopping) return "Stopping: it all comes back directly";
   if (s.auto?.retry) return "Something went wrong: it tries again by itself";
   return "Funded: the mixes are built and sent next";
 }
 
-/** Why a mix stopped, or what went wrong and is tried again: in full, under its row. */
-function detailOf(s: SessionView): string | undefined {
-  if (s.chain?.stopped) return `Why it stopped: ${s.chain.stopped}`;
+/**
+ * Why a mix stopped, was left out of Lovejoin (the pool below its floor, say),
+ * or what went wrong and is tried again: in full, under its row. And what
+ * stays at its account, if anything.
+ */
+export function detailOf(s: SessionView): string | undefined {
+  const lines: string[] = [];
+  if (s.mix?.skipped) lines.push(`Lovejoin was left out: ${s.mix.skipped.trim().replace(/\.$/, "")}.`);
+  if (s.chain?.stopped) lines.push(`Why it stopped: ${s.chain.stopped}`);
   if (s.auto?.retry && !isOver(s)) {
-    return `It tries again at ${new Date(s.auto.retry.at).toLocaleTimeString()}. What went wrong: ${s.auto.retry.error}`;
+    lines.push(`It tries again at ${new Date(s.auto.retry.at).toLocaleTimeString()}. What went wrong: ${s.auto.retry.error}`);
   }
-  return undefined;
+  if (unseen(s)) lines.push("Koios may have taken it, and it may still land: Try again looks for it again.");
+  if (s.leftBehind?.length) {
+    const n = s.leftBehind.length;
+    lines.push(`${n === 1 ? "One UTxO stays" : `${n} UTxOs stay`} at its account: no return takes ${n === 1 ? "it" : "them"}.`);
+  }
+  return lines.length ? lines.join(" ") : undefined;
+}
+
+/** Whose a chain is: a session's, or the public account's mix. */
+const chainName = (c: LovejoinChainView) => (c.session === undefined ? "From your public account" : `Private session ${c.session + 1}`);
+
+/**
+ * The wallet's chains through Lovejoin that aren't all sent: one being sent
+ * holds every box back until it's done; one that stopped partway says why,
+ * and the boxes it didn't mix wait for Mix my boxes again.
+ */
+export function Chains({ chains }: { chains: LovejoinChainView[] }) {
+  if (!chains.length) return null;
+  return (
+    <section className="section" aria-labelledby="lovejoin-chains-title">
+      <h2 id="lovejoin-chains-title">Chains</h2>
+      <ul className="list" data-testid="lovejoin-chains">
+        {chains.map((c) => (
+          <li key={`${c.session ?? "public"}.${c.at}`} className="token-row swap-row">
+            <span className="avatar avatar--contact" aria-hidden="true">
+              <ShieldIcon size={16} />
+            </span>
+            <span className="token-row__label">
+              {chainName(c)}, {plural(c.boxes, "box", "boxes")}
+            </span>
+            <SwapTag {...(c.stopped ? { tone: "off" as const, label: "Stopped" } : { tone: "live" as const, label: "Sending" })} />
+            <span className="token-row__sub">
+              {c.stopped ? `Stopped after ${c.sent} of ${c.total} transactions` : `${c.sent} of ${c.total} transactions sent`}
+            </span>
+            <p className="token-row__detail" data-testid="lovejoin-chain-detail">
+              {c.stopped
+                ? `Why it stopped: ${c.stopped.trim().replace(/\.$/, "")}. The boxes it didn't mix wait, not mixed yet, for Mix my boxes again.`
+                : "Withdraws wait until it's all sent."}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * The wallet's boxes that a chain of its made and didn't finish mixing: they
+ * never come back by themselves. Mix my boxes again takes them first; Bring
+ * it back anyway takes one as it is.
+ */
+export function NotMixed({ count, busy, onAnyway }: { count: number; busy: boolean; onAnyway: () => void }) {
+  if (!count) return null;
+  return (
+    <Callout tone="warn" testId="lovejoin-not-mixed">
+      <div className="stack-tight">
+        <span>
+          {count === 1 ? "One of your boxes isn't" : `${count} of your boxes aren't`} mixed yet: a chain stopped before
+          mixing {count === 1 ? "it" : "them"}. {count === 1 ? "It never comes" : "They never come"} back by{" "}
+          {count === 1 ? "itself" : "themselves"}, since each still shows where it went in. Mix my boxes again takes{" "}
+          {count === 1 ? "it" : "them"} first.
+        </span>
+        <button type="button" className="link align-start" onClick={onAnyway} disabled={busy} data-testid="lovejoin-anyway">
+          Bring one back anyway
+        </button>
+      </div>
+    </Callout>
+  );
 }
 
 export function Lovejoin({
@@ -90,13 +191,16 @@ export function Lovejoin({
   onBack: () => void;
   onPending: (pending: PendingTx) => void;
 }) {
+  const amounts = useAmounts();
   const [status, setStatus] = useState<LovejoinStatus>();
   const [mixes, setMixes] = useState<SessionView[]>([]);
+  // Asked first: bringing back a box not mixed yet, or stopping a mix.
+  const [asking, setAsking] = useState<{ anyway: true } | { stop: number }>();
   const [reading, setReading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [busy, setBusy] = useState(false);
   /** Which of the page's buttons is working. */
-  const [pressed, setPressed] = useState<"now" | "again">();
+  const [pressed, setPressed] = useState<"now" | "again" | "anyway">();
   const [error, setError] = useState<string>();
   const [source, setSource] = useState<Source>("private");
   const [boxes, setBoxes] = useState(1);
@@ -170,7 +274,7 @@ export function Lovejoin({
     };
   }, [boxes]);
 
-  async function act(task: () => Promise<void>, button?: "now" | "again") {
+  async function act(task: () => Promise<void>, button?: "now" | "again" | "anyway") {
     setBusy(true);
     setPressed(button);
     setError(undefined);
@@ -184,11 +288,32 @@ export function Lovejoin({
     }
   }
 
+  // The worker may say no, and why: a chain being sent, the last withdraw maybe on its way, boxes not mixed yet.
   const now = () =>
     act(async () => {
       onPending(await call("lovejoin-withdraw-now", {}));
       await load();
     }, "now");
+
+  /** Brings back a box its chain didn't mix, as it is: it shows where it went in. */
+  const anyway = () => {
+    const box = status?.notMixed[0];
+    setAsking(undefined);
+    if (!box) return;
+    void act(async () => {
+      onPending(await call("lovejoin-withdraw-now", { box, anyway: true }));
+      await load();
+    }, "anyway");
+  };
+
+  /** Stops a mix before its boxes go in: everything at its account comes back directly. */
+  const stop = (index: number) => {
+    setAsking(undefined);
+    void act(async () => {
+      const moved = await call("session-stop", { index });
+      setMixes((was) => was.map((m) => (m.index === index ? moved : m)));
+    });
+  };
 
   const again = () =>
     act(async () => {
@@ -246,9 +371,12 @@ export function Lovejoin({
   }
 
   const owned = status?.boxes.length ?? 0;
+  const notMixed = status?.notMixed.length ?? 0;
   const next = status?.due[0];
   const mixingAgain = mixes.some(isMixingAgain);
   const shown = [...mixes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
+  // The public mix being sent shows its own progress below: the list takes the others.
+  const chains = (status?.chains ?? []).filter((c) => !(sending && c.session === undefined));
   return (
     <Screen title="Lovejoin" titleId="lovejoin-title" onBack={onBack} backDisabled={busy} aside="A mixer for ADA, in 10 ₳ boxes" error={error}>
       {banner}
@@ -256,15 +384,24 @@ export function Lovejoin({
       {status && !status.available && <p className="note">Lovejoin isn't on this network yet.</p>}
       {status?.available && (
         <ReviewRows testId="lovejoin-status">
-          <Row label="Your boxes in the pool" value={owned ? `${plural(owned, "box", "boxes")}, ${formatAda(status.lovelace)} ₳` : "None"} strong />
-          {owned > 0 && next !== undefined && (
+          {/* What the wallet has in the pool is a balance: hidden while balances are (launch review #56). */}
+          <Row label="Your boxes in the pool" value={owned ? `${plural(owned, "box", "boxes")}, ${amounts.ada(status.lovelace)} ₳` : "None"} strong />
+          {notMixed > 0 && <Row label="Not mixed yet" value={plural(notMixed, "box", "boxes")} />}
+          {owned > notMixed && next !== undefined && (
             <Row label="Next one back" value={next <= Date.now() ? "At the next unlock" : whenOf(next, new Date())} />
           )}
         </ReviewRows>
       )}
+      <NotMixed count={notMixed} busy={busy || mixingAgain} onAnyway={() => setAsking({ anyway: true })} />
       {owned > 0 && (
         <div className="stack">
-          <button type="button" className="secondary" disabled={busy || mixingAgain} onClick={() => void again()} data-testid="lovejoin-again">
+          <button
+            type="button"
+            className={notMixed ? "primary" : "secondary"}
+            disabled={busy || mixingAgain}
+            onClick={() => void again()}
+            data-testid="lovejoin-again"
+          >
             {pressed === "again" ? "Building…" : "Mix my boxes again"}
           </button>
           <button type="button" className="secondary" disabled={busy || mixingAgain} onClick={() => void now()} data-testid="lovejoin-now">
@@ -277,6 +414,8 @@ export function Lovejoin({
           )}
         </div>
       )}
+
+      <Chains chains={chains} />
 
       {sending && (
         <div className="stack" data-testid="lovejoin-public-sending">
@@ -353,14 +492,28 @@ export function Lovejoin({
                 </span>
                 <SwapTag {...tagOf(m)} />
                 <span className="token-row__sub">{subOf(m, Date.now())}</span>
-                {detailOf(m) && (
+                {(detailOf(m) || stoppable(m)) && (
                   <p className="token-row__detail" data-testid="lovejoin-mix-detail">
                     {detailOf(m)}
-                    {m.auto?.retry && !isOver(m) && !m.chain?.stopped && (
+                    {((m.auto?.retry && !isOver(m) && !m.chain?.stopped) || unseen(m)) && (
                       <>
                         {" "}
                         <button type="button" className="link" disabled={busy} onClick={() => void retry(m.index)}>
-                          Try now
+                          {unseen(m) ? "Try again" : "Try now"}
+                        </button>
+                      </>
+                    )}
+                    {stoppable(m) && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          className="link"
+                          disabled={busy}
+                          onClick={() => setAsking({ stop: m.index })}
+                          data-testid="lovejoin-mix-stop"
+                        >
+                          Stop
                         </button>
                       </>
                     )}
@@ -377,6 +530,55 @@ export function Lovejoin({
         paid from itself, with giveme.my's collateral: nothing ties it to where it came from. Bringing one back early
         shortens that wait, which makes it easier to match by its timing.
       </Callout>
+      {status?.available && (
+        <Callout tone="warn" testId="lovejoin-unaudited">
+          {LOVEJOIN_UNAUDITED}
+        </Callout>
+      )}
+      {asking && "anyway" in asking && (
+        <Modal
+          title="Bring back a box that wasn't mixed?"
+          titleId="lovejoin-anyway-title"
+          onClose={() => setAsking(undefined)}
+          foot={
+            <>
+              <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
+                Keep it
+              </button>
+              <button type="button" className="danger" onClick={anyway} data-testid="lovejoin-anyway-confirm">
+                Bring it back anyway
+              </button>
+            </>
+          }
+        >
+          <p className="note">
+            Its chain stopped before mixing it, so it's still the box your deposit made. Brought back now, it shows where it
+            went in: anyone can tie that deposit to your private balance. Mix my boxes again hides it first.
+          </p>
+        </Modal>
+      )}
+      {asking && "stop" in asking && (
+        <Modal
+          title="Stop this mix?"
+          titleId="lovejoin-stop-title"
+          onClose={() => setAsking(undefined)}
+          foot={
+            <>
+              <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
+                Keep going
+              </button>
+              <button type="button" className="danger" onClick={() => stop(asking.stop)} data-testid="lovejoin-stop-confirm">
+                Stop the mix
+              </button>
+            </>
+          }
+        >
+          <p className="note">
+            Its boxes don't go into Lovejoin: everything at its one-time account comes back directly into your private
+            balance, less the return's network fee. A mix whose chain has begun goes on.
+          </p>
+        </Modal>
+      )}
     </Screen>
   );
 }

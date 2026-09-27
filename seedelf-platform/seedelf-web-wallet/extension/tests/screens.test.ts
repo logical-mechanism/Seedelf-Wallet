@@ -15,6 +15,7 @@ import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
 import { NetworkContext } from "../src/ui/network";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimCard } from "../src/ui/screens/Dapps";
+import { Chains, detailOf as lovejoinDetail, NotMixed, subOf as lovejoinSub } from "../src/ui/screens/Lovejoin";
 import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
 import { LovejoinCost, pairOf, pauseText, Plan, Session, TokenSelect, Unverified } from "../src/ui/screens/Swaps";
 
@@ -390,5 +391,70 @@ describe("Bring everything back's review (launch review #57, H6, #23)", () => {
     expect(line).toContain("#2 comes back with the next return");
     expect(line).toContain("#0 holds a reference script the wallet can't spend, so it stays there");
     expect(line).toContain("Once this return lands, bring the session back again for the rest.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lovejoin's page
+// ---------------------------------------------------------------------------
+
+describe("Lovejoin's page (launch review H2)", () => {
+  it("says boxes not mixed yet never come back by themselves, and offers to bring one back anyway", () => {
+    const line = text(createElement(NotMixed, { count: 3, busy: false, onAnyway: () => undefined }));
+    expect(line).toContain("3 of your boxes aren't mixed yet: a chain stopped before mixing them.");
+    expect(line).toContain("They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first.");
+    expect(line).toContain("Bring one back anyway");
+    expect(renderToStaticMarkup(createElement(NotMixed, { count: 0, busy: false, onAnyway: () => undefined }))).toBe("");
+  });
+
+  it("lists a chain being sent, which holds withdraws, and one stopped partway, with why", () => {
+    const line = text(
+      createElement(Chains, {
+        chains: [
+          { session: 1, boxes: 3, total: 13, sent: 5, at: 1 },
+          { boxes: 2, total: 9, sent: 4, at: 2, stopped: "The wallet locked, or the browser closed, while its chain was being sent." },
+        ],
+      }),
+    );
+    expect(line).toContain("Private session 2, 3 boxes Sending 5 of 13 transactions sent Withdraws wait until it's all sent.");
+    expect(line).toContain(
+      "From your public account, 2 boxes Stopped Stopped after 4 of 9 transactions Why it stopped: The wallet locked, or the browser closed, while its chain was being sent. The boxes it didn't mix wait, not mixed yet, for Mix my boxes again.",
+    );
+  });
+});
+
+describe("a mix from the private balance (launch review H2, H8, #11)", () => {
+  const mix = (over: Partial<SessionView>): SessionView => ({
+    index: 7,
+    network: "mainnet",
+    address: "addr1" + "m".repeat(50),
+    createdAt: 0,
+    stage: "closed",
+    txs: [{ kind: "out", txHash: "aa".repeat(32), at: 0, confirmed: true }],
+    holding: null,
+    mix: { boxes: 2 },
+    auto: { step: "done", stopping: false, filled: false, approvedMinOut: "0" },
+    ...over,
+  });
+
+  it("says in full why Lovejoin was left out: the pool below its floor", () => {
+    const skipped = mix({
+      mix: {
+        boxes: 2,
+        skipped: "Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so yours hide among enough others",
+      },
+    });
+    expect(lovejoinSub(skipped, 0)).toBe("Came back without going into Lovejoin");
+    expect(lovejoinDetail(skipped)).toBe(
+      "Lovejoin was left out: Lovejoin's pool holds 12 boxes that aren't yours, and the wallet mixes only once it holds 30, so yours hide among enough others.",
+    );
+  });
+
+  it("says a funding the chain hasn't shown may still land, and one turned away didn't go through", () => {
+    const failed = mix({ stage: "failed", auto: { step: "funding", stopping: false, filled: false, approvedMinOut: "0" } });
+    expect(lovejoinSub(failed, 0)).toBe("The chain hasn't shown its funding yet");
+    expect(lovejoinDetail(failed)).toContain("it may still land: Try again looks for it again");
+    expect(lovejoinSub({ ...failed, unsent: true }, 0)).toBe("Its funding didn't go through");
+    expect(lovejoinDetail({ ...failed, unsent: true })).toBeUndefined();
   });
 });
