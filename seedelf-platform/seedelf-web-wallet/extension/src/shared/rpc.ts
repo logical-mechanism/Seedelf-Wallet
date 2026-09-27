@@ -810,16 +810,43 @@ export interface LovejoinStatus {
   boxes: Array<{ txHash: string; txIndex: number }>;
   lovelace: string;
   due: number[];
+  /**
+   * Its boxes a chain of its own made and didn't finish mixing (a chain cut
+   * by a lock, a closed browser or a failed send): they never come back by
+   * themselves, since each still shows where it went in. Mix my boxes again
+   * takes them first; bringing one back takes `anyway`.
+   */
+  notMixed: Array<{ txHash: string; txIndex: number }>;
+  /** Its chains that aren't all sent: being sent (no withdraw meanwhile), or stopped partway. */
+  chains: LovejoinChainView[];
+}
+
+/** A chain through Lovejoin the wallet sent that isn't all sent. */
+export interface LovejoinChainView {
+  /** A session's return or mix (its index); none for a mix from the public account. */
+  session?: number;
+  boxes: number;
+  /** Its transactions, and how many were sent. */
+  total: number;
+  sent: number;
+  /** When it began to be sent (ms). */
+  at: number;
+  /** Why it stopped partway; none while it's being sent. */
+  stopped?: string;
 }
 
 /**
  * The boxes on their way back, as this device's schedule has them (no pool
  * read): how many, what they hold, and when the next is due (ms), for Home.
+ * `notMixed`: how many the last pool read found not mixed yet (they wait for
+ * Mix my boxes again); `stopped`: how many chains stopped partway.
  */
 export interface LovejoinHeld {
   boxes: number;
   lovelace: string;
   next: number | null;
+  notMixed: number;
+  stopped: number;
 }
 
 /** A session's order not filled yet, from Minswap. */
@@ -1027,8 +1054,11 @@ export interface Requests {
     payload: { advance?: boolean };
     result: { total: number; sent: number; stopped?: string } | null;
   };
-  /** Withdraws one of the wallet's boxes now, whatever its wait (`box`, or any). */
-  "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number } }; result: PendingTx };
+  /**
+   * Withdraws one of the wallet's boxes now, whatever its wait (`box`, or the
+   * one that has waited longest). One not mixed yet only with `anyway`.
+   */
+  "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number }; anyway?: boolean }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
   "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
   /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */

@@ -258,7 +258,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-mix-public-progress":
       return ctx.lovejoin.progress(ctx.network, message.advance ?? false);
     case "lovejoin-withdraw-now":
-      return ctx.lovejoin.withdrawNow(ctx.network, message.box);
+      return ctx.lovejoin.withdrawNow(ctx.network, message.box, message.anyway ?? false);
   }
 }
 

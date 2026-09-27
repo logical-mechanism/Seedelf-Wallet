@@ -73,12 +73,42 @@ const sessionsAlarm = {
   },
 };
 
+/** The run going on, if one is, and whether another is asked for after it (with a scan, if any asked for one). */
+let running: Promise<void> | undefined;
+let asked: { scan: boolean } | undefined;
+
+/**
+ * One run of runSessionsNow at a time: the alarm and an unlock can both ask
+ * while one goes on (a chain pumps for up to a block), and two at once would
+ * send two withdraws seconds apart. Asked during a run, it runs once more
+ * after it.
+ */
+function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "network">, scan = false): Promise<void> {
+  if (running) {
+    asked = { scan: scan || !!asked?.scan };
+    return running;
+  }
+  running = (async () => {
+    try {
+      await runSessionsNow(ctx, scan);
+      while (asked) {
+        const next = asked;
+        asked = undefined;
+        await runSessionsNow(ctx, next.scan);
+      }
+    } finally {
+      running = undefined;
+    }
+  })();
+  return running;
+}
+
 /**
  * The next step of every swap that runs itself, and Lovejoin's boxes that are
  * due back, while the wallet is unlocked; locked, the alarm stops until
  * unlock. `scan`: read Lovejoin's pool even with nothing due (at unlock).
  */
-async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "network">, scan = false): Promise<void> {
+async function runSessionsNow(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "network">, scan = false): Promise<void> {
   if ((await ctx.wallet.state()) !== "unlocked") {
     await sessionsAlarm.stop();
     return;

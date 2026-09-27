@@ -65,6 +65,7 @@ import { bodyOutpoints, txId } from "./cbor";
 import { SpentInputError, type KoiosUtxo } from "./koios";
 import type { Estimate, Minswap, PendingOrder } from "./minswap";
 import {
+  CHAIN_CUT,
   CHAIN_PUMP_MS,
   chainOwner,
   chainRetryMs,
@@ -226,6 +227,8 @@ interface KeptBack extends SessionBackSummary {
   builtAt: number;
   /** Through Lovejoin: the whole chain, in order, the return last (`txCbor`, `txHash`). */
   chain?: LovejoinChain["txs"];
+  /** And where its boxes end up, mixed all the way. */
+  leaves?: LovejoinChain["leaves"];
 }
 
 /** A return's chain through Lovejoin being sent, a window at a time, between the runner's steps. */
@@ -808,7 +811,7 @@ export class SessionService {
     if (!rows.length) throw new Error("The session's account is empty, so there's nothing to bring back.");
     const built = await this.buildBack(network, index, rows, undefined, direct);
     await wallet.withKeys(() => session.set(SESSION_BACK, built));
-    const { txCbor: _txCbor, builtAt: _builtAt, chain: _chain, ...summary } = built;
+    const { txCbor: _txCbor, builtAt: _builtAt, chain: _chain, leaves: _leaves, ...summary } = built;
     return summary;
   }
 
@@ -866,7 +869,10 @@ export class SessionService {
       }
     }
     await wallet.withKeys(() => session.set(SESSION_CLAIM, returns));
-    return { returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, chain: _chain, ...summary }) => summary), skipped };
+    return {
+      returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, chain: _chain, leaves: _leaves, ...summary }) => summary),
+      skipped,
+    };
   }
 
   /** Sends the returns Bring everything back built, those chosen, one after another. One that fails doesn't stop the rest. */
@@ -944,6 +950,8 @@ export class SessionService {
    */
   async runAll(network: NetworkName): Promise<void> {
     const book = await this.book(network);
+    // A chain a lock or a closed browser cut says so now, not only once it's brought back.
+    await this.serial(() => this.markCut(network)).catch(() => undefined);
     for (const s of book.sessions.filter(running)) await this.serial(() => this.step(network, s.index, false)).catch(() => undefined);
     for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt)) {
       if (await this.pendingChain(network, s.index)) await this.serial(() => this.pump(network, s.index)).catch(() => undefined);
@@ -951,6 +959,23 @@ export class SessionService {
     let still = (await this.book(network)).sessions.some(running);
     for (const s of book.sessions.filter((r) => !r.closedAt)) still ||= !!(await this.pendingChain(network, s.index));
     await (still ? this.deps.alarm?.start() : this.deps.alarm?.stop());
+  }
+
+  /**
+   * Marks each open session's chain that went in partly, and that nothing is
+   * sending anymore (its progress was wiped), as stopped (CHAIN_CUT).
+   */
+  private async markCut(network: NetworkName): Promise<void> {
+    for (const s of (await this.book(network)).sessions) {
+      const chain = s.chain;
+      if (s.closedAt || !chain || chain.stopped) continue;
+      const sent = new Set(s.txs.filter((t) => !t.unsent).map((t) => t.txHash));
+      const started = s.txs.some((t) => t.at >= chain.at && (t.kind === "deposit" || t.kind === "mix") && sent.has(t.txHash));
+      if (!started || sent.has(chain.last) || (await this.pendingChain(network, s.index))) continue;
+      await this.update(network, s.index, (r) => {
+        r.chain!.stopped = CHAIN_CUT;
+      });
+    }
   }
 
   /** Takes the session's next step, if it's time. A failure waits and tries again; a failed check pauses. */
@@ -1207,7 +1232,7 @@ export class SessionService {
     if (started && record?.chain && !record.chain.stopped) {
       // Nothing is sending the rest: the wallet locked, or the browser closed, partway.
       await this.update(network, index, (r) => {
-        r.chain!.stopped = "The wallet locked, or the browser closed, while its chain was being sent.";
+        r.chain!.stopped = CHAIN_CUT;
       });
     }
     // What the session's own transactions left at the account comes back first when not everything can at once.
@@ -1256,6 +1281,7 @@ export class SessionService {
             ...(record?.mix?.again ? { again: true } : {}),
           },
           chain: chain.txs,
+          leaves: chain.leaves,
           builtAt: now(),
         };
       }
@@ -1318,13 +1344,22 @@ export class SessionService {
    * `budgetMs`: how long this call looks for blocks after the first window.
    */
   private async sendChain(network: NetworkName, built: KeptBack, kept: string, budgetMs: number): Promise<PendingTx> {
-    const { chain: txs, txCbor: _txCbor, builtAt: _builtAt, ...summary } = built;
+    const { chain: txs, leaves, txCbor: _txCbor, builtAt: _builtAt, ...summary } = built;
     await this.update(network, built.index, (s) => {
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
     });
     await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
     // Being sent: its change to come and its collateral are the chain's too.
     await this.deps.lovejoin?.reserve(network, chainOwner(built.index), txs!);
+    // Recorded, sealed, before any of it is sent: what it deposits, mixes and leaves.
+    await this.deps.lovejoin?.recordChain(network, {
+      session: built.index,
+      progress: this.pendingKey(network, built.index),
+      txs: txs!,
+      leaves: leaves ?? [],
+      boxes: summary.lovejoin?.boxes ?? 0,
+      again: !!summary.lovejoin?.again,
+    });
     await this.deps.alarm?.start();
     await this.pump(network, built.index, budgetMs);
     return { kind: "session-back", network, txHash: built.txHash, submittedAt: this.deps.now(), confirmations: null };
@@ -1341,6 +1376,7 @@ export class SessionService {
     if (!pending) return;
     const koios = this.deps.koios(network);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const id = pending.txs.at(-1)!.txHash;
     let done: boolean;
     try {
       done = await pumpChain(
@@ -1369,11 +1405,14 @@ export class SessionService {
         budgetMs,
       );
     } catch (e) {
+      // Recorded as stopped before its progress goes: never taken for one a lock cut.
+      await this.deps.lovejoin?.chainEnded(network, id, e instanceof Error ? e.message : String(e)).catch(() => undefined);
       await this.dropPending(network, index);
       await this.deps.lovejoin?.release(network, chainOwner(index)).catch(() => undefined);
       throw e;
     }
     if (!done) return;
+    await this.deps.lovejoin?.chainEnded(network, id);
     await this.dropPending(network, index);
     await this.deps.lovejoin?.release(network, chainOwner(index));
     const last: PendingTx = {
@@ -1388,16 +1427,15 @@ export class SessionService {
 
   /**
    * Sends a chain's transaction `i`, trying again when Koios didn't answer or
-   * hasn't caught up (chainRetryMs), and sets the boxes' withdraws once the
-   * deposit is in; boxes mixed again wait afresh once their first mix is in.
-   * `maybeSent`: it may be in the mempool already (pumpChain).
+   * hasn't caught up (chainRetryMs), and tells Lovejoin, which sets the
+   * boxes' withdraws once the deposit is in (boxes mixed again wait afresh
+   * once their first mix is in). `maybeSent`: it may be in the mempool
+   * already (pumpChain).
    */
   private async sendStep(network: NetworkName, pending: PendingChain, i: number, maybeSent = false): Promise<void> {
     const step = pending.txs[i]!;
     const bytes = hexBytes(step.txCbor);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    // Sent before and not landed: sent again, its withdraws are set already.
-    const again = pending.flying.includes(step.txHash);
     const tries = { busy: 0, spent: 0, maybeSent };
     for (;;) {
       try {
@@ -1416,22 +1454,24 @@ export class SessionService {
         await sleep(wait);
       }
     }
-    const lovejoin = pending.summary.lovejoin;
-    if (again) return;
-    if (step.kind === "deposit" && lovejoin) await this.deps.lovejoin?.schedule(network, lovejoin.boxes);
-    if (i === 0 && step.kind === "mix" && lovejoin?.again) await this.deps.lovejoin?.reschedule(network, lovejoin.boxes);
+    await this.deps.lovejoin?.chainSent(network, pending.txs.at(-1)!.txHash, i);
+  }
+
+  /** Where session `index`'s chain waits while it's sent. */
+  private pendingKey(network: NetworkName, index: number): string {
+    return `${SESSION_CHAIN_PREFIX}${network}.${index}`;
   }
 
   private pendingChain(network: NetworkName, index: number): Promise<PendingChain | undefined> {
-    return this.deps.wallet.withKeys(() => this.deps.session.get<PendingChain>(`${SESSION_CHAIN_PREFIX}${network}.${index}`));
+    return this.deps.wallet.withKeys(() => this.deps.session.get<PendingChain>(this.pendingKey(network, index)));
   }
 
   private savePending(network: NetworkName, pending: PendingChain): Promise<void> {
-    return this.deps.wallet.withKeys(() => this.deps.session.set(`${SESSION_CHAIN_PREFIX}${network}.${pending.index}`, pending));
+    return this.deps.wallet.withKeys(() => this.deps.session.set(this.pendingKey(network, pending.index), pending));
   }
 
   private dropPending(network: NetworkName, index: number): Promise<void> {
-    return this.deps.wallet.withKeys(() => this.deps.session.remove(`${SESSION_CHAIN_PREFIX}${network}.${index}`));
+    return this.deps.wallet.withKeys(() => this.deps.session.remove(this.pendingKey(network, index)));
   }
 
   /**

@@ -12,9 +12,23 @@
 // register, paid from itself, with giveme.my's collateral: nothing ties it to
 // the session. One box a run: others due at the same time wait a fresh short
 // delay each (WITHDRAW_SPREAD_MS), so a wallet locked for hours doesn't send
-// them all in one burst at unlock. Boxes aren't remembered, they're found: other people's mixes
+// them all in one burst at unlock. The box that goes is the one that has
+// waited longest in the pool, and only once it has waited the delay's least.
+// Boxes aren't remembered, they're found: other people's mixes
 // move them, and the Seedelf key's check finds them wherever they are, after a
-// restore too. Only the due times are kept, sealed (`lovejoin.<network>`).
+// restore too. What's kept, sealed (`lovejoin.<network>`), is the due times
+// and each chain the wallet sends: its deposit, its mixes and its leaves,
+// recorded before any of it is sent.
+//
+// A chain is sent over many blocks, and only while the wallet is unlocked; a
+// lock, a closed browser or an update wipes what's left of it (it waits in
+// chrome.storage.session). A box that one of the wallet's chains made and
+// hadn't finished mixing is still traceable to where it came from, so it
+// never comes back by itself: it's shown as not mixed yet, for Mix my boxes
+// again. A chain cut short isn't sent on later: its later mixes were built
+// with pool boxes other people's mixes may have spent by then, so it would
+// stop at the first of them, while mixing again draws fresh ones. While any
+// chain is being sent, no box is withdrawn at all.
 //
 // Before a chain is used, Koios's Ogmios measures its first mix, given the
 // unsent deposit as extra UTxOs: the check that the wallet's evaluator costs
@@ -62,6 +76,7 @@ import {
   reservations,
   reservedSet,
   SESSION_RESERVED_PREFIX,
+  SPENT_KEEP_MS,
   spentSet,
   unspent,
   type Reservation,
@@ -290,10 +305,54 @@ export interface LovejoinPlan {
 interface Schedule {
   /** When each box that's on its way back is due, in ms. */
   due: number[];
+  /** Each chain the wallet sent here that may still hold a box, recorded before its first transaction was. */
+  chains: ChainRecord[];
+  /** How many of the wallet's boxes the last pool read found not mixed yet, for Home. */
+  notMixed?: number;
 }
+
+/** A chain through Lovejoin, as the sealed schedule keeps it. */
+interface ChainRecord {
+  /** Its last transaction's hash: the return, or a public mix's last mix. */
+  id: string;
+  /** A session's return or mix (its index); none for a mix from the public account. */
+  session?: number;
+  /** Where it waits while it's being sent (chrome.storage.session). */
+  progress: string;
+  deposit?: string;
+  mixes: string[];
+  /** Where the wallet's boxes end up, mixed all the way. */
+  leaves: OutRef[];
+  boxes: number;
+  /** The wallet's boxes mixed again, with no deposit. */
+  again?: boolean;
+  total: number;
+  sent: number;
+  at: number;
+  /** Its boxes' withdraws are set: its deposit is in, or, mixing again, its first mix. */
+  scheduled?: boolean;
+  /** All sent. */
+  done?: boolean;
+  /** Why it stopped partway. */
+  stopped?: string;
+  /** When it was all sent, or stopped. */
+  ended?: number;
+}
+
+/** Why a chain whose progress is gone stopped: nothing is sending the rest. */
+export const CHAIN_CUT = "The wallet locked, or the browser closed, while its chain was being sent.";
+
+/**
+ * A chain's record is kept this long after it ended, even holding no box: a
+ * transaction of it a node dropped after the wallet sent it leaves a box
+ * unmixed, and that box only shows again once the wallet forgets having
+ * spent it (spent.ts).
+ */
+const RECORD_KEEP_MS = SPENT_KEEP_MS + 60 * 60_000;
 
 interface KeptPublic extends LovejoinPublicSummary {
   chain: LovejoinChain["txs"];
+  leaves: OutRef[];
   builtAt: number;
 }
 
@@ -380,6 +439,22 @@ const free = (boxes: OutRef[], reserved: Set<string>) => boxes.filter((b) => !re
 /** What a chain's reservation (spent.ts) and record are kept under: the session's, or the public account's. */
 export const chainOwner = (index?: number) => (index === undefined ? "public" : `session.${index}`);
 
+/**
+ * The wallet's boxes that a chain of its own made short of its last mixes:
+ * not mixed yet, so still traceable to where they went in.
+ */
+function unmixedOf(chains: ChainRecord[], owned: OutRef[]): OutRef[] {
+  const made = new Set(chains.flatMap((c) => [...(c.deposit ? [c.deposit] : []), ...c.mixes]));
+  const leaves = new Set(chains.flatMap((c) => c.leaves.map(ref)));
+  return owned.filter((b) => made.has(b.txHash) && !leaves.has(ref(b)));
+}
+
+/** `boxes` by how long they've sat in the pool, longest first (Koios's `block_time`, in seconds). */
+function longestFirst(boxes: OutRef[], rows: Map<string, KoiosUtxo>): OutRef[] {
+  const since = (b: OutRef) => rows.get(ref(b))?.block_time ?? 0;
+  return [...boxes].sort((a, b) => since(a) - since(b) || ref(a).localeCompare(ref(b)));
+}
+
 /** A whole number of boxes, one to MAX_MIX_BOXES, or why not. */
 export function checkBoxes(boxes: number): void {
   if (!Number.isInteger(boxes) || boxes < 1 || boxes > MAX_MIX_BOXES) {
@@ -403,7 +478,12 @@ export class LovejoinService {
   async progress(network: NetworkName, advance = false): Promise<{ total: number; sent: number; stopped?: string } | null> {
     if (advance) await this.pumpPublic(network, 0).catch(() => undefined);
     const s = await this.sendingOf(network);
-    return s ? { total: s.txs.length, sent: s.next, ...(s.stopped ? { stopped: s.stopped } : {}) } : null;
+    if (s) return { total: s.txs.length, sent: s.next, ...(s.stopped ? { stopped: s.stopped } : {}) };
+    // Its progress is gone: a lock, a closed browser or an update cut it, and its record says how far it got.
+    if (!this.available(network)) return null;
+    await this.cuts(network);
+    const last = (await this.read(network)).chains.filter((c) => c.session === undefined).at(-1);
+    return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped } : null;
   }
 
   /** Whether Lovejoin is deployed on `network`. */
@@ -549,13 +629,16 @@ export class LovejoinService {
     }
     // One chain is at most MAX_CHAIN_MIXES long, whatever the spare ADA pays for: what's left comes back with the return.
     count = Math.min(count, Math.floor(others.length / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
+    // Mixing again takes the wallet's boxes in the pool's order: the ones not mixed yet go first.
+    const unmixed = new Set(unmixedOf((await this.read(network)).chains, owned).map(ref));
+    const first = (u: KoiosUtxo) => (unmixed.has(outpoint(u)) ? 0 : 1);
     const request = {
       network,
       params,
       index,
       utxos: rows,
       collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index },
-      pool: this.real(split),
+      pool: this.real(split).sort((a, b) => first(a) - first(b)),
       depth,
       boxes: count,
       merge,
@@ -606,10 +689,7 @@ export class LovejoinService {
   /** Runs `task` after every other task of `name`'s, so read-change-writes of one record never overlap. */
   private inTurn<T>(name: string, task: () => Promise<T>): Promise<T> {
     const run = (this.turns.get(name) ?? Promise.resolve()).then(task, task);
-    this.turns.set(
-      name,
-      run.catch(() => undefined),
-    );
+    this.turns.set(name, run.catch(() => undefined));
     return run;
   }
 
@@ -675,7 +755,9 @@ export class LovejoinService {
       fees: chain.fees,
       change: chain.returned,
     };
-    await wallet.withKeys(() => session.set(SESSION_LOVEJOIN_PUBLIC, { ...summary, chain: chain.txs, builtAt: now() } satisfies KeptPublic));
+    await wallet.withKeys(() =>
+      session.set(SESSION_LOVEJOIN_PUBLIC, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() } satisfies KeptPublic),
+    );
     await this.reserve(network, chainOwner(), chain.txs, now() + BUILT_TTL_MS);
     return summary;
   }
@@ -700,6 +782,12 @@ export class LovejoinService {
     });
     // Being sent: its change to come and its collateral are the chain's too.
     await this.reserve(network, chainOwner(), built.chain);
+    await this.recordChain(network, {
+      progress: SESSION_LOVEJOIN_SENDING + network,
+      txs: built.chain,
+      leaves: built.leaves ?? [],
+      boxes: built.boxes,
+    });
     await this.deps.alarm?.start();
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
     await this.pumpPublic(network, 0);
@@ -727,6 +815,7 @@ export class LovejoinService {
     const koios = this.deps.koios(network);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const save = () => wallet.withKeys(() => session.set(SESSION_LOVEJOIN_SENDING + network, sending));
+    const id = sending.txs.at(-1)!.txHash;
     try {
       const done = await pumpChain(
         sending,
@@ -734,8 +823,6 @@ export class LovejoinService {
           send: async (i, maybeSent) => {
             const step = sending.txs[i]!;
             const bytes = hexBytes(step.txCbor);
-            // Sent before and not landed: the mempool may have dropped it.
-            const again = sending.flying.includes(step.txHash);
             const tries = { busy: 0, spent: 0, maybeSent };
             for (;;) {
               try {
@@ -753,7 +840,7 @@ export class LovejoinService {
               }
             }
             await wallet.withKeys(() => rememberSpent(session, bytes));
-            if (step.kind === "deposit" && !again) await this.schedule(network, sending.boxes);
+            await this.chainSent(network, id, i);
           },
           onChain: async (hashes) => {
             const statuses = await koios.txStatus(hashes);
@@ -766,6 +853,7 @@ export class LovejoinService {
         budgetMs,
       );
       if (done) {
+        await this.chainEnded(network, id);
         await wallet.withKeys(() => session.remove(SESSION_LOVEJOIN_SENDING + network));
         await this.release(network, chainOwner());
       }
@@ -773,6 +861,7 @@ export class LovejoinService {
     } catch (e) {
       sending.stopped = e instanceof Error ? e.message : String(e);
       await save().catch(() => undefined);
+      await this.chainEnded(network, id, sending.stopped).catch(() => undefined);
       await this.release(network, chainOwner()).catch(() => undefined);
       throw e;
     } finally {
@@ -789,71 +878,226 @@ export class LovejoinService {
    * waits again, a fresh delay from now, as a deposit's boxes do.
    */
   async reschedule(network: NetworkName, boxes: number): Promise<void> {
+    const due = await this.draw(boxes);
     await this.update(network, (s) => {
       s.due.sort((a, b) => a - b);
       s.due.splice(0, boxes);
+      s.due.push(...due);
     });
-    await this.schedule(network, boxes);
   }
 
   /** Sets `boxes` withdraws to come, each after its own random delay. */
   async schedule(network: NetworkName, boxes: number): Promise<void> {
+    const due = await this.draw(boxes);
+    await this.update(network, (s) => s.due.push(...due));
+  }
+
+  /** `boxes` due times, each a random delay (the settings' range) from now. */
+  private async draw(boxes: number): Promise<number[]> {
     const { delay } = await this.settings();
     const [low, high] = delayHours(delay);
     const random = this.deps.random ?? secureRandom;
     const now = this.deps.now();
-    const due = Array.from({ length: boxes }, () => now + Math.round((low + (high - low) * random()) * HOUR));
-    await this.update(network, (s) => s.due.push(...due));
+    return Array.from({ length: boxes }, () => now + Math.round((low + (high - low) * random()) * HOUR));
   }
 
   /**
-   * The wallet's boxes in the pool (a pool read), and when they're due. A box
-   * found with no due time (a restore) gets one here.
+   * Records a chain before any of it is sent: its deposit, each mix and its
+   * leaves, sealed, so the wallet knows which of its boxes it hasn't mixed
+   * yet, after a lock too. `progress`: where it waits while it's sent.
+   */
+  async recordChain(
+    network: NetworkName,
+    chain: { session?: number; progress: string; txs: LovejoinChain["txs"]; leaves: OutRef[]; boxes: number; again?: boolean },
+  ): Promise<void> {
+    const { txs } = chain;
+    const record: ChainRecord = {
+      id: txs.at(-1)!.txHash,
+      ...(chain.session !== undefined ? { session: chain.session } : {}),
+      progress: chain.progress,
+      ...(txs[0]?.kind === "deposit" ? { deposit: txs[0].txHash } : {}),
+      mixes: txs.filter((t) => t.kind === "mix").map((t) => t.txHash),
+      leaves: chain.leaves,
+      boxes: chain.boxes,
+      ...(chain.again ? { again: true } : {}),
+      total: txs.length,
+      sent: 0,
+      at: this.deps.now(),
+    };
+    await this.update(network, (s) => {
+      s.chains = [...s.chains.filter((c) => c.id !== record.id), record];
+    });
+  }
+
+  /**
+   * Chain `id`'s transaction `i` is sent. Its first sets the boxes'
+   * withdraws: a deposit's boxes, each a delay from now; boxes mixed again
+   * wait afresh. Once only, however often it's sent.
+   */
+  async chainSent(network: NetworkName, id: string, i: number): Promise<void> {
+    const record = (await this.read(network)).chains.find((c) => c.id === id);
+    if (!record) return;
+    const due = i === 0 && !record.scheduled ? await this.draw(record.boxes) : [];
+    await this.update(network, (s) => {
+      const c = s.chains.find((r) => r.id === id);
+      if (!c) return;
+      c.sent = Math.max(c.sent, i + 1);
+      if (!due.length || c.scheduled) return;
+      c.scheduled = true;
+      if (c.again) {
+        s.due.sort((a, b) => a - b);
+        s.due.splice(0, c.boxes);
+      }
+      s.due.push(...due);
+    });
+  }
+
+  /** Chain `id` is all sent, or `stopped` partway, and why. */
+  async chainEnded(network: NetworkName, id: string, stopped?: string): Promise<void> {
+    const now = this.deps.now();
+    await this.update(network, (s) => {
+      const c = s.chains.find((r) => r.id === id);
+      if (!c || c.ended) return;
+      c.ended = now;
+      if (stopped === undefined) c.done = true;
+      else c.stopped = stopped;
+    });
+  }
+
+  /**
+   * Marks each chain recorded as being sent whose progress is gone as
+   * stopped: a lock, a closed browser or an update wiped it partway, and
+   * nothing sends the rest (CHAIN_CUT). No Koios request.
+   */
+  async cuts(network: NetworkName): Promise<void> {
+    const { wallet, session, now } = this.deps;
+    const live = (await this.read(network)).chains.filter((c) => !c.ended);
+    if (!live.length) return;
+    const gone = new Set<string>();
+    for (const c of live) {
+      if ((await wallet.withKeys(() => session.get(c.progress))) === undefined) gone.add(c.id);
+    }
+    if (!gone.size) return;
+    const at = now();
+    await this.update(network, (s) => {
+      for (const c of s.chains) {
+        if (!gone.has(c.id) || c.ended) continue;
+        c.stopped = CHAIN_CUT;
+        c.ended = at;
+      }
+    });
+  }
+
+  /** Whether a chain of the wallet's is being sent (recorded, and neither all sent nor stopped). */
+  private async chainsSending(network: NetworkName): Promise<boolean> {
+    await this.cuts(network);
+    return (await this.read(network)).chains.some((c) => !c.ended);
+  }
+
+  /**
+   * The wallet's boxes, as its recorded chains leave them: not mixed yet (a
+   * chain that ended left them so; one being sent is still mixing its own),
+   * or free to come back. A record that ended long enough ago and holds no
+   * box anymore goes, and Home's count of boxes not mixed yet follows.
+   */
+  private async sortOut(network: NetworkName, owned: OutRef[]): Promise<{ unmixed: OutRef[]; free: OutRef[] }> {
+    const now = this.deps.now();
+    const { chains } = await this.read(network);
+    const unmixed = unmixedOf(chains.filter((c) => c.ended), owned);
+    await this.update(network, (s) => {
+      s.chains = s.chains.filter((c) => !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], owned).length > 0);
+      s.notMixed = unmixed.length;
+    });
+    const held = new Set(unmixedOf(chains, owned).map(ref));
+    return { unmixed, free: owned.filter((b) => !held.has(ref(b))) };
+  }
+
+  /** The wallet's boxes a chain of its, built or being sent, will spend: none of them is withdrawn. */
+  private async reservedBoxes(network: NetworkName): Promise<Set<string>> {
+    const { wallet, session, now } = this.deps;
+    return (await wallet.withKeys(() => reservedSet(session, network, { now: now() }))).inputs;
+  }
+
+  /**
+   * The wallet's boxes in the pool (a pool read), when they're due, which
+   * aren't mixed yet, and its chains not all sent: being sent, or stopped
+   * partway. A box found with no due time (a restore) gets one here.
    */
   async status(network: NetworkName): Promise<LovejoinStatus> {
-    if (!this.available(network)) return { available: false, boxes: [], lovelace: "0", due: [] };
+    if (!this.available(network)) return { available: false, boxes: [], lovelace: "0", due: [], notMixed: [], chains: [] };
+    await this.cuts(network);
     const owned = await this.owned(network, await this.pool(network));
+    const { unmixed, free: back } = await this.sortOut(network, owned);
     const known = (await this.read(network)).due.length;
-    if (owned.length > known) await this.schedule(network, owned.length - known);
-    const { due } = await this.read(network);
-    return { available: true, boxes: owned, lovelace: (BigInt(owned.length) * LOVEJOIN_DENOM).toString(), due: [...due].sort((a, b) => a - b) };
+    if (back.length > known) await this.schedule(network, back.length - known);
+    const { due, chains } = await this.read(network);
+    return {
+      available: true,
+      boxes: owned,
+      lovelace: (BigInt(owned.length) * LOVEJOIN_DENOM).toString(),
+      due: [...due].sort((a, b) => a - b),
+      notMixed: unmixed,
+      chains: chains
+        .filter((c) => !c.done)
+        .map((c) => ({
+          ...(c.session !== undefined ? { session: c.session } : {}),
+          boxes: c.boxes,
+          total: c.total,
+          sent: c.sent,
+          at: c.at,
+          ...(c.stopped ? { stopped: c.stopped } : {}),
+        })),
+    };
   }
 
   /**
    * The boxes on their way back, from the schedule alone: one due time per
-   * box, kept to the pool's count at each scan. No Koios request, so Home
-   * can ask whenever it shows.
+   * box, kept to the pool's count at each scan; how many weren't mixed yet at
+   * the last one; and how many chains stopped partway. No Koios request, so
+   * Home can ask whenever it shows.
    */
   async held(network: NetworkName): Promise<LovejoinHeld> {
-    if (!this.available(network)) return { boxes: 0, lovelace: "0", next: null };
-    const { due } = await this.read(network);
+    if (!this.available(network)) return { boxes: 0, lovelace: "0", next: null, notMixed: 0, stopped: 0 };
+    await this.cuts(network);
+    const { due, chains, notMixed } = await this.read(network);
     return {
       boxes: due.length,
       lovelace: (BigInt(due.length) * LOVEJOIN_DENOM).toString(),
       next: due.length ? Math.min(...due) : null,
+      notMixed: notMixed ?? 0,
+      stopped: chains.filter((c) => c.stopped).length,
     };
   }
 
   /**
    * Withdraws a box that's due, one a run. `scan` (at unlock) reads the pool even
    * when nothing is due yet, on a wallet that has used Lovejoin here, so its
-   * boxes' due times follow the pool.
+   * boxes' due times follow the pool. One run at a time.
    */
-  async withdrawDue(network: NetworkName, scan = false): Promise<PendingTx[]> {
-    if (!this.available(network)) return [];
+  withdrawDue(network: NetworkName, scan = false): Promise<PendingTx[]> {
+    if (!this.available(network)) return Promise.resolve([]);
+    return this.inTurn(`withdraw.${network}`, () => this.withdrawDueNow(network, scan));
+  }
+
+  private async withdrawDueNow(network: NetworkName, scan: boolean): Promise<PendingTx[]> {
     // A chain mixing them again spends them: they wait until it's sent.
     if (await this.deps.mixingAgain?.(network)) return [];
+    // A chain being sent is still putting boxes in and mixing them: none comes back meanwhile.
+    if (await this.chainsSending(network)) return [];
     const used = (await this.deps.store.get<Schedule>(`lovejoin.${network}` as const)) !== undefined;
     const { due } = await this.read(network);
     const now = this.deps.now();
     if (!(scan && used) && !due.some((t) => t <= now)) return [];
     const pool = await this.pool(network);
     const owned = await this.owned(network, pool);
+    // A box a chain of the wallet's made and hadn't finished mixing never
+    // comes back by itself: it waits, not mixed yet, for Mix my boxes again.
+    const { free: back } = await this.sortOut(network, owned);
     // A box with no due time (a restore) gets one; a due time with no box
     // (withdrawn by hand, or a chain that didn't go through) goes.
-    if (owned.length > due.length) await this.schedule(network, owned.length - due.length);
+    if (back.length > due.length) await this.schedule(network, back.length - due.length);
     const schedule = await this.read(network);
-    const kept = [...schedule.due].sort((a, b) => a - b).slice(0, owned.length);
+    const kept = [...schedule.due].sort((a, b) => a - b).slice(0, back.length);
     await this.update(network, (s) => (s.due = kept));
 
     // One box a run. Boxes due together (the wallet stayed locked through
@@ -863,8 +1107,23 @@ export class LovejoinService {
     // as they come due while the wallet is unlocked.
     const ready = kept.filter((t) => t <= now);
     const [time] = ready;
-    const box = owned[0];
-    if (time === undefined || !box) return [];
+    if (time === undefined) return [];
+    // The box that has waited longest, never one a chain of the wallet's will spend.
+    const reserved = await this.reservedBoxes(network);
+    const rows = new Map(pool.map((u) => [outpoint(u), u]));
+    const [box] = longestFirst(free(back, reserved), rows);
+    if (!box) return [];
+    // And only once it has waited the delay's least since it came into the
+    // pool: a box a mix moved minutes ago would say which mix it came from.
+    const [least] = delayHours((await this.settings()).delay);
+    const waited = (rows.get(ref(box))?.block_time ?? 0) * 1000 + least * HOUR;
+    if (waited > now) {
+      await this.update(network, (s) => {
+        const at = s.due.indexOf(time);
+        if (at >= 0) s.due[at] = waited;
+      });
+      return [];
+    }
     if (ready.length > 1) {
       const random = this.deps.random ?? secureRandom;
       const [low, high] = WITHDRAW_SPREAD_MS;
@@ -885,21 +1144,54 @@ export class LovejoinService {
     }
   }
 
-  /** Withdraws one of our boxes now, whatever its delay (`box`, or any). */
-  async withdrawNow(network: NetworkName, box?: { txHash: string; txIndex: number }): Promise<PendingTx> {
+  /**
+   * Withdraws one of our boxes now, whatever its delay: `box`, or the one
+   * that has waited longest. One not mixed yet only when asked `anyway`:
+   * brought back, it ties where it went in to the private balance.
+   */
+  withdrawNow(network: NetworkName, box?: OutRef, anyway = false): Promise<PendingTx> {
+    return this.inTurn(`withdraw.${network}`, () => this.withdrawNowNow(network, box, anyway));
+  }
+
+  private async withdrawNowNow(network: NetworkName, box: OutRef | undefined, anyway: boolean): Promise<PendingTx> {
     if (await this.deps.mixingAgain?.(network)) {
       throw new Error("Your boxes are being mixed again. Bring one back once that's done.");
     }
+    if (await this.chainsSending(network)) {
+      throw new Error("A chain of yours is being sent through Lovejoin. Bring a box back once it's all sent.");
+    }
     const pool = await this.pool(network);
     const owned = await this.owned(network, pool);
-    const chosen = box ? owned.find((b) => b.txHash === box.txHash && b.txIndex === box.txIndex) : owned[0];
-    if (!chosen) throw new Error("That box isn't in Lovejoin's pool as yours anymore.");
+    const { unmixed, free: back } = await this.sortOut(network, owned);
+    const reserved = await this.reservedBoxes(network);
+    let chosen: OutRef | undefined;
+    if (box) {
+      chosen = owned.find((b) => ref(b) === ref(box));
+      if (!chosen) throw new Error("That box isn't in Lovejoin's pool as yours anymore.");
+      if (reserved.has(ref(chosen))) throw new Error("A mix you built is about to take that box. Bring it back once that's sent.");
+      if (!anyway && unmixed.some((b) => ref(b) === ref(chosen!))) {
+        throw new Error(
+          "That box wasn't mixed: its chain stopped before mixing it. Brought back now, it shows where it went in. Mix your boxes again first, or bring it back anyway.",
+        );
+      }
+    } else {
+      [chosen] = longestFirst(free(back, reserved), new Map(pool.map((u) => [outpoint(u), u])));
+      if (!chosen) {
+        throw new Error(
+          unmixed.length
+            ? "Your boxes in Lovejoin's pool weren't mixed yet. Mix them again first, or choose one to bring back anyway."
+            : "None of your boxes is in Lovejoin's pool.",
+        );
+      }
+    }
     const pending = await this.withdrawOne(network, pool, chosen);
-    // The earliest due time goes with it.
-    await this.update(network, (s) => {
-      s.due.sort((a, b) => a - b);
-      s.due.shift();
-    });
+    // The earliest due time goes with a box that had one.
+    if (back.some((b) => ref(b) === ref(chosen!))) {
+      await this.update(network, (s) => {
+        s.due.sort((a, b) => a - b);
+        s.due.shift();
+      });
+    }
     // Home's banner watches it, as it does every send the user makes; the ones due by themselves stay out of it.
     await this.deps.wallet.withKeys(() => this.deps.session.set(SESSION_PENDING, pending));
     return pending;
@@ -969,13 +1261,21 @@ export class LovejoinService {
   }
 
   private async read(network: NetworkName): Promise<Schedule> {
-    const kept = await this.deps.store.get<Schedule>(`lovejoin.${network}` as const);
-    return { due: Array.isArray(kept?.due) ? kept.due.filter((t) => typeof t === "number") : [] };
+    const kept = await this.deps.store.get<Partial<Schedule>>(`lovejoin.${network}` as const);
+    return {
+      due: Array.isArray(kept?.due) ? kept.due.filter((t) => typeof t === "number") : [],
+      // Kept before chains were recorded: none.
+      chains: Array.isArray(kept?.chains) ? kept.chains : [],
+      ...(typeof kept?.notMixed === "number" ? { notMixed: kept.notMixed } : {}),
+    };
   }
 
-  private async update(network: NetworkName, change: (s: Schedule) => void): Promise<void> {
-    const schedule = await this.read(network);
-    change(schedule);
-    await this.deps.store.set(`lovejoin.${network}` as const, schedule);
+  /** Changes the sealed schedule, one change at a time: the runner, the chains and the page never undo each other's. */
+  private update(network: NetworkName, change: (s: Schedule) => void): Promise<void> {
+    return this.inTurn(`lovejoin.${network}`, async () => {
+      const schedule = await this.read(network);
+      change(schedule);
+      await this.deps.store.set(`lovejoin.${network}` as const, schedule);
+    });
   }
 }

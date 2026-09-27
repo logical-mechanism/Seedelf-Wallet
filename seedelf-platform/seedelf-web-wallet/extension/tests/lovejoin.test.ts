@@ -11,6 +11,7 @@ import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { KoiosError, SpentInputError, type KoiosUtxo } from "../src/background/koios";
 import {
+  CHAIN_CUT,
   CHAIN_POLL_MS,
   CHAIN_PUMP_MS,
   CHAIN_RESEND_MS,
@@ -270,9 +271,9 @@ describe("a session's return through Lovejoin", CHAINS, () => {
     }
     // Home shows them from the schedule, without asking Koios.
     const calls = t.koios.calls.length;
-    expect(await t.lovejoin.held("preprod")).toEqual({ boxes: 2, lovelace: "20000000", next: Math.min(...schedule.due) });
+    expect(await t.lovejoin.held("preprod")).toEqual({ boxes: 2, lovelace: "20000000", next: Math.min(...schedule.due), notMixed: 0, stopped: 0 });
     expect(t.koios.calls.length).toBe(calls);
-    expect(await t.lovejoin.held("mainnet")).toEqual({ boxes: 0, lovelace: "0", next: null });
+    expect(await t.lovejoin.held("mainnet")).toEqual({ boxes: 0, lovelace: "0", next: null, notMixed: 0, stopped: 0 });
   });
 
   it("sends a transaction of the chain again when Koios didn't answer it, and finishes the chain", async () => {
@@ -595,11 +596,165 @@ describe("chains the wallet sends at once", CHAINS, () => {
 });
 
 /** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */
-async function ownedBox(t: ReturnType<typeof testBalances>, tx: string): Promise<KoiosUtxo> {
+async function ownedBox(t: ReturnType<typeof testBalances>, tx: string, txIndex = 0, blockTime?: number): Promise<KoiosUtxo> {
   const wasm = loadTestWasm();
   const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
-  return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
+  return {
+    ...POOL[0]!,
+    tx_hash: tx.length === 64 ? tx : tx.repeat(32),
+    tx_index: txIndex,
+    ...(blockTime !== undefined ? { block_time: blockTime } : {}),
+    inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} },
+  };
 }
+
+/** Lovejoin with giveme.my's witness stood in for: its recorded answer is another transaction's. */
+function witnessed(t: ReturnType<typeof testBalances>, extra: Partial<ConstructorParameters<typeof LovejoinService>[0]> = {}) {
+  const wasm = loadTestWasm();
+  t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+  return new LovejoinService({
+    ...t.deps,
+    wasm: {
+      ...wasm,
+      finishLovejoinWithdraw: (request: string) => {
+        const { txCbor } = JSON.parse(request) as { txCbor: string };
+        return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+      },
+    } as typeof wasm,
+    collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+    store: t.store,
+    ...extra,
+  });
+}
+
+/** The boxes a withdraw giveme.my was asked about spends. */
+const withdrawn = (t: ReturnType<typeof testBalances>) => t.collateral.asked.flatMap((tx) => txInputs(Uint8Array.from(Buffer.from(tx, "hex"))));
+
+describe("a chain's boxes", CHAINS, () => {
+  /** A wallet with collateral and 60 ₳ in its public account, and Lovejoin's pool. */
+  async function funded() {
+    const t = testBalances();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    t.koios.evaluation = AGREES;
+    t.koios.addedToAccounts.push(...POOL);
+    const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
+    const keyHash = await t.wallet.withKeys((keys) => keys.cardano.paymentKeyHash(0, 0));
+    const at = (tx: string, value: string) => ({ ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, payment_cred: keyHash, asset_list: [] });
+    t.koios.addedToAccounts.push(at("e5", "5000000"), at("e6", "60000000"));
+    return t;
+  }
+
+  it("never brings back by itself a box a public mix cut by a lock left unmixed, and says the mix stopped", async () => {
+    const t = await funded();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const summary = await t.lovejoin.publicBuild("preprod", 4);
+    expect(summary).toMatchObject({ boxes: 4, mixes: 4, txs: 5 });
+    await t.lovejoin.publicSubmit("preprod", summary.txHash);
+    // Recorded, sealed, before the deposit went: the deposit, each mix and the leaves.
+    const [record] = (await t.store.get<{ chains: Array<{ deposit: string; mixes: string[]; leaves: Array<{ txHash: string; txIndex: number }> }> }>("lovejoin.preprod"))!.chains;
+    expect(record!.mixes).toHaveLength(4);
+    expect(record!.leaves).toHaveLength(4);
+
+    // The deposit and three mixes went; the wallet locks before the fourth, and unlocks hours later.
+    await t.wallet.lock();
+    t.clock.now += 7 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4, stopped: CHAIN_CUT });
+    // On chain: three boxes mixed all the way, and one still the deposit's.
+    const sent = record!.leaves.filter((l) => record!.mixes.slice(0, 3).includes(l.txHash));
+    t.koios.addedToAccounts.push(await ownedBox(t, record!.deposit, 3), ...(await Promise.all(sent.map((l) => ownedBox(t, l.txHash, l.txIndex)))));
+
+    // Every due time runs out: the three mixed come back one a run, and the deposit's box never does.
+    const lovejoin = witnessed(t);
+    for (let run = 0; run < 8; run++) {
+      await lovejoin.withdrawDue("preprod", run === 0);
+      // Each withdraw lands before the next run.
+      for (const o of withdrawn(t)) t.koios.spent.add(o);
+      t.clock.now += 2 * HOUR;
+      await t.wallet.unlock(PASSWORD);
+    }
+    const out = withdrawn(t);
+    expect(out).toHaveLength(3);
+    expect(out).not.toContain(`${record!.deposit}#3`);
+    for (const l of sent) expect(out).toContain(`${l.txHash}#${l.txIndex}`);
+
+    // The page shows it as not mixed yet, and the stopped mix; Home counts both.
+    const status = await lovejoin.status("preprod");
+    expect(status.notMixed).toEqual([{ txHash: record!.deposit, txIndex: 3 }]);
+    expect(status.chains).toEqual([{ boxes: 4, total: 5, sent: 4, at: expect.any(Number), stopped: CHAIN_CUT }]);
+    expect(await lovejoin.held("preprod")).toMatchObject({ notMixed: 1, stopped: 1 });
+    // Brought back by hand only when asked anyway.
+    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("weren't mixed yet");
+    await expect(lovejoin.withdrawNow("preprod", { txHash: record!.deposit, txIndex: 3 })).rejects.toThrow("wasn't mixed");
+    await lovejoin.withdrawNow("preprod", { txHash: record!.deposit, txIndex: 3 }, true);
+    expect(withdrawn(t).at(-1)).toBe(`${record!.deposit}#3`);
+  });
+
+  it("withdraws nothing while a chain is being sent, and the box that has waited longest once it's done", async () => {
+    const { t } = await withSession("40000000");
+    // Two boxes of ours, both due: one five hours in the pool, and one two hours that sorts first.
+    const since = (hours: number) => t.clock.now / 1000 - hours * 3600;
+    t.koios.addedToAccounts.push(await ownedBox(t, "0a", 0, since(2)), await ownedBox(t, "f1", 0, since(5)));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR, t.clock.now - HOUR] });
+    const lovejoin = witnessed(t);
+    const runner = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin,
+      sleep: async () => undefined,
+    });
+    const review = await runner.backBuild("preprod", 0);
+    await runner.backSubmit("preprod", review.txHash);
+    // Four of ten sent: no box comes back, not even by hand.
+    expect(await lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect(t.collateral.asked).toHaveLength(0);
+    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("being sent through Lovejoin");
+    // It's all sent: the box that came into the pool first goes, not the first by hash.
+    t.koios.confirmations = 1;
+    await runner.runAll("preprod");
+    await lovejoin.withdrawDue("preprod");
+    expect(withdrawn(t)).toEqual([`${"f1".repeat(32)}#0`]);
+  });
+
+  it("brings no box back before it has waited the delay's least in the pool", async () => {
+    const { t } = await withSession("40000000");
+    // A box a mix moved ten minutes ago, and a due time from long before.
+    t.koios.addedToAccounts.push(await ownedBox(t, "d1", 0, t.clock.now / 1000 - 600));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
+    const lovejoin = witnessed(t);
+    expect(await lovejoin.withdrawDue("preprod")).toEqual([]);
+    expect(t.collateral.asked).toHaveLength(0);
+    // Its time moves to when it will have waited an hour.
+    expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toEqual([t.clock.now - 600_000 + HOUR]);
+  });
+
+  it("withdraws one box a run, however many runs overlap", async () => {
+    const { t } = await withSession("40000000");
+    t.koios.addedToAccounts.push(await ownedBox(t, "d1"), await ownedBox(t, "d2"));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
+    t.clock.now += 7 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    const lovejoin = witnessed(t);
+    const [a, b] = await Promise.all([lovejoin.withdrawDue("preprod"), lovejoin.withdrawDue("preprod")]);
+    expect([...a, ...b]).toHaveLength(1);
+    expect(t.collateral.asked).toHaveLength(1);
+  });
+
+  it("says a session's chain a lock cut stopped, as soon as the wallet unlocks", async () => {
+    const { t, sessions } = await withSession("40000000");
+    const review = await sessions.backBuild("preprod", 0);
+    await sessions.backSubmit("preprod", review.txHash);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    await sessions.runAll("preprod");
+    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 4, confirmed: 0, cut: false, stopped: CHAIN_CUT });
+    expect((await t.lovejoin.status("preprod")).chains).toEqual([
+      { session: 0, boxes: 2, total: 10, sent: 4, at: expect.any(Number), stopped: CHAIN_CUT },
+    ]);
+  });
+});
 
 describe("the boxes' withdraws", CHAINS, () => {
   it("finds ours in the pool, wherever mixes moved them", async () => {
