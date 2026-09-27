@@ -1,13 +1,13 @@
 // A site's signing prompt names every token as the rest of the wallet does
 // (launch review #18): a stranger's token called "₳" or "tUSDM" is shown by
 // its fingerprint, marked, and warned about, never as ADA or the listed
-// token.
+// token. The address a message is signed for is shown whole.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { DappTxSummary } from "../src/shared/rpc";
-import { SignTx } from "../src/ui/screens/DappApprovals";
+import { SignData, SignTx } from "../src/ui/screens/DappApprovals";
 import { assetFingerprint } from "../src/ui/tokens";
 
 const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
@@ -89,5 +89,10 @@ describe("a site's signing prompt", () => {
     expect(page).toMatch(/7 FOO Not on the wallet's list, asset1\w{4}…\w{6}\./);
     expect(page).toMatch(/Burns\s+7 FOO/);
     expect(html).not.toContain('data-testid="dapp-lookalike"');
+  });
+
+  it("shows the whole address a message is signed for, on a line of its own", () => {
+    const html = renderToStaticMarkup(createElement(SignData, { address: ADDRESS, signer: "payment", payload: "00", text: "Sign in" }));
+    expect(html).toContain(`<span class="dapp-address" data-testid="dapp-data-address" data-value="${ADDRESS}">${ADDRESS}</span>`);
   });
 });

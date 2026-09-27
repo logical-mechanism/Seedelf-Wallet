@@ -2560,6 +2560,14 @@ button.dapp-tile:hover {
   display: inline-flex;
 }
 
+/* What a banner's state means (maybe sent, or never landed): under the title, quieter. */
+.tx-banner__detail {
+  max-width: 34em;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .tx-banner__dismiss {
   margin-top: 2px;
   padding: 5px 16px;

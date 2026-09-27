@@ -45,7 +45,11 @@ export function TxBanner({
         </span>
         {title}
       </strong>
-      {detail && <span data-testid={`${testId}-detail`}>{detail}</span>}
+      {detail && (
+        <span className="tx-banner__detail" data-testid={`${testId}-detail`}>
+          {detail}
+        </span>
+      )}
       <a href={explorerUrl(network, txHash)} target="_blank" rel="noreferrer" className="banner__link">
         {shortHex(txHash, 10, 6)} on Cardanoscan
         <ExternalIcon size={12} />

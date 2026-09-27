@@ -19,7 +19,6 @@ import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
 import { ExternalIcon, GlobeIcon, SpinnerIcon } from "../components/Icons";
-import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import { PasswordField } from "../components/PasswordField";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
@@ -709,9 +708,12 @@ export function SignData({
       <ReviewRows testId="dapp-data">
         <Row label="With" value={signer === "stake" ? "Your stake key" : "Your payment key"} />
       </ReviewRows>
+      {/* The whole address on its own line, as the Pays rows show it: shortened, a lookalike's could read the same. */}
       <div className="stack-tight">
         <span className="note">For the address</span>
-        <MiddleEllipsis text={address} testId="dapp-data-address" />
+        <span className="dapp-address" data-testid="dapp-data-address" data-value={address}>
+          {address}
+        </span>
       </div>
       <div className="stack-tight">
         <span className="note">{text === undefined ? "The data (hex)" : "The message"}</span>
