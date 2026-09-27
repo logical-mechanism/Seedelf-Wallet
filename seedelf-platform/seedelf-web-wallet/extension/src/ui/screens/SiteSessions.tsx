@@ -355,8 +355,11 @@ export function SiteSession({
           }
         >
           <p className="note">
-            Private session {s.index + 1} ends, and the site's next connect asks again. The wallet stops reading this
-            account: anything the site pays it later, or leaves open on it, isn't looked for again.
+            {attached === false
+              ? `Private session ${s.index + 1} ends; ${hostOf(s)} stays connected as it is now, since it doesn't use this session.`
+              : `Private session ${s.index + 1} ends, and the site's next connect asks again.`}{" "}
+            The wallet stops reading this account: anything the site pays it later, or leaves open on it, isn't looked for
+            again.
           </p>
         </Modal>
       )}

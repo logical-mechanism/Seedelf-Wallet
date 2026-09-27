@@ -366,6 +366,9 @@ export function Lovejoin({
         }
       >
         {review.source === "private" ? <PrivateReview summary={review.summary} /> : <PublicReview summary={review.summary} />}
+        <p className="note" data-testid="lovejoin-unaudited">
+          {LOVEJOIN_UNAUDITED}
+        </p>
       </Screen>
     );
   }
