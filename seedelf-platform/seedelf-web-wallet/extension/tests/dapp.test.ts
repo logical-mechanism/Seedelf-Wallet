@@ -55,6 +55,22 @@ async function connected(t: Awaited<ReturnType<typeof on>>, s = site()) {
   return s;
 }
 
+const uint = (n: number) => (n < 24 ? n.toString(16).padStart(2, "0") : `18${n.toString(16).padStart(2, "0")}`);
+const outpoints = (list: string[]) =>
+  `8${list.length}${list.map((o) => `825820${o.slice(0, 64)}${uint(Number(o.slice(65)))}`).join("")}`;
+
+/**
+ * A site's transaction, built by hand: it spends `inputs` (`txhash#index`),
+ * puts up `collateral`, pays 4 ₳ to someone else, and carries
+ * `certificates` (CBOR, hex). Nothing balances it: the wallet only reads it.
+ */
+function siteTx({ inputs, collateral = [], certificates = [] }: { inputs: string[]; collateral?: string[]; certificates?: string[] }) {
+  const fields = [`00${outpoints(inputs)}`, `0181825839${loadTestWasm().cip30Address(THEIRS)}1a003d0900`, "021a00029810"];
+  if (certificates.length) fields.push(`048${certificates.length}${certificates.join("")}`);
+  if (collateral.length) fields.push(`0d${outpoints(collateral)}`);
+  return `84a${fields.length}${fields.join("")}a0f5f6`;
+}
+
 /** A payment from the account, built by the wallet's own Send: a dApp's transaction as far as the connector knows. */
 async function built(t: Awaited<ReturnType<typeof on>>, to = THEIRS) {
   const summary = await t.send.build("preprod", [{ to, lovelace: "3000000", tokens: [] }]);
@@ -206,6 +222,37 @@ describe("the dApp connector", () => {
       failure: { code: APIError.InvalidRequest },
     });
     expect(t.dapp.approvals()).toEqual([]);
+  });
+
+  it("won't sign a site's transaction that uses a UTxO the user locked, or spends the collateral", async () => {
+    const t = await on();
+    withCollateral(t);
+    const s = await connected(t);
+    await t.balances.get("preprod");
+    const utxos = (await t.coins.lists("preprod")).cardano;
+    const ref = (u: { txHash: string; index: number }) => `${u.txHash}#${u.index}`;
+    const collateral = ref(utxos.find((u) => u.collateral)!);
+    const [locked, free] = utxos.filter((u) => !u.collateral).map(ref);
+    await t.coins.setLocked("preprod", "cardano", locked!, true);
+
+    // Spent, or put up as collateral: refused before the user is asked.
+    for (const tx of [siteTx({ inputs: [locked!] }), siteTx({ inputs: [free!], collateral: [locked!] })]) {
+      await expect(t.dapp.call(s, "signTx", [tx, false])).rejects.toMatchObject({
+        failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining(`a UTxO you locked (${locked})`) },
+      });
+    }
+    await expect(t.dapp.call(s, "signTx", [siteTx({ inputs: [free!, collateral] }), false])).rejects.toMatchObject({
+      failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining(`spends your collateral (${collateral})`) },
+    });
+    expect(t.dapp.approvals()).toEqual([]);
+
+    // The collateral put up as collateral is what it's for; once unlocked, the UTxO is the site's to spend.
+    await t.coins.setLocked("preprod", "cardano", locked!, false);
+    const signing = t.dapp.call(s, "signTx", [siteTx({ inputs: [locked!], collateral: [collateral] }), false]);
+    await until(() => t.dapp.approvals().length === 1);
+    expect(t.dapp.approvals()[0]).not.toHaveProperty("collateralSpent");
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
   });
 
   it("refuses a transaction over 64 KiB before reading any of it: no Koios request, no prompt", async () => {
@@ -627,6 +674,22 @@ describe("private CIP-30: a site connected to a private session", () => {
     await expect(dapp.call(s, "signData", [OWN, hex("x")])).rejects.toMatchObject({
       failure: { code: DataSignError.ProofGeneration, info: "That address isn't this private session's." },
     });
+  });
+
+  it("says so in the prompt when a site's transaction spends the session's collateral", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s, out } = await connectedPrivately(t, dapp);
+    const spends = async (input: string) => {
+      const signing = dapp.call(s, "signTx", [siteTx({ inputs: [input] }), false]);
+      await until(() => dapp.approvals().length === 1);
+      const approval = dapp.approvals()[0]!;
+      await dapp.answer(approval.id, false);
+      await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+      return approval;
+    };
+    expect(await spends(`${out.txHash}#1`)).toMatchObject({ kind: "sign-tx", session: 0, collateralSpent: true });
+    expect(await spends(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`)).not.toHaveProperty("collateralSpent");
   });
 
   it("keeps the request waiting when the funding isn't sent, and its unfunded session can be closed from the dApps page", async () => {

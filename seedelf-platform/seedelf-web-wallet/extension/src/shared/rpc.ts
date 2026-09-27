@@ -586,11 +586,19 @@ export interface DappTxSummary {
  * connected to that private session, not the public account. A connect's
  * `funding`: the private session it chose is funded and on its way, and the
  * site connects once Koios sees it. `password` on a connect: sending a
- * private session's funding needs it.
+ * private session's funding needs it. A session's signature's
+ * `collateralSpent`: it spends the session's collateral as an ordinary input.
  */
 export type DappAsk =
   | { kind: "connect"; password: boolean; funding?: { index: number; txHash: string } }
-  | { kind: "sign-tx"; partial: boolean; summary: DappTxSummary; password: boolean; session?: number }
+  | {
+      kind: "sign-tx";
+      partial: boolean;
+      summary: DappTxSummary;
+      password: boolean;
+      session?: number;
+      collateralSpent?: boolean;
+    }
   | {
       kind: "sign-data";
       session?: number;

@@ -145,7 +145,12 @@ export function DappApprovals() {
       <div className="stack" data-testid={`dapp-${current.kind}`}>
         <Site origin={current.origin} title={current.title} session={current.session} />
         {current.kind === "sign-tx" && (
-          <SignTx summary={current.summary} partial={current.partial} session={current.session !== undefined} />
+          <SignTx
+            summary={current.summary}
+            partial={current.partial}
+            session={current.session !== undefined}
+            collateralSpent={!!current.collateralSpent}
+          />
         )}
         {current.kind === "sign-data" && (
           <SignData address={current.address} signer={current.key} payload={current.payload} text={current.text} />
@@ -419,7 +424,17 @@ function ConnectRequest({
   );
 }
 
-function SignTx({ summary: s, partial, session }: { summary: DappTxSummary; partial: boolean; session: boolean }) {
+function SignTx({
+  summary: s,
+  partial,
+  session,
+  collateralSpent,
+}: {
+  summary: DappTxSummary;
+  partial: boolean;
+  session: boolean;
+  collateralSpent: boolean;
+}) {
   const network = useNetwork();
   const net = BigInt(s.netLovelace);
   const token = (t: DappToken) => {
@@ -525,6 +540,12 @@ function SignTx({ summary: s, partial, session }: { summary: DappTxSummary; part
         </Callout>
       )}
 
+      {collateralSpent && (
+        <Callout tone="warn" testId="dapp-collateral-spent">
+          It spends this private session's collateral as an ordinary payment, so the session has none left to put up
+          for the site's contracts.
+        </Callout>
+      )}
       {s.collateral && s.collateral.own > 0 && (
         <p className="note" data-testid="dapp-collateral">
           Your collateral goes along: the network keeps up to {formatAda(s.collateral.atRisk)} ₳ of it only if a contract

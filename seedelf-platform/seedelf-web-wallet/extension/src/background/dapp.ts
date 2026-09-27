@@ -23,7 +23,10 @@
 //             waiting and counts towards the unlock back-off. The account's
 //             own outputs of every transaction it signs are kept (the last
 //             32), so a dApp can build its next transaction on them before
-//             they're on chain. `signData` is CIP-8, with the address's key.
+//             they're on chain. What the user locked, and the collateral,
+//             stay out of a site's transaction as out of the wallet's own:
+//             one that uses them is refused (`keptApart`). `signData` is
+//             CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts).
 // Limits      What a site asks for without the user costs the wallet little:
@@ -717,6 +720,50 @@ export class DappService {
     return { view, rows: [...found, ...others] };
   }
 
+  /**
+   * What the user keeps out of payments stays out of a site's too. On the
+   * public account, a transaction that spends a UTxO the user locked, puts
+   * one up as collateral, or spends the collateral as an ordinary input is
+   * refused: the lock was put there on purpose, and a spend ties that UTxO's
+   * history to the rest for good. Unlocking it, or reclaiming the
+   * collateral, is how the user means it. A session has no locks, and
+   * nothing in it is kept from its site: its collateral spent as an input is
+   * named in the prompt instead (the answer).
+   */
+  private async keptApart(
+    network: NetworkName,
+    holder: Holder,
+    view: View,
+    inputs: string[],
+    collateral: string[],
+  ): Promise<boolean> {
+    if (holder) {
+      const kept = sessionCollateral(view.utxos).collateral;
+      return !!kept && inputs.includes(outpoint(kept.utxo));
+    }
+    const [choices, { collateral: kept }] = await Promise.all([
+      this.deps.coins.choices(network),
+      this.deps.coins.account(network, view.utxos),
+    ]);
+    const locked = new Set(choices.cardano);
+    const used = [...new Set([...inputs, ...collateral])].filter((o) => locked.has(o));
+    if (used.length) {
+      const [first] = used;
+      const them = used.length === 1 ? "it" : "them";
+      throw new DappError({
+        code: TxSignError.ProofGeneration,
+        info: `This transaction uses ${used.length === 1 ? `a UTxO you locked (${first})` : `${used.length} UTxOs you locked (${first} and ${used.length - 1} more)`}. A lock keeps a UTxO out of every payment, so the wallet won't sign it. Unlock ${them} on the Public UTxOs screen first if you mean to spend ${them}.`,
+      });
+    }
+    if (kept && inputs.includes(outpoint(kept.utxo))) {
+      throw new DappError({
+        code: TxSignError.ProofGeneration,
+        info: `This transaction spends your collateral (${outpoint(kept.utxo)}) as an ordinary payment, so the wallet won't sign it. Reclaim it in Settings, under Collateral, first if you mean to spend it.`,
+      });
+    }
+    return false;
+  }
+
   /** Whether a site may make the worker ask Koios for `what` now, and counts it if so. */
   private allow(origin: string, what: keyof typeof PER_MINUTE): boolean {
     const key = `${what} ${origin}`;
@@ -737,13 +784,16 @@ export class DappService {
     password: boolean,
   ): Promise<string> {
     const bytes = txBytes(tx);
-    let refs: string[];
+    let inputs: string[];
+    let collateral: string[];
     try {
-      refs = [...(bodyOutpoints(bytes, 0) ?? []), ...(bodyOutpoints(bytes, 13) ?? [])];
+      inputs = bodyOutpoints(bytes, 0) ?? [];
+      collateral = bodyOutpoints(bytes, 13) ?? [];
     } catch {
       throw invalid("The wallet can't read this transaction.");
     }
-    const { view, rows } = await this.resolve(network, holder, session.origin, [...new Set(refs)]);
+    const { view, rows } = await this.resolve(network, holder, session.origin, [...new Set([...inputs, ...collateral])]);
+    const collateralSpent = await this.keptApart(network, holder, view, inputs, collateral);
     const request = JSON.stringify({
       network,
       txCbor: tx,
@@ -777,7 +827,14 @@ export class DappService {
         info: `This transaction needs signatures the wallet can't give: it spends or is signed for by keys that aren't ${whose}.`,
       });
     }
-    const ask: DappAsk = { kind: "sign-tx", partial: partialSign, summary, password, ...sessionOf(holder) };
+    const ask: DappAsk = {
+      kind: "sign-tx",
+      partial: partialSign,
+      summary,
+      password,
+      ...sessionOf(holder),
+      ...(collateralSpent ? { collateralSpent } : {}),
+    };
     return this.ask(session, ask, TxSignError.UserDeclined, async () => {
       const signed = await wallet.withKeys(
         ({ cardano, oneTime }) =>
