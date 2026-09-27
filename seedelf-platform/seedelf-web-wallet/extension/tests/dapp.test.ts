@@ -1383,10 +1383,10 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect(await dapp.sites()).toEqual([]);
     expect(dapp.approvals()).toMatchObject([{ kind: "connect" }]);
     expect(dapp.approvals()[0]).not.toHaveProperty("funding");
-    // The session it recorded never got its money: closed from the dApps page, its index isn't used again.
+    // The session it recorded never got its money: closed from the dApps page, its record goes, and its index isn't used again.
     expect((await sessions.list("preprod"))[0]).toMatchObject({ index: 0, stage: "failed", site: { origin: s.origin } });
     await dapp.disconnectSession(0);
-    expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
+    expect(await sessions.list("preprod")).toEqual([]);
     expect((await dapp.privateBuild(connect.id, "15000000", [])).index).toBe(1);
   });
 
@@ -1430,8 +1430,11 @@ describe("private CIP-30: a site connected to a private session", () => {
     // Brought back (the account is empty): disconnecting ends the session, and the site's next connect asks again.
     t.koios.addedToAccounts.splice(0);
     expect(await dapp.forget(s.origin)).toEqual([]);
-    expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
     await expect(dapp.call(s, "getBalance", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+    // Nothing on the device says which site had it any more (privacy review §3.12); its index isn't used again.
+    expect(await sessions.list("preprod")).toEqual([]);
+    expect(JSON.stringify(await t.store.get("sessions.preprod"))).not.toContain("example.com");
+    expect(await t.store.get("sessions.preprod")).toMatchObject({ next: 1 });
   });
 });
 

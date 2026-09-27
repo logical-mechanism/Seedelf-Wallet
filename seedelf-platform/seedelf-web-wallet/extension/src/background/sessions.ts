@@ -917,7 +917,8 @@ export class SessionService {
    * read as Koios lists it, what this wallet spent included: a return that
    * never lands leaves its inputs there. What no return takes doesn't count.
    * This is the check that matters: Settings disconnects a site with no
-   * other. Its index isn't used again.
+   * other. Its index isn't used again, and its record, with the site's
+   * origin, goes (unless something is left behind at its account).
    */
   disconnect(network: NetworkName, index: number): Promise<void> {
     return this.serial(async () => {
@@ -944,8 +945,18 @@ export class SessionService {
       if (returnable(s, rows).length) {
         throw new Error("The session's account still holds something. Bring it back first, then disconnect.");
       }
-      await this.update(network, index, (r) => {
-        r.closedAt = now();
+      // Closed, nothing shows a site's session again (the dApps page and
+      // Bring everything back take open ones), and which site had one says
+      // something about the user: its record goes, `next` keeping its index
+      // from being used again (privacy review §3.12). One with something no
+      // return takes left at its account (`leftBehind`) stays, closed, to
+      // point to it.
+      const book = await this.book(network);
+      const closing = book.sessions.find((r) => r.index === index)!;
+      if (closing.leftBehind?.length) closing.closedAt = now();
+      await this.save(network, {
+        ...book,
+        sessions: closing.leftBehind?.length ? book.sessions : book.sessions.filter((r) => r !== closing),
       });
     });
   }

@@ -1581,11 +1581,14 @@ describe("disconnecting a site's session", () => {
     await busy(t, FAILED_AFTER);
     await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Bring it back first");
 
-    // A return that lands empties it: disconnected, for good.
+    // A return that lands empties it: disconnected, for good. Its record goes, and the site's origin with it (privacy review §3.12);
+    // its index isn't used again.
     t.koios.missing.clear();
     t.koios.addedToAccounts.splice(0);
     await sessions.disconnect("preprod", 0);
-    expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
+    expect(await sessions.list("preprod")).toEqual([]);
+    expect(await t.store.get("sessions.preprod")).toEqual({ next: 1, sessions: [] });
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("no such session");
   });
 
   it("waits for a funding the wallet's watch still sends, or took lately, whatever the 20 minutes since it was first sent say (final review sessions-6)", async () => {
@@ -1617,10 +1620,10 @@ describe("disconnecting a site's session", () => {
     await busy(t, 60_000);
     await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("hasn't reached the chain yet");
 
-    // Twenty minutes after that, still not on chain: it never went, and the empty session ends.
+    // Twenty minutes after that, still not on chain: it never went, and the empty session ends, its record gone.
     await busy(t, FAILED_AFTER);
     await sessions.disconnect("preprod", 0);
-    expect((await sessions.list("preprod"))[0]!.stage).toBe("closed");
+    expect(await t.store.get("sessions.preprod")).toEqual({ next: 1, sessions: [] });
   });
 
   it("forgets no swap whose funding the wallet's watch still sends (final review sessions-6)", async () => {
@@ -1663,6 +1666,7 @@ describe("disconnecting a site's session", () => {
     expect(view).toMatchObject({ stage: "open", holding: { utxos: 0 } });
     expect(view!.leftBehind).toEqual([{ txHash: "e4".repeat(32), txIndex: 0, reason: "script", lovelace: "3000000" }]);
     await t.sessions.disconnect("preprod", 0);
+    // Its record stays, closed, to point to what's left at its account.
     expect((await t.sessions.list("preprod"))[0]!.stage).toBe("closed");
   });
 });
