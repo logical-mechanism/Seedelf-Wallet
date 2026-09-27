@@ -19,6 +19,7 @@ import {
   chainRetryMs,
   LovejoinService,
   MAX_CHAIN_MIXES,
+  MAX_DEPOSIT_BOXES,
   mixesPerBox,
   pumpChain,
   secureRandom,
@@ -31,7 +32,7 @@ import { Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
-import { koiosPreprod, loadTestWasm, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { koiosPreprod, loadTestWasm, sessionSwap, testBalances, testWallet, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -650,6 +651,60 @@ describe("the pool the chains draw from", CHAINS, () => {
     await lovejoin.chain("preprod", 0, [atSession("c1".repeat(32), 0, "40000000")], atSession("c2".repeat(32), 1, "5000000"), {});
     expect(asked).toBe(MAX_CHAIN_MIXES / mixesPerBox(3));
   });
+
+  it("puts no more boxes in one deposit than a transaction holds, and mixes as many again as one chain takes (final review lovejoin-5)", async () => {
+    const { t } = await withSession("40000000");
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const wasm = loadTestWasm();
+    // One wave deep, the spare ADA would pay for 150 boxes, and the pool has others enough for 200.
+    const others = Array.from({ length: 400 }, (_, i) => ({ txHash: i.toString(16).padStart(64, "0"), txIndex: 0 }));
+    const mine = Array.from({ length: 150 }, (_, i) => ({ txHash: i.toString(16).padStart(64, "a"), txIndex: 1 }));
+    const asked: number[] = [];
+    const lovejoin = new LovejoinService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      wasm: {
+        ...wasm,
+        planLovejoin: () => JSON.stringify({ boxes: 150, spare: "0", mixes: 150, mixFees: "0" }),
+        lovejoinOwned: () => JSON.stringify({ boxes: mine, lovelace: "0", others: others.length, otherBoxes: others }),
+        buildLovejoinChain: (_one: unknown, _key: unknown, request: string) => {
+          asked.push((JSON.parse(request) as { boxes: number }).boxes);
+          return JSON.stringify({ txs: [], boxes: asked.at(-1), depth: 1, fees: "0", returned: "0", tokens: [], merged: 0, leaves: [], leftOut: [] });
+        },
+      } as typeof wasm,
+    });
+    const rows = [atSession("c1".repeat(32), 0, "40000000")];
+    const collateral = atSession("c2".repeat(32), 1, "5000000");
+    await lovejoin.chain("preprod", 0, rows, collateral, {});
+    await lovejoin.chain("preprod", 0, rows, collateral, {}, [], undefined, true);
+    expect(asked).toEqual([MAX_DEPOSIT_BOXES, MAX_CHAIN_MIXES]);
+  });
+
+  it("takes a large return one wave deep through Lovejoin, its deposit within a transaction's size (final review lovejoin-5)", async () => {
+    const { t } = await withSession("1600000000");
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    // 300 other people's boxes in the pool: registers of another wallet's key.
+    const other = testWallet();
+    await other.wallet.create(account(15).phrase, PASSWORD);
+    const wasm = loadTestWasm();
+    for (let i = 0; i < 300; i++) {
+      const datum = await other.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+      const tx_hash = i.toString(16).padStart(4, "0").repeat(16);
+      t.koios.addedToAccounts.push({ ...POOL[0]!, tx_hash, tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } });
+    }
+    const sessions = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin: t.lovejoin,
+      sleep: async () => undefined,
+    });
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoinSkipped).toBeUndefined();
+    expect(review.lovejoin).toMatchObject({ boxes: MAX_DEPOSIT_BOXES, depth: 1 });
+  }, 120_000);
 });
 
 describe("chains the wallet sends at once", CHAINS, () => {

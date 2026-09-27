@@ -461,6 +461,18 @@ export const MAX_MIX_BOXES = 10;
  */
 export const MAX_CHAIN_MIXES = MAX_MIX_BOXES * mixesPerBox(3);
 
+/**
+ * The most boxes one deposit makes: each is an output of about 150 bytes,
+ * and a transaction holds 16 KiB (measured: 106 boxes fit with one input,
+ * 108 don't). Room is left for a session holding a few dozen UTxOs. Past
+ * it, a return's spare ADA comes back with its change (final review
+ * lovejoin-5). Mixing again has no deposit.
+ */
+export const MAX_DEPOSIT_BOXES = 96;
+
+/** The most boxes one chain with a deposit takes at `depth`: MAX_CHAIN_MIXES' worth, and what one deposit makes. */
+export const chainBoxes = (depth: number) => Math.min(MAX_DEPOSIT_BOXES, Math.floor(MAX_CHAIN_MIXES / mixesPerBox(depth)));
+
 /** A box in the pool, or anywhere: where it sits. */
 export interface OutRef {
   txHash: string;
@@ -719,8 +731,10 @@ export class LovejoinService {
     if (others.length < perBox * 2) {
       throw new LovejoinSkipped(`Lovejoin's pool has ${others.length} boxes to mix with, and this needs ${perBox * 2}`);
     }
-    // One chain is at most MAX_CHAIN_MIXES long, whatever the spare ADA pays for: what's left comes back with the return.
-    count = Math.min(count, Math.floor(others.length / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
+    // One chain is at most MAX_CHAIN_MIXES long, and one deposit makes at most MAX_DEPOSIT_BOXES,
+    // whatever the spare ADA pays for: what's left comes back with the return.
+    const most = again ? Math.floor(MAX_CHAIN_MIXES / perBox) : chainBoxes(depth);
+    count = Math.min(count, Math.floor(others.length / (perBox * 2)), most);
     // Mixing again takes the wallet's boxes in the pool's order: the ones not mixed yet go first.
     const unmixed = new Set(unmixedOf((await this.read(network)).chains, owned).map(ref));
     const first = (u: KoiosUtxo) => (unmixed.has(outpoint(u)) ? 0 : 1);

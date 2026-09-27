@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
+import { MAX_DEPOSIT_BOXES } from "../src/background/lovejoin";
 import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
@@ -261,6 +262,10 @@ describe("a swap's quote", () => {
     // A large one: no more than one chain takes (MAX_CHAIN_MIXES, 32 boxes of 4 mixes).
     t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "906594100" };
     expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ boxes: 32, mixes: 128, mixFees: "121600000" });
+    // One wave deep, 1,600 ₳: no more than one deposit makes (final review lovejoin-5).
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "1600000000" };
+    expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ boxes: MAX_DEPOSIT_BOXES, depth: 1, mixes: MAX_DEPOSIT_BOXES });
     // Where Lovejoin isn't, there's nothing to say.
     expect((await t.sessions.quote("preprod", selling)).lovejoin).toBeUndefined();
   });

@@ -72,12 +72,11 @@ import { builtOutputs, uncheckedProtocols, type BuiltOutput, type Estimate, type
 import {
   CHAIN_CUT,
   CHAIN_PUMP_MS,
+  chainBoxes,
   chainOwner,
   chainRetryMs,
   checkBoxes,
   LovejoinSkipped,
-  MAX_CHAIN_MIXES,
-  mixesPerBox,
   pumpChain,
   type ChainProgress,
   type LovejoinChain,
@@ -575,8 +574,8 @@ export class SessionService {
    * where Lovejoin is on: the boxes its spare ADA pays for at the set depth,
    * the proceeds' too when they're ADA (with the deposit back, and the room
    * left over), their mixes (WebAssembly's MIX_FEE_ESTIMATE each) and their
-   * withdraws. At most: the pool may take fewer, and one chain goes no
-   * further than MAX_CHAIN_MIXES.
+   * withdraws. At most: the pool may take fewer, and one chain takes no
+   * more than chainBoxes (MAX_CHAIN_MIXES, and what one deposit makes).
    */
   private async lovejoinCost(network: NetworkName, quote: SwapQuote): Promise<SwapQuote["lovejoin"]> {
     const lovejoin = this.deps.lovejoin;
@@ -589,7 +588,7 @@ export class SessionService {
     const proceeds = quote.ask.tokenOut === "lovelace" ? BigInt(quote.amountOut) + BigInt(quote.deposits) : 0n;
     const spare = proceeds + SWAP_MARGIN;
     const affordable = spare > besides ? Number((spare - besides) / perBox) : 0;
-    const boxes = Math.min(affordable, Math.floor(MAX_CHAIN_MIXES / mixesPerBox(one.depth)));
+    const boxes = Math.min(affordable, chainBoxes(one.depth));
     return {
       boxes,
       depth: one.depth,
