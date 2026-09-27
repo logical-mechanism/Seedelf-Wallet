@@ -17,7 +17,7 @@
 
 import type { NetworkName } from "../networks";
 import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
-import { nothingInAccount, readAccount } from "./account";
+import { nothingInAccount, readAccount, validUntil } from "./account";
 import { keep, measure, measureLocally, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
 
 /** chrome.storage.session: the mint built last, until it's sent or replaced. */
@@ -40,9 +40,10 @@ export class MintService {
   }
 
   private async buildFromAccount(network: NetworkName, label: string): Promise<MintSummary> {
-    const { wasm } = this.deps;
+    const { wasm, now } = this.deps;
     const { params, utxos, collateral, held, withdrawal } = await readAccount(this.deps, network);
-    const request = { network, params, label, utxos, collateral, withdrawal };
+    // The draft Ogmios measures and the finish hold the same slot.
+    const request = { network, params, label, utxos, collateral, withdrawal, invalidHereafter: validUntil(wasm, network, now()) };
     if (request.utxos.length === 0) {
       throw nothingInAccount(held, "Your public account is empty. Fund it first; the Seedelf is paid from there.");
     }

@@ -12,7 +12,7 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import type { MoveInSummary, PendingTx, TokenQuantity } from "../shared/rpc";
-import { nothingInAccount, readAccount } from "./account";
+import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { ActivityService } from "./activity";
 import type { CoinControlService } from "./coin-control";
 import type { Koios } from "./koios";
@@ -63,7 +63,7 @@ export class MoveInService {
     if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to make private.");
 
     return wallet.withKeys(async (keys) => {
-      const request = { network, params, utxos, lovelace, tokens, withdrawal };
+      const request = { network, params, utxos, lovelace, tokens, withdrawal, invalidHereafter: validUntil(wasm, network, now()) };
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
       const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };
       const summary: MoveInSummary = { ...rest, network };

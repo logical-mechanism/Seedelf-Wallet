@@ -161,3 +161,15 @@ export async function readAccount(
     ...(withdrawable ? { withdrawal: stake.rewards_available } : {}),
   };
 }
+
+/** How long a transaction built from the account stays valid. */
+export const VALID_FOR_MS = 2 * 60 * 60_000;
+
+/**
+ * The slot a transaction built from the account at `now` stops being valid
+ * at, two hours on: its `invalidHereafter`. Past it, one that never landed
+ * can't land any more, so paying again can't pay twice.
+ */
+export function validUntil(wasm: typeof Wasm, network: NetworkName, now: number): number {
+  return wasm.slotAt(network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod, now + VALID_FOR_MS);
+}
