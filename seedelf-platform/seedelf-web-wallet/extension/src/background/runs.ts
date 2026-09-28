@@ -49,7 +49,7 @@ export async function runNetworks(ctx: Runner, alarm: Alarm, unlock = false): Pr
     // A public mix still being sent keeps the alarm going too.
     if (await ctx.lovejoin.pumpPublic(network).catch(() => false)) busy = true;
     // And a payment that may still go through, sent again now and then until it's settled.
-    if (await ctx.pending.watch(network).catch(() => false)) busy = true;
+    if (await ctx.pending.watch(network, unlock).catch(() => false)) busy = true;
   }
   for (const network of ctx.networks) {
     await ctx.lovejoin.withdrawDue(network, unlock, since).catch(() => undefined);

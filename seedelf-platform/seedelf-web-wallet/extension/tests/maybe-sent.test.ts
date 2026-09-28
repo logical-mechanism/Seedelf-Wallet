@@ -457,7 +457,7 @@ describe("a payment that may still go through, across a lock (final review money
     expect(await t.store.get("maybeSent.preprod")).toBeNull();
   });
 
-  it("is sent again by the worker's run at unlock, the network shown or not", async () => {
+  it("is only looked for at unlock, and sent again by the worker's run two minutes on, the network shown or not (independent review L9)", async () => {
     const t = await unlocked();
     const summary = await again(t);
     unanswered(t);
@@ -465,6 +465,11 @@ describe("a payment that may still go through, across a lock (final review money
     await t.wallet.lock();
     t.clock.now += 5 * 60_000;
     await t.wallet.unlock(PASSWORD);
+    // The unlock's run, and Home's first look: nothing goes out the moment the wallet unlocks.
+    expect(await t.pending.watch("preprod", true)).toBe(true);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
+    expect(ids(t)).toEqual([summary.txHash]);
+    await busyFor(t, 2 * 60_000);
     expect(await t.pending.watch("preprod")).toBe(false);
     expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
     // Taken: an ordinary sent payment, which a lock may forget.
@@ -485,7 +490,7 @@ describe("a payment that may still go through, across a lock (final review money
     expect(await t.activity.seedelf("preprod")).toMatchObject([{ kind: "withdraw", txHash: summary.txHash }]);
   });
 
-  it("is let go at once when it can't land any more: past its slot, or a private one 20 minutes unseen", async () => {
+  it("is let go when it can't land any more: past its slot at once, a private one 20 minutes unseen once it's gone again after the unlock", async () => {
     const t = await unlocked();
     const summary = await again(t);
     unanswered(t, Infinity);
@@ -504,6 +509,10 @@ describe("a payment that may still go through, across a lock (final review money
     await t.wallet.lock();
     t.clock.now += UNSEEN_AFTER_MS + 60_000;
     await t.wallet.unlock(PASSWORD);
+    // Put back, it isn't judged on the time the wallet was locked alone: it goes again first (independent review L9).
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: privateOne.txHash, maybeSent: true });
+    await busyFor(t, 2 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: privateOne.txHash, maybeSent: true });
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: privateOne.txHash, dropped: "unseen" });
     expect(await spentSet(t.session)).toEqual(new Set());
     await expect(again(t)).resolves.toBeDefined();

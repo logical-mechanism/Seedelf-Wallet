@@ -1614,7 +1614,9 @@ describe("disconnecting a site's session", () => {
     await t.wallet.unlock(PASSWORD);
     await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("hasn't reached the chain yet");
 
-    // The watch sends it again, and Koios takes it: sent a minute ago, it may still land.
+    // The watch sends it again, two minutes after the unlock, and Koios takes it: sent a minute ago, it may still land.
+    await t.pending.pending("preprod");
+    await busy(t, 2 * 60_000);
     await t.pending.pending("preprod");
     expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: out.txHash, submittedAt: t.clock.now });
     await busy(t, 60_000);

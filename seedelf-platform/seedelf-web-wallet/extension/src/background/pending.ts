@@ -85,6 +85,12 @@ interface Watched extends PendingTx {
   kept?: string;
   /** When it last went again. */
   resentAt?: number;
+  /**
+   * Put back from its sealed copy (restoreNow), and not sent again since: it
+   * isn't let go as unseen before it has been, so that isn't judged on the
+   * time the wallet was locked alone (independent review L9).
+   */
+  restored?: boolean;
   /** A private spend that pays the public account (`paysAccount`): its landing reads the account again too. */
   toAccount?: boolean;
 }
@@ -231,15 +237,19 @@ async function unseal(deps: PendingDeps, w: Watched): Promise<void> {
 /**
  * The watch on `network`. One a lock or a closed browser cleared is put
  * back from its sealed copy first, if it may still go through, and its
- * UTxOs held back again. Call it in the network's turn.
+ * UTxOs held back again. It's put back as if sent again just now: nothing
+ * sends it in the second the wallet unlocks, not the unlock's run, nor
+ * Home's first look, and it goes again RESEND_MS on (privacy review §3.1,
+ * independent review L9). Call it in the network's turn.
  */
 async function restoreNow(deps: PendingDeps, network: NetworkName): Promise<Watched | undefined> {
-  const { wallet, session } = deps;
+  const { wallet, session, now } = deps;
   const key = pendingKey(network);
   const watched = await wallet.withKeys(() => session.get<Watched>(key));
   if (watched) return watched;
-  const w = await sealed(deps, network);
-  if (!unsettled(w) || w.network !== network || !w.txCbor) return undefined;
+  const sealedOne = await sealed(deps, network);
+  if (!unsettled(sealedOne) || sealedOne.network !== network || !sealedOne.txCbor) return undefined;
+  const w: Watched = { ...sealedOne, resentAt: now(), restored: true };
   await wallet.withKeys(async () => {
     await rememberSpent(session, network, hexBytes(w.txCbor!));
     await session.set(key, w);
@@ -299,6 +309,7 @@ function shown(watched: Watched): PendingTx {
     summary: _summary,
     kept: _kept,
     resentAt: _resentAt,
+    restored: _restored,
     toAccount: _toAccount,
     ...pending
   } = watched;
@@ -497,9 +508,14 @@ async function stillMaybeSent(deps: PendingDeps, s: Sending, ahead: Ahead): Prom
   return shown(cur?.txHash === s.txHash ? cur : record);
 }
 
-/** Whether the watch holds `record` still as `writeAhead` wrote it: maybe sent, and not sent again since. */
+/** Whether the watch holds `record` still as `writeAhead` wrote it: maybe sent, and not sent again since (put back after a lock isn't). */
 function writtenAhead(cur: Watched | undefined, record: Watched): cur is Watched {
-  return cur?.txHash === record.txHash && !!cur.maybeSent && cur.submittedAt === record.submittedAt && cur.resentAt === record.resentAt;
+  return (
+    cur?.txHash === record.txHash &&
+    !!cur.maybeSent &&
+    cur.submittedAt === record.submittedAt &&
+    (cur.resentAt === record.resentAt || !!cur.restored)
+  );
 }
 
 /**
@@ -514,16 +530,17 @@ const settling = new WeakMap<Area, Map<string, Promise<Watched | undefined>>>();
  * seen, sent again and taken, or let go. Returns it as it now stands, or
  * what the watch holds instead, if anything.
  */
-function settle(deps: PendingDeps, w: Watched): Promise<Watched | undefined> {
+function settle(deps: PendingDeps, w: Watched, look = false): Promise<Watched | undefined> {
   let going = settling.get(deps.session);
   if (!going) settling.set(deps.session, (going = new Map()));
   const id = `${w.network}.${w.txHash}`;
-  const run = going.get(id) ?? settleNow(deps, w).finally(() => going.delete(id));
+  const run = going.get(id) ?? settleNow(deps, w, look).finally(() => going.delete(id));
   going.set(id, run);
   return run;
 }
 
-async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undefined> {
+/** `look`: it's only looked for, never sent again (the unlock's run). */
+async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<Watched | undefined> {
   const { wallet, session, now } = deps;
   const koios = deps.koios(w.network);
   // Koios is asked outside the lock, so the watch can change meanwhile (a
@@ -556,8 +573,10 @@ async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undef
   // Past its slot by the chain's clock, not this device's, which set the slot.
   const expired =
     w.invalidHereafter !== undefined && age > VALID_FOR_MS && (await koios.tipSlot()) > w.invalidHereafter + EXPIRED_AFTER_SLOTS;
-  // Not while it waits in a mempool: it may still land (independent review L1).
-  const unseen = !expired && w.maybeSent && w.invalidHereafter === undefined && age > UNSEEN_AFTER_MS && !w.inMempool;
+  // Not while it waits in a mempool: it may still land (independent review L1). Nor
+  // put back after a lock and not sent again since (independent review L9).
+  const unseen =
+    !expired && w.maybeSent && w.invalidHereafter === undefined && age > UNSEEN_AFTER_MS && !w.inMempool && !w.restored;
   if (expired || unseen) {
     const held = await turn(async () => {
       const held = await wallet.withKeys(async () => {
@@ -578,8 +597,9 @@ async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undef
     return { ...w, dropped: expired ? "expired" : "unseen" };
   }
 
-  if (w.maybeSent && w.txCbor && now() - (w.resentAt ?? w.submittedAt) >= RESEND_MS) {
-    let current: Watched = { ...w, resentAt: now() };
+  if (!look && w.maybeSent && w.txCbor && now() - (w.resentAt ?? w.submittedAt) >= RESEND_MS) {
+    const { restored: _restored, ...resent } = w;
+    let current: Watched = { ...resent, resentAt: now() };
     let taken = false;
     // Each time it goes again is the wallet's send, when that may be the one the network takes: Lovejoin's
     // withdraws keep away from it (lastSpentAt) as from any other, never in the same run (independent review L8).
@@ -689,9 +709,10 @@ export class PendingService {
    * the alarm for it (independent review L3). One Koios took is left for
    * Home, which asks when it opens.
    */
-  async watch(network: NetworkName): Promise<boolean> {
+  async watch(network: NetworkName, unlock = false): Promise<boolean> {
     const watched = await watchedOn(this.deps, network);
     if (!watched?.maybeSent) return false;
-    return settle(this.deps, watched).then(unsettled, () => true);
+    // The unlock's run only looks: nothing goes out the moment the wallet unlocks (independent review L9).
+    return settle(this.deps, watched, unlock).then(unsettled, () => true);
   }
 }
