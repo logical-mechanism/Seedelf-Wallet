@@ -612,12 +612,14 @@ describe("the dApp connector", () => {
     t.clock.now += 60_000;
     await expect(t.dapp.call(s, "signTx", [unknown, true])).rejects.toMatchObject({ failure: { code: TxSignError.ProofGeneration } });
 
-    // Ten submits a minute.
-    const { tx } = await built(t);
+    // Ten submits a minute. Past them, one the wallet doesn't keep as sent is
+    // refused; the one it keeps hears its id, and Koios isn't asked (final review F12).
+    const { summary, tx } = await built(t);
     for (let i = 0; i < 10; i++) await t.dapp.call(s, "submitTx", [tx]);
-    await expect(t.dapp.call(s, "submitTx", [tx])).rejects.toMatchObject({
+    await expect(t.dapp.call(s, "submitTx", [unknown])).rejects.toMatchObject({
       failure: { code: TxSendError.Refused, info: expect.stringContaining("too often") },
     });
+    expect(await t.dapp.call(s, "submitTx", [tx])).toBe(summary.txHash);
     expect(t.koios.submitted).toHaveLength(10);
 
     // Data to sign over 64 KiB is refused unread.
