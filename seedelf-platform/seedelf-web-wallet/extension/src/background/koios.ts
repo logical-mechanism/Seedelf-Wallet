@@ -560,7 +560,11 @@ export class Koios {
     // A UTxO it spends is already spent: Koios showed the wallet an old view
     // of the chain (spent.ts), or this transaction already went through, or
     // another that spends the same (pending.ts looks for this one first).
-    if (text.includes("BadInputsUTxO")) {
+    // Newer nodes say so from their mempool, before the ledger would, when
+    // every input is spent: "All inputs are spent. Transaction has probably
+    // already been included". Read as a plain refusal, it stopped a chain
+    // through Lovejoin whose resend met it (found live, 2026-09-28).
+    if (text.includes("BadInputsUTxO") || text.includes("All inputs are spent")) {
       throw new SpentInputError(
         "The network refused it: a UTxO it spends is already spent, by a payment on its way or made elsewhere, or Koios showed an out-of-date view of the chain. Wait a minute and check Activity before you review it again.",
       );
