@@ -60,7 +60,9 @@
 //             the wallet spent itself. One already on chain, sent again, is
 //             a success, and leaves nothing behind. One Koios didn't answer
 //             for may land: it's kept as sent, looked for and sent again a
-//             few times, and the site hears its id, never that it failed.
+//             few times, and the site hears its id, never that it failed;
+//             and its id again when it sends it once more, meanwhile or
+//             while the wallet keeps it as sent.
 // Limits      What a site asks for without the user costs the wallet little:
 //             calls at the same time share one reading of the account; a
 //             site gets a few fresh readings, UTxO lookups and submits a
@@ -111,7 +113,7 @@ import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
-import { outpoint, rememberSiteSpent, reservedSet, spentSet, wait } from "./spent";
+import { outpoint, rememberSiteSpent, reservedSet, SPENT_KEEP_MS, spentSet, wait } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 import { isTrap } from "./wasm";
 
@@ -325,6 +327,8 @@ export class DappService {
   private readonly reading = new Map<string, Promise<View>>();
   /** Each site's last transaction being read (`readInTurn`), which its next waits for. */
   private readonly txReads = new Map<string, Promise<unknown>>();
+  /** Sites' transactions being sent (`submitTx`), by network, site and transaction id. */
+  private readonly submitting = new Map<string, Promise<string>>();
   /** The last change to the `dapps` record, which the next waits for (`changeSites`). */
   private sitesQueue: Promise<unknown> = Promise.resolve();
   /** The worker is closing the connector's window (`closeWindow`), not the user. */
@@ -1590,12 +1594,26 @@ export class DappService {
     } catch {
       throw invalid("The wallet can't read this transaction.");
     }
+    // The site sends it again while the wallet is still sending it (its own
+    // timeout, or Submit pressed twice): that call has the first one's
+    // answer. Sent on its own, it would be refused as spending what the
+    // first just spent, and heard as a failure (independent review M3).
+    const key = `${network} ${origin} ${id}`;
+    const sending = this.submitting.get(key);
+    if (sending) return sending;
     if (!this.allow(origin, "submit")) {
       throw new DappError({
         code: TxSendError.Refused,
         info: "This site sends transactions through Seedelf Wallet too often. Try again in a minute.",
       });
     }
+    const run = this.send(origin, network, holder, bytes, id).finally(() => this.submitting.delete(key));
+    this.submitting.set(key, run);
+    return run;
+  }
+
+  /** Sends a site's transaction through Koios: its id, or what the site hears. */
+  private async send(origin: string, network: NetworkName, holder: Holder, bytes: Uint8Array<ArrayBuffer>, id: string): Promise<string> {
     const koios = this.deps.koios(network);
     try {
       await koios.submitTx(bytes);
@@ -1614,15 +1632,34 @@ export class DappService {
       // Sent already, by the site itself or an earlier call: that's a
       // success. Nothing new went out, so nothing is kept of it: a site
       // resending old transactions can't fill the wallet's memory of what
-      // it spent (independent review L7).
-      const status = e instanceof SpentInputError ? await koios.txStatus([id]).catch(() => undefined) : undefined;
-      if (status?.get(id) == null) {
-        throw new DappError({ code: TxSendError.Failure, info: (e as Error).message });
+      // it spent (independent review L7). One the wallet sent for this site
+      // and still keeps as sent is too, though tx_status doesn't know it
+      // yet: in a mempool, it's refused as spending what it spends itself.
+      // Told it failed, the site would build the payment again from other
+      // UTxOs, and both could land (independent review M3).
+      if (e instanceof SpentInputError) {
+        if (await this.sentFor(origin, network, holder, id)) return id;
+        const status = await koios.txStatus([id]).catch(() => undefined);
+        if (status?.get(id) != null) return id;
       }
-      return id;
+      throw new DappError({ code: TxSendError.Failure, info: (e as Error).message });
     }
     await this.keepSent(origin, network, holder, bytes, id);
     return id;
+  }
+
+  /**
+   * Whether the wallet sent `id` for this site's account itself, and keeps
+   * it as sent (`keepSent`): for as long as what it spends is held as spent
+   * (spent.ts). One it sent for another site counts only for that site, as
+   * for building on it (`resolve`). No when that can't be read (locked).
+   */
+  private async sentFor(origin: string, network: NetworkName, holder: Holder, id: string): Promise<boolean> {
+    const since = this.deps.now() - SPENT_KEEP_MS;
+    const signed = await this.signed(network, holder).catch((): Signed[] => []);
+    return signed.some(
+      (s) => s.txHash === id && s.submittedAt !== undefined && s.submittedAt > since && (s.origin === undefined || s.origin === origin),
+    );
   }
 
   /**

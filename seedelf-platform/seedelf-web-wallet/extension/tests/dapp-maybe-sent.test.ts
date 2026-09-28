@@ -49,7 +49,7 @@ type T = Awaited<ReturnType<typeof ready>>["t"];
  * Koios's submits go as `answer` says, the node taking the transaction or
  * not; everything else as the fake answers.
  */
-function submits(t: T, answer: (n: number) => "taken-504" | "timeout" | "429" | "ok") {
+function submits(t: T, answer: (n: number) => "taken-504" | "timeout" | "429" | "in-mempool" | "ok") {
   const real = t.koios.fetch;
   let n = 0;
   t.koios.fetch = async (url, init) => {
@@ -58,6 +58,8 @@ function submits(t: T, answer: (n: number) => "taken-504" | "timeout" | "429" | 
     if (how === "ok") return real(url, init);
     if (how === "timeout") throw new DOMException("The operation timed out.", "TimeoutError");
     if (how === "429") return new Response("slow down", { status: 429 });
+    // Taken before, and in a mempool: the node refuses it as spending what it spends itself.
+    if (how === "in-mempool") return new Response(BAD_INPUTS, { status: 400 });
     // The node took it; the gateway's answer never came back whole.
     await real(url, init);
     return new Response("gateway timeout", { status: 504 });
@@ -66,6 +68,14 @@ function submits(t: T, answer: (n: number) => "taken-504" | "timeout" | "429" | 
 }
 
 const statusChecks = (t: T) => t.koios.calls.filter((c) => c.path === "tx_status").length;
+const BAD_INPUTS = '{"contents":{"contents":{"contents":{"era":"ShelleyBasedEraConway","error":["BadInputsUTxO"]}}}}';
+const REFUSED = { failure: { code: TxSendError.Failure, info: expect.stringContaining("already spent") } };
+
+/** A transaction spending `count` inputs of transaction `seed`, nothing else: one the wallet didn't sign. */
+function spending(seed: number, count: number): string {
+  const inputs = Array.from({ length: count }, (_, k) => `825820${seed.toString(16).padStart(64, "0")}${k.toString(16).padStart(2, "0")}`).join("");
+  return `84a100d90102${(0x80 + count).toString(16)}${inputs}a0f5f6`;
+}
 
 describe("a site's transaction Koios didn't answer for", () => {
   it("is answered with its id, kept as sent, and sent again until a submit is taken", async () => {
@@ -117,6 +127,82 @@ describe("a site's transaction Koios didn't answer for", () => {
     expect(statusChecks(t)).toBe(0);
     expect(t.session.data.has(SESSION_SPENT_SITES)).toBe(false);
     expect(await t.session.get(SESSION_DAPP_SIGNED + "preprod")).toBeUndefined();
+  });
+});
+
+describe("a site sending again a transaction the wallet sent for it", () => {
+  it("hears its id while it's in a mempool, though tx_status doesn't know it yet, and nothing new is kept", async () => {
+    const { t, s, tx, id } = await ready();
+    // Koios didn't answer for the first; the resends, and the site's own, are refused: it's in a mempool.
+    const tried = submits(t, (n) => (n === 0 ? "taken-504" : "in-mempool"));
+    expect(await t.dapp.call(s, "submitTx", [tx])).toBe(id);
+    expect(tried()).toBe(4);
+    const kept = { signed: await t.session.get(SESSION_DAPP_SIGNED + "preprod"), spent: await t.session.get(SESSION_SPENT_SITES) };
+    // Its own timeout, or Submit pressed again, a minute on.
+    t.clock.now += 60_000;
+    expect(await t.dapp.call(s, "submitTx", [tx])).toBe(id);
+    expect(tried()).toBe(5);
+    expect(await t.session.get(SESSION_DAPP_SIGNED + "preprod")).toEqual(kept.signed);
+    expect(await t.session.get(SESSION_SPENT_SITES)).toEqual(kept.spent);
+  });
+
+  it("hears its id when the first was taken at once, too", async () => {
+    const { t, s, tx, id } = await ready();
+    submits(t, (n) => (n === 0 ? "ok" : "in-mempool"));
+    expect(await t.dapp.call(s, "submitTx", [tx])).toBe(id);
+    expect(await t.dapp.call(s, "submitTx", [tx])).toBe(id);
+  });
+
+  it("hears the refusal once the wallet no longer keeps it as sent, unless the chain shows it", async () => {
+    const { t, s, tx, id } = await ready();
+    submits(t, (n) => (n === 0 ? "ok" : "in-mempool"));
+    expect(await t.dapp.call(s, "submitTx", [tx])).toBe(id);
+    // Sent two hours ago: what it spent isn't held any more.
+    const key = SESSION_DAPP_SIGNED + "preprod";
+    const signed = (await t.session.get<Array<{ submittedAt: number }>>(key))!;
+    await t.session.set(key, signed.map((x) => ({ ...x, submittedAt: t.clock.now - 2 * 60 * 60_000 - 1 })));
+    await expect(t.dapp.call(s, "submitTx", [tx])).rejects.toMatchObject(REFUSED);
+    t.koios.confirmations = 3;
+    expect(await t.dapp.call(s, "submitTx", [tx])).toBe(id);
+  });
+
+  it("is a refusal for another site: only the site it was sent for hears its id", async () => {
+    const { t, s } = await ready();
+    const other = site("https://other.example");
+    const enabling = t.dapp.call(other, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    await enabling;
+    const tx = spending(5, 1);
+    submits(t, (n) => (n === 0 ? "ok" : "in-mempool"));
+    expect(await t.dapp.call(s, "submitTx", [tx])).toBe(txIdOf(Uint8Array.from(Buffer.from(tx, "hex"))));
+    await expect(t.dapp.call(other, "submitTx", [tx])).rejects.toMatchObject(REFUSED);
+    // One nobody sent through the wallet is refused as ever.
+    await expect(t.dapp.call(s, "submitTx", [spending(6, 1)])).rejects.toMatchObject(REFUSED);
+  });
+
+  it("while the wallet is still sending it, has the first one's answer, and it goes out once", async () => {
+    const { t, s, tx, id } = await ready();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const tried = submits(t, (n) => (n === 0 ? "ok" : "in-mempool"));
+    const answer = t.koios.fetch;
+    let sending = false;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx")) {
+        sending = true;
+        await held;
+      }
+      return answer(url, init);
+    };
+    const first = t.dapp.call(s, "submitTx", [tx]);
+    await until(() => sending);
+    const second = t.dapp.call(s, "submitTx", [tx]);
+    // The second is on its way to Koios by now, but for the first.
+    for (let i = 0; i < 50; i++) await new Promise((r) => setTimeout(r, 0));
+    release();
+    expect(await Promise.all([first, second])).toEqual([id, id]);
+    expect(tried()).toBe(1);
   });
 });
 
