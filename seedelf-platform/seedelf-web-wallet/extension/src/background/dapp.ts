@@ -333,9 +333,15 @@ export class DappService {
   private sitesQueue: Promise<unknown> = Promise.resolve();
   /** The worker is closing the connector's window (`closeWindow`), not the user. */
   private closing = false;
-  /** Pages waiting on another page's connect question (`enable`), by session id; and those whose page went away meanwhile. */
-  private readonly joined = new Set<string>();
-  private readonly leftJoined = new Set<string>();
+  /**
+   * How many of each page's calls are running, by its session id; and the
+   * pages that went away (`gone`) with some still running, until the last
+   * of them ends. Nothing more is asked for those: one was reading a
+   * transaction, say, or waiting on another page's connect question
+   * (independent review L31, L35).
+   */
+  private readonly pageCalls = new Map<string, number>();
+  private readonly gonePages = new Set<string>();
   /**
    * The sites connected on each network, as this worker last read or wrote
    * the sealed `dapps` record: in memory only, never stored. `isEnabled`
@@ -352,12 +358,20 @@ export class DappService {
     const running = this.running.get(origin) ?? 0;
     if (running >= MAX_SITE_CALLS) throw refused(BUSY);
     this.running.set(origin, running + 1);
+    this.pageCalls.set(session.id, (this.pageCalls.get(session.id) ?? 0) + 1);
     try {
       return await this.run(session, method, args);
     } finally {
       const left = (this.running.get(origin) ?? 1) - 1;
       if (left > 0) this.running.set(origin, left);
       else this.running.delete(origin);
+      const page = (this.pageCalls.get(session.id) ?? 1) - 1;
+      if (page > 0) {
+        this.pageCalls.set(session.id, page);
+      } else {
+        this.pageCalls.delete(session.id);
+        this.gonePages.delete(session.id);
+      }
     }
   }
 
@@ -586,12 +600,13 @@ export class DappService {
    * A site's page went away: nothing it asked for waits any more. Each is
    * settled, though nobody hears it, so its call ends and gives back its
    * share of the site's calls (`MAX_SITE_CALLS`): left waiting forever, 32
-   * of them would lock the site out (independent review L31). A private
-   * session's funding already sent isn't undone: the site finds itself
-   * connected next time.
+   * of them would lock the site out (independent review L31). Its calls
+   * still on their way ask nothing more (`gonePages`). A private session's
+   * funding already sent isn't undone: the site finds itself connected next
+   * time.
    */
   gone(session: DappSession): void {
-    if (this.joined.has(session.id)) this.leftJoined.add(session.id);
+    if (this.pageCalls.has(session.id)) this.gonePages.add(session.id);
     const waiting = this.waiting.filter((w) => w.session.id === session.id);
     const unlocking = this.unlocking.filter((u) => u.session.id === session.id);
     if (!waiting.length && !unlocking.length) return;
@@ -723,15 +738,9 @@ export class DappService {
     // Nothing is awaited from here until it's asked, so two pages can't both ask.
     const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
     if (asking) {
-      this.joined.add(session.id);
-      let settled: DappError | "gone" | undefined;
-      try {
-        settled = await asking.settled;
-      } finally {
-        this.joined.delete(session.id);
-      }
+      const settled = await asking.settled;
       // This page went away too: nothing is asked for it.
-      if (this.leftJoined.delete(session.id)) throw refused(PAGE_GONE);
+      if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
       if (settled === "gone") return this.run(session, "enable", []) as Promise<true>;
       if (settled) throw settled;
       return true;
@@ -867,6 +876,8 @@ export class DappService {
     // it was declined. A connected site's `enable()` still opens the window.
     const known = !!this.lastSites.get(await this.deps.network())?.has(origin);
     if (this.refusing(origin) && (method !== "enable" || !known)) throw refused(method === "enable" ? DECLINED : NOT_CONNECTED);
+    // Its page went away while this call was on its way: nobody would answer it (independent review L31).
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     if (this.unlocking.length + this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) {
       throw refused(method === "enable" || known ? BUSY : NOT_CONNECTED);
     }
@@ -885,6 +896,8 @@ export class DappService {
 
   /** Puts a request in front of the user; `approve` runs if they say yes. */
   private ask<T>(session: DappSession, network: NetworkName, request: DappAsk, declined: number, approve: () => Promise<T>): Promise<T> {
+    // Its page went away while it was read: nobody would answer it (independent review L31).
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(session.origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     // Random, not a count: a count starts again when the worker restarts, and a
     // window still showing an older request would then answer a new one.

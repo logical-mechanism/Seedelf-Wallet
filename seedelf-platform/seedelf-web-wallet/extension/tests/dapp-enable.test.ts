@@ -22,6 +22,7 @@ const STRANGER = "https://stranger.example";
 const DECLINED = { failure: { code: APIError.Refused, info: "The user declined." } };
 const NOT_CONNECTED = { failure: { code: APIError.Refused, info: "This site isn't connected to Seedelf Wallet. Call enable() first." } };
 const BUSY = { failure: { code: APIError.Refused, info: "Seedelf Wallet is busy with this site's other requests." } };
+const GONE = { code: APIError.Refused, info: "The page went away." };
 
 let pages = 0;
 const site = (origin = "https://app.example.com"): DappSession => ({ id: `enable${++pages}`, origin, title: "Example" });
@@ -136,6 +137,37 @@ describe("pages of one site sharing a connect question", () => {
     expect(await second).toEqual({ code: APIError.Refused, info: "The page went away." });
     await settle();
     expect(t.dapp.approvals()).toEqual([]);
+  });
+
+  it("never ask for a page that called enable() more than once and went away", async () => {
+    const t = await on();
+    // One page calls it three times at once, as a dApp with several hooks does, then its tab closes.
+    const a = site(STRANGER);
+    const three = [1, 2, 3].map(() => heard(t.dapp.call(a, "enable", [])));
+    await until(() => t.dapp.approvals().length === 1);
+    await settle();
+    t.dapp.gone(a);
+    expect(await Promise.all(three)).toEqual([GONE, GONE, GONE]);
+    await settle();
+    expect(t.dapp.approvals()).toEqual([]);
+
+    // One page asks; another calls it twice on that question; then both go away, the second first.
+    const [b, c] = [site(STRANGER), site(STRANGER)];
+    const asked = heard(t.dapp.call(b, "enable", []));
+    await until(() => t.dapp.approvals().length === 1);
+    const twice = [1, 2].map(() => heard(t.dapp.call(c, "enable", [])));
+    await settle();
+    t.dapp.gone(c);
+    t.dapp.gone(b);
+    expect(await Promise.all([asked, ...twice])).toEqual([GONE, GONE, GONE]);
+    await settle();
+    expect(t.dapp.approvals()).toEqual([]);
+    // Nothing waits in the window, so closing it declines nobody, and the site is asked as ever.
+    const d = site(STRANGER);
+    const again = t.dapp.call(d, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await again).toBe(true);
   });
 });
 

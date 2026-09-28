@@ -9,6 +9,7 @@ import { Collateral } from "../src/background/collateral";
 import { DappService, type DappSession } from "../src/background/dapp";
 import type { KoiosUtxo } from "../src/background/koios";
 import { Minswap } from "../src/background/minswap";
+import { SESSION_SEND } from "../src/background/send";
 import { SessionService } from "../src/background/sessions";
 import { APIError } from "../src/shared/dapp";
 import { loadTestWasm, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
@@ -18,6 +19,8 @@ const PASSWORD = "correct horse battery";
 const account = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
 const ORIGIN = "https://app.example.com";
 const BUSY = { failure: { code: APIError.Refused, info: "Seedelf Wallet is busy with this site's other requests." } };
+const THEIRS = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod
+  .receive_0 as string;
 
 let pages = 0;
 const page = (origin = ORIGIN): DappSession => ({ id: `gone${++pages}`, origin, title: "Example" });
@@ -120,6 +123,34 @@ describe("a site's page that goes away while its request waits", () => {
     t.koios.addedToAccounts.push(atSession(out.txHash, 0, "15000000"), atSession(out.txHash, 1, "5000000"));
     expect(await dapp.call(page(), "enable", [])).toBe(true);
     expect(await dapp.sites()).toEqual([{ origin: ORIGIN, connectedAt: expect.any(Number), session: 0 }]);
+  });
+
+  it("never asks for a page that went away while its transaction was being read", async () => {
+    const t = await on();
+    const s = page();
+    const enabling = t.dapp.call(s, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    await enabling;
+    await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
+    const tx = (await t.session.get<{ txCbor: string }>(SESSION_SEND))!.txCbor;
+    // Koios is slow to answer the reading of the account the transaction spends from.
+    t.clock.now += 31_000;
+    let release!: () => void;
+    t.koios.hold = new Promise((r) => (release = r));
+    const calls = t.koios.calls.length;
+    const signing = t.dapp.call(s, "signTx", [tx, false]).catch((e: { failure: unknown }) => e.failure);
+    await until(() => t.koios.calls.length > calls);
+    t.dapp.gone(s);
+    release();
+    t.koios.hold = undefined;
+    expect(await signing).toEqual({ code: APIError.Refused, info: "The page went away." });
+    expect(t.dapp.approvals()).toEqual([]);
+    // The site's other pages are asked as ever.
+    const again = t.dapp.call(page(), "signTx", [tx, false]);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await expect(again).rejects.toMatchObject({ failure: { info: "The user declined." } });
   });
 
   it("still refuses a 33rd call while 32 of a site's are really running", async () => {
