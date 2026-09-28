@@ -53,11 +53,14 @@
 //             calls at the same time share one reading of the account; a
 //             site gets a few fresh readings, UTxO lookups and submits a
 //             minute (`PER_MINUTE`) and 32 calls running at once; and a
-//             transaction or data over 64 KiB is refused unread. Its
+//             transaction or data over 64 KiB, an amount over 8 KiB or an
+//             address longer than any Cardano's is refused unread. Its
 //             transactions are read one at a time, a few a minute that the
 //             user is never asked about, and none while the window's queue is
 //             full: WebAssembly's reading takes up to half a second, in the
 //             wallet's one queue, which the user's own requests and Lock wait on.
+//             WebAssembly that traps under a site's call locks the wallet
+//             (`answerSite`), as under the wallet's own pages.
 // Private     A site can connect to a private session instead (chunk 15c,
 //             private CIP-30): a one-time account funded from the private
 //             balance (sessions.ts), chosen in the window. The funding is
@@ -92,6 +95,7 @@ import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
 import { outpoint, rememberSpent, reservedSet, spentSet } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
+import { isTrap } from "./wasm";
 
 /** chrome.storage.session, per network: the account as the connector last read it. */
 export const SESSION_DAPP_VIEW = "seedelf.dapp.view.";
@@ -124,6 +128,15 @@ const MAX_COLLATERAL = 5_000_000n;
  * raise, as the WebAssembly's own check.
  */
 const MAX_SITE_BYTES = 65_536;
+/**
+ * The longest amount a site may ask `getUtxos` or `getCollateral` to cover,
+ * in hex: a CIP-30 Value naming far more tokens than any balance holds.
+ * Reading a longer one could run WebAssembly out of memory (independent
+ * review M15), so it's refused unread, as a transaction over 64 KiB is.
+ */
+const MAX_AMOUNT_HEX = 16_384;
+/** The longest address a site may ask `signData` to sign for: a Cardano address is under 128 bytes. */
+const MAX_ADDRESS_CHARS = 512;
 /** At most this many of one site's calls run at once, all its pages together; more are refused. */
 const MAX_SITE_CALLS = 32;
 /**
@@ -843,10 +856,13 @@ export class DappService {
     // CIP-30 passes CBOR; some dApps pass a plain number of lovelace.
     const text = typeof amount === "number" || typeof amount === "bigint" ? cborUint(BigInt(amount)) : amount;
     if (typeof text !== "string") throw invalid("The amount isn't a CBOR value.");
+    if (text.length > MAX_AMOUNT_HEX) throw invalid("The amount is far longer than any Cardano value: Seedelf Wallet reads at most 8 KiB.");
     try {
       const read = JSON.parse(this.deps.wasm.cip30ReadValue(text)) as { lovelace: string; tokens: Wanted["tokens"] };
       return { lovelace: BigInt(read.lovelace), tokens: read.tokens };
     } catch (e) {
+      // WebAssembly that trapped is broken, not refusing: the worker locks the wallet (sw.ts).
+      if (isTrap(e)) throw e;
       throw invalid((e as Error).message);
     }
   }
@@ -1272,6 +1288,8 @@ export class DappService {
     password: boolean,
   ): Promise<unknown> {
     if (typeof address !== "string") throw invalid("The address to sign with isn't a string.");
+    // Refused unread, as a transaction over 64 KiB is (independent review M15).
+    if (address.length > MAX_ADDRESS_CHARS) throw invalid("The address to sign with is far longer than any Cardano address.");
     if (typeof payload === "string" && payload.length > 2 * MAX_SITE_BYTES) {
       throw invalid("The data to sign is too long: Seedelf Wallet signs at most 64 KiB.");
     }
@@ -1368,6 +1386,31 @@ export class DappService {
   }
 }
 
+/** What a site hears when WebAssembly trapped under its request: nothing of the lock that follows. */
+export const SITE_TRAPPED = "Seedelf Wallet couldn't answer this request.";
+
+/**
+ * A site's call, as the worker answers it (sw.ts). WebAssembly that trapped
+ * under it outside the wallet's queue is broken for good (wasm.ts): the
+ * wallet locks, as it does for a trap under one of its own pages' requests
+ * (independent review M15), and the site hears only that it wasn't answered.
+ */
+export async function answerSite(
+  dapp: DappService,
+  wallet: { trapped: () => Promise<void> },
+  session: DappSession,
+  method: DappMethod,
+  args: unknown[],
+): Promise<unknown> {
+  try {
+    return await dapp.call(session, method, args);
+  } catch (e) {
+    if (!isTrap(e)) throw e;
+    await wallet.trapped();
+    throw new DappError({ code: APIError.InternalError, info: SITE_TRAPPED });
+  }
+}
+
 /** What an approved request that failed tells the site. */
 function failed(approval: DappApproval, e: unknown): DappError {
   const info = e instanceof Error ? e.message : String(e);
@@ -1419,7 +1462,8 @@ function outputsOf(wasm: AccountDeps["wasm"], txCbor: string): KoiosUtxo[] {
   try {
     // Amounts past 2^53 would lose digits as JSON numbers: read as text.
     rows = JSON.parse(wasm.ogmiosUtxos(txCbor).replace(/:(\d{16,})([,}])/g, ':"$1"$2')) as OgmiosUtxo[];
-  } catch {
+  } catch (e) {
+    if (isTrap(e)) throw e;
     return [];
   }
   return rows.map(({ transaction, index, address, value, datum, datumHash }) => ({
@@ -1459,7 +1503,8 @@ function keysOf(wasm: AccountDeps["wasm"], address: string): { payment?: string;
   let hex: string;
   try {
     hex = wasm.cip30Address(address);
-  } catch {
+  } catch (e) {
+    if (isTrap(e)) throw e;
     return {};
   }
   const kind = Number.parseInt(hex.slice(0, 1), 16);
