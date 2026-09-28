@@ -2179,8 +2179,12 @@ export class SessionService {
         r.chain!.stopped = CHAIN_CUT;
       });
     }
-    // What the session's own transactions left at the account comes back first when not everything can at once.
-    const own = record?.txs.map((t) => t.txHash) ?? [];
+    // What the session's own transactions left at the account comes back first when not everything can at once:
+    // the wallet's, and a site's own that the session's key signed (siteOuts), whose tokens the session's ADA
+    // pays the deposit of, as it did before H1. A stranger's is only what neither asked the key to sign: its
+    // tokens come back only when they pay their own way (final review F4).
+    const siteTxs = (record?.siteOuts ?? []).map((o) => o.split("#")[0]!);
+    const own = [...new Set([...(record?.txs.map((t) => t.txHash) ?? []), ...siteTxs])];
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
     // What that chain left was sent back directly, and isn't on chain yet: this return comes back directly too,
