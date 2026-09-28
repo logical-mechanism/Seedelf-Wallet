@@ -1826,9 +1826,16 @@ export class SessionService {
     const merge = await this.fundingChange(network, index);
     const record = (await this.book(network)).sessions.find((r) => r.index === index);
     // A chain that went in partly already: what's left comes back directly, rather than go in again.
-    // One that finished (its return sent) doesn't hold a later return back (a site's session is paid again).
-    const finished = !!record?.chain && record.txs.some((t) => t.txHash === record.chain!.last && !t.unsent);
-    const started = !finished && record?.txs.some((t) => (t.kind === "deposit" || t.kind === "mix") && !t.unsent);
+    // One that finished (its return sent), or whose rest came back directly (that return on chain), doesn't
+    // hold a later return back (a site's session is paid again). Only the latest chain's own transactions
+    // count, never an earlier one's (independent review L17); a session from before chains were recorded
+    // counts them all, as it did.
+    const chain = record?.chain;
+    const sent = (record?.txs ?? []).filter((t) => !t.unsent && (!chain || t.at >= chain.at));
+    const finished =
+      !!chain &&
+      sent.some((t) => t.txHash === chain.last || (t.kind === "back" && t.confirmed && !t.replaced));
+    const started = !finished && sent.some((t) => t.kind === "deposit" || t.kind === "mix");
     if (started && record?.chain && !record.chain.stopped) {
       // Nothing is sending the rest: the wallet locked, or the browser closed, partway.
       await this.update(network, index, (r) => {
