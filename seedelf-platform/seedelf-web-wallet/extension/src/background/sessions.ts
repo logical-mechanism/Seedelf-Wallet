@@ -2695,10 +2695,13 @@ export class SessionService {
     const { wallet, session, now } = this.deps;
     const mine = (s: SessionRecord) => s.txs.find((t) => t.txHash === txHash);
     let sentBefore = false;
+    // Sent before by a try Koios didn't answer (its `inputs` recorded then): it may be on its way.
+    let unanswered = false;
     await this.update(network, index, (s) => {
       const again = mine(s);
       if (again) {
         sentBefore = !again.unsent;
+        unanswered = sentBefore && !!again.inputs;
         delete again.unsent;
         again.sending = true;
         if (summary) again.summary = summary;
@@ -2722,8 +2725,14 @@ export class SessionService {
       // Koios didn't answer: it may be on its way, so it's looked for as one Koios took is (lost), and
       // what it spends counts as spent meanwhile, recorded with it to be freed if its step is built again.
       const maybe = maybeSent(e);
-      // Sent before, and refused while Koios couldn't say whether it's on chain: it may be (final review lovejoin-6).
-      const unread = sentBefore && e instanceof SpentUnread;
+      // Sent before, and refused as spending what's spent while Koios couldn't say whether it's on chain: it may
+      // be (final review lovejoin-6). And sent before by a try Koios didn't answer: this try failing says nothing
+      // of that one. Refused as spent, it may be that very transaction, landed or in a mempool (as the network
+      // refuses one it has); turned away (a 429, a node Koios couldn't reach), this one never left. Either way it
+      // stays maybe sent, as the wallet's watch keeps a payment (pending.ts, independent review L1): its inputs
+      // held (the unanswered try's, kept), its orders looked for, its history written once it lands (final
+      // review F11). A copy of its step is built again once it goes unseen (act), as for any it may have sent.
+      const unread = (sentBefore && e instanceof SpentUnread) || unanswered;
       await this.update(network, index, (s) => {
         const t = mine(s);
         if (!t) return;
