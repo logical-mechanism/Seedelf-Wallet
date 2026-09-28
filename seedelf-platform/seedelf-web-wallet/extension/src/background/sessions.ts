@@ -187,6 +187,12 @@ type RecordedTx = SessionTx & {
   inputs?: string[];
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`), recorded before it's sent. */
   orders?: string[];
+  /**
+   * A return Koios didn't answer: what its review said, for the private
+   * history once the chain shows it (noteLanded), as the wallet's watch
+   * does for its own (independent review M7).
+   */
+  summary?: Pick<SessionBackSummary, "index" | "lovelace" | "tokens" | "fee">;
 };
 
 /** The steps whose transaction is built again when it goes unseen (a chain's own are sent again as they are). */
@@ -948,7 +954,7 @@ export class SessionService {
       if (waiting.length) {
         const statuses = await koios.txStatus(waiting.map((t) => t.txHash));
         const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
-        if (on.size) s = await this.update(network, index, (r) => void settle(r, on));
+        if (on.size) s = await this.noteLanded(network, await this.update(network, index, (r) => void settle(r, on)));
         const recent = s.txs.some((t) => !t.confirmed && !t.unsent && now() - t.at <= FAILED_AFTER_MS);
         if (recent || (await this.stillWatched(network, s))) {
           throw new Error("Its last transaction hasn't reached the chain yet. Wait for it, then disconnect.");
@@ -1496,8 +1502,10 @@ export class SessionService {
           await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
         }
       }
-      if (s.txs.some((t) => !t.confirmed && !t.replaced)) return;
     }
+    // A return Koios didn't answer, on chain now: its history (independent review M7).
+    s = await this.noteLanded(network, s);
+    if (s.txs.some((t) => !t.confirmed && !t.replaced)) return;
 
     const { address, keyHash } = (await this.accounts(network, [s])).get(s.index)!;
     const { listed, rows } = await this.listing(network, keyHash);
@@ -1991,9 +1999,37 @@ export class SessionService {
       after: (s) => {
         if (skipped && !s.mix) s.lovejoinSkipped = skipped;
       },
+      summary: { index: built.index, lovelace: built.lovelace, tokens: built.tokens, fee: built.fee },
     });
     await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
     return pending;
+  }
+
+  /**
+   * Writes the private history of each of `s`'s returns Koios didn't answer
+   * when they were sent, once the chain has it (settled: confirmed), or a
+   * copy of it built again, from the summary kept with it (independent
+   * review M7). Without it, what it brought back would read as money
+   * received, which a funding or a mint takes first, tying the sessions
+   * together. Written before the summary goes: a second write only writes
+   * it again. Returns the record as saved.
+   */
+  private async noteLanded(network: NetworkName, s: SessionRecord): Promise<SessionRecord> {
+    const written = new Set<string>();
+    for (const t of s.txs) {
+      if (!t.confirmed || !t.summary) continue;
+      const pending: PendingTx = { kind: "session-back", network, txHash: t.txHash, submittedAt: t.at, confirmations: null };
+      try {
+        await this.deps.activity?.sent(network, pending, t.summary);
+        written.add(t.txHash);
+      } catch {
+        // Tried again at the next reading.
+      }
+    }
+    if (!written.size) return s;
+    return this.update(network, s.index, (r) => {
+      for (const t of r.txs) if (written.has(t.txHash)) delete t.summary;
+    });
   }
 
   /**
@@ -2152,7 +2188,8 @@ export class SessionService {
    * `kept`: where it was kept for Send, cleared once it's sent if that still
    * holds `keptHash` (this transaction, or the chain it's part of). `orders`:
    * a swap's, recorded with it. `after`: what else the record gains once
-   * it's sent.
+   * it's sent. `summary`: a return's, kept with it when Koios doesn't answer
+   * (RecordedTx `summary`).
    */
   private async sendRecorded(
     network: NetworkName,
@@ -2161,7 +2198,12 @@ export class SessionService {
     txHash: string,
     bytes: Uint8Array<ArrayBuffer>,
     kept: string,
-    { after, keptHash = txHash, orders }: { after?: (s: SessionRecord) => void; keptHash?: string; orders?: string[] } = {},
+    {
+      after,
+      keptHash = txHash,
+      orders,
+      summary,
+    }: { after?: (s: SessionRecord) => void; keptHash?: string; orders?: string[]; summary?: RecordedTx["summary"] } = {},
   ): Promise<PendingTx> {
     const { wallet, session, now } = this.deps;
     const mine = (s: SessionRecord) => s.txs.find((t) => t.txHash === txHash);
@@ -2190,6 +2232,8 @@ export class SessionService {
         delete t.sending;
         if (maybe) t.inputs = txInputs(bytes);
         else if (!unread) t.unsent = true;
+        // It may land: its history is written once it's seen (noteLanded).
+        if ((maybe || unread) && summary) t.summary = summary;
       });
       if (maybe || unread) await wallet.withKeys(() => rememberSpent(session, network, bytes));
       // A return merged into the funding's change, which was spent elsewhere: the kept view of the contract is behind, so read it in full next time.
@@ -2280,6 +2324,7 @@ export class SessionService {
         }
       }
       if (changed) await this.save(network, book);
+      for (const s of live) if (s.txs.some((t) => t.confirmed && t.summary)) await this.noteLanded(network, s);
       if (returned) await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
       if (resumed) await this.deps.alarm?.start();
     }
@@ -2320,7 +2365,9 @@ export class SessionService {
       address,
       createdAt: s.createdAt,
       stage,
-      txs: txs.map(({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, ...t }) => t),
+      txs: txs.map(
+        ({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, summary: _summary, ...t }) => t,
+      ),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(returnable(s, utxos)) : null,
       ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
