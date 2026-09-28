@@ -286,31 +286,48 @@ function shown(watched: Watched): PendingTx {
 }
 
 /**
- * Submits a kept, signed transaction, and has the watch take it over. One
- * Koios didn't answer comes back maybe sent, not as an error. One refused as
- * spending what's spent counts as sent if the chain has it; after a try
- * Koios didn't answer, it's still maybe sent if the chain doesn't have it yet.
+ * Submits a kept, signed transaction, and has the watch take it over. It's
+ * in the watch as maybe sent before it goes (`writeAhead`), so a lock, a
+ * closed browser or a stopped worker while Koios is asked never loses it
+ * (independent review M1). Taken, it goes on as an ordinary sent
+ * transaction. One Koios didn't answer stays maybe sent, and comes back so,
+ * not as an error. One refused as spending what's spent counts as sent if
+ * the chain has it; after a try Koios didn't answer, it's still maybe sent
+ * if the chain doesn't have it yet. Refused otherwise, it never went out:
+ * what was written ahead is taken back (`takeBack`), and the refusal said.
  */
 export async function submitWatched(deps: PendingDeps, s: Sending): Promise<PendingTx> {
   const { session, now } = deps;
   const koios = deps.koios(s.network);
   const bytes = hexBytes(s.txCbor);
+  const ahead = await writeAhead(deps, s);
+  // Sent before: Send's own copy says so, or the watch has it already, maybe sent.
+  const again = s.again || ahead.again;
+  let submitted: string | undefined;
   let confirmations: number | null = null;
   try {
-    const submitted = await koios.submitTx(bytes);
-    if (submitted !== s.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
+    submitted = await koios.submitTx(bytes);
   } catch (e) {
-    if (e instanceof KoiosBusyError && e.maybeSent) return maybeSent(deps, s);
-    if (!(e instanceof SpentInputError)) throw e;
-    // Spent already: by this very transaction, if an earlier try went through.
-    confirmations = (await koios.txStatus([s.txHash]).catch(() => undefined))?.get(s.txHash) ?? null;
-    if (confirmations === null) {
+    if (e instanceof KoiosBusyError && e.maybeSent) return stillMaybeSent(deps, s, ahead);
+    if (e instanceof SpentInputError) {
+      // Spent already: by this very transaction, if an earlier try went through.
+      confirmations = (await koios.txStatus([s.txHash]).catch(() => undefined))?.get(s.txHash) ?? null;
       // After a try Koios didn't answer, most likely that try, still on its way.
-      if (s.again) return maybeSent(deps, s);
+      if (confirmations === null && again) return stillMaybeSent(deps, s, ahead);
+    }
+    if (confirmations === null) {
+      // It never went out, unless the watch sent it again meanwhile: then it stays as the watch has it.
+      const kept = ahead.again ? undefined : await takeBack(deps, s, ahead);
+      if (kept) return shown(kept);
       // The kept view had a spent UTxO as ours: read the contract in full next time.
-      if (s.contract) await forgetContractView(deps, s.network);
+      if (e instanceof SpentInputError && s.contract) await forgetContractView(deps, s.network);
       throw e;
     }
+  }
+  if (submitted !== undefined && submitted !== s.txHash) {
+    // Something went out, and what isn't known: it stays maybe sent, as written ahead.
+    if (s.contract) await forgetContractView(deps, s.network).catch(() => undefined);
+    throw new Error(`Koios answered with another transaction id (${submitted}).`);
   }
 
   const pending: PendingTx = { kind: s.kind, network: s.network, txHash: s.txHash, submittedAt: now(), confirmations, ...slot(s) };
@@ -327,9 +344,27 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
 const slot = (s: { invalidHereafter?: number }) => (s.invalidHereafter === undefined ? {} : { invalidHereafter: s.invalidHereafter });
 const toAccount = (s: Sending) => (s.contract && paysAccount(s.kind, s.summary) ? { toAccount: true } : {});
 
-/** Watches `s` as maybe sent: its UTxOs held back, and kept to go again as it is. */
-async function maybeSent(deps: PendingDeps, s: Sending): Promise<PendingTx> {
-  const { session, now } = deps;
+/** What `writeAhead` wrote: the watch's record of `s`, and the sealed write, by its nonce. */
+interface Ahead {
+  record: Watched;
+  /** The watch had this very one already, maybe sent (Send again), and keeps it as it first was. */
+  again: boolean;
+  nonce?: string;
+}
+
+/**
+ * Writes `s` into its network's watch as maybe sent before it goes to
+ * Koios: its UTxOs held back, kept to go again as it is, and sealed
+ * (independent review M1). Whatever stops the submit halfway, a lock, a
+ * closed browser, a stopped worker, leaves it watched: put back at the next
+ * unlock, and settled as any maybe-sent one is (tx_status, sent again).
+ * Refused while another payment on the network may still go through, as a
+ * build is: one maybe-sent watch per network. One that can't be sealed
+ * isn't sent.
+ */
+async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
+  const { wallet, session, now } = deps;
+  const key = pendingKey(s.network);
   const bytes = hexBytes(s.txCbor);
   const record: Watched = {
     kind: s.kind,
@@ -346,17 +381,103 @@ async function maybeSent(deps: PendingDeps, s: Sending): Promise<PendingTx> {
     summary: s.summary,
     kept: s.key,
   };
-  // Another that may still go through keeps the watch (both went out at
-  // once, from two windows): new payments wait for it, and this one is held
-  // back all the same.
-  const watched = await take(deps, record, async () => {
-    await rememberSpent(session, s.network, bytes);
-    // Send sends these very bytes again, and asks giveme.my nothing.
-    await session.set(s.key, { ...s.kept, sentCbor: s.txCbor });
+  return inTurn(deps, s.network, async () => {
+    await restoreNow(deps, s.network);
+    const was = await wallet.withKeys(async () => {
+      const was = await session.get<Watched>(key);
+      if (unsettled(was) && was.txHash !== s.txHash) return was;
+      await rememberSpent(session, s.network, bytes);
+      // Send sends these very bytes again, and asks giveme.my nothing.
+      await session.set(s.key, { ...s.kept, sentCbor: s.txCbor });
+      if (!unsettled(was)) await session.set(key, record);
+      return was;
+    });
+    if (unsettled(was)) {
+      if (was.txHash !== s.txHash) throw new Error(MAYBE_SENT_WAIT);
+      return { record: was, again: true };
+    }
+    const ahead: Ahead = { record, again: false };
+    try {
+      await deps.store.set(sealedName(s.network), record);
+      ahead.nonce = await deps.store.sealedAs(sealedName(s.network));
+    } catch (e) {
+      // Not sealed, it isn't sent: a lock mid-submit would lose it.
+      await undoAhead(deps, s, ahead).catch(() => undefined);
+      throw e;
+    }
+    return ahead;
   });
+}
+
+/**
+ * Takes back what `writeAhead` wrote for `s`, refused: its watch, its UTxOs
+ * held back, Send's copy as sent. Only while the watch still has it as it
+ * was written: one sent again meanwhile (the watch's run) may have gone
+ * after all, and stays; that one is returned. Call it in the network's turn.
+ */
+async function undoAhead(deps: PendingDeps, s: Sending, { record }: Ahead): Promise<Watched | undefined> {
+  const { wallet, session } = deps;
+  const key = pendingKey(s.network);
+  const found = await wallet.withKeys(async () => {
+    const cur = await session.get<Watched>(key);
+    if (cur?.txHash !== record.txHash) return { undone: false };
+    if (!writtenAhead(cur, record)) return { undone: false, kept: cur };
+    await forgetSpent(session, record.inputs ?? []);
+    await session.remove(key);
+    const kept = await session.get<{ txHash?: string }>(s.key);
+    if (kept?.txHash === s.txHash) await session.set(s.key, s.kept);
+    return { undone: true };
+  });
+  if (found.undone) await unseal(deps, record);
+  return found.kept;
+}
+
+/**
+ * `s` was refused: it never went out, and what `writeAhead` wrote goes
+ * (`undoAhead`). Locked meanwhile, the lock took the watch, the UTxOs held
+ * back and Send's copy with it, and only the sealed copy is left, which goes
+ * too while it's still the one written ahead. Returns the watch's record
+ * when it stays.
+ */
+async function takeBack(deps: PendingDeps, s: Sending, ahead: Ahead): Promise<Watched | undefined> {
+  try {
+    return await inTurn(deps, s.network, () => undoAhead(deps, s, ahead));
+  } catch {
+    if (ahead.nonce) await deps.store.removeIf(sealedName(s.network), ahead.nonce).catch(() => undefined);
+    return undefined;
+  }
+}
+
+/**
+ * `s` may have gone through: watched as maybe sent, as written ahead, from
+ * when Koios last had it (its 20 minutes unseen count from then, as they did
+ * before it was written ahead). One the watch had already stays as it first
+ * was. Returns what the watch has of it.
+ */
+async function stillMaybeSent(deps: PendingDeps, s: Sending, ahead: Ahead): Promise<PendingTx> {
+  const { wallet, session, now } = deps;
+  const key = pendingKey(s.network);
   // What the kept view has of the contract is behind whatever happened.
-  if (s.contract) await forgetContractView(deps, s.network);
-  return shown(watched.txHash === s.txHash ? watched : record);
+  if (s.contract) await forgetContractView(deps, s.network).catch(() => undefined);
+  const { record } = ahead;
+  // Locked meanwhile, it's sealed all the same, and put back at the unlock.
+  const cur = await inTurn(deps, s.network, async () => {
+    const found = await wallet.withKeys(async () => {
+      const cur = await session.get<Watched>(key);
+      if (ahead.again || !writtenAhead(cur, record)) return { cur };
+      const later: Watched = { ...cur, submittedAt: now() };
+      await session.set(key, later);
+      return { cur: later, later };
+    });
+    if (found.later) await deps.store.set(sealedName(s.network), found.later).catch(() => undefined);
+    return found.cur;
+  }).catch(() => undefined);
+  return shown(cur?.txHash === s.txHash ? cur : record);
+}
+
+/** Whether the watch holds `record` still as `writeAhead` wrote it: maybe sent, and not sent again since. */
+function writtenAhead(cur: Watched | undefined, record: Watched): cur is Watched {
+  return cur?.txHash === record.txHash && !!cur.maybeSent && cur.submittedAt === record.submittedAt && cur.resentAt === record.resentAt;
 }
 
 /**

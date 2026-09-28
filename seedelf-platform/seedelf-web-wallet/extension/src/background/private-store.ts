@@ -122,4 +122,18 @@ export class PrivateStore {
     });
     await this.deps.local.set(PRIVATE_PREFIX + name, sealed);
   }
+
+  /** The nonce the record was last sealed under, which names that one write; undefined when there's none. No key needed. */
+  async sealedAs(name: RecordName): Promise<string | undefined> {
+    return (await this.deps.local.get<Sealed>(PRIVATE_PREFIX + name))?.nonce;
+  }
+
+  /**
+   * Deletes the record if it's still the write `nonce` names (`sealedAs`).
+   * No key needed, so it works while locked: a payment refused after a lock
+   * came mid-submit (pending.ts, independent review M1).
+   */
+  async removeIf(name: RecordName, nonce: string): Promise<void> {
+    if ((await this.sealedAs(name)) === nonce) await this.deps.local.remove(PRIVATE_PREFIX + name);
+  }
 }
