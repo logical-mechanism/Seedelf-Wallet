@@ -74,7 +74,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { merged, sessionClass, type HistoryClass } from "../shared/histories";
-import { DEFAULT_PREFERENCES } from "../shared/preferences";
+import { DEFAULT_PREFERENCES, type LovejoinDelay, type LovejoinDepth } from "../shared/preferences";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosUtxo } from "./koios";
@@ -203,6 +203,8 @@ type RecordedTx = SessionTx & {
    * spent (ownGone, independent review M4). None on one from before.
    */
   outs?: string[];
+  /** A swap's: the least its order asks for, recorded before it's sent (independent review L24). */
+  minAmountOut?: string;
 };
 
 /** The steps whose transaction is built again when it goes unseen (a chain's own are sent again as they are). */
@@ -216,8 +218,11 @@ interface AutoRecord {
   retry?: { at: number; error: string; tries: number };
   /** When the user pressed Stop. */
   stopping?: number;
-  /** When the runner saw the order filled. */
+  /** When the runner saw the order filled (`partly`: part of it, the rest refunded). */
   filled?: number;
+  partly?: boolean;
+  /** When the runner saw the order refunded: nothing of it filled (independent review M18). */
+  refunded?: number;
   /** When the runner found the funding never reached the chain. */
   failed?: number;
   /**
@@ -234,6 +239,12 @@ interface AutoRecord {
    * direct. None on a swap from before: as Settings has it.
    */
   direct?: boolean;
+  /**
+   * Through Lovejoin, how deep and how long, as its approval showed them:
+   * Settings changes swaps started later (independent review L21). None on
+   * a swap from before, or one that comes back directly: as Settings has it.
+   */
+  lovejoin?: { depth: LovejoinDepth; delay: LovejoinDelay };
 }
 
 interface SessionRecord {
@@ -310,6 +321,8 @@ interface KeptOut {
   index: number;
   swap: SessionView["swap"];
   approved: AutoRecord["approved"];
+  /** How deep and how long its return through Lovejoin goes, as the approval showed them. */
+  lovejoin?: AutoRecord["lovejoin"];
   builtAt: number;
 }
 
@@ -793,12 +806,16 @@ export class SessionService {
    * (WebAssembly's MIX_FEE_ESTIMATE each) and about what bringing them back
    * takes. `pool`: also as Lovejoin's pool has room for now (room, a read
    * kept five minutes), `of` the boxes the ADA pays for when that's fewer,
-   * and `skipped`, why it has none.
+   * and `skipped`, why it has none. `fixed`: a swap's approved depth and
+   * wait, rather than Settings' now.
    */
-  private async priced(network: NetworkName, pool: boolean) {
+  private async priced(network: NetworkName, pool: boolean, fixed?: AutoRecord["lovejoin"]) {
     const lovejoin = this.deps.lovejoin!;
     // What each box more takes, and what the chain takes besides: the deposit and its change.
-    const [one, two] = await Promise.all([lovejoin.funding(network, 1), lovejoin.funding(network, 2)]);
+    const [one, two] = await Promise.all([
+      lovejoin.funding(network, 1, false, fixed?.depth),
+      lovejoin.funding(network, 2, false, fixed?.depth),
+    ]);
     const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
     const besides = BigInt(one.lovelace) - perBox;
     const room = pool ? await lovejoin.room(network) : undefined;
@@ -816,7 +833,7 @@ export class SessionService {
         ...(boxes < pays ? { of: pays } : {}),
       };
     };
-    return { price, skipped, depth: one.depth, delay: one.delay };
+    return { price, skipped, depth: one.depth, delay: fixed?.delay ?? one.delay };
   }
 
   /**
@@ -857,10 +874,12 @@ export class SessionService {
     const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) };
     // Sending this is the approval: the swap runs itself within it.
     const approved = { minAmountOut: quote.minAmountOut, fund: quote.fund, aggregatorFee: quote.aggregatorFee };
-    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved };
-    await keep(this.deps, SESSION_OUT, kept);
     // Once, at Review, never as the user types: whether Lovejoin's pool takes the boxes now (privacy review §2.7).
     const lovejoin = await this.lovejoinCost(network, quote, true);
+    // Its depth and wait, as this review shows them, are the ones its return takes (independent review L21).
+    const way = lovejoin ? { lovejoin: { depth: lovejoin.depth as LovejoinDepth, delay: lovejoin.delay as LovejoinDelay } } : {};
+    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved, ...way };
+    await keep(this.deps, SESSION_OUT, kept);
     return { ...summary, ...(lovejoin ? { lovejoin } : {}) };
   }
 
@@ -1294,8 +1313,12 @@ export class SessionService {
       const book = await this.book(network);
       if (built.index < book.next) throw new Error("That session was started already. Start a new one.");
       await this.stillUnused(network, built.index);
-      // Where Lovejoin is, how it comes back is kept with it.
-      const back = this.deps.lovejoin?.available(network) ? { direct: direct ?? !(await this.throughLovejoin()) } : {};
+      // Where Lovejoin is, how it comes back is kept with it: through it, as deep and as long as approved.
+      const back: Pick<AutoRecord, "direct" | "lovejoin"> = {};
+      if (this.deps.lovejoin?.available(network)) {
+        back.direct = direct ?? !(await this.throughLovejoin());
+        if (!back.direct && built.lovejoin) back.lovejoin = built.lovejoin;
+      }
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
         index: built.index,
@@ -1329,6 +1352,13 @@ export class SessionService {
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
     const est = await minswap.estimate(ask);
+    // Its route now, as the runner's order checks it (independent review M17).
+    const unchecked = uncheckedProtocols(network, est);
+    if (unchecked.length) {
+      throw new Error(
+        `Minswap now routes this swap through ${unchecked.join(" and ")}, whose orders the wallet can't check yet, so it won't swap this way. Try again later, or Stop to bring it back.`,
+      );
+    }
     const txCbor = await minswap.buildTx(address, est.min_amount_out, ask);
     return this.review(network, s, "swap", txCbor, rows, { quote: quoteOf(network, ask, est) });
   }
@@ -1501,11 +1531,14 @@ export class SessionService {
   /**
    * Stop, the user's alone: an order that waits is cancelled, then
    * everything comes back. `direct`: not through Lovejoin, whatever was
-   * approved (privacy review §4.1).
+   * approved (privacy review §4.1). `ordered`: an order had gone out (or
+   * may have) when it took effect. Stop waits for a step already under way,
+   * so an order the runner was placing as the user pressed it goes first,
+   * whatever the page showed (independent review L22).
    */
-  stop(network: NetworkName, index: number, direct = false): Promise<SessionView> {
+  stop(network: NetworkName, index: number, direct = false): Promise<SessionView & { ordered?: boolean }> {
     return this.serial(async () => {
-      await this.automatic(network, index);
+      const ordered = (await this.automatic(network, index)).txs.some((t) => t.kind === "swap" && !t.unsent);
       await this.update(network, index, (s) => {
         s.auto!.stopping ??= this.deps.now();
         if (direct) s.auto!.direct = true;
@@ -1514,7 +1547,7 @@ export class SessionService {
       });
       await this.deps.alarm?.start();
       await this.step(network, index, "asked");
-      return this.one(network, index);
+      return { ...(await this.one(network, index)), ordered };
     });
   }
 
@@ -1532,7 +1565,8 @@ export class SessionService {
     const rows = this.seen.get(`${network}:${index}`);
     const held = rows ? spareOf(returnable(s, rows)) : 0n;
     const funded = s.swap?.tokenIn === "lovelace" && !s.auto!.filled ? BigInt(s.auto!.approved.fund.lovelace) : 0n;
-    const { price, skipped, depth, delay } = await this.priced(network, true);
+    // As deep and as long as the swap was approved (independent review L21).
+    const { price, skipped, depth, delay } = await this.priced(network, true, s.auto!.lovejoin);
     return { ...price(held > funded ? held : funded), depth, delay, on: true, ...(skipped ? { skipped } : {}) };
   }
 
@@ -1673,6 +1707,11 @@ export class SessionService {
     if (waiting.length) {
       const statuses = await this.deps.koios(network).txStatus(waiting.map((t) => t.txHash));
       const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
+      // A swap's copy tx_status doesn't show, whose order is on chain, landed all the same: looked for
+      // before it's taken for one never placed, and while it's still looked for. Never a second order,
+      // or a return that leaves its order at the DEX (independent review L15).
+      const unseen = waiting.filter((t) => t.kind === "swap" && !t.unsent && !on.has(t.txHash) && (t.replaced || lost(t, now())));
+      for (const h of await this.placed(network, s, unseen)) on.add(h);
       // Never taken, or never seen: its step is built again. It spends the session's
       // UTxOs, so the ledger lets only one of the two land, and one Koios may have
       // taken is still looked for (replaced).
@@ -1725,6 +1764,17 @@ export class SessionService {
     const { address, keyHash } = (await this.accounts(network, [s])).get(s.index)!;
     const { listed, rows } = await this.listing(network, keyHash);
     this.seen.set(`${network}:${s.index}`, rows);
+    // A swap copy whose own output (its change) Koios lists at the account is on chain, whatever tx_status and
+    // utxo_info say yet: it's the step, never one to build again or to bring back before its order is done.
+    // This is the listing an order or a return is built on, so the two can't disagree (independent review L15).
+    const shown = new Set(
+      s.txs.filter((t) => t.kind === "swap" && !t.confirmed && listed.some((u) => u.tx_hash === t.txHash)).map((t) => t.txHash),
+    );
+    if (shown.size) {
+      s = await this.update(network, s.index, (r) => {
+        settle(r, shown);
+      });
+    }
     // A copy that went unseen isn't a step taken: its step is taken again.
     const taken = s.txs.filter((t) => !t.replaced);
     const kinds = new Set(taken.map((t) => t.kind));
@@ -1738,6 +1788,8 @@ export class SessionService {
     // empty too (independent review M4). The next run looks again.
     if (taken.at(-1)!.kind === "back" && !returnable(s, listed).length && !mayStillLand(s, now())) {
       if (!ownGone(s, await this.spentStates(network, ownOuts(s)), new Set(listed.map(outpoint)))) return;
+      // Nor while an order of its swap may still pay the account (independent review L15, D2).
+      if (await this.ordersOpen(network, s, address)) return;
       await this.update(network, s.index, (r) => {
         r.closedAt = now();
       });
@@ -1780,16 +1832,31 @@ export class SessionService {
     // in a transaction the session didn't make; a cancel's refund in its own.
     if (!kinds.has("cancel")) {
       const own = new Set(s.txs.map((t) => t.txHash));
+      const arrived = active.filter((r) => !own.has(r.tx_hash));
       // Nothing's here yet: one of them is behind.
-      if (!active.some((r) => !own.has(r.tx_hash))) return;
+      if (!arrived.length) return;
       // Anyone can pay the account, and Minswap may not list a new order yet: what
       // arrived is the fill only once the order itself is spent.
       if (!(await this.ordersSpent(network, s))) return;
-      if (!auto.filled) {
+      if (!auto.filled && !auto.refunded) {
+        // A fill or a refund, told apart by what arrived (independent review M18), read again now that every
+        // order is known spent: a split route's legs are paid in different blocks, and one may have come since
+        // the reading above. What either reading holds counts.
+        const since = returnable(s, (await this.listing(network, keyHash)).rows).filter(
+          (r) => !own.has(r.tx_hash) && !arrived.some((a) => outpoint(a) === outpoint(r)),
+        );
+        const outcome = outcomeOf(s, [...arrived, ...since]);
         await this.update(network, s.index, (r) => {
-          r.auto!.filled = now();
+          if (outcome === "refunded") r.auto!.refunded = now();
+          else r.auto!.filled = now();
+          if (outcome === "partly") r.auto!.partly = true;
         });
       }
+    } else if (!(await this.ordersSpent(network, s))) {
+      // Cancelled: every order of the swap is spent too, as a fill's are. One Minswap didn't list isn't
+      // cancelled, and still pays the account; meanwhile what's there stays, so a cancel of it can still
+      // be paid for once Minswap lists it (independent review L16).
+      return;
     }
     await go(() => this.bringBack(network, s.index, rows));
   }
@@ -1842,6 +1909,35 @@ export class SessionService {
     return orders.every((o) => rows.some((r) => outpoint(r) === o && r.is_spent));
   }
 
+  /**
+   * Which of swap copies `copies` landed, by their orders (recorded before
+   * each was sent): Koios's `utxo_info` knows an order, spent or not, only
+   * once its transaction is in a block, whatever tx_status says yet
+   * (independent review L15).
+   */
+  private async placed(network: NetworkName, s: SessionRecord, copies: RecordedTx[]): Promise<string[]> {
+    const of = new Map<string, string>();
+    for (const t of copies) {
+      for (const o of t.orders ?? s.orders?.filter((x) => x.startsWith(`${t.txHash}#`)) ?? []) of.set(o, t.txHash);
+    }
+    if (!of.size) return [];
+    const rows = await this.deps.koios(network).utxoInfo([...of.keys()]);
+    return [...new Set(rows.flatMap((r) => of.get(outpoint(r)) ?? []))];
+  }
+
+  /**
+   * Whether an order of session `s`'s swap may still pay its account: one
+   * of the landed copy's orders isn't spent (ordersSpent), or Minswap lists
+   * one, though a DEX made it (a remainder of a partial fill, say). Nothing
+   * reads a closed session's account again, so it isn't closed meanwhile
+   * (independent review L15, D2).
+   */
+  private async ordersOpen(network: NetworkName, s: SessionRecord, address: string): Promise<boolean> {
+    if (!s.txs.some((t) => t.kind === "swap" && !t.unsent)) return false;
+    if (!(await this.ordersSpent(network, s))) return true;
+    return (await this.deps.minswap(network).pendingOrders(address)).length > 0;
+  }
+
   /** Places the order: a fresh quote, Minswap's swap for the account, the checks, and the key's signature. */
   private async order(network: NetworkName, s: SessionRecord, address: string, rows: KoiosUtxo[]): Promise<void> {
     if (!s.swap) throw new Refused("this session isn't for a swap.");
@@ -1849,6 +1945,12 @@ export class SessionService {
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
     const est = await minswap.estimate(ask);
+    // Routed afresh: never through a DEX whose orders the wallet can't check, whatever the quote went
+    // through. It pauses, as the quote would have refused it (independent review M17).
+    const unchecked = uncheckedProtocols(network, est);
+    if (unchecked.length) {
+      throw new Refused(`Minswap now routes it through ${unchecked.join(" and ")}, whose orders the wallet can't check yet.`);
+    }
     const least = BigInt(approved.minAmountOut);
     if (BigInt(est.amount_out) < least) throw new PriceMoved(est.amount_out);
     // At least what the user approved, or more when the price has moved their way.
@@ -1978,8 +2080,10 @@ export class SessionService {
     const bytes = hexBytes(whole);
     if (txId(bytes) !== built.txHash) throw new Error("Putting the signature in changed the transaction, so it wasn't sent.");
     return this.sendRecorded(network, built.index, built.kind, built.txHash, bytes, SESSION_TX, {
-      // Recorded with it, before it's sent: whichever copy of the swap lands, its own orders are the ones looked at.
+      // Recorded with it, before it's sent: whichever copy of the swap lands, its own orders are the ones looked
+      // at, and its own minimum the one shown.
       orders: built.kind === "swap" ? built.orders : undefined,
+      minAmountOut: built.kind === "swap" ? built.quote?.minAmountOut : undefined,
       after: (s) => {
         if (built.kind === "swap" && built.quote && s.swap) {
           s.swap = { ...s.swap, amountOut: built.quote.amountOut, minAmountOut: built.quote.minAmountOut };
@@ -2069,6 +2173,8 @@ export class SessionService {
             record?.mix?.again,
             own,
             record?.mix?.publicToo,
+            // A swap's, as deep as it was approved (independent review L21).
+            record?.auto?.lovejoin?.depth,
           );
         } catch (e) {
           skipped = leftOut(e);
@@ -2084,7 +2190,7 @@ export class SessionService {
       if (chain) {
         await this.leftBy(network, index, rows, chain.leftOut);
         const back = chain.txs[chain.txs.length - 1]!;
-        const { delay } = await lovejoin.settings();
+        const delay = record?.auto?.lovejoin?.delay ?? (await lovejoin.settings()).delay;
         return {
           network,
           index,
@@ -2331,6 +2437,8 @@ export class SessionService {
       leaves: leaves ?? [],
       boxes: summary.lovejoin?.boxes ?? 0,
       again: !!summary.lovejoin?.again,
+      // Its boxes wait as long as the return said: a swap's as approved (independent review L21).
+      ...(summary.lovejoin?.delay ? { delay: summary.lovejoin.delay as LovejoinDelay } : {}),
     });
     await this.deps.alarm?.start();
     await this.pump(network, built.index, budgetMs);
@@ -2453,10 +2561,10 @@ export class SessionService {
    * Records a session's transaction, then submits it, so the record always
    * knows what may be on its way. Its page watches it, not Home's banner.
    * `kept`: where it was kept for Send, cleared once it's sent if that still
-   * holds `keptHash` (this transaction, or the chain it's part of). `orders`:
-   * a swap's, recorded with it. `after`: what else the record gains once
-   * it's sent. `summary`: a return's, recorded with it until its history is
-   * written (RecordedTx `summary`).
+   * holds `keptHash` (this transaction, or the chain it's part of). `orders`
+   * and `minAmountOut`: a swap's, recorded with it. `after`: what else the
+   * record gains once it's sent. `summary`: a return's, recorded with it
+   * until its history is written (RecordedTx `summary`).
    */
   private async sendRecorded(
     network: NetworkName,
@@ -2470,7 +2578,14 @@ export class SessionService {
       keptHash = txHash,
       orders,
       summary,
-    }: { after?: (s: SessionRecord) => void; keptHash?: string; orders?: string[]; summary?: RecordedTx["summary"] } = {},
+      minAmountOut,
+    }: {
+      after?: (s: SessionRecord) => void;
+      keptHash?: string;
+      orders?: string[];
+      summary?: RecordedTx["summary"];
+      minAmountOut?: string;
+    } = {},
   ): Promise<PendingTx> {
     const { wallet, session, now } = this.deps;
     const mine = (s: SessionRecord) => s.txs.find((t) => t.txHash === txHash);
@@ -2485,7 +2600,15 @@ export class SessionService {
       } else {
         // A return's summary goes with it before it's sent: a lock or a restart may cut the send off, and it may
         // land all the same (independent review M7).
-        s.txs.push({ kind, txHash, at: now(), sending: true, ...(orders ? { orders } : {}), ...(summary ? { summary } : {}) });
+        s.txs.push({
+          kind,
+          txHash,
+          at: now(),
+          sending: true,
+          ...(orders ? { orders } : {}),
+          ...(minAmountOut ? { minAmountOut } : {}),
+          ...(summary ? { summary } : {}),
+        });
       }
     });
     try {
@@ -2582,9 +2705,10 @@ export class SessionService {
         // Brought back, and nothing has arrived since: the session is over. A
         // site's goes on until it's disconnected: the site may pay it later.
         // As act closes it: the account as Koios lists it, no copy of a step
-        // that may still land (final review sessions-1), and Koios shows its
-        // funding spent (independent review M4). A reading that fails leaves
-        // it to the next.
+        // that may still land (final review sessions-1), Koios showing its
+        // funding spent (independent review M4), and no order of its swap
+        // that may still pay it, as far as it can tell (independent review
+        // L15, D2). A reading that fails leaves it to the next.
         if (
           !s.site &&
           last.kind === "back" &&
@@ -2594,7 +2718,8 @@ export class SessionService {
           (await this.spentStates(network, ownOuts(s)).then(
             (known) => ownGone(s, known, new Set(of(listed, s.index).map(outpoint))),
             () => false,
-          ))
+          )) &&
+          !(await this.ordersOpen(network, s, keys.get(s.index)!.address).catch(() => true))
         ) {
           s.closedAt = now();
           changed = true;
@@ -2643,11 +2768,11 @@ export class SessionService {
       createdAt: s.createdAt,
       stage,
       txs: txs.map(
-        ({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, summary: _summary, outs: _outs, ...t }) => t,
+        ({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, summary: _summary, outs: _outs, minAmountOut: _min, ...t }) => t,
       ),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(returnable(s, utxos)) : null,
-      ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
+      ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix, s.swap) } : {}),
       ...(s.site ? { site: s.site } : {}),
       ...(s.mix ? { mix: s.mix } : {}),
       ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
@@ -2906,9 +3031,17 @@ function chainView(chain: NonNullable<SessionRecord["chain"]>, txs: RecordedTx[]
   };
 }
 
-/** Where a swap or a mix that runs itself is at, for its timeline. A mix's chain is its return. */
-function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage"], mix: boolean): SessionAuto {
+/**
+ * Where a swap or a mix that runs itself is at, for its timeline. A mix's
+ * chain is its return. `txs`: those shown. The least its order asks for,
+ * once one is placed: that copy's own (Review it myself, or a fresh quote,
+ * can ask for other than was approved), or, recorded before each kept its
+ * own, the swap's as last sent (independent review L24).
+ */
+function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage"], mix: boolean, swap?: SessionView["swap"]): SessionAuto {
   const has = (kind: SessionTx["kind"], confirmed = false) => txs.some((t) => t.kind === kind && (!confirmed || t.confirmed));
+  const order = txs.findLast((t) => t.kind === "swap");
+  const placedMinOut = order ? (order.minAmountOut ?? swap?.minAmountOut) : undefined;
   const step: SessionAuto["step"] =
     stage === "closed"
       ? "done"
@@ -2925,12 +3058,45 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     step,
     stopping: !!auto.stopping,
     filled: !!auto.filled,
+    ...(auto.partly ? { partly: true } : {}),
+    ...(auto.refunded ? { refunded: true } : {}),
     approvedMinOut: auto.approved.minAmountOut,
+    ...(placedMinOut ? { placedMinOut } : {}),
     ...(auto.paused ? { paused: auto.paused } : {}),
     ...(auto.retry ? { retry: { at: auto.retry.at, error: auto.retry.error } } : {}),
     ...(auto.unlockWait !== undefined ? { waitsUntil: auto.unlockWait } : {}),
     ...(auto.direct !== undefined ? { direct: auto.direct } : {}),
   };
+}
+
+/**
+ * What a swap's order did, once it's spent, by what arrived at the account
+ * from transactions the session didn't make (`arrived`, independent review
+ * M18). For a token: filled when it came, at least what the order asked
+ * for, and none of what it gave came back; refunded when none of it came;
+ * partly, between the two: a route split between DEXes whose orders went
+ * different ways. For ADA, which every order's deposit brings back filled
+ * or not, by what it gave instead: filled when none came back, refunded
+ * when all of it did, partly between. The least asked for is the landed
+ * copy's own, else the swap's as last sent.
+ */
+function outcomeOf(s: SessionRecord, arrived: KoiosUtxo[]): "filled" | "partly" | "refunded" {
+  const swap = s.swap;
+  if (!swap) return "filled";
+  const got = (id: string) =>
+    arrived
+      .flatMap((u) => u.asset_list ?? [])
+      .filter((a) => a.policy_id + a.asset_name === id)
+      .reduce((sum, a) => sum + BigInt(a.quantity), 0n);
+  const back = swap.tokenIn === "lovelace" ? 0n : got(swap.tokenIn);
+  if (swap.tokenOut !== "lovelace") {
+    const out = got(swap.tokenOut);
+    if (out === 0n) return "refunded";
+    const landed = s.txs.find((t) => t.kind === "swap" && t.confirmed && !t.replaced);
+    return out < BigInt(landed?.minAmountOut ?? swap.minAmountOut) || back > 0n ? "partly" : "filled";
+  }
+  if (back === 0n) return "filled";
+  return back >= BigInt(swap.amount) ? "refunded" : "partly";
 }
 
 /** What a transaction pays anyone but the session: a session from before's own address reads as paid (its stake part is the shared one). */
@@ -2969,7 +3135,10 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
  *   and no more than `aggregatorFee` quoted (none on preprod).
  * Anything else is refused. Which script an order goes to isn't checked:
  * no DEX's order contract is pinned, so that's Minswap's to build, as the
- * order's receivers are. Nor is its minimum read back: it's what the wallet
+ * order's receivers are; on mainnet, Minswap is asked to leave out every
+ * DEX the wallet doesn't check, and the estimate the order is built from is
+ * checked (excludedProtocols, uncheckedProtocols, independent review M17).
+ * Nor is its minimum read back: it's what the wallet
  * asks Minswap for, and Minswap builds the order. Returns the orders' output
  * indexes.
  */

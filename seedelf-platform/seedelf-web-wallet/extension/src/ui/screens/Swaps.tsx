@@ -206,7 +206,12 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
     if (s.stage === "closed") return { tone: "done", label: "Done" };
     return s.stage === "open" ? { tone: "wait", label: "Open" } : { tone: "live", label: "Running" };
   }
-  if (a.step === "done") return a.filled ? { tone: "done", label: "Done" } : { tone: "off", label: "Stopped" };
+  if (a.step === "done") {
+    // A refunded order isn't a swap done (independent review M18).
+    if (a.refunded) return { tone: "off", label: "Refunded" };
+    if (a.partly) return { tone: "done", label: "Partly filled" };
+    return a.filled ? { tone: "done", label: "Done" } : { tone: "off", label: "Stopped" };
+  }
   if (a.paused) return { tone: "wait", label: "Needs you" };
   if (a.retry) return { tone: "wait", label: "Retrying" };
   return { tone: "live", label: a.stopping ? "Stopping" : "Running" };
@@ -1037,8 +1042,9 @@ export function SwapApproval({
         Send approves all of it: the wallet asks Minswap for an order of at least {amountOf(quote.minAmountOut, get)},
         Minswap builds it, and the wallet places it and brings everything back without asking again. Before it signs, it
         checks that what Minswap built pays only this session, an order for it and Minswap's fee; the order's minimum it
-        can't read, so that's Minswap's to build as asked. If the price moves so that the order can't give that much, it
-        pauses and asks you. Stop is there until it's done.
+        can't read, so that's Minswap's to build as asked. If the price moves before the order is placed, so that it
+        couldn't give that much, it pauses and asks you. An order a DEX refunds comes back with the rest, and the swap's
+        page says it was refunded. Stop is there until it's done.
       </p>
       <p className="note">
         What the swap doesn't use, the collateral and the order's deposit come back with the proceeds. Three transactions,
@@ -1207,8 +1213,9 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
         {boxesText(l)}, mixed with other people's in {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳ in
         fees, which the session pays. {lovejoinHides(l.depth)} Each box comes back on its own after {delayText(l.delay)}, a
         few minutes into the first time the wallet is unlocked after that, for about {formatAda(l.withdrawFees)} ₳ in fees
-        all together. Less than a box's worth, and any tokens, come back at once. Settings, Lovejoin sets how deep and how
-        long, or turns it off.
+        all together. Less than a box's worth, and any tokens, come back at once. This swap keeps this depth and this wait:
+        Settings, Lovejoin changes the swaps you start after it, and turning Lovejoin off there doesn't change this one.
+        Stop can bring it back directly.
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED}
@@ -1535,6 +1542,11 @@ export function Session({
   const [stopping, setStopping] = useState(false);
   // What Stop brings back through Lovejoin, read as its dialog opens: null, directly.
   const [stopCost, setStopCost] = useState<SwapLovejoin | null>();
+  // Whether an order has gone out, as the record says as Stop's dialog opens: the page's last reading may be
+  // behind the runner. And one went out before Stop took effect, though the dialog said none had (independent
+  // review L22).
+  const [placedNow, setPlacedNow] = useState(false);
+  const [stoppedLate, setStoppedLate] = useState(false);
   const [forgetting, setForgetting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -1572,7 +1584,7 @@ export function Session({
   // A return brought back by hand, through Lovejoin: its Send button counts the chain's transactions.
   const backSending = useSendingLabel(s.index, busy && !!back?.lovejoin);
   // Once it's coming back, a chain through Lovejoin moves on with every transaction: read its progress from the record.
-  const returning = runs && (s.auto!.step === "returning" || s.auto!.filled || s.auto!.stopping);
+  const returning = runs && (s.auto!.step === "returning" || s.auto!.filled || !!s.auto!.refunded || s.auto!.stopping);
   useSessionsWhile(returning, (all) => {
     const now = all.find((x) => x.index === index);
     if (now) setS(now);
@@ -1768,7 +1780,13 @@ export function Session({
     const placed = s.txs.some((t) => t.kind === "swap");
     const openStop = () => {
       setStopCost(undefined);
+      setPlacedNow(false);
       setStopping(true);
+      // The record as it is now (no Koios read), not the page's last reading: the runner may have placed the order since.
+      call("sessions", {}).then(
+        (all) => setPlacedNow(!!all.find((x) => x.index === index)?.txs.some((t) => t.kind === "swap")),
+        () => undefined,
+      );
       // A pool read the worker keeps five minutes; without it, Stop says only what it always did.
       call("session-stop-cost", { index: s.index }).then(setStopCost, () => setStopCost(null));
     };
@@ -1832,6 +1850,12 @@ export function Session({
             </div>
           </Callout>
         )}
+        {stoppedLate && (
+          <Callout tone="warn" testId="session-stop-ordered">
+            An order had gone out before Stop took effect. The wallet cancels it, unless a batcher fills it first, and then
+            everything comes back into your private balance.
+          </Callout>
+        )}
         <Timeline
           s={s}
           busy={busy}
@@ -1843,13 +1867,16 @@ export function Session({
         {forgetModal}
         {stopping && (
           <StopDialog
-            placed={placed}
+            placed={placed || placedNow}
             cost={stopCost}
             busy={busy}
             onClose={() => setStopping(false)}
             onStop={(direct) =>
               void act(async () => {
-                setS(await call("session-stop", { index: s.index, ...(direct ? { direct } : {}) }));
+                const { ordered, ...stopped } = await call("session-stop", { index: s.index, ...(direct ? { direct } : {}) });
+                setS(stopped);
+                // The runner was placing it as the dialog said none was: Stop says what it does now.
+                setStoppedLate(!!ordered && !placed && !placedNow);
                 setStopping(false);
               })
             }
@@ -1891,6 +1918,9 @@ export function Session({
   );
 }
 
+/** Stop's words for an order the runner may be placing as the dialog shows (independent review L22). */
+const IF_ORDERED = "If the wallet is placing one right now, it's cancelled, unless a batcher fills it first.";
+
 /**
  * Stop's dialog (privacy review §2.8, §4.1): what stopping does, and when it
  * comes back through Lovejoin, what that takes as the worker works it out
@@ -1929,10 +1959,10 @@ export function StopDialog({
     >
       <p className="note" data-testid="session-stop-what">
         {mixes
-          ? `${placed ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance." : "No order is placed. Everything comes back into your private balance."} Its ADA goes through Lovejoin first: ${boxesText(cost)}, mixed in ${plural(cost.mixes, "mix", "mixes")} for about ${formatAda(cost.mixFees)} ₳ in fees, which the session pays, and about ${formatAda(cost.withdrawFees)} ₳ to bring them back, each on its own after ${delayText(cost.delay)}.${placed ? " The cancel costs a network fee too." : ""}`
+          ? `${placed ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance." : `If no order has gone out yet, none is placed, and everything comes back into your private balance. ${IF_ORDERED}`} Its ADA goes through Lovejoin first: ${boxesText(cost)}, mixed in ${plural(cost.mixes, "mix", "mixes")} for about ${formatAda(cost.mixFees)} ₳ in fees, which the session pays, and about ${formatAda(cost.withdrawFees)} ₳ to bring them back, each on its own after ${delayText(cost.delay)}.${placed ? " The cancel costs a network fee too." : ""}`
           : placed
             ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance. The cancel and the return each cost a network fee."
-            : "No order is placed. Everything comes back into your private balance, less the return's network fee."}
+            : `If no order has gone out yet, none is placed, and everything comes back into your private balance, less the return's network fee. ${IF_ORDERED}`}
       </p>
       {cost?.skipped && (
         <p className="note" data-testid="session-stop-pool">
@@ -2011,7 +2041,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const failed = s.stage === "failed";
   // Stopped before any order: the order and its fill never happen.
   const unordered = auto.stopping && !tx("swap");
-  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled);
+  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded);
   const state = (i: number): StepState => {
     if (failed) return i === 0 ? "failed" : "skipped";
     if ((i === 1 || i === 2) && unordered) return "skipped";
@@ -2019,7 +2049,8 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     if (i > at) return "todo";
     return auto.paused || auto.retry ? "paused" : "now";
   };
-  const least = sides ? amountOf(auto.approvedMinOut, sides.get) : undefined;
+  // What the order placed asks for, once one is; the approved least before (independent review L24).
+  const least = sides ? amountOf((tx("swap") && auto.placedMinOut) || auto.approvedMinOut, sides.get) : undefined;
   const steps: Array<{ title: string; sub: string; tx?: SessionTx }> = [
     {
       title: failed ? "Not funded" : "Funded",
@@ -2037,14 +2068,26 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       tx: tx("swap"),
     },
     {
-      title: unordered ? "Nothing to fill" : cancelled ? "Cancelled" : "Filled",
+      title: unordered
+        ? "Nothing to fill"
+        : cancelled
+          ? "Cancelled"
+          : auto.refunded
+            ? "Refunded"
+            : auto.partly
+              ? "Partly filled"
+              : "Filled",
       sub: unordered
         ? "Nothing was ordered"
         : cancelled
           ? "The order's funds back at the account"
-          : auto.filled
-            ? "The proceeds are at the account"
-            : "By a DEX's batcher, usually within a few blocks",
+          : auto.refunded
+            ? "Not filled: the DEX gave the order's funds back to the account"
+            : auto.partly
+              ? "Part of it filled; the DEX gave the rest back. Both are at the account"
+              : auto.filled
+                ? "The proceeds are at the account"
+                : "By a DEX's batcher, usually within a few blocks",
       tx: tx("cancel"),
     },
     {
@@ -2146,6 +2189,11 @@ export function nowLine(s: SessionView): string {
       }
       return "Coming back into your private balance: waiting for the network to confirm it.";
     case "done":
+      // Refunded, the swap didn't happen: never "Done" (independent review M18).
+      if (a.refunded) return "Refunded: the order wasn't filled, so what you swapped is back in your private balance.";
+      if (a.partly) {
+        return "Partly filled: part of the swap went through and the rest was refunded. Both are back in your private balance.";
+      }
       return a.filled ? "Done: the swap is in your private balance." : "Stopped: everything is back in your private balance.";
   }
 }

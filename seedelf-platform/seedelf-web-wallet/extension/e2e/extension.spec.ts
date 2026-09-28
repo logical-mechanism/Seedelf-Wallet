@@ -1855,7 +1855,7 @@ test("a private swap paused by a price move, then stopped: everything comes back
   // Stop, always there: one confirmation.
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   const confirm = page.getByRole("dialog", { name: "Stop this swap?" });
-  await expect(confirm).toContainText("No order is placed");
+  await expect(confirm).toContainText("If no order has gone out yet, none is placed");
   await snap(page, "swap-stop");
   await confirm.getByRole("button", { name: "Stop the swap" }).click();
   await expect(confirm).toBeHidden();

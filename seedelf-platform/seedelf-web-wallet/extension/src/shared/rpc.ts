@@ -802,10 +802,19 @@ export interface SessionAuto {
   retry?: { at: number; error: string };
   /** The user pressed Stop: any order is cancelled, then everything comes back. */
   stopping: boolean;
-  /** The order was filled. */
+  /** The order was filled: `partly`, part of it (a split route), the rest refunded. */
   filled: boolean;
+  partly?: boolean;
+  /** The order was refunded, none of it filled: what it gave came back (independent review M18). */
+  refunded?: boolean;
   /** The least the user approved receiving. */
   approvedMinOut: string;
+  /**
+   * The least the order placed asks for, once one is: Review it myself, or
+   * a fresh quote above the approved least, asks for other than was
+   * approved (independent review L24).
+   */
+  placedMinOut?: string;
   /**
    * Its next step, found as the wallet unlocked, waits until then (ms), so
    * it doesn't go out the moment the wallet unlocks (privacy review §3.1).
@@ -1288,8 +1297,9 @@ export interface Requests {
   /**
    * Stops the swap: its order is cancelled, then everything comes back into
    * the private balance (`direct`: not through Lovejoin, whatever was approved).
+   * `ordered`: an order had gone out, or may have, when Stop took effect.
    */
-  "session-stop": { payload: { index: number; direct?: boolean }; result: SessionView };
+  "session-stop": { payload: { index: number; direct?: boolean }; result: SessionView & { ordered?: boolean } };
   /** What Stop would bring back through Lovejoin, for its dialog; null when it comes back directly. */
   "session-stop-cost": { payload: { index: number }; result: SwapLovejoin | null };
   /** Goes on after a pause or a failure: the step is tried again now. */

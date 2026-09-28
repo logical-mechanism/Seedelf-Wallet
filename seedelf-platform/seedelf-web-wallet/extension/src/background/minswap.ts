@@ -115,7 +115,7 @@ const PREPROD_BROKEN = ["Splash", "SplashStable"];
  * - Minswap (V1) and MinswapStable: the sender's and the receiver's
  *   addresses. V1's passes on a real order Minswap built on preprod.
  * - MinswapV2: the canceller's key, and the refund and success receivers.
- * - SundaeSwap: the destination address. SundaeSwapV3: the owner's key.
+ * - SundaeSwap: the destination address.
  * - WingRiders, WingRidersV2 and WingRidersStableV2: the owner's and the
  *   beneficiary's addresses.
  * - Splash and SplashStable: the cancelling key and the redeemer's address.
@@ -129,7 +129,6 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
   "MinswapV2",
   "MinswapStable",
   "SundaeSwap",
-  "SundaeSwapV3",
   "WingRiders",
   "WingRidersV2",
   "WingRidersStableV2",
@@ -144,12 +143,66 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
  * or a quote be refused (final review sessions-4): VyFinance names its
  * owner as one 56-byte field, the key and the staking part together, and
  * MuesliSwap's orders are staked to its own key, not the sender's.
+ *
+ * SundaeSwapV3 too (independent review M16). Minswap builds its orders at
+ * SundaeSwap's V3 order script under a fixed staking part that isn't the
+ * sender's (f217f435…, the same for every sender, seen 2026-09-27), so the
+ * check refuses every one, after the swap is funded. And the order's owner
+ * is the sender's stake key, so cancelling one needs the session's stake
+ * key 2/i as well as its payment key 0/i, which the wallet never signs
+ * with; V3 orders don't expire, so an order it couldn't cancel would wait
+ * at the DEX for good. It comes back only with all three: the V3 order
+ * script and that staking part pinned in `checkOrder`, and a cancel that
+ * may be signed by 0/i and 2/i, and by nothing else.
  */
-const MAINNET_REFUSED = ["VyFinance", "MuesliSwap"];
+const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SundaeSwapV3"];
 
-/** What routing leaves out on `network`. */
+/**
+ * Every DEX Minswap's aggregator routes through, by the names its
+ * `exclude_protocols` takes: any other, and it refuses the whole request.
+ * Checked against the live API, not only its published list: an unknown
+ * name's 400 answer names one allowed constant per DEX, 19 on 2026-09-27,
+ * and each of these is taken (independent review M17). A DEX Minswap adds
+ * after that isn't here, and routing can go through it (excludedProtocols).
+ */
+export const MINSWAP_PROTOCOLS: readonly string[] = [
+  "MinswapV2",
+  "Minswap",
+  "MinswapStable",
+  "MuesliSwap",
+  "Splash",
+  "SundaeSwapV3",
+  "SundaeSwap",
+  "SundaeSwapStable",
+  "VyFinance",
+  "CswapV1",
+  "WingRidersV2",
+  "WingRiders",
+  "WingRidersStableV2",
+  "WingRidersStableV1",
+  "Spectrum",
+  "SplashStable",
+  "ChakraBondingCurve",
+  "OpenDjedV1",
+  "DanogoCLMMV1",
+];
+
+/**
+ * What routing leaves out on `network`. On mainnet, every DEX Minswap
+ * offers that isn't on MAINNET_PROTOCOLS (independent review M17): its
+ * `exclude_protocols` is a list to leave out, and its `include_protocols`
+ * isn't kept to (asked for MinswapV2 alone, it routed through Minswap V1
+ * too), so the list the wallet checks is turned into one Minswap keeps.
+ * build-tx routes again on Minswap's side with this list, so the order it
+ * builds goes through the same DEXes as the estimate the runner checked
+ * (uncheckedProtocols), except one Minswap adds after this list was
+ * written: which DEX an order goes to is still Minswap's to build, as its
+ * receivers and its minimum are (sessions.ts checkOrder).
+ */
 export function excludedProtocols(network: "preprod" | "mainnet"): string[] {
-  return network === "preprod" ? [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN] : [...DIRECT_PROTOCOLS, ...MAINNET_REFUSED];
+  if (network === "preprod") return [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN];
+  const unchecked = MINSWAP_PROTOCOLS.filter((p) => !MAINNET_PROTOCOLS.includes(p));
+  return [...new Set([...DIRECT_PROTOCOLS, ...MAINNET_REFUSED, ...unchecked])];
 }
 
 /**

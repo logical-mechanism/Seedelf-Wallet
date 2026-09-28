@@ -456,6 +456,8 @@ interface ChainRecord {
    * never come back by themselves (unschedule). Counted so none goes twice.
    */
   unscheduled?: number;
+  /** How long its boxes wait, as its return was approved or reviewed; Settings' when none (independent review L21). */
+  delay?: LovejoinDelay;
 }
 
 /** Why a chain whose progress is gone stopped: nothing is sending the rest. */
@@ -775,9 +777,19 @@ export class LovejoinService {
     return { pool: unspent(rows, spent), owned: listed.filter((b) => !spent.has(ref(b))), listed };
   }
 
-  /** How many boxes session `index`'s `rows` pay for at the set depth (`again`: the mixes alone). */
-  async plan(network: NetworkName, index: number, rows: KoiosUtxo[], collateral: KoiosUtxo, again = false): Promise<LovejoinPlan> {
-    const { depth } = await this.settings();
+  /**
+   * How many boxes session `index`'s `rows` pay for at the set depth (`again`: the mixes alone), or at
+   * `fixed`, the depth a swap was approved with (independent review L21).
+   */
+  async plan(
+    network: NetworkName,
+    index: number,
+    rows: KoiosUtxo[],
+    collateral: KoiosUtxo,
+    again = false,
+    fixed?: LovejoinDepth,
+  ): Promise<LovejoinPlan> {
+    const depth = fixed ?? (await this.settings()).depth;
     const request = { network, index, utxos: rows, collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index }, depth, again };
     return this.deps.wallet.withKeys(
       (keys) => JSON.parse(this.deps.wasm.planLovejoin(keys.oneTime, JSON.stringify(request))) as LovejoinPlan,
@@ -877,9 +889,14 @@ export class LovejoinService {
     }
   }
 
-  /** What mixing `boxes` boxes at the set depth takes, before anything is built (`again`: the mixes alone). */
-  async funding(network: NetworkName, boxes: number, again = false): Promise<LovejoinFunding> {
-    const { depth, delay } = await this.settings();
+  /**
+   * What mixing `boxes` boxes at the set depth takes, before anything is built (`again`: the mixes alone), or
+   * at `fixed`, the depth a swap was approved with (independent review L21).
+   */
+  async funding(network: NetworkName, boxes: number, again = false, fixed?: LovejoinDepth): Promise<LovejoinFunding> {
+    const set = await this.settings();
+    const { delay } = set;
+    const depth = fixed ?? set.depth;
     const found = JSON.parse(this.deps.wasm.lovejoinFunding(JSON.stringify({ network, boxes, depth, again }))) as Omit<
       LovejoinFunding,
       "depth" | "delay" | "boxes" | "again"
@@ -895,8 +912,9 @@ export class LovejoinService {
    * `again`: the wallet's boxes in the pool mixed again, with no deposit.
    * `own`: the session's own transactions, whose UTxOs the return takes
    * first. `publicToo`: mixing again takes the boxes a mix from the public
-   * account put in too (againBoxes). Throws LovejoinSkipped when the network
-   * measures its first mix differently.
+   * account put in too (againBoxes). `fixed`: the depth a swap was approved
+   * with, rather than Settings' now (independent review L21). Throws
+   * LovejoinSkipped when the network measures its first mix differently.
    */
   async chain(
     network: NetworkName,
@@ -909,12 +927,13 @@ export class LovejoinService {
     again = false,
     own: string[] = [],
     publicToo = false,
+    fixed?: LovejoinDepth,
   ): Promise<LovejoinChain | undefined> {
     if (!this.available(network) || !collateral) return undefined;
-    const plan = await this.plan(network, index, rows, collateral, again);
+    const plan = await this.plan(network, index, rows, collateral, again, fixed);
     const count = Math.min(plan.boxes, boxes ?? plan.boxes);
     if (count < 1) return undefined;
-    const { depth } = await this.settings();
+    const depth = fixed ?? (await this.settings()).depth;
     const owner = chainOwner(index);
     return this.unstale(async (avoid) => {
       // Never what another chain of the wallet's will spend (this session's own
@@ -1324,10 +1343,9 @@ export class LovejoinService {
     await this.update(network, (s) => s.due.push(...due));
   }
 
-  /** `boxes` due times, each a random delay (the settings' range) from now. */
-  private async draw(boxes: number): Promise<number[]> {
-    const { delay } = await this.settings();
-    const [low, high] = delayHours(delay);
+  /** `boxes` due times, each a random delay (the settings' range, or `fixed`'s) from now. */
+  private async draw(boxes: number, fixed?: LovejoinDelay): Promise<number[]> {
+    const [low, high] = delayHours(fixed ?? (await this.settings()).delay);
     const random = this.deps.random ?? secureRandom;
     const now = this.deps.now();
     return Array.from({ length: boxes }, () => now + Math.round((low + (high - low) * random()) * HOUR));
@@ -1337,10 +1355,20 @@ export class LovejoinService {
    * Records a chain before any of it is sent: its deposit, each mix and its
    * leaves, sealed, so the wallet knows which of its boxes it hasn't mixed
    * yet, after a lock too. `progress`: where it waits while it's sent.
+   * `delay`: how long its boxes wait, as its return said (independent
+   * review L21); Settings' when it's sent, without one.
    */
   async recordChain(
     network: NetworkName,
-    chain: { session?: number; progress: string; txs: LovejoinChain["txs"]; leaves: OutRef[]; boxes: number; again?: boolean },
+    chain: {
+      session?: number;
+      progress: string;
+      txs: LovejoinChain["txs"];
+      leaves: OutRef[];
+      boxes: number;
+      again?: boolean;
+      delay?: LovejoinDelay;
+    },
   ): Promise<void> {
     const { txs } = chain;
     const record: ChainRecord = {
@@ -1352,6 +1380,7 @@ export class LovejoinService {
       leaves: chain.leaves,
       boxes: chain.boxes,
       ...(chain.again ? { again: true } : {}),
+      ...(chain.delay ? { delay: chain.delay } : {}),
       total: txs.length,
       sent: 0,
       at: this.deps.now(),
@@ -1369,7 +1398,7 @@ export class LovejoinService {
   async chainSent(network: NetworkName, id: string, i: number): Promise<void> {
     const record = (await this.read(network)).chains.find((c) => c.id === id);
     if (!record) return;
-    const due = i === 0 && !record.scheduled ? await this.draw(record.boxes) : [];
+    const due = i === 0 && !record.scheduled ? await this.draw(record.boxes, record.delay) : [];
     await this.update(network, (s) => {
       const c = s.chains.find((r) => r.id === id);
       if (!c) return;

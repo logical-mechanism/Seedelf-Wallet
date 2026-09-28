@@ -325,7 +325,7 @@ describe("a swap's quote", () => {
 
   it("leaves out of mainnet's routing the DEXes whose orders the check refuses, and won't quote a route through one it can't check (final review sessions-4)", async () => {
     // VyFinance names its owner as one 56-byte field; MuesliSwap stakes its orders to its own key.
-    expect(excludedProtocols("mainnet")).toEqual([...DIRECT_PROTOCOLS, "VyFinance", "MuesliSwap"]);
+    expect(excludedProtocols("mainnet")).toEqual([...DIRECT_PROTOCOLS, "VyFinance", "MuesliSwap", "SundaeSwapV3", "SundaeSwapStable", "CswapV1", "WingRidersStableV1"]);
     expect(MAINNET_PROTOCOLS).not.toContain("VyFinance");
     expect(MAINNET_PROTOCOLS).not.toContain("MuesliSwap");
     const t = await unlocked();
@@ -342,8 +342,8 @@ describe("a swap's quote", () => {
     // On preprod, the check alone stands.
     await expect(t.sessions.quote("preprod", selling)).resolves.toMatchObject({ route: ["MinswapV2", "CswapV1"] });
     // Through DEXes whose orders name the owner's key as a field of its own: quoted.
-    via("MinswapV2", "SundaeSwapV3", "Splash");
-    await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["MinswapV2", "SundaeSwapV3", "Splash"] });
+    via("MinswapV2", "SundaeSwap", "Splash");
+    await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["MinswapV2", "SundaeSwap", "Splash"] });
   });
 
   it("refuses an ask before Minswap sees it", () => {
@@ -409,11 +409,12 @@ describe("a private session", () => {
     // Signed: the witness set gained the session key's signature.
     expect(sent.length).toBeGreaterThan(SWAP.length / 2 + 96);
 
-    // Filled: the proceeds and the change are at the account; the funding UTxO was spent.
-    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
+    // Filled: the proceeds and the change are at the account; the funding UTxO was spent, and so was the order.
+    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`).add(`${review.txHash}#0`);
     t.koios.addedToAccounts.push(
       atSession(review.txHash, 1, "131585414"),
       atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]),
+      { ...atSession(review.txHash, 0, "14000000"), address: bech32("addr_test", bytes(ORDER_ADDRESS)), payment_cred: "a6".repeat(28) },
     );
     expect(await sessions.orders("preprod", 0)).toEqual([]);
 
