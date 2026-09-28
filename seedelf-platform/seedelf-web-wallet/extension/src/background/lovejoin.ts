@@ -1030,9 +1030,13 @@ export class LovejoinService {
         JSON.parse(this.deps.wasm.buildLovejoinChain(keys.oneTime, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
     );
     if (chain.skipped) throw new LovejoinSkipped(chain.skipped);
-    await this.crossCheck(network, chain);
-    // Kept for Send (or sent at once): no other chain draws its boxes meanwhile.
-    await this.reserve(network, owner, chain.txs, this.deps.now() + BUILT_TTL_MS);
+    // Kept for Send (or sent at once) as soon as it's built, before the network's check: no other chain draws its
+    // boxes meanwhile, and one that took any since this pool read has it built again (independent review L27).
+    const mine = await this.reserve(network, owner, chain.txs, this.deps.now() + BUILT_TTL_MS);
+    await this.crossCheck(network, chain).catch(async (e: unknown) => {
+      await this.unreserve(network, owner, mine).catch(() => undefined);
+      throw e;
+    });
     return chain;
   }
 
@@ -1062,11 +1066,36 @@ export class LovejoinService {
   /**
    * Reserves what chain `owner`'s transactions spend and put up as
    * collateral (spent.ts), in place of its reservation before: kept for Send
-   * until `until`, or, without it, being sent.
+   * until `until`, or, without it, being sent. Never what another chain of
+   * the wallet's reserved: one built at the same time drew from the pool
+   * before this one's reservation was there, and the one that reserves
+   * second is refused (StalePool, which builds it again without those
+   * boxes), so no two chains spend one box (independent review L27).
+   * Returns the reservation made.
    */
-  reserve(network: NetworkName, owner: string, txs: LovejoinChain["txs"], until?: number): Promise<void> {
+  async reserve(network: NetworkName, owner: string, txs: LovejoinChain["txs"], until?: number): Promise<Reservation> {
+    const mine = reservationOf(txs, until);
+    await this.reserving(network, (kept) => {
+      const others = new Set(Object.entries(kept).flatMap(([chain, r]) => (chain === owner ? [] : r.inputs)));
+      const taken = mine.inputs.filter((o) => others.has(o));
+      if (taken.length) throw new StalePool(taken);
+      kept[owner] = mine;
+    });
+    return mine;
+  }
+
+  /**
+   * Takes back `mine`, chain `owner`'s reservation, if it still holds it: its
+   * build went no further (the network's check refused it, say). What the
+   * owner held before isn't put back: a chain built meanwhile may have drawn
+   * those boxes, so the review before is built again rather than sent.
+   */
+  private unreserve(network: NetworkName, owner: string, mine: Reservation): Promise<void> {
     return this.reserving(network, (kept) => {
-      kept[owner] = reservationOf(txs, until);
+      const r = kept[owner];
+      if (r && r.until === mine.until && r.inputs.length === mine.inputs.length && r.inputs.every((o, k) => o === mine.inputs[k])) {
+        delete kept[owner];
+      }
     });
   }
 
@@ -1132,7 +1161,7 @@ export class LovejoinService {
     if (sending && !sending.stopped) throw new Error("Your last mix from the public account is still being sent. Wait for it to finish.");
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
-    const { wasm, wallet, session, now } = this.deps;
+    const { wasm, wallet, now } = this.deps;
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     if (!collateral) {
       throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
@@ -1146,13 +1175,7 @@ export class LovejoinService {
       const built = await wallet.withKeys(
         (keys) => JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
       );
-      try {
-        await this.crossCheck(network, built);
-      } catch (e) {
-        if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
-        throw e;
-      }
-      return built;
+      return this.checked(network, built);
     });
     const last = chain.txs.at(-1)!;
     const summary: LovejoinPublicSummary = {
@@ -1166,11 +1189,36 @@ export class LovejoinService {
       fees: chain.fees,
       change: chain.returned,
     };
-    await wallet.withKeys(() =>
-      session.set(SESSION_LOVEJOIN_PUBLIC, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() } satisfies KeptPublic),
-    );
-    await this.reserve(network, chainOwner(), chain.txs, now() + BUILT_TTL_MS);
+    await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() }, chain.reserved);
     return summary;
+  }
+
+  /**
+   * A mix from the public account, just built: reserved at once, before the
+   * network's check, which it then passes, or its reservation goes
+   * (independent review L27).
+   */
+  private async checked(network: NetworkName, built: LovejoinChain): Promise<LovejoinChain & { reserved: Reservation }> {
+    const reserved = await this.reserve(network, chainOwner(), built.txs, this.deps.now() + BUILT_TTL_MS);
+    try {
+      await this.crossCheck(network, built);
+    } catch (e) {
+      await this.unreserve(network, chainOwner(), reserved).catch(() => undefined);
+      if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
+      throw e;
+    }
+    return { ...built, reserved };
+  }
+
+  /** Keeps a mix from the public account for Send, or lets its reservation go when it can't be kept. */
+  private async keep(network: NetworkName, kept: KeptPublic, reserved: Reservation): Promise<void> {
+    const { wallet, session } = this.deps;
+    try {
+      await wallet.withKeys(() => session.set(SESSION_LOVEJOIN_PUBLIC, kept));
+    } catch (e) {
+      await this.unreserve(network, chainOwner(), reserved).catch(() => undefined);
+      throw e;
+    }
   }
 
   /**
@@ -1188,7 +1236,7 @@ export class LovejoinService {
     if (sending && !sending.stopped) throw new Error("Your last mix from the public account is still being sent. Wait for it to finish.");
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
-    const { wasm, wallet, session, now } = this.deps;
+    const { wasm, wallet, now } = this.deps;
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     if (!collateral) {
       throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
@@ -1217,13 +1265,7 @@ export class LovejoinService {
       const built = await wallet.withKeys(
         (keys) => JSON.parse(wasm.buildLovejoinAgainFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
       );
-      try {
-        await this.crossCheck(network, built);
-      } catch (e) {
-        if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
-        throw e;
-      }
-      return built;
+      return this.checked(network, built);
     });
     const last = chain.txs.at(-1)!;
     const summary: PublicAgain = {
@@ -1238,10 +1280,7 @@ export class LovejoinService {
       change: chain.returned,
       again: true,
     };
-    await wallet.withKeys(() =>
-      session.set(SESSION_LOVEJOIN_PUBLIC, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() } satisfies KeptPublic),
-    );
-    await this.reserve(network, chainOwner(), chain.txs, now() + BUILT_TTL_MS);
+    await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() }, chain.reserved);
     return summary;
   }
 
