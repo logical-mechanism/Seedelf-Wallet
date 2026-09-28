@@ -8,11 +8,13 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { CHAIN_CUT } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
-import { SessionService } from "../src/background/sessions";
+import { SESSION_BACK, SessionService } from "../src/background/sessions";
+import { SESSION_SPENT } from "../src/background/spent";
 import { sessionSwap, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -178,5 +180,25 @@ describe("a mix whose chain stopped partway and whose rest came back (independen
     const book = await t.store.get<{ sessions: Array<{ chain: { last: string }; txs: Array<{ kind: string }> }> }>("sessions.preprod");
     expect(book!.sessions[0]!.chain.last).toBe(last);
     expect(book!.sessions[0]!.txs.map((x) => x.kind)).toEqual(["out", "deposit", "back", "back"]);
+  });
+});
+
+describe("a return's chain through Lovejoin kept for Send (independent review L18)", () => {
+  it("isn't sent when a transaction sent since its review spent what it spends, and nothing of it goes", CHAINS, async () => {
+    const { t, sessions } = await withSession();
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin).toBeDefined();
+    // A private spend reviewed after it and sent first took one of its UTxOs, as a Make public may take the
+    // funding change a chain's last transaction merges into.
+    const kept = (await t.session.get<{ chain: Array<{ txCbor: string }> }>(SESSION_BACK))!;
+    const [taken] = txInputs(Buffer.from(kept.chain[0]!.txCbor, "hex"));
+    const spent = (await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {};
+    await t.session.set(SESSION_SPENT, { ...spent, [taken!]: Date.now() });
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow(
+      "Something this return spends went out in another transaction since you reviewed it. Review it again.",
+    );
+    expect(t.koios.submitted).toHaveLength(0);
+    const [view] = await sessions.list("preprod");
+    expect(view!.chain).toBeUndefined();
   });
 });

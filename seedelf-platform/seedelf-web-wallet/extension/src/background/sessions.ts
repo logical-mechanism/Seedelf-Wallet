@@ -2165,6 +2165,13 @@ export class SessionService {
     if (await this.pendingChain(network, built.index)) {
       throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish.");
     }
+    // Something it spends went out in another of the wallet's transactions since it was reviewed (a private
+    // spend sent meanwhile took the funding change its last transaction merges into): it would stop at that one,
+    // after the rest went in, so nothing of it goes, and a new review leaves that out (independent review L18).
+    const spent = await this.deps.wallet.withKeys(() => spentSet(this.deps.session));
+    if (txs!.some((t) => txInputs(hexBytes(t.txCbor)).some((o) => spent.has(o)))) {
+      throw new Error("Something this return spends went out in another transaction since you reviewed it. Review it again.");
+    }
     await this.update(network, built.index, (s) => {
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
       delete s.lovejoinSkipped;
