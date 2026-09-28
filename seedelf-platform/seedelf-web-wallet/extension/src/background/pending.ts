@@ -642,8 +642,13 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         if (expired ? !ours(cur) : !unchanged(cur)) return { cur };
         // Unseen, its last try, a minute or two ago, may still have reached a node: when that was stays
         // the wallet's last send though what it spends is freed, and Lovejoin's withdraws keep away from
-        // it (final review F8). Past its slot, none can land.
-        if (!expired) await noteSend(session, w.resentAt ?? w.submittedAt);
+        // it (final review F8). The watch's own tries aren't all: the user's Send again Koios didn't
+        // answer leaves the watch as it was, and only stamps what it spends. Another transaction's
+        // stamp there is a send too. Past its slot, none can land.
+        if (!expired) {
+          const tries = Object.values(await spentAt(session, w.inputs ?? [], now()));
+          await noteSend(session, Math.max(w.resentAt ?? w.submittedAt, ...tries));
+        }
         if (w.inputs) await forgetSpent(session, w.inputs);
         await session.remove(key);
         await forgetReading(session, w);

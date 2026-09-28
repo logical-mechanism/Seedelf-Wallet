@@ -2,8 +2,10 @@
 // its last try, a minute or two before, may still have reached a node: when
 // that was stays the wallet's last send, so Lovejoin's withdraws keep away
 // from it as from any other (QUIET_AFTER_SEND_MS), in the same run too, and
-// a lock keeps it (independent review L8, final review F8).
-import { describe, expect, it } from "vitest";
+// a lock keeps it (independent review L8, final review F8). The user's own
+// Send again Koios didn't answer is one of those tries too, though it leaves
+// the watch as it was.
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import { txInputs } from "../src/background/cbor";
@@ -21,8 +23,12 @@ const account = (words: number) =>
   vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === words)!;
 const THEIRS = account(15).preprod.receive_0 as string;
 
+afterEach(() => void vi.restoreAllMocks());
+
 async function unlocked() {
   const t = testBalances();
+  // What's written ahead of a submit is stamped by the device's clock: this one.
+  vi.spyOn(Date, "now").mockImplementation(() => t.clock.now);
   await t.wallet.create(account(12).phrase, PASSWORD);
   return t;
 }
@@ -48,10 +54,11 @@ function privately(t: T) {
 
 /**
  * A private payment Koios never answers for, sent again every two minutes
- * and ten seconds while tx_status doesn't know it, up to the look that lets
- * it go: its hash, inputs, and when it last went.
+ * and ten seconds while tx_status doesn't know it (`resends` times), up to
+ * the look that lets it go: its hash, inputs, when it last went, and the
+ * service that sent it.
  */
-async function triedUnseen(t: T) {
+async function triedUnseen(t: T, resends = 9) {
   const withdraw = privately(t);
   const summary = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
   const real = t.koios.fetch;
@@ -66,13 +73,13 @@ async function triedUnseen(t: T) {
   expect(sent).not.toHaveProperty("invalidHereafter");
   const inputs = txInputs(t.koios.submitted[0]!);
   let lastTry = 0;
-  for (let i = 0; i < 9; i++) {
+  for (let i = 0; i < resends; i++) {
     await busyFor(t, 2 * 60_000 + 10_000);
     expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true });
     lastTry = t.clock.now;
   }
-  expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual(Array(10).fill(summary.txHash));
-  return { id: summary.txHash, inputs, lastTry };
+  expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual(Array(resends + 1).fill(summary.txHash));
+  return { id: summary.txHash, inputs, lastTry, withdraw };
 }
 
 describe("a maybe-sent private payment let go as unseen", () => {
@@ -124,5 +131,25 @@ describe("a maybe-sent private payment let go as unseen", () => {
     await busyFor(t, 2 * 60_000 + 10_000);
     expect(await t.pending.pending("preprod")).toMatchObject({ dropped: "unseen" });
     expect(await t.wallet.sends()).toEqual({ sent: lastTry, forgotten: started });
+  });
+
+  it("keeps the user's own Send again as its last try, though the watch doesn't have it", async () => {
+    const t = await unlocked();
+    // The watch's last try at T0; the review stays open with Send, since its first answer never came.
+    const { id, inputs, lastTry, withdraw } = await triedUnseen(t, 8);
+    await busyFor(t, 140_000);
+    const again = t.clock.now;
+    // Koios doesn't answer this one either: the watch stays as it was.
+    expect(await withdraw.submit("preprod", id)).toMatchObject({ maybeSent: true });
+    expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual(Array(10).fill(id));
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ resentAt: lastTry });
+
+    await busyFor(t, 30_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ dropped: "unseen" });
+    const spent = await t.wallet.withKeys(() => spentSet(t.session, t.clock.now));
+    for (const o of inputs) expect(spent.has(o)).toBe(false);
+    // The Send again, 30 seconds before, is the wallet's last send, not the watch's older try.
+    expect((await t.wallet.sends()).sent).toBe(again);
+    expect(t.clock.now - again).toBeLessThan(QUIET_AFTER_SEND_MS);
   });
 });
