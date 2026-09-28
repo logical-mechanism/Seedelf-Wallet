@@ -1444,6 +1444,11 @@ export class SessionService {
     if (waiting.length) {
       const statuses = await this.deps.koios(network).txStatus(waiting.map((t) => t.txHash));
       const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
+      // A swap's copy tx_status doesn't show, whose order is on chain, landed all the same: looked for
+      // before it's taken for one never placed, and while it's still looked for. Never a second order,
+      // or a return that leaves its order at the DEX (independent review L15).
+      const unseen = waiting.filter((t) => t.kind === "swap" && !t.unsent && !on.has(t.txHash) && (t.replaced || lost(t, now())));
+      for (const h of await this.placed(network, s, unseen)) on.add(h);
       // Never taken, or never seen: its step is built again. It spends the session's
       // UTxOs, so the ledger lets only one of the two land, and one Koios may have
       // taken is still looked for (replaced).
@@ -1504,6 +1509,8 @@ export class SessionService {
     // lands leaves its inputs there. And not while a copy of a step built
     // again may still land (final review sessions-1, sessions-2).
     if (taken.at(-1)!.kind === "back" && !returnable(s, listed).length && !mayStillLand(s, now())) {
+      // Nor while an order of its swap may still pay the account (independent review L15, D2).
+      if (await this.ordersOpen(network, s, address)) return;
       await this.update(network, s.index, (r) => {
         r.closedAt = now();
       });
@@ -1606,6 +1613,35 @@ export class SessionService {
     if (!orders?.length) return true;
     const rows = (await this.deps.koios(network).utxoInfo(orders)) as Array<KoiosUtxo & { is_spent?: boolean }>;
     return orders.every((o) => rows.some((r) => outpoint(r) === o && r.is_spent));
+  }
+
+  /**
+   * Which of swap copies `copies` landed, by their orders (recorded before
+   * each was sent): Koios's `utxo_info` knows an order, spent or not, only
+   * once its transaction is in a block, whatever tx_status says yet
+   * (independent review L15).
+   */
+  private async placed(network: NetworkName, s: SessionRecord, copies: RecordedTx[]): Promise<string[]> {
+    const of = new Map<string, string>();
+    for (const t of copies) {
+      for (const o of t.orders ?? s.orders?.filter((x) => x.startsWith(`${t.txHash}#`)) ?? []) of.set(o, t.txHash);
+    }
+    if (!of.size) return [];
+    const rows = await this.deps.koios(network).utxoInfo([...of.keys()]);
+    return [...new Set(rows.flatMap((r) => of.get(outpoint(r)) ?? []))];
+  }
+
+  /**
+   * Whether an order of session `s`'s swap may still pay its account: one
+   * of the landed copy's orders isn't spent (ordersSpent), or Minswap lists
+   * one, though a DEX made it (a remainder of a partial fill, say). Nothing
+   * reads a closed session's account again, so it isn't closed meanwhile
+   * (independent review L15, D2).
+   */
+  private async ordersOpen(network: NetworkName, s: SessionRecord, address: string): Promise<boolean> {
+    if (!s.txs.some((t) => t.kind === "swap" && !t.unsent)) return false;
+    if (!(await this.ordersSpent(network, s))) return true;
+    return (await this.deps.minswap(network).pendingOrders(address)).length > 0;
   }
 
   /** Places the order: a fresh quote, Minswap's swap for the account, the checks, and the key's signature. */
@@ -2231,14 +2267,17 @@ export class SessionService {
         const last = s.txs.filter((t) => !t.replaced).at(-1)!;
         // Brought back, and nothing has arrived since: the session is over. A
         // site's goes on until it's disconnected: the site may pay it later.
-        // As act closes it: the account as Koios lists it, and no copy of a
-        // step that may still land (final review sessions-1).
+        // As act closes it: the account as Koios lists it, no copy of a step
+        // that may still land (final review sessions-1), and no order of its
+        // swap that may still pay it, as far as it can tell (independent
+        // review L15, D2).
         if (
           !s.site &&
           last.kind === "back" &&
           last.confirmed &&
           !returnable(s, of(listed, s.index)).length &&
-          !mayStillLand(s, now())
+          !mayStillLand(s, now()) &&
+          !(await this.ordersOpen(network, s, keys.get(s.index)!.address).catch(() => true))
         ) {
           s.closedAt = now();
           changed = true;
