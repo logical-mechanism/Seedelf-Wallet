@@ -1705,8 +1705,9 @@ export class DappService {
   /**
    * Whether the wallet sent `id` for this site's account itself, and keeps
    * it as sent (`keepSent`): for as long as what it spends is held as spent
-   * (spent.ts). One it sent for another site counts only for that site, as
-   * for building on it (`resolve`). No when that can't be read (locked).
+   * (spent.ts). One the wallet signed counts for any site on this account;
+   * one it didn't sign (a site's own) only for the site that sent it, as for
+   * building on it (`resolve`). No when that can't be read (locked).
    */
   private async sentFor(origin: string, network: NetworkName, holder: Holder, id: string): Promise<boolean> {
     const since = this.deps.now() - SPENT_KEEP_MS;

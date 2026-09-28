@@ -279,7 +279,8 @@ export class Wallet {
   /**
    * When the wallet last sent something, on either network (`sent`): as what
    * it spent says (spent.ts), or the last send before a lock, which the lock
-   * keeps (SESSION_SENDS). And until when it may have sent something it has
+   * keeps (SESSION_SENDS), or the last try of a payment let go as unseen
+   * (noteSend, final review F8). And until when it may have sent something it has
    * forgotten (`forgotten`): a closed browser wipes what it spent unseen, so
    * a send before the browser started again may have been as late as that
    * (noteStart). 0 for none. An unlock is neither: nothing was sent then.

@@ -407,7 +407,7 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
           ))}
         </select>
         <p className="note">
-          A box comes back a few minutes into the first time the wallet is unlocked after its wait: never the moment you
+          A box comes back some minutes into the first time the wallet is unlocked after its wait: never the moment you
           unlock, nor right after the wallet sends something else.
         </p>
       </div>

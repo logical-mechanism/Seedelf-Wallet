@@ -54,7 +54,8 @@ export async function runNetworks(ctx: Runner, alarm: Alarm, unlock = false): Pr
     if (!unlock && (await relocked())) unlock = true;
     // One network's failure (Koios down, a record that won't open) never stops the other's.
     if (await ctx.sessions.runAll(network, unlock).catch(() => false)) busy = true;
-    // A public mix still being sent keeps the alarm going too.
+    // A public mix still being sent, or stopped at a transaction that may have gone through, keeps the alarm going
+    // too (final review F2).
     if (await ctx.lovejoin.pumpPublic(network).catch(() => false)) busy = true;
     // And a payment that may still go through, sent again now and then until it's settled.
     if (await ctx.pending.watch(network, unlock).catch(() => false)) busy = true;

@@ -803,7 +803,7 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
       </ReviewRows>
       <p className="note">
         Send sends the deposit and every mix, one after another, each on the one before's change. Your public account
-        pays them, and its collateral backs every mix. Each box comes back into your private balance a few minutes into
+        pays them, and its collateral backs every mix. Each box comes back into your private balance some minutes into
         the first time the wallet is unlocked after its wait.
       </p>
       <Callout tone="privacy">
