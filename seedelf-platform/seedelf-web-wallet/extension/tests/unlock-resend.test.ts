@@ -111,8 +111,11 @@ describe("a maybe-sent payment, as the wallet unlocks", () => {
     expect(await t.pending.pending("preprod")).toMatchObject({ dropped: "unseen" });
   });
 
-  it("put back past its 20 minutes, however long the wallet was locked, is let go at the first look, and nothing is sent", async () => {
-    for (const locked of [UNSEEN_AFTER_MS + 5 * 60_000, 24 * 60 * 60_000]) {
+  for (const [how, locked] of [
+    ["25 minutes", UNSEEN_AFTER_MS + 5 * 60_000],
+    ["a day", 24 * 60 * 60_000],
+  ] as const) {
+    it(`put back past its 20 minutes, locked for ${how}, is let go at the first look, and nothing is sent`, async () => {
       const t = await unlocked();
       const withdraw = privately(t);
       const summary = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
@@ -128,8 +131,8 @@ describe("a maybe-sent payment, as the wallet unlocks", () => {
       await busyFor(t, 2 * 60_000);
       await runNetworks(runner(t), alarm());
       expect(ids(t)).toEqual([summary.txHash]);
-    }
-  });
+    });
+  }
 
   it("taken back when Koios refuses it, though a lock and an unlock came while it was asked", async () => {
     const t = await unlocked();
