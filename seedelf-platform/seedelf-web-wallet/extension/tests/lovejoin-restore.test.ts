@@ -531,10 +531,68 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     expect(spent).toContain(`${M}#0`);
     expect(spent).not.toContain(`${N}#0`);
   });
+
+  it("asks nothing while Mix my boxes again sends two of a steady-state wallet's boxes: the boxes it hasn't reached yet keep their due times", async () => {
+    const { t } = await withSession("40000000");
+    const [B, C, D] = [hash("b7"), hash("c7"), hash("d7")];
+    t.koios.addedToAccounts.push(await ownedBox(t, B), await ownedBox(t, C), await ownedBox(t, D));
+    for (const tx of [B, C, D]) t.koios.txSpends.set(tx, mix());
+    await t.store.set("lovejoin.preprod", { due: [1, 2, 3].map((h) => t.clock.now + h * HOUR), chains: [] });
+    // Mix my boxes again takes B and C: its first mix spends B and leaves its box mixed, C's mix isn't sent yet.
+    const [X, Y] = [hash("e7"), hash("f7")];
+    await againSending(t, "seedelf.lovejoin.test", [X, Y], B);
+    t.koios.addedToAccounts.push(await ownedBox(t, X));
+    const status = await t.lovejoin.status("preprod");
+    expect(txInfoAsked(t)).toEqual([]);
+    expect(status.notMixed).toEqual([]);
+    expect(status.due).toHaveLength(3);
+    // The chain ends: its two boxes are where it left them, and D where it was.
+    await t.lovejoin.chainSent("preprod", Y, 1);
+    await t.lovejoin.chainEnded("preprod", Y);
+    t.koios.spent.add(`${C}#0`);
+    t.koios.addedToAccounts.push(await ownedBox(t, Y));
+    await t.lovejoin.status("preprod");
+    await t.lovejoin.withdrawDue("preprod", true);
+    expect(txInfoAsked(t)).toEqual([]);
+    expect(await origins(t)).toBeUndefined();
+  });
+
+  it("never holds a steady-state wallet's boxes while Mix my boxes again sends two of them and Koios fails", async () => {
+    const { t } = await withSession("40000000");
+    const [B, C, D] = [hash("b8"), hash("c8"), hash("d8")];
+    t.koios.addedToAccounts.push(await ownedBox(t, B), await ownedBox(t, C), await ownedBox(t, D));
+    await t.store.set("lovejoin.preprod", { due: [1, 2, 3].map((h) => t.clock.now + h * HOUR), chains: [] });
+    const koios = flakyTxInfo(t);
+    const [X, Y] = [hash("e8"), hash("f8")];
+    await againSending(t, "seedelf.lovejoin.test", [X, Y], B);
+    t.koios.addedToAccounts.push(await ownedBox(t, X));
+    const status = await t.lovejoin.status("preprod");
+    expect(koios.asked).toBe(0);
+    expect(status.unsure).toBeUndefined();
+    expect(status.notMixed).toEqual([]);
+    expect(await asking(t)).toBeUndefined();
+    const held = await t.lovejoin.held("preprod");
+    expect(held).toMatchObject({ boxes: 3, notMixed: 0 });
+    expect(held.unsure).toBeUndefined();
+  });
 });
 
 /** What the sealed schedule keeps of the transactions still asked of. */
 const asking = async (t: Tested) => (await t.store.get<{ asking?: Record<string, number> }>("lovejoin.preprod"))?.asking;
+
+/**
+ * Mix my boxes again being sent: a chain of `mixes`, one of the wallet's
+ * boxes each, each leaving its box mixed (at its #0), recorded and its
+ * progress where it waits. Its first mix is in, having spent `first`.
+ */
+async function againSending(t: Tested, key: string, mixes: string[], first: string): Promise<void> {
+  const txs = mixes.map((txHash) => ({ kind: "mix" as const, txHash, txCbor: "", fee: "0" }));
+  const leaves = mixes.map((txHash) => ({ txHash, txIndex: 0 }));
+  await t.lovejoin.recordChain("preprod", { session: 0, progress: key, txs, leaves, boxes: mixes.length, again: true });
+  await t.wallet.withKeys(() => t.session.set(key, { txs, next: 1, flying: [] }));
+  await t.lovejoin.chainSent("preprod", mixes.at(-1)!, 0);
+  t.koios.spent.add(`${first}#0`);
+}
 
 /**
  * A session's chain being sent through Lovejoin, recorded and its progress

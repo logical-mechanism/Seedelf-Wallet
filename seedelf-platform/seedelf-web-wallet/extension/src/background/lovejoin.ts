@@ -878,15 +878,19 @@ const notMixedYet = (s: Schedule, owned: OutRef[]) => [...unmixedOf(s.chains, ow
  * times for: some were found with none, which a restore's boxes are (found).
  * So are some after Mix my boxes again took boxes not mixed yet, which had
  * none: the due times its first mix took for them were other boxes' (chainSent).
- * A chain being sent set all its boxes' due times as it went in (chainSent),
- * while some of its boxes are still mixing or on their way: its due times
- * and the leaves it has reached are left out of the count, so a box a
- * restore found while one is sent (a swap's return, say) is looked up too
- * (independent review M14).
+ * A chain with a deposit being sent set all its boxes' due times as its
+ * deposit went in (chainSent), while some of its boxes are still mixing or
+ * on their way: its due times and the leaves it has reached are left out of
+ * the count, so a box a restore found while one is sent (a swap's return,
+ * say) is looked up too (independent review M14). Not Mix my boxes again's:
+ * the boxes it takes are the wallet's own, counted as they are until the mix
+ * that spends each is sent, and it takes as many due times as it sets
+ * (chainSent), so the count holds as it goes, and a wallet in its steady
+ * state asks nothing while it's sent.
  */
 function moreThanDue(s: Schedule, owned: OutRef[]): boolean {
   const held = new Set(notMixedYet(s, owned).map(ref));
-  const sending = s.chains.filter((c) => !c.ended && c.scheduled);
+  const sending = s.chains.filter((c) => !c.ended && c.scheduled && c.deposit);
   const theirs = new Set(sending.flatMap((c) => c.leaves.map(ref)));
   const back = owned.filter((b) => !held.has(ref(b)) && !theirs.has(ref(b))).length;
   return back > s.due.length - sending.reduce((n, c) => n + c.boxes, 0);
