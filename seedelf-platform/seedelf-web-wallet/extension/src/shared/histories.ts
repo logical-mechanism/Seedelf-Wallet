@@ -5,9 +5,10 @@
 //
 // The worker reads each UTxO's history from the sealed Seedelf history
 // (activity.ts), never from Koios, and gives it a class. WebAssembly's coin
-// selection keeps different classes apart whenever a choice that doesn't
-// merge them pays (seedelf-core's build::Histories), and merges them when
-// none does: it never refuses, and nothing asks. The review then says what
+// selection keeps different classes apart where one of the choices it tries
+// without merging them pays (seedelf-core's build::Histories), and merges
+// them otherwise: it never refuses what the CLI's order would pay, and
+// nothing asks. The review then says what
 // was merged, and the UTxOs screen tags each UTxO with where it came from.
 //
 // A class's id names its history:

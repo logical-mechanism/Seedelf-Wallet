@@ -1593,7 +1593,8 @@ pub mod api {
         pub change_outputs: usize,
         pub inputs: Vec<OutRef>,
         /// The classes of money it spends together, when they're more than
-        /// one: nothing else paid ([`classes_mixed`]).
+        /// one: none of the choices tried without merging them paid
+        /// ([`classes_mixed`]).
         pub classes_mixed: Vec<String>,
     }
 

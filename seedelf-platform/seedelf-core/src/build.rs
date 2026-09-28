@@ -1872,9 +1872,10 @@ fn policy_hash(config: &Config) -> Result<Hash<28>> {
 // mint, ties the new Seedelf to the account (privacy review §2.3).
 //
 // The web wallet knows where each of its UTxOs came from (its sealed
-// history), and gives each a class. Selection keeps classes apart whenever a
-// selection that doesn't merge them pays, and when none does it merges them
-// anyway, never refusing: the review then says what was merged. The CLI
+// history), and gives each a class. Selection keeps classes apart where one
+// of the choices it tries without merging them pays, and otherwise merges
+// them, never refusing what the CLI's order would pay (independent review
+// M6): the review then says what was merged. The CLI
 // knows nothing of the sort: every UTxO is Unknown, and it picks as it
 // always has.
 // ---------------------------------------------------------------------------

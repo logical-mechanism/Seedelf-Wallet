@@ -837,7 +837,7 @@ describe("a mix from the private balance (launch review H2, H8, #11)", () => {
 
   it("says a mix found as the wallet unlocked goes on a few minutes after, not at once (privacy review §3.1)", () => {
     const waiting = mix({ stage: "open", auto: { step: "returning", stopping: false, filled: false, approvedMinOut: "0", waitsUntil: 60_000 } });
-    expect(lovejoinSub(waiting, 0)).toBe("Funded: it goes on a few minutes after the unlock");
+    expect(lovejoinSub(waiting, 0)).toBe("Funded: it goes on within 20 minutes of the unlock");
     // Past it, it's under way.
     expect(lovejoinSub(waiting, 120_000)).toBe("Funded: the mixes are built and sent next");
   });

@@ -103,8 +103,8 @@ export function subOf(s: SessionView, now: number): string {
   if (s.chain) return chainText(s.chain, !s.auto);
   if (s.auto?.stopping) return "Stopping: it all comes back directly";
   if (s.auto?.retry) return "Something went wrong: it tries again by itself";
-  // Found as the wallet unlocked, its next step waits a few minutes (privacy review §3.1).
-  if (s.auto?.waitsUntil !== undefined && s.auto.waitsUntil > now) return "Funded: it goes on a few minutes after the unlock";
+  // Found as the wallet unlocked, its next step waits a fresh draw of up to 20 minutes (privacy review §3.1).
+  if (s.auto?.waitsUntil !== undefined && s.auto.waitsUntil > now) return "Funded: it goes on within 20 minutes of the unlock";
   return "Funded: the mixes are built and sent next";
 }
 

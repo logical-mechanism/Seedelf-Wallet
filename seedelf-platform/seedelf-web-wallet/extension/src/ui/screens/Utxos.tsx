@@ -305,8 +305,9 @@ export function UtxoDetails({
         <CopyField label="Transaction" value={utxo.txHash} display={shortHex(utxo.txHash, 14, 8)} testId="utxo-tx" />
         {utxo.history && (
           <p className="note" data-testid="utxo-history-note">
-            Came from: {historyOf(utxo)}. Payments keep money with different histories apart when something else pays,
-            since spending them together ties them to each other. Lock it to keep it out of payments altogether.
+            Came from: {historyOf(utxo)}. Payments try to keep money with different histories apart, since spending
+            them together ties them to each other, and say when they can't. Lock it to keep it out of payments
+            altogether.
           </p>
         )}
         <ReviewRows testId="utxo-output">
