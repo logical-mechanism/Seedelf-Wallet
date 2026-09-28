@@ -1212,6 +1212,8 @@ export class DappService {
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx,
       );
+      // What it pays the session's account, recorded before the site has the signature (independent review M4).
+      if (holder) await this.deps.sessions.siteSigned(network, holder.index, (tx as string).trim(), signed.summary);
       await this.remember(network, holder, signed.summary, (tx as string).trim());
       return signed.witnessSet;
     });

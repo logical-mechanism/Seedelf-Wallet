@@ -269,6 +269,12 @@ interface SessionRecord {
   lovejoinSkipped?: string;
   /** What's at its account that no return takes (SessionView's). It doesn't hold the session open. */
   leftBehind?: LeftBehindUtxo[];
+  /**
+   * What a site's own transactions, signed for its private session, pay the
+   * session's account (`txhash#index`), recorded before the site has the
+   * signature (siteSigned, independent review M4): the newest SITE_OUTS_KEPT.
+   */
+  siteOuts?: string[];
   closedAt?: number;
 }
 
@@ -384,6 +390,15 @@ const NO_COLLATERAL = "its 5 ₳ collateral isn't at its account anymore, and th
 /** The most funding changes one return merges into (WebAssembly's MAX_MERGE). */
 const MAX_MERGE = 4;
 
+/**
+ * The most outputs of a site's own transactions a session keeps (siteOuts),
+ * the newest: few enough that, with its fundings' and top-ups', one
+ * utxo_info request, so one backend, usually answers for them all. Older
+ * ones matter less: a backend lags minutes, and one still unspent that long
+ * is listed at the account.
+ */
+const SITE_OUTS_KEPT = 40;
+
 /** The most a cancel's fee may be: Minswap's cancel of six orders, each a script spend, costs well under it. */
 const MAX_CANCEL_FEE = 3_000_000n;
 
@@ -478,9 +493,12 @@ function paysAccount(txCbor: string, txHash: string, keyHash: string): string[] 
   }
 }
 
-/** What session `s`'s own transactions paid its account (`outs`), of those that may have gone out. */
+/**
+ * What session `s`'s own transactions paid its account (`outs`), of those
+ * that may have gone out, and what its site's signed ones pay it (`siteOuts`).
+ */
 function ownOuts(s: SessionRecord): string[] {
-  return [...new Set(s.txs.flatMap((t) => (t.unsent ? [] : (t.outs ?? []))))];
+  return [...new Set([...s.txs.flatMap((t) => (t.unsent ? [] : (t.outs ?? []))), ...(s.siteOuts ?? [])])];
 }
 
 /**
@@ -493,16 +511,18 @@ function ownOuts(s: SessionRecord): string[] {
  * session's funding lists the account empty (spent.ts). An output Koios
  * doesn't know is fine only when the chain never showed its transaction:
  * it never landed. A session from before outputs were recorded has none.
+ * What its site's signed transactions pay it (`siteOuts`) counts the same
+ * once Koios knows it; one it doesn't is fine, since the site may never
+ * have sent it: a backend that shows the money it spent gone knows it.
  */
 function ownGone(s: SessionRecord, known: ReadonlyMap<string, boolean>, listed: ReadonlySet<string>): boolean {
-  return s.txs.every(
-    (t) =>
-      t.unsent ||
-      !t.outs ||
-      t.outs.every((o) => {
-        const spent = known.get(o);
-        return spent === undefined ? !t.confirmed : spent || listed.has(o);
-      }),
+  const gone = (o: string, unknown: boolean) => {
+    const spent = known.get(o);
+    return spent === undefined ? unknown : spent || listed.has(o);
+  };
+  return (
+    s.txs.every((t) => t.unsent || !t.outs || t.outs.every((o) => gone(o, !t.confirmed))) &&
+    (s.siteOuts ?? []).every((o) => gone(o, true))
   );
 }
 
@@ -639,10 +659,11 @@ export class SessionService {
         throw new Error("Its funding may still reach the chain: the wallet is still sending it. Wait for it, then forget the session.");
       }
       // One Koios knows an output of landed, whatever tx_status and the account's read said: a backend behind
-      // them doesn't show it (independent review M4). It's the session's money, so the session stays, and goes
-      // on as the list does when the funding shows up after all.
+      // them doesn't show it (independent review M4). Unspent, it's the session's money, so the session stays,
+      // and goes on as the list does when the funding shows up after all. All of them spent, the account's
+      // empty read stands: nothing is left of it, and a swap resumed there would wait for good.
       const known = await this.spentStates(network, ownOuts(record));
-      if (known.size) {
+      if ([...known.values()].some((spent) => !spent)) {
         const landed = new Set([...known.keys()].map((o) => o.split("#")[0]!));
         await this.update(network, index, (r) => {
           settle(r, landed);
@@ -990,10 +1011,11 @@ export class SessionService {
    * read as Koios lists it, what this wallet spent included: a return that
    * never lands leaves its inputs there. What no return takes doesn't count.
    * An empty read isn't enough alone: Koios must show what the session's
-   * fundings and top-ups paid the account spent (ownGone, independent
-   * review M4). This is the check that matters: Settings disconnects a site
-   * with no other. Its index isn't used again, and its record, with the
-   * site's origin, goes (unless something is left behind at its account).
+   * fundings and top-ups paid the account spent, and what its site's signed
+   * transactions pay it, those it knows (ownGone, independent review M4).
+   * This is the check that matters: Settings disconnects a site with no
+   * other. Its index isn't used again, and its record, with the site's
+   * origin, goes (unless something is left behind at its account).
    */
   disconnect(network: NetworkName, index: number): Promise<void> {
     return this.serial(async () => {
@@ -1020,8 +1042,8 @@ export class SessionService {
       if (returnable(s, rows).length) {
         throw new Error("The session's account still holds something. Bring it back first, then disconnect.");
       }
-      // An empty read proves nothing alone: a Koios backend behind the funding, or a top-up, reads the account
-      // empty. What the session's own transactions paid it must show spent (independent review M4).
+      // An empty read proves nothing alone: a Koios backend behind the funding, a top-up or the site's own
+      // transaction reads the account empty. What they paid it must show spent (independent review M4).
       const listed = new Set(rows.map(outpoint));
       if (!ownGone(s, await this.spentStates(network, ownOuts(s)), listed)) throw new Error(NOT_CAUGHT_UP);
       // What's left behind, as far as the account still has it (independent review L19): one a transaction
@@ -1087,6 +1109,34 @@ export class SessionService {
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const reward = await wallet.withKeys((keys) => keys.oneTime.rewardAddress(net, index));
     return { address, reward, keyHash };
+  }
+
+  /**
+   * Records what a site's transaction, signed for its private session, pays
+   * the session's account (`siteOuts`), before the site has the signature
+   * (independent review M4): Disconnect then waits, as for a funding, until
+   * Koios shows each spent that it knows. By payment key, whatever the
+   * staking part, as Koios lists the account; as WebAssembly read the
+   * transaction (`summary`) when its bytes can't be read here. A session
+   * that's over, or gone, meanwhile throws, and the site gets no signature.
+   */
+  siteSigned(
+    network: NetworkName,
+    index: number,
+    txCbor: string,
+    summary: Pick<DappTxSummary, "txHash" | "ownOutputs">,
+  ): Promise<void> {
+    return this.serial(async () => {
+      const s = await this.live(network, index);
+      if (!s.site) throw new Error("This session isn't a site's.");
+      const { keyHash } = (await this.accounts(network, [s])).get(index)!;
+      const outs =
+        paysAccount(txCbor, summary.txHash, keyHash) ?? summary.ownOutputs.map((o) => `${summary.txHash}#${o.txIndex}`);
+      if (!outs.length) return;
+      await this.update(network, index, (r) => {
+        r.siteOuts = [...new Set([...(r.siteOuts ?? []), ...outs])].slice(-SITE_OUTS_KEPT);
+      });
+    });
   }
 
   /**

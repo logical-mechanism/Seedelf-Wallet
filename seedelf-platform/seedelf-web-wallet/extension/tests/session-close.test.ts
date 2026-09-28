@@ -321,6 +321,24 @@ describe("forgetting a swap whose funding never showed", () => {
     expect(runner.on).toBe(true);
   });
 
+  it("forgets one whose funding Koios knows landed once all it paid is spent: resumed, it would wait for good", async () => {
+    const t = await unlocked();
+    const runner = { on: false, start: async () => void (runner.on = true) };
+    const sessions = signing(t, runner);
+    const out = await sessions.outBuild("preprod", await sessions.quote("preprod", minswapEstimate.ask));
+    await sessions.outSubmit("preprod", out.txHash);
+    const funding = t.koios.submitted.at(-1)!;
+    await busy(t, FAILED_AFTER);
+    expect((await sessions.advance("preprod", 0)).stage).toBe("failed");
+    runner.on = false;
+
+    // Koios knows its outputs, both spent (another browser's session on the same account swept them, say).
+    caughtUp(t, funding, { spent: true });
+    expect(await sessions.forget("preprod", 0)).toEqual([]);
+    expect(await record(t)).toBeUndefined();
+    expect(runner.on).toBe(false);
+  });
+
   it("forgets one Koios knows nothing of, and one never sent without asking", async () => {
     const t = await unlocked();
     const sessions = signing(t);
