@@ -1,9 +1,10 @@
 // A mix from the public account that stopped at a transaction that may have
-// gone through holds only what that transaction spends, and its collateral
-// if it has one: the mixes after it never go, so their pool boxes are free
-// for another chain, and a deposit's stop frees the collateral. A new mix
-// is refused until it's settled, and the refusal says how long that can
-// take: up to two hours after it was sent (independent review L5).
+// gone through holds only what that transaction spends, never its
+// collateral: the mixes after it never go, so their pool boxes are free for
+// another chain, and the collateral for a site's transaction (final review
+// F2). A new mix is refused until it's settled, and the refusal says how
+// long that can take: up to two hours after it was sent (independent review
+// L5).
 import { describe, expect, it } from "vitest";
 
 import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
@@ -58,12 +59,12 @@ describe("a mix from the public account stopped at a transaction that may have g
     expect(room.free).toBe(room.others);
   });
 
-  it("stopped at a mix, holds that mix's inputs and its collateral, and none of the mixes' after it", async () => {
+  it("stopped at a mix, holds that mix's inputs, and neither its collateral nor the mixes' after it (final review F2)", async () => {
     const { t, chain } = await stoppedAt(2);
     expect(chain[1]!.kind).toBe("mix");
     const mix = reservationOf([chain[1]!]);
     expect(mix.collateral).toEqual([COLLATERAL]);
-    expect(await reservedPublic(t)).toEqual({ inputs: mix.inputs, collateral: mix.collateral });
+    expect(await reservedPublic(t)).toEqual({ inputs: mix.inputs, collateral: [] });
     const whole = reservationOf(chain);
     expect(whole.inputs.length).toBeGreaterThan(mix.inputs.length);
     // The mix's own pool boxes count as spent; the ones the mixes after it would have taken are free.

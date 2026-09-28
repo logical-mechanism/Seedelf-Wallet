@@ -1272,18 +1272,18 @@ export class LovejoinService {
   /**
    * The mix from the public account being sent (`txs`) stopped at `step`,
    * which may have gone through: in place of what the whole chain reserved,
-   * only what `step` spends, and its collateral if it has one, stays held,
-   * still as being sent, until it's settled (publicUnsettled). The mixes
-   * after it never go, so their pool boxes are free for another chain's
-   * draw, and the collateral for a site's transaction when `step` is the
-   * deposit (independent review L5). Only while the reservation there is
-   * still that chain's.
+   * only what `step` spends stays held, still as being sent, until it's
+   * settled (publicUnsettled). The mixes after it never go, so their pool
+   * boxes are free for another chain's draw (independent review L5), and
+   * the collateral for a site's transaction, a mix's too: no mix of the
+   * chain waits for it anymore (final review F2). Only while the
+   * reservation there is still that chain's.
    */
   private holdOnly(network: NetworkName, txs: LovejoinChain["txs"], step: LovejoinChain["txs"][number]): Promise<void> {
     const whole = reservationOf(txs);
     return this.reserving(network, (kept) => {
       const r = kept[chainOwner()];
-      if (r && r.until === undefined && sameInputs(r, whole)) kept[chainOwner()] = reservationOf([step]);
+      if (r && r.until === undefined && sameInputs(r, whole)) kept[chainOwner()] = { inputs: reservationOf([step]).inputs, collateral: [] };
     });
   }
 
@@ -1542,21 +1542,44 @@ export class LovejoinService {
    * default): a window at a time, so no more than a few of its mixes wait in
    * the mempool (pumpChain). Its Send sends the first, and the alarm and the
    * Lovejoin page the rest. Returns whether some is left to send. A
-   * transaction that can't be sent stops it, and says why (progress).
+   * transaction that can't be sent stops it, and says why (progress). With
+   * none being sent, one that stopped at a transaction that may have gone
+   * through is looked for instead (publicLook), and returns whether it's
+   * still unsettled.
    */
   async pumpPublic(network: NetworkName, budgetMs = CHAIN_PUMP_MS): Promise<boolean> {
     if (this.pumping.has(network)) return true;
     this.pumping.add(network);
+    let more: boolean | undefined;
     try {
-      return await this.pumpPublicNow(network, budgetMs);
+      more = await this.pumpPublicNow(network, budgetMs);
     } finally {
       this.pumping.delete(network);
     }
+    return more ?? this.publicLook(network);
   }
 
-  private async pumpPublicNow(network: NetworkName, budgetMs: number): Promise<boolean> {
+  /**
+   * With no mix from the public account being sent: whether one that
+   * stopped at a transaction that may have gone through is still unsettled,
+   * looked for at most every PUBLIC_LOOK_MS on a network, as the pages look
+   * (lookDue). The worker's runs ask too, so what it holds (what that
+   * transaction spends, which a site's transaction on the account is refused)
+   * goes once it's settled with no wallet page open, and the alarm keeps
+   * going for it meanwhile (final review F2).
+   */
+  private async publicLook(network: NetworkName): Promise<boolean> {
+    if (!this.available(network)) return false;
+    const { chains } = await this.read(network);
+    if (!chains.some((r) => r.session === undefined && r.maybe)) return false;
+    if (!this.lookDue(network)) return true;
+    return (await this.publicUnsettled(network)) !== undefined;
+  }
+
+  /** Sends more of the public mix being sent (pumpPublic); undefined when none is. */
+  private async pumpPublicNow(network: NetworkName, budgetMs: number): Promise<boolean | undefined> {
     const sending = await this.sendingOf(network);
-    if (!sending || sending.stopped) return false;
+    if (!sending || sending.stopped) return undefined;
     const { wallet, session } = this.deps;
     const koios = this.deps.koios(network);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
