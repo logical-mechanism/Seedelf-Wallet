@@ -640,6 +640,17 @@ interface ChainRecord {
    * never come back by themselves (unschedule). Counted so none goes twice.
    */
   unscheduled?: number;
+  /**
+   * Once it stopped: how many of its boxes a pool read last found it left not
+   * mixed yet, still the wallet's, and whether one ever found any of them
+   * (`found`). Found, none left since, and nothing of it that may still have
+   * gone through: it has nothing more to ask of the user, and the Lovejoin
+   * page and Home no longer show it, while the record lives out its
+   * RECORD_KEEP_MS for the rules that read it (shown). One whose boxes no
+   * read has found yet (its deposit not in yet) is still shown.
+   */
+  left?: number;
+  found?: true;
   /** How long its boxes wait, as its return was approved or reviewed; Settings' when none (independent review L21). */
   delay?: LovejoinDelay;
   /**
@@ -1012,6 +1023,15 @@ function originOf(b: OutRef, s: Schedule): string | undefined {
   if (made) return chainOwner(made.session);
   return s.leaves?.[ref(b)] ?? (s.origins?.[b.txHash]?.public ? chainOwner() : undefined);
 }
+
+/**
+ * Whether the Lovejoin page and Home show chain `c`: one being sent, or one
+ * that stopped with something still to do: boxes it left not mixed yet, a
+ * transaction that may have gone through, or boxes no pool read has found
+ * yet. One whose boxes were found, and all mixed again or brought back since,
+ * isn't.
+ */
+const shown = (c: ChainRecord) => !c.done && !(c.stopped && c.ended && c.found && c.left === 0 && !c.maybe);
 
 /**
  * When chain `c`'s boxes may come back by its own wait (ms): its recorded
@@ -2397,6 +2417,12 @@ export class LovejoinService {
     await this.update(network, (s) => {
       for (const c of s.chains) {
         if (c.ended) unschedule(s, c, unmixedOf([c], owned).length - (c.unscheduled ?? 0), free.length);
+        // What a stopped chain still leaves to mix, as this read finds it: once its boxes were found, and none
+        // is left the wallet's, the pages stop showing it (shown). Found counts what's listed, spent or not.
+        if (c.ended && c.stopped) {
+          c.left = unmixedOf([c], owned).length;
+          if (unmixedOf([c], listed).length) c.found = true;
+        }
       }
       // Kept while its boxes haven't waited its own delay's least, too: the withdraws read that from it (ripeAt).
       const keep = (c: ChainRecord) =>
@@ -2656,7 +2682,7 @@ export class LovejoinService {
       ...(deposits.length ? { deposits } : {}),
       fromPublic: fromPublic(owned, schedule),
       chains: chains
-        .filter((c) => !c.done)
+        .filter(shown)
         .map((c) => ({
           ...(c.session !== undefined ? { session: c.session } : {}),
           boxes: c.boxes,
@@ -2686,7 +2712,7 @@ export class LovejoinService {
       next: due.length ? Math.min(...due) : null,
       notMixed: notMixed ?? 0,
       ...(unsure ? { unsure } : {}),
-      stopped: chains.filter((c) => c.stopped).length,
+      stopped: chains.filter((c) => c.stopped && shown(c)).length,
     };
   }
 

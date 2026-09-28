@@ -138,7 +138,9 @@ const chainName = (c: LovejoinChainView) => (c.session === undefined ? "From you
 /**
  * The wallet's chains through Lovejoin that aren't all sent: one being sent
  * holds every box back until it's done; one that stopped partway says why,
- * and the boxes it didn't mix wait for Mix my boxes again.
+ * and the boxes it didn't mix wait for Mix my boxes again. One whose boxes
+ * were all mixed again or brought back since isn't listed (lovejoin.ts
+ * `shown`).
  */
 export function Chains({ chains }: { chains: LovejoinChainView[] }) {
   const amounts = useAmounts();
