@@ -106,6 +106,13 @@ export function validUntil(pending: PendingTx): string | undefined {
 /** Why a payment Koios didn't answer is still shown as on its way, and until when it holds new ones back. */
 function maybeSentDetail(pending: PendingTx): string {
   const until = validUntil(pending);
+  if (pending.inMempool) {
+    return (
+      "Koios didn't answer when it was sent. Sent again, the network says it has it already, and what it spends isn't spent on chain yet: " +
+      "it's waiting to go into a block, and may still land. New payments wait until it lands, or until it can't any more" +
+      (until ? `: it can land until about ${until}.` : ".")
+    );
+  }
   return (
     "Koios didn't answer when it was sent. The wallet sends it again now and then, which is safe: the network takes it only once. " +
     "New payments wait until it lands, or until it can't any more: " +

@@ -548,6 +548,13 @@ export interface PendingTx {
   /** The slot it can't land after: the public account's transactions carry one (account.ts). */
   invalidHereafter?: number;
   /**
+   * Maybe sent, and sent again, the network refused it as spending what's
+   * spent while the chain still showed what it spends unspent: it's waiting
+   * in a mempool, and may still land. A private one isn't let go on age
+   * meanwhile (pending.ts).
+   */
+  inMempool?: boolean;
+  /**
    * It never landed, and its UTxOs count in the balance again. `expired`:
    * the chain passed its slot, so nothing was sent. `unseen`: a private
    * payment Koios didn't answer, which the chain still hadn't shown 20
