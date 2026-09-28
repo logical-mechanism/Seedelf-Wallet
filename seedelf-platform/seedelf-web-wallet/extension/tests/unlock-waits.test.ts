@@ -1,9 +1,9 @@
-// Nothing goes out the moment the wallet unlocks (privacy review §3.1), and
-// no Lovejoin box goes back within minutes of the wallet's own send: the
-// wallet's unlock time counts for both, whichever run or page gets there
-// first, and a lock that wipes what the wallet sent leaves the unlock in its
-// place (independent review M10, L10, L11, L12, L13). The real WebAssembly,
-// a recorded preprod pool, and fakes of Koios, giveme.my and Minswap.
+// Nothing goes out the moment the wallet unlocks (privacy review §3.1): a
+// fresh draw from the unlock, whichever run or page gets there first. And no
+// Lovejoin box goes back within minutes of the wallet's own send, one a lock
+// or a closed browser made it forget included, while an unlock alone isn't a
+// send (independent review M10, L10, L11, L12, L13). The real WebAssembly, a
+// recorded preprod pool, and fakes of Koios, giveme.my and Minswap.
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
@@ -15,7 +15,7 @@ import { Minswap } from "../src/background/minswap";
 import { runNetworks, type Runner } from "../src/background/runs";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_SPENT } from "../src/background/spent";
-import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
+import { noteStart, SESSION_SENDS, SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import type { NetworkName } from "../src/networks";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
@@ -41,12 +41,13 @@ async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
   return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
 }
 
-/** Lovejoin with giveme.my's witness stood in for, so a withdraw that goes is submitted. */
-function witnessed(t: T): LovejoinService {
+/** Lovejoin with giveme.my's witness stood in for, so a withdraw that goes is submitted; its draws `random`'s, if given. */
+function witnessed(t: T, random?: () => number): LovejoinService {
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   return new LovejoinService({
     ...t.deps,
+    ...(random ? { random } : {}),
     wasm: {
       ...wasm,
       finishLovejoinWithdraw: (request: string) => {
@@ -60,11 +61,11 @@ function witnessed(t: T): LovejoinService {
 }
 
 /** An unlocked wallet with Lovejoin's pool and one box of its own in it. */
-async function withBox() {
+async function withBox(random?: () => number) {
   const t = testBalances();
   await t.wallet.create(PHRASE, PASSWORD);
   t.koios.addedToAccounts.push(...POOL, await ownedBox(t, "e1"));
-  return { t, lovejoin: witnessed(t) };
+  return { t, lovejoin: witnessed(t, random) };
 }
 
 const schedule = async (t: T) =>
@@ -79,40 +80,143 @@ function failing(t: T, path: string) {
   };
 }
 
-describe("the quiet after the wallet's own send, across a lock (independent review M10)", SLOW, () => {
-  for (const how of ["a lock", "a closed browser"] as const) {
-    it(`counts a send ${how} wiped as the unlock: a box due minutes after it is pushed, not withdrawn`, async () => {
-      const { t, lovejoin } = await withBox();
-      await busyFor(t, HOUR);
-      // The wallet pays at T; a box is due four minutes on.
-      const paid = t.clock.now;
-      await t.store.set("lovejoin.preprod", { due: [paid + 4 * 60_000] });
-      await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"9a".repeat(32)}#0`]: paid }));
-      // Half a minute later it locks, or the browser closes; a minute after the payment it's unlocked again.
-      t.clock.now += 30_000;
-      if (how === "a lock") await t.wallet.lock();
-      else await t.session.clear();
-      t.clock.now += 30_000;
-      await t.wallet.unlock(PASSWORD);
-      const unlocked = t.clock.now;
-      expect(await t.wallet.withKeys(() => t.session.get(SESSION_SPENT))).toBeUndefined();
-      expect(await lovejoin.withdrawDue("preprod", true)).toEqual([]);
-      expect((await schedule(t)).due).toEqual([paid + 4 * 60_000]);
+describe("the quiet after the wallet's own send, across a lock or a closed browser (independent review M10)", SLOW, () => {
+  /** The wallet pays at `paid`: what it spent says so. */
+  const pays = (t: T, paid: number) => t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"9a".repeat(32)}#0`]: paid }));
 
-      // Its time comes: what the wallet sent is forgotten, and the unlock counts in its place.
-      await busyFor(t, paid + 4 * 60_000 - t.clock.now);
-      expect(await lovejoin.withdrawDue("preprod", false, t.clock.now)).toEqual([]);
-      expect(t.collateral.asked).toHaveLength(0);
-      const [pushed] = (await schedule(t)).due;
-      expect(pushed).toBeGreaterThanOrEqual(t.clock.now + QUIET_PUSH_MS[0]);
-      expect(pushed).toBeLessThanOrEqual(t.clock.now + QUIET_PUSH_MS[1]);
+  it("notes the browser's start once, and a lock keeps it with the last send, and nothing else", async () => {
+    const t = testBalances();
+    // The worker's first start after the browser's.
+    const started = t.clock.now;
+    await noteStart(t.session, started);
+    await t.wallet.create(PHRASE, PASSWORD);
+    // A restarted worker doesn't move it.
+    await busyFor(t, 60_000);
+    await noteStart(t.session, t.clock.now);
+    expect(await t.wallet.sends()).toEqual({ sent: 0, forgotten: started });
+    const paid = t.clock.now;
+    await pays(t, paid);
+    await t.wallet.lock();
+    expect([...t.session.data.keys()]).toEqual([SESSION_SENDS]);
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.wallet.sends()).toEqual({ sent: paid, forgotten: started });
+  });
 
-      // Once the unlock is as far behind as a send would have to be, it goes.
-      await busyFor(t, Math.max(pushed!, unlocked + QUIET_AFTER_SEND_MS) - t.clock.now);
+  it("keeps a send's time across a lock: a box due minutes after it is pushed, not withdrawn", async () => {
+    const { t, lovejoin } = await withBox();
+    await busyFor(t, HOUR);
+    // The wallet pays at T; a box is due four minutes on.
+    const paid = t.clock.now;
+    await t.store.set("lovejoin.preprod", { due: [paid + 4 * 60_000] });
+    await pays(t, paid);
+    // Half a minute later it locks; a minute after the payment it's unlocked again.
+    t.clock.now += 30_000;
+    await t.wallet.lock();
+    t.clock.now += 30_000;
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.wallet.withKeys(() => t.session.get(SESSION_SPENT))).toBeUndefined();
+    expect(await t.wallet.sends()).toEqual({ sent: paid, forgotten: 0 });
+    expect(await lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    expect((await schedule(t)).due).toEqual([paid + 4 * 60_000]);
+
+    // Its time comes, a minute short of the quiet after the payment: pushed a fresh few minutes.
+    await busyFor(t, paid + 4 * 60_000 - t.clock.now);
+    expect(await lovejoin.withdrawDue("preprod", false, t.clock.now)).toEqual([]);
+    expect(t.collateral.asked).toHaveLength(0);
+    const [pushed] = (await schedule(t)).due;
+    expect(pushed).toBeGreaterThanOrEqual(t.clock.now + QUIET_PUSH_MS[0]);
+    expect(pushed).toBeLessThanOrEqual(t.clock.now + QUIET_PUSH_MS[1]);
+    expect((await schedule(t)).marks?.[pushed!]).toEqual({ pushes: 1 });
+
+    await busyFor(t, pushed! - t.clock.now);
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.collateral.asked).toHaveLength(1);
+  });
+
+  it("counts a send a closed browser wiped as late as the browser's start", async () => {
+    const { t, lovejoin } = await withBox();
+    await busyFor(t, HOUR);
+    const paid = t.clock.now;
+    await t.store.set("lovejoin.preprod", { due: [paid + 4 * 60_000] });
+    await pays(t, paid);
+    // Half a minute later the browser closes, unlocked: session storage goes, unseen.
+    t.clock.now += 30_000;
+    t.session.data.clear();
+    // Ten seconds on it starts again, and so does the worker; the wallet is unlocked twenty seconds later.
+    t.clock.now += 10_000;
+    const started = t.clock.now;
+    await noteStart(t.session, started);
+    t.clock.now += 20_000;
+    await t.wallet.unlock(PASSWORD);
+    expect(await t.wallet.sends()).toEqual({ sent: 0, forgotten: started });
+    expect(await lovejoin.withdrawDue("preprod", true)).toEqual([]);
+
+    // Its time comes: what the wallet sent is forgotten, and may have been as late as the browser's start.
+    await busyFor(t, paid + 4 * 60_000 - t.clock.now);
+    expect(await lovejoin.withdrawDue("preprod", false, t.clock.now)).toEqual([]);
+    expect(t.collateral.asked).toHaveLength(0);
+    const [pushed] = (await schedule(t)).due;
+    expect(pushed).toBeGreaterThanOrEqual(t.clock.now + QUIET_PUSH_MS[0]);
+
+    // Once the browser's start is as far behind as a send would have to be, it goes.
+    await busyFor(t, Math.max(pushed!, started + QUIET_AFTER_SEND_MS) - t.clock.now);
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.collateral.asked).toHaveLength(1);
+  });
+
+  /**
+   * The wallet on a 5-minute auto-lock, unlocked now and left alone: the
+   * unlock's run, then the alarm's every minute until the lock at five
+   * (the caller's). Returns how far into the unlock the box went, or
+   * undefined if it didn't.
+   */
+  async function idleUnlock(t: T, lovejoin: LovejoinService): Promise<number | undefined> {
+    await t.wallet.unlock(PASSWORD);
+    const unlocked = t.clock.now;
+    await lovejoin.withdrawDue("preprod", true);
+    for (let minute = 1; minute <= 5; minute++) {
+      t.clock.now = unlocked + minute * 60_000;
       await lovejoin.withdrawDue("preprod", false, t.clock.now);
-      expect(t.collateral.asked).toHaveLength(1);
-    });
+      if (t.collateral.asked.length) return t.clock.now - unlocked;
+    }
+    return undefined;
   }
+
+  it("never counts an unlock as a send: a box due while it was locked goes on its fresh draw, inside the first unlock", async () => {
+    const { t, lovejoin } = await withBox(() => 0.5);
+    await t.deps.preferences.set({ lockAfterMinutes: 5 });
+    await busyFor(t, HOUR);
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now + 30 * 60_000] });
+    await t.wallet.lock();
+    t.clock.now += 3 * HOUR;
+    const went = await idleUnlock(t, lovejoin);
+    // Its draw is 2 to 3 minutes in, and the run a minute after takes it at the latest.
+    expect(went).toBeGreaterThanOrEqual(UNLOCK_WAIT_MS[0]);
+    expect(went).toBeLessThanOrEqual(4 * 60_000);
+  });
+
+  it("leaves the next unlock its draw when a send the browser forgot pushed the box past a short one", async () => {
+    const { t, lovejoin } = await withBox(() => 0.5);
+    await t.deps.preferences.set({ lockAfterMinutes: 5 });
+    await busyFor(t, HOUR);
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now + 30 * 60_000] });
+    // The browser closes, unlocked; hours later it starts, and the wallet is unlocked half a minute on.
+    t.session.data.clear();
+    t.clock.now += 3 * HOUR;
+    await noteStart(t.session, t.clock.now);
+    t.clock.now += 30_000;
+    // Its draw falls within minutes of the browser's start: pushed past this unlock, which locks at five.
+    expect(await idleUnlock(t, lovejoin)).toBeUndefined();
+    const [pushed] = (await schedule(t)).due;
+    expect(pushed).toBeGreaterThan(t.clock.now);
+    expect((await schedule(t)).marks?.[pushed!]).toEqual({ pushes: 1 });
+    await t.wallet.lock();
+    // Unlocked again an hour on: a fresh draw into it, not the first minute's run.
+    t.clock.now += HOUR;
+    const went = await idleUnlock(t, lovejoin);
+    expect(went).toBeGreaterThanOrEqual(UNLOCK_WAIT_MS[0]);
+    expect(went).toBeLessThanOrEqual(4 * 60_000);
+  });
 });
 
 describe("the unlock's fresh draws, whichever run gets there first (independent review L10, L13)", SLOW, () => {
@@ -214,7 +318,7 @@ describe("a run under way across a lock and an unlock (independent review L11)",
           change(`withdraw ${n}`);
           return [];
         }),
-        held: async () => ({ boxes: 0 }),
+        returning: async () => false,
       },
       pending: { watch: async () => false },
     } as unknown as Runner;

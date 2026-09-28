@@ -65,8 +65,9 @@ export async function runNetworks(ctx: Runner, alarm: Alarm, unlock = false): Pr
     // Lovejoin's boxes on their way back keep the alarm going too: each comes
     // back soon after its own due time while the wallet is unlocked, rather
     // than all of them at the next unlock. A minute with nothing due asks
-    // Koios nothing.
-    if ((await ctx.lovejoin.held(network).catch(() => undefined))?.boxes) busy = true;
+    // Koios nothing. So does a withdraw that may have gone through, looked
+    // for and sent again at its time (independent review M11).
+    if (await ctx.lovejoin.returning(network).catch(() => false)) busy = true;
   }
   if (busy) await alarm.start();
   else if (alarm.starts() === started) await alarm.stop();

@@ -18,6 +18,7 @@ import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
 import { LOCAL_PREFERENCES } from "./preferences";
 import { PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
+import { lastSpentAt } from "./spent";
 import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord } from "./vault";
 
 /**
@@ -54,6 +55,34 @@ export const SESSION_ACTIVITY = "seedelf.lastActivity";
  * closed browser wipes it with the rest (`unlockedAt`).
  */
 export const SESSION_UNLOCKED_AT = "seedelf.unlockedAt";
+/**
+ * chrome.storage.session: what the wallet knows of its own sends beyond what
+ * it spent (spent.ts), which a lock wipes (KnownSends). The one thing a lock
+ * keeps: two times, nothing of what was sent (`sends`).
+ */
+export const SESSION_SENDS = "seedelf.sends";
+/**
+ * What the wallet knows of its own sends beyond what it spent: its last send
+ * before the last lock (`last`); and when session storage began (`since`),
+ * the browser's start or the extension's: a closed browser wipes what it
+ * spent unseen, so a send before then may have been as late as then
+ * (noteStart).
+ */
+interface KnownSends {
+  last?: number;
+  since?: number;
+}
+
+/**
+ * Notes when session storage began, if nothing says what the wallet knows of
+ * its sends yet: at every start of the worker (sw.ts), so its first after
+ * the browser's, or the extension's, notes it before anything unlocks. A
+ * lock keeps it. A send before then is forgotten, and may have been as late
+ * as then (independent review M10).
+ */
+export async function noteStart(session: Area, now: number): Promise<void> {
+  if ((await session.get(SESSION_SENDS)) === undefined) await session.set(SESSION_SENDS, { since: now });
+}
 /**
  * chrome.storage.session: the last balance reading per network, e.g.
  * `seedelf.balances.preprod`. It says which contract UTxOs are the user's,
@@ -218,10 +247,10 @@ export class Wallet {
   /**
    * When the wallet last unlocked (ms): its unlock, or its create or
    * restore. Throws if locked. Nothing goes out the moment it unlocks
-   * (privacy review §3.1), so what the worker sends by itself counts from
-   * it, whichever run or page gets there first, not only the unlock's own
-   * run (independent review M10, L10, L11, L12). One unlocked before it was
-   * kept counts from now.
+   * (privacy review §3.1): what the worker sends by itself waits a fresh
+   * draw from it, made by whichever run or page gets there first, not only
+   * the unlock's own run (independent review L10, L11, L12). One unlocked
+   * before it was kept counts from now.
    */
   unlockedAt(): Promise<number> {
     return this.serial(async () => {
@@ -231,6 +260,26 @@ export class Wallet {
       const now = this.deps.now();
       await this.deps.session.set(SESSION_UNLOCKED_AT, now);
       return now;
+    });
+  }
+
+  /**
+   * When the wallet last sent something, on either network (`sent`): as what
+   * it spent says (spent.ts), or the last send before a lock, which the lock
+   * keeps (SESSION_SENDS). And until when it may have sent something it has
+   * forgotten (`forgotten`): a closed browser wipes what it spent unseen, so
+   * a send before the browser started again may have been as late as that
+   * (noteStart). 0 for none. An unlock is neither: nothing was sent then.
+   * Lovejoin's withdraws keep away from both (QUIET_AFTER_SEND_MS,
+   * independent review M10). Throws if locked.
+   */
+  sends(): Promise<{ sent: number; forgotten: number }> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      const { session, now } = this.deps;
+      const kept = (await session.get<KnownSends>(SESSION_SENDS)) ?? {};
+      const spent = (await lastSpentAt(session, now())) ?? 0;
+      return { sent: Math.max(spent, kept.last ?? 0), forgotten: kept.since ?? 0 };
     });
   }
 
@@ -490,19 +539,33 @@ export class Wallet {
   }
 
   /**
-   * Lock: clear session storage, which only ever holds unlocked state (the
-   * entropy, balances, a built or pending transaction), stop the alarm, and
-   * drop the keys from memory. Storage goes first and the keys go whatever
-   * happens, so nothing WebAssembly does (a trapped instance, say) can keep
-   * the wallet unlocked.
+   * Lock: clear session storage, which holds unlocked state (the entropy,
+   * balances, a built or pending transaction), stop the alarm, and drop the
+   * keys from memory. Storage goes first and the keys go whatever happens,
+   * so nothing WebAssembly does (a trapped instance, say) can keep the
+   * wallet unlocked. What it knows of its own sends outlasts the lock, two
+   * times and nothing of what was sent, so a Lovejoin box never goes back
+   * minutes after a send the lock would have made it forget (SESSION_SENDS,
+   * independent review M10).
    */
   private async wipe(): Promise<void> {
     try {
+      const sends = await this.lockKeeps().catch(() => undefined);
       await this.deps.session.clear();
+      if (sends) await this.deps.session.set(SESSION_SENDS, sends).catch(() => undefined);
       await this.deps.autoLock.stop();
     } finally {
       this.free();
     }
+  }
+
+  /** What a lock keeps of the wallet's sends (KnownSends): nothing when it knows of none. */
+  private async lockKeeps(): Promise<KnownSends | undefined> {
+    const { session, now } = this.deps;
+    const kept = (await session.get<KnownSends>(SESSION_SENDS)) ?? {};
+    const last = Math.max(kept.last ?? 0, (await lastSpentAt(session, now())) ?? 0);
+    const sends: KnownSends = { ...(last ? { last } : {}), ...(kept.since !== undefined ? { since: kept.since } : {}) };
+    return Object.keys(sends).length ? sends : undefined;
   }
 
   /** Drops the keys, freeing each one it can: never throws, and never keeps one. */

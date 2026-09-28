@@ -40,7 +40,7 @@ function runner(work: Partial<Record<NetworkName, { swaps?: boolean; mixing?: bo
     lovejoin: {
       pumpPublic: vi.fn(async (n: NetworkName) => !!of(n).mixing),
       withdrawDue: vi.fn(async () => []),
-      held: vi.fn(async (n: NetworkName) => ({ boxes: of(n).boxes ?? 0 })),
+      returning: vi.fn(async (n: NetworkName) => (of(n).boxes ?? 0) > 0),
     },
     pending: { watch: vi.fn(async (n: NetworkName) => !!of(n).maybeSent) },
   } as unknown as Runner;

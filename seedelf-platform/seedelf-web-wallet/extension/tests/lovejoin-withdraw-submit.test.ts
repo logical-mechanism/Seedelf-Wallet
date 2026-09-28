@@ -2,8 +2,9 @@
 // asked, so a lock or a closed browser meanwhile never loses it (independent
 // review M1); a 429 or a refusal isn't a withdraw that may have gone through
 // (M11); and one that may have is sent again only under a new withdraw's
-// timing rules, each resend counting as the wallet's send (M11, L8). The real
-// WebAssembly, a recorded preprod pool, and fakes of Koios and giveme.my.
+// timing rules, each resend counting as the wallet's send (M11, L8), and a
+// fresh draw into an unlock. The real WebAssembly, a recorded preprod
+// pool, and fakes of Koios and giveme.my.
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -11,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { CHAIN_RESEND_MS, LovejoinService, QUIET_AFTER_SEND_MS, QUIET_PUSH_MS } from "../src/background/lovejoin";
+import { CHAIN_RESEND_MS, LovejoinService, QUIET_AFTER_SEND_MS, QUIET_PUSH_MS, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { lastSpentAt, SESSION_SPENT, spentSet } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
@@ -33,7 +34,8 @@ type T = ReturnType<typeof testBalances>;
 
 interface Kept {
   due: number[];
-  withdrawing?: { txHash: string; sentAt: number; waitUntil?: number; pushes?: number };
+  marks?: Record<string, { unlock?: true; pushes?: number }>;
+  withdrawing?: { txHash: string; sentAt: number; waitUntil?: number; pushes?: number; unlock?: true };
 }
 const kept = async (t: T) => (await t.store.get<Kept>("lovejoin.preprod"))!;
 
@@ -243,6 +245,32 @@ describe("a withdraw that may have gone through, sent again (independent review 
     await busyFor(t, Math.max(pushed!, t.clock.now - 60_000 + QUIET_AFTER_SEND_MS) - t.clock.now);
     await lovejoin.withdrawDue("preprod", false, t.clock.now);
     expect(t.collateral.asked).toHaveLength(1);
+  });
+
+  it("waits a fresh draw into the unlock after a lock, rather than go a minute in, and keeps the alarm for it", async () => {
+    const { t, lovejoin } = await due();
+    const txHash = await maybeSent(t, 10 * 60_000);
+    await t.wallet.lock();
+    t.clock.now += HOUR;
+    await t.wallet.unlock(PASSWORD);
+    const unlocked = t.clock.now;
+    // The unlock's run only looks for it, and draws its wait.
+    await lovejoin.withdrawDue("preprod", true);
+    expect(resent(t, txHash)).toBe(0);
+    const { waitUntil, unlock } = (await kept(t)).withdrawing!;
+    expect(unlock).toBe(true);
+    expect(waitUntil).toBeGreaterThanOrEqual(unlocked + UNLOCK_WAIT_MS[0]);
+    // With no box due, the alarm still runs for it.
+    expect(await lovejoin.returning("preprod")).toBe(true);
+    // Not the next minute's run: at its draw.
+    await busyFor(t, 60_000);
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(resent(t, txHash)).toBe(0);
+    await busyFor(t, waitUntil! - t.clock.now);
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(resent(t, txHash)).toBe(1);
+    expect((await kept(t)).withdrawing).toMatchObject({ sentAt: t.clock.now });
+    expect((await kept(t)).withdrawing?.unlock).toBeUndefined();
   });
 
   it("is sent again at once when the user asks for a box back, and says it may still be on its way", async () => {

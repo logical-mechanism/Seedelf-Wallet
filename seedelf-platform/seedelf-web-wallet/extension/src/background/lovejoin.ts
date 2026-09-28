@@ -17,12 +17,13 @@
 // due while it was locked waits a fresh draw inside the stretch the unlock
 // keeps it open (UNLOCK_WAIT_MS), once, so a short unlock never holds it for
 // good. Nor in a run that sent anything else, nor right after the wallet's
-// own send or its unlock (QUIET_AFTER_SEND_MS). One box a run: others due
-// at the same time wait a fresh short delay each (WITHDRAW_SPREAD_MS), so a
-// wallet locked for hours doesn't send them all in one burst. The box that
-// goes is one that has waited the delay's least since a mix last moved it,
-// one someone else's mix has moved since the wallet's chain left it if
-// there is one (§3.6), and then the one that has waited longest in the pool.
+// own send (QUIET_AFTER_SEND_MS), one a lock or a closed browser made it
+// forget included. One box a run: others due at the same time wait a fresh
+// short delay each (WITHDRAW_SPREAD_MS), so a wallet locked for hours
+// doesn't send them all in one burst. The box that goes is one that has
+// waited the delay's least since a mix last moved it, one someone else's
+// mix has moved since the wallet's chain left it if there is one (§3.6),
+// and then the one that has waited longest in the pool.
 // Boxes aren't remembered, they're found: other people's mixes
 // move them, and the Seedelf key's check finds them wherever they are, after a
 // restore too. What's kept, sealed (`lovejoin.<network>`), is the due times
@@ -88,7 +89,6 @@ import type { PrivateStore } from "./private-store";
 import type { ScriptSpendDeps } from "./script-spend";
 import {
   forgetSpent,
-  lastSpentAt,
   outpoint,
   rememberSpent,
   reservationOf,
@@ -410,7 +410,11 @@ interface Schedule {
 
 /** Why a due time was drawn again. */
 interface DueMark {
-  /** At an unlock: a later unlock doesn't draw it again, so it goes at the next run (privacy review §3.1). */
+  /**
+   * At an unlock: a later unlock doesn't draw it again, so it goes at the
+   * next run (privacy review §3.1). A push for a send the wallet forgot
+   * leaves the next unlock its draw (quiet, independent review M10).
+   */
   unlock?: true;
   /** How often the wallet's own sends pushed it: after QUIET_PUSHES, it goes anyway. */
   pushes?: number;
@@ -429,10 +433,15 @@ interface Withdrawing {
   fee: string;
   at: number;
   sentAt: number;
-  /** Not sent again before this (ms): the wallet's own send, or its unlock, was too close (independent review M11). */
+  /**
+   * Not sent again before this (ms): a fresh draw at an unlock, or the
+   * wallet's own send was too close (independent review M11).
+   */
   waitUntil?: number;
-  /** How often that put it off since it was last sent: after QUIET_PUSHES, it goes anyway. */
+  /** How often its own sends put it off since it was last sent: after QUIET_PUSHES, it goes anyway. */
   pushes?: number;
+  /** Its wait was drawn at an unlock: a later unlock doesn't draw it again (DueMark `unlock`). */
+  unlock?: true;
 }
 
 /** Koios didn't answer a withdraw's submit: it may have gone through. */
@@ -537,11 +546,11 @@ export const UNLOCK_WAIT_MS: [number, number] = [2 * 60_000, 20 * 60_000];
 /**
  * No box goes back within this long of the wallet's own last send, on
  * either network (what spent.ts remembers): a withdraw minutes after a
- * payment says both are one owner's. A lock or a closed browser wipes what
- * it remembers, so a send before the last unlock counts as the unlock
- * (lastSent, independent review M10). It's pushed a fresh QUIET_PUSH_MS
- * instead, at most QUIET_PUSHES times, and then goes anyway, so none waits
- * for good.
+ * payment says both are one owner's. A lock keeps the last one's time,
+ * and a closed browser wipes it unseen, so one before the browser started
+ * again may have been as late as that (wallet.ts `sends`, independent
+ * review M10). It's pushed a fresh QUIET_PUSH_MS instead, at most
+ * QUIET_PUSHES times, and then goes anyway, so none waits for good.
  */
 export const QUIET_AFTER_SEND_MS = 5 * 60_000;
 export const QUIET_PUSH_MS: [number, number] = [3 * 60_000, 10 * 60_000];
@@ -560,6 +569,19 @@ const within = ([low, high]: [number, number], random: () => number) => Math.rou
 export function unlockWait(lockAfterMs: number, random: () => number = secureRandom): number {
   const [low, cap] = UNLOCK_WAIT_MS;
   return within([low, Math.max(low, Math.min(cap, lockAfterMs - low))], random);
+}
+
+/**
+ * Whether a withdraw at `now` would be too close to the wallet's own send
+ * (QUIET_AFTER_SEND_MS): "sent", its last send (`sent`) was; "forgotten",
+ * a send it forgot may have been (`forgotten`, a closed browser's): a guess,
+ * so the push it makes leaves the next unlock its draw (DueMark `unlock`).
+ * 0 for none. Undefined when neither.
+ */
+function quiet(now: number, sent: number, forgotten: number): "sent" | "forgotten" | undefined {
+  if (now - sent < QUIET_AFTER_SEND_MS) return "sent";
+  if (now - forgotten < QUIET_AFTER_SEND_MS) return "forgotten";
+  return undefined;
 }
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
@@ -1555,13 +1577,24 @@ export class LovejoinService {
   }
 
   /**
+   * Whether a box is on its way back on `network`: one due, or a withdraw
+   * that may have gone through, looked for and sent again only by the
+   * alarm's runs, under a new withdraw's rules (independent review M11). No
+   * Koios request.
+   */
+  async returning(network: NetworkName): Promise<boolean> {
+    return (await this.held(network)).boxes > 0 || (this.available(network) && !!(await this.read(network)).withdrawing);
+  }
+
+  /**
    * Withdraws a box that's due, one a run. `unlock` (the run as the wallet
    * unlocks) reads the pool even when nothing is due yet, on a network where
    * the wallet has something open in Lovejoin, so its boxes' due times follow
    * the pool; and sends nothing. Each box due by then waits a fresh draw
    * (privacy review §3.1), made by the first run after the unlock, this one
    * or another (unlockDraws). `since`: when the run began, so nothing goes
-   * back in a run that sent anything else. One run at a time.
+   * back in a run that sent anything else, or that began before the unlock.
+   * One run at a time.
    */
   withdrawDue(network: NetworkName, unlock = false, since?: number): Promise<PendingTx[]> {
     if (!this.available(network)) return Promise.resolve([]);
@@ -1571,7 +1604,10 @@ export class LovejoinService {
   private async withdrawDueNow(network: NetworkName, unlock: boolean, since: number | undefined): Promise<PendingTx[]> {
     // The unlock's fresh draws come first, before any Koios read: a read that
     // fails can't leave a box due to go at the next run (independent review L10).
-    await this.unlockDraws(network);
+    const unlocked = await this.unlockDraws(network);
+    // A run that began before this unlock (the wallet locked and unlocked
+    // while it went on) is the unlock's from here: it sends nothing (L11).
+    if (since !== undefined && since < unlocked) unlock = true;
     // A chain mixing them again spends them: they wait until it's sent.
     if (await this.deps.mixingAgain?.(network)) return [];
     // A chain being sent is still putting boxes in and mixing them: none comes back meanwhile.
@@ -1634,11 +1670,17 @@ export class LovejoinService {
     // Nor right after something else the wallet sent: in the same run (the
     // next takes it), or within QUIET_AFTER_SEND_MS, which pushes it a fresh
     // few minutes, a few times at most.
-    const sent = await this.lastSent(now);
+    const { sent, forgotten } = await this.deps.wallet.sends();
     if (since !== undefined && sent >= since) return [];
     const pushes = schedule.marks?.[time]?.pushes ?? 0;
-    if (now - sent < QUIET_AFTER_SEND_MS && pushes < QUIET_PUSHES) {
-      await this.update(network, (s) => moveDue(s, time, now + within(QUIET_PUSH_MS, random), (m) => (m.pushes = pushes + 1)));
+    const push = quiet(now, sent, forgotten);
+    if (push && pushes < QUIET_PUSHES) {
+      await this.update(network, (s) =>
+        moveDue(s, time, now + within(QUIET_PUSH_MS, random), (m) => {
+          m.pushes = pushes + 1;
+          if (push === "forgotten") delete m.unlock;
+        }),
+      );
       return [];
     }
     if (ready.length > 1) {
@@ -1677,16 +1719,17 @@ export class LovejoinService {
    * came due while it was locked, or comes due before the least of a fresh
    * wait would (independent review L13), waits a fresh draw inside the
    * stretch the unlock keeps it open, once: one drawn at an unlock before
-   * (the wallet locked again first) goes at the next run instead. Drawn by
-   * whichever run gets here first after the unlock, the unlock's own or
-   * one after it, from the sealed schedule alone: the unlock's run failing
-   * on a Koios read, or coming after a run already under way, can't skip
-   * it (L10).
+   * (the wallet locked again first) goes at the next run instead. So does a
+   * withdraw that may have gone through, before it's sent again (M11).
+   * Drawn by whichever run gets here first after the unlock, the unlock's
+   * own or one after it, from the sealed schedule alone: the unlock's run
+   * failing on a Koios read, or coming after a run already under way, can't
+   * skip it (L10). Returns the unlock.
    */
-  private async unlockDraws(network: NetworkName): Promise<void> {
+  private async unlockDraws(network: NetworkName): Promise<number> {
     const unlocked = await this.deps.wallet.unlockedAt();
     const before = await this.read(network);
-    if (before.unlock === unlocked || !before.due.length) return;
+    if (before.unlock === unlocked || (!before.due.length && !before.withdrawing)) return unlocked;
     const lockAfter = await this.deps.preferences.lockAfterMs();
     const random = this.deps.random ?? secureRandom;
     const now = this.deps.now();
@@ -1695,21 +1738,14 @@ export class LovejoinService {
       for (const t of s.due.filter((d) => d < now + UNLOCK_WAIT_MS[0] && !s.marks?.[d]?.unlock)) {
         moveDue(s, t, now + unlockWait(lockAfter, random), (m) => (m.unlock = true));
       }
+      const w = s.withdrawing;
+      if (w && !w.unlock && Math.max(w.sentAt + CHAIN_RESEND_MS, w.waitUntil ?? 0) < now + UNLOCK_WAIT_MS[0]) {
+        w.waitUntil = now + unlockWait(lockAfter, random);
+        w.unlock = true;
+      }
       s.unlock = unlocked;
     });
-  }
-
-  /**
-   * When the wallet last sent something, on either network, as what it spent
-   * says (spent.ts), or when it last unlocked, if that's later: a lock or a
-   * closed browser wipes what it spent, so a send before it is only known to
-   * be before the unlock (independent review M10).
-   */
-  private async lastSent(now: number): Promise<number> {
-    const { wallet, session } = this.deps;
-    const unlocked = await wallet.unlockedAt();
-    const spent = await wallet.withKeys(() => lastSpentAt(session, now));
-    return Math.max(spent ?? 0, unlocked);
+    return unlocked;
   }
 
   /**
@@ -1887,11 +1923,12 @@ export class LovejoinService {
    *
    * `run`: the unlock's or the alarm's run, where a resend may be its first
    * real send (a submit that never reached a node), so it keeps a new
-   * withdraw's rules (independent review M11): never in the unlock's run
-   * (privacy review §3.1), nor in a run that sent anything else, nor within
-   * QUIET_AFTER_SEND_MS of the wallet's own send or its unlock (resends).
-   * The user's ask (withdrawNow) sends it again at once. Each resend is the
-   * wallet's send too, which what comes after keeps away from (L8).
+   * withdraw's rules (independent review M11): never in the unlock's run,
+   * but a fresh draw into it (unlockDraws, privacy review §3.1), nor in a
+   * run that sent anything else, nor within QUIET_AFTER_SEND_MS of the
+   * wallet's own send (resends). The user's ask (withdrawNow) sends it again
+   * at once, once a wait already drawn is over. Each resend is the wallet's
+   * send too, which what comes after keeps away from (L8).
    */
   private async settleWithdrawing(network: NetworkName, run?: { unlock: boolean; since?: number }): Promise<boolean> {
     const { withdrawing: w } = await this.read(network);
@@ -1929,6 +1966,7 @@ export class LovejoinService {
         s.withdrawing.sentAt = now;
         delete s.withdrawing.waitUntil;
         delete s.withdrawing.pushes;
+        delete s.withdrawing.unlock;
       });
     }
     return true;
@@ -1937,23 +1975,27 @@ export class LovejoinService {
   /**
    * Whether withdraw `w`, due to go again and not seen yet, goes in this
    * `run` (settleWithdrawing). Not in the unlock's run. Nor in one that sent
-   * anything else, nor within QUIET_AFTER_SEND_MS of the wallet's own send,
-   * or its unlock, since `w` last went (its own isn't another's): that pushes
-   * it a fresh QUIET_PUSH_MS, QUIET_PUSHES times at most, as a box due is.
+   * anything else, nor within QUIET_AFTER_SEND_MS of the wallet's own send
+   * since `w` last went (its own isn't another's), one a closed browser made
+   * it forget included: that pushes it a fresh QUIET_PUSH_MS, QUIET_PUSHES
+   * times at most, as a box due is.
    */
   private async resends(network: NetworkName, w: Withdrawing, now: number, run?: { unlock: boolean; since?: number }): Promise<boolean> {
     if (!run) return true;
     if (run.unlock) return false;
-    const last = await this.lastSent(now);
-    if (last <= w.sentAt) return true;
-    if (run.since !== undefined && last >= run.since) return false;
+    const known = await this.deps.wallet.sends();
+    const sent = known.sent > w.sentAt ? known.sent : 0;
+    const forgotten = known.forgotten > w.sentAt ? known.forgotten : 0;
+    if (run.since !== undefined && sent >= run.since) return false;
     const pushes = w.pushes ?? 0;
-    if (now - last >= QUIET_AFTER_SEND_MS || pushes >= QUIET_PUSHES) return true;
+    const push = quiet(now, sent, forgotten);
+    if (!push || pushes >= QUIET_PUSHES) return true;
     const random = this.deps.random ?? secureRandom;
     await this.update(network, (s) => {
       if (s.withdrawing?.txHash !== w.txHash) return;
       s.withdrawing.waitUntil = now + within(QUIET_PUSH_MS, random);
       s.withdrawing.pushes = pushes + 1;
+      if (push === "forgotten") delete s.withdrawing.unlock;
     });
     return false;
   }

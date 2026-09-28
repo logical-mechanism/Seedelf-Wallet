@@ -1078,9 +1078,9 @@ function witnessed(t: ReturnType<typeof testBalances>, extra: Partial<Constructo
 
 /**
  * The wallet unlocked an hour ago, and the first run after it drew the
- * unlock's waits then: a box due now is one the alarm takes, past the quiet
- * after an unlock (independent review M10, L10). Call it once the schedule
- * is kept.
+ * unlock's waits then: a box due now is one the alarm takes, not one the
+ * unlock draws a wait for (independent review L10). Call it once the
+ * schedule is kept.
  */
 async function unlockedAnHourAgo(t: ReturnType<typeof testBalances>): Promise<void> {
   const at = t.clock.now - HOUR;
@@ -1579,7 +1579,7 @@ describe("the boxes' withdraws", CHAINS, () => {
     for (const d of redrawn) expect(d).toBeGreaterThanOrEqual(unlocked + UNLOCK_WAIT_MS[0]);
   });
 
-  it("draws a box's wait at one unlock only: locked before it went, it goes at the first run past the next unlock's quiet", async () => {
+  it("draws a box's wait at one unlock only: locked before it went, it goes at the run after the next unlock's", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "e4"));
     await t.lovejoin.schedule("preprod", 1);
@@ -1594,8 +1594,8 @@ describe("the boxes' withdraws", CHAINS, () => {
     expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
     expect(t.collateral.asked).toHaveLength(0);
     expect(await due()).toEqual([drawn]);
-    // The first run once the unlock is as far behind as a send would have to be tries it (independent review M10).
-    await busyFor(t, QUIET_AFTER_SEND_MS);
+    // The next minute's run tries it: an unlock isn't a send (independent review M10).
+    t.clock.now += 60_000;
     await t.lovejoin.withdrawDue("preprod");
     expect(t.collateral.asked).toHaveLength(1);
   });
@@ -1643,7 +1643,7 @@ describe("the boxes' withdraws", CHAINS, () => {
     expect(t.collateral.asked).toHaveLength(1);
   });
 
-  it("only looks for a withdraw that may have gone through at unlock, and sends it again once the unlock is a few minutes behind", async () => {
+  it("only looks for a withdraw that may have gone through at unlock, and sends it again on a fresh draw into it", async () => {
     const { t } = await withSession("40000000");
     const cbor = swapTx();
     const at = t.clock.now - 10 * 60_000;
@@ -1653,12 +1653,14 @@ describe("the boxes' withdraws", CHAINS, () => {
     const submits = t.koios.submitted.length;
     expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
     expect(t.koios.submitted).toHaveLength(submits);
-    // The next run is within the unlock's quiet: it waits a fresh few minutes (independent review M11).
+    // The next run comes before the unlock's fresh draw: it isn't sent then (independent review M11).
+    const { waitUntil } = (await t.store.get<{ withdrawing: { waitUntil: number } }>("lovejoin.preprod"))!.withdrawing;
+    expect(waitUntil).toBeGreaterThanOrEqual(t.clock.now + UNLOCK_WAIT_MS[0]);
     t.clock.now += 60_000;
     await t.wallet.touch();
     await t.lovejoin.withdrawDue("preprod");
     expect(t.koios.submitted).toHaveLength(submits);
-    await busyFor(t, QUIET_AFTER_SEND_MS + QUIET_PUSH_MS[1]);
+    await busyFor(t, waitUntil - t.clock.now);
     await t.lovejoin.withdrawDue("preprod");
     expect(t.koios.submitted).toHaveLength(submits + 1);
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(withdrawing.txHash);
