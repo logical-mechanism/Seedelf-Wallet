@@ -306,6 +306,7 @@ describe("a swap's order found spent (independent review M18)", () => {
     ask: { tokenIn: string; tokenOut: string; amount: string },
     arrived: Array<ReturnType<typeof atSession>>,
     split = false,
+    late: Array<ReturnType<typeof atSession>> = [],
   ) {
     const t = await unlocked();
     const sessions = signing(t);
@@ -333,6 +334,12 @@ describe("a swap's order found spent (independent review M18)", () => {
     );
     for (const o of orders) t.koios.spent.add(o);
     t.koios.addedToAccounts.push(...arrived);
+    // `late` lands as the orders are looked up: after the account was read.
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/utxo_info")) t.koios.addedToAccounts.push(...late.splice(0));
+      return real(url, init);
+    };
     const view = await sessions.advance("preprod", 0, true);
     return { t, sessions, view };
   }
@@ -362,6 +369,20 @@ describe("a swap's order found spent (independent review M18)", () => {
       [atSession("aa".repeat(32), 0, "2000000", [[MIN, "450000000"]]), atSession("bb".repeat(32), 0, "7000000")],
       true,
     ));
+    expect(view.auto).toMatchObject({ filled: true, partly: true });
+  });
+
+  it("tells a split route's outcome by what arrived once every order is spent, a leg paid after the account was read too", async () => {
+    // ADA→token: the second leg's fill lands between the reading and the orders' lookup. Filled, not partly.
+    let { view } = await spent(buying, [atSession("aa".repeat(32), 0, "2000000", [[MIN, "450000000"]])], true, [
+      atSession("bb".repeat(32), 0, "2000000", [[MIN, "456594100"]]),
+    ]);
+    expect(view.auto).toMatchObject({ filled: true });
+    expect(view.auto!.partly).toBeUndefined();
+    // Token→ADA: the second leg's refund comes back late. Partly, not filled.
+    ({ view } = await spent(selling, [atSession("aa".repeat(32), 0, "6000000")], true, [
+      atSession("bb".repeat(32), 0, "2000000", [[MIN, "453297050"]]),
+    ]));
     expect(view.auto).toMatchObject({ filled: true, partly: true });
   });
 

@@ -1598,8 +1598,13 @@ export class SessionService {
       // arrived is the fill only once the order itself is spent.
       if (!(await this.ordersSpent(network, s))) return;
       if (!auto.filled && !auto.refunded) {
-        // A fill or a refund, told apart by what arrived (independent review M18).
-        const outcome = outcomeOf(s, arrived);
+        // A fill or a refund, told apart by what arrived (independent review M18), read again now that every
+        // order is known spent: a split route's legs are paid in different blocks, and one may have come since
+        // the reading above. What either reading holds counts.
+        const since = returnable(s, (await this.listing(network, keyHash)).rows).filter(
+          (r) => !own.has(r.tx_hash) && !arrived.some((a) => outpoint(a) === outpoint(r)),
+        );
+        const outcome = outcomeOf(s, [...arrived, ...since]);
         await this.update(network, s.index, (r) => {
           if (outcome === "refunded") r.auto!.refunded = now();
           else r.auto!.filled = now();
