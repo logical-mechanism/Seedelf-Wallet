@@ -2503,9 +2503,11 @@ export class SessionService {
    * unused, but its funding may wait up to 10 minutes for Send, and
    * meanwhile the same phrase in another browser, or a wallet removed and
    * restored, may have funded a session of its own there. A new review
-   * takes the next unused one. Only what's on chain, as Koios has it, shows:
-   * two browsers funding sessions at about the same time can still share
-   * an account.
+   * takes the next unused one: a used one moves the record's `next` past
+   * it, since freshIndex asks only about its stake key, and would otherwise
+   * give it again when only its payment key shows it. Only what's on chain,
+   * as Koios has it, shows: two browsers funding sessions at about the same
+   * time can still share an account.
    */
   private async stillUnused(network: NetworkName, index: number): Promise<void> {
     const { wasm, wallet } = this.deps;
@@ -2516,6 +2518,9 @@ export class SessionService {
     }));
     const koios = this.deps.koios(network);
     if ((await koios.usedStakeAddresses([reward])).has(reward) || (await koios.credentialUtxos([keyHash])).length) {
+      // Used on chain, so skipping it is always safe. The record as it is now, after Koios answered.
+      const book = await this.book(network);
+      if (book.next <= index) await this.save(network, { ...book, next: index + 1 });
       throw new Error(
         "That session's one-time account was used meanwhile, by your recovery phrase in another browser, say. Nothing was sent. Review it again: it takes the next unused one.",
       );

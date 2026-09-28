@@ -75,12 +75,14 @@ describe("a new session's funding", () => {
     await sa.siteOutSubmit("preprod", outA.txHash, ORIGIN);
     b.koios.usedStakes.add(await reward(b, 0));
 
-    // B's Send asks again, and refuses: nothing is sent, and nothing recorded.
+    // B's Send asks again, and refuses: nothing is sent, and no session recorded. The used index is skipped.
     await expect(sb.siteOutSubmit("preprod", outB.txHash, "https://b.example")).rejects.toThrow(USED);
     expect(b.koios.submitted).toHaveLength(0);
-    expect(await recorded(b)).toEqual({ next: 0, sessions: [] });
-    // Its new review takes the next unused one.
+    expect(await recorded(b)).toEqual({ next: 1, sessions: [] });
+    // Its new review takes the next unused one; the one reviewed before isn't sent.
     expect((await sb.siteOutBuild("preprod", "https://b.example", "15000000", [])).index).toBe(1);
+    await expect(sb.siteOutSubmit("preprod", outB.txHash, "https://b.example")).rejects.toThrow();
+    expect(b.koios.submitted).toHaveLength(0);
   });
 
   it("isn't sent to an account something was paid to meanwhile, whatever its stake key says", async () => {
@@ -101,7 +103,14 @@ describe("a new session's funding", () => {
     } as KoiosUtxo);
     await expect(sessions.outSubmit("preprod", out.txHash)).rejects.toThrow(USED);
     expect(t.koios.submitted).toHaveLength(0);
-    expect(await recorded(t)).toEqual({ next: 0, sessions: [] });
+    // Its stake key still reads unused, which is all a review asks about: the index is skipped, so the new
+    // review takes the next and goes, rather than being refused on the same index each time.
+    expect(await recorded(t)).toEqual({ next: 1, sessions: [] });
+    const again = await sessions.outBuild("preprod", await sessions.quote("preprod", minswapEstimate.ask));
+    expect(again.index).toBe(1);
+    await sessions.outSubmit("preprod", again.txHash);
+    expect(t.koios.submitted.map(txIdOf)).toEqual([again.txHash]);
+    expect(await recorded(t)).toMatchObject({ next: 2, sessions: [{ index: 1 }] });
   });
 
   it("asks about a mix's account too", async () => {
@@ -124,7 +133,7 @@ describe("a new session's funding", () => {
     );
     t.koios.usedStakes.add(await reward(t, 0));
     await expect(sessions.mixOutSubmit("preprod", "0e".repeat(32))).rejects.toThrow(USED);
-    expect(await recorded(t)).toEqual({ next: 0, sessions: [] });
+    expect(await recorded(t)).toEqual({ next: 1, sessions: [] });
   });
 
   it("isn't recorded or sent when Koios can't be asked, and goes once it can", async () => {
