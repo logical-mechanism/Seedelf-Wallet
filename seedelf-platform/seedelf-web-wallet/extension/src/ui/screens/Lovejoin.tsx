@@ -174,21 +174,21 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
 }
 
 /**
- * The wallet's boxes that a chain of its made and didn't finish mixing, or,
- * after a restore, that a deposit made: they never come back by themselves.
- * Mixing again takes them first: Mix again from my public account those a
- * mix from it made (`fromPublic` of them), Mix my boxes again the rest.
- * Bring it back anyway takes one as it is. After a restore, a box whose
- * making Koios hasn't said of yet (`unsure` of them) waits too, until it
- * has (independent review M14).
- */
-/**
  * The box Bring one back anyway takes: one whose making Koios hasn't said of
  * yet first, after a restore, since it may well be mixed, while the others
  * surely aren't (independent review M14).
  */
 export const anywayBox = (status?: Pick<LovejoinStatus, "notMixed" | "unsure">) => status?.unsure?.[0] ?? status?.notMixed[0];
 
+/**
+ * The wallet's boxes that a chain of its made and didn't finish mixing, or,
+ * after a restore, that a deposit made: they never come back by themselves.
+ * Mixing again takes them first: Mix again from my public account those a
+ * mix from it made (`fromPublic` of them), Mix my boxes again the rest.
+ * Bring it back anyway takes one as it is. After a restore, a box whose
+ * making Koios hasn't said of yet (`unsure` of them) waits too, until it
+ * has, and Mix my boxes again refuses meanwhile (independent review M14).
+ */
 export function NotMixed({
   count,
   fromPublic = 0,
@@ -218,7 +218,7 @@ export function NotMixed({
       : fromPublic > 0
         ? "Mix again from my public account takes those your public account put in first, and Mix my boxes again the others."
         : `Mix my boxes again takes ${them} first.`;
-  const asks = "The wallet asks Koios again at the next read, and Mix my boxes again waits until it has.";
+  const asks = "The wallet asks Koios again at the next read, and Mix my boxes again can't be used until it has.";
   // Koios hasn't said how these went in: said as they are, without the number while balances are hidden.
   const unsureMany = amounts.hidden || unsure > 1;
   const more = amounts.hidden ? "some more" : unsure === 1 ? "one more" : `${unsure} more`;

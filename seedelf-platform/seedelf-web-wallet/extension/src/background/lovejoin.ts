@@ -97,7 +97,7 @@ import { nothingInAccount, readAccount } from "./account";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { txInputs } from "./cbor";
 import { GAP_LIMIT } from "./chain";
-import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, KoiosError, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
@@ -2428,17 +2428,21 @@ export class LovejoinService {
    * key the wallet doesn't know has the account's keys looked for further
    * (fartherKeys): an address of the account's past those known, before a
    * balance reading found it. Those Koios doesn't know are left out, and
-   * every one when it doesn't answer.
+   * those of a request it doesn't answer and of every one after it: each is
+   * asked of again at a later read, and what came back before it is kept.
    */
   private async madeBy(network: NetworkName, txHashes: string[]): Promise<Map<string, Pick<Origin, "mixed" | "public">>> {
     const mixBox = NETWORKS[network].lovejoin?.mixBox;
-    const rows = await this.deps
-      .koios(network)
-      .txSpends(txHashes)
-      .catch((e: unknown) => {
-        if (e instanceof KoiosError) return [];
+    const koios = this.deps.koios(network);
+    const rows: KoiosTxSpends[] = [];
+    for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
+      try {
+        rows.push(...(await koios.txSpends(txHashes.slice(i, i + TXS_PER_REQUEST))));
+      } catch (e) {
+        if (e instanceof KoiosError) break;
         throw e;
-      });
+      }
+    }
     const told = new Map<string, Pick<Origin, "mixed" | "public">>();
     const asked = new Set(txHashes);
     const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
@@ -2808,12 +2812,15 @@ export class LovejoinService {
       const rows = new Map(pool.map((u) => [outpoint(u), u]));
       [chosen] = backOrder(free(back, reserved), rows, ownLeaves(await this.read(network)), least, this.deps.now());
       if (!chosen) {
+        // Mix my boxes again refuses while Koios hasn't said of a box (againBoxes): it's never "first" then (M14).
         throw new Error(
           unsure.length && unsure.length === unmixed.length
             ? "Koios hasn't said yet how your boxes went into Lovejoin's pool, so none comes back until it has. Try again in a minute, or choose one to bring back anyway."
-            : unmixed.length
-              ? "Your boxes in Lovejoin's pool weren't mixed yet. Mix them again first, or choose one to bring back anyway."
-              : "None of your boxes is in Lovejoin's pool.",
+            : unsure.length
+              ? "Your boxes in Lovejoin's pool weren't mixed yet, and Koios hasn't said yet how some went in. Mix them again once it has, or choose one to bring back anyway."
+              : unmixed.length
+                ? "Your boxes in Lovejoin's pool weren't mixed yet. Mix them again first, or choose one to bring back anyway."
+                : "None of your boxes is in Lovejoin's pool.",
         );
       }
     }

@@ -431,7 +431,11 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     // Nothing comes back by itself, nor as the box that has waited longest.
     const lovejoin = witnessed(t);
     expect(await runsFor(t, lovejoin, 16)).toEqual([]);
-    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("weren't mixed yet");
+    // Mix my boxes again refuses while Koios hasn't said of N, so the refusal says to mix them again once it has.
+    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow(
+      "Your boxes in Lovejoin's pool weren't mixed yet, and Koios hasn't said yet how some went in. Mix them again once it has, or choose one to bring back anyway.",
+    );
+    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("Koios hasn't said how some of your boxes went into Lovejoin's pool");
     await expect(lovejoin.withdrawNow("preprod", { txHash: N, txIndex: 0 })).rejects.toThrow("Koios hasn't said how that box went into the pool");
 
     // Koios catches up: a session's deposit made N. Held, as not mixed yet, and never asked of again.
@@ -598,6 +602,36 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     expect((await t.lovejoin.status("preprod")).fromPublic).toEqual([]);
     expect((await origins(t))?.[Q]).toEqual({ mixed: false, seen: t.clock.now });
   });
+
+  it("keeps what Koios said of the transactions it answered for when a later request of the same read fails", async () => {
+    const { t } = await withSession("40000000");
+    const txs = Array.from({ length: TXS_PER_REQUEST + 1 }, (_, i) => (0x40 + i).toString(16).padStart(64, "0"));
+    for (const tx of txs) {
+      t.koios.addedToAccounts.push(await ownedBox(t, tx));
+      t.koios.txSpends.set(tx, mix());
+    }
+    // The request of the one left over after the first twenty fails.
+    const fetch = t.koios.fetch;
+    let down = true;
+    t.koios.fetch = async (url, init) => {
+      if (down && url.includes("/tx_info") && (JSON.parse(String(init.body)) as { _tx_hashes: string[] })._tx_hashes.length === 1) {
+        return new Response("upstream", { status: 500 });
+      }
+      return fetch(url, init);
+    };
+    const first = await t.lovejoin.status("preprod");
+    expect(Object.keys((await origins(t))!)).toHaveLength(TXS_PER_REQUEST);
+    const [left] = Object.keys((await asking(t))!);
+    expect(first.unsure).toEqual([{ txHash: left, txIndex: 0 }]);
+    expect(first.due).toHaveLength(TXS_PER_REQUEST);
+    // Koios answers at the next read: only that one is asked of.
+    down = false;
+    const asked = txInfoAsked(t).length;
+    const second = await t.lovejoin.status("preprod");
+    expect(txInfoAsked(t).slice(asked)).toEqual([[left]]);
+    expect(second.unsure).toBeUndefined();
+    expect(second.due).toHaveLength(TXS_PER_REQUEST + 1);
+  });
 });
 
 /** What the sealed schedule keeps of the transactions still asked of. */
@@ -726,7 +760,7 @@ describe("Lovejoin's page after a restore (independent review M14)", () => {
 
   it("says plainly when Koios hasn't said what made a box, and that the wallet asks again", () => {
     expect(notMixed(1, 1)).toContain(
-      "One of your boxes isn't known to be mixed yet: Koios hasn't said how it went into the pool. It doesn't come back by itself meanwhile. The wallet asks Koios again at the next read, and Mix my boxes again waits until it has.",
+      "One of your boxes isn't known to be mixed yet: Koios hasn't said how it went into the pool. It doesn't come back by itself meanwhile. The wallet asks Koios again at the next read, and Mix my boxes again can't be used until it has.",
     );
     // How many is hidden with the balances (privacy review §2.16).
     expect(notMixed(1, 1, true)).toContain(
@@ -734,7 +768,7 @@ describe("Lovejoin's page after a restore (independent review M14)", () => {
     );
     // Those Koios hasn't said of are said apart, never as a stopped chain's.
     expect(notMixed(3, 1)).toContain(
-      "2 of your boxes aren't mixed yet: a chain stopped before mixing them. They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first. Koios hasn't said yet how one more went in: it doesn't come back by itself meanwhile. The wallet asks Koios again at the next read, and Mix my boxes again waits until it has.",
+      "2 of your boxes aren't mixed yet: a chain stopped before mixing them. They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first. Koios hasn't said yet how one more went in: it doesn't come back by itself meanwhile. The wallet asks Koios again at the next read, and Mix my boxes again can't be used until it has.",
     );
     expect(notMixed(3, 2)).toContain(
       "One of your boxes isn't mixed yet: a chain stopped before mixing it. It never comes back by itself, since each still shows where it went in. Mix my boxes again takes it first. Koios hasn't said yet how 2 more went in: they don't come back by themselves meanwhile.",
