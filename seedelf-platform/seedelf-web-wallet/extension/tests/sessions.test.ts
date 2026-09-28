@@ -522,7 +522,8 @@ describe("a private session", () => {
     const out = await sessions.outBuild("preprod", quote);
     await sessions.outSubmit("preprod", out.txHash);
     await sessions.outBuild("preprod", quote);
-    expect(probes()).toEqual([[await reward(0)], [await reward(0)], [await reward(1)]]);
+    // The submit asks about its own again, just before it's sent (independent review M13).
+    expect(probes()).toEqual([[await reward(0)], [await reward(0)], [await reward(0)], [await reward(1)]]);
   });
 
   it("won't sign a swap that spends anything but the session's, or bring a session back with an order waiting", async () => {

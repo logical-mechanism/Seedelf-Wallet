@@ -7,7 +7,8 @@
 // out     a Seedelf spend (Make public's builder, giveme.my's collateral)
 //         pays the session's account twice: the swap with its costs, and
 //         5 ₳ as the account's own collateral. The session is recorded
-//         before it's sent, so its index is never used twice.
+//         before it's sent, so this device never uses its index twice, and
+//         the chain is asked first whether another browser used it since.
 // swap    once that's on chain, Minswap builds the swap for the account
 //         (its aggregator takes only a sender); WebAssembly reads it against
 //         the session's key alone, and the key signs it. The DEX's batchers
@@ -827,6 +828,7 @@ export class SessionService {
       }
       const book = await this.book(network);
       if (built.index < book.next) throw new Error("That session was started already. Start a new one.");
+      await this.stillUnused(network, built.index);
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
         index: built.index,
@@ -911,6 +913,7 @@ export class SessionService {
       const book = await this.book(network);
       if (built.index < book.next) throw new Error("That mix was started already. Start a new one.");
       if (built.mix.again && book.sessions.some(mixingAgain)) throw new Error("Your boxes are being mixed again already.");
+      await this.stillUnused(network, built.index);
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
         index: built.index,
@@ -1174,6 +1177,7 @@ export class SessionService {
       }
       const book = await this.book(network);
       if (built.index < book.next) throw new Error("That session was started already. Start a new one.");
+      await this.stillUnused(network, built.index);
       // Where Lovejoin is, how it comes back is kept with it.
       const back = this.deps.lovejoin?.available(network) ? { direct: direct ?? !(await this.throughLovejoin()) } : {};
       // Recorded before it's sent: whatever happens next, this index is never used again.
@@ -2476,7 +2480,7 @@ export class SessionService {
    * of sessions to come, and successive windows overlap, tying every session
    * the wallet opens together, whatever the IP address.
    * Only once `next` turns out used does it ask about INDEX_PROBE more at a
-   * time.
+   * time. It's asked again just before the funding is sent (stillUnused).
    */
   private async freshIndex(network: NetworkName): Promise<number> {
     const { wasm, wallet } = this.deps;
@@ -2488,6 +2492,33 @@ export class SessionService {
       const used = await this.deps.koios(network).usedStakeAddresses(probe.map((p) => p.reward));
       const fresh = probe.find((p) => !used.has(p.reward));
       if (fresh) return fresh.index;
+    }
+  }
+
+  /**
+   * Asks the chain again, just before a new session's funding is recorded
+   * and sent, whether one-time account `index` is still unused (independent
+   * review M13): its stake key on any address (`account_addresses`, as
+   * freshIndex asks), and anything at its payment key. Review found it
+   * unused, but its funding may wait up to 10 minutes for Send, and
+   * meanwhile the same phrase in another browser, or a wallet removed and
+   * restored, may have funded a session of its own there. A new review
+   * takes the next unused one. Only what's on chain, as Koios has it, shows:
+   * two browsers funding sessions at about the same time can still share
+   * an account.
+   */
+  private async stillUnused(network: NetworkName, index: number): Promise<void> {
+    const { wasm, wallet } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const { reward, keyHash } = await wallet.withKeys((keys) => ({
+      reward: keys.oneTime.rewardAddress(net, index),
+      keyHash: keys.oneTime.keyHash(index),
+    }));
+    const koios = this.deps.koios(network);
+    if ((await koios.usedStakeAddresses([reward])).has(reward) || (await koios.credentialUtxos([keyHash])).length) {
+      throw new Error(
+        "That session's one-time account was used meanwhile, by your recovery phrase in another browser, say. Nothing was sent. Review it again: it takes the next unused one.",
+      );
     }
   }
 
