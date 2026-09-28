@@ -31,6 +31,7 @@ import {
   boxFrom,
   isHistoryClass,
   MADE_PRIVATE,
+  merged,
   receivedIn,
   sessionClass,
   UNKNOWN,
@@ -184,8 +185,8 @@ export class ActivityService {
     };
     // A session is shown by its number, from 1; its address says nothing to the user.
     const session = typeof s.index === "number" ? `Private session ${s.index + 1}` : undefined;
-    // What it leaves in the private balance: the history its review worked out (the inputs' own), or a
-    // session's funding change and return, which are that session's.
+    // What it leaves in the private balance: the history its review worked out (the inputs' own; a session's
+    // funding's, with the session's), or a session's funding change and return, which are that session's.
     const origin: HistoryClass | undefined = isHistoryClass(s.origin)
       ? { id: s.origin.id, origin: s.origin.origin }
       : (pending.kind === "session-out" || pending.kind === "session-back") && typeof s.index === "number"
@@ -212,8 +213,17 @@ export class ActivityService {
                 : pending.kind === "mint"
                   ? { ...shared, kind: "mint", direction: "none", detail: s.label || undefined }
                   : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };
-    if (origin) entry.origin = origin;
-    return this.update(network, (h) => ({ ...h, entries: [...h.entries.filter((e) => e.txHash !== entry.txHash), entry] }));
+    return this.update(network, (h) => {
+      // A return's money came from the session's account, which its fundings paid: it carries what they
+      // spent, as their change does, and is one history with that change (independent review L41).
+      const back =
+        pending.kind === "session-back" && !isHistoryClass(s.origin) && session
+          ? h.entries.filter((e) => e.kind === "session-out" && e.detail === session && isHistoryClass(e.origin)).map((e) => e.origin!)
+          : [];
+      const o = back.length && origin ? merged([origin, ...back]) : origin;
+      if (o) entry.origin = o;
+      return { ...h, entries: [...h.entries.filter((e) => e.txHash !== entry.txHash), entry] };
+    });
   }
 
   /**

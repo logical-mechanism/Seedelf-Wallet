@@ -1,15 +1,17 @@
 // Where each private UTxO's money came from, as the sealed history says
 // (independent review): what a restored wallet's history finds already there
 // is Unknown, not a payment received (L38); money still held never ages out
-// of the history, and Unknown money is kept apart by its transaction (L40).
+// of the history, and Unknown money is kept apart by its transaction (L40); a
+// session's funding change and return carry what paid for the session (L41).
 import { describe, expect, it } from "vitest";
 
 import type { KoiosUtxo } from "../src/background/koios";
 import { classesOf, spentHistories } from "../src/background/script-spend";
-import { historiesNote, historyTags, unknownIn } from "../src/shared/histories";
+import { SESSION_OUT } from "../src/background/sessions";
+import { boxFrom, historiesNote, historyTags, unknownIn, type HistoryClass } from "../src/shared/histories";
 import type { PendingTx } from "../src/shared/rpc";
 import { activityTitle } from "../src/ui/activity";
-import { ownedUtxos, testBalances, vectors } from "./fakes";
+import { minswapEstimate, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 
@@ -186,5 +188,54 @@ describe("money whose history the wallet keeps apart (independent review L40)", 
     expect(historyTags(a)).toEqual(["Unknown"]);
     // With nothing known, WebAssembly merges nothing it can name, and nothing is said.
     expect(spentHistories({}, inputs, [])).toBeUndefined();
+  });
+});
+
+describe("a session's funding change and return (independent review L41)", () => {
+  const sent = (kind: PendingTx["kind"], txHash: string): PendingTx => ({ kind, network: "preprod", txHash, submittedAt: 1, confirmations: null });
+
+  it("carry the box that paid for the session, so a later review counts it", async () => {
+    const t = await unlocked();
+    // One spend: the funding takes the 25 ₳ UTxO alone, a box back from Lovejoin.
+    const evaluation = withdrawPreprod.amount.evaluation as { result: unknown[] };
+    t.koios.evaluation = { ...evaluation, result: evaluation.result.slice(0, 1) };
+    await t.activity.arrived("preprod", []);
+    await t.activity.sent("preprod", sent("lovejoin-withdraw", a1.tx_hash), { lovelace: a1.value });
+    await t.balances.get("preprod");
+    const quote = await t.sessions.quote("preprod", minswapEstimate.ask);
+    const out = await t.sessions.outBuild("preprod", quote);
+    expect(out.inputs).toBe(1);
+
+    // Kept for Send with what its change carries: the box's history and the session's.
+    const kept = (await t.session.get<Record<string, unknown> & { origin: HistoryClass; index: number }>(SESSION_OUT))!;
+    const change: HistoryClass = { id: `${boxFrom(a1.tx_hash).id}+session:${kept.index}`, origin: "session" };
+    expect(kept.origin).toEqual(change);
+    // Sent (pending.ts writes the kept summary down), its change is classed so.
+    const { txCbor: _txCbor, seed: _seed, builtAt: _builtAt, ...summary } = kept;
+    await t.activity.sent("preprod", sent("session-out", out.txHash), summary);
+    const changeUtxo = { ...at("00"), tx_hash: out.txHash, tx_index: 1 };
+    const returned = at("5b");
+    const otherBox = at("5c");
+    await t.activity.sent("preprod", sent("lovejoin-withdraw", otherBox.tx_hash), { lovelace: "9710000" });
+
+    // Its return, written without a history of its own, carries the same: one history with the change.
+    await t.activity.sent("preprod", sent("session-back", returned.tx_hash), { index: kept.index, lovelace: "4000000" });
+    const classes = await t.activity.classes("preprod", [changeUtxo, returned, otherBox]);
+    expect(classes.get(`${out.txHash}#1`)).toEqual(change);
+    expect(classes.get(`${returned.tx_hash}#0`)).toEqual(change);
+
+    // Spending the change with another box ties two boxes, and the note says so.
+    const n = kept.index + 1;
+    expect(historiesNote([change, boxFrom(otherBox.tx_hash)])).toBe(
+      `This spends 2 boxes back from Lovejoin and money from Private session ${n} together. Anyone can see they're one owner's, which ties them to each other, and undoes some of what Lovejoin did for the boxes.`,
+    );
+    // The change and the return together tie nothing new: one history, no note.
+    const byOutpoint = Object.fromEntries(classes);
+    const both = [
+      { txHash: out.txHash, txIndex: 1 },
+      { txHash: returned.tx_hash, txIndex: 0 },
+    ];
+    expect(historiesNote(spentHistories(byOutpoint, both, []))).toBeUndefined();
+    expect(historyTags(change)).toEqual(["Back from Lovejoin", `Private session ${n}`]);
   });
 });

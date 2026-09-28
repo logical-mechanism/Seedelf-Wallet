@@ -433,3 +433,64 @@ fn unknown_money_of_different_transactions_is_kept_apart_once_anything_is_known(
             .unwrap();
     assert_eq!(outpoints(&spend.inputs()), outpoints(&blind.inputs()));
 }
+
+/// A session's funding change carries what paid for it, a box say, with the
+/// session's history (independent review L41): selection still takes it as
+/// the session's money, never as a box.
+#[test]
+fn a_funding_change_carrying_a_box_is_still_the_sessions_money() {
+    let w = world();
+    let change = owned(&w, 0x01, 0, 20 * ADA, &[]);
+    let rec = owned(&w, 0x02, 0, 20 * ADA, &[]);
+    let later_box = owned(&w, 0x03, 0, 30 * ADA, &[]);
+    let available = [change.clone(), rec.clone(), later_box.clone()];
+    let of = |purpose: Purpose| {
+        histories(
+            purpose,
+            &[
+                (
+                    &change,
+                    class(
+                        &format!("box:{}+session:3", "0a".repeat(32)),
+                        Origin::Session,
+                    ),
+                ),
+                (&rec, received(&rec)),
+                (&later_box, a_box(&later_box)),
+            ],
+        )
+    };
+    let fund = |purpose: Purpose| {
+        let spend = build::sweep_many_apart(
+            &w.chain,
+            &available,
+            &of(purpose),
+            &funding(5 * ADA, Assets::new()),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        outpoints(&spend.inputs())
+    };
+    // Session 3's top-up takes what its funding left first.
+    let top_up = Purpose::Fund {
+        session: Some("session:3".into()),
+    };
+    assert_eq!(fund(top_up), outpoints(std::slice::from_ref(&change)));
+    // Another session's funding takes received money, leaving it for last.
+    let other = Purpose::Fund {
+        session: Some("session:4".into()),
+    };
+    assert_eq!(fund(other), outpoints(std::slice::from_ref(&rec)));
+    // A Send takes it as a session's, before received money and boxes.
+    let spend = build::sweep_many_apart(
+        &w.chain,
+        &available,
+        &of(Purpose::Pay),
+        &pay(15 * ADA),
+        &w.owner,
+        w.signer,
+    )
+    .unwrap();
+    assert_eq!(outpoints(&spend.inputs()), outpoints(&[change]));
+}
