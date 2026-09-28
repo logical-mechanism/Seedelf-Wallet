@@ -113,6 +113,16 @@ describe("two pages and a mix from the public account (independent review L30)",
     expect((await publicReservation(t))?.until).toBeUndefined();
   });
 
+  it("never holds every mix back for a reservation a stopped mix left as being sent (a write that failed)", async () => {
+    const t = await publicFunded();
+    await t.wallet.withKeys(() =>
+      t.session.set(SESSION_RESERVED_PREFIX + "preprod", { public: { inputs: [`${"e6".repeat(32)}#0`], collateral: [`${"e5".repeat(32)}#0`] } }),
+    );
+    // Nothing is being sent from the account: the reservation goes, and the review is built.
+    await t.lovejoin.publicBuild("preprod", 1);
+    expect((await publicReservation(t))?.until).toBeDefined();
+  });
+
   it("sends a mix once when its Send is pressed on two pages at once", async () => {
     const t = await publicFunded();
     const mix = await t.lovejoin.publicBuild("preprod", 1);

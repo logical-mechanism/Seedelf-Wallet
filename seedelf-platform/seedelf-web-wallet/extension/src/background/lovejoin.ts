@@ -1203,10 +1203,7 @@ export class LovejoinService {
   async publicBuild(network: NetworkName, boxes: number): Promise<LovejoinPublicSummary> {
     if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
     checkBoxes(boxes);
-    const sending = await this.sendingOf(network);
-    if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING);
-    // Nor while the last may have gone through, unseen yet: the account would pay for a mix twice.
-    if (await this.publicUnsettled(network)) throw new Error(PUBLIC_MAYBE_WAIT);
+    await this.publicReady(network);
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
     const { wasm, wallet, now } = this.deps;
@@ -1239,6 +1236,25 @@ export class LovejoinService {
     };
     await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() }, chain.reserved);
     return summary;
+  }
+
+  /**
+   * Refuses a new mix from the public account while the last is still being
+   * sent, or stopped at a transaction that may have gone through, unseen
+   * yet: the account could pay for a mix twice (independent review L5).
+   * Otherwise nothing is being sent from it, and a reservation left as being
+   * sent (a write that failed) goes, rather than hold every mix back. In the
+   * account's turn, so no Send starts meanwhile (independent review L30).
+   */
+  private publicReady(network: NetworkName): Promise<void> {
+    return this.inTurn(`public.${network}`, async () => {
+      const sending = await this.sendingOf(network);
+      if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING);
+      if (await this.publicUnsettledNow(network)) throw new Error(PUBLIC_MAYBE_WAIT);
+      await this.reserving(network, (kept) => {
+        if (kept[chainOwner()] && kept[chainOwner()]!.until === undefined) delete kept[chainOwner()];
+      });
+    });
   }
 
   /**
@@ -1280,10 +1296,7 @@ export class LovejoinService {
    */
   async publicAgainBuild(network: NetworkName): Promise<PublicAgain> {
     if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
-    const sending = await this.sendingOf(network);
-    if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING);
-    // Nor while the last may have gone through, unseen yet (independent review L5).
-    if (await this.publicUnsettled(network)) throw new Error(PUBLIC_MAYBE_WAIT);
+    await this.publicReady(network);
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
     const { wasm, wallet, now } = this.deps;
