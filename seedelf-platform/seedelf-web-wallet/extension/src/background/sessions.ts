@@ -1972,18 +1972,28 @@ export class SessionService {
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
       delete s.lovejoinSkipped;
     });
-    await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
-    // Being sent: its change to come and its collateral are the chain's too.
-    await this.deps.lovejoin?.reserve(network, chainOwner(built.index), txs!);
-    // Recorded, sealed, before any of it is sent: what it deposits, mixes and leaves.
-    await this.deps.lovejoin?.recordChain(network, {
+    const lovejoin = this.deps.lovejoin;
+    const start = async () => {
+      // Being sent: its change to come and its collateral are the chain's too.
+      await lovejoin?.reserve(network, chainOwner(built.index), txs!);
+      try {
+        await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
+      } catch (e) {
+        await lovejoin?.release(network, chainOwner(built.index)).catch(() => undefined);
+        throw e;
+      }
+    };
+    // Recorded, sealed, before any of it is sent, and before its progress is where the runner sends it from
+    // (independent review L28): what it deposits, mixes and leaves.
+    const record = {
       session: built.index,
       progress: this.pendingKey(network, built.index),
       txs: txs!,
       leaves: leaves ?? [],
       boxes: summary.lovejoin?.boxes ?? 0,
       again: !!summary.lovejoin?.again,
-    });
+    };
+    await (lovejoin ? lovejoin.recordChain(network, record, start) : start());
     await this.deps.alarm?.start();
     await this.pump(network, built.index, budgetMs);
     return { kind: "session-back", network, txHash: built.txHash, submittedAt: this.deps.now(), confirmations: null };

@@ -749,6 +749,12 @@ export class LovejoinService {
   private pumping = new Set<NetworkName>();
   /** One task at a time on each record (inTurn). */
   private turns = new Map<string, Promise<unknown>>();
+  /**
+   * The chains recorded whose progress is being put where they wait
+   * (recordChain), by id: not cut meanwhile (cuts). In memory: a worker that
+   * stops in between never put it there, and the chain was cut.
+   */
+  private starting = new Set<string>();
   /** The pool as a swap's review last read it, by network (room). */
   private rooms = new Map<NetworkName, { at: number; room: { others: number; free: number } }>();
 
@@ -1255,19 +1261,21 @@ export class LovejoinService {
     // A payment may have gone maybe sent since the review: nothing of the mix goes, or is kept for it, meanwhile.
     await settleMaybeSent(this.deps, network);
     const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
-    // Its own boxes mixed again: they wait afresh once its first mix is in (chainSent).
-    await wallet.withKeys(async () => {
-      await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
-      await session.remove(SESSION_LOVEJOIN_PUBLIC);
-    });
-    // Being sent: its change to come and its collateral are the chain's too.
-    await this.reserve(network, chainOwner(), built.chain);
-    await this.recordChain(network, {
-      progress: SESSION_LOVEJOIN_SENDING + network,
-      txs: built.chain,
-      leaves: built.leaves ?? [],
-      boxes: built.boxes,
-      ...(built.again ? { again: true } : {}),
+    // Recorded, sealed, before its progress is where anything can send it from (independent review L28). Its own
+    // boxes mixed again: they wait afresh once its first mix is in (chainSent).
+    const chain = { progress: SESSION_LOVEJOIN_SENDING + network, txs: built.chain, leaves: built.leaves ?? [], boxes: built.boxes };
+    await this.recordChain(network, { ...chain, ...(built.again ? { again: true } : {}) }, async () => {
+      // Being sent: its change to come and its collateral are the chain's too.
+      await this.reserve(network, chainOwner(), built.chain);
+      try {
+        await wallet.withKeys(async () => {
+          await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
+          await session.remove(SESSION_LOVEJOIN_PUBLIC);
+        });
+      } catch (e) {
+        await this.release(network, chainOwner()).catch(() => undefined);
+        throw e;
+      }
     });
     await this.deps.alarm?.start();
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
@@ -1402,10 +1410,15 @@ export class LovejoinService {
    * Records a chain before any of it is sent: its deposit, each mix and its
    * leaves, sealed, so the wallet knows which of its boxes it hasn't mixed
    * yet, after a lock too. `progress`: where it waits while it's sent.
+   * `start` then puts it there (and reserves what it spends), so nothing can
+   * send a chain with no record (independent review L28); meanwhile it isn't
+   * taken for one a lock cut (cuts). One whose `start` fails never went:
+   * its record goes.
    */
   async recordChain(
     network: NetworkName,
     chain: { session?: number; progress: string; txs: LovejoinChain["txs"]; leaves: OutRef[]; boxes: number; again?: boolean },
+    start?: () => Promise<void>,
   ): Promise<void> {
     const { txs } = chain;
     const record: ChainRecord = {
@@ -1421,9 +1434,22 @@ export class LovejoinService {
       sent: 0,
       at: this.deps.now(),
     };
-    await this.update(network, (s) => {
-      s.chains = [...s.chains.filter((c) => c.id !== record.id), record];
-    });
+    this.starting.add(record.id);
+    try {
+      await this.update(network, (s) => {
+        s.chains = [...s.chains.filter((c) => c.id !== record.id), record];
+      });
+      try {
+        await start?.();
+      } catch (e) {
+        await this.update(network, (s) => {
+          s.chains = s.chains.filter((c) => c.id !== record.id);
+        }).catch(() => undefined);
+        throw e;
+      }
+    } finally {
+      this.starting.delete(record.id);
+    }
   }
 
   /**
@@ -1479,6 +1505,8 @@ export class LovejoinService {
     if (!live.length) return;
     const stopped = new Map<string, string>();
     for (const c of live) {
+      // Its progress is being put where it waits (recordChain): not cut.
+      if (this.starting.has(c.id)) continue;
       const progress = await wallet.withKeys(() => session.get<ChainProgress & { stopped?: string }>(c.progress));
       // Another chain's in its place is this one's gone too.
       if (progress?.txs?.at(-1)?.txHash !== c.id) stopped.set(c.id, CHAIN_CUT);
