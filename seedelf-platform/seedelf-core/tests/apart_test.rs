@@ -154,6 +154,14 @@ fn same(a: &UtxoResponse, b: &UtxoResponse) -> bool {
     a.tx_hash == b.tx_hash && a.tx_index == b.tx_index
 }
 
+/// How many of `boxes` `spent` spends.
+fn boxes_in(boxes: &[UtxoResponse], spent: &[UtxoResponse]) -> usize {
+    spent
+        .iter()
+        .filter(|u| boxes.iter().any(|b| same(b, u)))
+        .count()
+}
+
 fn outpoints(utxos: &[UtxoResponse]) -> Vec<String> {
     let mut v: Vec<String> = utxos
         .iter()
@@ -195,12 +203,6 @@ fn many_small_utxos_ahead_of_the_boxes_never_block_what_the_cli_order_pays() {
     let available: Vec<UtxoResponse> = small.iter().chain(&boxes).cloned().collect();
     let mut known: Vec<(&UtxoResponse, Class)> = small.iter().map(|u| (u, received(u))).collect();
     known.extend(boxes.iter().map(|u| (u, a_box(u))));
-    let boxes_in = |spent: &[UtxoResponse]| {
-        spent
-            .iter()
-            .filter(|u| boxes.iter().any(|b| same(b, u)))
-            .count()
-    };
 
     for purpose in [Purpose::Pay, Purpose::Mint, Purpose::Fund { session: None }] {
         let h = histories(purpose.clone(), &known);
@@ -212,7 +214,7 @@ fn many_small_utxos_ahead_of_the_boxes_never_block_what_the_cli_order_pays() {
             .inputs();
         // One box and the most small ones a transaction takes are short:
         // two boxes, and the small ones that make up the rest.
-        assert_eq!(boxes_in(&spent), 2, "{purpose:?}");
+        assert_eq!(boxes_in(&boxes, &spent), 2, "{purpose:?}");
         assert!(spent.len() <= 22, "{purpose:?}: {} inputs", spent.len());
         // And it says what it merged: each is a history of its own.
         assert_eq!(h.merged(&spent).len(), spent.len());
@@ -220,18 +222,19 @@ fn many_small_utxos_ahead_of_the_boxes_never_block_what_the_cli_order_pays() {
         // 35 ₳: one box pays with the small ones, where the CLI's order
         // spends four.
         let (apart, blind) = both(&w, &available, &h, &pay(35 * ADA));
-        assert_eq!(boxes_in(&blind.unwrap().inputs()), 4);
+        assert_eq!(boxes_in(&boxes, &blind.unwrap().inputs()), 4);
         let spent = apart
             .unwrap_or_else(|e| panic!("{purpose:?}: {e}"))
             .inputs();
-        assert_eq!(boxes_in(&spent), 1, "{purpose:?}");
+        assert_eq!(boxes_in(&boxes, &spent), 1, "{purpose:?}");
     }
 }
 
-/// The same with a token in each small UTxO: those the spend doesn't send go
-/// behind the boxes (independent review M6).
+/// The same with a token in each small UTxO: they're merged before a second
+/// box is, as pure ADA is, where the CLI's order spends the five
+/// (independent review M6).
 #[test]
-fn token_utxos_the_spend_doesnt_send_go_behind_the_boxes_when_merging_fails() {
+fn token_utxos_are_merged_before_a_second_box_when_merging_fails() {
     let w = world();
     let small: Vec<UtxoResponse> = (0..24)
         .map(|i| owned(&w, 0x31, i, 1_700_000, &[("nft", 1)]))
@@ -241,8 +244,107 @@ fn token_utxos_the_spend_doesnt_send_go_behind_the_boxes_when_merging_fails() {
     let mut known: Vec<(&UtxoResponse, Class)> = small.iter().map(|u| (u, received(u))).collect();
     known.extend(boxes.iter().map(|u| (u, a_box(u))));
     let h = histories(Purpose::Pay, &known);
-    let (apart, _) = both(&w, &available, &h, &pay(40 * ADA));
-    assert_eq!(outpoints(&apart.unwrap().inputs()), outpoints(&boxes));
+    let (apart, blind) = both(&w, &available, &h, &pay(40 * ADA));
+    assert_eq!(outpoints(&blind.unwrap().inputs()), outpoints(&boxes));
+    let spent = apart.unwrap().inputs();
+    assert_eq!(boxes_in(&boxes, &spent), 1);
+    assert!(spent.len() <= 22, "{} inputs", spent.len());
+}
+
+/// When the purpose's order runs into the limit, merging pays as it did
+/// before the purpose's order came in: here own pure ADA and the one large
+/// payment, no box, where the next order would take all three
+/// (independent review M6, L39).
+#[test]
+fn a_failed_purpose_order_pays_as_merging_did_before_it() {
+    let w = world();
+    // The user's own money, which a Send takes first: 10 ₳ in 1 ₳ UTxOs and
+    // 15 of 1.2 ₳, each holding an NFT; a received payment of 35 ₳ holding
+    // one; three boxes.
+    let own_ada: Vec<UtxoResponse> = (0..10).map(|i| owned(&w, 0x34, i, ADA, &[])).collect();
+    let own_nfts: Vec<UtxoResponse> = (0..15)
+        .map(|i| owned(&w, 0x35, i, 1_200_000, &[("own", 1)]))
+        .collect();
+    let rec = owned(&w, 0x36, 0, 35 * ADA, &[("rec", 1)]);
+    let boxes: Vec<UtxoResponse> = (0..3).map(|i| owned(&w, 0xb4, i, BOX, &[])).collect();
+    let available: Vec<UtxoResponse> = own_ada
+        .iter()
+        .chain(&own_nfts)
+        .chain(std::slice::from_ref(&rec))
+        .chain(&boxes)
+        .cloned()
+        .collect();
+    let mut known: Vec<(&UtxoResponse, Class)> = own_ada
+        .iter()
+        .chain(&own_nfts)
+        .map(|u| (u, class("public", Origin::Own)))
+        .collect();
+    known.push((&rec, received(&rec)));
+    known.extend(boxes.iter().map(|u| (u, a_box(u))));
+    let h = histories(Purpose::Pay, &known);
+    let spent =
+        build::sweep_many_apart(&w.chain, &available, &h, &pay(38 * ADA), &w.owner, w.signer)
+            .unwrap()
+            .inputs();
+    let before: Vec<UtxoResponse> = own_ada.iter().chain([&rec]).cloned().collect();
+    assert_eq!(outpoints(&spent), outpoints(&before));
+    assert_eq!(boxes_in(&boxes, &spent), 0);
+}
+
+/// Many small UTxOs of the user's own, and two received payments holding
+/// an NFT each: when the small ones run into the limit, the two payments
+/// pay alone, never tying the user's money to boxes (independent review M6).
+#[test]
+fn received_token_utxos_pay_before_any_box_when_small_ones_hit_the_limit() {
+    let w = world();
+    let own: Vec<UtxoResponse> = (0..30).map(|i| owned(&w, 0x37, i, ADA, &[])).collect();
+    let nfts: Vec<UtxoResponse> = (0..2)
+        .map(|i| owned(&w, 0x38, i, 20 * ADA, &[("nft", 1)]))
+        .collect();
+    let boxes: Vec<UtxoResponse> = (0..5).map(|i| owned(&w, 0xb5, i, BOX, &[])).collect();
+    let available: Vec<UtxoResponse> = own.iter().chain(&nfts).chain(&boxes).cloned().collect();
+    let mut known: Vec<(&UtxoResponse, Class)> = own
+        .iter()
+        .map(|u| (u, class("public", Origin::Own)))
+        .collect();
+    known.extend(nfts.iter().map(|u| (u, received(u))));
+    known.extend(boxes.iter().map(|u| (u, a_box(u))));
+    let h = histories(Purpose::Pay, &known);
+    let spent =
+        build::sweep_many_apart(&w.chain, &available, &h, &pay(35 * ADA), &w.owner, w.signer)
+            .unwrap()
+            .inputs();
+    assert_eq!(outpoints(&spent), outpoints(&nfts));
+}
+
+/// A stranger's UTxO whose tokens make any transaction spending it too large
+/// is left for the boxes, and costs no box more than paying without it
+/// needs (independent review M6).
+#[test]
+fn a_token_utxo_too_large_to_merge_is_left_for_the_fewest_boxes() {
+    let w = world();
+    let names: Vec<String> = (0..400).map(|i| format!("{i:032}")).collect();
+    let tokens: Vec<(&str, u64)> = names.iter().map(|n| (n.as_str(), 1)).collect();
+    let junk = owned(&w, 0x39, 0, 200 * ADA, &tokens);
+    let boxes: Vec<UtxoResponse> = (0..5).map(|i| owned(&w, 0xb6, i, BOX, &[])).collect();
+    for (small, lovelace, want_boxes) in [(30, 35 * ADA, 2), (10, 30 * ADA, 3)] {
+        let own: Vec<UtxoResponse> = (0..small).map(|i| owned(&w, 0x3a, i, ADA, &[])).collect();
+        let available: Vec<UtxoResponse> =
+            own.iter().chain([&junk]).chain(&boxes).cloned().collect();
+        let mut known: Vec<(&UtxoResponse, Class)> = own
+            .iter()
+            .map(|u| (u, class("public", Origin::Own)))
+            .collect();
+        known.push((&junk, received(&junk)));
+        known.extend(boxes.iter().map(|u| (u, a_box(u))));
+        let h = histories(Purpose::Pay, &known);
+        let spent =
+            build::sweep_many_apart(&w.chain, &available, &h, &pay(lovelace), &w.owner, w.signer)
+                .unwrap_or_else(|e| panic!("{small}: {e}"))
+                .inputs();
+        assert!(!spent.iter().any(|u| same(u, &junk)), "{small}");
+        assert_eq!(boxes_in(&boxes, &spent), want_boxes, "{small}");
+    }
 }
 
 /// When the purpose's order runs into the limit, the largest pure ADA of the

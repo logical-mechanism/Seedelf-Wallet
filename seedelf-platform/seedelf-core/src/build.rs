@@ -2068,10 +2068,12 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
 ///    class first; then by the purpose's order, its last resorts after the
 ///    rest, and boxes back from Lovejoin last of all, one at a time, so two
 ///    are spent together only when nothing else pays. When that runs into
-///    what a transaction can spend (too many inputs), fewer inputs: the
-///    largest pure ADA first, boxes after it; then the boxes one more at a
-///    time ahead of the rest, so as few are spent as pay; and at the last
-///    the CLI's own order, so nothing the CLI pays is refused.
+///    what a transaction can spend (too many inputs), the same without the
+///    purpose's order; then as few boxes as pay, none first, then one more
+///    at a time, each with the fewest other inputs (the largest first,
+///    tokens or not), or with UTxOs holding tokens last, for when their
+///    tokens make it too large; and at the last the CLI's own order, so
+///    nothing the CLI pays is refused.
 fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
@@ -2295,12 +2297,14 @@ fn apart<T>(
     // a. As the CLI would, but the purpose's last resorts after the rest,
     //    and boxes after everything, one at a time; within each, by the
     //    purpose's order, the largest first (independent review L39).
-    // b. Fewer inputs: pure ADA, the largest first, the last resorts after
-    //    the rest, then the boxes one at a time, and UTxOs holding tokens the
-    //    spend doesn't send after the boxes.
-    // c. The boxes one more at a time: the largest j of them, then b's order
-    //    without the other boxes, for j = 1, 2, …, so no more boxes are spent
-    //    together than pay. Boxes that fail alone fail with more.
+    // b. The same without the purpose's order, pure ADA before tokens within
+    //    each: what merging paid before a did is paid the same way.
+    // c. As few boxes as pay: the largest j of them, then the rest without
+    //    the other boxes (the last resorts after the others), for j = 0, 1,
+    //    2, …, so no more boxes are spent together than pay. For each j, the
+    //    rest the largest first, tokens or not, for the fewest inputs; then
+    //    pure ADA before tokens, for when a UTxO's tokens make it too large.
+    //    Boxes that fail alone fail with more.
     // d. The CLI's own order, boxes among the rest by size: never refused
     //    what the CLI would pay.
     let tier = |u: &UtxoResponse| purpose.tier(&class(u));
@@ -2314,8 +2318,22 @@ fn apart<T>(
             std::cmp::Reverse(lovelace_of(u)),
         )
     });
-    let mut fewer: Vec<&UtxoResponse> = rest.iter().collect();
-    fewer.sort_by_key(|u| {
+    let mut by_tier: Vec<&UtxoResponse> = rest.iter().collect();
+    by_tier.sort_by_key(|u| {
+        (
+            tier(u),
+            !joins_base(u),
+            holds_tokens(u),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    let is_box = |u: &UtxoResponse| tier(u) == 2 && !holds_tokens(u);
+    let mut boxes: Vec<&UtxoResponse> = rest.iter().filter(|u| is_box(u)).collect();
+    boxes.sort_by_key(|u| (!joins_base(u), std::cmp::Reverse(lovelace_of(u))));
+    let mut largest: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
+    largest.sort_by_key(|u| (tier(u), !joins_base(u), std::cmp::Reverse(lovelace_of(u))));
+    let mut tokens_last: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
+    tokens_last.sort_by_key(|u| {
         (
             holds_tokens(u),
             tier(u),
@@ -2323,29 +2341,38 @@ fn apart<T>(
             std::cmp::Reverse(lovelace_of(u)),
         )
     });
-    let is_box = |u: &UtxoResponse| tier(u) == 2 && !holds_tokens(u);
-    let (boxes, others): (Vec<&UtxoResponse>, Vec<&UtxoResponse>) =
-        fewer.iter().partition(|u| is_box(u));
-    // With nothing but boxes, a and b grew these already.
-    let boxes_first = (1..=boxes.len())
-        .filter(|_| !others.is_empty())
-        .map(|j| (boxes[..j].iter().chain(&others).copied().collect(), j));
-    let mut blind: Vec<&UtxoResponse> = rest.iter().collect();
-    blind.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let same = |a: &[&UtxoResponse], b: &[&UtxoResponse]| {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| std::ptr::eq(*x, *y))
     };
+    let mut rests = vec![&largest];
+    if !same(&largest, &tokens_last) {
+        rests.push(&tokens_last);
+    }
+    let (boxes, rests) = (&boxes, &rests);
+    // With nothing but boxes, a grew these already.
+    let fewest_boxes = (0..=boxes.len())
+        .filter(|_| !largest.is_empty())
+        .flat_map(|j| {
+            rests
+                .iter()
+                .map(move |others| (boxes[..j].iter().chain(others.iter()).copied().collect(), j))
+        });
+    let mut blind: Vec<&UtxoResponse> = rest.iter().collect();
+    blind.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut failed = false;
     let mut boxes_fail = false;
     let mut grown: Vec<Vec<&UtxoResponse>> = Vec::new();
     // Each order, and how many boxes it brings forward (none for a, b, d).
-    let orders = [(by_history, 0), (fewer, 0)]
+    let orders = [(by_history, 0), (by_tier, 0)]
         .into_iter()
-        .chain(boxes_first)
+        .chain(fewest_boxes)
         .chain([(blind, 0)]);
     for (order, j) in orders {
-        // The same order again would fail the same way.
-        if (j > 0 && boxes_fail) || grown.iter().any(|g| same(g, &order)) {
+        // The same order again, or the start of one grown whole before (c's
+        // without boxes, often), would fail the same way.
+        let grown_before =
+            |g: &Vec<&UtxoResponse>| g.len() >= order.len() && same(&g[..order.len()], &order);
+        if (j > 0 && boxes_fail) || grown.iter().any(grown_before) {
             continue;
         }
         let whole = order.len() == rest.len();
