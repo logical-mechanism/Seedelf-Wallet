@@ -21,9 +21,10 @@
 // forget included. One box a run: others due at the same time wait a fresh
 // short delay each (WITHDRAW_SPREAD_MS), so a wallet locked for hours
 // doesn't send them all in one burst. The box that goes is one that has
-// waited the delay's least since a mix last moved it, one someone else's
-// mix has moved since the wallet's chain left it if there is one (§3.6),
-// and then the one that has waited longest in the pool.
+// waited the delay's least since a mix last moved it, and its own chain's
+// delay's least (a swap's as approved) since that chain went in; one
+// someone else's mix has moved since the wallet's chain left it if there is
+// one (§3.6); and then the one that has waited longest in the pool.
 // Boxes aren't remembered, they're found: other people's mixes
 // move them, and the Seedelf key's check finds them wherever they are, after a
 // restore too. What's kept, sealed (`lovejoin.<network>`), is the due times
@@ -831,6 +832,25 @@ function backOrder(boxes: OutRef[], rows: Map<string, KoiosUtxo>, leaves: Set<st
 function originOf(b: OutRef, s: Schedule): string | undefined {
   const made = s.chains.find((c) => c.deposit === b.txHash || c.mixes.includes(b.txHash));
   return made ? chainOwner(made.session) : s.leaves?.[ref(b)];
+}
+
+/**
+ * When chain `c`'s boxes may come back by its own wait (ms): its recorded
+ * delay's least (a swap's as approved, a return's as reviewed) from when it
+ * went in. 0 when it recorded none: Settings' least, since a mix last moved
+ * a box, is the rule then (backOrder).
+ */
+const ownWaitAt = (c: ChainRecord) => (c.delay ? c.at + delayHours(c.delay)[0] * HOUR : 0);
+
+/**
+ * When box `b` may come back by the wait of the recorded chain that put it
+ * where it is (ownWaitAt): another chain's earlier due time, drawn from a
+ * shorter delay, never brings it back first (final review F9). 0 when no
+ * recorded chain did (a restore, or someone else's mix moved it since).
+ */
+function ripeAt(b: OutRef, s: Schedule): number {
+  const made = s.chains.find((c) => c.deposit === b.txHash || c.mixes.includes(b.txHash));
+  return made ? ownWaitAt(made) : 0;
 }
 
 /** The boxes of `boxes` a mix from the public account put where they are. */
@@ -2049,7 +2069,9 @@ export class LovejoinService {
       for (const c of s.chains) {
         if (c.ended) unschedule(s, c, unmixedOf([c], owned).length - (c.unscheduled ?? 0), free.length);
       }
-      const keep = (c: ChainRecord) => !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], listed).length > 0;
+      // Kept while its boxes haven't waited its own delay's least, too: the withdraws read that from it (ripeAt).
+      const keep = (c: ChainRecord) =>
+        !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], listed).length > 0 || now < ownWaitAt(c);
       const gone = s.chains.filter((c) => !keep(c)).flatMap((c) => c.leaves.map((l) => [ref(l), chainOwner(c.session)] as const));
       const leaves = Object.entries({ ...s.leaves, ...Object.fromEntries(gone) }).filter(([r]) => there.has(r));
       if (leaves.length) s.leaves = Object.fromEntries(leaves);
@@ -2203,14 +2225,23 @@ export class LovejoinService {
     const rows = new Map(pool.map((u) => [outpoint(u), u]));
     const [least] = delayHours((await this.settings()).delay);
     const candidates = free(back, reserved);
-    const [box] = backOrder(candidates, rows, ownLeaves(schedule), least, now);
-    if (!box) return [];
+    if (!candidates.length) return [];
+    // Only a box that has waited its own chain's delay's least since that
+    // chain went in: a swap approved to wait longer than Settings' delay now
+    // keeps its wait, whichever chain's due time comes first (final review F9).
+    const [box] = backOrder(
+      candidates.filter((b) => ripeAt(b, schedule) <= now),
+      rows,
+      ownLeaves(schedule),
+      least,
+      now,
+    );
     // And only once it has waited the delay's least since a mix last moved
     // it: a box a mix moved minutes ago would say which mix it came from.
     // Until one has, the due time waits past the first that will, by a fresh
     // draw, so it isn't the very moment either.
-    if (waitedAt(box, rows, least) > now) {
-      const first = Math.min(...candidates.map((b) => waitedAt(b, rows, least)));
+    if (!box || waitedAt(box, rows, least) > now) {
+      const first = Math.min(...candidates.map((b) => Math.max(waitedAt(b, rows, least), ripeAt(b, schedule))));
       await this.update(network, (s) => moveDue(s, time, first + within(WITHDRAW_SPREAD_MS, random)));
       return [];
     }
