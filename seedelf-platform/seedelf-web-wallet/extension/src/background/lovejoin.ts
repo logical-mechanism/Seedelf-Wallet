@@ -543,6 +543,15 @@ interface Origin {
   seen: number;
 }
 
+/**
+ * How far along each of the public account's chains its payment keys are
+ * looked for, when an input of a transaction that made a box carries the
+ * account's stake key under a payment key the wallet doesn't know (madeBy):
+ * a thousand key hashes at most, about a fifth of a second, once for each
+ * such transaction.
+ */
+const FARTHER_KEYS = 500;
+
 /** Why a due time was drawn again. */
 interface DueMark {
   /**
@@ -2412,9 +2421,14 @@ export class LovejoinService {
   /**
    * What made each of `txHashes`, as Koios's tx_info says of its inputs: a
    * mix, when one sat at Lovejoin's mix_box; the public account, when one was
-   * under one of its payment keys, or staked to its stake key (accountKeys).
-   * Those Koios doesn't know are left out, and every one when it doesn't
-   * answer.
+   * under one of its payment keys (accountKeys). Only a payment key says so:
+   * anyone can pay from an address of their own payment key and the
+   * account's stake key, without the account's signature, as activity.ts's
+   * accountMatcher says. An input that carries the stake key under a payment
+   * key the wallet doesn't know has the account's keys looked for further
+   * (fartherKeys): an address of the account's past those known, before a
+   * balance reading found it. Those Koios doesn't know are left out, and
+   * every one when it doesn't answer.
    */
   private async madeBy(network: NetworkName, txHashes: string[]): Promise<Map<string, Pick<Origin, "mixed" | "public">>> {
     const mixBox = NETWORKS[network].lovejoin?.mixBox;
@@ -2430,23 +2444,54 @@ export class LovejoinService {
     const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
     if (!mixBox || !read.length) return told;
     const account = await this.accountKeys(network);
-    const theirs = ({ cred, stake }: { cred?: string; stake?: string }) =>
-      (cred !== undefined && account.payment.has(cred)) || (stake !== undefined && stake === account.stake);
-    for (const { tx_hash, inputs } of read) {
-      const keys = inputs!.map((i) => this.keysOf(i.payment_addr));
+    const spent = read.map(({ tx_hash, inputs }) => [tx_hash, inputs!.map((i) => this.keysOf(i.payment_addr))] as const);
+    // The stake key alone never makes an input the account's: its payment key is looked for further (independent review M14).
+    const unknown = new Set(
+      spent.flatMap(([, keys]) =>
+        keys.flatMap(({ cred, stake }) =>
+          cred !== undefined && cred !== mixBox && account.stake !== undefined && stake === account.stake && !account.payment.has(cred)
+            ? [cred]
+            : [],
+        ),
+      ),
+    );
+    if (unknown.size) for (const key of await this.fartherKeys(unknown)) account.payment.add(key);
+    for (const [tx_hash, keys] of spent) {
       told.set(tx_hash, {
         mixed: keys.some((k) => k.cred === mixBox),
-        ...(keys.some(theirs) ? { public: true as const } : {}),
+        ...(keys.some((k) => k.cred !== undefined && account.payment.has(k.cred)) ? { public: true as const } : {}),
       });
     }
     return told;
   }
 
   /**
+   * Which of `creds` are the public account's payment keys past the first
+   * GAP_LIMIT of each chain: looked for along both up to FARTHER_KEYS,
+   * stopping once each is found. Each is an input's that carried the
+   * account's stake key (madeBy), looked for once for each transaction Koios
+   * says the making of, whose answer is kept (found).
+   */
+  private fartherKeys(creds: Set<string>): Promise<string[]> {
+    return this.deps.wallet.withKeys(({ cardano }) => {
+      const left = new Set(creds);
+      const found: string[] = [];
+      for (let i = GAP_LIMIT; i < FARTHER_KEYS && left.size; i++) {
+        for (const role of [0, 1]) {
+          const key = cardano.paymentKeyHash(role, i);
+          if (left.delete(key)) found.push(key);
+        }
+      }
+      return found;
+    });
+  }
+
+  /**
    * The public account's keys as the wallet knows them (hex): its payment
    * keys, the first GAP_LIMIT of each chain and those the last balance
    * reading found past them; and its stake key, which each of its base
-   * addresses carries however far past them, a balance reading or not.
+   * addresses carries however far past them, a balance reading or not
+   * (madeBy looks further for one of those).
    */
   private accountKeys(network: NetworkName): Promise<{ payment: Set<string>; stake?: string }> {
     const { wallet, session, wasm } = this.deps;

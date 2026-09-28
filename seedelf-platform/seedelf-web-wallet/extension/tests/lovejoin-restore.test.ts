@@ -28,6 +28,7 @@ import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin } from "../src/ui/screens/Home";
 import { anywayBox, NotMixed } from "../src/ui/screens/Lovejoin";
 import { account, AGREES, atSession, CHAINS, HOUR, PASSWORD, POOL, publicFunded, withSession, type Tested } from "./chain-fixtures";
+import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, loadTestWasm, sessionSwap, testBalances, withdrawPreprod } from "./fakes";
 
@@ -574,6 +575,28 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     const held = await t.lovejoin.held("preprod");
     expect(held).toMatchObject({ boxes: 3, notMixed: 0 });
     expect(held.unsure).toBeUndefined();
+  });
+
+  it("never counts a deposit as the public account's when its input only carries the account's stake key under someone else's payment key", async () => {
+    const t = await publicFunded();
+    const P = hash("b9");
+    t.koios.addedToAccounts.push(await ownedBox(t, P));
+    // Anyone can pay from an address of their own payment key and the account's stake key, without the account.
+    const stake = await t.wallet.withKeys((k) => Buffer.from(bech32Bytes(k.cardano.stakeAddress(t.deps.wasm.Network.Preprod)).slice(1)).toString("hex"));
+    const stranger = "ee".repeat(28);
+    t.koios.txSpends.set(P, [{ payment_addr: { bech32: preprodAddress(stranger, stake), cred: stranger } }]);
+    const status = await t.lovejoin.status("preprod");
+    expect(status.fromPublic).toEqual([]);
+    expect(status.notMixed).toEqual([{ txHash: P, txIndex: 0 }]);
+    expect(await origins(t)).toEqual({ [P]: { mixed: false, seen: t.clock.now } });
+    // A deposit's box, mixed again from the private balance as any is.
+    expect(await t.lovejoin.againBoxes("preprod")).toEqual({ boxes: 1, owned: 1 });
+    // Read from its address alone, as a Koios without `cred` gives it: the same.
+    const Q = hash("ba");
+    t.koios.addedToAccounts.push(await ownedBox(t, Q));
+    t.koios.txSpends.set(Q, [{ payment_addr: { bech32: preprodAddress(stranger, stake) } }]);
+    expect((await t.lovejoin.status("preprod")).fromPublic).toEqual([]);
+    expect((await origins(t))?.[Q]).toEqual({ mixed: false, seen: t.clock.now });
   });
 });
 
