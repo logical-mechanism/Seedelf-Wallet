@@ -188,9 +188,11 @@ type RecordedTx = SessionTx & {
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`), recorded before it's sent. */
   orders?: string[];
   /**
-   * A return Koios didn't answer: what its review said, for the private
-   * history once the chain shows it (noteLanded), as the wallet's watch
-   * does for its own (independent review M7).
+   * A return whose private history isn't written yet: what its review said,
+   * recorded with it before it's sent, and gone once its history is. One
+   * Koios didn't answer, or that a lock or a restart cut off, is written
+   * once the chain shows it (noteLanded), as the wallet's watch does for its
+   * own (independent review M7).
    */
   summary?: Pick<SessionBackSummary, "index" | "lovelace" | "tokens" | "fee">;
 };
@@ -578,6 +580,16 @@ function landed(copies: RecordedTx[], gone: Set<string>): boolean {
  */
 function mayStillLand(s: SessionRecord, now: number): boolean {
   return s.txs.some((t) => t.replaced && !t.confirmed && now - t.at < REPLACED_WATCH_MS);
+}
+
+/**
+ * A return whose history isn't written yet (`summary`), that Koios may have
+ * taken and the chain hasn't shown: looked for as long as a copy built
+ * again is (REPLACED_WATCH_MS), since a lagging Koios may show it late
+ * (independent review M7).
+ */
+function awaitsHistory(t: RecordedTx, now: number): boolean {
+  return !!t.summary && !t.confirmed && !t.unsent && now - t.at < REPLACED_WATCH_MS;
 }
 
 export class SessionService {
@@ -983,6 +995,9 @@ export class SessionService {
           throw new Error("Its last transaction hasn't reached the chain yet. Wait for it, then disconnect.");
         }
       }
+      // A return seen on chain earlier, whose history's write failed then: written now, before its record goes
+      // and takes the summary with it (independent review M7).
+      s = await this.noteLanded(network, s);
       const { keyHash } = (await this.accounts(network, [s])).get(index)!;
       const spent = await wallet.withKeys(() => spentSet(session));
       const rows = await readFresh(spent, () => koios.credentialUtxos([keyHash]), (r) => r, this.deps.sleep);
@@ -1412,9 +1427,41 @@ export class SessionService {
     for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt)) {
       if (await this.pendingChain(network, s.index)) await this.serial(() => this.pump(network, s.index)).catch(() => undefined);
     }
-    let still = (await this.book(network)).sessions.some(running);
+    // A return whose history isn't written yet, of a session nothing steps (a site's, a hand-run swap, a paused
+    // one): looked for, and written once on chain, as act does for a running one (independent review M7).
+    for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt && r.txs.some((t) => t.summary))) {
+      await this.serial(() => this.settleReturns(network, s.index)).catch(() => undefined);
+    }
+    const now = this.deps.now();
+    const after = await this.book(network);
+    let still = after.sessions.some((r) => running(r) || (!r.closedAt && r.txs.some((t) => awaitsHistory(t, now))));
     for (const s of book.sessions.filter((r) => !r.closedAt)) still ||= !!(await this.pendingChain(network, s.index));
     return still;
+  }
+
+  /**
+   * Session `index`'s returns whose history isn't written yet, when nothing
+   * steps it: looked for on chain (settled) while they may still land, and
+   * written once there (noteLanded), so a balance reading doesn't note what
+   * came back as money received (independent review M7). Reads only.
+   */
+  private async settleReturns(network: NetworkName, index: number): Promise<void> {
+    const { wallet, session, now } = this.deps;
+    let s = (await this.book(network)).sessions.find((r) => r.index === index);
+    if (!s || s.closedAt || running(s)) return;
+    let returned = false;
+    if (s.txs.some((t) => awaitsHistory(t, now()))) {
+      const waiting = s.txs.filter((t) => !t.confirmed && !t.unsent);
+      const statuses = await this.deps.koios(network).txStatus(waiting.map((t) => t.txHash));
+      const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
+      if (on.size) {
+        returned = waiting.some((t) => t.kind === "back" && on.has(t.txHash));
+        s = await this.update(network, index, (r) => void settle(r, on));
+      }
+    }
+    await this.noteLanded(network, s);
+    // The private balance has new UTxOs: the next reading should see them.
+    if (returned) await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
   }
 
   /**
@@ -2031,18 +2078,32 @@ export class SessionService {
       },
       summary: { index: built.index, lovelace: built.lovelace, tokens: built.tokens, fee: built.fee },
     });
-    await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
+    const written = await (this.deps.activity?.sent(network, pending, built) ?? Promise.resolve()).then(
+      () => true,
+      () => false,
+    );
+    if (written) {
+      // Its history is written: nothing is left to write once it lands (RecordedTx `summary`).
+      await this.update(network, built.index, (s) => {
+        const t = s.txs.find((x) => x.txHash === built.txHash);
+        if (t) delete t.summary;
+      }).catch(() => undefined);
+    } else {
+      // Written once it's seen on chain (noteLanded), which the runs look for (independent review M7).
+      await this.deps.alarm?.start();
+    }
     return pending;
   }
 
   /**
-   * Writes the private history of each of `s`'s returns Koios didn't answer
-   * when they were sent, once the chain has it (settled: confirmed), or a
-   * copy of it built again, from the summary kept with it (independent
-   * review M7). Without it, what it brought back would read as money
-   * received, which a funding or a mint takes first, tying the sessions
-   * together. Written before the summary goes: a second write only writes
-   * it again. Returns the record as saved.
+   * Writes the private history of each of `s`'s returns whose history isn't
+   * written yet (Koios didn't answer, or a lock or a restart cut the send
+   * off), once the chain has it (settled: confirmed), or a copy of it built
+   * again, from the summary kept with it (independent review M7). Without
+   * it, what it brought back would read as money received, which a funding
+   * or a mint takes first, tying the sessions together. Written before the
+   * summary goes: a second write only writes it again. Returns the record as
+   * saved.
    */
   private async noteLanded(network: NetworkName, s: SessionRecord): Promise<SessionRecord> {
     const written = new Set<string>();
@@ -2218,8 +2279,8 @@ export class SessionService {
    * `kept`: where it was kept for Send, cleared once it's sent if that still
    * holds `keptHash` (this transaction, or the chain it's part of). `orders`:
    * a swap's, recorded with it. `after`: what else the record gains once
-   * it's sent. `summary`: a return's, kept with it when Koios doesn't answer
-   * (RecordedTx `summary`).
+   * it's sent. `summary`: a return's, recorded with it until its history is
+   * written (RecordedTx `summary`).
    */
   private async sendRecorded(
     network: NetworkName,
@@ -2244,8 +2305,11 @@ export class SessionService {
         sentBefore = !again.unsent;
         delete again.unsent;
         again.sending = true;
+        if (summary) again.summary = summary;
       } else {
-        s.txs.push({ kind, txHash, at: now(), sending: true, ...(orders ? { orders } : {}) });
+        // A return's summary goes with it before it's sent: a lock or a restart may cut the send off, and it may
+        // land all the same (independent review M7).
+        s.txs.push({ kind, txHash, at: now(), sending: true, ...(orders ? { orders } : {}), ...(summary ? { summary } : {}) });
       }
     });
     try {
@@ -2262,10 +2326,11 @@ export class SessionService {
         delete t.sending;
         if (maybe) t.inputs = txInputs(bytes);
         else if (!unread) t.unsent = true;
-        // It may land: its history is written once it's seen (noteLanded).
-        if ((maybe || unread) && summary) t.summary = summary;
       });
       if (maybe || unread) await wallet.withKeys(() => rememberSpent(session, network, bytes));
+      // It may land: its history is written once it's seen (noteLanded), which the runs look for, a site's
+      // session's too (runAll).
+      if ((maybe || unread) && summary) await this.deps.alarm?.start();
       // A return merged into the funding's change, which was spent elsewhere: the kept view of the contract is behind, so read it in full next time.
       if (kind === "back" && e instanceof SpentInputError) await forgetContractView(this.deps, network).catch(() => undefined);
       throw e;

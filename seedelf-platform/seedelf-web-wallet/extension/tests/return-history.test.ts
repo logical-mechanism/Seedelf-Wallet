@@ -5,7 +5,10 @@
 // The real WebAssembly, and fakes of Koios.
 import { describe, expect, it } from "vitest";
 
+import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
+import { Minswap } from "../src/background/minswap";
+import { SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { sessionSwap, testBalances, vectors } from "./fakes";
 
@@ -188,5 +191,150 @@ describe("a session's return Koios didn't answer (independent review M7)", () =>
     await t.sessions.list("preprod", true);
     expect(await classOf(t, review.txHash)).toEqual({ id: "session:0", origin: "session" });
     expect((await recorded(t, review.txHash))!.summary).toBeUndefined();
+  });
+});
+
+/** Session 0, a site's private session holding 40 ₳ and its 5 ₳ collateral. */
+async function siteSession(t: T) {
+  await t.store.set("sessions.preprod", {
+    next: 1,
+    sessions: [
+      {
+        index: 0,
+        ownStake: true,
+        createdAt: t.clock.now,
+        txs: [{ kind: "out", txHash: OUT, at: t.clock.now, confirmed: true }],
+        site: { origin: "https://example.org" },
+      },
+    ],
+  });
+  t.koios.addedToAccounts.push(atSession(OUT, 0, "40000000"), atSession(OUT, 1, "5000000"));
+}
+
+/** The sessions as the worker has them: with the alarm that wakes its runs, counting its starts. */
+function withAlarm(t: T) {
+  const alarm = { starts: 0, start: async () => void alarm.starts++ };
+  const sessions = new SessionService({
+    ...t.deps,
+    collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+    store: t.store,
+    minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+    alarm,
+  });
+  return { alarm, sessions };
+}
+
+/** The return landed: what it spent is gone from the account. */
+const siteLanded = (t: T) => t.koios.spent.add(`${OUT}#0`).add(`${OUT}#1`);
+
+/** A reading of the private balance finds what `back` made before anything wrote its history. */
+const readBefore = (t: T, back: string) =>
+  t.activity.arrived("preprod", [{ ...atSession(back, 0, "44000000"), address: "addr_test1" } as KoiosUtxo]);
+
+describe("a session's return whose history isn't written yet, with no page open (independent review M7)", () => {
+  it("is looked for by the worker's runs, and written as the session's once it lands, a site's session's too", async () => {
+    const t = await unlocked();
+    await siteSession(t);
+    const { alarm, sessions } = withAlarm(t);
+    const review = await sessions.backBuild("preprod", 0, true);
+    const undo = unanswered(t);
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("Koios");
+    undo();
+    // Nothing else runs for a site's session: the runs start, and keep going while it may land.
+    expect(alarm.starts).toBe(1);
+    t.koios.missing.add(review.txHash);
+    expect(await sessions.runAll("preprod")).toBe(true);
+    expect((await t.activity.seedelf("preprod")).some((e) => e.txHash === review.txHash)).toBe(false);
+
+    // It lands, and Home reads the private balance before any run: received, for now.
+    t.koios.missing.delete(review.txHash);
+    siteLanded(t);
+    await readBefore(t, review.txHash);
+    expect(await classOf(t, review.txHash)).toMatchObject({ origin: "received" });
+
+    // The next run, with no list asked for: it's the session's, and nothing keeps the runs going anymore.
+    expect(await sessions.runAll("preprod")).toBe(false);
+    expect(await classOf(t, review.txHash)).toEqual({ id: "session:0", origin: "session" });
+    expect(await recorded(t, review.txHash)).toMatchObject({ confirmed: true });
+    expect((await recorded(t, review.txHash))!.summary).toBeUndefined();
+  });
+
+  it("is written when a lock cut its send off, once the unlock's run finds it on chain", async () => {
+    const t = await unlocked();
+    await siteSession(t);
+    const { sessions } = withAlarm(t);
+    const review = await sessions.backBuild("preprod", 0, true);
+    // Koios takes it, and the wallet locks before its answer is read.
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      const answer = await real(url, init);
+      if (url.endsWith("/submittx")) await t.wallet.lock();
+      return answer;
+    };
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow();
+    t.koios.fetch = real;
+    expect(t.koios.submitted.map(txIdOf)).toEqual([review.txHash]);
+    await t.wallet.unlock(PASSWORD);
+    expect((await recorded(t, review.txHash))!.summary).toMatchObject({ index: 0, lovelace: review.lovelace });
+
+    siteLanded(t);
+    await readBefore(t, review.txHash);
+    await sessions.runAll("preprod", true);
+    expect(await classOf(t, review.txHash)).toEqual({ id: "session:0", origin: "session" });
+    expect(await sessions.runAll("preprod")).toBe(false);
+  });
+
+  it("lets its summary go once sent and written, and keeps it when the write fails, for the run that sees it land", async () => {
+    const t = await unlocked();
+    await siteSession(t);
+    const { alarm, sessions } = withAlarm(t);
+    const review = await sessions.backBuild("preprod", 0, true);
+    const write = t.activity.sent;
+    t.activity.sent = async () => {
+      throw new Error("The history won't open.");
+    };
+    await sessions.backSubmit("preprod", review.txHash);
+    t.activity.sent = write;
+    expect(alarm.starts).toBe(1);
+    expect((await recorded(t, review.txHash))!.summary).toMatchObject({ index: 0 });
+
+    siteLanded(t);
+    await readBefore(t, review.txHash);
+    expect(await sessions.runAll("preprod")).toBe(false);
+    expect(await classOf(t, review.txHash)).toEqual({ id: "session:0", origin: "session" });
+    expect((await recorded(t, review.txHash))!.summary).toBeUndefined();
+
+    // Sent and written at once, as usual: nothing is left to write, and no run looks for it.
+    const next = await unlocked();
+    await siteSession(next);
+    const two = withAlarm(next);
+    const again = await two.sessions.backBuild("preprod", 0, true);
+    await two.sessions.backSubmit("preprod", again.txHash);
+    expect((await recorded(next, again.txHash))!.summary).toBeUndefined();
+    expect(two.alarm.starts).toBe(0);
+    expect(await two.sessions.runAll("preprod")).toBe(false);
+  });
+
+  it("is written by Disconnect when a write failed as it landed, before its record goes", async () => {
+    const t = await unlocked();
+    await siteSession(t);
+    const { sessions } = withAlarm(t);
+    const review = await sessions.backBuild("preprod", 0, true);
+    const undo = unanswered(t);
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("Koios");
+    undo();
+    siteLanded(t);
+    // Seen on chain by the list, while the history won't open.
+    const write = t.activity.sent;
+    t.activity.sent = async () => {
+      throw new Error("The history won't open.");
+    };
+    await sessions.list("preprod", true);
+    t.activity.sent = write;
+    expect(await recorded(t, review.txHash)).toMatchObject({ confirmed: true, summary: { index: 0 } });
+
+    await sessions.disconnect("preprod", 0);
+    expect((await t.store.get<Book>("sessions.preprod"))!.sessions).toHaveLength(0);
+    expect(await classOf(t, review.txHash)).toEqual({ id: "session:0", origin: "session" });
   });
 });
