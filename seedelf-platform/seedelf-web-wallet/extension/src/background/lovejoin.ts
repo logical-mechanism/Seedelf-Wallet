@@ -306,6 +306,12 @@ export async function pumpChain(
   };
   // Every one in the mempool, sent again in order: each spends the change of
   // the one before, so a node that dropped one dropped every one after it.
+  // One still waiting in a mempool is refused, and tried again until it lands
+  // (CHAIN_SPENT_TRIES), so under heavy congestion all of them together can
+  // take longer than Chrome lets one request run. Chrome then stops the
+  // worker partway: what went is saved (`sending`, `sentAt`), and the next
+  // call goes on from there, at worst stopping the chain at a `next` refused
+  // again, as a send that can't go does (independent review L25).
   const resend = async () => {
     for (const [k, hash] of [...chain.flying].entries()) {
       const at = chain.txs.findIndex((t) => t.txHash === hash);
