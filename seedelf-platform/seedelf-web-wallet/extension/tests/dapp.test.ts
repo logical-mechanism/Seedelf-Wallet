@@ -670,6 +670,8 @@ describe("the dApp connector", () => {
       return s;
     };
     const [s, other] = [await connect(site()), await connect(site("https://other.example"))];
+    const more = [await connect(site("https://third.example")), await connect(site("https://fourth.example"))];
+    const last = await connect(site("https://fifth.example"));
     await dapp.call(s, "getBalance", []);
     // Nothing of the account's to sign in it.
     const nothing = siteTx({ inputs: [] });
@@ -710,13 +712,19 @@ describe("the dApp connector", () => {
     await asked();
     expect(reads).toBe(3 + 3 + 20 + 2);
 
-    // Twenty wait for the user: the next is refused unread, as the window would refuse it.
-    const waiting = Array.from({ length: 20 }, () => dapp.call(s, "signTx", [tx, false]));
+    // Five of one site's wait for the user: its next is refused unread, so one site can't fill the
+    // window's queue (independent review L35). Twenty of all sites' do: the next, any site's, is refused
+    // unread, as the window would refuse it.
+    const busy = { failure: { code: APIError.Refused, info: "Seedelf Wallet is busy with this site's other requests." } };
+    const waiting = Array.from({ length: 5 }, () => dapp.call(s, "signTx", [tx, false]));
+    await until(() => dapp.approvals().length === 5);
+    let before = reads;
+    await expect(dapp.call(s, "signTx", [tx, false])).rejects.toMatchObject(busy);
+    expect(reads).toBe(before);
+    for (const who of [other, ...more]) waiting.push(...Array.from({ length: 5 }, () => dapp.call(who, "signTx", [tx, false])));
     await until(() => dapp.approvals().length === 20);
-    const before = reads;
-    await expect(dapp.call(other, "signTx", [tx, false])).rejects.toMatchObject({
-      failure: { code: APIError.Refused, info: "Seedelf Wallet is busy with this site's other requests." },
-    });
+    before = reads;
+    await expect(dapp.call(last, "signTx", [tx, false])).rejects.toMatchObject(busy);
     expect(reads).toBe(before);
     for (const approval of dapp.approvals()) await dapp.answer(approval.id, false);
     for (const w of waiting) await expect(w).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
@@ -1076,67 +1084,44 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect((await sessions.list("preprod"))[0]).toMatchObject({ index: 0, site: { origin: s.origin } });
   });
 
-  it("won't fund a private session for a site another of its requests connected meanwhile", async () => {
-    const t = await on();
-    const { dapp } = privately(t);
-    // Two tabs, or enable() twice: two questions.
-    const first = dapp.call(site(), "enable", []);
-    const second = dapp.call(site(), "enable", []);
-    await until(() => dapp.approvals().length === 2);
-    const [a, b] = dapp.approvals();
-    // Their ids are random, never a count that starts again with the worker.
-    expect(a!.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    expect(a!.id).not.toBe(b!.id);
-    const out = await dapp.privateBuild(b!.id, "15000000", []);
-
-    // The first is answered with the public account meanwhile.
-    expect(await dapp.answer(a!.id, true)).toEqual({});
-    expect(await first).toBe(true);
-    // So the second's session isn't funded: the site wouldn't talk to it.
-    expect(await dapp.answer(b!.id, true, PASSWORD, { txHash: out.txHash })).toEqual({
-      error: expect.stringContaining("connected meanwhile"),
-    });
-    expect(t.koios.submitted).toHaveLength(0);
-    await expect(dapp.privateBuild(b!.id, "15000000", [])).rejects.toThrow("connected meanwhile");
-    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number) }]);
-    await dapp.answer(b!.id, false);
-    await expect(second).rejects.toMatchObject({ failure: { code: APIError.Refused } });
-  });
-
-  it("says so when another of the site's requests connected it while its session's funding was sent", async () => {
+  it("asks a site's pages that enable() at once one question, and funds one private session for all of them", async () => {
     const t = await on();
     const { dapp, sessions } = privately(t);
+    // Two tabs, or enable() twice: one question (independent review L35), so two sessions can't be funded for one site.
     const first = dapp.call(site(), "enable", []);
     const second = dapp.call(site(), "enable", []);
-    await until(() => dapp.approvals().length === 2);
-    const [a, b] = dapp.approvals();
-    const out = await dapp.privateBuild(b!.id, "15000000", []);
-
-    // giveme.my answers slowly, and meanwhile the other request is answered with the public account.
-    let answer!: () => void;
-    const answered = new Promise<void>((r) => (answer = r));
-    const fetch = t.collateral.fetch;
-    let asked = false;
-    t.collateral.fetch = async (url, init) => {
-      asked = true;
-      await answered;
-      return fetch(url, init);
-    };
-    const funding = dapp.answer(b!.id, true, PASSWORD, { txHash: out.txHash });
-    await until(() => asked);
-    expect(await dapp.answer(a!.id, true)).toEqual({});
-    answer();
-    expect(await funding).toEqual({
-      error: expect.stringContaining("Private session 1 is funded, but another of this site's requests connected it meanwhile"),
-    });
-
-    // The funding went out and the session holds it; the site talks to the public account, and nothing waits.
-    expect(t.koios.submitted.map((x) => txIdOf(x))).toEqual([out.txHash]);
-    expect((await sessions.list("preprod"))[0]).toMatchObject({ index: 0, site: { origin: site().origin } });
-    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number) }]);
+    await until(() => dapp.approvals().length === 1);
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+    const [a, ...others] = dapp.approvals();
+    expect(others).toEqual([]);
+    // Its id is random, never a count that starts again with the worker.
+    expect(a!.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const out = await dapp.privateBuild(a!.id, "15000000", []);
+    expect(await dapp.answer(a!.id, true, PASSWORD, { txHash: out.txHash })).toEqual({});
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, "15000000"), atSession(out.txHash, 1, "5000000"));
     expect(await first).toBe(true);
     expect(await second).toBe(true);
+    expect(t.koios.submitted.map((x) => txIdOf(x))).toEqual([out.txHash]);
+    expect(await sessions.list("preprod")).toHaveLength(1);
+    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number), session: 0 }]);
     expect(dapp.approvals()).toEqual([]);
+  });
+
+  it("asks for another of the site's pages once the page whose question it shared goes away", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const page = site();
+    const first = dapp.call(page, "enable", []);
+    const second = dapp.call(site(), "enable", []);
+    await until(() => dapp.approvals().length === 1);
+    const [a] = dapp.approvals();
+    dapp.gone(page);
+    await expect(first).rejects.toMatchObject({ failure: { info: "The page went away." } });
+    // The other page asks now, with a question of its own, and has its answer.
+    await until(() => dapp.approvals().length === 1 && dapp.approvals()[0]!.id !== a!.id);
+    expect(await dapp.answer(dapp.approvals()[0]!.id, true)).toEqual({});
+    expect(await second).toBe(true);
+    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number) }]);
   });
 
   it("gives the site the session's account alone: its address, its reward address, its money and its collateral", async () => {

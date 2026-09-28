@@ -20,7 +20,15 @@
 //             unlock first, which names the sites waiting. Closing it without
 //             unlocking declines them, and that site's signatures and sends
 //             are refused without asking for a minute, so a dApp that asks
-//             again and again doesn't keep opening it.
+//             again and again doesn't keep opening it: in the words a site
+//             that isn't connected hears unlocked, so they say nothing of
+//             the lock (independent review L36).
+//             A site that isn't connected asks to connect once at a time:
+//             another of its pages' `enable()` has that one's answer. Once
+//             the user says no, or closes the window on it, its `enable()` is
+//             declined unasked for a minute, locked or not. Each site has at
+//             most 5 requests waiting at once, of the window's 20
+//             (independent review L35).
 // Reading     The account as `readAccountUtxos` finds it (two Koios
 //             requests), kept 30 s: less what the user locked and the
 //             collateral (`getCollateral` gives that one), plus what the
@@ -116,10 +124,16 @@ const INFLIGHT_MS = 10 * 60_000;
 const CHAIN_MS = SENT_KEEP_MS;
 /** Of a signed transaction's outputs, this many are kept for that. */
 const MAX_CHAINED = 64;
-/** After the window is closed while locked, a site's signatures and sends are refused for this long, unasked. */
+/**
+ * After the window is closed while locked, a site's signatures and sends are
+ * refused for this long, unasked; and after the user declines a site's
+ * connect, or closes the window on it, its `enable()` is.
+ */
 const REFUSE_MS = 60_000;
 /** At most this many calls from sites wait for the user at once. */
 const MAX_WAITING = 20;
+/** Of those, at most this many from one site: one can't fill the window's queue for the rest. */
+const MAX_SITE_WAITING = 5;
 /** How often a private session's funding is looked for, once it's sent. */
 const FUNDING_POLL_MS = 10_000;
 /** A funding Koios hasn't seen after this long never reached the chain. */
@@ -256,6 +270,14 @@ interface Waiting {
   reject: (error: DappError) => void;
   /** What the site hears when the user says no. */
   declined: DappFailure;
+  /** Its page went away before the user answered (`gone`). */
+  gone?: boolean;
+  /**
+   * How it ended, for another page of the same site asking to connect
+   * meanwhile (`enable`): answered (undefined), what the site heard, or
+   * "gone", when its page went away first.
+   */
+  settled?: Promise<DappError | "gone" | undefined>;
 }
 
 interface Unlocking {
@@ -270,6 +292,8 @@ const ALREADY_CONNECTED =
   "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session: it keeps what it already saw.";
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
 const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable() first.";
+/** What a site hears when the user says no, or closed the window on it. */
+const DECLINED = "The user declined.";
 /** What a site's call ends with once its page is gone: nobody hears it. */
 const PAGE_GONE = "The page went away.";
 /** What a site asking on the network the wallet left hears, and the window says. */
@@ -333,14 +357,7 @@ export class DappService {
     // The network the wallet is on as this call goes on: a site connected on
     // one isn't on the other, and what it asks is answered, and signed, there.
     const network = await this.deps.network();
-    if (method === "enable") {
-      if (!(await this.connected(network, origin))) {
-        await this.ask(session, network, { kind: "connect", password: await this.needsPassword() }, APIError.Refused, () =>
-          this.connect(network, origin),
-        );
-      }
-      return true;
-    }
+    if (method === "enable") return this.enable(session, network);
     const site = await this.site(network, origin);
     if (!site) throw refused(NOT_CONNECTED);
     const holder = await this.holder(network, site);
@@ -417,6 +434,8 @@ export class DappService {
     const [w] = this.waiting.splice(i, 1);
     this.deps.changed();
     if (!approve) {
+      // A site the user won't connect doesn't ask again for a minute (independent review L35).
+      if (approval.kind === "connect") this.refuseFor(approval.origin);
       w!.reject(new DappError(w!.declined));
       return {};
     }
@@ -481,15 +500,16 @@ export class DappService {
         // No window to show them in: they're declined, as if closed.
       }
     }
-    const until = this.deps.now() + REFUSE_MS;
     for (const u of this.unlocking.splice(0)) {
-      this.refusedUntil.set(u.session.origin, until);
+      this.refuseFor(u.session.origin);
       // As a declined request is: nothing more about the wallet.
-      u.reject(refused("The user declined."));
+      u.reject(refused(DECLINED));
     }
     // A private session's funding is sent: it isn't undone, and the site connects once it arrives.
     for (const w of this.waiting.filter((x) => !funding(x))) {
       remove(this.waiting, (x) => x === w);
+      // A connect the window closed on isn't asked again for a minute either (independent review L35).
+      if (w.approval.kind === "connect") this.refuseFor(w.session.origin);
       w.reject(new DappError(w.declined));
     }
   }
@@ -525,7 +545,10 @@ export class DappService {
     if (!waiting.length && !unlocking.length) return;
     remove(this.waiting, (w) => waiting.includes(w));
     remove(this.unlocking, (u) => unlocking.includes(u));
-    for (const w of waiting) w.reject(refused(PAGE_GONE));
+    for (const w of waiting) {
+      w.gone = true;
+      w.reject(refused(PAGE_GONE));
+    }
     for (const u of unlocking) u.reject(refused(PAGE_GONE));
     this.deps.changed();
   }
@@ -627,6 +650,46 @@ export class DappService {
   }
 
   /**
+   * `enable()`, unlocked: true once the site is connected, which the user is
+   * asked. One question per site at a time (independent review L35):
+   * another of its pages asking meanwhile has that one's answer, and asks
+   * itself only if that page went away first. A site the user declined, or
+   * closed the window on, isn't asked again for a minute.
+   */
+  private async enable(session: DappSession, network: NetworkName): Promise<true> {
+    const { origin } = session;
+    const password = await this.needsPassword();
+    if (await this.connected(network, origin)) return true;
+    // Nothing is awaited from here until it's asked, so two pages can't both ask.
+    const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
+    if (asking) {
+      const settled = await asking.settled;
+      if (settled === "gone") return this.run(session, "enable", []) as Promise<true>;
+      if (settled) throw settled;
+      return true;
+    }
+    if (this.refusing(origin)) throw refused(DECLINED);
+    await this.ask(session, network, { kind: "connect", password }, APIError.Refused, () => this.connect(network, origin));
+    return true;
+  }
+
+  /** The user declined `origin`, or closed the window on it: `REFUSE_MS` of refusals, unasked. */
+  private refuseFor(origin: string): void {
+    this.refusedUntil.set(origin, this.deps.now() + REFUSE_MS);
+  }
+
+  /** Whether `origin` is refused unasked now (`refuseFor`). */
+  private refusing(origin: string): boolean {
+    return this.deps.now() < (this.refusedUntil.get(origin) ?? 0);
+  }
+
+  /** How many of `origin`'s requests wait for the user: in the window, or for the unlock. */
+  private waitingFrom(origin: string): number {
+    const from = (x: { session: DappSession }) => x.session.origin === origin;
+    return this.waiting.filter(from).length + this.unlocking.filter(from).length;
+  }
+
+  /**
    * Whether `origin` is connected on the network the wallet is on, locked or
    * not: an answer that changed at an unlock would tell a site polling it
    * when the wallet is in use. While locked, the sealed record can't be
@@ -718,9 +781,16 @@ export class DappService {
   /** Waits for the wallet to be unlocked, in the connector's window. */
   private async unlocked(session: DappSession, method: DappMethod): Promise<void> {
     if ((await this.deps.wallet.state()) === "unlocked") return;
-    const refusedUntil = this.refusedUntil.get(session.origin) ?? 0;
-    if (method !== "enable" && this.deps.now() < refusedUntil) throw refused("Seedelf Wallet is locked.");
-    if (this.unlocking.length + this.waiting.length >= MAX_WAITING) throw refused(BUSY);
+    const { origin } = session;
+    // Refused unasked in the words the site would hear unlocked, never that
+    // the wallet is locked (independent review L36): a signature or a send
+    // hears what a site that isn't connected does; `enable()` from one, that
+    // it was declined. A connected site's `enable()` still opens the window.
+    const known = !!this.lastSites.get(await this.deps.network())?.has(origin);
+    if (this.refusing(origin) && (method !== "enable" || !known)) throw refused(method === "enable" ? DECLINED : NOT_CONNECTED);
+    if (this.unlocking.length + this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) {
+      throw refused(method === "enable" || known ? BUSY : NOT_CONNECTED);
+    }
     let waiter: Unlocking | undefined;
     const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, resolve, reject })));
     try {
@@ -736,13 +806,14 @@ export class DappService {
 
   /** Puts a request in front of the user; `approve` runs if they say yes. */
   private ask<T>(session: DappSession, network: NetworkName, request: DappAsk, declined: number, approve: () => Promise<T>): Promise<T> {
-    if (this.waiting.length >= MAX_WAITING) throw refused(BUSY);
+    if (this.waiting.length >= MAX_WAITING || this.waitingFrom(session.origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     // Random, not a count: a count starts again when the worker restarts, and a
     // window still showing an older request would then answer a new one.
     const approval = { ...request, id: crypto.randomUUID(), origin: session.origin, title: session.title } as DappApproval;
-    const failure: DappFailure = { code: declined, info: "The user declined." };
+    const failure: DappFailure = { code: declined, info: DECLINED };
+    let entry!: Waiting;
     const answered = new Promise<T>((resolve, reject) => {
-      this.waiting.push({
+      entry = {
         approval,
         session,
         network,
@@ -750,8 +821,13 @@ export class DappService {
         resolve: resolve as (value: unknown) => void,
         reject,
         declined: failure,
-      });
+      };
+      this.waiting.push(entry);
     });
+    entry.settled = answered.then(
+      () => undefined,
+      (e: unknown) => (entry.gone ? "gone" : e instanceof DappError ? e : new DappError({ code: APIError.InternalError, info: String(e) })),
+    );
     this.deps.changed();
     this.deps.window.show().catch((e: unknown) => {
       // No window to answer in: the site hears why, rather than waiting.
@@ -1169,7 +1245,7 @@ export class DappService {
     collateral: string[],
     partialSign: boolean,
   ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean }> {
-    if (this.waiting.length >= MAX_WAITING) throw refused(BUSY);
+    if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
       throw refused("This site asks too often for signatures Seedelf Wallet can't give. Try again in a minute.");
     }
