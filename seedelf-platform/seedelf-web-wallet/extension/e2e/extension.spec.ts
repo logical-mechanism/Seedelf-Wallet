@@ -1524,8 +1524,9 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await expect(page.getByTestId("session-rows")).toContainText("906.5941 MIN");
   expect(koios.submitted).toHaveLength(2);
 
-  // The return lands and the account is empty: done, in the success colour.
+  // The return lands and the account is empty, and Koios shows the funding's outputs spent: done, in the success colour.
   koios.addedToAccounts.splice(0);
+  koios.unlistedSpent = true;
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("session-now")).toHaveText("Done: the swap is in your private balance.");
   await expect(timeline).toHaveClass(/timeline--done/);
@@ -1863,8 +1864,9 @@ test("a private swap paused by a price move, then stopped: everything comes back
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
   expect(koios.submitted).toHaveLength(1);
 
-  // The return lands: stopped, everything back, and nothing was ever ordered.
+  // The return lands, and Koios shows the funding's outputs spent: stopped, everything back, and nothing was ever ordered.
   koios.addedToAccounts.splice(0);
+  koios.unlistedSpent = true;
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("session-now")).toHaveText("Stopped: everything is back in your private balance.");
   await expect(page.getByTestId("session-timeline").locator('[data-state="skipped"]')).toHaveCount(2);

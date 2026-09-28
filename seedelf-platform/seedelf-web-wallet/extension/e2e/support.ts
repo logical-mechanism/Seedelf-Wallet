@@ -148,6 +148,12 @@ export interface KoiosFake {
   addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
   /** Outpoints (`txhash#index`) the chain has spent, as utxo_info marks them: an order a batcher filled, say. */
   spent: Set<string>;
+  /**
+   * Every output the fixtures don't list is spent, as utxo_info answers once
+   * a session's return landed: its funding's outputs among them (a session
+   * ends only once Koios shows those spent, independent review M4).
+   */
+  unlistedSpent: boolean;
   /** Requests a page made instead of the worker (`byWorker`): there must be none. */
   strays: string[];
 }
@@ -262,9 +268,10 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
         ...Object.values(koiosPreprod.accounts as Record<string, { account_utxos: unknown[] }>).flatMap((a) => a.account_utxos),
         ...koios.addedToAccounts,
       ] as Array<{ tx_hash: string; tx_index: number }>;
-      const found = known.filter((u) => refs.includes(ref(u))).map((u) => ({ ...u, is_spent: koios.spent.has(ref(u)) }));
+      const spent = (r: string) => koios.spent.has(r) || (koios.unlistedSpent && !known.some((u) => ref(u) === r));
+      const found = known.filter((u) => refs.includes(ref(u))).map((u) => ({ ...u, is_spent: spent(ref(u)) }));
       const gone = refs
-        .filter((r) => koios.spent.has(r) && !found.some((u) => ref(u) === r))
+        .filter((r) => spent(r) && !found.some((u) => ref(u) === r))
         .map((r) => ({ tx_hash: r.split("#")[0], tx_index: Number(r.split("#")[1]), is_spent: true }));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([...found, ...gone]) });
     }
@@ -377,6 +384,7 @@ export const test = base.extend<{
       stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
       addedToAccounts: [],
       spent: new Set(),
+      unlistedSpent: false,
       strays: [],
     });
   },
