@@ -80,6 +80,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
+import { txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
@@ -107,6 +108,38 @@ export const SESSION_LOVEJOIN_SENDING = "seedelf.lovejoin.sending.";
 
 /** A built mix is only sent within this long; after that, build again. */
 const BUILT_TTL_MS = 10 * 60_000;
+
+/** A mix from the public account is built or sent while the last one from it is still being sent. */
+const PUBLIC_STILL_SENDING = "Your last mix from the public account is still being sent. Wait for it to finish.";
+/** The mix kept for Send isn't the one asked for, or something took its place since. */
+const NOT_READY = "That mix isn't ready to send. Review it again.";
+/**
+ * A mix from the public account is built while a transaction of the last one
+ * may have gone through, unseen yet, and the wallet is sure of it `left` ms
+ * from now at the latest: one that never reached a node shows nothing, so
+ * it's only known never to have gone once the wallet stops holding what it
+ * spends (SPENT_KEEP_MS, two hours), and the copy says so (independent
+ * review L5). Past that, only Koios not answering keeps it unsure.
+ */
+const publicMaybeWait = (left: number) => {
+  if (left <= 0) {
+    return "Your last mix from the public account stopped at a transaction that may have gone through, and the wallet couldn't reach Koios to check whether it did. No other mix from the account is built until it knows. Try again in a minute.";
+  }
+  const minutes = Math.max(1, Math.ceil(left / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const unit = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  const about = hours ? `${unit(hours, "hour")}${minutes % 60 ? ` ${unit(minutes % 60, "minute")}` : ""}` : unit(minutes, "minute");
+  return `Your last mix from the public account stopped at a transaction that may have gone through, and the network hasn't shown it yet. No other mix from the account is built until the wallet knows: once the network shows it, or what it spends, that takes a few minutes. If it never went through, the wallet can only be sure two hours after it was sent, in about ${about}.`;
+};
+
+/**
+ * A mix from the public account stopped at a transaction that may have gone
+ * through: the progress Home, the UTxOs page and the Lovejoin page ask for
+ * looks for it (tx_status, and utxo_info when that says nothing) at most this
+ * often on a network, as the alarm does a payment that may still go through.
+ * Its Review and Send look each time (independent review L5).
+ */
+export const PUBLIC_LOOK_MS = 2 * 60_000;
 
 /** A chained transaction Koios didn't answer, or asked to slow down for: tried again this many times, waiting CHAIN_BUSY_MS longer each time. */
 export const CHAIN_RETRIES = 4;
@@ -209,7 +242,8 @@ export const CHAIN_POLL_MS = 5_000;
 /**
  * A chain's oldest transaction in the mempool that hasn't landed after this
  * long (several blocks) is sent again: a node may have dropped it, and with
- * it every transaction of the chain after it. The ledger takes it once.
+ * it every transaction of the chain after it, so they all go again, in order
+ * (independent review L25). The ledger takes each once.
  */
 export const CHAIN_RESEND_MS = 3 * 60_000;
 /**
@@ -234,6 +268,12 @@ export interface ChainProgress {
    * (Chrome stops an idle worker during a long back-off).
    */
   sending?: number;
+  /**
+   * The next transaction, refused as spending what's spent, for which those
+   * in the mempool were sent again (pumpChain): refused once more, the chain
+   * stops.
+   */
+  resentFor?: number;
 }
 
 /**
@@ -244,9 +284,15 @@ export interface ChainProgress {
  * `i` (its retries included; `maybeSent`: it may be in the mempool already),
  * `onChain` says which hashes are on chain, and `save` keeps the progress
  * after each change. A read of what's on chain that Koios doesn't answer sees
- * nothing yet; the oldest in the mempool is sent again after CHAIN_RESEND_MS.
- * A resend refused as spent while Koios still can't say is no failure: `send`
- * returns (mayBeIn), and it's looked for again.
+ * nothing yet; once the oldest in the mempool has waited CHAIN_RESEND_MS,
+ * every one there is sent again, in order. A resend refused as spent while
+ * Koios still can't say is no failure: `send` returns (mayBeIn), and it's
+ * looked for again. A transaction refused as spending what's spent, after
+ * its tries, while those it builds on are still in the mempool as far as the
+ * wallet knows, is no failure yet either: a node dropped them (the one before
+ * them landed, or a block was rolled back), so they go again, in order, and
+ * it goes once more at the next call, which stays well short of Chrome's
+ * five minutes (independent review L25).
  */
 export async function pumpChain(
   chain: ChainProgress,
@@ -270,6 +316,23 @@ export async function pumpChain(
     await io.send(i, maybeSent);
     delete chain.sending;
   };
+  // Every one in the mempool, sent again in order: each spends the change of
+  // the one before, so a node that dropped one dropped every one after it.
+  // One still waiting in a mempool is refused, and tried again until it lands
+  // (CHAIN_SPENT_TRIES), so under heavy congestion all of them together can
+  // take longer than Chrome lets one request run. Chrome then stops the
+  // worker partway: what went is saved (`sending`, `sentAt`), and the next
+  // call goes on from there, at worst stopping the chain at a `next` refused
+  // again, as a send that can't go does (independent review L25).
+  const resend = async () => {
+    for (const [k, hash] of [...chain.flying].entries()) {
+      const at = chain.txs.findIndex((t) => t.txHash === hash);
+      if (at < 0) continue;
+      await send(at, true);
+      sentAt()[k] = io.now();
+      await io.save();
+    }
+  };
   for (let polls = Math.ceil(budgetMs / CHAIN_POLL_MS); ; polls--) {
     if (chain.flying.length >= CHAIN_WINDOW) {
       const on = await io.onChain(chain.flying).catch((e: unknown) => {
@@ -281,16 +344,18 @@ export async function pumpChain(
         chain.flying = chain.flying.filter((h) => !on.has(h));
         await io.save();
       } else if (io.now() - sentAt()[0]! >= CHAIN_RESEND_MS) {
-        const oldest = chain.txs.findIndex((t) => t.txHash === chain.flying[0]);
-        if (oldest >= 0) {
-          await send(oldest, true);
-          sentAt()[0] = io.now();
-          await io.save();
-        }
+        await resend();
       }
     }
     while (chain.next < chain.txs.length && chain.flying.length < CHAIN_WINDOW) {
-      await send(chain.next, false);
+      try {
+        await send(chain.next, false);
+      } catch (e) {
+        if (!(e instanceof SpentInputError) || !chain.flying.length || chain.resentFor === chain.next) throw e;
+        chain.resentFor = chain.next;
+        await resend();
+        return false;
+      }
       chain.flying.push(chain.txs[chain.next]!.txHash);
       sentAt().push(io.now());
       chain.next++;
@@ -299,6 +364,18 @@ export async function pumpChain(
     if (chain.next >= chain.txs.length) return true;
     if (polls <= 0) return false;
     await io.sleep(CHAIN_POLL_MS);
+  }
+}
+
+/**
+ * A chain's progress isn't where it waits anymore, or another chain's is
+ * there in its place: a lock wiped it while a send of it waited (the wallet
+ * may be unlocked again since). Nothing more of it is sent, and nothing of it
+ * is written back; its record says it was cut (independent review L14).
+ */
+export class ChainGone extends Error {
+  constructor() {
+    super(CHAIN_CUT);
   }
 }
 
@@ -458,6 +535,17 @@ interface ChainRecord {
   unscheduled?: number;
   /** How long its boxes wait, as its return was approved or reviewed; Settings' when none (independent review L21). */
   delay?: LovejoinDelay;
+  /**
+   * A mix from the public account's transaction that may have gone through
+   * (independent review L5): the one it stopped at when Koios didn't answer
+   * it (`unanswered`); or its first, which spends the account, marked from
+   * just before it's first sent until it's known to have gone (chainSent) or
+   * an answer says it never did, so a lock or a closed browser meanwhile
+   * leaves it looked for. Its index, hash, what it spends, and when (ms).
+   * Once the mix ended, and until it's settled (publicUnsettled), no other
+   * mix from the account is built.
+   */
+  maybe?: { index: number; txHash: string; inputs: string[]; at: number; unanswered?: true };
 }
 
 /** Why a chain whose progress is gone stopped: nothing is sending the rest. */
@@ -487,7 +575,13 @@ interface SendingPublic extends ChainProgress {
   network: NetworkName;
   boxes: number;
   stopped?: string;
+  /** It stopped at this transaction, which may have gone through (ChainRecord `maybe`). */
+  maybe?: number;
 }
+
+/** What a chain's transaction `i` is called, where a stop says which went and which may have. */
+const stepName = (txs: LovejoinChain["txs"], i: number) =>
+  txs[i]?.kind === "deposit" ? "its deposit" : `its transaction ${i + 1} of ${txs.length}`;
 
 export interface LovejoinDeps extends ScriptSpendDeps {
   store: PrivateStore;
@@ -611,6 +705,9 @@ interface Split {
 /** `boxes` less those another chain of the wallet's will spend. */
 const free = (boxes: OutRef[], reserved: Set<string>) => boxes.filter((b) => !reserved.has(ref(b)));
 
+/** Whether two reservations spend the same. */
+const sameInputs = (a: Reservation, b: Reservation) => a.inputs.length === b.inputs.length && a.inputs.every((o, k) => o === b.inputs[k]);
+
 /** What a chain's reservation (spent.ts) and record are kept under: the session's, or the public account's. */
 export const chainOwner = (index?: number) => (index === undefined ? "public" : `session.${index}`);
 
@@ -710,12 +807,24 @@ export function checkBoxes(boxes: number): void {
 }
 
 export class LovejoinService {
-  /** A public mix is being sent right now: the Send, the page and the alarm never send it twice at once. */
-  private pumping = false;
+  /**
+   * The networks whose public mix is being sent right now: the Send, the
+   * page and the alarm never send one twice at once. Claimed before anything
+   * is awaited (independent review L26).
+   */
+  private pumping = new Set<NetworkName>();
   /** One task at a time on each record (inTurn). */
   private turns = new Map<string, Promise<unknown>>();
+  /**
+   * The chains recorded whose progress is being put where they wait
+   * (recordChain), by id: not cut meanwhile (cuts). In memory: a worker that
+   * stops in between never put it there, and the chain was cut.
+   */
+  private starting = new Set<string>();
   /** The pool as a swap's review last read it, by network (room). */
   private rooms = new Map<NetworkName, { at: number; room: { others: number; free: number } }>();
+  /** When progress last looked for a public mix's transaction that may have gone through, by network (PUBLIC_LOOK_MS). */
+  private looked = new Map<NetworkName, number>();
 
   constructor(private readonly deps: LovejoinDeps) {}
 
@@ -724,15 +833,43 @@ export class LovejoinService {
    * far, of all, and why it stopped, if it did. `advance`: send more of it
    * first, if there's room (the Lovejoin page, while it's open).
    */
-  async progress(network: NetworkName, advance = false): Promise<{ total: number; sent: number; stopped?: string } | null> {
+  async progress(
+    network: NetworkName,
+    advance = false,
+  ): Promise<{ total: number; sent: number; stopped?: string; maybeSent?: true } | null> {
     if (advance) await this.pumpPublic(network, 0).catch(() => undefined);
-    const s = await this.sendingOf(network);
-    if (s) return { total: s.txs.length, sent: s.next, ...(s.stopped ? { stopped: s.stopped } : {}) };
+    let s = await this.sendingOf(network);
+    // Stopped at a transaction that may have gone through: looked for first, now and then, and said as it now stands.
+    if (s?.maybe !== undefined && this.lookDue(network)) {
+      await this.publicUnsettled(network).catch(() => undefined);
+      s = await this.sendingOf(network);
+    }
+    const maybe = (m: unknown) => (m !== undefined ? { maybeSent: true as const } : {});
+    if (s) return { total: s.txs.length, sent: s.next, ...(s.stopped ? { stopped: s.stopped } : {}), ...maybe(s.maybe) };
     // Its progress is gone: a lock, a closed browser or an update cut it, and its record says how far it got.
     if (!this.available(network)) return null;
     await this.cuts(network);
-    const last = (await this.read(network)).chains.filter((c) => c.session === undefined).at(-1);
-    return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped } : null;
+    const lastOf = async () => (await this.read(network)).chains.filter((c) => c.session === undefined).at(-1);
+    let last = await lastOf();
+    if (last?.maybe && this.lookDue(network)) {
+      await this.publicUnsettled(network).catch(() => undefined);
+      last = await lastOf();
+    }
+    return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped, ...maybe(last.maybe) } : null;
+  }
+
+  /**
+   * Whether progress looks for a public mix's transaction that may have gone
+   * through now: at most every PUBLIC_LOOK_MS on a network, however often
+   * Home and the UTxOs page ask. Counted as it's asked, so calls at once look
+   * once.
+   */
+  private lookDue(network: NetworkName): boolean {
+    const now = this.deps.now();
+    const last = this.looked.get(network);
+    if (last !== undefined && now >= last && now - last < PUBLIC_LOOK_MS) return false;
+    this.looked.set(network, now);
+    return true;
   }
 
   /** Whether Lovejoin is deployed on `network` (networks.ts: the UI's gate is the same). */
@@ -1006,9 +1143,13 @@ export class LovejoinService {
         JSON.parse(this.deps.wasm.buildLovejoinChain(keys.oneTime, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
     );
     if (chain.skipped) throw new LovejoinSkipped(chain.skipped);
-    await this.crossCheck(network, chain);
-    // Kept for Send (or sent at once): no other chain draws its boxes meanwhile.
-    await this.reserve(network, owner, chain.txs, this.deps.now() + BUILT_TTL_MS);
+    // Kept for Send (or sent at once) as soon as it's built, before the network's check: no other chain draws its
+    // boxes meanwhile, and one that took any since this pool read has it built again (independent review L27).
+    const mine = await this.reserve(network, owner, chain.txs, this.deps.now() + BUILT_TTL_MS);
+    await this.crossCheck(network, chain).catch(async (e: unknown) => {
+      await this.unreserve(network, owner, mine).catch(() => undefined);
+      throw e;
+    });
     return chain;
   }
 
@@ -1038,11 +1179,44 @@ export class LovejoinService {
   /**
    * Reserves what chain `owner`'s transactions spend and put up as
    * collateral (spent.ts), in place of its reservation before: kept for Send
-   * until `until`, or, without it, being sent.
+   * until `until`, or, without it, being sent. Never what another chain of
+   * the wallet's reserved: one built at the same time drew from the pool
+   * before this one's reservation was there, and the one that reserves
+   * second is refused (StalePool, which builds it again without those
+   * boxes), so no two chains spend one box (independent review L27). A mix
+   * from the public account kept for Send, never in place of the one being
+   * sent; and, `held`, sent only while its own reservation as it was kept
+   * for Send still stands: another build since (a second page's Review) took
+   * its place, and may have drawn its boxes (independent review L30). A
+   * session's builds and sends go one at a time (SessionService), none while
+   * its chain is on its way, so what it holds as being sent is left over
+   * from one that stopped: its return takes its place, as before, never the
+   * session's return sent directly for it. Returns the reservation made.
    */
-  reserve(network: NetworkName, owner: string, txs: LovejoinChain["txs"], until?: number): Promise<void> {
+  async reserve(network: NetworkName, owner: string, txs: LovejoinChain["txs"], until?: number, held = false): Promise<Reservation> {
+    const mine = reservationOf(txs, until);
+    await this.reserving(network, (kept) => {
+      const was = kept[owner];
+      if (owner === chainOwner() && until !== undefined && was && was.until === undefined) throw new Error(PUBLIC_STILL_SENDING);
+      if (held && !(was?.until !== undefined && sameInputs(was, mine))) throw new Error(NOT_READY);
+      const others = new Set(Object.entries(kept).flatMap(([chain, r]) => (chain === owner ? [] : r.inputs)));
+      const taken = mine.inputs.filter((o) => others.has(o));
+      if (taken.length) throw new StalePool(taken);
+      kept[owner] = mine;
+    });
+    return mine;
+  }
+
+  /**
+   * Takes back `mine`, chain `owner`'s reservation, if it still holds it: its
+   * build went no further (the network's check refused it, say). What the
+   * owner held before isn't put back: a chain built meanwhile may have drawn
+   * those boxes, so the review before is built again rather than sent.
+   */
+  private unreserve(network: NetworkName, owner: string, mine: Reservation): Promise<void> {
     return this.reserving(network, (kept) => {
-      kept[owner] = reservationOf(txs, until);
+      const r = kept[owner];
+      if (r && r.until === mine.until && sameInputs(r, mine)) delete kept[owner];
     });
   }
 
@@ -1050,6 +1224,24 @@ export class LovejoinService {
   release(network: NetworkName, owner: string): Promise<void> {
     return this.reserving(network, (kept) => {
       delete kept[owner];
+    });
+  }
+
+  /**
+   * The mix from the public account being sent (`txs`) stopped at `step`,
+   * which may have gone through: in place of what the whole chain reserved,
+   * only what `step` spends, and its collateral if it has one, stays held,
+   * still as being sent, until it's settled (publicUnsettled). The mixes
+   * after it never go, so their pool boxes are free for another chain's
+   * draw, and the collateral for a site's transaction when `step` is the
+   * deposit (independent review L5). Only while the reservation there is
+   * still that chain's.
+   */
+  private holdOnly(network: NetworkName, txs: LovejoinChain["txs"], step: LovejoinChain["txs"][number]): Promise<void> {
+    const whole = reservationOf(txs);
+    return this.reserving(network, (kept) => {
+      const r = kept[chainOwner()];
+      if (r && r.until === undefined && sameInputs(r, whole)) kept[chainOwner()] = reservationOf([step]);
     });
   }
 
@@ -1104,11 +1296,10 @@ export class LovejoinService {
   async publicBuild(network: NetworkName, boxes: number): Promise<LovejoinPublicSummary> {
     if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
     checkBoxes(boxes);
-    const sending = await this.sendingOf(network);
-    if (sending && !sending.stopped) throw new Error("Your last mix from the public account is still being sent. Wait for it to finish.");
+    await this.publicReady(network);
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
-    const { wasm, wallet, session, now } = this.deps;
+    const { wasm, wallet, now } = this.deps;
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     if (!collateral) {
       throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
@@ -1122,13 +1313,7 @@ export class LovejoinService {
       const built = await wallet.withKeys(
         (keys) => JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
       );
-      try {
-        await this.crossCheck(network, built);
-      } catch (e) {
-        if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
-        throw e;
-      }
-      return built;
+      return this.checked(network, built);
     });
     const last = chain.txs.at(-1)!;
     const summary: LovejoinPublicSummary = {
@@ -1142,11 +1327,56 @@ export class LovejoinService {
       fees: chain.fees,
       change: chain.returned,
     };
-    await wallet.withKeys(() =>
-      session.set(SESSION_LOVEJOIN_PUBLIC, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() } satisfies KeptPublic),
-    );
-    await this.reserve(network, chainOwner(), chain.txs, now() + BUILT_TTL_MS);
+    await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() }, chain.reserved);
     return summary;
+  }
+
+  /**
+   * Refuses a new mix from the public account while the last is still being
+   * sent, or stopped at a transaction that may have gone through, unseen
+   * yet: the account could pay for a mix twice (independent review L5).
+   * Otherwise nothing is being sent from it, and a reservation left as being
+   * sent (a write that failed) goes, rather than hold every mix back. In the
+   * account's turn, so no Send starts meanwhile (independent review L30).
+   */
+  private publicReady(network: NetworkName): Promise<void> {
+    return this.inTurn(`public.${network}`, async () => {
+      const sending = await this.sendingOf(network);
+      if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING);
+      const until = await this.publicUnsettledNow(network);
+      if (until !== undefined) throw new Error(publicMaybeWait(until - this.deps.now()));
+      await this.reserving(network, (kept) => {
+        if (kept[chainOwner()] && kept[chainOwner()]!.until === undefined) delete kept[chainOwner()];
+      });
+    });
+  }
+
+  /**
+   * A mix from the public account, just built: reserved at once, before the
+   * network's check, which it then passes, or its reservation goes
+   * (independent review L27).
+   */
+  private async checked(network: NetworkName, built: LovejoinChain): Promise<LovejoinChain & { reserved: Reservation }> {
+    const reserved = await this.reserve(network, chainOwner(), built.txs, this.deps.now() + BUILT_TTL_MS);
+    try {
+      await this.crossCheck(network, built);
+    } catch (e) {
+      await this.unreserve(network, chainOwner(), reserved).catch(() => undefined);
+      if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
+      throw e;
+    }
+    return { ...built, reserved };
+  }
+
+  /** Keeps a mix from the public account for Send, or lets its reservation go when it can't be kept. */
+  private async keep(network: NetworkName, kept: KeptPublic, reserved: Reservation): Promise<void> {
+    const { wallet, session } = this.deps;
+    try {
+      await wallet.withKeys(() => session.set(SESSION_LOVEJOIN_PUBLIC, kept));
+    } catch (e) {
+      await this.unreserve(network, chainOwner(), reserved).catch(() => undefined);
+      throw e;
+    }
   }
 
   /**
@@ -1160,11 +1390,10 @@ export class LovejoinService {
    */
   async publicAgainBuild(network: NetworkName): Promise<PublicAgain> {
     if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
-    const sending = await this.sendingOf(network);
-    if (sending && !sending.stopped) throw new Error("Your last mix from the public account is still being sent. Wait for it to finish.");
+    await this.publicReady(network);
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
-    const { wasm, wallet, session, now } = this.deps;
+    const { wasm, wallet, now } = this.deps;
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     if (!collateral) {
       throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
@@ -1193,13 +1422,7 @@ export class LovejoinService {
       const built = await wallet.withKeys(
         (keys) => JSON.parse(wasm.buildLovejoinAgainFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
       );
-      try {
-        await this.crossCheck(network, built);
-      } catch (e) {
-        if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
-        throw e;
-      }
-      return built;
+      return this.checked(network, built);
     });
     const last = chain.txs.at(-1)!;
     const summary: PublicAgain = {
@@ -1214,10 +1437,7 @@ export class LovejoinService {
       change: chain.returned,
       again: true,
     };
-    await wallet.withKeys(() =>
-      session.set(SESSION_LOVEJOIN_PUBLIC, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() } satisfies KeptPublic),
-    );
-    await this.reserve(network, chainOwner(), chain.txs, now() + BUILT_TTL_MS);
+    await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() }, chain.reserved);
     return summary;
   }
 
@@ -1228,36 +1448,51 @@ export class LovejoinService {
    * deposit is in. Home's banner watches the last mix.
    */
   async publicSubmit(network: NetworkName, txHash: string): Promise<PendingTx> {
-    const { wallet, session, now } = this.deps;
-    const built = await wallet.withKeys(() => session.get<KeptPublic>(SESSION_LOVEJOIN_PUBLIC));
-    if (!built || built.txHash !== txHash || built.network !== network) {
-      throw new Error("That mix isn't ready to send. Review it again.");
-    }
-    if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
-    // A payment may have gone maybe sent since the review: nothing of the mix goes, or is kept for it, meanwhile.
-    await settleMaybeSent(this.deps, network);
-    const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
-    // Its own boxes mixed again: they wait afresh once its first mix is in (chainSent).
-    await wallet.withKeys(async () => {
-      await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
-      await session.remove(SESSION_LOVEJOIN_PUBLIC);
-    });
-    // Being sent: its change to come and its collateral are the chain's too.
-    await this.reserve(network, chainOwner(), built.chain);
-    await this.recordChain(network, {
-      progress: SESSION_LOVEJOIN_SENDING + network,
-      txs: built.chain,
-      leaves: built.leaves ?? [],
-      boxes: built.boxes,
-      ...(built.again ? { again: true } : {}),
-    });
+    const { now } = this.deps;
+    // One Send at a time on a network, and never while the last mix from the account is still being sent: its
+    // progress stays its own (independent review L30).
+    await this.inTurn(`public.${network}`, () => this.publicStart(network, txHash));
     await this.deps.alarm?.start();
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
     await this.pumpPublic(network, 0);
     const pending: PendingTx = { kind: "lovejoin-mix", network, txHash, submittedAt: now(), confirmations: null };
-    await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
+    await this.deps.wallet.withKeys(() => this.deps.session.remove(SESSION_BALANCES_PREFIX + network));
     await watchSent(this.deps, pending);
     return pending;
+  }
+
+  /** Records the mix kept for Send (`txHash`), reserves what it spends, and puts its progress where it's sent from. */
+  private async publicStart(network: NetworkName, txHash: string): Promise<void> {
+    const { wallet, session, now } = this.deps;
+    const built = await wallet.withKeys(() => session.get<KeptPublic>(SESSION_LOVEJOIN_PUBLIC));
+    if (!built || built.txHash !== txHash || built.network !== network) throw new Error(NOT_READY);
+    if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
+    // A payment may have gone maybe sent since the review: nothing of the mix goes, or is kept for it, meanwhile.
+    await settleMaybeSent(this.deps, network);
+    const before = await this.sendingOf(network);
+    if (before && !before.stopped) throw new Error(PUBLIC_STILL_SENDING);
+    const until = await this.publicUnsettledNow(network);
+    if (until !== undefined) throw new Error(publicMaybeWait(until - now()));
+    const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
+    // Recorded, sealed, before its progress is where anything can send it from (independent review L28). Its own
+    // boxes mixed again: they wait afresh once its first mix is in (chainSent).
+    const chain = { progress: SESSION_LOVEJOIN_SENDING + network, txs: built.chain, leaves: built.leaves ?? [], boxes: built.boxes };
+    await this.recordChain(network, { ...chain, ...(built.again ? { again: true } : {}) }, async () => {
+      // Being sent: its change to come and its collateral are the chain's too, as long as what its review
+      // reserved is still its own.
+      await this.reserve(network, chainOwner(), built.chain, undefined, true);
+      try {
+        // Its progress last: a write that fails before it leaves nothing that sends the chain, whose record and
+        // reservation then go (independent review L28).
+        await wallet.withKeys(async () => {
+          await session.remove(SESSION_LOVEJOIN_PUBLIC);
+          await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
+        });
+      } catch (e) {
+        await this.release(network, chainOwner()).catch(() => undefined);
+        throw e;
+      }
+    });
   }
 
   /**
@@ -1268,15 +1503,41 @@ export class LovejoinService {
    * transaction that can't be sent stops it, and says why (progress).
    */
   async pumpPublic(network: NetworkName, budgetMs = CHAIN_PUMP_MS): Promise<boolean> {
-    if (this.pumping) return true;
+    if (this.pumping.has(network)) return true;
+    this.pumping.add(network);
+    try {
+      return await this.pumpPublicNow(network, budgetMs);
+    } finally {
+      this.pumping.delete(network);
+    }
+  }
+
+  private async pumpPublicNow(network: NetworkName, budgetMs: number): Promise<boolean> {
     const sending = await this.sendingOf(network);
     if (!sending || sending.stopped) return false;
-    this.pumping = true;
     const { wallet, session } = this.deps;
     const koios = this.deps.koios(network);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    const save = () => wallet.withKeys(() => session.set(SESSION_LOVEJOIN_SENDING + network, sending));
+    const key = SESSION_LOVEJOIN_SENDING + network;
     const id = sending.txs.at(-1)!.txHash;
+    // Its progress is still where it waits, as this chain: a lock since (and an unlock after it) wiped it, or
+    // another chain took its place, and nothing of it is sent or written back (independent review L14). Call it
+    // while unlocked.
+    const ours = async () => {
+      if ((await session.get<SendingPublic>(key))?.txs?.at(-1)?.txHash !== id) throw new ChainGone();
+    };
+    const save = () =>
+      wallet.withKeys(async () => {
+        await ours();
+        await session.set(key, sending);
+      });
+    // The next transaction, when a send of it gave up while it may have gone in all the same: a try that may have
+    // reached a node, and none that says it's in (independent review L5). Cleared once a send of it goes.
+    let unsure: number | undefined;
+    // Whether its first transaction's record says it may have gone (chainMarked), and the next transaction, when
+    // a send of it gave up on an answer that says it didn't go.
+    let marked = false;
+    let refused: number | undefined;
     try {
       const done = await pumpChain(
         sending,
@@ -1284,7 +1545,18 @@ export class LovejoinService {
           send: async (i, maybeSent) => {
             const step = sending.txs[i]!;
             const bytes = hexBytes(step.txCbor);
+            // Its first spends the account (a deposit, or mixing again's first mix): its record says, sealed, that
+            // it may have gone before it's first sent, until it's known. A lock or a closed browser before an
+            // answer then leaves it looked for, never a mix the account pays for twice (independent review L5).
+            const first = i === 0 && sending.next === 0;
+            const mark = async () => {
+              await this.chainMarked(network, id, { index: 0, txHash: step.txHash, inputs: txInputs(bytes), at: this.deps.now() });
+              marked = true;
+            };
+            if (first) await mark();
             const tries = { busy: 0, spent: 0, maybeSent };
+            // Whether a try may have put it in: sent before, or one Koios didn't answer.
+            let reached = maybeSent;
             for (;;) {
               try {
                 try {
@@ -1298,11 +1570,34 @@ export class LovejoinService {
               } catch (e) {
                 // Refused while Koios couldn't say whether it's on chain, and it may be: looked for again (final review lovejoin-6).
                 if (mayBeIn(tries, e)) break;
+                // Koios didn't answer, or answered what isn't Koios's or the network's word (another id, a body it
+                // couldn't read): it may have reached a node.
+                if ((e instanceof KoiosBusyError && e.maybeSent) || !(e instanceof KoiosError)) reached = true;
                 const wait = chainRetryMs(i, tries, e);
-                if (wait === undefined) throw e;
+                if (wait === undefined) {
+                  // Once a try may have put it in, a later answer says nothing of that one: Koios's node down, a
+                  // gateway's page, even a refusal. Only answers to every try that say it didn't go let it go
+                  // (independent review L5).
+                  if (i === sending.next) {
+                    if (reached) unsure = i;
+                    else refused = i;
+                  }
+                  throw e;
+                }
+                // Every answer so far says it never went (Koios asked the wallet to slow down, say): its mark goes
+                // while it waits, and is back before it's tried again, so a lock meanwhile holds no mix from the
+                // account back for two hours.
+                if (first && marked && !reached) {
+                  await this.chainUnmarked(network, id, step.txHash);
+                  marked = false;
+                }
                 await sleep(wait);
+                // Never after a lock: the wallet may have locked while it waited, and locking stops the chain.
+                await wallet.withKeys(ours);
+                if (first && !marked) await mark();
               }
             }
+            if (unsure === i) unsure = undefined;
             await wallet.withKeys(() => rememberSpent(session, network, bytes, this.deps.now()));
             await this.chainSent(network, id, i);
           },
@@ -1318,18 +1613,53 @@ export class LovejoinService {
       );
       if (done) {
         await this.chainEnded(network, id);
-        await wallet.withKeys(() => session.remove(SESSION_LOVEJOIN_SENDING + network));
-        await this.release(network, chainOwner());
+        // What it held, and its progress, go: unless a lock took them already, and something else holds its place.
+        const here = await wallet.withKeys(() => ours().then(() => true, () => false));
+        if (here) {
+          // Its reservation first: nothing takes its place while its progress is there (independent review L30).
+          await this.release(network, chainOwner());
+          await wallet.withKeys(() => session.remove(key));
+        }
       }
       return !done;
     } catch (e) {
-      sending.stopped = e instanceof Error ? e.message : String(e);
+      // A lock cut it: whatever holds its place now stays as it is, and its record says it was cut; its first
+      // transaction's mark with it, unless that's known to have gone.
+      if (e instanceof ChainGone) {
+        await this.chainEnded(network, id, CHAIN_CUT, sending.next > 0 ? null : undefined).catch(() => undefined);
+        throw e;
+      }
+      // Stopped at a transaction that may have gone through: what it spends counts as spent, and stays reserved,
+      // and it's looked for before another mix from the account is built (independent review L5). Nothing after
+      // it is sent, so what the rest of the chain would have spent is free for other chains and sites. That's one
+      // Koios didn't answer, or its first, marked, when nothing said whether it went (a write that failed after
+      // it was sent, say). Otherwise its mark goes.
+      const at = unsure ?? (marked && sending.next === 0 && refused === undefined ? 0 : undefined);
+      const step = at === undefined ? undefined : sending.txs[at]!;
+      const maybe = step && {
+        index: at!,
+        txHash: step.txHash,
+        inputs: txInputs(hexBytes(step.txCbor)),
+        at: this.deps.now(),
+        ...(unsure !== undefined ? { unanswered: true as const } : {}),
+      };
+      sending.stopped =
+        unsure !== undefined
+          ? `Koios didn't answer when ${stepName(sending.txs, unsure)} was sent, so it may have gone through. The wallet looks for it on chain before another mix from your public account is built.`
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      if (maybe) {
+        sending.maybe = maybe.index;
+        await wallet.withKeys(() => rememberSpent(session, network, hexBytes(step!.txCbor), maybe.at)).catch(() => undefined);
+      }
+      // Recorded as stopped, and what it held let go, before its progress says so: nothing takes its place until
+      // all of that is done (independent review L30).
+      await this.chainEnded(network, id, sending.stopped, maybe ?? null).catch(() => undefined);
+      if (maybe) await this.holdOnly(network, sending.txs, step!).catch(() => undefined);
+      else await this.release(network, chainOwner()).catch(() => undefined);
       await save().catch(() => undefined);
-      await this.chainEnded(network, id, sending.stopped).catch(() => undefined);
-      await this.release(network, chainOwner()).catch(() => undefined);
-      throw e;
-    } finally {
-      this.pumping = false;
+      throw unsure !== undefined ? new Error(sending.stopped) : e;
     }
   }
 
@@ -1356,7 +1686,11 @@ export class LovejoinService {
    * leaves, sealed, so the wallet knows which of its boxes it hasn't mixed
    * yet, after a lock too. `progress`: where it waits while it's sent.
    * `delay`: how long its boxes wait, as its return said (independent
-   * review L21); Settings' when it's sent, without one.
+   * review L21); Settings' when it's sent, without one. `start` then puts
+   * it there (and reserves what it spends), so nothing can send a chain
+   * with no record (independent review L28); meanwhile it isn't taken for
+   * one a lock cut (cuts). One whose `start` fails never went: its record
+   * goes.
    */
   async recordChain(
     network: NetworkName,
@@ -1369,6 +1703,7 @@ export class LovejoinService {
       again?: boolean;
       delay?: LovejoinDelay;
     },
+    start?: () => Promise<void>,
   ): Promise<void> {
     const { txs } = chain;
     const record: ChainRecord = {
@@ -1385,9 +1720,22 @@ export class LovejoinService {
       sent: 0,
       at: this.deps.now(),
     };
-    await this.update(network, (s) => {
-      s.chains = [...s.chains.filter((c) => c.id !== record.id), record];
-    });
+    this.starting.add(record.id);
+    try {
+      await this.update(network, (s) => {
+        s.chains = [...s.chains.filter((c) => c.id !== record.id), record];
+      });
+      try {
+        await start?.();
+      } catch (e) {
+        await this.update(network, (s) => {
+          s.chains = s.chains.filter((c) => c.id !== record.id);
+        }).catch(() => undefined);
+        throw e;
+      }
+    } finally {
+      this.starting.delete(record.id);
+    }
   }
 
   /**
@@ -1403,6 +1751,8 @@ export class LovejoinService {
       const c = s.chains.find((r) => r.id === id);
       if (!c) return;
       c.sent = Math.max(c.sent, i + 1);
+      // It went: marked as maybe gone while it was sent (pumpPublic), it's known now.
+      if (c.maybe?.index === i) delete c.maybe;
       if (!due.length || c.scheduled) return;
       c.scheduled = true;
       if (c.again) {
@@ -1415,20 +1765,119 @@ export class LovejoinService {
 
   /**
    * Chain `id` is all sent, or `stopped` partway, and why. Stopped, the due
-   * times of the boxes it hadn't mixed all the way go (unschedule).
+   * times of the boxes it hadn't mixed all the way go (unschedule). `maybe`:
+   * the transaction it stopped at may have gone through (ChainRecord
+   * `maybe`); null, nothing it marked so may have; none, its mark stays as
+   * it is.
    */
-  async chainEnded(network: NetworkName, id: string, stopped?: string): Promise<void> {
+  async chainEnded(network: NetworkName, id: string, stopped?: string, maybe?: ChainRecord["maybe"] | null): Promise<void> {
     const now = this.deps.now();
     await this.update(network, (s) => {
       const c = s.chains.find((r) => r.id === id);
       if (!c || c.ended) return;
       c.ended = now;
-      if (stopped === undefined) c.done = true;
-      else {
+      if (stopped === undefined) {
+        c.done = true;
+        delete c.maybe;
+      } else {
         c.stopped = stopped;
+        if (maybe) c.maybe = maybe;
+        else if (maybe === null) delete c.maybe;
         unschedule(s, c, unfinished(c));
       }
     });
+  }
+
+  /**
+   * Marks chain `id`'s transaction `maybe` as one that may have gone through
+   * (ChainRecord `maybe`) while it's sent, unless the chain ended, or has a
+   * mark already.
+   */
+  private chainMarked(network: NetworkName, id: string, maybe: NonNullable<ChainRecord["maybe"]>): Promise<void> {
+    return this.update(network, (s) => {
+      const c = s.chains.find((r) => r.id === id);
+      if (c && !c.ended && !c.maybe) c.maybe = maybe;
+    });
+  }
+
+  /** Takes chain `id`'s mark on `txHash` back (chainMarked) while it's sent: every answer so far says it never went. */
+  private chainUnmarked(network: NetworkName, id: string, txHash: string): Promise<void> {
+    return this.update(network, (s) => {
+      const c = s.chains.find((r) => r.id === id);
+      if (c && !c.ended && c.maybe?.txHash === txHash) delete c.maybe;
+    });
+  }
+
+  /**
+   * Looks for the transaction a mix from the public account stopped at
+   * while it may have gone through (ChainRecord `maybe`): on chain, it went;
+   * not, and a UTxO it spends is spent now, it can't go anymore, whether it
+   * did or not; unseen as long as the wallet holds what it spends
+   * (SPENT_KEEP_MS), it never went. Then the mix's record and progress say
+   * so, and what it reserved goes. Returns, while it's still unsettled, when
+   * it will be at the latest, as long as Koios answers (ms): no other mix
+   * from the account is built meanwhile, or the account could pay for one
+   * twice (independent review L5). It's only looked for, never sent again:
+   * its mix stopped.
+   */
+  private publicUnsettled(network: NetworkName): Promise<number | undefined> {
+    return this.inTurn(`public.${network}`, () => this.publicUnsettledNow(network));
+  }
+
+  /** publicUnsettled, in the account's turn. */
+  private async publicUnsettledNow(network: NetworkName): Promise<number | undefined> {
+    // One whose progress is gone ends first (cuts): only a mix that ended is settled here, never one still being
+    // sent, whose first transaction's mark goes with its send (chainSent).
+    await this.cuts(network);
+    const c = (await this.read(network)).chains.find((r) => r.session === undefined && r.maybe && r.ended);
+    const m = c?.maybe;
+    if (!c || !m) return undefined;
+    const by = m.at + SPENT_KEEP_MS;
+    const koios = this.deps.koios(network);
+    const seen = (await koios.txStatus([m.txHash]).catch(() => undefined))?.get(m.txHash);
+    // Koios didn't answer: looked for again next time.
+    if (seen === undefined) return by;
+    let how: "in" | "spent" | "never" = "in";
+    if (seen === null) {
+      const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
+      if (!rows) return by;
+      if (rows.some((r) => r.is_spent)) how = "spent";
+      else if (this.deps.now() >= by) how = "never";
+      else return by;
+    }
+    const what = c.deposit === m.txHash ? "its deposit" : `its transaction ${m.index + 1} of ${c.total}`;
+    const lead = m.unanswered
+      ? `Koios didn't answer when ${what} was sent`
+      : c.stopped === CHAIN_CUT
+        ? `The wallet locked, or the browser closed, as ${what} was sent`
+        : `The mix stopped as ${what} was sent`;
+    const why = {
+      in: `${lead}. It went through, and the mix stopped there.`,
+      spent: `${lead}, and what it spends is spent now: if that was it, the boxes it made wait in the pool, not mixed yet.`,
+      never: `${lead}, and it never went through.`,
+    }[how];
+    await this.update(network, (s) => {
+      const r = s.chains.find((x) => x.id === c.id);
+      if (r?.maybe?.txHash !== m.txHash) return;
+      delete r.maybe;
+      r.stopped = why;
+      if (how === "in") r.sent = Math.max(r.sent, m.index + 1);
+    });
+    const { wallet, session } = this.deps;
+    const key = SESSION_LOVEJOIN_SENDING + network;
+    await wallet.withKeys(async () => {
+      const p = await session.get<SendingPublic>(key);
+      if (p?.txs?.at(-1)?.txHash !== c.id || p.maybe === undefined) return;
+      delete p.maybe;
+      p.stopped = why;
+      if (how === "in") p.next = Math.max(p.next, m.index + 1);
+      await session.set(key, p);
+    });
+    // Nothing of it can land later: what it held goes, as a stopped mix's does.
+    await this.reserving(network, (kept) => {
+      if (kept[chainOwner()] && kept[chainOwner()]!.until === undefined) delete kept[chainOwner()];
+    });
+    return undefined;
   }
 
   /**
@@ -1443,6 +1892,8 @@ export class LovejoinService {
     if (!live.length) return;
     const stopped = new Map<string, string>();
     for (const c of live) {
+      // Its progress is being put where it waits (recordChain): not cut.
+      if (this.starting.has(c.id)) continue;
       const progress = await wallet.withKeys(() => session.get<ChainProgress & { stopped?: string }>(c.progress));
       // Another chain's in its place is this one's gone too.
       if (progress?.txs?.at(-1)?.txHash !== c.id) stopped.set(c.id, CHAIN_CUT);
@@ -1538,6 +1989,7 @@ export class LovejoinService {
           sent: c.sent,
           at: c.at,
           ...(c.stopped ? { stopped: c.stopped } : {}),
+          ...(c.maybe && c.ended ? { maybeSent: true as const } : {}),
         })),
     };
   }

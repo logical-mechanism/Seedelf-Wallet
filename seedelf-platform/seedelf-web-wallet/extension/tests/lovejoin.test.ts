@@ -238,14 +238,15 @@ describe("sending a chain a window at a time", () => {
     const { chain, clock, sent, io } = pumped(6);
     expect(await pumpChain(chain, io, CHAIN_RESEND_MS - CHAIN_POLL_MS)).toBe(false);
     expect(sent).toEqual([0, 1, 2, 3].map((i) => [i, false]));
-    // Three minutes on, still nothing: a node dropped it. The first goes again, as maybe in already.
+    // Three minutes on, still nothing: a node dropped it, and every one after it, which spends its change. They
+    // all go again, in order, as maybe in already (independent review L25).
     expect(await pumpChain(chain, io, CHAIN_POLL_MS)).toBe(false);
-    expect(sent.slice(4)).toEqual([[0, true]]);
-    expect(chain.sentAt![0]).toBe(clock.now);
+    expect(sent.slice(4)).toEqual([0, 1, 2, 3].map((i) => [i, true]));
+    expect(chain.sentAt).toEqual([clock.now, clock.now, clock.now, clock.now]);
     // It lands, and the rest go.
     io.onChain = async (hashes) => new Set(hashes.filter((h) => h === "t0"));
     await pumpChain(chain, io, 0);
-    expect(sent.slice(5)).toEqual([[4, false]]);
+    expect(sent.slice(8)).toEqual([[4, false]]);
   });
 
   it("marks a send before it begins, so one a stopped worker left unfinished counts as maybe in", async () => {
@@ -1019,11 +1020,12 @@ describe("a chain's resend while tx_status is down", CHAINS, () => {
     let down = true;
     const net = statusDown(t, () => down);
     await lovejoin.publicSubmit("preprod", summary.txHash);
-    // Three minutes on, the oldest is sent again and refused, while tx_status still can't say: it's looked for again.
+    // Three minutes on, the four in the mempool are sent again, in order, and refused, while tx_status still can't say:
+    // they're looked for again (independent review L25).
     t.clock.now += CHAIN_RESEND_MS;
     await t.wallet.touch();
     expect(await lovejoin.pumpPublic("preprod")).toBe(true);
-    expect(net.refused()).toBe(1);
+    expect(net.refused()).toBe(4);
     expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4 });
     // tx_status answers again: the last mix goes.
     down = false;

@@ -83,6 +83,7 @@ import {
   CHAIN_CUT,
   CHAIN_PUMP_MS,
   chainBoxes,
+  ChainGone,
   chainOwner,
   chainRetryMs,
   checkBoxes,
@@ -2422,15 +2423,26 @@ export class SessionService {
     if (txs!.some((t) => txInputs(hexBytes(t.txCbor)).some((o) => spent.has(o)))) {
       throw new Error("Something this return spends went out in another transaction since you reviewed it. Review it again.");
     }
+    let was: Pick<SessionRecord, "chain" | "lovejoinSkipped"> = {};
     await this.update(network, built.index, (s) => {
+      was = { ...(s.chain ? { chain: s.chain } : {}), ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}) };
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
       delete s.lovejoinSkipped;
     });
-    await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
-    // Being sent: its change to come and its collateral are the chain's too.
-    await this.deps.lovejoin?.reserve(network, chainOwner(built.index), txs!);
-    // Recorded, sealed, before any of it is sent: what it deposits, mixes and leaves.
-    await this.deps.lovejoin?.recordChain(network, {
+    const lovejoin = this.deps.lovejoin;
+    const start = async () => {
+      // Being sent: its change to come and its collateral are the chain's too.
+      await lovejoin?.reserve(network, chainOwner(built.index), txs!);
+      try {
+        await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
+      } catch (e) {
+        await lovejoin?.release(network, chainOwner(built.index)).catch(() => undefined);
+        throw e;
+      }
+    };
+    // Recorded, sealed, before any of it is sent, and before its progress is where the runner sends it from
+    // (independent review L28): what it deposits, mixes and leaves.
+    const record = {
       session: built.index,
       progress: this.pendingKey(network, built.index),
       txs: txs!,
@@ -2439,7 +2451,18 @@ export class SessionService {
       again: !!summary.lovejoin?.again,
       // Its boxes wait as long as the return said: a swap's as approved (independent review L21).
       ...(summary.lovejoin?.delay ? { delay: summary.lovejoin.delay as LovejoinDelay } : {}),
-    });
+    };
+    try {
+      await (lovejoin ? lovejoin.recordChain(network, record, start) : start());
+    } catch (e) {
+      // It never started: the session says what it said before, not that this chain is on its way.
+      await this.update(network, built.index, (s) => {
+        if (s.chain?.last !== record.txs.at(-1)!.txHash) return;
+        delete s.chain;
+        Object.assign(s, was);
+      }).catch(() => undefined);
+      throw e;
+    }
     await this.deps.alarm?.start();
     await this.pump(network, built.index, budgetMs);
     return { kind: "session-back", network, txHash: built.txHash, submittedAt: this.deps.now(), confirmations: null };
@@ -2478,15 +2501,21 @@ export class SessionService {
             }
             return on;
           },
-          save: () => this.savePending(network, pending),
+          save: () => this.keepPending(network, pending),
           sleep,
           now: this.deps.now,
         },
         budgetMs,
       );
     } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      // Said on the session, where its page shows it in full: here, once the chain has stopped, not when one
+      // send gave up, which pumpChain may yet get past (independent review L25).
+      await this.update(network, index, (s) => {
+        if (s.chain) s.chain.stopped = why;
+      }).catch(() => undefined);
       // Recorded as stopped before its progress goes: never taken for one a lock cut.
-      await this.deps.lovejoin?.chainEnded(network, id, e instanceof Error ? e.message : String(e)).catch(() => undefined);
+      await this.deps.lovejoin?.chainEnded(network, id, why).catch(() => undefined);
       await this.dropPending(network, index);
       await this.deps.lovejoin?.release(network, chainOwner(index)).catch(() => undefined);
       throw e;
@@ -2526,15 +2555,11 @@ export class SessionService {
         // Refused while Koios couldn't say whether it's on chain, and it may be: looked for again (final review lovejoin-6).
         if (mayBeIn(tries, e)) break;
         const wait = chainRetryMs(i, tries, e);
-        if (wait === undefined) {
-          // Said on the session, where its page shows it in full.
-          const why = e instanceof Error ? e.message : String(e);
-          await this.update(network, pending.index, (s) => {
-            if (s.chain) s.chain.stopped = why;
-          }).catch(() => undefined);
-          throw e;
-        }
+        // The chain's stop is said on the session by pump, if it does stop.
+        if (wait === undefined) throw e;
         await sleep(wait);
+        // Never after a lock and an unlock while it waited: the lock stopped the chain (independent review L14).
+        await this.deps.wallet.withKeys(() => this.pendingHere(network, pending));
       }
     }
     await this.deps.lovejoin?.chainSent(network, pending.txs.at(-1)!.txHash, i);
@@ -2551,6 +2576,24 @@ export class SessionService {
 
   private savePending(network: NetworkName, pending: PendingChain): Promise<void> {
     return this.deps.wallet.withKeys(() => this.deps.session.set(this.pendingKey(network, pending.index), pending));
+  }
+
+  /**
+   * Keeps session `index`'s chain's progress as it's sent, while it's still
+   * where it waits: a lock wiped it (the wallet may be unlocked since), and
+   * nothing of it is written back (independent review L14).
+   */
+  private keepPending(network: NetworkName, pending: PendingChain): Promise<void> {
+    return this.deps.wallet.withKeys(async () => {
+      await this.pendingHere(network, pending);
+      await this.deps.session.set(this.pendingKey(network, pending.index), pending);
+    });
+  }
+
+  /** Throws ChainGone when `pending` isn't where its session's chain waits anymore. Call it while unlocked. */
+  private async pendingHere(network: NetworkName, pending: PendingChain): Promise<void> {
+    const kept = await this.deps.session.get<PendingChain>(this.pendingKey(network, pending.index));
+    if (kept?.txs?.at(-1)?.txHash !== pending.txs.at(-1)!.txHash) throw new ChainGone();
   }
 
   private dropPending(network: NetworkName, index: number): Promise<void> {

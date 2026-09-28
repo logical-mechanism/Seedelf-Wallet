@@ -176,7 +176,8 @@ export function Home() {
         (h) => live && setHeld(h),
         () => undefined,
       );
-      // The device's record alone: no Koios request.
+      // The device's record: no Koios request, but for a look, at most every two minutes, for a public mix's
+      // transaction that may have gone through (lovejoin.ts, PUBLIC_LOOK_MS).
       void call("lovejoin-mix-public-progress", {}).then(
         (m) => live && setMixing(m),
         () => undefined,
