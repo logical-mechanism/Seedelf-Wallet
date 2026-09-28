@@ -53,7 +53,7 @@ describe("a maybe-sent payment's watch, when Koios fails", () => {
       networks: ["mainnet", "preprod"],
       wallet: t.wallet,
       sessions: { runAll: async () => false },
-      lovejoin: { pumpPublic: async () => false, withdrawDue: async () => [], held: async () => ({ boxes: 0 }) },
+      lovejoin: { pumpPublic: async () => false, withdrawDue: async () => [], returning: async () => false },
       pending: t.pending,
     } as unknown as Runner;
     await runNetworks(ctx, alarm);

@@ -1232,7 +1232,8 @@ describe("a swap that runs itself", () => {
     expect(await refused(swapTx({ outputs: [[other, 1_000_000], [SESSION_ADDRESS, 144_585_414]] }), "1000000")).toBe(
       "it places no order.",
     );
-  });
+    // Eleven wallets, each a key derivation: seconds on a busy machine.
+  }, 30_000);
 
   it("pauses rather than sign a swap that gives ADA to the treasury, which no output shows", async () => {
     const t = await unlocked();

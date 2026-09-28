@@ -62,7 +62,7 @@ describe("a maybe-sent payment sent again", () => {
           seen.push(await t.wallet.withKeys(() => lastSpentAt(t.session, t.clock.now)));
           return [];
         },
-        held: async () => ({ boxes: 0 }),
+        returning: async () => false,
       },
       pending: t.pending,
     } as unknown as Runner;

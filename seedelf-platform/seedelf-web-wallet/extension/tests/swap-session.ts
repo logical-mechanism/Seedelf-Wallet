@@ -4,7 +4,7 @@
 // aggregator, as sessions.test.ts sets them up.
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { Minswap } from "../src/background/minswap";
+import { builtOutputs, Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
@@ -127,6 +127,21 @@ export async function started(sessions: SessionService, ask = ASK) {
 export function funded(t: T) {
   t.koios.confirmations = 1;
   t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
+}
+
+/**
+ * What the funding really submitted paid session 0's account, known to Koios
+ * and spent: a session ends only once Koios shows it so (independent review M4).
+ */
+export function fundingOutsSpent(t: T) {
+  const funding = t.koios.submitted[0];
+  if (!funding) return;
+  const id = txIdOf(funding);
+  builtOutputs(funding).forEach((o, i) => {
+    if (o.address.slice(2, 58) !== sessionSwap.keyHash) return;
+    t.koios.addedToAccounts.push(atSession(id, i, o.lovelace.toString()));
+    t.koios.spent.add(`${id}#${i}`);
+  });
 }
 
 /** The swap `txHash` lands: its order waits at the DEX's contract (output 0), and its change is at the account. */

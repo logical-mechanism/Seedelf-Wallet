@@ -40,7 +40,7 @@ async function worker() {
     networks: ["mainnet", "preprod"],
     wallet: t.wallet,
     sessions: { runAll: async () => false },
-    lovejoin: { pumpPublic: async () => false, withdrawDue: async () => [], held: async () => ({ boxes: 0 }) },
+    lovejoin: { pumpPublic: async () => false, withdrawDue: async () => [], returning: async () => false },
     pending,
   } as unknown as Runner;
   return { t, alarm, pending, run: (unlock = false) => runNetworks(ctx, alarm, unlock) };

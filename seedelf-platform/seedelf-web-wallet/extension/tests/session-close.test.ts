@@ -115,11 +115,12 @@ describe("a session's funding", () => {
     const outs = paidToSession(funding);
     expect(outs).toHaveLength(2);
     expect((await record(t))!.txs[0]).toMatchObject({ kind: "out", outs });
-    // A top-up's too, its one payment.
+    // A top-up's too: its payment, and a collateral, since the account as
+    // read here holds none it can put up (independent review M9).
     const more = await sessions.topUpBuild("preprod", 0, "3000000", []);
     await sessions.topUpSubmit("preprod", more.txHash);
     const topUp = t.koios.submitted.at(-1)!;
-    expect(paidToSession(topUp)).toHaveLength(1);
+    expect(paidToSession(topUp)).toHaveLength(2);
     expect((await record(t))!.txs[1]).toMatchObject({ kind: "out", outs: paidToSession(topUp) });
     // Its page never shows them.
     expect((await sessions.list("preprod"))[0]!.txs[0]).not.toHaveProperty("outs");

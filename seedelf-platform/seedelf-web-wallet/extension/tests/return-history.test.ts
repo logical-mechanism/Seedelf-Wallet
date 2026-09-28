@@ -21,6 +21,9 @@ async function unlocked() {
   const t = testBalances();
   await t.wallet.create(account(12).phrase, PASSWORD);
   t.koios.confirmations = 1;
+  // The private history is there before any of this: what arrives later is
+  // received, not already in the balance (independent review L38).
+  await t.activity.arrived("preprod", []);
   return t;
 }
 type T = Awaited<ReturnType<typeof unlocked>>;

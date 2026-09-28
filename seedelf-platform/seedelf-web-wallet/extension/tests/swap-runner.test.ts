@@ -13,6 +13,7 @@ import {
   busy,
   FUNDING,
   funded,
+  fundingOutsSpent,
   MIN,
   ORDER,
   ordered,
@@ -218,6 +219,7 @@ describe("a swap's close (independent review L15, D2)", () => {
     funded(t);
     await sessions.advance("preprod", 0, true);
     t.koios.spent.add(FUNDING);
+    fundingOutsSpent(t);
     expect((await sessions.advance("preprod", 0, true)).stage).toBe("closed");
     expect(t.minswap.calls.map((c) => c.path)).toEqual(["estimate"]);
   });
