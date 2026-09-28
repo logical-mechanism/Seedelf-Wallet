@@ -26,8 +26,10 @@ function poolReadsTogether(t: Tested, count: number) {
   let release!: () => void;
   const together = new Promise<void>((resolve) => (release = resolve));
   t.koios.fetch = async (url, init) => {
-    const asked = init?.body ? (JSON.parse(String(init.body)) as { _payment_credentials?: string[] }) : undefined;
-    if (new URL(url).pathname.endsWith("/credential_utxos") && asked?._payment_credentials?.includes(MIX_BOX)) {
+    const pool =
+      new URL(url).pathname.endsWith("/credential_utxos") &&
+      (JSON.parse(String(init!.body)) as { _payment_credentials: string[] })._payment_credentials.includes(MIX_BOX);
+    if (pool) {
       if (++waiting >= count) release();
       await together;
     }
