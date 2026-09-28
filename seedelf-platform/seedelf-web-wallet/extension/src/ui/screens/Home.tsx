@@ -646,8 +646,11 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
   const boxes = held.boxes || held.notMixed;
   const lovelace = held.boxes ? held.lovelace : (BigInt(held.notMixed) * LOVEJOIN_BOX).toString();
   // How many aren't mixed yet is an amount too: said without the number while balances are hidden (privacy review §2.16).
+  // Those Koios hasn't said the making of yet, after a restore, may be mixed: said apart (independent review M14).
+  const unsure = Math.min(held.unsure ?? 0, held.notMixed);
   const flags = [
-    held.notMixed ? `${amounts.hidden ? "some" : held.notMixed} not mixed yet` : "",
+    held.notMixed > unsure ? `${amounts.hidden ? "some" : held.notMixed - unsure} not mixed yet` : "",
+    unsure ? `${amounts.hidden ? "some" : unsure} not known to be mixed yet` : "",
     held.stopped ? (held.stopped === 1 ? "a mix stopped partway" : `${held.stopped} mixes stopped partway`) : "",
   ].filter(Boolean);
   const flagged = flags.join(", and ");

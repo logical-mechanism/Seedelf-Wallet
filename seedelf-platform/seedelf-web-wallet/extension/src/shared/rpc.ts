@@ -1108,13 +1108,16 @@ export interface LovejoinChainView {
  * The boxes on their way back, as this device's schedule has them (no pool
  * read): how many, what they hold, and when the next is due (ms), for Home.
  * `notMixed`: how many the last pool read found not mixed yet (they wait for
- * Mix my boxes again); `stopped`: how many chains stopped partway.
+ * Mix my boxes again); `unsure`: of those, how many only because Koios
+ * hasn't said yet how they went in, after a restore (independent review
+ * M14); `stopped`: how many chains stopped partway.
  */
 export interface LovejoinHeld {
   boxes: number;
   lovelace: string;
   next: number | null;
   notMixed: number;
+  unsure?: number;
   stopped: number;
 }
 

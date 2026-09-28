@@ -37,7 +37,8 @@
 // due times, is known by the transaction that made it (tx_info): a mix made
 // it, and it comes back as any box does; a deposit did, and it's held, not
 // mixed yet, as a recorded chain's box is; paid by the public account, it's
-// the account's. Until Koios says, it's held (independent review M14).
+// the account's. Until Koios says, it's held, and asked of again at each
+// pool read (independent review M14).
 //
 // A chain is sent over many blocks, and only while the wallet is unlocked; a
 // lock, a closed browser or an update wipes what's left of it (it waits in
@@ -78,7 +79,8 @@
 // swap's review, when its return would go through Lovejoin, used again for
 // five minutes (room, §2.7); a withdraw is giveme.my plus one submit. After
 // a restore, one tx_info with a pool read, for the transactions that made
-// the boxes no record accounts for, each asked of once (found).
+// the boxes no record accounts for, each asked of once, or again at each
+// read until Koios answers for it (found).
 
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
 import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
@@ -479,6 +481,8 @@ interface Schedule {
   chains: ChainRecord[];
   /** How many of the wallet's boxes the last pool read found not mixed yet, for Home. */
   notMixed?: number;
+  /** Of those, how many Koios hasn't said the making of yet, after a restore (found): they may be mixed (M14). */
+  unsure?: number;
   /** A withdraw whose submit Koios didn't answer: it may have gone through, and is looked for before another is built. */
   withdrawing?: Withdrawing;
   /** What put a due time off, by the time (ms): so none is put off for good. */
@@ -498,6 +502,14 @@ interface Schedule {
   leaves?: Record<string, string>;
   /** What made each box no record accounts for, as Koios said, by the transaction that made it (found). */
   origins?: Record<string, Origin>;
+  /**
+   * The transactions that made boxes no record accounts for that Koios was
+   * asked of and didn't answer for, or didn't know: each is asked of again
+   * at every pool read, however many due times there are, and its boxes are
+   * held until Koios says (found). By transaction, when a pool read last
+   * listed a box it made (ms), which goes as an Origin's `seen` does.
+   */
+  asking?: Record<string, number>;
 }
 
 /**
@@ -862,6 +874,25 @@ function depositsOf(s: Schedule, owned: OutRef[], origins: Record<string, Pick<O
 const notMixedYet = (s: Schedule, owned: OutRef[]) => [...unmixedOf(s.chains, owned), ...depositsOf(s, owned)];
 
 /**
+ * Whether more of the boxes of `owned` could come back than `s` has due
+ * times for: some were found with none, which a restore's boxes are (found).
+ * So are some after Mix my boxes again took boxes not mixed yet, which had
+ * none: the due times its first mix took for them were other boxes' (chainSent).
+ * A chain being sent set all its boxes' due times as it went in (chainSent),
+ * while some of its boxes are still mixing or on their way: its due times
+ * and the leaves it has reached are left out of the count, so a box a
+ * restore found while one is sent (a swap's return, say) is looked up too
+ * (independent review M14).
+ */
+function moreThanDue(s: Schedule, owned: OutRef[]): boolean {
+  const held = new Set(notMixedYet(s, owned).map(ref));
+  const sending = s.chains.filter((c) => !c.ended && c.scheduled);
+  const theirs = new Set(sending.flatMap((c) => c.leaves.map(ref)));
+  const back = owned.filter((b) => !held.has(ref(b)) && !theirs.has(ref(b))).length;
+  return back > s.due.length - sending.reduce((n, c) => n + c.boxes, 0);
+}
+
+/**
  * How many boxes chain `c` stopped short of their last mix, as its record
  * says: a deposit's boxes whose last mix wasn't sent. None for mixing again,
  * where a box the chain didn't reach is as it was, maybe free to come back.
@@ -989,7 +1020,8 @@ const empty = (s: Schedule) =>
   !s.notMixed &&
   !s.withdrawing &&
   !Object.keys(s.leaves ?? {}).length &&
-  !Object.keys(s.origins ?? {}).length;
+  !Object.keys(s.origins ?? {}).length &&
+  !Object.keys(s.asking ?? {}).length;
 
 /** How long a swap's review uses a reading of the pool again (room): reviews in a row ask Koios once. */
 export const POOL_ROOM_MS = 5 * 60_000;
@@ -1314,9 +1346,11 @@ export class LovejoinService {
     let { count } = c;
     const short = this.floorShort(network, split.others.length);
     if (short) throw new LovejoinSkipped(short);
-    // Mixing again from the private balance never takes a box a mix from the public account put in, unless asked (againBoxes).
+    // Mixing again from the private balance never takes a box a mix from the public account put in, unless asked
+    // (againBoxes), nor one whose making Koios hasn't said of yet after a restore: it may be the account's (M14).
     const schedule = await this.read(network);
-    const left = new Set(again && !publicToo ? fromPublic(split.owned, schedule).map(ref) : []);
+    const asked = split.owned.filter((b) => schedule.asking?.[b.txHash] !== undefined);
+    const left = new Set(again && !publicToo ? [...fromPublic(split.owned, schedule), ...asked].map(ref) : []);
     const owned = free(split.owned, split.reserved).filter((b) => !left.has(ref(b)));
     const others = free(split.others, split.reserved);
     if (again) {
@@ -2308,7 +2342,15 @@ export class LovejoinService {
       );
       if (origins.length) s.origins = Object.fromEntries(origins);
       else delete s.origins;
+      // So does a transaction Koios is still asked of; one it has said of since goes at once.
+      const asking = Object.entries(s.asking ?? {}).flatMap(([tx, seen]): Array<[string, number]> =>
+        s.origins?.[tx] ? [] : listedTxs.has(tx) ? [[tx, now]] : now - seen < RECORD_KEEP_MS ? [[tx, seen]] : [],
+      );
+      if (asking.length) s.asking = Object.fromEntries(asking);
+      else delete s.asking;
       s.notMixed = unmixed.length;
+      if (unsure.length) s.unsure = unsure.length;
+      else delete s.unsure;
     });
     return { unmixed, free, unsure };
   }
@@ -2317,16 +2359,17 @@ export class LovejoinService {
    * What made the boxes of `owned` that no record of the wallet's accounts
    * for (Origin), by transaction, as `s` keeps it; and the boxes of those
    * Koios hasn't said of (`unsure`). Only when more of the boxes could come
-   * back than `s` has due times for: that's a restore (Remove wallet, Forgot
-   * password, another browser or device), whose chain records are gone. A
-   * wallet in its steady state has a due time for each box that can come
-   * back, boxes other people's mixes moved since included, and asks Koios
-   * nothing (independent review M14). The transactions that made the boxes
-   * with none kept are read (tx_info, with their inputs), in one request, each
-   * only once: in the network's turn, so runs and pages at once ask once, and
-   * what Koios says is kept, sealed, by the transaction. One Koios doesn't
-   * answer for, or doesn't know, is asked of again at a later pool read, and
-   * its box is held meanwhile.
+   * back than `s` has due times for (moreThanDue): that's a restore (Remove
+   * wallet, Forgot password, another browser or device), whose chain records
+   * are gone. A wallet in its steady state has a due time for each box that
+   * can come back, boxes other people's mixes moved since included, and asks
+   * Koios nothing (independent review M14). The transactions that made the
+   * boxes with none kept are read (tx_info, with their inputs), in one
+   * request, each only once: in the network's turn, so runs and pages at once
+   * ask once, and what Koios says is kept, sealed, by the transaction. One
+   * Koios doesn't answer for, or doesn't know, is kept as still asked of
+   * (`asking`): its boxes are held, and it's asked of again at each later
+   * pool read, however many due times there are by then, until Koios says.
    */
   private async found(
     network: NetworkName,
@@ -2336,29 +2379,38 @@ export class LovejoinService {
     const kept = s.origins ?? {};
     const known = recorded(s);
     const unknown = owned.filter((b) => !known(b) && !kept[b.txHash]);
-    const held = new Set([...unmixedOf(s.chains, owned), ...depositsOf(s, owned)].map(ref));
-    const back = owned.filter((b) => !held.has(ref(b))).length;
-    if (!unknown.length || back <= s.due.length) return { origins: kept, unsure: [] };
+    // Due times left over from something else never let a box Koios hasn't answered for go unasked, and free.
+    const ask = moreThanDue(s, owned) ? unknown : unknown.filter((b) => s.asking?.[b.txHash] !== undefined);
+    if (!ask.length) return { origins: kept, unsure: [] };
     const origins = await this.inTurn(`origins.${network}`, async () => {
-      const was = (await this.read(network)).origins ?? {};
-      const asked = [...new Set(unknown.map((b) => b.txHash))].filter((tx) => !was[tx]);
+      const was = await this.read(network);
+      const said = was.origins ?? {};
+      const asked = [...new Set(ask.map((b) => b.txHash))].filter((tx) => !said[tx]);
       const told = asked.length ? await this.madeBy(network, asked) : new Map<string, Pick<Origin, "mixed" | "public">>();
-      if (!told.size) return was;
       const at = this.deps.now();
       const fresh = Object.fromEntries([...told].map(([tx, o]) => [tx, { ...o, seen: at }]));
-      await this.update(network, (x) => {
-        x.origins = { ...x.origins, ...fresh };
-      });
-      return { ...was, ...fresh };
+      const silent = asked.filter((tx) => !told.has(tx));
+      if (told.size || silent.some((tx) => was.asking?.[tx] === undefined)) {
+        await this.update(network, (x) => {
+          if (told.size) x.origins = { ...x.origins, ...fresh };
+          const asking = { ...x.asking };
+          for (const tx of told.keys()) delete asking[tx];
+          for (const tx of silent) asking[tx] ??= at;
+          if (Object.keys(asking).length) x.asking = asking;
+          else delete x.asking;
+        });
+      }
+      return { ...said, ...fresh };
     });
-    return { origins, unsure: unknown.filter((b) => !origins[b.txHash]) };
+    return { origins, unsure: ask.filter((b) => !origins[b.txHash]) };
   }
 
   /**
    * What made each of `txHashes`, as Koios's tx_info says of its inputs: a
    * mix, when one sat at Lovejoin's mix_box; the public account, when one was
-   * under one of its payment keys (accountKeys). Those Koios doesn't know are
-   * left out, and every one when it doesn't answer.
+   * under one of its payment keys, or staked to its stake key (accountKeys).
+   * Those Koios doesn't know are left out, and every one when it doesn't
+   * answer.
    */
   private async madeBy(network: NetworkName, txHashes: string[]): Promise<Map<string, Pick<Origin, "mixed" | "public">>> {
     const mixBox = NETWORKS[network].lovejoin?.mixBox;
@@ -2374,47 +2426,53 @@ export class LovejoinService {
     const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
     if (!mixBox || !read.length) return told;
     const account = await this.accountKeys(network);
+    const theirs = ({ cred, stake }: { cred?: string; stake?: string }) =>
+      (cred !== undefined && account.payment.has(cred)) || (stake !== undefined && stake === account.stake);
     for (const { tx_hash, inputs } of read) {
-      const creds = inputs!.map((i) => this.credentialOf(i.payment_addr));
+      const keys = inputs!.map((i) => this.keysOf(i.payment_addr));
       told.set(tx_hash, {
-        mixed: creds.includes(mixBox),
-        ...(creds.some((c) => c !== undefined && account.has(c)) ? { public: true as const } : {}),
+        mixed: keys.some((k) => k.cred === mixBox),
+        ...(keys.some(theirs) ? { public: true as const } : {}),
       });
     }
     return told;
   }
 
   /**
-   * The public account's payment keys as the wallet knows them (hex): the
-   * first GAP_LIMIT of each chain, and those the last balance reading found
-   * past them.
+   * The public account's keys as the wallet knows them (hex): its payment
+   * keys, the first GAP_LIMIT of each chain and those the last balance
+   * reading found past them; and its stake key, which each of its base
+   * addresses carries however far past them, a balance reading or not.
    */
-  private accountKeys(network: NetworkName): Promise<Set<string>> {
-    const { wallet, session } = this.deps;
+  private accountKeys(network: NetworkName): Promise<{ payment: Set<string>; stake?: string }> {
+    const { wallet, session, wasm } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     return wallet.withKeys(async ({ cardano }) => {
       const found = await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
       const first = Array.from({ length: GAP_LIMIT }, (_, i) => [cardano.paymentKeyHash(0, i), cardano.paymentKeyHash(1, i)]).flat();
-      return new Set([...first, ...(found?.keys ?? [])]);
+      const { stake } = this.keysOf({ bech32: cardano.stakeAddress(net) });
+      return { payment: new Set([...first, ...(found?.keys ?? [])]), ...(stake !== undefined ? { stake } : {}) };
     });
   }
 
   /**
-   * An input's payment credential (hex), a key's or a script's: Koios's
-   * `cred`, or its address's (CIP-19), when Koios gives none. Undefined for
-   * a Byron address, or one that can't be read.
+   * An address's payment credential (hex), a key's or a script's: Koios's
+   * `cred`, or the address's own (CIP-19), when Koios gives none; and the
+   * stake key it carries: a base address's, or a reward address's. Neither
+   * for a Byron address, or one that can't be read.
    */
-  private credentialOf(address: { bech32: string; cred?: string | null }): string | undefined {
-    if (typeof address.cred === "string") return address.cred;
-    if (address.cred === null) return undefined;
-    let hex: string;
+  private keysOf(address: { bech32: string; cred?: string | null }): { cred?: string; stake?: string } {
+    let hex = "";
     try {
       hex = this.deps.wasm.cip30Address(address.bech32);
     } catch (e) {
       if (isTrap(e)) throw e;
-      return undefined;
     }
-    const cred = Number.parseInt(hex.slice(0, 1), 16) < 8 ? hex.slice(2, 58) : "";
-    return cred.length === 56 ? cred : undefined;
+    const kind = Number.parseInt(hex.slice(0, 1), 16);
+    const own = kind < 8 ? hex.slice(2, 58) : "";
+    const cred = typeof address.cred === "string" ? address.cred : address.cred === null || own.length !== 56 ? undefined : own;
+    const stake = kind === 0 || kind === 1 ? hex.slice(58, 114) : kind === 14 ? hex.slice(2, 58) : "";
+    return { ...(cred !== undefined ? { cred } : {}), ...(stake.length === 56 ? { stake } : {}) };
   }
 
   /** The wallet's boxes a chain of its, built or being sent, will spend: none of them is withdrawn. */
@@ -2469,12 +2527,13 @@ export class LovejoinService {
   async held(network: NetworkName): Promise<LovejoinHeld> {
     if (!this.available(network)) return { boxes: 0, lovelace: "0", next: null, notMixed: 0, stopped: 0 };
     await this.cuts(network);
-    const { due, chains, notMixed } = await this.read(network);
+    const { due, chains, notMixed, unsure } = await this.read(network);
     return {
       boxes: due.length,
       lovelace: (BigInt(due.length) * LOVEJOIN_DENOM).toString(),
       next: due.length ? Math.min(...due) : null,
       notMixed: notMixed ?? 0,
+      ...(unsure ? { unsure } : {}),
       stopped: chains.filter((c) => c.stopped).length,
     };
   }
@@ -2993,6 +3052,7 @@ export class LovejoinService {
       // Kept before chains were recorded: none.
       chains: Array.isArray(kept?.chains) ? kept.chains : [],
       ...(typeof kept?.notMixed === "number" ? { notMixed: kept.notMixed } : {}),
+      ...(typeof kept?.unsure === "number" ? { unsure: kept.unsure } : {}),
       ...(kept?.withdrawing ? { withdrawing: kept.withdrawing } : {}),
       // Kept before due times were drawn again, or leaves kept: none.
       ...(record(kept?.marks) ? { marks: { ...kept!.marks } } : {}),
@@ -3004,6 +3064,9 @@ export class LovejoinService {
               Object.entries(kept!.origins!).filter(([, o]) => record(o) && typeof o.mixed === "boolean" && typeof o.seen === "number"),
             ),
           }
+        : {}),
+      ...(record(kept?.asking)
+        ? { asking: Object.fromEntries(Object.entries(kept!.asking!).filter(([, seen]) => typeof seen === "number")) }
         : {}),
       ...(typeof kept?.unlock === "number" ? { unlock: kept.unlock } : {}),
     };

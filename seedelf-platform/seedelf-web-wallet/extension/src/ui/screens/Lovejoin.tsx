@@ -182,6 +182,13 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
  * making Koios hasn't said of yet (`unsure` of them) waits too, until it
  * has (independent review M14).
  */
+/**
+ * The box Bring one back anyway takes: one whose making Koios hasn't said of
+ * yet first, after a restore, since it may well be mixed, while the others
+ * surely aren't (independent review M14).
+ */
+export const anywayBox = (status?: Pick<LovejoinStatus, "notMixed" | "unsure">) => status?.unsure?.[0] ?? status?.notMixed[0];
+
 export function NotMixed({
   count,
   fromPublic = 0,
@@ -197,25 +204,32 @@ export function NotMixed({
 }) {
   const amounts = useAmounts();
   if (!count) return null;
+  // Those known not to be mixed, said first; the others (`unsure`) may be, and are said apart (independent review M14).
+  const known = count - Math.min(unsure, count);
+  const first = known || count;
   // How many is an amount too: while balances are hidden, it's "some" (privacy review §2.16).
-  const many = amounts.hidden || count > 1;
-  const which = amounts.hidden ? "Some of your boxes aren't" : count === 1 ? "One of your boxes isn't" : `${count} of your boxes aren't`;
+  const many = amounts.hidden || first > 1;
+  const which = amounts.hidden ? "Some of your boxes aren't" : first === 1 ? "One of your boxes isn't" : `${first} of your boxes aren't`;
   const them = many ? "them" : "it";
   // A mix from the public account made them: the account pays to mix them again, and the private balance stays out of it (§2.10).
   const takes =
-    fromPublic >= count
+    fromPublic >= known
       ? `${many ? "They" : "It"} came from your public account, so Mix again from my public account takes ${them} first: paid by the account, which ties nothing new.`
       : fromPublic > 0
         ? "Mix again from my public account takes those your public account put in first, and Mix my boxes again the others."
         : `Mix my boxes again takes ${them} first.`;
   const asks = "The wallet asks Koios again at the next read, and Mix my boxes again waits until it has.";
+  // Koios hasn't said how these went in: said as they are, without the number while balances are hidden.
+  const unsureMany = amounts.hidden || unsure > 1;
+  const more = amounts.hidden ? "some more" : unsure === 1 ? "one more" : `${unsure} more`;
+  const waits = `${unsureMany ? "they don't come" : "it doesn't come"} back by ${unsureMany ? "themselves" : "itself"} meanwhile.`;
   return (
     <Callout tone="warn" testId="lovejoin-not-mixed">
       <div className="stack-tight">
         <span>
-          {unsure >= count
+          {!known
             ? `${which} known to be mixed yet: Koios hasn't said how ${many ? "they" : "it"} went into the pool. ${many ? "They don't come" : "It doesn't come"} back by ${many ? "themselves" : "itself"} meanwhile. ${asks}`
-            : `${which} mixed yet: a chain stopped before mixing ${them}. ${many ? "They never come" : "It never comes"} back by ${many ? "themselves" : "itself"}, since each still shows where it went in. ${takes}${unsure > 0 ? ` Koios hasn't said yet how some of them went in. ${asks}` : ""}`}
+            : `${which} mixed yet: a chain stopped before mixing ${them}. ${many ? "They never come" : "It never comes"} back by ${many ? "themselves" : "itself"}, since each still shows where it went in. ${takes}${unsure > 0 ? ` Koios hasn't said yet how ${more} went in: ${waits} ${asks}` : ""}`}
         </span>
         <button type="button" className="link align-start" onClick={onAnyway} disabled={busy} data-testid="lovejoin-anyway">
           Bring one back anyway
@@ -339,9 +353,9 @@ export function Lovejoin({
       await load();
     }, "now");
 
-  /** Brings back a box its chain didn't mix, as it is: it shows where it went in. */
+  /** Brings back a box its chain didn't mix, as it is: it shows where it went in (anywayBox). */
   const anyway = () => {
-    const box = status?.notMixed[0];
+    const box = anywayBox(status);
     setAsking(undefined);
     if (!box) return;
     void act(async () => {
@@ -434,7 +448,9 @@ export function Lovejoin({
   const publicNotMixed = (status?.notMixed ?? []).filter((b) => theirs.has(`${b.txHash}#${b.txIndex}`)).length;
   // After a restore, those whose making Koios hasn't said of yet (independent review M14).
   const unsure = new Set((status?.unsure ?? []).map((b) => `${b.txHash}#${b.txIndex}`));
-  const firstUnsure = !!status?.notMixed[0] && unsure.has(`${status.notMixed[0].txHash}#${status.notMixed[0].txIndex}`);
+  // The box Bring one back anyway takes, which its warning is about.
+  const taken = anywayBox(status);
+  const firstUnsure = !!taken && unsure.has(`${taken.txHash}#${taken.txIndex}`);
   const next = status?.due[0];
   const mixingAgain = mixes.some(isMixingAgain);
   const shown = [...mixes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
@@ -449,7 +465,8 @@ export function Lovejoin({
         <ReviewRows testId="lovejoin-status">
           {/* What the wallet has in the pool is a balance, and so is how many boxes: hidden while balances are (launch review #56, privacy review §2.16). */}
           <Row label="Your boxes in the pool" value={owned ? `${amounts.count(owned, "box", "boxes")}, ${amounts.ada(status.lovelace)} ₳` : "None"} strong />
-          {notMixed > 0 && <Row label="Not mixed yet" value={amounts.count(notMixed, "box", "boxes")} />}
+          {notMixed > unsure.size && <Row label="Not mixed yet" value={amounts.count(notMixed - unsure.size, "box", "boxes")} />}
+          {unsure.size > 0 && <Row label="Not known to be mixed yet" value={amounts.count(unsure.size, "box", "boxes")} />}
           {owned > notMixed && next !== undefined && (
             <Row label="Next one back" value={next <= Date.now() ? "In a few minutes" : whenOf(next, new Date())} />
           )}
@@ -643,7 +660,7 @@ export function Lovejoin({
           <p className="note">
             {firstUnsure
               ? "Koios hasn't said how it went into the pool, so the wallet can't tell whether it was mixed. If a deposit made it, bringing it back now shows where it went in: anyone can tie that deposit to your private balance. Refresh in a minute to ask Koios again."
-              : status?.notMixed[0] && theirs.has(`${status.notMixed[0].txHash}#${status.notMixed[0].txIndex}`)
+              : taken && theirs.has(`${taken.txHash}#${taken.txIndex}`)
                 ? "Its mix from your public account stopped before mixing it, so it's still the box that deposit made. Brought back now, it shows where it went in: anyone can tie your public account to your private balance. Mix again from my public account hides it first, and ties nothing new."
                 : "Its chain stopped before mixing it, so it's still the box your deposit made. Brought back now, it shows where it went in: anyone can tie that deposit to your private balance. Mix my boxes again hides it first."}
           </p>
