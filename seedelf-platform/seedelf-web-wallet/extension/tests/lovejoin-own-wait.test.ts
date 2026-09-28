@@ -4,7 +4,9 @@
 // due time brings that chain's own box back instead, or waits. Among the
 // boxes that have waited, the order is as before (privacy review §3.6). A
 // chain's record stays until its boxes have waited, even past the time an
-// ended record is kept (final review F9, independent review L21).
+// ended record is kept. A box someone else's mix moved since may be any
+// chain's that went in before that move, so it waits the longest of theirs
+// (final review F9, independent review L21).
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -99,6 +101,8 @@ async function pooled(swapAgo: number, otherAgo: number, due: (now: number) => n
 
 const SWAP = `${"a1".repeat(32)}#0`;
 const OTHER = `${"b1".repeat(32)}#0`;
+/** The wallet's box where someone else's mix put it: no recorded chain made it. */
+const MOVED = `${"c1".repeat(32)}#0`;
 const spends = (t: T) => txInputs(t.koios.submitted.at(-1)!);
 const kept = async (t: T) => (await t.store.get<{ due: number[]; chains: Array<{ session: number }> }>("lovejoin.preprod"))!;
 
@@ -132,6 +136,45 @@ describe("a box and its own chain's wait (final review F9)", SLOW, () => {
     expect(pending).toBeDefined();
     expect(spends(t)).toContain(OTHER);
     expect((await kept(t)).chains.map((c) => c.session)).toContain(0);
+  });
+
+  it("never brings back early a box someone else's mix moved since the swap went in: it may be the swap's", async () => {
+    // Someone else's mix took the swap's box 20 minutes after it went in: it's the wallet's still, at their outref.
+    const { t, lovejoin } = await pooled(90 * MINUTE, 80 * MINUTE, (now) => [now - MINUTE, now + 18 * HOUR]);
+    const now = t.clock.now;
+    t.koios.spent.add(SWAP);
+    t.koios.addedToAccounts.push(await ownedBox(t, "c1", now - 90 * MINUTE + 20 * MINUTE));
+    const [pending] = await lovejoin.withdrawDue("preprod", false, now);
+    expect(pending).toBeDefined();
+    expect(spends(t)).toContain(OTHER);
+    expect(spends(t)).not.toContain(MOVED);
+  });
+
+  it("waits, when only that moved box is there, until the swap's own least is over, and a fresh draw past it", async () => {
+    const { t, lovejoin } = await pooled(90 * MINUTE, 80 * MINUTE, (now) => [now - MINUTE]);
+    const now = t.clock.now;
+    t.koios.spent.add(SWAP);
+    t.koios.spent.add(OTHER);
+    t.koios.addedToAccounts.push(await ownedBox(t, "c1", now - 90 * MINUTE + 20 * MINUTE));
+    expect(await lovejoin.withdrawDue("preprod", false, now)).toEqual([]);
+    expect(t.collateral.asked).toHaveLength(0);
+    const [moved] = (await kept(t)).due;
+    const ripe = now - 90 * MINUTE + 6 * HOUR;
+    expect(moved).toBeGreaterThanOrEqual(ripe + WITHDRAW_SPREAD_MS[0]);
+    expect(moved).toBeLessThanOrEqual(ripe + WITHDRAW_SPREAD_MS[1]);
+  });
+
+  it("brings back, in §3.6's order, a moved box that moved before the swap went in: it can't be the swap's", async () => {
+    // The other return went in three hours ago, and someone else's mix took its box 20 minutes later; the swap went
+    // in an hour ago.
+    const { t, lovejoin } = await pooled(HOUR, 3 * HOUR, (now) => [now - MINUTE, now + 18 * HOUR]);
+    const now = t.clock.now;
+    t.koios.spent.add(OTHER);
+    t.koios.addedToAccounts.push(await ownedBox(t, "c1", now - 3 * HOUR + 20 * MINUTE));
+    const [pending] = await lovejoin.withdrawDue("preprod", false, now);
+    expect(pending).toBeDefined();
+    expect(spends(t)).toContain(MOVED);
+    expect(spends(t)).not.toContain(SWAP);
   });
 
   it("brings the swap's box back in the pool's order once it has waited its own least", async () => {
