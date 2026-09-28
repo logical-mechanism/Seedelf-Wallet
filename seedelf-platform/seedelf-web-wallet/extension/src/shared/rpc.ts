@@ -1069,6 +1069,10 @@ export interface LovejoinPublicSummary {
 
 /** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
 export interface LovejoinStatus {
+  /** Real boxes in the pool that aren't this wallet's: what the floor counts. */
+  others: number;
+  /** The fewest others the wallet mixes with on this network; 0 where there's no floor. */
+  floor: number;
   available: boolean;
   boxes: Array<{ txHash: string; txIndex: number }>;
   lovelace: string;

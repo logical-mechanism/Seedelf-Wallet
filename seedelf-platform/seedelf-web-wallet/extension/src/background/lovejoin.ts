@@ -1230,10 +1230,19 @@ export class LovejoinService {
    * boxes an older chain left not mixed yet. Until it's gone from the
    * listing, the record that says it isn't mixed stays (sortOut).
    */
-  private async ours(network: NetworkName): Promise<{ pool: KoiosUtxo[]; owned: OutRef[]; listed: OutRef[] }> {
+  private async ours(
+    network: NetworkName,
+  ): Promise<{ pool: KoiosUtxo[]; owned: OutRef[]; listed: OutRef[]; others: OutRef[] }> {
     const { rows, spent } = await this.listing(network);
-    const listed = await this.owned(network, rows);
-    return { pool: unspent(rows, spent), owned: listed.filter((b) => !spent.has(ref(b))), listed };
+    const { boxes: listed, otherBoxes } = await this.ownership(network, rows);
+    const pool = unspent(rows, spent);
+    return {
+      pool,
+      owned: listed.filter((b) => !spent.has(ref(b))),
+      listed,
+      // What the floor counts: real boxes that aren't ours and aren't spent.
+      others: otherBoxes.filter((b) => !spent.has(ref(b))),
+    };
   }
 
   /**
@@ -2696,9 +2705,9 @@ export class LovejoinService {
    * Koios said a mix made it (found, independent review M14).
    */
   async status(network: NetworkName): Promise<LovejoinStatus> {
-    if (!this.available(network)) return { available: false, boxes: [], lovelace: "0", due: [], notMixed: [], fromPublic: [], chains: [] };
+    if (!this.available(network)) return { available: false, boxes: [], others: 0, floor: 0, lovelace: "0", due: [], notMixed: [], fromPublic: [], chains: [] };
     await this.cuts(network);
-    const { owned, listed } = await this.ours(network);
+    const { owned, listed, others } = await this.ours(network);
     const { unmixed, free: back, unsure, deposits } = await this.sortOut(network, owned, listed);
     await this.scheduleFound(network, back.length);
     const schedule = await this.read(network);
@@ -2706,6 +2715,10 @@ export class LovejoinService {
     return {
       available: true,
       boxes: owned,
+      // What the floor counts, and the floor itself: the page offers to seed
+      // the pool when it's short, without waiting for a mix to be refused.
+      others: others.length,
+      floor: NETWORKS[network].lovejoin?.poolFloor ?? 0,
       lovelace: (BigInt(owned.length) * LOVEJOIN_DENOM).toString(),
       due: [...due].sort((a, b) => a - b),
       notMixed: unmixed,
@@ -3051,10 +3064,6 @@ export class LovejoinService {
   private real({ pool, owned, others, reserved }: Split): KoiosUtxo[] {
     const real = new Set([...owned, ...others].map(ref));
     return pool.filter((u) => real.has(outpoint(u)) && !reserved.has(outpoint(u)));
-  }
-
-  private async owned(network: NetworkName, pool: KoiosUtxo[]): Promise<OutRef[]> {
-    return (await this.ownership(network, pool)).boxes;
   }
 
   /** WebAssembly's reading of the pool: the wallet's boxes, and the real boxes that aren't. */

@@ -49,7 +49,6 @@ import type {
   SessionOutSummary,
   SessionView,
 } from "../../shared/rpc";
-import { POOL_SEEDABLE } from "../../networks";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HistoriesNote } from "../components/HistoriesNote";
@@ -513,27 +512,11 @@ export function Lovejoin({
   const shown = [...mixes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   // The public mix being sent shows its own progress below: the list takes the others.
   const chains = (status?.chains ?? []).filter((c) => !(sending && c.session === undefined));
+  // The pool can't be mixed in yet: seeding is the only thing that starts one.
+  const short = !!status?.available && status.others < status.floor;
   return (
     <Screen title="Lovejoin" titleId="lovejoin-title" onBack={onBack} backDisabled={busy} aside="A mixer for ADA, in 10 ₳ boxes" error={error}>
       {banner}
-      {error?.includes(POOL_SEEDABLE) && (
-        <div className="stack" data-testid="lovejoin-seed-offer">
-          <Callout tone="privacy">
-            Seeding hides nothing of yours: the boxes go back to you and the chain shows it. It gives other people boxes
-            to mix with, which is the only way a pool can start. Yours stay in the pool, with no wait set, until you bring
-            one back.
-          </Callout>
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy}
-            onClick={() => void seed()}
-            data-testid="lovejoin-seed"
-          >
-            Seed the pool with {plural(boxes, "box", "boxes")}
-          </button>
-        </div>
-      )}
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load()} />
       {status && !status.available && <p className="note">Lovejoin isn't on this network yet.</p>}
       {status?.available && (
@@ -546,6 +529,24 @@ export function Lovejoin({
             <Row label="Next one back" value={next <= Date.now() ? "In a few minutes" : whenOf(next, new Date())} />
           )}
         </ReviewRows>
+      )}
+      {short && (
+        <div className="stack" data-testid="lovejoin-seed-offer">
+          <Callout tone="warn">
+            Lovejoin's pool holds {plural(status!.others, "box", "boxes")} that aren't yours, and the wallet mixes only
+            once it holds {status!.floor}, so there's enough to mix with. Nothing can be mixed until then, and a mix is
+            what puts boxes in — so the pool has to be started by someone putting boxes in for nothing.
+          </Callout>
+          <Callout tone="privacy">
+            Seeding hides nothing of yours: your public account pays, the boxes come back to it unmixed, and anyone
+            reading the chain can follow both. It gives other people boxes to mix with. Yours stay in the pool, with no
+            wait set, until you bring one back. Your own boxes never count towards the floor, so seeding from this wallet
+            won't let this wallet mix.
+          </Callout>
+          <button type="button" className="secondary" disabled={busy} onClick={() => void seed()} data-testid="lovejoin-seed">
+            Seed the pool with {plural(boxes, "box", "boxes")}
+          </button>
+        </div>
       )}
       <NotMixed
         count={notMixed}

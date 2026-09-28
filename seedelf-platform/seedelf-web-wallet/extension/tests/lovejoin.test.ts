@@ -2152,6 +2152,17 @@ describe("mixing from the tile", CHAINS, () => {
     await expect(t.lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow("isn't ready to send");
   });
 
+  it("says how many boxes in the pool aren't the wallet's, and the floor, so the page can offer to seed it", async () => {
+    const t = await wallet();
+    // The recorded pool's 20 boxes are other people's; preprod has no floor.
+    const listed = await t.lovejoin.status("preprod");
+    expect(listed).toMatchObject({ available: true, others: 20, floor: 0 });
+    expect(listed.boxes).toHaveLength(0);
+    // Mainnet's floor is what the page compares against: nothing of the pool sits there.
+    const onMainnet = await t.lovejoin.status("mainnet");
+    expect(onMainnet).toMatchObject({ available: true, others: 0, floor: 30 });
+  });
+
   it("seeds an empty pool: the deposit alone, no mixes, and its boxes wait for Bring one back", async () => {
     const t = await wallet();
     const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);

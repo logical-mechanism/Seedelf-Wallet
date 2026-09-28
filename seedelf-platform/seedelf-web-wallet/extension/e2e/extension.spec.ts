@@ -17,6 +17,7 @@ import {
   type KoiosFake,
   launch,
   lovejoinPool,
+  chooseNetwork,
   madeByMix,
   ownedLovejoinBox,
   openApp,
@@ -1763,6 +1764,33 @@ test("Lovejoin: a mix that stopped partway leaves its box not mixed yet, said so
 // the box never comes back by itself, and its time went with the stop
 // (lovejoin.ts unschedule): Home's row counts the box, not mixed yet, and
 // no next one back.
+test("Lovejoin: a pool under its floor offers to seed it, and says the seed hides nothing", async ({ context, koios }) => {
+  // No pool at all, and mainnet's floor of 30: nothing can be mixed, and a mix
+  // is what puts boxes in, so the page has to offer the way to start one.
+  const [rich] = (Object.values(koiosPreprod.accounts)[0] as { account_utxos: Array<Record<string, any>> }).account_utxos.filter(
+    (u) => BigInt(u.value) > 1_000_000_000n,
+  );
+  const at = (tx: string, value: string) => ({ ...rich!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] }) as never;
+  koios.addedToAccounts.push(at("e5", "5000000"), at("e6", "30000000"));
+
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await chooseNetwork(context, "mainnet");
+  await page.reload();
+  await expect(page.getByTestId("network")).toHaveText("MAINNET");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
+
+  // It's there on opening the page, with no mix attempted first.
+  const offer = page.getByTestId("lovejoin-seed-offer");
+  await expect(offer).toContainText("holds 0 boxes that aren't yours");
+  await expect(offer).toContainText("the wallet mixes only once it holds 30");
+  await expect(offer).toContainText("Seeding hides nothing of yours");
+  await expect(offer).toContainText("seeding from this wallet won't let this wallet mix");
+  await expect(page.getByTestId("lovejoin-seed")).toBeVisible();
+});
+
 test("Lovejoin: Home's row doesn't count a box not mixed yet as on its way back", async ({ context, koios }) => {
   const page = await stoppedPublicMix(context, koios);
   await page.getByRole("button", { name: "Back", exact: true }).click();
