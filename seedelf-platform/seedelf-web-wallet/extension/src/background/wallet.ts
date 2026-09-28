@@ -49,6 +49,12 @@ export const SESSION_ENTROPY = "seedelf.entropy";
 /** chrome.storage.session: when the user last did something (ms since the epoch). */
 export const SESSION_ACTIVITY = "seedelf.lastActivity";
 /**
+ * chrome.storage.session: when the wallet last unlocked, was created or
+ * restored (ms since the epoch). A restarted worker keeps it; a lock or a
+ * closed browser wipes it with the rest (`unlockedAt`).
+ */
+export const SESSION_UNLOCKED_AT = "seedelf.unlockedAt";
+/**
  * chrome.storage.session: the last balance reading per network, e.g.
  * `seedelf.balances.preprod`. It says which contract UTxOs are the user's,
  * so it never goes to disk and it's wiped on lock.
@@ -206,6 +212,25 @@ export class Wallet {
         this.lockedBy = undefined;
         this.deps.changed();
       }
+    });
+  }
+
+  /**
+   * When the wallet last unlocked (ms): its unlock, or its create or
+   * restore. Throws if locked. Nothing goes out the moment it unlocks
+   * (privacy review §3.1), so what the worker sends by itself counts from
+   * it, whichever run or page gets there first, not only the unlock's own
+   * run (independent review M10, L10, L11, L12). One unlocked before it was
+   * kept counts from now.
+   */
+  unlockedAt(): Promise<number> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      const at = await this.deps.session.get<number>(SESSION_UNLOCKED_AT);
+      if (typeof at === "number") return at;
+      const now = this.deps.now();
+      await this.deps.session.set(SESSION_UNLOCKED_AT, now);
+      return now;
     });
   }
 
@@ -444,8 +469,10 @@ export class Wallet {
     this.lockedBy = undefined;
     this.free();
     this.keys = this.derive(entropy);
+    const now = this.deps.now();
     await this.deps.session.set(SESSION_ENTROPY, toBase64(entropy));
-    await this.deps.session.set(SESSION_ACTIVITY, this.deps.now());
+    await this.deps.session.set(SESSION_ACTIVITY, now);
+    await this.deps.session.set(SESSION_UNLOCKED_AT, now);
     await this.deps.autoLock.start();
   }
 

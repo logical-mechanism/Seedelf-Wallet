@@ -91,6 +91,7 @@ import {
   secureRandom,
   sentAlready,
   SpentUnread,
+  UNLOCK_WAIT_MS,
   unlockWait,
   type ChainProgress,
   type LovejoinChain,
@@ -211,6 +212,12 @@ interface AutoRecord {
    * at the next run after that unlock's, so it never waits for good.
    */
   unlockWait?: number;
+  /**
+   * The unlock (the wallet's `unlockedAt`) that drew its wait: whichever
+   * run or page finds its step first after an unlock draws it, not only the
+   * unlock's own run, and only once (waits, independent review L10, L12).
+   */
+  unlockDrawn?: number;
   /**
    * How it comes back, as approved (privacy review §4.1): true, directly;
    * false, through Lovejoin, whatever Settings says since. Stop can make it
@@ -1562,20 +1569,33 @@ export class SessionService {
    * unlock before, whose wallet locked before it went, isn't drawn again:
    * it goes at the next run. The user's own ask (Refresh, Stop, Try now)
    * goes at once.
+   *
+   * Found by the unlock's run, or by any run or page before this unlock drew
+   * its wait, while the stretch an unlock's wait can reach isn't over: the
+   * unlock's run may not have got to it first (a read that failed, a retry
+   * still waiting, a page opened first, or a run under way across a lock),
+   * and correctness doesn't hang on it (independent review L10, L11, L12).
+   * A session started since the unlock was the user's own doing, and isn't
+   * held back.
    */
   private async waits(network: NetworkName, s: SessionRecord, run: Run): Promise<boolean> {
     const until = s.auto?.unlockWait;
-    if (run === "unlock") {
-      if (until === undefined) {
+    if (run !== "asked") {
+      const now = this.deps.now();
+      const unlocked = await this.deps.wallet.unlockedAt();
+      const found = run === "unlock" || (s.createdAt < unlocked && now - unlocked < UNLOCK_WAIT_MS[1]);
+      if (found && s.auto?.unlockDrawn !== unlocked) {
         const lockAfter = (await this.deps.preferences?.lockAfterMs()) ?? DEFAULT_PREFERENCES.lockAfterMinutes * 60_000;
-        const at = this.deps.now() + unlockWait(lockAfter, this.deps.random ?? secureRandom);
+        const at = until ?? now + unlockWait(lockAfter, this.deps.random ?? secureRandom);
         await this.update(network, s.index, (r) => {
           r.auto!.unlockWait = at;
+          r.auto!.unlockDrawn = unlocked;
         });
+        return true;
       }
-      return true;
+      if (run === "unlock") return true;
+      if (until !== undefined && now < until) return true;
     }
-    if (run === "run" && until !== undefined && this.deps.now() < until) return true;
     if (until !== undefined) {
       await this.update(network, s.index, (r) => {
         delete r.auto!.unlockWait;

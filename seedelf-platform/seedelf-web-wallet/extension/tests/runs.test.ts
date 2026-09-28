@@ -29,7 +29,7 @@ function runner(work: Partial<Record<NetworkName, { swaps?: boolean; mixing?: bo
   const alarm = sessionsAlarm();
   const ctx = {
     networks: ["mainnet", "preprod"],
-    wallet: { state: async () => "unlocked" },
+    wallet: { state: async () => "unlocked", unlockedAt: async () => 1_800_000_000_000 },
     sessions: {
       runAll: vi.fn(async (n: NetworkName) => {
         if (of(n).fails) throw new Error("Koios didn't answer.");

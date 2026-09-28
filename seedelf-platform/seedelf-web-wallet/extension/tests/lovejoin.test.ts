@@ -41,7 +41,18 @@ import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
-import { koiosPreprod, loadTestWasm, minswapEstimate, sessionSwap, testBalances, testWallet, vectors, withdrawPreprod } from "./fakes";
+import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
+import {
+  busyFor,
+  koiosPreprod,
+  loadTestWasm,
+  minswapEstimate,
+  sessionSwap,
+  testBalances,
+  testWallet,
+  vectors,
+  withdrawPreprod,
+} from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -1065,6 +1076,19 @@ function witnessed(t: ReturnType<typeof testBalances>, extra: Partial<Constructo
   });
 }
 
+/**
+ * The wallet unlocked an hour ago, and the first run after it drew the
+ * unlock's waits then: a box due now is one the alarm takes, past the quiet
+ * after an unlock (independent review M10, L10). Call it once the schedule
+ * is kept.
+ */
+async function unlockedAnHourAgo(t: ReturnType<typeof testBalances>): Promise<void> {
+  const at = t.clock.now - HOUR;
+  await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, at));
+  const kept = await t.store.get<object>("lovejoin.preprod");
+  if (kept) await t.store.set("lovejoin.preprod", { ...kept, unlock: at });
+}
+
 /** The boxes a withdraw giveme.my was asked about spends. */
 const withdrawn = (t: ReturnType<typeof testBalances>) => t.collateral.asked.flatMap((tx) => txInputs(Uint8Array.from(Buffer.from(tx, "hex"))));
 
@@ -1110,8 +1134,7 @@ describe("a chain's boxes", CHAINS, () => {
       await lovejoin.withdrawDue("preprod", run === 0);
       // Each withdraw lands before the next run.
       for (const o of withdrawn(t)) t.koios.spent.add(o);
-      t.clock.now += 2 * HOUR;
-      await t.wallet.unlock(PASSWORD);
+      await busyFor(t, 2 * HOUR);
     }
     const out = withdrawn(t);
     expect(out).toHaveLength(3);
@@ -1302,9 +1325,10 @@ describe("a chain's boxes", CHAINS, () => {
     expect(await lovejoin.withdrawDue("preprod", true)).toEqual([]);
     expect(t.collateral.asked).toHaveLength(0);
     await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("being sent through Lovejoin");
-    // It's all sent: the box that came into the pool first goes, not the first by hash.
+    // It's all sent: the box that came into the pool first goes, not the first by hash, once the unlock's waits are over.
     t.koios.confirmations = 1;
     await runner.runAll("preprod");
+    await busyFor(t, 15 * 60_000);
     await lovejoin.withdrawDue("preprod");
     expect(withdrawn(t)).toEqual([`${"f1".repeat(32)}#0`]);
   });
@@ -1314,6 +1338,7 @@ describe("a chain's boxes", CHAINS, () => {
     // A box a mix moved ten minutes ago, and a due time from long before.
     t.koios.addedToAccounts.push(await ownedBox(t, "d1", 0, t.clock.now / 1000 - 600));
     await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
+    await unlockedAnHourAgo(t);
     const lovejoin = witnessed(t);
     expect(await lovejoin.withdrawDue("preprod")).toEqual([]);
     expect(t.collateral.asked).toHaveLength(0);
@@ -1354,6 +1379,7 @@ describe("a chain's boxes", CHAINS, () => {
     expect((await kept()).chains).toEqual([]);
     expect((await kept()).leaves).toEqual({ [`${leaf.txHash}#0`]: "public" });
     // The box someone else moved goes first, though the leaf has waited longer.
+    await unlockedAnHourAgo(t);
     await lovejoin.withdrawDue("preprod");
     expect(withdrawn(t)).toEqual([`${"b7".repeat(32)}#0`]);
     // Once someone else's mix moves the leaf too, it isn't kept anymore.
@@ -1402,6 +1428,7 @@ describe("a chain's boxes", CHAINS, () => {
     await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
     t.clock.now += 7 * HOUR;
     await t.wallet.unlock(PASSWORD);
+    await unlockedAnHourAgo(t);
     const lovejoin = witnessed(t);
     const [a, b] = await Promise.all([lovejoin.withdrawDue("preprod"), lovejoin.withdrawDue("preprod")]);
     expect([...a, ...b]).toHaveLength(1);
@@ -1414,6 +1441,7 @@ describe("a chain's boxes", CHAINS, () => {
     t.koios.addedToAccounts.push(await ownedBox(t, "d1", 0, since(5)), await ownedBox(t, "d2", 0, since(5)));
     // One box due an hour ago, the other in five minutes.
     await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR, t.clock.now + 5 * 60_000] });
+    await unlockedAnHourAgo(t);
     const lovejoin = witnessed(t);
     // The submit times out, but the withdraw reached the mempool.
     const fetch = t.koios.fetch;
@@ -1486,9 +1514,11 @@ describe("the boxes' withdraws", CHAINS, () => {
 
     // Due: the withdraw is built, measured and handed to giveme.my, whose
     // recorded answer is another transaction's, so it isn't sent.
-    // Hours later the wallet locked itself; the withdraw runs at the next unlock.
+    // Hours later the wallet locked itself; the withdraw runs a fresh wait into the next unlock.
     t.clock.now += 7 * HOUR;
     await t.wallet.unlock(PASSWORD);
+    expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
+    await busyFor(t, 15 * 60_000);
     expect(await t.lovejoin.withdrawDue("preprod")).toEqual([]);
     expect(t.collateral.asked).toHaveLength(1);
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
@@ -1547,7 +1577,7 @@ describe("the boxes' withdraws", CHAINS, () => {
     for (const d of redrawn) expect(d).toBeGreaterThanOrEqual(unlocked + UNLOCK_WAIT_MS[0]);
   });
 
-  it("draws a box's wait at one unlock only: locked before it went, it goes at the run after the next unlock's", async () => {
+  it("draws a box's wait at one unlock only: locked before it went, it goes at the first run past the next unlock's quiet", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "e4"));
     await t.lovejoin.schedule("preprod", 1);
@@ -1562,8 +1592,8 @@ describe("the boxes' withdraws", CHAINS, () => {
     expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
     expect(t.collateral.asked).toHaveLength(0);
     expect(await due()).toEqual([drawn]);
-    // The next minute's run tries it.
-    t.clock.now += 60_000;
+    // The first run once the unlock is as far behind as a send would have to be tries it (independent review M10).
+    await busyFor(t, QUIET_AFTER_SEND_MS);
     await t.lovejoin.withdrawDue("preprod");
     expect(t.collateral.asked).toHaveLength(1);
   });
@@ -1572,6 +1602,7 @@ describe("the boxes' withdraws", CHAINS, () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "e6"));
     await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
+    await unlockedAnHourAgo(t);
     // What the wallet's last send spent, and when.
     const sent = (at: number) => t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"9a".repeat(32)}#0`]: at }));
     const due = async () => (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due;
@@ -1604,6 +1635,7 @@ describe("the boxes' withdraws", CHAINS, () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "e9"));
     await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
+    await unlockedAnHourAgo(t);
     await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"9b".repeat(32)}#0`]: t.clock.now - QUIET_AFTER_SEND_MS }));
     await t.lovejoin.withdrawDue("preprod", false, t.clock.now);
     expect(t.collateral.asked).toHaveLength(1);
