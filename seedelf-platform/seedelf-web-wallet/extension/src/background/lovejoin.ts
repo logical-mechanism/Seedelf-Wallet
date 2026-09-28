@@ -209,7 +209,8 @@ export const CHAIN_POLL_MS = 5_000;
 /**
  * A chain's oldest transaction in the mempool that hasn't landed after this
  * long (several blocks) is sent again: a node may have dropped it, and with
- * it every transaction of the chain after it. The ledger takes it once.
+ * it every transaction of the chain after it, so they all go again, in order
+ * (independent review L25). The ledger takes each once.
  */
 export const CHAIN_RESEND_MS = 3 * 60_000;
 /**
@@ -244,9 +245,14 @@ export interface ChainProgress {
  * `i` (its retries included; `maybeSent`: it may be in the mempool already),
  * `onChain` says which hashes are on chain, and `save` keeps the progress
  * after each change. A read of what's on chain that Koios doesn't answer sees
- * nothing yet; the oldest in the mempool is sent again after CHAIN_RESEND_MS.
- * A resend refused as spent while Koios still can't say is no failure: `send`
- * returns (mayBeIn), and it's looked for again.
+ * nothing yet; once the oldest in the mempool has waited CHAIN_RESEND_MS,
+ * every one there is sent again, in order. A resend refused as spent while
+ * Koios still can't say is no failure: `send` returns (mayBeIn), and it's
+ * looked for again. A transaction refused as spending what's spent, after
+ * its tries, while those it builds on are still in the mempool as far as the
+ * wallet knows, is no failure yet either: a node dropped them (the one before
+ * them landed, or a block was rolled back), so they go again, in order, and
+ * then it does, once more (independent review L25).
  */
 export async function pumpChain(
   chain: ChainProgress,
@@ -270,6 +276,19 @@ export async function pumpChain(
     await io.send(i, maybeSent);
     delete chain.sending;
   };
+  // Every one in the mempool, sent again in order: each spends the change of
+  // the one before, so a node that dropped one dropped every one after it.
+  const resend = async () => {
+    for (const [k, hash] of [...chain.flying].entries()) {
+      const at = chain.txs.findIndex((t) => t.txHash === hash);
+      if (at < 0) continue;
+      await send(at, true);
+      sentAt()[k] = io.now();
+      await io.save();
+    }
+  };
+  // The one sent again once already after a refusal, in this call.
+  let retried: number | undefined;
   for (let polls = Math.ceil(budgetMs / CHAIN_POLL_MS); ; polls--) {
     if (chain.flying.length >= CHAIN_WINDOW) {
       const on = await io.onChain(chain.flying).catch((e: unknown) => {
@@ -281,16 +300,18 @@ export async function pumpChain(
         chain.flying = chain.flying.filter((h) => !on.has(h));
         await io.save();
       } else if (io.now() - sentAt()[0]! >= CHAIN_RESEND_MS) {
-        const oldest = chain.txs.findIndex((t) => t.txHash === chain.flying[0]);
-        if (oldest >= 0) {
-          await send(oldest, true);
-          sentAt()[0] = io.now();
-          await io.save();
-        }
+        await resend();
       }
     }
     while (chain.next < chain.txs.length && chain.flying.length < CHAIN_WINDOW) {
-      await send(chain.next, false);
+      try {
+        await send(chain.next, false);
+      } catch (e) {
+        if (!(e instanceof SpentInputError) || !chain.flying.length || retried === chain.next) throw e;
+        retried = chain.next;
+        await resend();
+        continue;
+      }
       chain.flying.push(chain.txs[chain.next]!.txHash);
       sentAt().push(io.now());
       chain.next++;

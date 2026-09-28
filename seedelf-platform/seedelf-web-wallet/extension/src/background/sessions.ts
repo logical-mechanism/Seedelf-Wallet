@@ -2028,8 +2028,14 @@ export class SessionService {
         budgetMs,
       );
     } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      // Said on the session, where its page shows it in full: here, once the chain has stopped, not when one
+      // send gave up, which pumpChain may yet get past (independent review L25).
+      await this.update(network, index, (s) => {
+        if (s.chain) s.chain.stopped = why;
+      }).catch(() => undefined);
       // Recorded as stopped before its progress goes: never taken for one a lock cut.
-      await this.deps.lovejoin?.chainEnded(network, id, e instanceof Error ? e.message : String(e)).catch(() => undefined);
+      await this.deps.lovejoin?.chainEnded(network, id, why).catch(() => undefined);
       await this.dropPending(network, index);
       await this.deps.lovejoin?.release(network, chainOwner(index)).catch(() => undefined);
       throw e;
@@ -2069,14 +2075,8 @@ export class SessionService {
         // Refused while Koios couldn't say whether it's on chain, and it may be: looked for again (final review lovejoin-6).
         if (mayBeIn(tries, e)) break;
         const wait = chainRetryMs(i, tries, e);
-        if (wait === undefined) {
-          // Said on the session, where its page shows it in full.
-          const why = e instanceof Error ? e.message : String(e);
-          await this.update(network, pending.index, (s) => {
-            if (s.chain) s.chain.stopped = why;
-          }).catch(() => undefined);
-          throw e;
-        }
+        // The chain's stop is said on the session by pump, if it does stop.
+        if (wait === undefined) throw e;
         await sleep(wait);
       }
     }
