@@ -86,7 +86,7 @@ import { txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
-import type { PrivateStore } from "./private-store";
+import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import type { ScriptSpendDeps } from "./script-spend";
 import {
   forgetSpent,
@@ -582,6 +582,22 @@ interface ChainRecord {
    */
   maybe?: { index: number; txHash: string; inputs: string[]; at: number; unanswered?: true };
 }
+
+/**
+ * A mix from the public account's transaction that may have gone through,
+ * unsettled when the wallet was removed (ChainRecord `maybe`): kept, sealed,
+ * on its own through Remove wallet (private-store.ts KEPT_ON_RESET), so the
+ * same phrase restored here looks for it before another mix from the
+ * account is built (keepOnReset, final review F1).
+ */
+interface KeptMaybe {
+  txHash: string;
+  inputs: string[];
+  at: number;
+}
+
+/** The record KeptMaybe is sealed in, on `network`. */
+const keptMaybeName = (network: NetworkName) => `lovejoinMaybe.${network}` as const;
 
 /** Why a chain whose progress is gone stopped: nothing is sending the rest. */
 export const CHAIN_CUT = "The wallet locked, or the browser closed, while its chain was being sent.";
@@ -1629,7 +1645,8 @@ export class LovejoinService {
   private async publicLook(network: NetworkName): Promise<boolean> {
     if (!this.available(network)) return false;
     const { chains } = await this.read(network);
-    if (!chains.some((r) => r.session === undefined && r.maybe)) return false;
+    // Or one Remove wallet kept, after the same phrase was restored here (final review F1).
+    if (!chains.some((r) => r.session === undefined && r.maybe) && !(await this.keptMaybe(network))) return false;
     if (!this.lookDue(network)) return true;
     return (await this.publicUnsettled(network)) !== undefined;
   }
@@ -1958,20 +1975,10 @@ export class LovejoinService {
     await this.cuts(network);
     const c = (await this.read(network)).chains.find((r) => r.session === undefined && r.maybe && r.ended);
     const m = c?.maybe;
-    if (!c || !m) return undefined;
+    if (!c || !m) return this.keptUnsettled(network);
     const by = m.at + SPENT_KEEP_MS;
-    const koios = this.deps.koios(network);
-    const seen = (await koios.txStatus([m.txHash]).catch(() => undefined))?.get(m.txHash);
-    // Koios didn't answer: looked for again next time.
-    if (seen === undefined) return by;
-    let how: "in" | "spent" | "never" = "in";
-    if (seen === null) {
-      const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
-      if (!rows) return by;
-      if (rows.some((r) => r.is_spent)) how = "spent";
-      else if (this.deps.now() >= by) how = "never";
-      else return by;
-    }
+    const how = await this.lookFor(network, m);
+    if (!how) return by;
     const what = c.deposit === m.txHash ? "its deposit" : `its transaction ${m.index + 1} of ${c.total}`;
     const lead = m.unanswered
       ? `Koios didn't answer when ${what} was sent`
@@ -2005,6 +2012,98 @@ export class LovejoinService {
       if (kept[chainOwner()] && kept[chainOwner()]!.until === undefined) delete kept[chainOwner()];
     });
     return undefined;
+  }
+
+  /**
+   * Where transaction `m` of a mix from the public account, which may have
+   * gone through, stands (publicUnsettled): on chain, it went ("in"); not,
+   * and a UTxO it spends is spent now, it can't go anymore, whether it did or
+   * not ("spent"); unseen as long as the wallet holds what it spends
+   * (SPENT_KEEP_MS), it never went ("never"). Undefined while it's still
+   * unsettled, or Koios didn't answer: looked for again next time.
+   */
+  private async lookFor(network: NetworkName, m: KeptMaybe): Promise<"in" | "spent" | "never" | undefined> {
+    const koios = this.deps.koios(network);
+    const seen = (await koios.txStatus([m.txHash]).catch(() => undefined))?.get(m.txHash);
+    if (seen === undefined) return undefined;
+    if (seen !== null) return "in";
+    const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
+    if (!rows) return undefined;
+    if (rows.some((r) => r.is_spent)) return "spent";
+    return this.deps.now() >= m.at + SPENT_KEEP_MS ? "never" : undefined;
+  }
+
+  /** What Remove wallet kept of a mix from the public account that may have gone through (keepOnReset), if this phrase opens it. */
+  private async keptMaybe(network: NetworkName): Promise<KeptMaybe | undefined> {
+    try {
+      const m = await this.deps.store.get<KeptMaybe | null>(keptMaybeName(network));
+      return m?.txHash ? m : undefined;
+    } catch (e) {
+      // One that won't open was another wallet's (adoptKept).
+      if (e instanceof UnreadableRecordError) return undefined;
+      throw e;
+    }
+  }
+
+  /**
+   * After the same phrase was restored here: what Remove wallet kept of a
+   * mix from the public account whose transaction may have gone through
+   * (keepOnReset) is looked for as publicUnsettled looks, and goes once it's
+   * settled. Returns, while it isn't, when it will be at the latest: no
+   * other mix from the account is built meanwhile, or the account could pay
+   * for one twice (final review F1).
+   */
+  private async keptUnsettled(network: NetworkName): Promise<number | undefined> {
+    const name = keptMaybeName(network);
+    const nonce = await this.deps.store.sealedAs(name);
+    const m = await this.keptMaybe(network);
+    if (!m || nonce === undefined) return undefined;
+    if (!(await this.lookFor(network, m))) return m.at + SPENT_KEEP_MS;
+    // Only the one looked for: never one kept since.
+    await this.deps.store.removeIf(name, nonce);
+    return undefined;
+  }
+
+  /**
+   * Whether a mix from the public account stopped at a transaction that may
+   * have gone through, unsettled yet, or Remove wallet kept one: Remove
+   * wallet says so first (final review F1). No Koios request.
+   */
+  async publicMaybe(network: NetworkName): Promise<boolean> {
+    if (!this.available(network)) return false;
+    await this.cuts(network);
+    if ((await this.read(network)).chains.some((r) => r.session === undefined && r.maybe && r.ended)) return true;
+    return (await this.keptMaybe(network)) !== undefined;
+  }
+
+  /**
+   * Just before Remove wallet deletes the Lovejoin records: a mix from the
+   * public account whose transaction may have gone through, unsettled yet,
+   * is kept, sealed, on its own (KeptMaybe), as a payment that may is: the
+   * same phrase restored here looks for it before another mix from the
+   * account is built, and another phrase's wallet deletes it (adoptKept,
+   * final review F1). Unlocked only: Forgot password can't read it.
+   */
+  async keepOnReset(networks: NetworkName[]): Promise<void> {
+    for (const network of networks) {
+      const chains = await this.read(network).then((s) => s.chains, () => []);
+      const m = chains.filter((r) => r.session === undefined && r.maybe).at(-1)?.maybe;
+      if (m) await this.deps.store.set(keptMaybeName(network), { txHash: m.txHash, inputs: m.inputs, at: m.at }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * After a wallet is made or restored: what Remove wallet kept of a mix
+   * from the public account (keepOnReset) stays if this phrase opens it, and
+   * is looked for; one it can't open was another wallet's, and goes (final
+   * review F1).
+   */
+  async adoptKept(networks: NetworkName[]): Promise<void> {
+    for (const network of networks) {
+      await this.deps.store.get(keptMaybeName(network)).catch(async (e: unknown) => {
+        if (e instanceof UnreadableRecordError) await this.deps.store.remove(keptMaybeName(network));
+      });
+    }
   }
 
   /**
