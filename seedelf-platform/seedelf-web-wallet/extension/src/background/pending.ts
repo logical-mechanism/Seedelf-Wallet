@@ -48,7 +48,7 @@ import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetSent, recentlySent } from "./sent-txs";
 import { forgetSpent, outpoint, rememberSpent, spentAt } from "./spent";
 import type { Area } from "./storage";
-import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
+import { noteSend, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
 
 /**
  * chrome.storage.session: the submitted transaction being watched, one per
@@ -640,6 +640,10 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         const cur = await session.get<Watched>(key);
         // Past its slot, it can't land whatever happened meanwhile; one sent again and taken meanwhile isn't unseen.
         if (expired ? !ours(cur) : !unchanged(cur)) return { cur };
+        // Unseen, its last try, a minute or two ago, may still have reached a node: when that was stays
+        // the wallet's last send though what it spends is freed, and Lovejoin's withdraws keep away from
+        // it (final review F8). Past its slot, none can land.
+        if (!expired) await noteSend(session, w.resentAt ?? w.submittedAt);
         if (w.inputs) await forgetSpent(session, w.inputs);
         await session.remove(key);
         await forgetReading(session, w);

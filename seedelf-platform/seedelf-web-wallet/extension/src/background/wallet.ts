@@ -63,9 +63,10 @@ export const SESSION_UNLOCKED_AT = "seedelf.unlockedAt";
 export const SESSION_SENDS = "seedelf.sends";
 /**
  * What the wallet knows of its own sends beyond what it spent: its last send
- * before the last lock (`last`); and when session storage began (`since`),
- * the browser's start or the extension's: a closed browser wipes what it
- * spent unseen, so a send before then may have been as late as then
+ * before the last lock, or the last try of a payment let go since, whose
+ * spent UTxOs were freed (`last`, noteSend); and when session storage began
+ * (`since`), the browser's start or the extension's: a closed browser wipes
+ * what it spent unseen, so a send before then may have been as late as then
  * (noteStart).
  */
 interface KnownSends {
@@ -82,6 +83,18 @@ interface KnownSends {
  */
 export async function noteStart(session: Area, now: number): Promise<void> {
   if ((await session.get(SESSION_SENDS)) === undefined) await session.set(SESSION_SENDS, { since: now });
+}
+
+/**
+ * Notes a send at `at` that what the wallet spent no longer says: a
+ * maybe-sent payment let go as unseen frees its UTxOs, while its last try
+ * may still have reached a node (pending.ts). Lovejoin's withdraws keep away
+ * from it all the same (`sends`, final review F8). Only ever later. Call it
+ * while unlocked.
+ */
+export async function noteSend(session: Area, at: number): Promise<void> {
+  const kept = (await session.get<KnownSends>(SESSION_SENDS)) ?? {};
+  if ((kept.last ?? 0) < at) await session.set(SESSION_SENDS, { ...kept, last: at });
 }
 /**
  * chrome.storage.session: the last balance reading per network, e.g.
