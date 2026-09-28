@@ -1,8 +1,9 @@
 // Nothing goes out the moment the wallet unlocks (privacy review §3.1): a
 // maybe-sent payment put back from its sealed copy is only looked for by the
 // unlock's run and by Home's first look, and goes again two minutes on
-// (independent review L9). Put back, it isn't let go as unseen on the time
-// the wallet was locked alone: it goes again first.
+// (independent review L9). A private one put back within its 20 minutes
+// isn't let go before it has gone again; one put back past them, however
+// long ago, is let go at the first look, and nothing is sent.
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
@@ -49,6 +50,23 @@ function runner(t: T): Runner {
 
 const alarm = () => ({ start: async () => undefined, stop: async () => undefined, starts: () => 0 });
 
+/** The withdraw service with giveme.my's witness and WebAssembly's signing stood in for, as maybe-sent.test.ts has it. */
+function privately(t: T) {
+  const wasm = loadTestWasm();
+  t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+  return new WithdrawService({
+    ...t.deps,
+    wasm: {
+      ...wasm,
+      signScriptSpend: (_key: unknown, request: string) => {
+        const { txCbor } = JSON.parse(request) as { txCbor: string };
+        return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+      },
+    } as typeof wasm,
+    collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+  });
+}
+
 describe("a maybe-sent payment, as the wallet unlocks", () => {
   it("is only looked for by the unlock's run and Home's first look, and goes again two minutes on", async () => {
     const t = await unlocked();
@@ -72,34 +90,45 @@ describe("a maybe-sent payment, as the wallet unlocks", () => {
     expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
   });
 
-  it("isn't let go as unseen on the time the wallet was locked alone: it goes again first, and is let go if that's unanswered", async () => {
+  it("put back within its 20 minutes, isn't let go before it has gone again, and is let go if that's unanswered", async () => {
     const t = await unlocked();
-    const wasm = loadTestWasm();
-    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
-    const withdraw = new WithdrawService({
-      ...t.deps,
-      wasm: {
-        ...wasm,
-        signScriptSpend: (_key: unknown, request: string) => {
-          const { txCbor } = JSON.parse(request) as { txCbor: string };
-          return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
-        },
-      } as typeof wasm,
-      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
-    });
+    const withdraw = privately(t);
     const summary = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
     unanswered(t, Infinity);
     await withdraw.submit("preprod", summary.txHash);
     await t.wallet.lock();
-    t.clock.now += UNSEEN_AFTER_MS + 5 * 60_000;
+    t.clock.now += UNSEEN_AFTER_MS - 60_000;
     await t.wallet.unlock(PASSWORD);
     expect(await t.pending.watch("preprod", true)).toBe(true);
+    // Past its 20 minutes now, and not sent again yet: held.
+    await busyFor(t, 90_000);
     expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true });
-    await busyFor(t, 2 * 60_000);
+    expect(ids(t)).toEqual([summary.txHash]);
+    await busyFor(t, 30_000);
     // Sent again, and Koios doesn't answer that either.
     expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true });
     expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
     expect(await t.pending.pending("preprod")).toMatchObject({ dropped: "unseen" });
+  });
+
+  it("put back past its 20 minutes, however long the wallet was locked, is let go at the first look, and nothing is sent", async () => {
+    for (const locked of [UNSEEN_AFTER_MS + 5 * 60_000, 24 * 60 * 60_000]) {
+      const t = await unlocked();
+      const withdraw = privately(t);
+      const summary = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
+      unanswered(t);
+      await withdraw.submit("preprod", summary.txHash);
+      await t.wallet.lock();
+      t.clock.now += locked;
+      await t.wallet.unlock(PASSWORD);
+      // The unlock's run looks, and lets it go.
+      expect(await t.pending.watch("preprod", true)).toBe(false);
+      expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
+      expect(t.local.data.has("seedelf.private.maybeSent.preprod")).toBe(false);
+      await busyFor(t, 2 * 60_000);
+      await runNetworks(runner(t), alarm());
+      expect(ids(t)).toEqual([summary.txHash]);
+    }
   });
 
   it("taken back when Koios refuses it, though a lock and an unlock came while it was asked", async () => {

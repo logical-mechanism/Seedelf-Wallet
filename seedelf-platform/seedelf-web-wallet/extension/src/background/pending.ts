@@ -89,9 +89,11 @@ interface Watched extends PendingTx {
   /** When it last went again. */
   resentAt?: number;
   /**
-   * Put back from its sealed copy (restoreNow), and not sent again since: it
-   * isn't let go as unseen before it has been, so that isn't judged on the
-   * time the wallet was locked alone (independent review L9).
+   * Put back from its sealed copy (restoreNow) within its 20 minutes, and
+   * not sent again since: it isn't let go as unseen before it has been, as
+   * the first resend after the unlock waits two minutes (independent review
+   * L9). One put back past its 20 minutes isn't: it's let go at the first
+   * look, and nothing is sent.
    */
   restored?: boolean;
   /** A private spend that pays the public account (`paysAccount`): its landing reads the account again too. */
@@ -248,7 +250,10 @@ async function unseal(deps: PendingDeps, w: Watched): Promise<void> {
  * UTxOs held back again. It's put back as if sent again just now: nothing
  * sends it in the second the wallet unlocks, not the unlock's run, nor
  * Home's first look, and it goes again RESEND_MS on (privacy review §3.1,
- * independent review L9). Call it in the network's turn.
+ * independent review L9). A private one still within its 20 minutes isn't
+ * let go before that resend (`restored`); one past them is let go at the
+ * first look, however long the wallet was locked. Call it in the network's
+ * turn.
  */
 async function restoreNow(deps: PendingDeps, network: NetworkName): Promise<Watched | undefined> {
   const { wallet, session, now } = deps;
@@ -257,7 +262,9 @@ async function restoreNow(deps: PendingDeps, network: NetworkName): Promise<Watc
   if (watched) return watched;
   const sealedOne = await sealed(deps, network);
   if (!unsettled(sealedOne) || sealedOne.network !== network || !sealedOne.txCbor) return undefined;
-  const w: Watched = { ...sealedOne, resentAt: now(), restored: true };
+  const { restored: _restored, ...was } = sealedOne;
+  const fresh = now() - was.submittedAt <= UNSEEN_AFTER_MS;
+  const w: Watched = { ...was, resentAt: now(), ...(fresh ? { restored: true } : {}) };
   await wallet.withKeys(async () => {
     await rememberSpent(session, network, hexBytes(w.txCbor!));
     await session.set(key, w);
@@ -582,7 +589,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
   const expired =
     w.invalidHereafter !== undefined && age > VALID_FOR_MS && (await koios.tipSlot()) > w.invalidHereafter + EXPIRED_AFTER_SLOTS;
   // Not while it waits in a mempool: it may still land (independent review L1). Nor
-  // put back after a lock and not sent again since (independent review L9).
+  // put back within its 20 minutes and not sent again since (independent review L9).
   const unseen =
     !expired && w.maybeSent && w.invalidHereafter === undefined && age > UNSEEN_AFTER_MS && !w.inMempool && !w.restored;
   if (expired || unseen) {
