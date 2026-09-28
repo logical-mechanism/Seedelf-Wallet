@@ -28,7 +28,8 @@
 //             the user says no, or closes the window on it, its `enable()` is
 //             declined unasked for a minute, locked or not. Each site has at
 //             most 5 requests waiting at once, of the window's 20
-//             (independent review L35).
+//             (independent review L35); its pages' `enable()` calls waiting
+//             for the unlock count once, as they'll share one question.
 // Reading     The account as `readAccountUtxos` finds it (two Koios
 //             requests), kept 30 s: less what the user locked and the
 //             collateral (`getCollateral` gives that one), plus what the
@@ -293,6 +294,8 @@ interface Waiting {
 
 interface Unlocking {
   session: DappSession;
+  /** An `enable()`: a site's take one place in the window's queue together (`unlockPlaces`). */
+  enable: boolean;
   resolve: () => void;
   reject: (error: DappError) => void;
 }
@@ -760,10 +763,18 @@ export class DappService {
     return this.deps.now() < (this.refusedUntil.get(origin) ?? 0);
   }
 
-  /** How many of `origin`'s requests wait for the user: in the window, or for the unlock. */
+  /**
+   * How many of `origin`'s requests wait for the user: in the window, or for
+   * the unlock, where its pages' `enable()` calls count once together.
+   */
   private waitingFrom(origin: string): number {
     const from = (x: { session: DappSession }) => x.session.origin === origin;
-    return this.waiting.filter(from).length + this.unlocking.filter(from).length;
+    return this.waiting.filter(from).length + unlockPlaces(this.unlocking.filter(from));
+  }
+
+  /** How many requests wait for the user, every site's, counted as `waitingFrom` does. */
+  private queued(): number {
+    return this.waiting.length + unlockPlaces(this.unlocking);
   }
 
   /**
@@ -878,11 +889,16 @@ export class DappService {
     if (this.refusing(origin) && (method !== "enable" || !known)) throw refused(method === "enable" ? DECLINED : NOT_CONNECTED);
     // Its page went away while this call was on its way: nobody would answer it (independent review L31).
     if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
-    if (this.unlocking.length + this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) {
-      throw refused(method === "enable" || known ? BUSY : NOT_CONNECTED);
+    // Another of its pages' `enable()` waits already: this one shares its
+    // place, as it will its connect question, so a site open in several tabs
+    // is never refused for it (independent review L35).
+    const enable = method === "enable";
+    const shares = enable && this.unlocking.some((u) => u.enable && u.session.origin === origin);
+    if (!shares && (this.queued() >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING)) {
+      throw refused(enable || known ? BUSY : NOT_CONNECTED);
     }
     let waiter: Unlocking | undefined;
-    const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, resolve, reject })));
+    const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, enable, resolve, reject })));
     try {
       await this.deps.window.show();
     } catch (e) {
@@ -1792,6 +1808,16 @@ function sessionCollateral(utxos: PathedUtxo[]): { spendable: PathedUtxo[]; coll
 
 function remove<T>(list: T[], drop: (item: T) => boolean): void {
   for (let i = list.length - 1; i >= 0; i--) if (drop(list[i]!)) list.splice(i, 1);
+}
+
+/**
+ * The places in the window's queue those waiting for the unlock take: one
+ * each, but a site's `enable()` calls one together, as they share one
+ * connect question once it's unlocked (independent review L35).
+ */
+function unlockPlaces(unlocking: Unlocking[]): number {
+  const enabling = new Set(unlocking.filter((u) => u.enable).map((u) => u.session.origin));
+  return unlocking.filter((u) => !u.enable).length + enabling.size;
 }
 
 /** A transaction's output, as WebAssembly's `ogmiosUtxos` gives it (Ogmios v6). */

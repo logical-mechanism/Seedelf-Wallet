@@ -171,6 +171,30 @@ describe("pages of one site sharing a connect question", () => {
   });
 });
 
+describe("a site open in several tabs while the wallet is locked", () => {
+  it("has every tab's enable() wait for the one unlock, taking one place, and asks once", async () => {
+    const t = await on();
+    const message = [t.deps.wasm.cip30Address(OWN), hex("Sign in")];
+    await t.wallet.lock();
+    const tabs = Array.from({ length: 8 }, () => t.dapp.call(site(STRANGER), "enable", []));
+    await until(() => t.dapp.unlockingSites().length === 1);
+    await settle();
+    // Its tabs' enable() take one of its five places: four signatures more go in, not five.
+    const signing = Array.from({ length: 4 }, () => heard(t.dapp.call(site(STRANGER), "signData", message)));
+    await settle();
+    expect(await heard(t.dapp.call(site(STRANGER), "signData", message))).toEqual(NOT_CONNECTED.failure);
+
+    await t.wallet.unlock(PASSWORD);
+    await t.dapp.stateChanged();
+    await until(() => t.dapp.approvals().length === 1);
+    await settle();
+    expect(t.dapp.approvals()).toHaveLength(1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await Promise.all(tabs)).toEqual(Array.from({ length: 8 }, () => true));
+    await Promise.all(signing);
+  });
+});
+
 describe("one site's share of the window", () => {
   it("is five requests waiting at once; another site's still go in", async () => {
     const t = await on();
