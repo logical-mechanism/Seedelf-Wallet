@@ -1460,8 +1460,10 @@ describe("a chain's boxes", CHAINS, () => {
     // Not seen for a while: it's sent again, as it was.
     expect(submits).toBe(2);
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(kept.withdrawing!.txHash);
-    // Found on chain: in the history, and the next box goes.
+    // Found on chain: in the history, and the next box goes, once the resend, the wallet's send too, is a few minutes behind.
     t.koios.confirmations = 1;
+    await t.wallet.touch();
+    await busyFor(t, QUIET_AFTER_SEND_MS);
     await lovejoin.withdrawDue("preprod");
     expect((await t.store.get<{ withdrawing?: unknown }>("lovejoin.preprod"))!.withdrawing).toBeUndefined();
     expect(t.collateral.asked).toHaveLength(2);
@@ -1641,7 +1643,7 @@ describe("the boxes' withdraws", CHAINS, () => {
     expect(t.collateral.asked).toHaveLength(1);
   });
 
-  it("only looks for a withdraw that may have gone through at unlock, and sends it again at the next run", async () => {
+  it("only looks for a withdraw that may have gone through at unlock, and sends it again once the unlock is a few minutes behind", async () => {
     const { t } = await withSession("40000000");
     const cbor = swapTx();
     const at = t.clock.now - 10 * 60_000;
@@ -1651,8 +1653,12 @@ describe("the boxes' withdraws", CHAINS, () => {
     const submits = t.koios.submitted.length;
     expect(await t.lovejoin.withdrawDue("preprod", true)).toEqual([]);
     expect(t.koios.submitted).toHaveLength(submits);
+    // The next run is within the unlock's quiet: it waits a fresh few minutes (independent review M11).
     t.clock.now += 60_000;
     await t.wallet.touch();
+    await t.lovejoin.withdrawDue("preprod");
+    expect(t.koios.submitted).toHaveLength(submits);
+    await busyFor(t, QUIET_AFTER_SEND_MS + QUIET_PUSH_MS[1]);
     await t.lovejoin.withdrawDue("preprod");
     expect(t.koios.submitted).toHaveLength(submits + 1);
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(withdrawing.txHash);

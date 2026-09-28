@@ -80,12 +80,14 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
+import { txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import type { ScriptSpendDeps } from "./script-spend";
 import {
+  forgetSpent,
   lastSpentAt,
   outpoint,
   rememberSpent,
@@ -414,7 +416,12 @@ interface DueMark {
   pushes?: number;
 }
 
-/** A withdraw that may have gone through, signed as it was sent, and when it was sent first and last (ms). */
+/**
+ * A withdraw that may have gone through, signed as it was sent, and when it
+ * was sent first and last (ms). Kept before it's first sent, so a lock, a
+ * closed browser or a stopped worker while Koios is asked never loses it
+ * (independent review M1).
+ */
 interface Withdrawing {
   txHash: string;
   txCbor: string;
@@ -422,12 +429,18 @@ interface Withdrawing {
   fee: string;
   at: number;
   sentAt: number;
+  /** Not sent again before this (ms): the wallet's own send, or its unlock, was too close (independent review M11). */
+  waitUntil?: number;
+  /** How often that put it off since it was last sent: after QUIET_PUSHES, it goes anyway. */
+  pushes?: number;
 }
 
 /** Koios didn't answer a withdraw's submit: it may have gone through. */
 class WithdrawMaybeSent extends Error {
-  constructor() {
-    super("Koios didn't answer when the box was sent back, so it may have gone through. The wallet looks for it before bringing back another.");
+  constructor(
+    message = "Koios didn't answer when the box was sent back, so it may have gone through. The wallet looks for it before bringing back another.",
+  ) {
+    super(message);
   }
 }
 
@@ -1564,7 +1577,7 @@ export class LovejoinService {
     // A chain being sent is still putting boxes in and mixing them: none comes back meanwhile.
     if (await this.chainsSending(network)) return [];
     // Nor while the last withdraw may still be on its way: two a minute apart say they're one owner's.
-    if (await this.settleWithdrawing(network, unlock)) return [];
+    if (await this.settleWithdrawing(network, { unlock, since })) return [];
     const now = this.deps.now();
     const before = await this.read(network);
     // Only a network with something of the wallet's open in Lovejoin reads its pool at unlock (privacy review §2.18).
@@ -1810,47 +1823,80 @@ export class LovejoinService {
     };
     if (finished.txHash !== built.txHash) throw new Error("Signing changed the withdraw, so it wasn't sent.");
     const bytes = hexBytes(finished.txCbor);
+    // Kept, sealed, and its box counted as spent, before it's sent: a lock, a
+    // closed browser or a stopped worker while Koios is asked leaves it to be
+    // looked for (settleWithdrawing), never a withdraw the wallet forgot it
+    // sent (independent review M1). Nothing is sent if it can't be kept.
+    const at = now();
+    await this.update(network, (s) => {
+      s.withdrawing = { txHash: built.txHash, txCbor: finished.txCbor, lovelace: built.lovelace, fee: built.fee, at, sentAt: at };
+    });
+    await wallet.withKeys(() => rememberSpent(session, network, bytes, at));
     let submitted: string;
     try {
       submitted = await koios.submitTx(bytes);
     } catch (e) {
-      if (!(e instanceof KoiosBusyError)) throw e;
-      // It may be in: its box counts as spent, and it's kept, sealed, to be looked for (settleWithdrawing).
-      await wallet.withKeys(() => rememberSpent(session, network, bytes, now()));
-      const at = now();
-      await this.update(network, (s) => {
-        s.withdrawing = { txHash: built.txHash, txCbor: finished.txCbor, lovelace: built.lovelace, fee: built.fee, at, sentAt: at };
-      });
-      throw new WithdrawMaybeSent();
+      // Koios didn't answer, or failed after passing it on: it may be in, and it's looked for.
+      if (e instanceof KoiosBusyError && e.maybeSent) throw new WithdrawMaybeSent();
+      // Refused, or never passed on (a 429, which Koios's gateway answers
+      // first): nothing went. It isn't looked for, its box is free, and its
+      // due time stays for a later run, under the same rules (independent
+      // review M11). A lock meanwhile leaves it looked for, which finds that.
+      await this.dropWithdrawing(network, built.txHash).catch(() => undefined);
+      await wallet.withKeys(() => forgetSpent(session, txInputs(bytes))).catch(() => undefined);
+      throw e;
     }
-    if (submitted !== built.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
-    await wallet.withKeys(async () => {
-      await rememberSpent(session, network, bytes, now());
-      await session.remove(SESSION_BALANCES_PREFIX + network);
-    });
+    if (submitted !== built.txHash) {
+      throw new WithdrawMaybeSent(
+        `Koios answered with another transaction id (${submitted}), so the box may have gone back. The wallet looks for it before bringing back another.`,
+      );
+    }
+    // Sent: what's left is best effort. A lock before its history is written
+    // leaves it looked for, and settleWithdrawing writes it once it's seen.
+    await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network)).catch(() => undefined);
     const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: built.txHash, submittedAt: now(), confirmations: null };
     await this.deps.activity?.sent(network, pending, { lovelace: built.lovelace, fee: built.fee }).catch(() => undefined);
+    await this.dropWithdrawing(network, built.txHash).catch(() => undefined);
     return pending;
+  }
+
+  /** Stops looking for withdraw `txHash`: seen, sent and in the history, or it never went. */
+  private dropWithdrawing(network: NetworkName, txHash: string): Promise<void> {
+    return this.update(network, (s) => {
+      if (s.withdrawing?.txHash === txHash) delete s.withdrawing;
+    });
   }
 
   /**
    * A withdraw Koios didn't answer may have gone through, so it's looked for
    * (tx_status) before any other is built. On chain, it goes in the history,
    * and that's that. Not yet, it's sent again as it was, at most every
-   * CHAIN_RESEND_MS (the ledger takes it once). After SPENT_KEEP_MS it never
-   * went: its box shows in the pool again, and comes back in turn. Returns
-   * whether it's still being looked for. `unlock`: it's only looked for,
-   * never sent again the moment the wallet unlocks (privacy review §3.1).
+   * CHAIN_RESEND_MS (the ledger takes it once), and its box is held as spent
+   * again after a lock. After SPENT_KEEP_MS it never went: its box shows in
+   * the pool again, and comes back in turn. Returns whether it's still being
+   * looked for.
+   *
+   * `run`: the unlock's or the alarm's run, where a resend may be its first
+   * real send (a submit that never reached a node), so it keeps a new
+   * withdraw's rules (independent review M11): never in the unlock's run
+   * (privacy review §3.1), nor in a run that sent anything else, nor within
+   * QUIET_AFTER_SEND_MS of the wallet's own send or its unlock (resends).
+   * The user's ask (withdrawNow) sends it again at once. Each resend is the
+   * wallet's send too, which what comes after keeps away from (L8).
    */
-  private async settleWithdrawing(network: NetworkName, unlock = false): Promise<boolean> {
+  private async settleWithdrawing(network: NetworkName, run?: { unlock: boolean; since?: number }): Promise<boolean> {
     const { withdrawing: w } = await this.read(network);
     if (!w) return false;
+    const { wallet, session } = this.deps;
     const koios = this.deps.koios(network);
     const now = this.deps.now();
-    const drop = () =>
-      this.update(network, (s) => {
-        if (s.withdrawing?.txHash === w.txHash) delete s.withdrawing;
-      });
+    const bytes = hexBytes(w.txCbor);
+    // A lock or a closed browser wiped what the wallet spent: its box is held again, as when it was sent.
+    await wallet.withKeys(async () => {
+      const spent = await spentSet(session, now);
+      if (txInputs(bytes).some((o) => !spent.has(o))) await rememberSpent(session, network, bytes, w.sentAt);
+    });
+    const drop = () => this.dropWithdrawing(network, w.txHash);
     const seen = (await koios.txStatus([w.txHash]).catch(() => undefined))?.get(w.txHash);
     if (seen != null) {
       const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: w.txHash, submittedAt: w.at, confirmations: seen };
@@ -1865,14 +1911,42 @@ export class LovejoinService {
       await drop();
       return false;
     }
-    if (!unlock && now - w.sentAt >= CHAIN_RESEND_MS) {
+    if (now - w.sentAt >= CHAIN_RESEND_MS && (w.waitUntil ?? 0) <= now && (await this.resends(network, w, now, run))) {
       // Refused as spent, it's in the mempool already, or its box moved: either way it's looked for again.
-      await koios.submitTx(hexBytes(w.txCbor)).catch(() => undefined);
+      await koios.submitTx(bytes).catch(() => undefined);
+      await wallet.withKeys(() => rememberSpent(session, network, bytes, now));
       await this.update(network, (s) => {
-        if (s.withdrawing?.txHash === w.txHash) s.withdrawing.sentAt = now;
+        if (s.withdrawing?.txHash !== w.txHash) return;
+        s.withdrawing.sentAt = now;
+        delete s.withdrawing.waitUntil;
+        delete s.withdrawing.pushes;
       });
     }
     return true;
+  }
+
+  /**
+   * Whether withdraw `w`, due to go again and not seen yet, goes in this
+   * `run` (settleWithdrawing). Not in the unlock's run. Nor in one that sent
+   * anything else, nor within QUIET_AFTER_SEND_MS of the wallet's own send,
+   * or its unlock, since `w` last went (its own isn't another's): that pushes
+   * it a fresh QUIET_PUSH_MS, QUIET_PUSHES times at most, as a box due is.
+   */
+  private async resends(network: NetworkName, w: Withdrawing, now: number, run?: { unlock: boolean; since?: number }): Promise<boolean> {
+    if (!run) return true;
+    if (run.unlock) return false;
+    const last = await this.lastSent(now);
+    if (last <= w.sentAt) return true;
+    if (run.since !== undefined && last >= run.since) return false;
+    const pushes = w.pushes ?? 0;
+    if (now - last >= QUIET_AFTER_SEND_MS || pushes >= QUIET_PUSHES) return true;
+    const random = this.deps.random ?? secureRandom;
+    await this.update(network, (s) => {
+      if (s.withdrawing?.txHash !== w.txHash) return;
+      s.withdrawing.waitUntil = now + within(QUIET_PUSH_MS, random);
+      s.withdrawing.pushes = pushes + 1;
+    });
+    return false;
   }
 
   private async read(network: NetworkName): Promise<Schedule> {
