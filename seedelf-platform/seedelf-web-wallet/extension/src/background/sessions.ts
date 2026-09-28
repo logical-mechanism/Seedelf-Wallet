@@ -1576,13 +1576,14 @@ export class SessionService {
    * still waiting, a page opened first, or a run under way across a lock),
    * and correctness doesn't hang on it (independent review L10, L11, L12).
    * A session started since the unlock was the user's own doing, and isn't
-   * held back.
+   * held back; nor is one the user asked of since, which takes the unlock's
+   * draw with it: its next step goes when it comes.
    */
   private async waits(network: NetworkName, s: SessionRecord, run: Run): Promise<boolean> {
     const until = s.auto?.unlockWait;
+    const unlocked = await this.deps.wallet.unlockedAt();
     if (run !== "asked") {
       const now = this.deps.now();
-      const unlocked = await this.deps.wallet.unlockedAt();
       const found = run === "unlock" || (s.createdAt < unlocked && now - unlocked < UNLOCK_WAIT_MS[1]);
       if (found && s.auto?.unlockDrawn !== unlocked) {
         const lockAfter = (await this.deps.preferences?.lockAfterMs()) ?? DEFAULT_PREFERENCES.lockAfterMinutes * 60_000;
@@ -1596,9 +1597,11 @@ export class SessionService {
       if (run === "unlock") return true;
       if (until !== undefined && now < until) return true;
     }
-    if (until !== undefined) {
+    const asked = run === "asked" && s.auto?.unlockDrawn !== unlocked;
+    if (until !== undefined || asked) {
       await this.update(network, s.index, (r) => {
         delete r.auto!.unlockWait;
+        if (asked) r.auto!.unlockDrawn = unlocked;
       });
     }
     return false;

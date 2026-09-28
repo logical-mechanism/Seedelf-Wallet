@@ -478,6 +478,28 @@ describe("a swap's step at the unlock (independent review L10, L12)", SLOW, () =
     expect(await waitsUntil(sessions)).toBeGreaterThanOrEqual(t.clock.now + UNLOCK_WAIT_MS[0]);
   });
 
+  it("draws no wait after the user's own ask since the unlock: its next step goes when it comes", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await funded(t, sessions);
+    await t.wallet.lock();
+    t.clock.now += 3 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    const sent = t.koios.submitted.length;
+    // Before any run gets to it, the user presses Try now: it goes at once, but Minswap can't build the order.
+    const minswap = t.minswap.fetch;
+    t.minswap.fetch = async (url, init) => (url.includes("build-tx") ? new Response("busy", { status: 503 }) : minswap(url, init));
+    await sessions.advance("preprod", 0, true);
+    t.minswap.fetch = minswap;
+    expect(t.koios.submitted).toHaveLength(sent);
+    expect((await sessions.list("preprod"))[0]!.auto!.retry).toBeDefined();
+    // Its retry, a minute into the unlock: the user's ask took the unlock's draw, so it goes.
+    await busyFor(t, 60_000);
+    await sessions.runAll("preprod");
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(SWAP_TX);
+    expect(await waitsUntil(sessions)).toBeUndefined();
+  });
+
   it("holds back no swap started since the unlock: that was the user's own doing", async () => {
     const t = await unlocked();
     const sessions = signing(t);
