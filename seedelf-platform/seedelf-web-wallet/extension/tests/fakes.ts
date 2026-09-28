@@ -193,6 +193,8 @@ export interface FakeKoios {
   stakes: Map<string, KoiosAccountInfo>;
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
+  /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
+  txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null } }>>;
   /** Stake addresses some address has used, as far as `account_addresses` goes: one-time accounts used before, say. */
   usedStakes: Set<string>;
   /** The slot of the newest block, as `tip` answers. */
@@ -218,6 +220,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     addedToAccounts: [],
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     txExtras: new Map(),
+    txSpends: new Map(),
     usedStakes: new Set(),
     tip: 0,
     fetch: async (url, init) => {
@@ -268,9 +271,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         const after = body._after_block_height;
         rows = after === undefined ? all : all.filter((t) => t.block_height > after);
       } else if (path === "tx_info") {
-        rows = activityPreprod.tx_info
-          .filter((t) => body._tx_hashes.includes(t.tx_hash))
-          .map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) }));
+        rows = [
+          ...activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash)).map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) })),
+          ...[...fake.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
+        ];
       } else if (path === "utxo_info") {
         // Any UTxO the fixtures know, spent or not, as Koios answers.
         const refs: string[] = body._utxo_refs;

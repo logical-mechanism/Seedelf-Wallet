@@ -681,6 +681,7 @@ describe("the pool the chains draw from", CHAINS, () => {
     await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("pool has 7 boxes to mix with, and a box 2 waves deep needs 8");
     // Nor are the boxes mixed again counted against the junk.
     t.koios.addedToAccounts.push(await ownedBox(t, "d9"));
+    mixMade(t, "d9");
     await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("pool has 7 boxes to mix with");
   });
 
@@ -1059,6 +1060,16 @@ async function ownedBox(t: ReturnType<typeof testBalances>, tx: string, txIndex 
   };
 }
 
+/**
+ * Koios says a mix made each of `txs` (tx_info: one of its inputs sat at
+ * mix_box): what a wallet with no record of the boxes asks before one comes
+ * back by itself (independent review M14).
+ */
+function mixMade(t: ReturnType<typeof testBalances>, ...txs: string[]): void {
+  const input = { payment_addr: { bech32: POOL[0]!.address, cred: NETWORKS.preprod.lovejoin!.mixBox } };
+  for (const tx of txs) t.koios.txSpends.set(tx.length === 64 ? tx : tx.repeat(32), [input]);
+}
+
 /** Lovejoin with giveme.my's witness stood in for: its recorded answer is another transaction's. */
 function witnessed(t: ReturnType<typeof testBalances>, extra: Partial<ConstructorParameters<typeof LovejoinService>[0]> = {}) {
   const wasm = loadTestWasm();
@@ -1427,6 +1438,7 @@ describe("a chain's boxes", CHAINS, () => {
   it("withdraws one box a run, however many runs overlap", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "d1"), await ownedBox(t, "d2"));
+    mixMade(t, "d1", "d2");
     await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR] });
     t.clock.now += 7 * HOUR;
     await t.wallet.unlock(PASSWORD);
@@ -1721,9 +1733,10 @@ describe("the boxes' withdraws", CHAINS, () => {
     expect(t.koios.calls.slice(calls).map((c) => c.path)).toContain("credential_utxos");
   });
 
-  it("gives a box found with no due time one (a restore), when the tile opens", async () => {
+  it("gives a box found with no due time one (a restore), when the tile opens, once Koios says a mix made it", async () => {
     const { t } = await withSession("40000000");
     t.koios.addedToAccounts.push(await ownedBox(t, "d3"), await ownedBox(t, "d4"));
+    mixMade(t, "d3", "d4");
     expect((await t.lovejoin.status("preprod")).boxes).toHaveLength(2);
     const due = (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due;
     expect(due).toHaveLength(2);
@@ -2045,6 +2058,7 @@ describe("mixing from the tile", CHAINS, () => {
     const t = await wallet();
     t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
     t.koios.addedToAccounts.push(await ownedBox(t, "d8"));
+    mixMade(t, "d8");
     const { sessions } = mixRunner(t);
     const out = await sessions.againBuild("preprod");
     expect(out.mix).toMatchObject({ boxes: 1, again: true, mixes: 4 });
@@ -2066,6 +2080,7 @@ describe("mixing from the tile", CHAINS, () => {
     const others = [...POOL, ...POOL.map((b, i) => ({ ...b, tx_hash: (i % 2 ? "e1" : "e2").repeat(31) + i.toString(16).padStart(2, "0") }))];
     t.koios.addedToAccounts.splice(0, t.koios.addedToAccounts.length, ...others);
     for (let i = 0; i < 12; i++) t.koios.addedToAccounts.push(await ownedBox(t, (0xa0 + i).toString(16)));
+    mixMade(t, ...Array.from({ length: 12 }, (_, i) => (0xa0 + i).toString(16)));
     // One wave deep, 40 others mix twenty: all twelve go.
     await t.deps.preferences.set({ lovejoinDepth: 1 });
     expect(await t.lovejoin.againBoxes("preprod")).toEqual({ boxes: 12, owned: 12 });

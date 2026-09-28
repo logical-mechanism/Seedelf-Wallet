@@ -1065,11 +1065,19 @@ export interface LovejoinStatus {
   due: number[];
   /**
    * Its boxes a chain of its own made and didn't finish mixing (a chain cut
-   * by a lock, a closed browser or a failed send): they never come back by
-   * themselves, since each still shows where it went in. Mix my boxes again
-   * takes them first; bringing one back takes `anyway`.
+   * by a lock, a closed browser or a failed send), or, after a restore, that
+   * a deposit made, as Koios said: they never come back by themselves, since
+   * each still shows where it went in. Mix my boxes again takes them first;
+   * bringing one back takes `anyway`.
    */
   notMixed: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Of `notMixed`, listed last: boxes after a restore, with no record of the
+   * chain that made them, whose making Koios hasn't said of yet. Held until
+   * it does, as a deposit's are: the wallet asks again at a later pool read
+   * (independent review M14).
+   */
+  unsure?: Array<{ txHash: string; txIndex: number }>;
   /**
    * Its boxes a mix from the public account put where they are: the
    * account's, which paid for it in the open. Mixed again, the account pays,
