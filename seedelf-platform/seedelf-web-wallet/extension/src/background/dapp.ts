@@ -270,6 +270,8 @@ const ALREADY_CONNECTED =
   "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session: it keeps what it already saw.";
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
 const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable() first.";
+/** What a site's call ends with once its page is gone: nobody hears it. */
+const PAGE_GONE = "The page went away.";
 /** What a site asking on the network the wallet left hears, and the window says. */
 const NETWORK_LEFT = "Seedelf Wallet moved to another network in its settings, so this request was declined. Ask again.";
 
@@ -509,12 +511,23 @@ export class DappService {
     this.deps.changed();
   }
 
-  /** A site's page went away: nothing it asked for waits any more. */
+  /**
+   * A site's page went away: nothing it asked for waits any more. Each is
+   * settled, though nobody hears it, so its call ends and gives back its
+   * share of the site's calls (`MAX_SITE_CALLS`): left waiting forever, 32
+   * of them would lock the site out (independent review L31). A private
+   * session's funding already sent isn't undone: the site finds itself
+   * connected next time.
+   */
   gone(session: DappSession): void {
-    const before = this.waiting.length + this.unlocking.length;
-    remove(this.waiting, (w) => w.session.id === session.id);
-    remove(this.unlocking, (u) => u.session.id === session.id);
-    if (this.waiting.length + this.unlocking.length !== before) this.deps.changed();
+    const waiting = this.waiting.filter((w) => w.session.id === session.id);
+    const unlocking = this.unlocking.filter((u) => u.session.id === session.id);
+    if (!waiting.length && !unlocking.length) return;
+    remove(this.waiting, (w) => waiting.includes(w));
+    remove(this.unlocking, (u) => unlocking.includes(u));
+    for (const w of waiting) w.reject(refused(PAGE_GONE));
+    for (const u of unlocking) u.reject(refused(PAGE_GONE));
+    this.deps.changed();
   }
 
   /** The sites connected on the network the wallet is on, each with its private session if it has one. Throws if locked. */
