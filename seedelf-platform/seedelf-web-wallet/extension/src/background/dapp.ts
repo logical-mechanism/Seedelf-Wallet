@@ -50,7 +50,9 @@
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts), apart from what
 //             the wallet spent itself. One already on chain, sent again, is
-//             a success, and leaves nothing behind.
+//             a success, and leaves nothing behind. One Koios didn't answer
+//             for may land: it's kept as sent, looked for and sent again a
+//             few times, and the site hears its id, never that it failed.
 // Limits      What a site asks for without the user costs the wallet little:
 //             calls at the same time share one reading of the account; a
 //             site gets a few fresh readings, UTxO lookups and submits a
@@ -89,13 +91,13 @@ import type { DappApproval, DappAsk, DappSite, DappTxSummary, SessionOutSummary,
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
 import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
 import type { CoinControlService } from "./coin-control";
-import { SpentInputError, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { chainOwner } from "./lovejoin";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
-import { outpoint, rememberSiteSpent, reservedSet, spentSet } from "./spent";
+import { outpoint, rememberSiteSpent, reservedSet, spentSet, wait } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 import { isTrap } from "./wasm";
 
@@ -151,6 +153,13 @@ const MAX_SITE_CALLS = 32;
  * a second of the wallet's queue. Those put in front of the user never count.
  */
 const PER_MINUTE = { fresh: 4, lookup: 6, submit: 10, unprompted: 20 } as const;
+/**
+ * A site's transaction Koios didn't answer for may be on its way: it's
+ * looked for, and sent again, this many times, this far apart, before the
+ * site hears its id (`submitTx`).
+ */
+const SUBMIT_CHECKS = 3;
+const SUBMIT_CHECK_MS = 5_000;
 /** What a site hears when the window's queue is full. */
 const BUSY = "Seedelf Wallet is busy with this site's other requests.";
 
@@ -1353,6 +1362,17 @@ export class DappService {
     try {
       await koios.submitTx(bytes);
     } catch (e) {
+      if (e instanceof KoiosBusyError && e.maybeSent) {
+        // Koios didn't answer, or failed on its side, with the transaction
+        // sent: the node may have taken it (independent review M3). Told it
+        // failed, a site would build the payment again from other UTxOs, and
+        // both could land. So it's kept as sent, what it spends as spent,
+        // and it's looked for and sent again a few times; the site then
+        // hears its id, as for any submit, and follows it on chain.
+        await this.keepSent(origin, network, holder, bytes, id);
+        await this.settle(koios, bytes, id);
+        return id;
+      }
       // Sent already, by the site itself or an earlier call: that's a
       // success. Nothing new went out, so nothing is kept of it: a site
       // resending old transactions can't fill the wallet's memory of what
@@ -1363,8 +1383,20 @@ export class DappService {
       }
       return id;
     }
+    await this.keepSent(origin, network, holder, bytes, id);
+    return id;
+  }
+
+  /**
+   * Keeps a site's transaction as sent: what it spends, and its outputs for
+   * the site's next transaction to build on. Once it's gone out, the site
+   * hears its id whatever happens here: a wallet locked meanwhile has
+   * nothing to keep it in, and telling the site it failed could have it
+   * paid twice.
+   */
+  private async keepSent(origin: string, network: NetworkName, holder: Holder, bytes: Uint8Array, id: string): Promise<void> {
     const { wallet, session, wasm, now } = this.deps;
-    await wallet.withKeys(async () => {
+    const keep = async () => {
       // Apart from what the wallet spent itself, under a cap of its own (spent.ts).
       await rememberSiteSpent(session, bytes);
       const key = SESSION_DAPP_SIGNED + network + suffix(holder);
@@ -1388,8 +1420,30 @@ export class DappService {
       await session.set(key, own.slice(-KEEP_SIGNED));
       // Home reads the account again, to show what the site did.
       await session.remove(SESSION_BALANCES_PREFIX + network);
-    });
-    return id;
+    };
+    await wallet.withKeys(keep).catch(() => undefined);
+  }
+
+  /**
+   * Looks for a site's transaction Koios didn't answer for, and sends it
+   * again, a few times, 5 s apart, until the chain shows it or a submit is
+   * taken. Sending it again is safe: the ledger takes a transaction once. A
+   * refusal says nothing either way (one in a mempool already is refused as
+   * spending what's spent), so the site hears its id whatever this finds.
+   */
+  private async settle(koios: Koios, bytes: Uint8Array<ArrayBuffer>, id: string): Promise<void> {
+    const sleep = this.deps.sleep ?? wait;
+    for (let i = 0; i < SUBMIT_CHECKS; i++) {
+      await sleep(SUBMIT_CHECK_MS);
+      const status = await koios.txStatus([id]).catch(() => undefined);
+      if (status?.get(id) != null) return;
+      try {
+        await koios.submitTx(bytes);
+        return;
+      } catch {
+        // In a mempool already, refused, or Koios still not answering: looked for again.
+      }
+    }
   }
 }
 
