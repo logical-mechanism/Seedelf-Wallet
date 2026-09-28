@@ -189,6 +189,42 @@ describe("a payment refused", () => {
     await expect(pay(t)).resolves.toBeDefined();
   });
 
+  it("after a lock and an unlock mid-submit, with nothing looking since, leaves nothing sealed: nothing waits for it", async () => {
+    const t = await unlocked();
+    const summary = await pay(t);
+    whileAsked(
+      t,
+      async () => {
+        await t.wallet.lock();
+        await t.wallet.unlock(PASSWORD);
+      },
+      "refused",
+    );
+    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction");
+    expect(t.local.data.has(SEALED)).toBe(false);
+    expect(await t.pending.pending("preprod")).toBeNull();
+    await expect(pay(t)).resolves.toBeDefined();
+  });
+
+  it("after a lock mid-submit, leaves a sealed copy written since as it is", async () => {
+    const t = await unlocked();
+    const summary = await pay(t);
+    let since: unknown;
+    whileAsked(
+      t,
+      async () => {
+        await t.wallet.lock();
+        await t.wallet.unlock(PASSWORD);
+        // Something else sealed over it meanwhile: not the write that was refused, so it stays.
+        since = { ...(await t.store.get<object>("maybeSent.preprod")), txHash: "cd".repeat(32) };
+        await t.store.set("maybeSent.preprod", since);
+      },
+      "refused",
+    );
+    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction");
+    expect(await t.store.get("maybeSent.preprod")).toEqual(since);
+  });
+
   it("isn't taken back when Koios only asked the wallet to slow down: it never passed it on", async () => {
     const t = await unlocked();
     const summary = await pay(t);

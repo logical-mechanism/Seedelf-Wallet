@@ -485,10 +485,13 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
  * held back, Send's copy as sent. What it wrote over goes back as it was: the
  * watch of the payment before it, and what another transaction had spent
  * already. A lock meanwhile took those, and they stay gone; it was put back
- * after the unlock (restoreNow), and goes all the same. Only while the watch
- * still has it as it was written: one sent again meanwhile (the watch's run)
- * may have gone after all, and stays; that one is returned. Call it in the
- * network's turn.
+ * after the unlock (restoreNow), and goes all the same. Not put back yet (a
+ * lock and an unlock while Koios was asked, and nothing has looked since),
+ * only its sealed copy is left, which goes too while it's still the one
+ * written ahead: otherwise the next look would put a refused payment back as
+ * maybe sent. Only while the watch still has it as it was written: one sent
+ * again meanwhile (the watch's run) may have gone after all, and stays; that
+ * one is returned. Call it in the network's turn.
  */
 async function undoAhead(deps: PendingDeps, s: Sending, ahead: Ahead): Promise<Watched | undefined> {
   const { wallet, session } = deps;
@@ -496,7 +499,7 @@ async function undoAhead(deps: PendingDeps, s: Sending, ahead: Ahead): Promise<W
   const key = pendingKey(s.network);
   const found = await wallet.withKeys(async () => {
     const cur = await session.get<Watched>(key);
-    if (cur?.txHash !== record.txHash) return { undone: false };
+    if (cur?.txHash !== record.txHash) return { undone: false, gone: true };
     if (!writtenAhead(cur, record)) return { undone: false, kept: cur };
     // Put back after a lock (restoreNow set its resentAt): what it wrote over went with the lock.
     const before = cur.resentAt === record.resentAt ? ahead.before : undefined;
@@ -509,15 +512,17 @@ async function undoAhead(deps: PendingDeps, s: Sending, ahead: Ahead): Promise<W
     return { undone: true };
   });
   if (found.undone) await unseal(deps, record);
+  // The watch no longer has it, and nothing has put it back since a lock took it (independent review M1).
+  else if (found.gone && ahead.nonce) await deps.store.removeIf(sealedName(s.network), ahead.nonce).catch(() => undefined);
   return found.kept;
 }
 
 /**
  * `s` was refused: it never went out, and what `writeAhead` wrote goes
- * (`undoAhead`). Locked meanwhile, the lock took the watch, the UTxOs held
- * back and Send's copy with it, and only the sealed copy is left, which goes
- * too while it's still the one written ahead. Returns the watch's record
- * when it stays.
+ * (`undoAhead`). Locked meanwhile, whether still or unlocked again, the lock
+ * took the watch, the UTxOs held back and Send's copy with it, and only the
+ * sealed copy is left, which goes too while it's still the one written
+ * ahead. Returns the watch's record when it stays.
  */
 async function takeBack(deps: PendingDeps, s: Sending, ahead: Ahead): Promise<Watched | undefined> {
   try {
