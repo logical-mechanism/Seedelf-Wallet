@@ -604,6 +604,15 @@ interface SendingPublic extends ChainProgress {
   stopped?: string;
   /** It stopped at this transaction, which may have gone through (ChainRecord `maybe`). */
   maybe?: number;
+  /**
+   * The next transaction, when a try of it may have reached a node (Koios
+   * didn't answer it): kept with the progress, not only in one call, so a
+   * resend of those before it (pumpChain, independent review L25) never
+   * loses that, and a later call whose tries of it are all refused still
+   * stops as "may have gone through" (final review F10). Goes once a send
+   * of it goes.
+   */
+  reached?: number;
 }
 
 /** What a chain's transaction `i` is called, where a stop says which went and which may have. */
@@ -1619,9 +1628,10 @@ export class LovejoinService {
               marked = true;
             };
             if (first) await mark();
-            const tries = { busy: 0, spent: 0, maybeSent };
+            // A try of it in an earlier call may have put it in too (`reached`, final review F10).
+            const tries = { busy: 0, spent: 0, maybeSent: maybeSent || sending.reached === i };
             // Whether a try may have put it in: sent before, or one Koios didn't answer.
-            let reached = maybeSent;
+            let reached = tries.maybeSent;
             for (;;) {
               try {
                 try {
@@ -1638,6 +1648,8 @@ export class LovejoinService {
                 // Koios didn't answer, or answered what isn't Koios's or the network's word (another id, a body it
                 // couldn't read): it may have reached a node.
                 if ((e instanceof KoiosBusyError && e.maybeSent) || !(e instanceof KoiosError)) reached = true;
+                // Kept with the progress, which the next save writes: pumpChain may yet get past this send (L25).
+                if (reached && i === sending.next) sending.reached = i;
                 const wait = chainRetryMs(i, tries, e);
                 if (wait === undefined) {
                   // Once a try may have put it in, a later answer says nothing of that one: Koios's node down, a
@@ -1663,6 +1675,7 @@ export class LovejoinService {
               }
             }
             if (unsure === i) unsure = undefined;
+            if (sending.reached === i) delete sending.reached;
             await wallet.withKeys(() => rememberSpent(session, network, bytes, this.deps.now()));
             await this.chainSent(network, id, i);
           },
