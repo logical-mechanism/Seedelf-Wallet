@@ -32,9 +32,10 @@ describe("a mix from the public account and a lock (independent review L14)", CH
     // The deposit's submit gets a 503; the wallet locks while the send waits to try it again.
     await expect(lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow("locked");
     expect(seen).toEqual({ submits: 1, whileLocked: 0 });
-    // Unlocked again, its record says a lock cut it.
+    // Unlocked again, its record says a lock cut it, and that its deposit, sent unanswered, may have gone through
+    // (independent review L5).
     await t.wallet.unlock(PASSWORD);
-    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT });
+    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT, maybeSent: true });
   });
 
   it("never tries it again, nor writes its progress back, after a lock and an unlock while it waited", async () => {
