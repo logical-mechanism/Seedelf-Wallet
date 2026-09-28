@@ -116,7 +116,7 @@ import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
 import { outpoint, rememberSiteSpent, reservedSet, SPENT_KEEP_MS, spentSet, wait } from "./spent";
-import { SESSION_BALANCES_PREFIX, WASM_BROKEN } from "./wallet";
+import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WASM_BROKEN } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session, per network: the account as the connector last read it. */
@@ -1734,8 +1734,12 @@ export class DappService {
             },
           ];
       await session.set(key, own.slice(-KEEP_SIGNED));
-      // Home reads the account again, to show what the site did.
-      await session.remove(SESSION_BALANCES_PREFIX + network);
+      // Home reads the account again, to show what the site did. A private
+      // session's site spends only the session's account: the account isn't
+      // read again for it, only the private side, which its transaction may
+      // pay (independent review M8).
+      if (holder) await session.set(SESSION_PRIVATE_STALE_PREFIX + network, true);
+      else await session.remove(SESSION_BALANCES_PREFIX + network);
     };
     await wallet.withKeys(keep).catch(() => undefined);
   }

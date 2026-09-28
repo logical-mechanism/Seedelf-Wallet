@@ -117,7 +117,7 @@ import {
   type ScriptSpendDeps,
 } from "./script-spend";
 import { forgetSpent, outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
-import { SESSION_BALANCES_PREFIX } from "./wallet";
+import { SESSION_PRIVATE_STALE_PREFIX } from "./wallet";
 
 /** chrome.storage.session: a session's funding payment, built and waiting for Send. */
 export const SESSION_OUT = "seedelf.session.out";
@@ -1659,8 +1659,9 @@ export class SessionService {
       }
     }
     await this.noteLanded(network, s);
-    // The private balance has new UTxOs: the next reading should see them.
-    if (returned) await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
+    // The private balance has new UTxOs: the next reading reads its side
+    // again, and leaves the account's as it was (independent review M8).
+    if (returned) await wallet.withKeys(() => session.set(SESSION_PRIVATE_STALE_PREFIX + network, true));
   }
 
   /**
@@ -1772,8 +1773,9 @@ export class SessionService {
         // of it and the unseen copy land (final review sessions-1).
         if (freed.length) await wallet.withKeys(() => forgetSpent(session, freed));
         if (waiting.some((t) => t.kind === "back" && on.has(t.txHash))) {
-          // The private balance has new UTxOs: the next reading should see them.
-          await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
+          // The private balance has new UTxOs: the next reading reads its side again, not the account's
+          // (independent review M8).
+          await wallet.withKeys(() => session.set(SESSION_PRIVATE_STALE_PREFIX + network, true));
         }
       }
     }
@@ -2722,7 +2724,10 @@ export class SessionService {
     await wallet.withKeys(async () => {
       await rememberSpent(session, network, bytes);
       await clearKept(session, kept, keptHash);
-      await session.remove(SESSION_BALANCES_PREFIX + network);
+      // A return spends the funding's change it merges into: the private side is read again. A swap, a
+      // cancel or a chain's mix spends only the session's own account, which no balance reading holds.
+      // Neither reads the public account again (independent review M8).
+      if (kind === "back") await session.set(SESSION_PRIVATE_STALE_PREFIX + network, true);
     });
     return { kind: PENDING_KIND[kind], network, txHash, submittedAt: now(), confirmations: null };
   }
@@ -2805,7 +2810,8 @@ export class SessionService {
       }
       if (changed) await this.save(network, book);
       for (const s of live) if (s.txs.some((t) => t.confirmed && t.summary)) await this.noteLanded(network, s);
-      if (returned) await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
+      // What came back is in the private balance: its side is read again, not the account's (independent review M8).
+      if (returned) await wallet.withKeys(() => session.set(SESSION_PRIVATE_STALE_PREFIX + network, true));
       if (resumed) await this.deps.alarm?.start();
     }
     return [...book.sessions]

@@ -100,7 +100,7 @@ import {
   unspent,
   type Reservation,
 } from "./spent";
-import { SESSION_BALANCES_PREFIX } from "./wallet";
+import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX } from "./wallet";
 
 /** chrome.storage.session: a mix from the public account, built and signed, waiting for Send. */
 export const SESSION_LOVEJOIN_PUBLIC = "seedelf.lovejoin.public";
@@ -2395,7 +2395,9 @@ export class LovejoinService {
     }
     // Sent: what's left is best effort. A lock before its history is written
     // leaves it looked for, and settleWithdrawing writes it once it's seen.
-    await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network)).catch(() => undefined);
+    // The box comes back into the private balance: the next reading reads that side again, and not the
+    // account's (independent review M8).
+    await wallet.withKeys(() => session.set(SESSION_PRIVATE_STALE_PREFIX + network, true)).catch(() => undefined);
     const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: built.txHash, submittedAt: now(), confirmations: null };
     await this.deps.activity?.sent(network, pending, { lovelace: built.lovelace, fee: built.fee }).catch(() => undefined);
     await this.dropWithdrawing(network, built.txHash).catch(() => undefined);
@@ -2444,7 +2446,8 @@ export class LovejoinService {
     if (seen != null) {
       const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: w.txHash, submittedAt: w.at, confirmations: seen };
       await this.deps.activity?.sent(network, pending, { lovelace: w.lovelace, fee: w.fee }).catch(() => undefined);
-      await this.deps.wallet.withKeys(() => this.deps.session.remove(SESSION_BALANCES_PREFIX + network));
+      // Only the private side is read again (independent review M8).
+      await this.deps.wallet.withKeys(() => this.deps.session.set(SESSION_PRIVATE_STALE_PREFIX + network, true));
       await drop();
       return false;
     }
