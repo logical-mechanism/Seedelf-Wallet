@@ -329,6 +329,9 @@ export class DappService {
   private sitesQueue: Promise<unknown> = Promise.resolve();
   /** The worker is closing the connector's window (`closeWindow`), not the user. */
   private closing = false;
+  /** Pages waiting on another page's connect question (`enable`), by session id; and those whose page went away meanwhile. */
+  private readonly joined = new Set<string>();
+  private readonly leftJoined = new Set<string>();
   /**
    * The sites connected on each network, as this worker last read or wrote
    * the sealed `dapps` record: in memory only, never stored. `isEnabled`
@@ -584,6 +587,7 @@ export class DappService {
    * connected next time.
    */
   gone(session: DappSession): void {
+    if (this.joined.has(session.id)) this.leftJoined.add(session.id);
     const waiting = this.waiting.filter((w) => w.session.id === session.id);
     const unlocking = this.unlocking.filter((u) => u.session.id === session.id);
     if (!waiting.length && !unlocking.length) return;
@@ -711,7 +715,15 @@ export class DappService {
     // Nothing is awaited from here until it's asked, so two pages can't both ask.
     const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
     if (asking) {
-      const settled = await asking.settled;
+      this.joined.add(session.id);
+      let settled: DappError | "gone" | undefined;
+      try {
+        settled = await asking.settled;
+      } finally {
+        this.joined.delete(session.id);
+      }
+      // This page went away too: nothing is asked for it.
+      if (this.leftJoined.delete(session.id)) throw refused(PAGE_GONE);
       if (settled === "gone") return this.run(session, "enable", []) as Promise<true>;
       if (settled) throw settled;
       return true;

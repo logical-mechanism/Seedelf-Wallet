@@ -122,6 +122,23 @@ describe("a site that isn't connected, calling enable() again and again", () => 
   });
 });
 
+describe("pages of one site sharing a connect question", () => {
+  it("never ask for a page that went away while it waited on another's", async () => {
+    const t = await on();
+    const [a, b] = [site(STRANGER), site(STRANGER)];
+    const first = heard(t.dapp.call(a, "enable", []));
+    const second = heard(t.dapp.call(b, "enable", []));
+    await until(() => t.dapp.approvals().length === 1);
+    await settle();
+    t.dapp.gone(b);
+    t.dapp.gone(a);
+    expect(await first).toEqual({ code: APIError.Refused, info: "The page went away." });
+    expect(await second).toEqual({ code: APIError.Refused, info: "The page went away." });
+    await settle();
+    expect(t.dapp.approvals()).toEqual([]);
+  });
+});
+
 describe("one site's share of the window", () => {
   it("is five requests waiting at once; another site's still go in", async () => {
     const t = await on();
