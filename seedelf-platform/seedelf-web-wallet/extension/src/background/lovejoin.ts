@@ -877,11 +877,26 @@ function recorded(s: Schedule): (b: OutRef) => boolean {
 /**
  * Whether what made box `b` is known: a record of the wallet's accounts for
  * it (recorded), or Koios said (`origins`). Only such a box is taken into a
- * mix again from the private balance or brought back (independent review M14).
+ * mix again from the private balance or brought back, and it isn't asked of
+ * again (made, independent review M14).
  */
 function knownOf(s: Schedule): (b: OutRef) => boolean {
   const known = recorded(s);
   return (b) => known(b) || s.origins?.[b.txHash] !== undefined;
+}
+
+/**
+ * Whether box `b` may come back as a mixed box: a record of the wallet's
+ * accounts for it (recorded: one its chain left not mixed yet is held
+ * apart, unmixedOf), or Koios said a mix made it. Never one Koios said a
+ * deposit made: a withdraw checks this against the schedule as it is when
+ * it takes a box, since another lookup (Mix my boxes again pressed on the
+ * page) can keep a deposit's answer after its boxes were sorted out
+ * (independent review M14).
+ */
+function mixedOf(s: Schedule): (b: OutRef) => boolean {
+  const known = recorded(s);
+  return (b) => known(b) || s.origins?.[b.txHash]?.mixed === true;
 }
 
 /** The boxes of `owned` no record accounts for that a deposit made, as Koios said (`origins`): not mixed yet. */
@@ -2798,8 +2813,9 @@ export class LovejoinService {
     // chain's last mix a node dropped after it was all sent leaves its due time to a box a restore found, the box
     // that mix spent staying spent by it for hours, then held as not mixed yet; and the quiet after the chain's
     // sends is long over by the time one is due. A deposit's is held from then on (sortOut); one Koios can't say of
-    // waits a fresh draw, and isn't taken meanwhile.
-    if (!knownOf(schedule)(box)) {
+    // waits a fresh draw, and isn't taken meanwhile. Only a mix's answer lets it go: a deposit's kept since the
+    // boxes were sorted out (Mix my boxes again pressed on the page asked meanwhile) holds it as well (mixedOf).
+    if (!mixedOf(schedule)(box)) {
       const { origins, untold } = await this.made(network, [box]);
       if (untold.length) await this.update(network, (s) => moveDue(s, time, now + within(WITHDRAW_SPREAD_MS, random)));
       if (origins[box.txHash]?.mixed !== true) return [];
@@ -2928,9 +2944,10 @@ export class LovejoinService {
           "Koios hasn't said yet how some of your boxes went into Lovejoin's pool, so the wallet can't tell whether they were mixed. Try again in a minute.",
         );
       }
-      // Only a box whose making is known now: a record accounts for it, or Koios said a mix made it.
+      // Only a box whose making is known now: a record accounts for it, or Koios said a mix made it. Never one
+      // Koios said a deposit made, by an answer another lookup kept after the boxes were sorted out (mixedOf).
       const after = await this.read(network);
-      [chosen] = backOrder(free(back, reserved).filter(knownOf(after)), rows, ownLeaves(after), least, this.deps.now());
+      [chosen] = backOrder(free(back, reserved).filter(mixedOf(after)), rows, ownLeaves(after), least, this.deps.now());
       if (!chosen) {
         // Mix my boxes again refuses while Koios hasn't said of a box (againBoxes): it's never "first" then. Those
         // known not to be mixed are said apart from those Koios hasn't said of, which may be (M14).

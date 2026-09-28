@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { Koios, TXS_PER_REQUEST, type FetchLike, type KoiosUtxo } from "../src/background/koios";
-import { LovejoinService } from "../src/background/lovejoin";
+import { chainOwner, LovejoinService } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_SPENT } from "../src/background/spent";
@@ -907,6 +907,59 @@ describe("taking a box no record accounts for (independent review M14)", CHAINS,
     expect(txInfoAsked(t)).toEqual([[P]]);
   });
 
+  it("never brings back by itself a box Koios said a deposit made while the run was about to take it: Mix my boxes again pressed then asked, and the box stays held (privacy review §2.10)", async () => {
+    const { t } = await withSession("40000000");
+    const P = hash("cc");
+    t.koios.addedToAccounts.push(await ownedBox(t, P));
+    t.koios.txSpends.set(P, await accountDeposit(t));
+    // As above: a chain's dropped last mix left its due time to P, and the pool read asks nothing.
+    const { mixes } = await sentChain(t, "9", [0]);
+    const lovejoin = witnessed(t);
+    // The run where a due time came has sorted out the boxes, P among those free to come back, when Mix my boxes
+    // again is pressed on the page: it asks what made P, and Koios says the account's deposit.
+    const due = async () => ((await t.store.get<{ due: number[] }>("lovejoin.preprod"))?.due ?? []).some((d) => d <= t.clock.now);
+    const pressed = pressedAsSorted(lovejoin, due, () => lovejoin.againBoxes("preprod"));
+    const back = await runsFor(t, lovejoin, 16);
+    expect(pressed()).toBe(true);
+    // A deposit's box isn't taken as a mix's, whoever asked Koios: only the chain's mixed box came back.
+    expect(back).toEqual([`${mixes[0]}#0`]);
+    expect(txInfoAsked(t)).toEqual([[P]]);
+    const status = await t.lovejoin.status("preprod");
+    expect(status.notMixed).toContainEqual({ txHash: P, txIndex: 0 });
+    expect(status.fromPublic).toEqual([{ txHash: P, txIndex: 0 }]);
+  });
+
+  it("never brings back, as Bring one back now, a box Koios said a deposit made while it chose: Mix my boxes again pressed then asked, and it takes a box whose making is known (privacy review §2.10)", async () => {
+    const { t } = await withSession("40000000");
+    const [M, P] = [hash("b3"), hash("cd")];
+    // M is where the wallet's own chain left it, hours ago. P, the account's deposit before a restore, went in just
+    // now: Bring one back now puts it after M, so it asks nothing, and the pool read's count asks nothing either.
+    const at = t.clock.now / 1000;
+    t.koios.addedToAccounts.push({ ...(await ownedBox(t, M)), block_time: at - 3 * 3600 }, { ...(await ownedBox(t, P)), block_time: at });
+    t.koios.txSpends.set(P, await accountDeposit(t));
+    await t.store.set("lovejoin.preprod", {
+      due: [t.clock.now + 30 * HOUR, t.clock.now + 40 * HOUR],
+      chains: [],
+      leaves: { [`${M}#0`]: chainOwner(0) },
+    });
+    const lovejoin = witnessed(t);
+    // Once it has sorted out the boxes, time passes (P has waited the delay's least by the time it chooses, and goes
+    // before M, still where the wallet's chain left it), and Mix my boxes again is pressed on the page: it asks what
+    // made P, and Koios says the account's deposit.
+    const pressed = pressedAsSorted(
+      lovejoin,
+      async () => true,
+      async () => {
+        await busyFor(t, 2 * HOUR);
+        await lovejoin.againBoxes("preprod");
+      },
+    );
+    await lovejoin.withdrawNow("preprod");
+    expect(pressed()).toBe(true);
+    expect(txInfoAsked(t)).toEqual([[P]]);
+    expect(withdrawn(t)).toEqual([`${M}#0`]);
+  });
+
   it("refuses to take a box no record accounts for while Koios can't say what made it, and keeps nothing for the pool reads, in a wallet's steady state", async () => {
     const { t } = await withSession("40000000");
     const B = hash("b9");
@@ -1014,6 +1067,27 @@ describe("taking a box no record accounts for (independent review M14)", CHAINS,
     expect(txInfoAsked(t)).toEqual([[M, N].sort()]);
   });
 });
+
+/**
+ * Runs `press` once, the first time `when` holds as `lovejoin` has sorted out
+ * the wallet's boxes in the pool, before it takes one: a press on the page
+ * (Mix my boxes again) landing between a withdraw's pool read and the box it
+ * takes. Says whether it ran.
+ */
+function pressedAsSorted(lovejoin: LovejoinService, when: () => Promise<boolean>, press: () => Promise<unknown>): () => boolean {
+  const sorting = lovejoin as unknown as { sortOut: (...args: unknown[]) => Promise<unknown> };
+  const sortOut = sorting.sortOut.bind(lovejoin);
+  let pressed = false;
+  sorting.sortOut = async (...args) => {
+    const sorted = await sortOut(...args);
+    if (!pressed && (await when())) {
+      pressed = true;
+      await press();
+    }
+    return sorted;
+  };
+  return () => pressed;
+}
 
 /** What the sealed schedule keeps of the transactions still asked of. */
 const asking = async (t: Tested) => (await t.store.get<{ asking?: Record<string, number> }>("lovejoin.preprod"))?.asking;
