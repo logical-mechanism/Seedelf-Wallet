@@ -889,9 +889,14 @@ const notMixedYet = (s: Schedule, owned: OutRef[]) => [...unmixedOf(s.chains, ow
  * none: the due times its first mix took for them were other boxes' (chainSent).
  * A chain with a deposit being sent set all its boxes' due times as its
  * deposit went in (chainSent), while some of its boxes are still mixing or
- * on their way: its due times and the leaves it has reached are left out of
- * the count, so a box a restore found while one is sent (a swap's return,
- * say) is looked up too (independent review M14). Not Mix my boxes again's:
+ * on their way: its boxes found in the pool (its deposit's and its mixes',
+ * the leaves it has reached too) are left out of the count, and as many of
+ * its due times, so a box a restore found while one is sent (a swap's
+ * return, say) is looked up too (independent review M14). Only those found:
+ * a box of its that someone else's mix moved since is counted as the
+ * wallet's other boxes are, and keeps its due time, so a wallet in its
+ * steady state asks nothing then either. One its own mix spends isn't found
+ * until that mix is in, which only ever asks less. Not Mix my boxes again's:
  * the boxes it takes are the wallet's own, counted as they are until the mix
  * that spends each is sent, and it takes as many due times as it sets
  * (chainSent), so the count holds as it goes, and a wallet in its steady
@@ -900,9 +905,10 @@ const notMixedYet = (s: Schedule, owned: OutRef[]) => [...unmixedOf(s.chains, ow
 function moreThanDue(s: Schedule, owned: OutRef[]): boolean {
   const held = new Set(notMixedYet(s, owned).map(ref));
   const sending = s.chains.filter((c) => !c.ended && c.scheduled && c.deposit);
-  const theirs = new Set(sending.flatMap((c) => c.leaves.map(ref)));
+  const made = new Set(sending.flatMap((c) => [c.deposit!, ...c.mixes]));
+  const theirs = new Set(owned.filter((b) => made.has(b.txHash)).map(ref));
   const back = owned.filter((b) => !held.has(ref(b)) && !theirs.has(ref(b))).length;
-  return back > s.due.length - sending.reduce((n, c) => n + c.boxes, 0);
+  return back > s.due.length - theirs.size;
 }
 
 /**

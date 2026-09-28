@@ -497,6 +497,47 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     expect(txInfoAsked(t)).toEqual([]);
   });
 
+  it("asks nothing while a chain is sent in the steady state and someone else's mix moves one of the chain's boxes: its due time goes with the box", async () => {
+    const { t } = await withSession("40000000");
+    const B = hash("91");
+    t.koios.addedToAccounts.push(await ownedBox(t, B));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR], chains: [] });
+    const D = await sendingChain(t, "seedelf.lovejoin.test", "6");
+    // Someone else's mix spends the deposit's second box: the wallet's box it made is where no record of its says.
+    const Z = hash("92");
+    t.koios.spent.add(`${D}#1`);
+    t.koios.addedToAccounts.push(await ownedBox(t, Z));
+    const status = await t.lovejoin.status("preprod");
+    expect(txInfoAsked(t)).toEqual([]);
+    expect(status.notMixed).toEqual([]);
+    expect(status.unsure).toBeUndefined();
+    expect(status.due).toHaveLength(3);
+    expect(await origins(t)).toBeUndefined();
+  });
+
+  it("never holds a steady-state wallet's boxes while a chain is sent, someone else's mix moves one of the chain's boxes, and Koios fails", async () => {
+    const { t } = await withSession("40000000");
+    const B = hash("93");
+    t.koios.addedToAccounts.push(await ownedBox(t, B));
+    await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR], chains: [] });
+    const koios = flakyTxInfo(t);
+    const D = await sendingChain(t, "seedelf.lovejoin.test", "7");
+    const Z = hash("94");
+    t.koios.spent.add(`${D}#1`);
+    t.koios.addedToAccounts.push(await ownedBox(t, Z));
+    const status = await t.lovejoin.status("preprod");
+    expect(koios.asked).toBe(0);
+    expect(status.unsure).toBeUndefined();
+    expect(status.notMixed).toEqual([]);
+    expect(await asking(t)).toBeUndefined();
+    const held = await t.lovejoin.held("preprod");
+    expect(held).toMatchObject({ boxes: 3, notMixed: 0 });
+    expect(held.unsure).toBeUndefined();
+    // Mix my boxes again doesn't wait for Koios.
+    const again = await t.lovejoin.againBoxes("preprod").catch((e: Error) => e.message);
+    expect(again).not.toEqual(expect.stringContaining("Koios hasn't said"));
+  });
+
   it("counts a deposit paid from the account's address past the first twenty as the account's, by the stake key it carries", async () => {
     const t = await publicFunded();
     const P = hash("be");
