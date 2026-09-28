@@ -1425,9 +1425,11 @@ export class LovejoinService {
       // reserved is still its own.
       await this.reserve(network, chainOwner(), built.chain, undefined, true);
       try {
+        // Its progress last: a write that fails before it leaves nothing that sends the chain, whose record and
+        // reservation then go (independent review L28).
         await wallet.withKeys(async () => {
-          await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
           await session.remove(SESSION_LOVEJOIN_PUBLIC);
+          await session.set(SESSION_LOVEJOIN_SENDING + network, sending);
         });
       } catch (e) {
         await this.release(network, chainOwner()).catch(() => undefined);
