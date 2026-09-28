@@ -1093,7 +1093,9 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
       </p>
       {held && (
         <Callout tone="warn" testId="remove-at-stake">
-          {stake === null ? "Seedelf Wallet couldn't check what's still open, which removing it would leave behind." : "Still open, which removing the wallet leaves behind:"}
+          {stake === null
+            ? "Seedelf Wallet couldn't check what's still open, which removing it would leave behind."
+            : "Still open, which removing the wallet leaves behind:"}
           {!!stake?.length && (
             <ul className="dapp-points">
               {atStakeLines(stake).map((line) => (
