@@ -1429,6 +1429,20 @@ describe("private CIP-30: a site connected to a private session", () => {
 
     // Brought back (the account is empty): disconnecting ends the session, and the site's next connect asks again.
     t.koios.addedToAccounts.splice(0);
+    // Only once Koios shows what the funding and the top-up paid the account spent, not on an empty read
+    // alone (independent review M4).
+    await expect(dapp.forget(s.origin)).rejects.toThrow("Koios hasn't caught up with this session yet");
+    expect(await dapp.sites()).toHaveLength(1);
+    for (const tx of t.koios.submitted) {
+      const outputs = JSON.parse(t.deps.wasm.ogmiosUtxos(Buffer.from(tx).toString("hex"))) as Array<{
+        index: number;
+        address: string;
+      }>;
+      for (const o of outputs.filter((x) => x.address === sessionSwap.address)) {
+        t.koios.addedToAccounts.push(atSession(txIdOf(tx), o.index, "0"));
+        t.koios.spent.add(`${txIdOf(tx)}#${o.index}`);
+      }
+    }
     expect(await dapp.forget(s.origin)).toEqual([]);
     await expect(dapp.call(s, "getBalance", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
     // Nothing on the device says which site had it any more (privacy review §3.12); its index isn't used again.

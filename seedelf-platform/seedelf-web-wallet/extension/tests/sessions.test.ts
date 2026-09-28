@@ -79,6 +79,23 @@ function atSession(tx_hash: string, tx_index: number, value: string, tokens: Arr
   } as KoiosUtxo;
 }
 
+/**
+ * What the first transaction sent, session 0's funding, paid its account,
+ * known to Koios and spent: a test's account holds the recorded swap's UTxO
+ * in their place, and a session ends only once Koios shows them gone
+ * (independent review M4).
+ */
+function fundingSpent(t: Awaited<ReturnType<typeof unlocked>>) {
+  const funding = t.koios.submitted[0];
+  if (!funding) return;
+  const id = txIdOf(funding);
+  builtOutputs(funding).forEach((o, i) => {
+    if (o.address.slice(2, 58) !== sessionSwap.keyHash) return;
+    t.koios.addedToAccounts.push(atSession(id, i, o.lovelace.toString()));
+    t.koios.spent.add(`${id}#${i}`);
+  });
+}
+
 /** Minswap's swap from session 0's funding, as the fake aggregator builds it. */
 const SWAP = swapTx();
 
@@ -369,6 +386,7 @@ describe("a private session", () => {
 
     // The funding lands: the session's account holds it.
     t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
+    fundingSpent(t);
     t.koios.confirmations = 1;
     [view] = await sessions.list("preprod", true);
     expect(view).toMatchObject({ stage: "open", holding: { lovelace: "145790603", tokens: [], utxos: 1 } });
@@ -506,7 +524,8 @@ describe("a private session", () => {
     const out = await sessions.outBuild("preprod", quote);
     await sessions.outSubmit("preprod", out.txHash);
     await sessions.outBuild("preprod", quote);
-    expect(probes()).toEqual([[await reward(0)], [await reward(0)], [await reward(1)]]);
+    // The submit asks about its own again, just before it's sent (independent review M13).
+    expect(probes()).toEqual([[await reward(0)], [await reward(0)], [await reward(0)], [await reward(1)]]);
   });
 
   it("won't sign a swap that spends anything but the session's, or bring a session back with an order waiting", async () => {
@@ -620,6 +639,7 @@ describe("a swap that runs itself", () => {
   function funded(t: T) {
     t.koios.confirmations = 1;
     t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
+    fundingSpent(t);
   }
 
   /** The swap lands: its order waits at the DEX's contract (output 0), and its change is at the account. */
@@ -1587,6 +1607,7 @@ describe("disconnecting a site's session", () => {
     // its index isn't used again.
     t.koios.missing.clear();
     t.koios.addedToAccounts.splice(0);
+    fundingSpent(t);
     await sessions.disconnect("preprod", 0);
     expect(await sessions.list("preprod")).toEqual([]);
     expect(await t.store.get("sessions.preprod")).toEqual({ next: 1, sessions: [] });

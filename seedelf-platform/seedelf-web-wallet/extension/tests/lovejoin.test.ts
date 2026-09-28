@@ -1747,8 +1747,17 @@ describe("mixing from the tile", CHAINS, () => {
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
     expect(view.auto?.step).toBe("returning");
 
-    // Once it's all in and the account is empty, the mix is over; a swap list doesn't show it.
+    // Once it's all in and the account is empty, the mix is over; a swap list doesn't show it. Koios shows
+    // what the funding paid the account spent, whichever outputs those were (independent review M4).
     t.koios.spent.add(`${out.txHash}#0`).add(`${out.txHash}#1`);
+    const stored = await t.store.get<{ sessions: Array<{ txs: Array<{ outs?: string[] }> }> }>("sessions.preprod");
+    for (const o of stored!.sessions[0]!.txs[0]!.outs!) {
+      const [hash, i] = o.split("#");
+      if (!t.koios.addedToAccounts.some((u) => `${u.tx_hash}#${u.tx_index}` === o)) {
+        t.koios.addedToAccounts.push(atSession(hash!, Number(i), "0"));
+      }
+      t.koios.spent.add(o);
+    }
     [view] = await sessions.list("preprod", true);
     expect(view).toMatchObject({ stage: "closed", mix: { boxes: 1 } });
     expect(view!.mix!.skipped).toBeUndefined();
