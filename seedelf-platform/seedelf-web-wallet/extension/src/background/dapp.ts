@@ -776,8 +776,13 @@ export class DappService {
     }
   }
 
-  /** Refuses unless `origin` is still connected on `network`, to `holder`: what a request was read for (independent review L33). */
+  /**
+   * Refuses unless the connector is still on and `origin` still connected on
+   * `network`, to `holder`: what a request was read for. Checked as it's
+   * approved, after the password (independent review L33).
+   */
   private async stillConnected(network: NetworkName, origin: string, holder: Holder): Promise<void> {
+    if (!(await this.deps.preferences.get()).dappConnector) throw refused(OFF);
     const site = await this.site(network, origin);
     if (!site || site.session !== holder?.index) throw refused(DISCONNECTED);
   }

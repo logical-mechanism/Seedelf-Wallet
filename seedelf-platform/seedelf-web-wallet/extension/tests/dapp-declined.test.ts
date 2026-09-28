@@ -165,6 +165,21 @@ describe("approving a site's request", () => {
     expect(await message).toEqual({ code: APIError.Refused, info: DISCONNECTED });
   });
 
+  it("signs nothing once the connector is turned off while the password is checked", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const signing = waitingMessage(t, s);
+    await until(() => t.dapp.approvals().length === 1);
+    // Chrome takes the access away as the password is checked.
+    const check = t.wallet.checkPassword.bind(t.wallet);
+    t.wallet.checkPassword = async (password: string) => {
+      await check(password);
+      await t.preferences.set({ dappConnector: false });
+    };
+    expect(await t.dapp.answer(t.dapp.approvals()[0]!.id, true, PASSWORD)).toEqual({ error: OFF });
+    expect(await signing).toEqual({ code: APIError.Refused, info: OFF });
+  });
+
   it("signs nothing a Lovejoin chain started meanwhile needs, or that the user locked meanwhile", async () => {
     const t = await on();
     const s = await connected(t);
