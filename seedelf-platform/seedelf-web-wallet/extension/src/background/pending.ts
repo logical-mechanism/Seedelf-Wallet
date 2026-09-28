@@ -411,9 +411,11 @@ interface Ahead {
    * What it wrote over, put back as it was if `s` is refused: the watch of
    * a payment settled (a Send taken, watched for its confirmations), when
    * each of its UTxOs another transaction had spent already was spent, and
-   * whether `s` was kept as sent already.
+   * whether `s` was kept as sent already. And when it held its UTxOs back
+   * (`at`): one another transaction spends while Koios is asked stays that
+   * one's.
    */
-  before?: { watched?: Watched; spent: Record<string, number>; sent: boolean };
+  before?: { watched?: Watched; spent: Record<string, number>; sent: boolean; at: number };
 }
 
 /**
@@ -455,8 +457,9 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
         watched: was,
         spent: await spentAt(session, record.inputs!),
         sent: (await recentlySent(session, s.network)).some((t) => t.txHash === s.txHash),
+        at: Date.now(),
       };
-      await rememberSpent(session, s.network, bytes);
+      await rememberSpent(session, s.network, bytes, before.at);
       // Send sends these very bytes again, and asks giveme.my nothing.
       await session.set(s.key, { ...s.kept, sentCbor: s.txCbor });
       if (!unsettled(was)) await session.set(key, record);
@@ -503,7 +506,7 @@ async function undoAhead(deps: PendingDeps, s: Sending, ahead: Ahead): Promise<W
     if (!writtenAhead(cur, record)) return { undone: false, kept: cur };
     // Put back after a lock (restoreNow set its resentAt): what it wrote over went with the lock.
     const before = cur.resentAt === record.resentAt ? ahead.before : undefined;
-    await forgetSpent(session, record.inputs ?? [], before?.spent);
+    await forgetSpent(session, record.inputs ?? [], { before: before?.spent, at: before?.at });
     if (!before?.sent) await forgetSent(session, s.network, s.txHash);
     if (before?.watched) await session.set(key, before.watched);
     else await session.remove(key);

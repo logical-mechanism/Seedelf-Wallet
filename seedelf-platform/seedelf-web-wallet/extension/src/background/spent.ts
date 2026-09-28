@@ -57,16 +57,19 @@ export async function rememberSpent(session: Area, network: NetworkName, tx: Uin
  * Forgets `outpoints`: a transaction that never landed spent nothing
  * (pending.ts). One another transaction had spent already (`before`, from
  * `spentAt` just before this one was remembered) goes back to when that one
- * spent it, and stays (independent review M1). Call it while unlocked.
+ * spent it, and stays (independent review M1). With `at`, when this one was
+ * remembered, one spent again since, by another transaction, is that one's
+ * now, and stays as it is. Call it while unlocked.
  */
 export async function forgetSpent(
   session: Area,
   outpoints: readonly string[],
-  before: Readonly<Record<string, number>> = {},
+  { before = {}, at }: { before?: Readonly<Record<string, number>>; at?: number } = {},
   now = Date.now(),
 ): Promise<void> {
   const spent = await kept(session, now);
   for (const o of outpoints) {
+    if (at !== undefined && spent[o] !== undefined && spent[o] !== at) continue;
     if (before[o] !== undefined) spent[o] = before[o];
     else delete spent[o];
   }

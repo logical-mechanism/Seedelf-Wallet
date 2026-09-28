@@ -263,6 +263,26 @@ describe("a payment refused, beside what was there before it", () => {
     expect((await recentlySent(t.session, "preprod")).map((s) => s.txHash)).not.toContain(summary.txHash);
   });
 
+  it("keeps what another transaction spent of its UTxOs while Koios was asked, and when", async () => {
+    const t = await unlocked();
+    const summary = await pay(t);
+    const [input] = await inputsOf(t);
+    // A site's transaction that spends the same UTxO goes in while this one is asked, and is recorded so.
+    const at = Date.now() + 60_000;
+    whileAsked(
+      t,
+      () =>
+        t.wallet.withKeys(async () => {
+          const spent = (await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {};
+          await t.session.set(SESSION_SPENT, { ...spent, [input!]: at });
+        }),
+      "refused",
+    );
+    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction");
+    expect(await t.session.get(SESSION_SPENT)).toEqual({ [input!]: at });
+    expect(await lastSpentAt(t.session, at)).toBe(at);
+  });
+
   it("leaves the watch of the payment before it, taken and waiting for the chain", async () => {
     const t = await unlocked();
     const first = await pay(t);
