@@ -306,16 +306,16 @@ export async function send(
 }
 
 /**
- * Refuses a kept transaction that spends what a return's chain through
- * Lovejoin being sent will spend (spent.ts reservations): readContract left
- * those out, but only of what was built after the chain started.
+ * Refuses a kept transaction that spends what a chain through Lovejoin being
+ * sent will spend (spent.ts reservations: a session's return, whose last
+ * transaction merges into its funding's change, or a mix from the public
+ * account): readContract leaves those out, but only of what's built after
+ * the chain started.
  */
 async function refuseReserved(deps: ScriptSpendDeps, network: NetworkName, txCbor: string, what: string): Promise<void> {
   const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
   const reserved = await deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true, now: deps.now() }));
   if (inputs.some((o) => reserved.inputs.has(o))) {
-    throw new Error(
-      `That ${what} spends private money a return through Lovejoin, sent since you reviewed it, needs for its last transaction. Review it again.`,
-    );
+    throw new Error(`That ${what} spends a UTxO a chain through Lovejoin, sent since you reviewed it, spends too. Review it again.`);
   }
 }

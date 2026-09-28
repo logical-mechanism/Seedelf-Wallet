@@ -67,7 +67,7 @@ describe("a private spend kept for Send (independent review L18)", () => {
     const { summary, input } = await reviewed(t);
     await reserve(t, { "session:0": { inputs: [input] } });
     await expect(withSigner(t, summary.txHash).submit("preprod", summary.txHash)).rejects.toThrow(
-      "sent since you reviewed it, needs for its last transaction. Review it again.",
+      "spends a UTxO a chain through Lovejoin, sent since you reviewed it, spends too. Review it again.",
     );
     expect(t.koios.submitted).toHaveLength(0);
   });
