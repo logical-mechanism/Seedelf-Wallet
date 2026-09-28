@@ -1647,6 +1647,9 @@ export class DappService {
     const sending = this.submitting.get(key);
     if (sending) return sending;
     if (!this.allow(origin, "submit")) {
+      // One the wallet keeps as sent for this site is sent already: it hears
+      // its id, and Koios isn't asked (final review F12).
+      if (await this.sentFor(origin, network, holder, id)) return id;
       throw new DappError({
         code: TxSendError.Refused,
         info: "This site sends transactions through Seedelf Wallet too often. Try again in a minute.",
@@ -1674,16 +1677,20 @@ export class DappService {
         await this.settle(koios, bytes, id);
         return id;
       }
+      // One the wallet sent for this site and still keeps as sent is a
+      // success, whatever Koios answers it again: in a mempool, it's
+      // refused as spending what it spends itself, though tx_status doesn't
+      // know it yet; a 429, a node Koios couldn't reach, or another
+      // refusal, says nothing of the try the wallet kept. Told it failed,
+      // the site would build the payment again from other UTxOs, and both
+      // could land (independent review M3, final review F12). Nothing new
+      // went out, so nothing more is kept of it.
+      if (await this.sentFor(origin, network, holder, id)) return id;
       // Sent already, by the site itself or an earlier call: that's a
       // success. Nothing new went out, so nothing is kept of it: a site
       // resending old transactions can't fill the wallet's memory of what
-      // it spent (independent review L7). One the wallet sent for this site
-      // and still keeps as sent is too, though tx_status doesn't know it
-      // yet: in a mempool, it's refused as spending what it spends itself.
-      // Told it failed, the site would build the payment again from other
-      // UTxOs, and both could land (independent review M3).
+      // it spent (independent review L7).
       if (e instanceof SpentInputError) {
-        if (await this.sentFor(origin, network, holder, id)) return id;
         const status = await koios.txStatus([id]).catch(() => undefined);
         if (status?.get(id) != null) return id;
       }

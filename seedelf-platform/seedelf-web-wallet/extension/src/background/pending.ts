@@ -48,7 +48,7 @@ import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetSent, recentlySent } from "./sent-txs";
 import { forgetSpent, outpoint, rememberSpent, spentAt } from "./spent";
 import type { Area } from "./storage";
-import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
+import { noteSend, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
 
 /**
  * chrome.storage.session: the submitted transaction being watched, one per
@@ -640,6 +640,15 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         const cur = await session.get<Watched>(key);
         // Past its slot, it can't land whatever happened meanwhile; one sent again and taken meanwhile isn't unseen.
         if (expired ? !ours(cur) : !unchanged(cur)) return { cur };
+        // Unseen, its last try, a minute or two ago, may still have reached a node: when that was stays
+        // the wallet's last send though what it spends is freed, and Lovejoin's withdraws keep away from
+        // it (final review F8). The watch's own tries aren't all: the user's Send again Koios didn't
+        // answer leaves the watch as it was, and only stamps what it spends. Another transaction's
+        // stamp there is a send too. Past its slot, none can land.
+        if (!expired) {
+          const tries = Object.values(await spentAt(session, w.inputs ?? [], now()));
+          await noteSend(session, Math.max(w.resentAt ?? w.submittedAt, ...tries));
+        }
         if (w.inputs) await forgetSpent(session, w.inputs);
         await session.remove(key);
         await forgetReading(session, w);
@@ -658,9 +667,20 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
     const { restored: _restored, ...resent } = w;
     let current: Watched = { ...resent, resentAt: now() };
     let taken = false;
-    // Each time it goes again is the wallet's send, when that may be the one the network takes: Lovejoin's
-    // withdraws keep away from it (lastSpentAt) as from any other, never in the same run (independent review L8).
-    await wallet.withKeys(() => rememberSpent(session, w.network, hexBytes(w.txCbor!), now()));
+    // Only while the watch still holds `w` as it was read before Koios was asked. A lock and an unlock
+    // meanwhile took it, and put it back as sent again just now, or haven't yet: nothing goes out the
+    // moment the wallet unlocks, whoever joins this look (independent review L9, final review F7).
+    const moved = await turn(() =>
+      wallet.withKeys(async () => {
+        const cur = await session.get<Watched>(key);
+        if (!unchanged(cur)) return { cur };
+        // Each time it goes again is the wallet's send, when that may be the one the network takes: Lovejoin's
+        // withdraws keep away from it (lastSpentAt) as from any other, never in the same run (independent review L8).
+        await rememberSpent(session, w.network, hexBytes(w.txCbor!), now());
+        return undefined;
+      }),
+    );
+    if (moved) return moved.cur;
     try {
       if ((await koios.submitTx(hexBytes(w.txCbor))) === w.txHash) {
         // Taken: an ordinary sent transaction from here on.
@@ -751,8 +771,9 @@ export async function settleMaybeSent(deps: PendingDeps, network: NetworkName): 
   const w = await watchedOn(deps, network);
   if (!unsettled(w) || w.network !== network) return;
   await settle(deps, w);
-  // As the watch stands now: another may have gone maybe sent meanwhile.
-  if (unsettled(await deps.wallet.withKeys(() => deps.session.get<Watched>(pendingKey(network))))) throw new Error(MAYBE_SENT_WAIT);
+  // As the watch stands now: another may have gone maybe sent meanwhile, or a lock and an unlock
+  // while Koios was asked took this one, and it's put back first (final review F7).
+  if (unsettled(await watchedOn(deps, network))) throw new Error(MAYBE_SENT_WAIT);
 }
 
 export class PendingService {
