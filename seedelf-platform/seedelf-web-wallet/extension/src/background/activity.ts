@@ -215,7 +215,8 @@ export class ActivityService {
                   : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };
     return this.update(network, (h) => {
       // A return's money came from the session's account, which its fundings paid: it carries what they
-      // spent, as their change does, and is one history with that change (independent review L41).
+      // spent, as their change does, and keeps it should their entries age out. `classes` reads all of a
+      // session's entries as one history (independent review L41).
       const back =
         pending.kind === "session-back" && !isHistoryClass(s.origin) && session
           ? h.entries.filter((e) => e.kind === "session-out" && e.detail === session && isHistoryClass(e.origin)).map((e) => e.origin!)
@@ -233,12 +234,31 @@ export class ActivityService {
    * known, each transaction's Unknown money is a class of its own, so two
    * are kept apart, and merging them is said, as for payments received
    * (independent review L40). With none known, all of it is one Unknown, and
-   * selection picks as the CLI does.
+   * selection picks as the CLI does. A private session's money, what each
+   * of its fundings left and its return, is one class.
    */
   async classes(network: NetworkName, utxos: KoiosUtxo[]): Promise<Map<string, HistoryClass>> {
     const history = await this.deps.store.get<History>(`history.${network}`);
-    const byTx = new Map((history?.entries ?? []).map((e) => [e.txHash, e]));
-    const found = utxos.map((u) => [u, classOf(byTx.get(u.tx_hash), u)] as const);
+    const entries = history?.entries ?? [];
+    const byTx = new Map(entries.map((e) => [e.txHash, e]));
+    // Every funding and top-up of a session paid its account, and its return came from there: on chain, what
+    // each funding's change and the return carry is already one owner's. So they're one history, all of theirs
+    // merged: spending two of them together ties nothing new, and selection takes them together before it
+    // merges anything else (independent review L41).
+    const bySession = new Map<number, HistoryClass[]>();
+    for (const e of entries) {
+      const n = sessionOf(e);
+      if (n === undefined) continue;
+      const classes = bySession.get(n) ?? [];
+      classes.push(classOf(e));
+      bySession.set(n, classes);
+    }
+    const sessions = new Map([...bySession].map(([n, classes]) => [n, merged(classes)]));
+    const of = (e: ActivityEntry | undefined) => {
+      const n = e && sessionOf(e);
+      return n !== undefined ? sessions.get(n)! : classOf(e);
+    };
+    const found = utxos.map((u) => [u, of(byTx.get(u.tx_hash))] as const);
     const known = found.some(([, c]) => c.origin !== "unknown");
     return new Map(
       found.map(([u, c]): [string, HistoryClass] => {
@@ -370,22 +390,29 @@ export class ActivityService {
   }
 }
 
-/** The history of `u`, made by the transaction `entry` records, if any. */
-function classOf(entry: ActivityEntry | undefined, u: KoiosUtxo): HistoryClass {
+/** The private session (from 0) whose funding, top-up or return `entry` records, if it's one: its detail names it. */
+function sessionOf(entry: ActivityEntry): number | undefined {
+  if (entry.kind !== "session-out" && entry.kind !== "session-back") return undefined;
+  const n = /^Private session (\d+)$/.exec(entry.detail ?? "")?.[1];
+  return n ? Number(n) - 1 : undefined;
+}
+
+/** The history of what the transaction `entry` records made, if any. */
+function classOf(entry: ActivityEntry | undefined): HistoryClass {
   if (!entry) return UNKNOWN;
   if (entry.origin && isHistoryClass(entry.origin)) return entry.origin;
   switch (entry.kind) {
     case "move-in":
       return MADE_PRIVATE;
     case "received":
-      return receivedIn(u.tx_hash);
+      return receivedIn(entry.txHash);
     case "lovejoin-withdraw":
-      return boxFrom(u.tx_hash);
+      return boxFrom(entry.txHash);
     case "session-out":
     case "session-back": {
       // Written before `origin` was: the session is in its detail.
-      const n = /^Private session (\d+)$/.exec(entry.detail ?? "")?.[1];
-      return n ? sessionClass(Number(n) - 1) : UNKNOWN;
+      const n = sessionOf(entry);
+      return n !== undefined ? sessionClass(n) : UNKNOWN;
     }
     default:
       // A payment's change from before the history kept where money came from: its inputs aren't known.

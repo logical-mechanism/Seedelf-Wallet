@@ -519,3 +519,40 @@ fn a_funding_change_carrying_a_box_is_still_the_sessions_money() {
     .unwrap();
     assert_eq!(outpoints(&spend.inputs()), outpoints(&[change]));
 }
+
+/// All of a session's money is one class, whatever paid for each funding
+/// (independent review L41): a Send that no single UTxO pays spends the
+/// funding's change and the top-up's together, tying nothing new, before it
+/// merges the user's own money with either.
+#[test]
+fn a_sessions_fundings_changes_are_spent_together_before_anything_is_merged() {
+    let w = world();
+    let own = owned(&w, 0x01, 0, 10 * ADA, &[]);
+    let funding_change = owned(&w, 0x02, 0, 12 * ADA, &[]);
+    let top_up_change = owned(&w, 0x03, 0, 12 * ADA, &[]);
+    let available = [own.clone(), funding_change.clone(), top_up_change.clone()];
+    let session = class(
+        &format!(
+            "box:{}+received:{}+session:3",
+            "aa".repeat(32),
+            "bb".repeat(32)
+        ),
+        Origin::Session,
+    );
+    let h = histories(
+        Purpose::Pay,
+        &[
+            (&own, class("public", Origin::Own)),
+            (&funding_change, session.clone()),
+            (&top_up_change, session),
+        ],
+    );
+    let spend =
+        build::sweep_many_apart(&w.chain, &available, &h, &pay(20 * ADA), &w.owner, w.signer)
+            .unwrap();
+    assert_eq!(
+        outpoints(&spend.inputs()),
+        outpoints(&[funding_change, top_up_change])
+    );
+    assert!(h.merged(&spend.inputs()).is_empty());
+}

@@ -2,7 +2,8 @@
 // (independent review): what a restored wallet's history finds already there
 // is Unknown, not a payment received (L38); money still held never ages out
 // of the history, and Unknown money is kept apart by its transaction (L40); a
-// session's funding change and return carry what paid for the session (L41).
+// session's funding change and return carry what paid for the session, and
+// all of a session's money is one history (L41).
 import { describe, expect, it } from "vitest";
 
 import type { KoiosUtxo } from "../src/background/koios";
@@ -237,5 +238,63 @@ describe("a session's funding change and return (independent review L41)", () =>
     ];
     expect(historiesNote(spentHistories(byOutpoint, both, []))).toBeUndefined();
     expect(historyTags(change)).toEqual(["Back from Lovejoin", `Private session ${n}`]);
+  });
+
+  it("are one history with a top-up's change and the return, however each was paid for", async () => {
+    const t = await unlocked({ owned: false });
+    await t.activity.arrived("preprod", []);
+    const [boxTx, paidTx, fundTx, topUpTx, backTx, ownTx] = ["aa", "bb", "f1", "f2", "5b", "01"].map((h) => h.repeat(32));
+    // Session 3 (the fourth): its funding took box aa alone, its top-up a payment received in bb. Each
+    // funding's change is written with what paid for it (sessions.ts buildFunding).
+    await t.activity.sent("preprod", sent("lovejoin-withdraw", boxTx!), { lovelace: "9710000" });
+    await t.activity.sent("preprod", sent("session-out", fundTx!), {
+      index: 3,
+      lovelace: "2000000",
+      origin: { id: `box:${boxTx}+session:3`, origin: "session" },
+    });
+    await t.activity.sent("preprod", sent("session-out", topUpTx!), {
+      index: 3,
+      lovelace: "2000000",
+      origin: { id: `received:${paidTx}+session:3`, origin: "session" },
+    });
+    await t.activity.sent("preprod", sent("move-in", ownTx!), { lovelace: "10000000" });
+    const c1 = { ...at("f1"), tx_index: 1 };
+    const c2 = { ...at("f2"), tx_index: 1 };
+    const own = at("01");
+
+    // Both changes are one class: on chain, both fundings paid the session's account.
+    const session: HistoryClass = { id: `box:${boxTx}+received:${paidTx}+session:3`, origin: "session" };
+    let classes = await t.activity.classes("preprod", [c1, c2, own]);
+    expect(classes.get(`${fundTx}#1`)).toEqual(session);
+    expect(classes.get(`${topUpTx}#1`)).toEqual(session);
+    expect(classes.get(`${ownTx}#0`)).toEqual({ id: "public", origin: "own" });
+    // So spending the two together is noted as nothing, and never counted as a merge.
+    const byOutpoint = () => Object.fromEntries(classes);
+    const changes = [
+      { txHash: fundTx!, txIndex: 1 },
+      { txHash: topUpTx!, txIndex: 1 },
+    ];
+    expect(spentHistories(byOutpoint(), changes, [])).toEqual([session]);
+    expect(historiesNote(spentHistories(byOutpoint(), changes, []))).toBeUndefined();
+    expect(historyTags(session)).toEqual(["Back from Lovejoin", "Received", "Private session 4"]);
+
+    // Its return, even one written with only the session's class, is the same history.
+    await t.activity.sent("preprod", sent("session-back", backTx!), {
+      index: 3,
+      lovelace: "3000000",
+      origin: { id: "session:3", origin: "session" },
+    });
+    const back = at("5b");
+    classes = await t.activity.classes("preprod", [c1, c2, back]);
+    expect(new Set(classes.values())).toEqual(new Set([session]));
+    const withBack = [...changes, { txHash: backTx!, txIndex: 0 }];
+    expect(historiesNote(spentHistories(byOutpoint(), withBack, []))).toBeUndefined();
+
+    // Another session's money stays apart.
+    const otherTx = "f3".repeat(32);
+    await t.activity.sent("preprod", sent("session-out", otherTx), { index: 4, lovelace: "2000000" });
+    classes = await t.activity.classes("preprod", [c1, { ...at("f3"), tx_index: 1 }]);
+    expect(classes.get(`${otherTx}#1`)).toEqual({ id: "session:4", origin: "session" });
+    expect(classes.get(`${fundTx}#1`)).toEqual(session);
   });
 });
