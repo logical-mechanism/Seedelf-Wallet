@@ -75,6 +75,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       await wallet.create(message.phrase, message.password);
       // What Remove wallet kept of a payment that may still go through: this phrase's is watched again, another's goes.
       await ctx.pending.adoptKept(ctx.networks).catch(() => undefined);
+      // So does a mix from the public account that may have gone through (final review F1).
+      await ctx.lovejoin.adoptKept(ctx.networks).catch(() => undefined);
       return status(ctx);
     case "unlock":
       return wallet.unlock(message.password);
@@ -136,6 +138,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // from its vault: kept now, it outlives the vault, so the next restore
       // is on that network, never mainnet first (independent review L42).
       await ctx.networkChoice.keep(await ctx.networkChoice.get());
+      // A mix from the public account that may have gone through is kept, sealed, as that payment is (final review F1).
+      if ((await wallet.state()) === "unlocked") await ctx.lovejoin.keepOnReset(ctx.networks).catch(() => undefined);
       await wallet.reset();
       // The settings went with it: sites can't connect to a wallet that isn't there.
       await ctx.connector(false).catch(() => false);
@@ -314,8 +318,9 @@ export const RESET_AT_STAKE =
  * with something (independent review M2, M5), from what the wallet keeps,
  * with no Koios request: a payment that may still go through, private
  * sessions whose accounts a restore doesn't find yet, a chain through
- * Lovejoin being sent. A network whose records won't read says so. Throws
- * if locked.
+ * Lovejoin being sent, a mix from the public account that may have gone
+ * through (final review F1). A network whose records won't read says so.
+ * Throws if locked.
  */
 async function atStake(ctx: Context): Promise<AtStake[]> {
   if ((await ctx.wallet.state()) !== "unlocked") throw new Error("The wallet is locked.");
@@ -325,7 +330,10 @@ async function atStake(ctx: Context): Promise<AtStake[]> {
       const maybeSent = await ctx.pending.maybeSentOn(network);
       const sessions = await ctx.sessions.atStake(network);
       const chainSending = await ctx.lovejoin.chainsSending(network);
-      if (maybeSent || sessions.length || chainSending) found.push({ network, ...(maybeSent ? { maybeSent } : {}), sessions, chainSending });
+      const mixMaybeSent = await ctx.lovejoin.publicMaybe(network);
+      if (maybeSent || sessions.length || chainSending || mixMaybeSent) {
+        found.push({ network, ...(maybeSent ? { maybeSent } : {}), sessions, chainSending, ...(mixMaybeSent ? { mixMaybeSent } : {}) });
+      }
     } catch {
       found.push({ network, sessions: [], chainSending: false, unreadable: true });
     }

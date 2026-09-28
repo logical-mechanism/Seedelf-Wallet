@@ -583,6 +583,8 @@ export interface AtStake {
   sessions: Array<{ index: number; kind: "swap" | "mix" | "site"; origin?: string; leftBehind?: boolean }>;
   /** A chain through Lovejoin is still being sent. */
   chainSending: boolean;
+  /** A mix from the public account stopped at a transaction that may have gone through, unsettled yet (final review F1). */
+  mixMaybeSent?: boolean;
   /** What the wallet keeps for this network couldn't be read: what's open there isn't known. */
   unreadable?: boolean;
 }

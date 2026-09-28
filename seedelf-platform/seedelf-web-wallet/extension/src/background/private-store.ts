@@ -5,8 +5,9 @@
 // chrome.storage.local with XChaCha20-Poly1305 under a key derived from the
 // recovery phrase's entropy (Wallet.withStoreKey). They can't be read while
 // the wallet is locked, or by anyone without the phrase, and removing the
-// wallet deletes them, but for a payment that may still go through
-// (`KEPT_ON_RESET`). Each is padded before it's sealed, so its size says
+// wallet deletes them, but for a payment, or a mix from the public account,
+// that may still go through (`KEPT_ON_RESET`). Each is padded before it's
+// sealed, so its size says
 // little of what it holds: how many Lovejoin boxes, how long a history
 // (privacy review §3.13). Whether a record exists still shows.
 
@@ -31,6 +32,8 @@ export const PRIVATE_RECORDS = [
   "sessions.mainnet",
   "lovejoin.preprod",
   "lovejoin.mainnet",
+  "lovejoinMaybe.preprod",
+  "lovejoinMaybe.mainnet",
   "maybeSent.preprod",
   "maybeSent.mainnet",
   "mintedBy.preprod",
@@ -43,9 +46,17 @@ export type RecordName = (typeof PRIVATE_RECORDS)[number];
  * is there only until it's settled. Sealed under the phrase's key, the same
  * phrase restored here puts its watch back, so nothing is paid beside it; a
  * wallet of another phrase can't open it, and deletes it when it's made
- * (pending.ts, independent review M2).
+ * (pending.ts, independent review M2). So is a mix from the public account
+ * stopped at a transaction that may have gone through: no other mix from
+ * the account is built until it's settled (lovejoin.ts keepOnReset, final
+ * review F1).
  */
-export const KEPT_ON_RESET: readonly RecordName[] = ["maybeSent.preprod", "maybeSent.mainnet"];
+export const KEPT_ON_RESET: readonly RecordName[] = [
+  "maybeSent.preprod",
+  "maybeSent.mainnet",
+  "lovejoinMaybe.preprod",
+  "lovejoinMaybe.mainnet",
+];
 
 interface Sealed {
   v: 1;
@@ -85,6 +96,8 @@ const WHAT: Record<RecordName, string> = {
   "sessions.mainnet": "your private sessions",
   "lovejoin.preprod": "your Lovejoin boxes",
   "lovejoin.mainnet": "your Lovejoin boxes",
+  "lovejoinMaybe.preprod": "a mix that may have gone through",
+  "lovejoinMaybe.mainnet": "a mix that may have gone through",
   "maybeSent.preprod": "a payment that may still go through",
   "maybeSent.mainnet": "a payment that may still go through",
   "mintedBy.preprod": "who paid for your Seedelfs",

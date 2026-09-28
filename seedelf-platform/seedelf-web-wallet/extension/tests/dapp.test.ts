@@ -536,7 +536,7 @@ describe("the dApp connector", () => {
       });
     }
     await expect(t.dapp.call(s, "signTx", [siteTx({ inputs: [held!] }), false])).rejects.toMatchObject({
-      failure: { info: `This transaction uses a UTxO (${held}) that a chain still being sent through Lovejoin needs, so the wallet won't sign it: the rest of that chain would be refused. Wait for it to finish, then try again.` },
+      failure: { info: `This transaction uses a UTxO (${held}) that a chain still being sent through Lovejoin needs, or that one which stopped at a transaction that may have gone through still holds, so the wallet won't sign it. Wait for the chain to finish, or for the wallet to learn whether that transaction went (two hours at most), then try again.` },
     });
     expect(t.koios.calls.length).toBe(calls);
     expect(t.dapp.approvals()).toEqual([]);

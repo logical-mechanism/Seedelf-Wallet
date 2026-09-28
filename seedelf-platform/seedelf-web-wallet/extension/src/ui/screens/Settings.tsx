@@ -1004,9 +1004,10 @@ function sessionName(s: AtStake["sessions"][number]): string {
  * each thing on each network (independent review M2, M5). A restore finds
  * the public account, the private balance and Lovejoin's boxes; it doesn't
  * find what private sessions' one-time accounts hold yet, and nothing
- * watches a payment that may still go through until the same phrase is
- * restored here, before any other wallet is made here: that deletes its
- * record (pending.ts adoptKept).
+ * watches a payment that may still go through, or a mix from the public
+ * account that may have, until the same phrase is restored here, before any
+ * other wallet is made here: that deletes its record (pending.ts and
+ * lovejoin.ts adoptKept).
  */
 export function atStakeLines(stake: AtStake[]): string[] {
   return stake.flatMap((s) => {
@@ -1032,6 +1033,11 @@ export function atStakeLines(stake: AtStake[]): string[] {
     }
     if (s.chainSending) {
       lines.push(`${on}: a chain through Lovejoin is still being sent. Removing the wallet stops it partway, its boxes less mixed.`);
+    }
+    if (s.mixMaybeSent) {
+      lines.push(
+        `${on}: a mix from your public account stopped at a transaction that may have gone through. An encrypted record of it stays in this browser: restoring this same recovery phrase here looks for it again before another mix from the account is built, but making or restoring another wallet here first deletes that record. While nothing looks for it, the account could pay for a mix twice.`,
+      );
     }
     return lines;
   });

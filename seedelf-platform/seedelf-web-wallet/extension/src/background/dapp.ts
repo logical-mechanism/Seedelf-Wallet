@@ -1219,8 +1219,10 @@ export class DappService {
    * site's collateral (`getCollateral` offers none meanwhile): a site that
    * flips a signed transaction's validity flag has the network take it, and
    * the chain stops with it (independent review L32). A chain built and kept
-   * for Send holds nothing here, and one that's done or stopped lets go.
-   * Refused before anything is looked up.
+   * for Send holds nothing here, and one that's done or stopped lets go, but
+   * for what a transaction a public mix stopped at, which may have gone
+   * through, spends, until that's settled; never its collateral (lovejoin.ts
+   * holdOnly, final review F2). Refused before anything is looked up.
    *
    * Only the holder's own chain: another's UTxOs aren't this holder's to sign
    * anyway (another account's key, a Seedelf UTxO's proof, a Lovejoin box's),
@@ -1236,7 +1238,7 @@ export class DappService {
     const [first] = used;
     throw new DappError({
       code: TxSignError.ProofGeneration,
-      info: `This transaction uses ${used.length === 1 ? `a UTxO (${first})` : `${used.length} UTxOs (${first} and ${used.length - 1} more)`} that a chain still being sent through Lovejoin needs, so the wallet won't sign it: the rest of that chain would be refused. Wait for it to finish, then try again.`,
+      info: `This transaction uses ${used.length === 1 ? `a UTxO (${first})` : `${used.length} UTxOs (${first} and ${used.length - 1} more)`} that a chain still being sent through Lovejoin needs, or that one which stopped at a transaction that may have gone through still holds, so the wallet won't sign it. Wait for the chain to finish, or for the wallet to learn whether that transaction went (two hours at most), then try again.`,
     });
   }
 
