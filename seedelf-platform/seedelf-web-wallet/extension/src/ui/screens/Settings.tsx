@@ -343,7 +343,9 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
         When a private session comes back with ADA to spare (a token→ADA swap's proceeds count), that ADA goes through
         Lovejoin first, in boxes of 10 ₳ mixed with other people's, so what comes back is harder to tie to the session on
         chain. The session pays for the mixes, and about 0.3 ₳ brings each box back. Its mixes are sent only while the
-        wallet is unlocked: locking partway stops them, and what's left comes back directly.
+        wallet is unlocked: locking partway stops them, and what's left comes back directly. A swap or a mix brings it back
+        by itself; a site's session, or a return you sent from Bring everything back, keeps it at its account until you
+        bring it back.
         {floor > 0 &&
           ` The wallet mixes only once Lovejoin's pool holds ${floor} boxes that aren't yours; until then a return comes back directly, and says so.`}{" "}
         {LOVEJOIN_SEEN}

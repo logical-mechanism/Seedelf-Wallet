@@ -45,9 +45,17 @@ export function lovejoinHides(depth: number): string {
   return `Which box coming out is yours stays one of up to ${3 ** depth} (at ${depth} ${depth === 1 ? "wave" : "waves"} deep), fewer while few people use Lovejoin. Spending boxes that came back together, or with the change the session's funding left, narrows it.`;
 }
 
-/** How far a return's chain through Lovejoin has got, in words. */
-export function chainText(c: NonNullable<SessionView["chain"]>): string {
+/**
+ * How far a return's chain through Lovejoin has got, in words. `byHand`: a
+ * session nothing brings back by itself (no `auto`: a site's, or one brought
+ * back from Bring everything back), whose stopped chain's rest stays at its
+ * account until the user brings it back (independent review L23).
+ */
+export function chainText(c: NonNullable<SessionView["chain"]>, byHand = false): string {
   if (c.cut) return `Stopped after ${c.sent} of ${c.total} transactions; what was left came back directly`;
+  if (c.stopped && byHand) {
+    return `Stopped after ${c.sent} of ${c.total} transactions; once those are on chain, what's left stays at the account until you bring it back`;
+  }
   if (c.stopped) return `Stopped after ${c.sent} of ${c.total} transactions; once those are on chain, what's left comes back directly`;
   if (c.sent < c.total) return `Sending ${c.sent} of ${c.total} transactions`;
   if (c.confirmed < c.total) return `${c.confirmed} of ${c.total} transactions on chain`;

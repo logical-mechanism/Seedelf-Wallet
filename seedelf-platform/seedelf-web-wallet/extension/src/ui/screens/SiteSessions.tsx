@@ -298,7 +298,9 @@ export function SiteSession({
         ))}
         <Row label="Account" value={shortHex(s.address, 16, 8)} title={s.address} />
         <Row label="Started" value={whenOf(s.createdAt, new Date())} />
-        {s.chain && (s.chain.cut || s.chain.confirmed < s.chain.total) && <Row label="Through Lovejoin" value={chainText(s.chain)} />}
+        {s.chain && (s.chain.cut || s.chain.confirmed < s.chain.total) && (
+          <Row label="Through Lovejoin" value={chainText(s.chain, !s.auto)} />
+        )}
       </ReviewRows>
       <div className="field-row">
         <span className="note">The account's address, as the site sees it</span>
