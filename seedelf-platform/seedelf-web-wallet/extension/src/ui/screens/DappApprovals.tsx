@@ -18,6 +18,7 @@ import { call, onDappChanged } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { HistoriesNote } from "../components/HistoriesNote";
+import { PaidRows } from "../components/PaidRows";
 import { Choice } from "../components/Choice";
 import { ExplorerLink } from "../components/ExplorerLink";
 import { GlobeIcon, SpinnerIcon } from "../components/Icons";
@@ -375,8 +376,6 @@ export function ConnectRequest({
   // The funding, built: what goes where, and Send.
   if (review) {
     const [forSite, collateral] = review.payments;
-    const carried = (p: typeof forSite) =>
-      p ? `${formatAda(p.lovelace)} ₳${p.tokens.length ? ` and ${plural(p.tokens.length, "token")}` : ""}` : "";
     return (
       <Screen
         onSubmit={send}
@@ -404,7 +403,7 @@ export function ConnectRequest({
           <ReviewRows testId="dapp-funding-rows">
             <Row label="To" value={`Private session ${review.index + 1}`} strong />
             <Row label="Account" value={shortHex(review.address, 16, 8)} title={review.address} />
-            <Row label="For the site" value={carried(forSite)} strong />
+            <PaidRows label="For the site" paid={forSite} />
             <Row label="Its collateral" value={`${formatAda(collateral?.lovelace ?? "0")} ₳`} />
             <Row label="Network fee" value={`${formatAda(review.fee.total)} ₳`} />
             <Row label="Back to your private balance" value={`${formatAda(review.changeLovelace)} ₳`} />
