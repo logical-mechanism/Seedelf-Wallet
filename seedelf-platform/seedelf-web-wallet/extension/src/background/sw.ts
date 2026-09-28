@@ -11,7 +11,7 @@ import { CoinControlService } from "./coin-control";
 import { Collateral } from "./collateral";
 import { applyConnector } from "./connector";
 import { ContactsService } from "./contacts";
-import { DappError, DappService, type DappSession } from "./dapp";
+import { answerSite, DappError, DappService, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
 import { Koios, KOIOS_LIMIT } from "./koios";
@@ -247,9 +247,10 @@ chrome.storage.local.onChanged.addListener((changes) => {
 });
 
 // The user took the wallet's access to sites away in Chrome's own settings:
-// the connector is off.
+// the connector is off, and nothing a site asked for waits on it.
 chrome.permissions.onRemoved.addListener((removed) => {
   if (!removed.origins?.some((o) => DAPP_ORIGINS.includes(o))) return;
+  void context?.then((ctx) => ctx.dapp.connectorOff()).catch(() => undefined);
   void new PreferencesService(chromeArea(chrome.storage.local))
     .set({ dappConnector: false })
     .then(() => applyConnector(false))
@@ -313,7 +314,8 @@ chrome.runtime.onConnect.addListener((port) => {
     const method = call.method;
     const args = call.args;
     getContext()
-      .then((ctx) => ctx.dapp.call(session, method, args))
+      // A trap under it locks the wallet, as one under answerUi does (dapp.ts).
+      .then((ctx) => answerSite(ctx.dapp, ctx.wallet, session, method, args))
       .then(
         (value) => answer({ id, value }),
         (e: unknown) =>

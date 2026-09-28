@@ -59,6 +59,17 @@ export const READ_METHODS: ReadonlySet<DappMethod> = new Set<DappMethod>([
   "getRewardAddresses",
 ]);
 
+/**
+ * What a call the worker stopped under hears from the bridge. A send may
+ * have gone out already, and a site that sent it again blindly, or built it
+ * again from other UTxOs, could pay twice (independent review M3).
+ */
+export function cutOff(method: DappMethod): string {
+  return method === "submitTx"
+    ? "Seedelf Wallet stopped before answering, and the transaction may have gone through. Check for it on chain before you send it again."
+    : "Seedelf Wallet stopped before answering, so nothing was signed. Try again.";
+}
+
 export const isDappMethod = (m: unknown): m is DappMethod => (DAPP_METHODS as readonly unknown[]).includes(m);
 
 /** A call from the bridge to the worker. */

@@ -356,15 +356,30 @@ pub fn address_hex(bech32: &str) -> Result<String> {
         .to_hex())
 }
 
+/// The most policies and tokens, all together, an amount a dApp asks for may
+/// name: far past any balance a site covers with one call, and each is a few
+/// hundred bytes here, so a site's amount can't run the module out of memory
+/// (independent review M15).
+pub const MAX_VALUE_ENTRIES: usize = 1_000;
+
 /// An amount a dApp asks for (`getUtxos(amount)`, `getCollateral`): a CIP-30
 /// `Value` in hex. Lenient about encodings: definite or indefinite lengths,
-/// and a zero quantity counts as none.
+/// and a zero quantity counts as none. One naming more than
+/// `MAX_VALUE_ENTRIES` policies and tokens is refused as it's read.
 pub fn read_value(value_hex: &str) -> Result<(u64, Vec<Token>)> {
     let bytes = hex::decode(value_hex.trim()).map_err(|_| anyhow!("the amount isn't hex"))?;
     let mut d = minicbor::Decoder::new(&bytes);
     let unreadable = |e: minicbor::decode::Error| anyhow!("the amount isn't a Cardano value: {e}");
     use minicbor::data::Type;
     let mut tokens = Vec::new();
+    let mut entries = 0usize;
+    let mut count = || -> Result<()> {
+        entries += 1;
+        if entries > MAX_VALUE_ENTRIES {
+            bail!("the amount names more than {MAX_VALUE_ENTRIES} tokens");
+        }
+        Ok(())
+    };
     let lovelace = match d.datatype().map_err(unreadable)? {
         Type::Array | Type::ArrayIndef => {
             d.array().map_err(unreadable)?;
@@ -376,6 +391,7 @@ pub fn read_value(value_hex: &str) -> Result<(u64, Vec<Token>)> {
                     d.skip().ok();
                     break;
                 }
+                count()?;
                 let policy = d.bytes().map_err(unreadable)?.to_vec();
                 let names = d.map().map_err(unreadable)?;
                 let mut j = 0;
@@ -384,6 +400,7 @@ pub fn read_value(value_hex: &str) -> Result<(u64, Vec<Token>)> {
                         d.skip().ok();
                         break;
                     }
+                    count()?;
                     let name = d.bytes().map_err(unreadable)?.to_vec();
                     let quantity = d.u64().map_err(unreadable)?;
                     if quantity > 0 {

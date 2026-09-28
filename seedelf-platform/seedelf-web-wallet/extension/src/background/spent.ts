@@ -14,6 +14,11 @@
 // minutes a backend was seen behind: by time, not by count, so a long
 // Lovejoin chain (four inputs a mix, up to 130 mixes) can't push out what
 // another feature spent a minute before it.
+//
+// What sites' own transactions spend, sent through the dApp connector, is
+// kept apart, with a cap of its own (`rememberSiteSpent`): a site resending
+// old transactions, or sending many of its own, never pushes out what the
+// wallet spent itself (independent review L7). Both count everywhere.
 
 import type { NetworkName } from "../networks";
 import { bodyOutpoints, txInputs } from "./cbor";
@@ -28,6 +33,10 @@ export const SESSION_SPENT = "seedelf.spent";
 export const SPENT_KEEP_MS = 2 * 60 * 60_000;
 /** Never more than this many, however many were spent within SPENT_KEEP_MS (about 1 MB). */
 const SPENT_MOST = 10_000;
+/** chrome.storage.session: what sites' transactions sent through the connector spent, and when (ms), apart from the wallet's own. */
+export const SESSION_SPENT_SITES = "seedelf.spent.sites";
+/** Of those, never more than this many, the newest. */
+const SITES_SPENT_MOST = 5_000;
 
 /** The kept record; a list of outpoints from before times were kept counts as spent now. */
 async function kept(session: Area, now: number): Promise<Record<string, number>> {
@@ -51,6 +60,31 @@ export async function rememberSpent(session: Area, network: NetworkName, tx: Uin
   await session.set(SESSION_SPENT, Object.fromEntries(fresh));
   // And the transaction itself, a while: a site on its network may build on its outputs (sent-txs.ts).
   await rememberSent(session, network, tx, now);
+}
+
+/**
+ * Remembers the inputs of a site's own transaction the connector sends
+ * (dapp.ts), apart from what the wallet spent, under a cap of their own:
+ * nothing a site sends pushes the wallet's own out. Not kept among the
+ * wallet's own sends (sent-txs.ts): a site chains on its own from what the
+ * connector keeps for it. Call it while unlocked.
+ */
+export async function rememberSiteSpent(session: Area, tx: Uint8Array, now = Date.now()): Promise<void> {
+  const spent = (await session.get<Record<string, number>>(SESSION_SPENT_SITES)) ?? {};
+  for (const o of txInputs(tx)) spent[o] = now;
+  const fresh = Object.entries(spent)
+    .filter(([, at]) => now - at < SPENT_KEEP_MS)
+    .sort(([, a], [, b]) => a - b)
+    .slice(-SITES_SPENT_MOST);
+  await session.set(SESSION_SPENT_SITES, Object.fromEntries(fresh));
+}
+
+/** Everything spent, the wallet's own and sites', and when: for reading only. */
+async function everySpent(session: Area, now: number): Promise<Record<string, number>> {
+  const sites = (await session.get<Record<string, number>>(SESSION_SPENT_SITES)) ?? {};
+  const own = await kept(session, now);
+  for (const [o, at] of Object.entries(sites)) own[o] = Math.max(own[o] ?? 0, at);
+  return own;
 }
 
 /**
@@ -84,7 +118,7 @@ export async function spentAt(session: Area, outpoints: readonly string[], now =
 
 /** The outpoints spent within SPENT_KEEP_MS. Call it while unlocked. */
 export async function spentSet(session: Area, now = Date.now()): Promise<Set<string>> {
-  const spent = await kept(session, now);
+  const spent = await everySpent(session, now);
   return new Set(Object.keys(spent).filter((o) => now - spent[o]! < SPENT_KEEP_MS));
 }
 
@@ -94,7 +128,7 @@ export async function spentSet(session: Area, now = Date.now()): Promise<Set<str
  * Lovejoin's withdraws keep away from it (lovejoin.ts QUIET_AFTER_SEND_MS).
  */
 export async function lastSpentAt(session: Area, now = Date.now()): Promise<number | undefined> {
-  const at = Object.values(await kept(session, now)).filter((t) => now - t < SPENT_KEEP_MS);
+  const at = Object.values(await everySpent(session, now)).filter((t) => now - t < SPENT_KEEP_MS);
   return at.length ? at.reduce((a, b) => Math.max(a, b)) : undefined;
 }
 

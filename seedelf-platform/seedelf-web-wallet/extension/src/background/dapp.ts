@@ -20,7 +20,16 @@
 //             unlock first, which names the sites waiting. Closing it without
 //             unlocking declines them, and that site's signatures and sends
 //             are refused without asking for a minute, so a dApp that asks
-//             again and again doesn't keep opening it.
+//             again and again doesn't keep opening it: in the words a site
+//             that isn't connected hears unlocked, so they say nothing of
+//             the lock (independent review L36).
+//             A site that isn't connected asks to connect once at a time:
+//             another of its pages' `enable()` has that one's answer. Once
+//             the user says no, or closes the window on it, its `enable()` is
+//             declined unasked for a minute, locked or not. Each site has at
+//             most 5 requests waiting at once, of the window's 20
+//             (independent review L35); its pages' `enable()` calls waiting
+//             for the unlock count once, as they'll share one question.
 // Reading     The account as `readAccountUtxos` finds it (two Koios
 //             requests), kept 30 s: less what the user locked and the
 //             collateral (`getCollateral` gives that one), plus what the
@@ -48,16 +57,26 @@
 //             Another's is left to the stranger's path, never named.
 //             `signData` is CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
-//             and what it spends is remembered (spent.ts).
+//             and what it spends is remembered (spent.ts), apart from what
+//             the wallet spent itself. One already on chain, sent again, is
+//             a success, and leaves nothing behind. One Koios didn't answer
+//             for may land: it's kept as sent, looked for and sent again a
+//             few times, and the site hears its id, never that it failed;
+//             and its id again when it sends it once more, meanwhile or
+//             while the wallet keeps it as sent.
 // Limits      What a site asks for without the user costs the wallet little:
 //             calls at the same time share one reading of the account; a
 //             site gets a few fresh readings, UTxO lookups and submits a
 //             minute (`PER_MINUTE`) and 32 calls running at once; and a
-//             transaction or data over 64 KiB is refused unread. Its
+//             transaction or data over 64 KiB, an amount over 8 KiB or an
+//             address longer than any Cardano's is refused unread. Its
 //             transactions are read one at a time, a few a minute that the
 //             user is never asked about, and none while the window's queue is
 //             full: WebAssembly's reading takes up to half a second, in the
 //             wallet's one queue, which the user's own requests and Lock wait on.
+//             WebAssembly that traps under a site's call, or as the user
+//             approves it, locks the wallet (`answerSite`, `answer`), as
+//             under the wallet's own pages.
 // Private     A site can connect to a private session instead (chunk 15c,
 //             private CIP-30): a one-time account funded from the private
 //             balance (sessions.ts), chosen in the window. The funding is
@@ -68,7 +87,11 @@
 //
 // What sites wait for is kept in memory: a restarted worker has dropped the
 // sites' ports too, so there's nothing to answer. The bridge's pings keep the
-// worker running while the user reads a prompt.
+// worker running while the user reads a prompt. Disconnecting a site
+// declines what it waits for, and turning the connector off, or removing the
+// wallet, declines everything; an approval checks again that the site is
+// still connected to the account it asked of, and what Lovejoin and the
+// user's locks keep apart (independent review L33).
 
 import type { NetworkName } from "../networks";
 import {
@@ -82,16 +105,19 @@ import {
 } from "../shared/dapp";
 import type { DappApproval, DappAsk, DappSite, DappTxSummary, SessionOutSummary, TokenQuantity } from "../shared/rpc";
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
+import { GAP_LIMIT } from "./chain";
 import type { CoinControlService } from "./coin-control";
-import { SpentInputError, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { chainOwner } from "./lovejoin";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
-import { outpoint, rememberSpent, reservedSet, spentSet } from "./spent";
-import { SESSION_BALANCES_PREFIX } from "./wallet";
+import { outpoint, rememberSiteSpent, reservedSet, SPENT_KEEP_MS, spentSet, wait } from "./spent";
+import { SESSION_BALANCES_PREFIX, WASM_BROKEN } from "./wallet";
+import { isTrap } from "./wasm";
 
 /** chrome.storage.session, per network: the account as the connector last read it. */
 export const SESSION_DAPP_VIEW = "seedelf.dapp.view.";
@@ -108,10 +134,16 @@ const INFLIGHT_MS = 10 * 60_000;
 const CHAIN_MS = SENT_KEEP_MS;
 /** Of a signed transaction's outputs, this many are kept for that. */
 const MAX_CHAINED = 64;
-/** After the window is closed while locked, a site's signatures and sends are refused for this long, unasked. */
+/**
+ * After the window is closed while locked, a site's signatures and sends are
+ * refused for this long, unasked; and after the user declines a site's
+ * connect, or closes the window on it, its `enable()` is.
+ */
 const REFUSE_MS = 60_000;
 /** At most this many calls from sites wait for the user at once. */
 const MAX_WAITING = 20;
+/** Of those, at most this many from one site: one can't fill the window's queue for the rest. */
+const MAX_SITE_WAITING = 5;
 /** How often a private session's funding is looked for, once it's sent. */
 const FUNDING_POLL_MS = 10_000;
 /** A funding Koios hasn't seen after this long never reached the chain. */
@@ -124,6 +156,15 @@ const MAX_COLLATERAL = 5_000_000n;
  * raise, as the WebAssembly's own check.
  */
 const MAX_SITE_BYTES = 65_536;
+/**
+ * The longest amount a site may ask `getUtxos` or `getCollateral` to cover,
+ * in hex: a CIP-30 Value naming far more tokens than any balance holds.
+ * Reading a longer one could run WebAssembly out of memory (independent
+ * review M15), so it's refused unread, as a transaction over 64 KiB is.
+ */
+const MAX_AMOUNT_HEX = 16_384;
+/** The longest address a site may ask `signData` to sign for: a Cardano address is under 128 bytes. */
+const MAX_ADDRESS_CHARS = 512;
 /** At most this many of one site's calls run at once, all its pages together; more are refused. */
 const MAX_SITE_CALLS = 32;
 /**
@@ -136,6 +177,13 @@ const MAX_SITE_CALLS = 32;
  * a second of the wallet's queue. Those put in front of the user never count.
  */
 const PER_MINUTE = { fresh: 4, lookup: 6, submit: 10, unprompted: 20 } as const;
+/**
+ * A site's transaction Koios didn't answer for may be on its way: it's
+ * looked for, and sent again, this many times, this far apart, before the
+ * site hears its id (`submitTx`).
+ */
+const SUBMIT_CHECKS = 3;
+const SUBMIT_CHECK_MS = 5_000;
 /** What a site hears when the window's queue is full. */
 const BUSY = "Seedelf Wallet is busy with this site's other requests.";
 
@@ -192,6 +240,9 @@ interface SessionAccount {
 /** Who a connected site talks to: the public account (none), or its private session. */
 type Holder = SessionAccount | undefined;
 
+/** Another of the wallet's accounts a site's transaction touches: the public account, or a private session by index. */
+type Tie = "account" | number;
+
 /** A connected site, as the sealed record keeps it. */
 type Connected = DappSite & { network: NetworkName };
 
@@ -232,10 +283,20 @@ interface Waiting {
   reject: (error: DappError) => void;
   /** What the site hears when the user says no. */
   declined: DappFailure;
+  /** Its page went away before the user answered (`gone`). */
+  gone?: boolean;
+  /**
+   * How it ended, for another page of the same site asking to connect
+   * meanwhile (`enable`): answered (undefined), what the site heard, or
+   * "gone", when its page went away first.
+   */
+  settled?: Promise<DappError | "gone" | undefined>;
 }
 
 interface Unlocking {
   session: DappSession;
+  /** An `enable()`: a site's take one place in the window's queue together (`unlockPlaces`). */
+  enable: boolean;
   resolve: () => void;
   reject: (error: DappError) => void;
 }
@@ -246,6 +307,14 @@ const ALREADY_CONNECTED =
   "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session: it keeps what it already saw.";
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
 const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable() first.";
+/** What a site hears while the connector is off, and what it was waiting for hears once it's turned off. */
+const OFF = "Connecting sites is off in Seedelf Wallet's settings.";
+/** What a site's request hears once the site is disconnected, or connected to another account, while it waited. */
+const DISCONNECTED = "This site was disconnected from Seedelf Wallet, so the request was declined.";
+/** What a site hears when the user says no, or closed the window on it. */
+const DECLINED = "The user declined.";
+/** What a site's call ends with once its page is gone: nobody hears it. */
+const PAGE_GONE = "The page went away.";
 /** What a site asking on the network the wallet left hears, and the window says. */
 const NETWORK_LEFT = "Seedelf Wallet moved to another network in its settings, so this request was declined. Ask again.";
 
@@ -262,10 +331,21 @@ export class DappService {
   private readonly reading = new Map<string, Promise<View>>();
   /** Each site's last transaction being read (`readInTurn`), which its next waits for. */
   private readonly txReads = new Map<string, Promise<unknown>>();
+  /** Sites' transactions being sent (`submitTx`), by network, site and transaction id. */
+  private readonly submitting = new Map<string, Promise<string>>();
   /** The last change to the `dapps` record, which the next waits for (`changeSites`). */
   private sitesQueue: Promise<unknown> = Promise.resolve();
   /** The worker is closing the connector's window (`closeWindow`), not the user. */
   private closing = false;
+  /**
+   * How many of each page's calls are running, by its session id; and the
+   * pages that went away (`gone`) with some still running, until the last
+   * of them ends. Nothing more is asked for those: one was reading a
+   * transaction, say, or waiting on another page's connect question
+   * (independent review L31, L35).
+   */
+  private readonly pageCalls = new Map<string, number>();
+  private readonly gonePages = new Set<string>();
   /**
    * The sites connected on each network, as this worker last read or wrote
    * the sealed `dapps` record: in memory only, never stored. `isEnabled`
@@ -282,12 +362,20 @@ export class DappService {
     const running = this.running.get(origin) ?? 0;
     if (running >= MAX_SITE_CALLS) throw refused(BUSY);
     this.running.set(origin, running + 1);
+    this.pageCalls.set(session.id, (this.pageCalls.get(session.id) ?? 0) + 1);
     try {
       return await this.run(session, method, args);
     } finally {
       const left = (this.running.get(origin) ?? 1) - 1;
       if (left > 0) this.running.set(origin, left);
       else this.running.delete(origin);
+      const page = (this.pageCalls.get(session.id) ?? 1) - 1;
+      if (page > 0) {
+        this.pageCalls.set(session.id, page);
+      } else {
+        this.pageCalls.delete(session.id);
+        this.gonePages.delete(session.id);
+      }
     }
   }
 
@@ -295,7 +383,7 @@ export class DappService {
     const on = (await this.deps.preferences.get()).dappConnector;
     const { origin } = session;
     if (method === "isEnabled" && !on) return false;
-    if (!on) throw refused("Connecting sites is off in Seedelf Wallet's settings.");
+    if (!on) throw refused(OFF);
     if (method === "isEnabled") return this.isEnabled(origin);
     if ((await this.deps.wallet.state()) !== "unlocked") {
       // Which sites are connected is sealed while locked: a read is refused
@@ -307,14 +395,7 @@ export class DappService {
     // The network the wallet is on as this call goes on: a site connected on
     // one isn't on the other, and what it asks is answered, and signed, there.
     const network = await this.deps.network();
-    if (method === "enable") {
-      if (!(await this.connected(network, origin))) {
-        await this.ask(session, network, { kind: "connect", password: await this.needsPassword() }, APIError.Refused, () =>
-          this.connect(network, origin),
-        );
-      }
-      return true;
-    }
+    if (method === "enable") return this.enable(session, network);
     const site = await this.site(network, origin);
     if (!site) throw refused(NOT_CONNECTED);
     const holder = await this.holder(network, site);
@@ -367,6 +448,11 @@ export class DappService {
   ): Promise<{ error?: string }> {
     const asked = this.waiting.find((w) => w.approval.id === id);
     if (!asked) return { error: "The site stopped waiting for this." };
+    // Turned off while it waited: nothing is connected, funded or signed (independent review L33).
+    if (approve && !(await this.deps.preferences.get()).dappConnector) {
+      this.connectorOff();
+      return { error: OFF };
+    }
     const { approval } = asked;
     if (approval.kind === "connect" && approval.funding) return { error: "Its private session is funded already." };
     // Asked on the network the wallet has left: never signed or connected on the one it's on.
@@ -391,6 +477,8 @@ export class DappService {
     const [w] = this.waiting.splice(i, 1);
     this.deps.changed();
     if (!approve) {
+      // A site the user won't connect doesn't ask again for a minute (independent review L35).
+      if (approval.kind === "connect") this.refuseFor(approval.origin);
       w!.reject(new DappError(w!.declined));
       return {};
     }
@@ -398,6 +486,15 @@ export class DappService {
       w!.resolve(await w!.approve());
       return {};
     } catch (e) {
+      // WebAssembly that trapped under it outside the wallet's queue (reading
+      // what a signed transaction pays, say) is broken, not refusing: the
+      // wallet locks, as under a site's call (`answerSite`), and the site
+      // hears only that it wasn't answered (independent review M15).
+      if (isTrap(e)) {
+        w!.reject(new DappError({ code: APIError.InternalError, info: SITE_TRAPPED }));
+        await this.deps.wallet.trapped();
+        return { error: WASM_BROKEN };
+      }
       const error = e instanceof DappError ? e : failed(w!.approval, e);
       w!.reject(error);
       return { error: error.message };
@@ -407,7 +504,11 @@ export class DappService {
   /** The wallet's state changed: an unlock lets the waiting calls on. A removed wallet's sites are forgotten. */
   async stateChanged(): Promise<void> {
     const state = await this.deps.wallet.state();
-    if (state === "no-wallet") this.lastSites.clear();
+    if (state === "no-wallet") {
+      this.lastSites.clear();
+      // The wallet was removed, and the connector with it: nothing waits on it (independent review L33).
+      this.connectorOff();
+    }
     if (!this.unlocking.length || state !== "unlocked") return;
     for (const u of this.unlocking.splice(0)) u.resolve();
     this.deps.changed();
@@ -455,15 +556,16 @@ export class DappService {
         // No window to show them in: they're declined, as if closed.
       }
     }
-    const until = this.deps.now() + REFUSE_MS;
     for (const u of this.unlocking.splice(0)) {
-      this.refusedUntil.set(u.session.origin, until);
+      this.refuseFor(u.session.origin);
       // As a declined request is: nothing more about the wallet.
-      u.reject(refused("The user declined."));
+      u.reject(refused(DECLINED));
     }
     // A private session's funding is sent: it isn't undone, and the site connects once it arrives.
     for (const w of this.waiting.filter((x) => !funding(x))) {
       remove(this.waiting, (x) => x === w);
+      // A connect the window closed on isn't asked again for a minute either (independent review L35).
+      if (w.approval.kind === "connect") this.refuseFor(w.session.origin);
       w.reject(new DappError(w.declined));
     }
   }
@@ -485,12 +587,50 @@ export class DappService {
     this.deps.changed();
   }
 
-  /** A site's page went away: nothing it asked for waits any more. */
+  /**
+   * The connector was turned off (Settings, Chrome's access to sites taken
+   * away, or the wallet removed): everything sites wait for is declined, a
+   * private session's funding waiting for the chain too, whose money stays
+   * on the dApps page (independent review L33).
+   */
+  connectorOff(): void {
+    const unlocking = this.unlocking.splice(0);
+    for (const u of unlocking) u.reject(refused(OFF));
+    if (!this.decline(() => true, OFF) && unlocking.length) this.deps.changed();
+  }
+
+  /** Declines what `which` picks of what's waiting, with `info`, as the user saying no would; whether any was. */
+  private decline(which: (w: Waiting) => boolean, info: string): boolean {
+    const out = this.waiting.filter(which);
+    if (!out.length) return false;
+    remove(this.waiting, (w) => out.includes(w));
+    for (const w of out) w.reject(new DappError({ ...w.declined, info }));
+    this.deps.changed();
+    return true;
+  }
+
+  /**
+   * A site's page went away: nothing it asked for waits any more. Each is
+   * settled, though nobody hears it, so its call ends and gives back its
+   * share of the site's calls (`MAX_SITE_CALLS`): left waiting forever, 32
+   * of them would lock the site out (independent review L31). Its calls
+   * still on their way ask nothing more (`gonePages`). A private session's
+   * funding already sent isn't undone: the site finds itself connected next
+   * time.
+   */
   gone(session: DappSession): void {
-    const before = this.waiting.length + this.unlocking.length;
-    remove(this.waiting, (w) => w.session.id === session.id);
-    remove(this.unlocking, (u) => u.session.id === session.id);
-    if (this.waiting.length + this.unlocking.length !== before) this.deps.changed();
+    if (this.pageCalls.has(session.id)) this.gonePages.add(session.id);
+    const waiting = this.waiting.filter((w) => w.session.id === session.id);
+    const unlocking = this.unlocking.filter((u) => u.session.id === session.id);
+    if (!waiting.length && !unlocking.length) return;
+    remove(this.waiting, (w) => waiting.includes(w));
+    remove(this.unlocking, (u) => unlocking.includes(u));
+    for (const w of waiting) {
+      w.gone = true;
+      w.reject(refused(PAGE_GONE));
+    }
+    for (const u of unlocking) u.reject(refused(PAGE_GONE));
+    this.deps.changed();
   }
 
   /** The sites connected on the network the wallet is on, each with its private session if it has one. Throws if locked. */
@@ -517,6 +657,8 @@ export class DappService {
     const site = await this.site(network, origin);
     if (site?.session !== undefined) await this.deps.sessions.disconnect(network, site.session);
     await this.changeSites((all) => all.filter((s) => !(s.origin === origin && s.network === network)));
+    // What it asked for and the user hasn't answered goes with it (independent review L33).
+    this.decline((w) => w.session.origin === origin && w.network === network, DISCONNECTED);
     return this.sitesOn(network);
   }
 
@@ -527,8 +669,14 @@ export class DappService {
    */
   async disconnectSession(index: number): Promise<void> {
     const network = await this.deps.network();
+    // Read first, so what its site waits for can be declined once it's gone (independent review L33).
+    const origins = await this.sitesOn(network).then(
+      (all) => all.filter((s) => s.session === index).map((s) => s.origin),
+      (): string[] => [],
+    );
     await this.deps.sessions.disconnect(network, index);
     await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === network)));
+    this.decline((w) => origins.includes(w.session.origin) && w.network === network, DISCONNECTED);
   }
 
   /**
@@ -590,6 +738,56 @@ export class DappService {
   }
 
   /**
+   * `enable()`, unlocked: true once the site is connected, which the user is
+   * asked. One question per site at a time (independent review L35):
+   * another of its pages asking meanwhile has that one's answer, and asks
+   * itself only if that page went away first. A site the user declined, or
+   * closed the window on, isn't asked again for a minute.
+   */
+  private async enable(session: DappSession, network: NetworkName): Promise<true> {
+    const { origin } = session;
+    const password = await this.needsPassword();
+    if (await this.connected(network, origin)) return true;
+    // Nothing is awaited from here until it's asked, so two pages can't both ask.
+    const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
+    if (asking) {
+      const settled = await asking.settled;
+      // This page went away too: nothing is asked for it.
+      if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
+      if (settled === "gone") return this.run(session, "enable", []) as Promise<true>;
+      if (settled) throw settled;
+      return true;
+    }
+    if (this.refusing(origin)) throw refused(DECLINED);
+    await this.ask(session, network, { kind: "connect", password }, APIError.Refused, () => this.connect(network, origin));
+    return true;
+  }
+
+  /** The user declined `origin`, or closed the window on it: `REFUSE_MS` of refusals, unasked. */
+  private refuseFor(origin: string): void {
+    this.refusedUntil.set(origin, this.deps.now() + REFUSE_MS);
+  }
+
+  /** Whether `origin` is refused unasked now (`refuseFor`). */
+  private refusing(origin: string): boolean {
+    return this.deps.now() < (this.refusedUntil.get(origin) ?? 0);
+  }
+
+  /**
+   * How many of `origin`'s requests wait for the user: in the window, or for
+   * the unlock, where its pages' `enable()` calls count once together.
+   */
+  private waitingFrom(origin: string): number {
+    const from = (x: { session: DappSession }) => x.session.origin === origin;
+    return this.waiting.filter(from).length + unlockPlaces(this.unlocking.filter(from));
+  }
+
+  /** How many requests wait for the user, every site's, counted as `waitingFrom` does. */
+  private queued(): number {
+    return this.waiting.length + unlockPlaces(this.unlocking);
+  }
+
+  /**
    * Whether `origin` is connected on the network the wallet is on, locked or
    * not: an answer that changed at an unlock would tell a site polling it
    * when the wallet is in use. While locked, the sealed record can't be
@@ -610,6 +808,17 @@ export class DappService {
     } catch {
       throw refused("This site's private session is over. Disconnect it in Seedelf Wallet's settings, then connect it again.");
     }
+  }
+
+  /**
+   * Refuses unless the connector is still on and `origin` still connected on
+   * `network`, to `holder`: what a request was read for. Checked as it's
+   * approved, after the password (independent review L33).
+   */
+  private async stillConnected(network: NetworkName, origin: string, holder: Holder): Promise<void> {
+    if (!(await this.deps.preferences.get()).dappConnector) throw refused(OFF);
+    const site = await this.site(network, origin);
+    if (!site || site.session !== holder?.index) throw refused(DISCONNECTED);
   }
 
   /**
@@ -681,11 +890,25 @@ export class DappService {
   /** Waits for the wallet to be unlocked, in the connector's window. */
   private async unlocked(session: DappSession, method: DappMethod): Promise<void> {
     if ((await this.deps.wallet.state()) === "unlocked") return;
-    const refusedUntil = this.refusedUntil.get(session.origin) ?? 0;
-    if (method !== "enable" && this.deps.now() < refusedUntil) throw refused("Seedelf Wallet is locked.");
-    if (this.unlocking.length + this.waiting.length >= MAX_WAITING) throw refused(BUSY);
+    const { origin } = session;
+    // Refused unasked in the words the site would hear unlocked, never that
+    // the wallet is locked (independent review L36): a signature or a send
+    // hears what a site that isn't connected does; `enable()` from one, that
+    // it was declined. A connected site's `enable()` still opens the window.
+    const known = !!this.lastSites.get(await this.deps.network())?.has(origin);
+    if (this.refusing(origin) && (method !== "enable" || !known)) throw refused(method === "enable" ? DECLINED : NOT_CONNECTED);
+    // Its page went away while this call was on its way: nobody would answer it (independent review L31).
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
+    // Another of its pages' `enable()` waits already: this one shares its
+    // place, as it will its connect question, so a site open in several tabs
+    // is never refused for it (independent review L35).
+    const enable = method === "enable";
+    const shares = enable && this.unlocking.some((u) => u.enable && u.session.origin === origin);
+    if (!shares && (this.queued() >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING)) {
+      throw refused(enable || known ? BUSY : NOT_CONNECTED);
+    }
     let waiter: Unlocking | undefined;
-    const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, resolve, reject })));
+    const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, enable, resolve, reject })));
     try {
       await this.deps.window.show();
     } catch (e) {
@@ -699,13 +922,16 @@ export class DappService {
 
   /** Puts a request in front of the user; `approve` runs if they say yes. */
   private ask<T>(session: DappSession, network: NetworkName, request: DappAsk, declined: number, approve: () => Promise<T>): Promise<T> {
-    if (this.waiting.length >= MAX_WAITING) throw refused(BUSY);
+    // Its page went away while it was read: nobody would answer it (independent review L31).
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
+    if (this.waiting.length >= MAX_WAITING || this.waitingFrom(session.origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     // Random, not a count: a count starts again when the worker restarts, and a
     // window still showing an older request would then answer a new one.
     const approval = { ...request, id: crypto.randomUUID(), origin: session.origin, title: session.title } as DappApproval;
-    const failure: DappFailure = { code: declined, info: "The user declined." };
+    const failure: DappFailure = { code: declined, info: DECLINED };
+    let entry!: Waiting;
     const answered = new Promise<T>((resolve, reject) => {
-      this.waiting.push({
+      entry = {
         approval,
         session,
         network,
@@ -713,8 +939,13 @@ export class DappService {
         resolve: resolve as (value: unknown) => void,
         reject,
         declined: failure,
-      });
+      };
+      this.waiting.push(entry);
     });
+    entry.settled = answered.then(
+      () => undefined,
+      (e: unknown) => (entry.gone ? "gone" : e instanceof DappError ? e : new DappError({ code: APIError.InternalError, info: String(e) })),
+    );
     this.deps.changed();
     this.deps.window.show().catch((e: unknown) => {
       // No window to answer in: the site hears why, rather than waiting.
@@ -831,6 +1062,10 @@ export class DappService {
   private async collateral(network: NetworkName, holder: Holder, params: unknown): Promise<string[] | null> {
     const { collateral } = await this.available(network, holder);
     if (!collateral) return null;
+    // While the account's own Lovejoin chain is being sent, its collateral
+    // backs the chain's mixes, and a site's transaction whose contract fails
+    // would take it: none is offered then (`heldForLovejoin`).
+    if (await this.chainHolds(network, holder, outpoint(collateral.utxo))) return null;
     const amount = (params as { amount?: unknown } | null | undefined)?.amount;
     if (amount !== undefined && amount !== null) {
       const { lovelace } = this.readAmount(amount);
@@ -843,10 +1078,13 @@ export class DappService {
     // CIP-30 passes CBOR; some dApps pass a plain number of lovelace.
     const text = typeof amount === "number" || typeof amount === "bigint" ? cborUint(BigInt(amount)) : amount;
     if (typeof text !== "string") throw invalid("The amount isn't a CBOR value.");
+    if (text.length > MAX_AMOUNT_HEX) throw invalid("The amount is far longer than any Cardano value: Seedelf Wallet reads at most 8 KiB.");
     try {
       const read = JSON.parse(this.deps.wasm.cip30ReadValue(text)) as { lovelace: string; tokens: Wanted["tokens"] };
       return { lovelace: BigInt(read.lovelace), tokens: read.tokens };
     } catch (e) {
+      // WebAssembly that trapped is broken, not refusing: the worker locks the wallet (sw.ts).
+      if (isTrap(e)) throw e;
       throw invalid((e as Error).message);
     }
   }
@@ -973,10 +1211,12 @@ export class DappService {
    * mix for a site on a session. Its next step would be refused as a double
    * spend, and the chain would stop partway, its boxes less mixed. The view
    * leaves those UTxOs out already, but a site can still name one it read
-   * before, or found elsewhere. The chain's collateral may still be put up as
-   * collateral (`getCollateral` gives it on the public account), only never
-   * spent. A chain built and kept for Send holds nothing here, and one that's
-   * done or stopped lets go. Refused before anything is looked up.
+   * before, or found elsewhere. Nor is the chain's collateral put up as a
+   * site's collateral (`getCollateral` offers none meanwhile): a site that
+   * flips a signed transaction's validity flag has the network take it, and
+   * the chain stops with it (independent review L32). A chain built and kept
+   * for Send holds nothing here, and one that's done or stopped lets go.
+   * Refused before anything is looked up.
    *
    * Only the holder's own chain: another's UTxOs aren't this holder's to sign
    * anyway (another account's key, a Seedelf UTxO's proof, a Lovejoin box's),
@@ -986,21 +1226,26 @@ export class DappService {
    * a stranger's does.
    */
   private async heldForLovejoin(network: NetworkName, holder: Holder, inputs: string[], collateral: string[]): Promise<void> {
-    const { wallet, session } = this.deps;
-    const only = chainOwner(holder?.index);
-    const held = await wallet.withKeys(() => reservedSet(session, network, { sending: true, only }));
-    const used = [
-      ...new Set([
-        ...inputs.filter((o) => held.inputs.has(o) || held.collateral.has(o)),
-        ...collateral.filter((o) => held.inputs.has(o)),
-      ]),
-    ];
+    const held = await this.chainHeld(network, holder);
+    const used = [...new Set([...inputs, ...collateral].filter((o) => held.inputs.has(o) || held.collateral.has(o)))];
     if (!used.length) return;
     const [first] = used;
     throw new DappError({
       code: TxSignError.ProofGeneration,
       info: `This transaction uses ${used.length === 1 ? `a UTxO (${first})` : `${used.length} UTxOs (${first} and ${used.length - 1} more)`} that a chain still being sent through Lovejoin needs, so the wallet won't sign it: the rest of that chain would be refused. Wait for it to finish, then try again.`,
     });
+  }
+
+  /** What the holder's own Lovejoin chain being sent will spend and put up (spent.ts's reservations). */
+  private chainHeld(network: NetworkName, holder: Holder): Promise<{ inputs: Set<string>; collateral: Set<string> }> {
+    const { wallet, session } = this.deps;
+    return wallet.withKeys(() => reservedSet(session, network, { sending: true, only: chainOwner(holder?.index) }));
+  }
+
+  /** Whether the holder's own Lovejoin chain being sent needs `o`. */
+  private async chainHolds(network: NetworkName, holder: Holder, o: string): Promise<boolean> {
+    const held = await this.chainHeld(network, holder);
+    return held.inputs.has(o) || held.collateral.has(o);
   }
 
   /**
@@ -1117,8 +1362,8 @@ export class DappService {
     inputs: string[],
     collateral: string[],
     partialSign: boolean,
-  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean }> {
-    if (this.waiting.length >= MAX_WAITING) throw refused(BUSY);
+  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean; view: View; rows: KoiosUtxo[] }> {
+    if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
       throw refused("This site asks too often for signatures Seedelf Wallet can't give. Try again in a minute.");
     }
@@ -1174,7 +1419,7 @@ export class DappService {
         info: "This transaction registers or delegates this private session's stake key, which stays unregistered: its deposit and any rewards would be left behind when the session ends, so the wallet won't sign it. Stake, or delegate your vote, from your public account instead.",
       });
     }
-    return { request, summary, collateralSpent };
+    return { request, summary, collateralSpent, view, rows };
   }
 
   private async signTx(
@@ -1195,19 +1440,33 @@ export class DappService {
       throw invalid("The wallet can't read this transaction.");
     }
     await this.heldForLovejoin(network, holder, inputs, collateral);
-    const { request, summary, collateralSpent } = await this.readInTurn(session.origin, () =>
+    const { request, summary, collateralSpent, view, rows } = await this.readInTurn(session.origin, () =>
       this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign),
     );
     const { wasm, wallet } = this.deps;
+    // For the prompt alone: never refused for it, which would tell the site.
+    // Unchecked, the prompt promises nothing (independent review M12).
+    const ties = await this.ties(network, holder, summary, rows).catch((e: unknown) => {
+      if (isTrap(e)) throw e;
+      return undefined;
+    });
     const ask: DappAsk = {
       kind: "sign-tx",
       partial: partialSign,
-      summary,
+      summary: ties ? { ...summary, paid: summary.paid.map((p, i) => (ties.paid[i] === undefined ? p : { ...p, yours: ties.paid[i] })) } : summary,
       password,
       ...sessionOf(holder),
       ...(collateralSpent ? { collateralSpent } : {}),
+      ...(ties ? { ties: ties.all } : {}),
     };
     return this.ask(session, network, ask, TxSignError.UserDeclined, async () => {
+      // Checked again as it's approved (independent review L33): while it
+      // waited, the site may have been disconnected or moved to another
+      // account, a Lovejoin chain started that needs what it uses, or the
+      // user locked a UTxO it spends.
+      await this.stillConnected(network, session.origin, holder);
+      await this.heldForLovejoin(network, holder, inputs, collateral);
+      await this.keptApart(network, holder, view, inputs, collateral);
       const signed = await wallet.withKeys(
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx,
@@ -1217,6 +1476,52 @@ export class DappService {
       await this.remember(network, holder, signed.summary, (tx as string).trim());
       return signed.witnessSet;
     });
+  }
+
+  /**
+   * Which of the wallet's other accounts a site's transaction pays, or
+   * spends from (the inputs the wallet found), which signing ties on chain
+   * to the account the site sees: for a site on a private session, the
+   * public account (its stake key, and its payment keys in range, as Make
+   * public counts them: destination.ts) and the other sessions; for a site
+   * on the public account, the sessions. By each paid output, and all
+   * together, the public account first. Nothing is asked of anyone for it
+   * (independent review M12).
+   */
+  private async ties(
+    network: NetworkName,
+    holder: Holder,
+    summary: DappTxSummary,
+    rows: KoiosUtxo[],
+  ): Promise<{ paid: Array<Tie | undefined>; all: Tie[] }> {
+    const { wasm, wallet, session, sessions } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const indices = (await sessions.indices(network)).filter((i) => i !== holder?.index);
+    const known = await wallet.withKeys(({ cardano, oneTime }) => ({
+      account: holder
+        ? {
+            payment: new Set(Array.from({ length: GAP_LIMIT }, (_, i) => [cardano.paymentKeyHash(0, i), cardano.paymentKeyHash(1, i)]).flat()),
+            stake: keysOf(wasm, cardano.stakeAddress(net)).stake,
+          }
+        : undefined,
+      sessions: indices.map((index) => ({ index, payment: oneTime.keyHash(index), stake: keysOf(wasm, oneTime.rewardAddress(net, index)).stake })),
+    }));
+    if (known.account) {
+      // And those the last balance reading found past the first 20 (destination.ts).
+      const found = await wallet.withKeys(() => session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network));
+      for (const k of found?.keys ?? []) known.account.payment.add(k);
+    }
+    const whose = (address: string): Tie | undefined => {
+      const { payment, stake } = keysOf(wasm, address);
+      const { account } = known;
+      if (account && ((payment !== undefined && account.payment.has(payment)) || (stake !== undefined && stake === account.stake))) {
+        return "account";
+      }
+      return known.sessions.find((s) => (payment !== undefined && payment === s.payment) || (stake !== undefined && stake === s.stake))?.index;
+    };
+    const paid = summary.paid.map((p) => whose(p.address));
+    const all = [...new Set([...paid, ...rows.map((r) => whose(r.address))].filter((t): t is Tie => t !== undefined))];
+    return { paid, all: all.sort((a, b) => (a === "account" ? -1 : b === "account" ? 1 : a - b)) };
   }
 
   /**
@@ -1274,6 +1579,8 @@ export class DappService {
     password: boolean,
   ): Promise<unknown> {
     if (typeof address !== "string") throw invalid("The address to sign with isn't a string.");
+    // Refused unread, as a transaction over 64 KiB is (independent review M15).
+    if (address.length > MAX_ADDRESS_CHARS) throw invalid("The address to sign with is far longer than any Cardano address.");
     if (typeof payload === "string" && payload.length > 2 * MAX_SITE_BYTES) {
       throw invalid("The data to sign is too long: Seedelf Wallet signs at most 64 KiB.");
     }
@@ -1309,11 +1616,14 @@ export class DappService {
         ...sessionOf(holder),
       },
       DataSignError.UserDeclined,
-      () =>
-        wallet.withKeys(
+      async () => {
+        // Still connected, to the same account, as it's approved (independent review L33).
+        await this.stillConnected(network, session.origin, holder);
+        return wallet.withKeys(
           ({ cardano, oneTime }) =>
             JSON.parse(holder ? wasm.signSessionData(oneTime, request) : wasm.signDappData(cardano, request)) as unknown,
-        ),
+        );
+      },
     );
   }
 
@@ -1325,25 +1635,86 @@ export class DappService {
     } catch {
       throw invalid("The wallet can't read this transaction.");
     }
+    // The site sends it again while the wallet is still sending it (its own
+    // timeout, or Submit pressed twice): that call has the first one's
+    // answer. Sent on its own, it would be refused as spending what the
+    // first just spent, and heard as a failure (independent review M3).
+    const key = `${network} ${origin} ${id}`;
+    const sending = this.submitting.get(key);
+    if (sending) return sending;
     if (!this.allow(origin, "submit")) {
       throw new DappError({
         code: TxSendError.Refused,
         info: "This site sends transactions through Seedelf Wallet too often. Try again in a minute.",
       });
     }
+    const run = this.send(origin, network, holder, bytes, id).finally(() => this.submitting.delete(key));
+    this.submitting.set(key, run);
+    return run;
+  }
+
+  /** Sends a site's transaction through Koios: its id, or what the site hears. */
+  private async send(origin: string, network: NetworkName, holder: Holder, bytes: Uint8Array<ArrayBuffer>, id: string): Promise<string> {
     const koios = this.deps.koios(network);
     try {
       await koios.submitTx(bytes);
     } catch (e) {
-      // Sent already, by the site itself or an earlier call: that's a success.
-      const status = e instanceof SpentInputError ? await koios.txStatus([id]).catch(() => undefined) : undefined;
-      if (status?.get(id) == null) {
-        throw new DappError({ code: TxSendError.Failure, info: (e as Error).message });
+      if (e instanceof KoiosBusyError && e.maybeSent) {
+        // Koios didn't answer, or failed on its side, with the transaction
+        // sent: the node may have taken it (independent review M3). Told it
+        // failed, a site would build the payment again from other UTxOs, and
+        // both could land. So it's kept as sent, what it spends as spent,
+        // and it's looked for and sent again a few times; the site then
+        // hears its id, as for any submit, and follows it on chain.
+        await this.keepSent(origin, network, holder, bytes, id);
+        await this.settle(koios, bytes, id);
+        return id;
       }
+      // Sent already, by the site itself or an earlier call: that's a
+      // success. Nothing new went out, so nothing is kept of it: a site
+      // resending old transactions can't fill the wallet's memory of what
+      // it spent (independent review L7). One the wallet sent for this site
+      // and still keeps as sent is too, though tx_status doesn't know it
+      // yet: in a mempool, it's refused as spending what it spends itself.
+      // Told it failed, the site would build the payment again from other
+      // UTxOs, and both could land (independent review M3).
+      if (e instanceof SpentInputError) {
+        if (await this.sentFor(origin, network, holder, id)) return id;
+        const status = await koios.txStatus([id]).catch(() => undefined);
+        if (status?.get(id) != null) return id;
+      }
+      throw new DappError({ code: TxSendError.Failure, info: (e as Error).message });
     }
+    await this.keepSent(origin, network, holder, bytes, id);
+    return id;
+  }
+
+  /**
+   * Whether the wallet sent `id` for this site's account itself, and keeps
+   * it as sent (`keepSent`): for as long as what it spends is held as spent
+   * (spent.ts). One it sent for another site counts only for that site, as
+   * for building on it (`resolve`). No when that can't be read (locked).
+   */
+  private async sentFor(origin: string, network: NetworkName, holder: Holder, id: string): Promise<boolean> {
+    const since = this.deps.now() - SPENT_KEEP_MS;
+    const signed = await this.signed(network, holder).catch((): Signed[] => []);
+    return signed.some(
+      (s) => s.txHash === id && s.submittedAt !== undefined && s.submittedAt > since && (s.origin === undefined || s.origin === origin),
+    );
+  }
+
+  /**
+   * Keeps a site's transaction as sent: what it spends, and its outputs for
+   * the site's next transaction to build on. Once it's gone out, the site
+   * hears its id whatever happens here: a wallet locked meanwhile has
+   * nothing to keep it in, and telling the site it failed could have it
+   * paid twice.
+   */
+  private async keepSent(origin: string, network: NetworkName, holder: Holder, bytes: Uint8Array, id: string): Promise<void> {
     const { wallet, session, wasm, now } = this.deps;
-    await wallet.withKeys(async () => {
-      await rememberSpent(session, network, bytes);
+    const keep = async () => {
+      // Apart from what the wallet spent itself, under a cap of its own (spent.ts).
+      await rememberSiteSpent(session, bytes);
       const key = SESSION_DAPP_SIGNED + network + suffix(holder);
       const kept = (await session.get<Signed[]>(key)) ?? [];
       // One the wallet didn't sign is kept here too, for this site's next
@@ -1365,8 +1736,55 @@ export class DappService {
       await session.set(key, own.slice(-KEEP_SIGNED));
       // Home reads the account again, to show what the site did.
       await session.remove(SESSION_BALANCES_PREFIX + network);
-    });
-    return id;
+    };
+    await wallet.withKeys(keep).catch(() => undefined);
+  }
+
+  /**
+   * Looks for a site's transaction Koios didn't answer for, and sends it
+   * again, a few times, 5 s apart, until the chain shows it or a submit is
+   * taken. Sending it again is safe: the ledger takes a transaction once. A
+   * refusal says nothing either way (one in a mempool already is refused as
+   * spending what's spent), so the site hears its id whatever this finds.
+   */
+  private async settle(koios: Koios, bytes: Uint8Array<ArrayBuffer>, id: string): Promise<void> {
+    const sleep = this.deps.sleep ?? wait;
+    for (let i = 0; i < SUBMIT_CHECKS; i++) {
+      await sleep(SUBMIT_CHECK_MS);
+      const status = await koios.txStatus([id]).catch(() => undefined);
+      if (status?.get(id) != null) return;
+      try {
+        await koios.submitTx(bytes);
+        return;
+      } catch {
+        // In a mempool already, refused, or Koios still not answering: looked for again.
+      }
+    }
+  }
+}
+
+/** What a site hears when WebAssembly trapped under its request: nothing of the lock that follows. */
+export const SITE_TRAPPED = "Seedelf Wallet couldn't answer this request.";
+
+/**
+ * A site's call, as the worker answers it (sw.ts). WebAssembly that trapped
+ * under it outside the wallet's queue is broken for good (wasm.ts): the
+ * wallet locks, as it does for a trap under one of its own pages' requests
+ * (independent review M15), and the site hears only that it wasn't answered.
+ */
+export async function answerSite(
+  dapp: DappService,
+  wallet: { trapped: () => Promise<void> },
+  session: DappSession,
+  method: DappMethod,
+  args: unknown[],
+): Promise<unknown> {
+  try {
+    return await dapp.call(session, method, args);
+  } catch (e) {
+    if (!isTrap(e)) throw e;
+    await wallet.trapped();
+    throw new DappError({ code: APIError.InternalError, info: SITE_TRAPPED });
   }
 }
 
@@ -1404,6 +1822,16 @@ function remove<T>(list: T[], drop: (item: T) => boolean): void {
   for (let i = list.length - 1; i >= 0; i--) if (drop(list[i]!)) list.splice(i, 1);
 }
 
+/**
+ * The places in the window's queue those waiting for the unlock take: one
+ * each, but a site's `enable()` calls one together, as they share one
+ * connect question once it's unlocked (independent review L35).
+ */
+function unlockPlaces(unlocking: Unlocking[]): number {
+  const enabling = new Set(unlocking.filter((u) => u.enable).map((u) => u.session.origin));
+  return unlocking.filter((u) => !u.enable).length + enabling.size;
+}
+
 /** A transaction's output, as WebAssembly's `ogmiosUtxos` gives it (Ogmios v6). */
 interface OgmiosUtxo {
   transaction: { id: string };
@@ -1421,7 +1849,8 @@ function outputsOf(wasm: AccountDeps["wasm"], txCbor: string): KoiosUtxo[] {
   try {
     // Amounts past 2^53 would lose digits as JSON numbers: read as text.
     rows = JSON.parse(wasm.ogmiosUtxos(txCbor).replace(/:(\d{16,})([,}])/g, ':"$1"$2')) as OgmiosUtxo[];
-  } catch {
+  } catch (e) {
+    if (isTrap(e)) throw e;
     return [];
   }
   return rows.map(({ transaction, index, address, value, datum, datumHash }) => ({
@@ -1461,7 +1890,8 @@ function keysOf(wasm: AccountDeps["wasm"], address: string): { payment?: string;
   let hex: string;
   try {
     hex = wasm.cip30Address(address);
-  } catch {
+  } catch (e) {
+    if (isTrap(e)) throw e;
     return {};
   }
   const kind = Number.parseInt(hex.slice(0, 1), 16);

@@ -18,6 +18,7 @@ import { call, onDappChanged } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { HistoriesNote } from "../components/HistoriesNote";
+import { PaidRows } from "../components/PaidRows";
 import { Choice } from "../components/Choice";
 import { ExplorerLink } from "../components/ExplorerLink";
 import { GlobeIcon, SpinnerIcon } from "../components/Icons";
@@ -26,7 +27,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
-import { certificateLine, paidTo, stakingComesBack, withdrawalLine } from "../dapp";
+import { certificateLine, paidTo, signingTies, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
 import { formatAda, formatQuantity, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { tokenDecimals, tokenText } from "../tokens";
@@ -191,6 +192,7 @@ export function DappApprovals() {
             partial={current.partial}
             session={current.session !== undefined}
             collateralSpent={!!current.collateralSpent}
+            ties={current.ties}
           />
         )}
         {current.kind === "sign-data" && (
@@ -374,8 +376,6 @@ export function ConnectRequest({
   // The funding, built: what goes where, and Send.
   if (review) {
     const [forSite, collateral] = review.payments;
-    const carried = (p: typeof forSite) =>
-      p ? `${formatAda(p.lovelace)} ₳${p.tokens.length ? ` and ${plural(p.tokens.length, "token")}` : ""}` : "";
     return (
       <Screen
         onSubmit={send}
@@ -403,7 +403,7 @@ export function ConnectRequest({
           <ReviewRows testId="dapp-funding-rows">
             <Row label="To" value={`Private session ${review.index + 1}`} strong />
             <Row label="Account" value={shortHex(review.address, 16, 8)} title={review.address} />
-            <Row label="For the site" value={carried(forSite)} strong />
+            <PaidRows label="For the site" paid={forSite} />
             <Row label="Its collateral" value={`${formatAda(collateral?.lovelace ?? "0")} ₳`} />
             <Row label="Network fee" value={`${formatAda(review.fee.total)} ₳`} />
             <Row label="Back to your private balance" value={`${formatAda(review.changeLovelace)} ₳`} />
@@ -549,11 +549,14 @@ export function SignTx({
   partial,
   session,
   collateralSpent,
+  ties,
 }: {
   summary: DappTxSummary;
   partial: boolean;
   session: boolean;
   collateralSpent: boolean;
+  /** The wallet's other accounts it moves money with (independent review M12); undefined when unchecked. */
+  ties?: Array<"account" | number>;
 }) {
   const network = useNetwork();
   const net = BigInt(s.netLovelace);
@@ -657,7 +660,13 @@ export function SignTx({
       )}
       {s.paid.some((p) => p.seedelf === "register") && (
         <Callout tone="privacy" testId="dapp-seedelf-payment">
-          It pays a Seedelf. Nothing on chain says whose, but it comes from your public account in the open.
+          It pays a Seedelf. Nothing on chain says whose, but it comes from{" "}
+          {session ? "this private session's one-time account" : "your public account"} in the open.
+        </Callout>
+      )}
+      {ties && ties.length > 0 && (
+        <Callout tone="warn" testId="dapp-ties">
+          {tiesLine(ties, session)}
         </Callout>
       )}
 
@@ -733,9 +742,11 @@ export function SignTx({
       )}
 
       <Callout tone="privacy" testId="dapp-tx-privacy">
-        {session
-          ? "Signing ties this transaction to the session's one-time account. Your public account and your private balance aren't in it."
-          : "Signing ties this transaction to your public account, as any payment from it. Your private balance isn't in it."}
+        {signingTies(
+          ties,
+          session,
+          s.paid.some((p) => p.seedelf === "register"),
+        )}
       </Callout>
     </>
   );

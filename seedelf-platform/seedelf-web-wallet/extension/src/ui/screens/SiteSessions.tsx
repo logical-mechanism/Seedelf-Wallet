@@ -20,6 +20,7 @@ import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
+import { PaidRows } from "../components/PaidRows";
 import {
   chainText,
   IntoRow,
@@ -443,11 +444,7 @@ function TopUp({
       >
         <ReviewRows testId="top-up-review">
           <Row label="To" value={`Private session ${review.index + 1}`} strong />
-          <Row
-            label="Amount"
-            value={`${formatAda(paid?.lovelace ?? "0")} ₳${paid?.tokens.length ? ` and ${plural(paid.tokens.length, "token")}` : ""}`}
-            strong
-          />
+          <PaidRows label="Amount" paid={paid} />
           {collateral && <Row label="Its collateral" value={`${formatAda(collateral.lovelace)} ₳`} />}
           <Row label="Network fee" value={`${formatAda(review.fee.total)} ₳`} />
           <Row label="Back to your private balance" value={`${formatAda(review.changeLovelace)} ₳`} />
