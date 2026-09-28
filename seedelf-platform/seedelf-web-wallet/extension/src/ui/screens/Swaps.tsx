@@ -206,7 +206,12 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
     if (s.stage === "closed") return { tone: "done", label: "Done" };
     return s.stage === "open" ? { tone: "wait", label: "Open" } : { tone: "live", label: "Running" };
   }
-  if (a.step === "done") return a.filled ? { tone: "done", label: "Done" } : { tone: "off", label: "Stopped" };
+  if (a.step === "done") {
+    // A refunded order isn't a swap done (independent review M18).
+    if (a.refunded) return { tone: "off", label: "Refunded" };
+    if (a.partly) return { tone: "done", label: "Partly filled" };
+    return a.filled ? { tone: "done", label: "Done" } : { tone: "off", label: "Stopped" };
+  }
   if (a.paused) return { tone: "wait", label: "Needs you" };
   if (a.retry) return { tone: "wait", label: "Retrying" };
   return { tone: "live", label: a.stopping ? "Stopping" : "Running" };
@@ -1037,8 +1042,9 @@ export function SwapApproval({
         Send approves all of it: the wallet asks Minswap for an order of at least {amountOf(quote.minAmountOut, get)},
         Minswap builds it, and the wallet places it and brings everything back without asking again. Before it signs, it
         checks that what Minswap built pays only this session, an order for it and Minswap's fee; the order's minimum it
-        can't read, so that's Minswap's to build as asked. If the price moves so that the order can't give that much, it
-        pauses and asks you. Stop is there until it's done.
+        can't read, so that's Minswap's to build as asked. If the price moves before the order is placed, so that it
+        couldn't give that much, it pauses and asks you. An order a DEX refunds comes back with the rest, and the swap's
+        page says it was refunded. Stop is there until it's done.
       </p>
       <p className="note">
         What the swap doesn't use, the collateral and the order's deposit come back with the proceeds. Three transactions,
@@ -1572,7 +1578,7 @@ export function Session({
   // A return brought back by hand, through Lovejoin: its Send button counts the chain's transactions.
   const backSending = useSendingLabel(s.index, busy && !!back?.lovejoin);
   // Once it's coming back, a chain through Lovejoin moves on with every transaction: read its progress from the record.
-  const returning = runs && (s.auto!.step === "returning" || s.auto!.filled || s.auto!.stopping);
+  const returning = runs && (s.auto!.step === "returning" || s.auto!.filled || !!s.auto!.refunded || s.auto!.stopping);
   useSessionsWhile(returning, (all) => {
     const now = all.find((x) => x.index === index);
     if (now) setS(now);
@@ -2011,7 +2017,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const failed = s.stage === "failed";
   // Stopped before any order: the order and its fill never happen.
   const unordered = auto.stopping && !tx("swap");
-  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled);
+  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded);
   const state = (i: number): StepState => {
     if (failed) return i === 0 ? "failed" : "skipped";
     if ((i === 1 || i === 2) && unordered) return "skipped";
@@ -2038,14 +2044,26 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       tx: tx("swap"),
     },
     {
-      title: unordered ? "Nothing to fill" : cancelled ? "Cancelled" : "Filled",
+      title: unordered
+        ? "Nothing to fill"
+        : cancelled
+          ? "Cancelled"
+          : auto.refunded
+            ? "Refunded"
+            : auto.partly
+              ? "Partly filled"
+              : "Filled",
       sub: unordered
         ? "Nothing was ordered"
         : cancelled
           ? "The order's funds back at the account"
-          : auto.filled
-            ? "The proceeds are at the account"
-            : "By a DEX's batcher, usually within a few blocks",
+          : auto.refunded
+            ? "Not filled: the DEX gave the order's funds back to the account"
+            : auto.partly
+              ? "Part of it filled; the DEX gave the rest back. Both are at the account"
+              : auto.filled
+                ? "The proceeds are at the account"
+                : "By a DEX's batcher, usually within a few blocks",
       tx: tx("cancel"),
     },
     {
@@ -2147,6 +2165,11 @@ export function nowLine(s: SessionView): string {
       }
       return "Coming back into your private balance: waiting for the network to confirm it.";
     case "done":
+      // Refunded, the swap didn't happen: never "Done" (independent review M18).
+      if (a.refunded) return "Refunded: the order wasn't filled, so what you swapped is back in your private balance.";
+      if (a.partly) {
+        return "Partly filled: part of the swap went through and the rest was refunded. Both are back in your private balance.";
+      }
       return a.filled ? "Done: the swap is in your private balance." : "Stopped: everything is back in your private balance.";
   }
 }

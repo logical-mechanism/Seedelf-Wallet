@@ -802,8 +802,11 @@ export interface SessionAuto {
   retry?: { at: number; error: string };
   /** The user pressed Stop: any order is cancelled, then everything comes back. */
   stopping: boolean;
-  /** The order was filled. */
+  /** The order was filled: `partly`, part of it (a split route), the rest refunded. */
   filled: boolean;
+  partly?: boolean;
+  /** The order was refunded, none of it filled: what it gave came back (independent review M18). */
+  refunded?: boolean;
   /** The least the user approved receiving. */
   approvedMinOut: string;
   /**

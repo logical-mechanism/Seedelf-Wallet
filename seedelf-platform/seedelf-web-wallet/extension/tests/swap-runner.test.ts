@@ -238,3 +238,87 @@ describe("the least a swap's order asks for (independent review L24)", () => {
     expect(view.auto).toMatchObject({ approvedMinOut: "902083681", placedMinOut: "905450000" });
   });
 });
+
+describe("a swap's order found spent (independent review M18)", () => {
+  /**
+   * Session 0 with its swap landed (`ask`, its order at SWAP_TX#0 and, for a split route, #2), and
+   * the change at the account; the orders are then spent, and `arrived` pays the account.
+   */
+  async function spent(
+    ask: { tokenIn: string; tokenOut: string; amount: string },
+    arrived: Array<ReturnType<typeof atSession>>,
+    split = false,
+  ) {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const now = t.clock.now;
+    const orders = split ? [`${SWAP_TX}#0`, `${SWAP_TX}#2`] : [`${SWAP_TX}#0`];
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [
+            { kind: "out", txHash: "01".repeat(32), at: now, confirmed: true },
+            { kind: "swap", txHash: SWAP_TX, at: now, confirmed: true, orders, minAmountOut: "902083681" },
+          ],
+          swap: { ...ASK, ...ask, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } } },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(
+      atSession(SWAP_TX, 1, "131585414"),
+      ...orders.map((o) => atContract(SWAP_TX, Number(o.split("#")[1]))),
+    );
+    for (const o of orders) t.koios.spent.add(o);
+    t.koios.addedToAccounts.push(...arrived);
+    const view = await sessions.advance("preprod", 0, true);
+    return { t, sessions, view };
+  }
+  const buying = { tokenIn: "lovelace", tokenOut: MIN, amount: "10000000" };
+  const selling = { tokenIn: MIN, tokenOut: "lovelace", amount: "906594100" };
+
+  it("records a refund of an ADA→token order as refunded, not filled: what was asked for never came", async () => {
+    const { t, sessions, view } = await spent(buying, [atSession("aa".repeat(32), 0, "12000000")]);
+    expect(view.auto).toMatchObject({ step: "returning", filled: false, refunded: true });
+    // It all comes back all the same.
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    // The return lands.
+    t.koios.confirmations = 1;
+    t.koios.spent.add(`${SWAP_TX}#1`).add(`${"aa".repeat(32)}#0`);
+    const done = await sessions.advance("preprod", 0, true);
+    expect(done).toMatchObject({ stage: "closed", auto: { step: "done", filled: false, refunded: true } });
+  });
+
+  it("records an ADA→token fill as filled, and a split route with a leg refunded as partly filled", async () => {
+    let { view } = await spent(buying, [atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]])]);
+    expect(view.auto).toMatchObject({ filled: true });
+    expect(view.auto!.refunded).toBeUndefined();
+    expect(view.auto!.partly).toBeUndefined();
+    // One leg filled, for less than the whole asked for; the other gave its ADA back.
+    ({ view } = await spent(
+      buying,
+      [atSession("aa".repeat(32), 0, "2000000", [[MIN, "450000000"]]), atSession("bb".repeat(32), 0, "7000000")],
+      true,
+    ));
+    expect(view.auto).toMatchObject({ filled: true, partly: true });
+  });
+
+  it("tells a token→ADA refund by the token coming back, and a fill by it not", async () => {
+    let { view } = await spent(selling, [atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]])]);
+    expect(view.auto).toMatchObject({ filled: false, refunded: true });
+    ({ view } = await spent(selling, [atSession("aa".repeat(32), 0, "12000000")]));
+    expect(view.auto).toMatchObject({ filled: true });
+    expect(view.auto!.refunded).toBeUndefined();
+    // Half of it back: one leg of a split route refunded.
+    ({ view } = await spent(
+      selling,
+      [atSession("aa".repeat(32), 0, "6000000"), atSession("bb".repeat(32), 0, "2000000", [[MIN, "453297050"]])],
+      true,
+    ));
+    expect(view.auto).toMatchObject({ filled: true, partly: true });
+  });
+});

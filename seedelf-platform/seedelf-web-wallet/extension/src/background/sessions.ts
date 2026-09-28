@@ -201,8 +201,11 @@ interface AutoRecord {
   retry?: { at: number; error: string; tries: number };
   /** When the user pressed Stop. */
   stopping?: number;
-  /** When the runner saw the order filled. */
+  /** When the runner saw the order filled (`partly`: part of it, the rest refunded). */
   filled?: number;
+  partly?: boolean;
+  /** When the runner saw the order refunded: nothing of it filled (independent review M18). */
+  refunded?: number;
   /** When the runner found the funding never reached the chain. */
   failed?: number;
   /**
@@ -1555,14 +1558,19 @@ export class SessionService {
     // in a transaction the session didn't make; a cancel's refund in its own.
     if (!kinds.has("cancel")) {
       const own = new Set(s.txs.map((t) => t.txHash));
+      const arrived = active.filter((r) => !own.has(r.tx_hash));
       // Nothing's here yet: one of them is behind.
-      if (!active.some((r) => !own.has(r.tx_hash))) return;
+      if (!arrived.length) return;
       // Anyone can pay the account, and Minswap may not list a new order yet: what
       // arrived is the fill only once the order itself is spent.
       if (!(await this.ordersSpent(network, s))) return;
-      if (!auto.filled) {
+      if (!auto.filled && !auto.refunded) {
+        // A fill or a refund, told apart by what arrived (independent review M18).
+        const outcome = outcomeOf(s, arrived);
         await this.update(network, s.index, (r) => {
-          r.auto!.filled = now();
+          if (outcome === "refunded") r.auto!.refunded = now();
+          else r.auto!.filled = now();
+          if (outcome === "partly") r.auto!.partly = true;
         });
       }
     } else if (!(await this.ordersSpent(network, s))) {
@@ -2586,6 +2594,8 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     step,
     stopping: !!auto.stopping,
     filled: !!auto.filled,
+    ...(auto.partly ? { partly: true } : {}),
+    ...(auto.refunded ? { refunded: true } : {}),
     approvedMinOut: auto.approved.minAmountOut,
     ...(placedMinOut ? { placedMinOut } : {}),
     ...(auto.paused ? { paused: auto.paused } : {}),
@@ -2593,6 +2603,36 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     ...(auto.unlockWait !== undefined ? { waitsUntil: auto.unlockWait } : {}),
     ...(auto.direct !== undefined ? { direct: auto.direct } : {}),
   };
+}
+
+/**
+ * What a swap's order did, once it's spent, by what arrived at the account
+ * from transactions the session didn't make (`arrived`, independent review
+ * M18). For a token: filled when it came, at least what the order asked
+ * for, and none of what it gave came back; refunded when none of it came;
+ * partly, between the two: a route split between DEXes whose orders went
+ * different ways. For ADA, which every order's deposit brings back filled
+ * or not, by what it gave instead: filled when none came back, refunded
+ * when all of it did, partly between. The least asked for is the landed
+ * copy's own, else the swap's as last sent.
+ */
+function outcomeOf(s: SessionRecord, arrived: KoiosUtxo[]): "filled" | "partly" | "refunded" {
+  const swap = s.swap;
+  if (!swap) return "filled";
+  const got = (id: string) =>
+    arrived
+      .flatMap((u) => u.asset_list ?? [])
+      .filter((a) => a.policy_id + a.asset_name === id)
+      .reduce((sum, a) => sum + BigInt(a.quantity), 0n);
+  const back = swap.tokenIn === "lovelace" ? 0n : got(swap.tokenIn);
+  if (swap.tokenOut !== "lovelace") {
+    const out = got(swap.tokenOut);
+    if (out === 0n) return "refunded";
+    const landed = s.txs.find((t) => t.kind === "swap" && t.confirmed && !t.replaced);
+    return out < BigInt(landed?.minAmountOut ?? swap.minAmountOut) || back > 0n ? "partly" : "filled";
+  }
+  if (back === 0n) return "filled";
+  return back >= BigInt(swap.amount) ? "refunded" : "partly";
 }
 
 /** What a transaction pays anyone but the session: a session from before's own address reads as paid (its stake part is the shared one). */

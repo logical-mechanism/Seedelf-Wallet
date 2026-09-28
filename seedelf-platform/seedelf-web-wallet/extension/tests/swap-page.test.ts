@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SessionView } from "../src/shared/rpc";
 import { NetworkContext } from "../src/ui/network";
-import { Session } from "../src/ui/screens/Swaps";
+import { Session, SwapRow } from "../src/ui/screens/Swaps";
 
 /** A page's text, as a person reads it. */
 function text(element: ReactElement): string {
@@ -63,5 +63,35 @@ describe("a swap's timeline (independent review L24)", () => {
     const line = page(placed);
     expect(line).toContain("Asked for at least 4 tUSDM");
     expect(line).not.toContain("Asked for at least 4.158 tUSDM");
+  });
+});
+
+describe("a swap whose order was refunded (independent review M18)", () => {
+  const over = (auto: Partial<SessionView["auto"]>) =>
+    swapSession({
+      stage: "closed",
+      holding: { lovelace: "0", tokens: [], utxos: 0 },
+      txs: [...swapSession().txs, swapTx, { kind: "back", txHash: "ef".repeat(32), at: 0, confirmed: true }],
+      auto: { step: "done", stopping: false, filled: false, approvedMinOut: "4158000", placedMinOut: "4158000", ...auto },
+    });
+
+  it("never says the swap is done: it says it was refunded, and its tag says so", () => {
+    const refunded = over({ refunded: true });
+    const line = page(refunded);
+    expect(line).toContain("Refunded: the order wasn't filled, so what you swapped is back in your private balance.");
+    expect(line).toContain("Not filled: the DEX gave the order's funds back to the account");
+    expect(line).not.toContain("Done: the swap is in your private balance");
+    expect(line).not.toContain("The proceeds are at the account");
+    const row = text(createElement(SwapRow, { session: refunded, onOpen: () => undefined }));
+    expect(row).toContain("Refunded");
+    expect(row).not.toContain("Done");
+  });
+
+  it("says a swap partly filled went partly through", () => {
+    const partly = over({ filled: true, partly: true });
+    expect(page(partly)).toContain("Partly filled: part of the swap went through and the rest was refunded.");
+    expect(text(createElement(SwapRow, { session: partly, onOpen: () => undefined }))).toContain("Partly filled");
+    // A whole fill reads as before.
+    expect(page(over({ filled: true }))).toContain("Done: the swap is in your private balance.");
   });
 });
