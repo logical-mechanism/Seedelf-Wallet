@@ -1501,10 +1501,12 @@ export class LovejoinService {
             // Its first spends the account (a deposit, or mixing again's first mix): its record says, sealed, that
             // it may have gone before it's first sent, until it's known. A lock or a closed browser before an
             // answer then leaves it looked for, never a mix the account pays for twice (independent review L5).
-            if (i === 0 && sending.next === 0) {
+            const first = i === 0 && sending.next === 0;
+            const mark = async () => {
               await this.chainMarked(network, id, { index: 0, txHash: step.txHash, inputs: txInputs(bytes), at: this.deps.now() });
               marked = true;
-            }
+            };
+            if (first) await mark();
             const tries = { busy: 0, spent: 0, maybeSent };
             // Whether a try may have put it in: sent before, or one Koios didn't answer.
             let reached = maybeSent;
@@ -1535,9 +1537,17 @@ export class LovejoinService {
                   }
                   throw e;
                 }
+                // Every answer so far says it never went (Koios asked the wallet to slow down, say): its mark goes
+                // while it waits, and is back before it's tried again, so a lock meanwhile holds no mix from the
+                // account back for two hours.
+                if (first && marked && !reached) {
+                  await this.chainUnmarked(network, id, step.txHash);
+                  marked = false;
+                }
                 await sleep(wait);
                 // Never after a lock: the wallet may have locked while it waited, and locking stops the chain.
                 await wallet.withKeys(ours);
+                if (first && !marked) await mark();
               }
             }
             if (unsure === i) unsure = undefined;
@@ -1730,6 +1740,14 @@ export class LovejoinService {
     return this.update(network, (s) => {
       const c = s.chains.find((r) => r.id === id);
       if (c && !c.ended && !c.maybe) c.maybe = maybe;
+    });
+  }
+
+  /** Takes chain `id`'s mark on `txHash` back (chainMarked) while it's sent: every answer so far says it never went. */
+  private chainUnmarked(network: NetworkName, id: string, txHash: string): Promise<void> {
+    return this.update(network, (s) => {
+      const c = s.chains.find((r) => r.id === id);
+      if (c && !c.ended && c.maybe?.txHash === txHash) delete c.maybe;
     });
   }
 
