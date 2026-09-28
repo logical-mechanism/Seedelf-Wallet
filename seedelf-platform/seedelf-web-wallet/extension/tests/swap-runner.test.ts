@@ -86,6 +86,64 @@ describe("a swap's copy tx_status doesn't show (independent review L15)", () => 
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
   });
 
+  /**
+   * The copy landed, and the account's listing shows it: the funding is spent and its change is there. utxo_info's
+   * backend is as far behind as tx_status's: it doesn't know the order yet.
+   */
+  function landedUnknown(t: T) {
+    t.koios.spent.add(FUNDING);
+    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"));
+  }
+
+  it("never places a second order when the copy's change is at the account, though utxo_info doesn't know its order yet", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await unansweredOrder(t, sessions);
+    // It was filled too, and Minswap lists nothing.
+    landedUnknown(t);
+    t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
+    const builds = t.minswap.calls.filter((c) => c.path === "build-tx").length;
+    await busy(t, 16 * 60_000);
+    let view = await sessions.advance("preprod", 0, true);
+    expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
+    expect(t.koios.submitted).toHaveLength(2);
+    // Its change is proof it landed: it's the step, whose order is waited on.
+    expect(view.txs.map((x) => [x.kind, !!x.confirmed])).toEqual([
+      ["out", true],
+      ["swap", true],
+    ]);
+    expect(view.auto!.filled).toBe(false);
+
+    // utxo_info catches up: the order is spent, and the fill comes back.
+    t.koios.addedToAccounts.push(atContract(SWAP_TX, 0));
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    view = await sessions.advance("preprod", 0, true);
+    expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
+    expect(view.auto).toMatchObject({ step: "returning", filled: true });
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+  });
+
+  it("Stop waits to cancel a copy whose change is at the account, rather than bring the rest back", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await unansweredOrder(t, sessions);
+    await sessions.stop("preprod", 0);
+    landedUnknown(t);
+    await busy(t, 16 * 60_000);
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => [x.kind, !!x.confirmed])).toEqual([
+      ["out", true],
+      ["swap", true],
+    ]);
+    expect(t.koios.submitted).toHaveLength(2);
+
+    // Minswap lists it: Stop's cancel is asked for.
+    t.minswap.orders = [ORDER];
+    view = await sessions.advance("preprod", 0, true);
+    expect(t.minswap.calls.map((c) => c.path)).toContain("cancel-tx");
+    expect(view.txs.map((x) => x.kind)).not.toContain("back");
+  });
+
   it("is built again, as before, when no order of it is on chain", async () => {
     const t = await unlocked();
     const sessions = signing(t);

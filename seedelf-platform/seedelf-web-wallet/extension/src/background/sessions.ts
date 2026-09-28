@@ -1526,6 +1526,17 @@ export class SessionService {
     const { address, keyHash } = (await this.accounts(network, [s])).get(s.index)!;
     const { listed, rows } = await this.listing(network, keyHash);
     this.seen.set(`${network}:${s.index}`, rows);
+    // A swap copy whose own output (its change) Koios lists at the account is on chain, whatever tx_status and
+    // utxo_info say yet: it's the step, never one to build again or to bring back before its order is done.
+    // This is the listing an order or a return is built on, so the two can't disagree (independent review L15).
+    const shown = new Set(
+      s.txs.filter((t) => t.kind === "swap" && !t.confirmed && listed.some((u) => u.tx_hash === t.txHash)).map((t) => t.txHash),
+    );
+    if (shown.size) {
+      s = await this.update(network, s.index, (r) => {
+        settle(r, shown);
+      });
+    }
     // A copy that went unseen isn't a step taken: its step is taken again.
     const taken = s.txs.filter((t) => !t.replaced);
     const kinds = new Set(taken.map((t) => t.kind));
