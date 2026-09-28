@@ -32,7 +32,7 @@ import { LovejoinService } from "./lovejoin";
 import { chromeArea } from "./storage";
 import { guardedConnector, keepStorageFromSites } from "./storage-access";
 import { serveUi } from "./ui-port";
-import { hasEntropy, Wallet, WASM_BROKEN } from "./wallet";
+import { hasEntropy, noteStart, Wallet, WASM_BROKEN } from "./wallet";
 import { freshWasm, isTrap, loadWasm } from "./wasm";
 
 const extensionOrigin = chrome.runtime.getURL("");
@@ -41,6 +41,11 @@ const extensionOrigin = chrome.runtime.getURL("");
 // Where Chrome won't do it for local storage, the dApp connector stays off.
 const storageProtected = keepStorageFromSites(chrome.storage);
 const connector = guardedConnector(storageProtected, applyConnector);
+
+// A closed browser, or the extension's update, wiped what the wallet
+// remembered of its sends unseen: one before the worker's first start since
+// may have been as late as then (wallet.ts noteStart, independent review M10).
+void noteStart(chromeArea(chrome.storage.session), Date.now()).catch(() => undefined);
 
 const AUTO_LOCK_ALARM = "seedelf.auto-lock";
 /** Wakes a swap that runs itself (sessions.ts), a chain being sent, and Lovejoin boxes waiting to come back, every minute while the wallet is unlocked. */

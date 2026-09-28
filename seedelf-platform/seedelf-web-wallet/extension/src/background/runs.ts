@@ -29,6 +29,11 @@ export interface Alarm {
  * Lovejoin's boxes go last, after every network's other work: none goes back
  * in a run that sent anything else (lovejoin.ts).
  *
+ * A run is long (Koios's reads, a chain a block at a time), and the wallet
+ * can lock and unlock again while it goes on: the rest of it is then the
+ * unlock's run, which sends nothing (independent review L11). What each
+ * service sends checks the unlock time again itself (wallet.ts unlockedAt).
+ *
  * The alarm is decided once, after every network: it goes on if any of them
  * has something running, and stops only if none has and nothing started it
  * meanwhile. A swap or a chain the user sends while a run reads Koios starts
@@ -42,8 +47,11 @@ export async function runNetworks(ctx: Runner, alarm: Alarm, unlock = false): Pr
   }
   const started = alarm.starts();
   const since = Date.now();
+  const unlockedAt = await ctx.wallet.unlockedAt().catch(() => undefined);
+  const relocked = async () => (await ctx.wallet.unlockedAt().catch(() => undefined)) !== unlockedAt;
   let busy = false;
   for (const network of ctx.networks) {
+    if (!unlock && (await relocked())) unlock = true;
     // One network's failure (Koios down, a record that won't open) never stops the other's.
     if (await ctx.sessions.runAll(network, unlock).catch(() => false)) busy = true;
     // A public mix still being sent keeps the alarm going too.
@@ -52,12 +60,14 @@ export async function runNetworks(ctx: Runner, alarm: Alarm, unlock = false): Pr
     if (await ctx.pending.watch(network).catch(() => false)) busy = true;
   }
   for (const network of ctx.networks) {
+    if (!unlock && (await relocked())) unlock = true;
     await ctx.lovejoin.withdrawDue(network, unlock, since).catch(() => undefined);
     // Lovejoin's boxes on their way back keep the alarm going too: each comes
     // back soon after its own due time while the wallet is unlocked, rather
     // than all of them at the next unlock. A minute with nothing due asks
-    // Koios nothing.
-    if ((await ctx.lovejoin.held(network).catch(() => undefined))?.boxes) busy = true;
+    // Koios nothing. So does a withdraw that may have gone through, looked
+    // for and sent again at its time (independent review M11).
+    if (await ctx.lovejoin.returning(network).catch(() => false)) busy = true;
   }
   if (busy) await alarm.start();
   else if (alarm.starts() === started) await alarm.stop();

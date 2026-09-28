@@ -29,7 +29,7 @@ function runner(work: Partial<Record<NetworkName, { swaps?: boolean; mixing?: bo
   const alarm = sessionsAlarm();
   const ctx = {
     networks: ["mainnet", "preprod"],
-    wallet: { state: async () => "unlocked" },
+    wallet: { state: async () => "unlocked", unlockedAt: async () => 1_800_000_000_000 },
     sessions: {
       runAll: vi.fn(async (n: NetworkName) => {
         if (of(n).fails) throw new Error("Koios didn't answer.");
@@ -40,7 +40,7 @@ function runner(work: Partial<Record<NetworkName, { swaps?: boolean; mixing?: bo
     lovejoin: {
       pumpPublic: vi.fn(async (n: NetworkName) => !!of(n).mixing),
       withdrawDue: vi.fn(async () => []),
-      held: vi.fn(async (n: NetworkName) => ({ boxes: of(n).boxes ?? 0 })),
+      returning: vi.fn(async (n: NetworkName) => (of(n).boxes ?? 0) > 0),
     },
     pending: { watch: vi.fn(async (n: NetworkName) => !!of(n).maybeSent) },
   } as unknown as Runner;
