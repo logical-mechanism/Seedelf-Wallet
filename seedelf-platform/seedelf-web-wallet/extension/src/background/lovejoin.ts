@@ -323,6 +323,18 @@ export async function pumpChain(
   }
 }
 
+/**
+ * A chain's progress isn't where it waits anymore, or another chain's is
+ * there in its place: a lock wiped it while a send of it waited (the wallet
+ * may be unlocked again since). Nothing more of it is sent, and nothing of it
+ * is written back; its record says it was cut (independent review L14).
+ */
+export class ChainGone extends Error {
+  constructor() {
+    super(CHAIN_CUT);
+  }
+}
+
 /** The network measured a chain's scripts differently from the wallet: the chain doesn't start. */
 export class LovejoinSkipped extends Error {
   constructor(readonly reason: string) {
@@ -1289,8 +1301,19 @@ export class LovejoinService {
     const { wallet, session } = this.deps;
     const koios = this.deps.koios(network);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    const save = () => wallet.withKeys(() => session.set(SESSION_LOVEJOIN_SENDING + network, sending));
+    const key = SESSION_LOVEJOIN_SENDING + network;
     const id = sending.txs.at(-1)!.txHash;
+    // Its progress is still where it waits, as this chain: a lock since (and an unlock after it) wiped it, or
+    // another chain took its place, and nothing of it is sent or written back (independent review L14). Call it
+    // while unlocked.
+    const ours = async () => {
+      if ((await session.get<SendingPublic>(key))?.txs?.at(-1)?.txHash !== id) throw new ChainGone();
+    };
+    const save = () =>
+      wallet.withKeys(async () => {
+        await ours();
+        await session.set(key, sending);
+      });
     try {
       const done = await pumpChain(
         sending,
@@ -1315,6 +1338,8 @@ export class LovejoinService {
                 const wait = chainRetryMs(i, tries, e);
                 if (wait === undefined) throw e;
                 await sleep(wait);
+                // Never after a lock: the wallet may have locked while it waited, and locking stops the chain.
+                await wallet.withKeys(ours);
               }
             }
             await wallet.withKeys(() => rememberSpent(session, network, bytes, this.deps.now()));
@@ -1332,11 +1357,20 @@ export class LovejoinService {
       );
       if (done) {
         await this.chainEnded(network, id);
-        await wallet.withKeys(() => session.remove(SESSION_LOVEJOIN_SENDING + network));
-        await this.release(network, chainOwner());
+        // What it held, and its progress, go: unless a lock took them already, and something else holds its place.
+        const here = await wallet.withKeys(() => ours().then(() => true, () => false));
+        if (here) {
+          await wallet.withKeys(() => session.remove(key));
+          await this.release(network, chainOwner());
+        }
       }
       return !done;
     } catch (e) {
+      // A lock cut it: whatever holds its place now stays as it is, and its record says it was cut.
+      if (e instanceof ChainGone) {
+        await this.chainEnded(network, id, CHAIN_CUT).catch(() => undefined);
+        throw e;
+      }
       sending.stopped = e instanceof Error ? e.message : String(e);
       await save().catch(() => undefined);
       await this.chainEnded(network, id, sending.stopped).catch(() => undefined);
