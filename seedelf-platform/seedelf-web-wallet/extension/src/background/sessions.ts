@@ -897,16 +897,27 @@ export class SessionService {
     });
   }
 
-  /** Builds another payment into a site's private session: `lovelace` and `tokens`, from the private balance. */
+  /**
+   * Builds another payment into a site's private session: `lovelace` and
+   * `tokens`, from the private balance, and a new 5 ₳ collateral when the
+   * account holds none it can put up (independent review M9). A return takes
+   * everything at the account, its collateral too, and a site's transaction
+   * may spend it: without one the site has none for its contracts, and the
+   * next return can't go through Lovejoin. One a return's chain being sent
+   * will spend doesn't count.
+   */
   async topUpBuild(network: NetworkName, index: number, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
     const s = await this.live(network, index);
     if (!s.site) throw new Error("Only a site's private session takes a top-up.");
-    const { address } = (await this.accounts(network, [s])).get(index)!;
+    const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
+    const held = await this.accountUtxos(network, keyHash);
+    const payments = [{ to: address, lovelace, tokens }];
+    if (!held.some(collateralFits)) payments.push({ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] });
     const { summary, txCbor, seed } = await this.buildFunding(
       network,
       index,
       address,
-      [{ to: address, lovelace, tokens }],
+      payments,
       "Your private balance is empty, so there's nothing to top up with.",
     );
     const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
@@ -1835,8 +1846,9 @@ export class SessionService {
       const collateral = rows.find((u) => collateralFits(u) && u.tx_hash === funding) ?? rows.find(collateralFits);
       let chain: LovejoinChain | undefined;
       if (!collateral) {
-        // Something the account signed spent it (a site's transaction, say): no mix can go, so it comes back
-        // directly, and says so when its spare ADA would have paid for a box.
+        // Something the account signed spent it (a site's transaction, or a return before this one, which takes
+        // it; a top-up puts one back): no mix can go, so it comes back directly, and says so when its spare ADA
+        // would have paid for a box.
         if (record?.mix || spareOf(rows) >= BigInt((await lovejoin.funding(network, 1)).lovelace)) skipped = NO_COLLATERAL;
       } else {
         try {

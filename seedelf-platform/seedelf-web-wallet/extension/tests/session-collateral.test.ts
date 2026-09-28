@@ -1,7 +1,7 @@
 // A private session's own 5 ₳ collateral: what its return's chain through
 // Lovejoin puts up, never a stranger's 5 ₳ its evaluator can't take
-// (independent review L20). The real WebAssembly, a recorded preprod pool,
-// and fakes of Koios.
+// (independent review L20), and put back by a top-up once a return took it
+// (M9). The real WebAssembly, a recorded preprod pool, and fakes of Koios.
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -99,5 +99,37 @@ describe("a return's chain through Lovejoin (independent review L20)", () => {
     const review = await sessions.backBuild("preprod", 0);
     expect(review.lovejoin).toBeUndefined();
     expect(review.lovejoinSkipped).toMatch(/5 ₳ collateral isn't at its account/);
+  });
+});
+
+/** The outputs a built payment makes, as Koios would list them once it lands. */
+function landed(t: Awaited<ReturnType<typeof withSession>>["t"], txCbor: string, txHash: string): KoiosUtxo[] {
+  const outputs = JSON.parse(t.deps.wasm.ogmiosUtxos(txCbor)) as Array<{ index: number; address: string; value: { ada: { lovelace: number } } }>;
+  return outputs
+    .filter((o) => o.address === sessionSwap.address)
+    .map((o) => atSession(txHash, o.index, String(o.value.ada.lovelace)));
+}
+
+describe("a site's session topped up after a return took its collateral (independent review M9)", () => {
+  it("puts back a 5 ₳ collateral with the top-up, so the next return goes through Lovejoin again", CHAINS, async () => {
+    const { t, sessions } = await withSession();
+    // Its collateral's gone: a return took it with everything else (40 ₳ came since), or a site's transaction spent it.
+    t.koios.spent.add(`${"c2".repeat(32)}#1`);
+    const topUp = await sessions.topUpBuild("preprod", 0, "3000000", []);
+    expect(topUp.payments.map((p) => [p.address, p.lovelace])).toEqual([
+      [sessionSwap.address, "3000000"],
+      [sessionSwap.address, "5000000"],
+    ]);
+    const kept = (await t.session.get<{ txCbor: string }>("seedelf.session.top-up"))!;
+    t.koios.addedToAccounts.push(...landed(t, kept.txCbor, topUp.txHash));
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoinSkipped).toBeUndefined();
+    expect(review.lovejoin!.boxes).toBeGreaterThan(0);
+  });
+
+  it("adds none while the account holds a collateral it can put up", CHAINS, async () => {
+    const { sessions } = await withSession();
+    const topUp = await sessions.topUpBuild("preprod", 0, "3000000", []);
+    expect(topUp.payments.map((p) => [p.address, p.lovelace])).toEqual([[sessionSwap.address, "3000000"]]);
   });
 });

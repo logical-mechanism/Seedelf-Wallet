@@ -218,7 +218,10 @@ export function SiteSession({
           busy={busy}
           onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
         />
-        <p className="note">The site stays connected, to an empty account: Top up fills it again.</p>
+        <p className="note">
+          The site stays connected, to an empty account: Top up fills it again, with a new 5 ₳ collateral when the account has
+          none left.
+        </p>
         <ReturnLinks back={back} />
       </Screen>
     );
@@ -421,7 +424,7 @@ function TopUp({
   }
 
   if (review) {
-    const [paid] = review.payments;
+    const [paid, collateral] = review.payments;
     return (
       <Screen
         title="Review the top-up"
@@ -443,9 +446,17 @@ function TopUp({
             value={`${formatAda(paid?.lovelace ?? "0")} ₳${paid?.tokens.length ? ` and ${plural(paid.tokens.length, "token")}` : ""}`}
             strong
           />
+          {collateral && <Row label="Its collateral" value={`${formatAda(collateral.lovelace)} ₳`} />}
           <Row label="Network fee" value={`${formatAda(review.fee.total)} ₳`} />
           <Row label="Back to your private balance" value={`${formatAda(review.changeLovelace)} ₳`} />
         </ReviewRows>
+        {collateral && (
+          <p className="note" data-testid="top-up-collateral">
+            The account has no collateral left: a return took it, or a site's transaction spent it. This puts back 5 ₳, which
+            the site puts up for its contracts and a return through Lovejoin needs for its mixes. It comes back with the
+            session's next return.
+          </p>
+        )}
         <Callout tone="privacy">
           This payment links the private UTxOs it spends to the session's account, as its funding did.
         </Callout>
