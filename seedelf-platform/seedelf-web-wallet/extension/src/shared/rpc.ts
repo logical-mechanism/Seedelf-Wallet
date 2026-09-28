@@ -1073,11 +1073,26 @@ export interface LovejoinStatus {
   due: number[];
   /**
    * Its boxes a chain of its own made and didn't finish mixing (a chain cut
-   * by a lock, a closed browser or a failed send): they never come back by
-   * themselves, since each still shows where it went in. Mix my boxes again
-   * takes them first; bringing one back takes `anyway`.
+   * by a lock, a closed browser or a failed send), or, after a restore, that
+   * a deposit made, as Koios said: they never come back by themselves, since
+   * each still shows where it went in. Mix my boxes again takes them first;
+   * bringing one back takes `anyway`.
    */
   notMixed: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Of `notMixed`, listed last: boxes after a restore, with no record of the
+   * chain that made them, whose making Koios hasn't said of yet. Held until
+   * it does, as a deposit's are: the wallet asks again at a later pool read
+   * (independent review M14).
+   */
+  unsure?: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Of `notMixed`: boxes after a restore, with no record of the chain that
+   * made them, that Koios said a deposit made. Whose deposit it was, and why
+   * no mix followed it, the wallet can't know, so they're never said to be
+   * the user's deposit or a stopped chain's (independent review M14).
+   */
+  deposits?: Array<{ txHash: string; txIndex: number }>;
   /**
    * Its boxes a mix from the public account put where they are: the
    * account's, which paid for it in the open. Mixed again, the account pays,
@@ -1108,13 +1123,16 @@ export interface LovejoinChainView {
  * The boxes on their way back, as this device's schedule has them (no pool
  * read): how many, what they hold, and when the next is due (ms), for Home.
  * `notMixed`: how many the last pool read found not mixed yet (they wait for
- * Mix my boxes again); `stopped`: how many chains stopped partway.
+ * Mix my boxes again); `unsure`: of those, how many only because Koios
+ * hasn't said yet how they went in, after a restore (independent review
+ * M14); `stopped`: how many chains stopped partway.
  */
 export interface LovejoinHeld {
   boxes: number;
   lovelace: string;
   next: number | null;
   notMixed: number;
+  unsure?: number;
   stopped: number;
 }
 

@@ -13,7 +13,7 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService } from "../src/background/lovejoin";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
-import { koiosPreprod, loadTestWasm, testBalances, vectors } from "./fakes";
+import { koiosPreprod, loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
 import { atSession, funded, signing, started, unlocked as swapWallet } from "./swap-session";
 
 const PASSWORD = "correct horse battery";
@@ -52,6 +52,8 @@ async function boxDue() {
   const wasm = loadTestWasm();
   const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
   const box = { ...POOL[0]!, tx_hash: "e1".repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
+  // Someone else's mix moved it: Koios says so, as the wallet asks before it takes a box no record accounts for (M14).
+  madeByMix(t.koios, box.tx_hash);
   const unlockedAt = t.clock.now - HOUR;
   await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, unlockedAt));
   // Home's first reading, kept, before the box's pool is listed.

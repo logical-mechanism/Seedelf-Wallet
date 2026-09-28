@@ -120,6 +120,12 @@ export interface KoiosTxOut {
   asset_list: Array<{ policy_id: string; asset_name: string; quantity: string }> | null;
 }
 
+/** What a transaction spent: `tx_info`'s inputs, each where it sat (`cred`: its payment key or script hash, hex). */
+export interface KoiosTxSpends {
+  tx_hash: string;
+  inputs: Array<{ payment_addr: { bech32: string; cred?: string | null } }> | null;
+}
+
 /** A stake key's standing: `account_info`. No row at all means it was never registered. */
 export interface KoiosAccountInfo {
   stake_address: string;
@@ -214,6 +220,9 @@ export const CREDENTIALS_PER_REQUEST = 75;
 
 /** Outpoints in one `utxo_info` request: each is about 70 bytes, under the same 5,120-byte cap. */
 export const REFS_PER_REQUEST = 60;
+
+/** Transactions in one `tx_info` request for their inputs alone, as Activity asks 20 at a time for the rest. */
+export const TXS_PER_REQUEST = 20;
 
 export class KoiosError extends Error {}
 
@@ -413,6 +422,30 @@ export class Koios {
       _scripts: false,
       _bytecode: false,
     });
+  }
+
+  /**
+   * What each transaction spent, its inputs alone (`tx_info`): nothing of
+   * their datums, scripts, tokens or metadata. At most `TXS_PER_REQUEST` go
+   * in a request. A transaction Koios doesn't know has no row.
+   */
+  async txSpends(txHashes: string[]): Promise<KoiosTxSpends[]> {
+    const rows: KoiosTxSpends[] = [];
+    for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
+      rows.push(
+        ...(await this.post<KoiosTxSpends>("tx_info", {
+          _tx_hashes: txHashes.slice(i, i + TXS_PER_REQUEST),
+          _inputs: true,
+          _metadata: false,
+          _assets: false,
+          _withdrawals: false,
+          _certs: false,
+          _scripts: false,
+          _bytecode: false,
+        })),
+      );
+    }
+    return rows;
   }
 
   /** A stake key's standing; undefined when it was never registered. */

@@ -35,6 +35,7 @@ import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
 import type { SwapAsk } from "../src/shared/rpc";
+import { NETWORKS } from "../src/networks";
 import { txIdOf } from "./fixtures/cbor";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
 
@@ -193,6 +194,8 @@ export interface FakeKoios {
   stakes: Map<string, KoiosAccountInfo>;
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
+  /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
+  txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null } }>>;
   /** Stake addresses some address has used, as far as `account_addresses` goes: one-time accounts used before, say. */
   usedStakes: Set<string>;
   /** The slot of the newest block, as `tip` answers. */
@@ -203,6 +206,16 @@ export interface FakeKoios {
 export const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 ) as unknown[];
+
+/**
+ * Koios says a mix made each of `txs` (tx_info: one of its inputs sat at
+ * Lovejoin's mix_box): a box of the wallet's that someone else's mix moved,
+ * whose making the wallet asks of before it takes it (independent review M14).
+ */
+export function madeByMix(koios: Pick<FakeKoios, "txSpends">, ...txs: string[]): void {
+  const input = { payment_addr: { bech32: "addr_test1", cred: NETWORKS.preprod.lovejoin!.mixBox } };
+  for (const tx of txs) koios.txSpends.set(tx, [input]);
+}
 
 /** A fetch that answers from the fixtures, paging like Koios does. */
 export function fakeKoios({ owned = true } = {}): FakeKoios {
@@ -218,6 +231,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     addedToAccounts: [],
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     txExtras: new Map(),
+    txSpends: new Map(),
     usedStakes: new Set(),
     tip: 0,
     fetch: async (url, init) => {
@@ -268,9 +282,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         const after = body._after_block_height;
         rows = after === undefined ? all : all.filter((t) => t.block_height > after);
       } else if (path === "tx_info") {
-        rows = activityPreprod.tx_info
-          .filter((t) => body._tx_hashes.includes(t.tx_hash))
-          .map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) }));
+        rows = [
+          ...activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash)).map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) })),
+          ...[...fake.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
+        ];
       } else if (path === "utxo_info") {
         // Any UTxO the fixtures know, spent or not, as Koios answers.
         const refs: string[] = body._utxo_refs;
