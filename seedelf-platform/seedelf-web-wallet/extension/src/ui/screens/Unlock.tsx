@@ -164,7 +164,8 @@ export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s
         Without the password, the only way back in is your recovery phrase. This deletes the wallet from this browser,
         then you restore it from the phrase and choose a new password. The phrase brings back your public account, your
         private balance and your Lovejoin boxes. What private sessions' one-time accounts hold doesn't show after a
-        restore yet.
+        restore yet. If a payment may still go through, an encrypted record of it stays in this browser: restoring this
+        same phrase here watches it again, and making or restoring another wallet deletes that record.
       </p>
       <Callout tone="warn">
         If you don't have your recovery phrase, stop here. Deleting the wallet without it loses your funds for good.

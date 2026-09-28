@@ -1003,7 +1003,8 @@ function sessionName(s: AtStake["sessions"][number]): string {
  * the public account, the private balance and Lovejoin's boxes; it doesn't
  * find what private sessions' one-time accounts hold yet, and nothing
  * watches a payment that may still go through until the same phrase is
- * restored here.
+ * restored here, before any other wallet is made here: that deletes its
+ * record (pending.ts adoptKept).
  */
 export function atStakeLines(stake: AtStake[]): string[] {
   return stake.flatMap((s) => {
@@ -1012,7 +1013,7 @@ export function atStakeLines(stake: AtStake[]): string[] {
     if (s.unreadable) lines.push(`${on}: Seedelf Wallet couldn't read what's still open there.`);
     if (s.maybeSent) {
       lines.push(
-        `${on}: a payment Koios didn't answer may still go through. Nothing watches it until the same recovery phrase is restored in this browser, and a payment made meanwhile, here or elsewhere, could pay twice.`,
+        `${on}: a payment Koios didn't answer may still go through. An encrypted record of it stays in this browser: restoring this same recovery phrase here watches it again, but making or restoring another wallet here first deletes that record. While nothing watches it, a payment made here or elsewhere could pay twice.`,
       );
     }
     const open = s.sessions.filter((x) => !x.leftBehind);

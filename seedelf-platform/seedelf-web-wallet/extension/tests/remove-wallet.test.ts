@@ -211,7 +211,7 @@ describe("Remove wallet's screen", () => {
       { network: "preprod", sessions: [], chainSending: false, unreadable: true },
     ]);
     expect(lines).toEqual([
-      "Mainnet: a payment Koios didn't answer may still go through. Nothing watches it until the same recovery phrase is restored in this browser, and a payment made meanwhile, here or elsewhere, could pay twice.",
+      "Mainnet: a payment Koios didn't answer may still go through. An encrypted record of it stays in this browser: restoring this same recovery phrase here watches it again, but making or restoring another wallet here first deletes that record. While nothing watches it, a payment made here or elsewhere could pay twice.",
       "Mainnet: 2 private sessions still open: private session 1 (app.example), private session 3 (a swap). What their one-time accounts hold doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page, or a running swap's Stop.",
       "Mainnet: something no return takes is left at the account of private session 4 (a mix), and it doesn't show after a restore yet.",
       "Mainnet: a chain through Lovejoin is still being sent. Removing the wallet stops it partway, its boxes less mixed.",
@@ -227,5 +227,9 @@ describe("Remove wallet's screen", () => {
       .replace(/\s+/g, " ");
     expect(html).toContain("The phrase brings back your public account, your private balance and your Lovejoin boxes.");
     expect(html).toContain("What private sessions' one-time accounts hold doesn't show after a restore yet.");
+    // It runs locked, and keeps a payment that may still go through: it says so, and what brings it back.
+    expect(html).toContain(
+      "If a payment may still go through, an encrypted record of it stays in this browser: restoring this same phrase here watches it again, and making or restoring another wallet deletes that record.",
+    );
   });
 });
