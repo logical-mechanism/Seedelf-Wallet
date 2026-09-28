@@ -1114,20 +1114,21 @@ export class LovejoinService {
    * the wallet's reserved: one built at the same time drew from the pool
    * before this one's reservation was there, and the one that reserves
    * second is refused (StalePool, which builds it again without those
-   * boxes), so no two chains spend one box (independent review L27). Kept
-   * for Send, never in place of `owner`'s chain being sent; and, `held`,
-   * sent only while its own reservation as it was kept for Send still stands:
-   * another build of `owner`'s since (a second page's Review) took its place,
-   * and may have drawn its boxes (independent review L30). Returns the
-   * reservation made.
+   * boxes), so no two chains spend one box (independent review L27). A mix
+   * from the public account kept for Send, never in place of the one being
+   * sent; and, `held`, sent only while its own reservation as it was kept
+   * for Send still stands: another build since (a second page's Review) took
+   * its place, and may have drawn its boxes (independent review L30). A
+   * session's builds and sends go one at a time (SessionService), none while
+   * its chain is on its way, so what it holds as being sent is left over
+   * from one that stopped: its return takes its place, as before, never the
+   * session's return sent directly for it. Returns the reservation made.
    */
   async reserve(network: NetworkName, owner: string, txs: LovejoinChain["txs"], until?: number, held = false): Promise<Reservation> {
     const mine = reservationOf(txs, until);
     await this.reserving(network, (kept) => {
       const was = kept[owner];
-      if (until !== undefined && was && was.until === undefined) {
-        throw new Error(owner === chainOwner() ? PUBLIC_STILL_SENDING : "Its return through Lovejoin is still being sent. Wait for it to finish.");
-      }
+      if (owner === chainOwner() && until !== undefined && was && was.until === undefined) throw new Error(PUBLIC_STILL_SENDING);
       if (held && !(was?.until !== undefined && sameInputs(was, mine))) throw new Error(NOT_READY);
       const others = new Set(Object.entries(kept).flatMap(([chain, r]) => (chain === owner ? [] : r.inputs)));
       const taken = mine.inputs.filter((o) => others.has(o));
