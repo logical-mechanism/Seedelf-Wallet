@@ -7,6 +7,7 @@
 
 import { useRef, useState, type ReactNode } from "react";
 
+import type { NetworkName } from "../../networks";
 import type { Paid, TokenAmount } from "../../shared/rpc";
 import { MAX_RECIPIENTS } from "../../shared/recipients";
 import { adaWithTokens, formatAda, tokenKey as key } from "../format";
@@ -43,11 +44,11 @@ export function useRecipients() {
 export const fieldId = (base: string, draft: Draft, index: number) => (index === 0 ? base : `${base}-${draft.id}`);
 
 /** What `draft`'s token boxes can offer: what's held, less what the other recipients take. */
-export function heldFor(held: TokenAmount[], drafts: Draft[], draft: Draft): TokenAmount[] {
+export function heldFor(network: NetworkName, held: TokenAmount[], drafts: Draft[], draft: Draft): TokenAmount[] {
   const taken = new Map<string, bigint>();
   for (const other of drafts) {
     if (other.id === draft.id) continue;
-    for (const t of tokenChoices(held, other.tokens).sent) taken.set(key(t), (taken.get(key(t)) ?? 0n) + BigInt(t.quantity));
+    for (const t of tokenChoices(network, held, other.tokens).sent) taken.set(key(t), (taken.get(key(t)) ?? 0n) + BigInt(t.quantity));
   }
   return held
     .map((t) => {
@@ -58,9 +59,9 @@ export function heldFor(held: TokenAmount[], drafts: Draft[], draft: Draft): Tok
 }
 
 /** Each recipient's lovelace and tokens as the worker takes them; `ok` once every one can be sent. */
-export function recipientAmounts(held: TokenAmount[], drafts: Draft[], max: boolean) {
+export function recipientAmounts(network: NetworkName, held: TokenAmount[], drafts: Draft[], max: boolean) {
   const each = drafts.map((d) => {
-    const tokens = tokenChoices(heldFor(held, drafts, d), d.tokens);
+    const tokens = tokenChoices(network, heldFor(network, held, drafts, d), d.tokens);
     const lovelace = max ? null : lovelaceToSend(d.amount, tokens.sent.length > 0);
     return { draft: d, tokens, lovelace, ok: tokens.ok && (max || typeof lovelace === "string") };
   });

@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { SESSION_BUILT } from "../src/background/move-in";
-import { SESSION_SPENT } from "../src/background/spent";
-import { koiosPreprod, testBalances, transferPreprod, vectors } from "./fakes";
+import { rememberSpent, SESSION_SPENT, SPENT_KEEP_MS, spentSet } from "../src/background/spent";
+import { koiosPreprod, memoryArea, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const v = vectors("cardano_account.json").find((c) => c.account === 0 && c.phrase.split(" ").length === 12)!;
@@ -48,7 +48,31 @@ describe("spent UTxOs", () => {
   it("remembers what a submitted transaction spends", async () => {
     const { t, spent } = await movedIn();
     expect(spent.length).toBeGreaterThan(0);
-    expect(await t.session.get(SESSION_SPENT)).toEqual(spent);
+    expect(Object.keys((await t.session.get<Record<string, number>>(SESSION_SPENT))!).sort()).toEqual([...spent].sort());
+  });
+
+  it("keeps each for two hours from when it was spent, however many a long chain spends meanwhile", async () => {
+    const session = memoryArea();
+    const at = 1_800_000_000_000;
+    const transfer = hexBytes(transferPreprod.draft.draftCbor);
+    await rememberSpent(session, "preprod", transfer, at);
+    // A long Lovejoin chain after it, on the other network (what's spent is kept for both together): 130 mixes of four inputs each, and more.
+    const mix = (i: number) => hexBytes(`84a100d9010284${[0, 1, 2, 3].map((k) => `825820${i.toString(16).padStart(64, "0")}0${k}`).join("")}a0f5f6`);
+    for (let i = 0; i < 200; i++) await rememberSpent(session, "mainnet", mix(i + 1), at + 60_000);
+    const inputs = transferPreprod.draft.inputs.map((i) => `${i.txHash}#${i.txIndex}`);
+    const spent = await spentSet(session, at + 60_000);
+    expect(spent.size).toBe(inputs.length + 800);
+    for (const o of inputs) expect(spent.has(o)).toBe(true);
+    // Two hours on, the transfer's are forgotten, and the chain's a minute later.
+    expect([...(await spentSet(session, at + SPENT_KEEP_MS))].some((o) => inputs.includes(o))).toBe(false);
+    expect((await spentSet(session, at + SPENT_KEEP_MS)).size).toBe(800);
+    expect((await spentSet(session, at + SPENT_KEEP_MS + 60_000)).size).toBe(0);
+  });
+
+  it("reads a list kept before times were kept as spent now", async () => {
+    const session = memoryArea();
+    await session.set(SESSION_SPENT, ["ab#0", "cd#1"]);
+    expect(await spentSet(session)).toEqual(new Set(["ab#0", "cd#1"]));
   });
 
   it("reads again while Koios still lists them, and uses the first reading that doesn't", async () => {

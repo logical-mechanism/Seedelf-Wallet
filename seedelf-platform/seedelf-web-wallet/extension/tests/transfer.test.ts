@@ -6,12 +6,13 @@
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
+import { SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { Koios } from "../src/background/koios";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
 import { SEEDELF_NAME_RULE } from "../src/shared/seedelf-name";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
+import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const bytes = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
@@ -42,6 +43,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     now: () => t.clock.now,
     coins: t.coins,
+    store: t.store,
   });
   return { service, calls };
 }
@@ -73,7 +75,7 @@ describe("finding a Seedelf", () => {
 });
 
 describe("transfer", () => {
-  it("builds a payment, measured by Ogmios, without sending anything", async () => {
+  it("builds a payment, measured in the wallet, without sending anything", async () => {
     const t = await unlocked();
     const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens }]);
     expect(summary).toMatchObject({
@@ -85,13 +87,18 @@ describe("transfer", () => {
       inputs: 2,
     });
     const fee = summary.fee;
-    expect(fee.total).toBe(transferPreprod.final.fee.total);
+    // The recorded fee, or a hair less when the new one-time key's hash sorts
+    // before giveme.my's among the signers the script searches (the recorded one didn't).
+    const short = Number(transferPreprod.final.fee.total) - Number(fee.total);
+    expect(short).toBeGreaterThanOrEqual(0);
+    expect(short).toBeLessThan(1_000);
     expect(Number(fee.total)).toBe(Number(fee.size) + Number(fee.compute) + Number(fee.scriptReference));
     expect(Number(fee.scriptReference)).toBe(629 * 15); // the wallet script only
     expect(BigInt(summary.changeLovelace)).toBe(28_000_000n - 5_000_000n - BigInt(fee.total));
 
-    // Koios was read and Ogmios measured a draft; nobody else heard of it.
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
+    // Koios was read, and nobody heard of it: the wallet measured the scripts
+    // itself, as the chain did (the recorded fee), so no draft went to Ogmios.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
     expect(t.collateral.asked).toHaveLength(0);
     expect(t.koios.submitted).toHaveLength(0);
 
@@ -99,6 +106,33 @@ describe("transfer", () => {
     const built = (await t.session.get<Stored>(SESSION_TRANSFER))!;
     expect(txIdOf(bytes(built.txCbor))).toBe(summary.txHash);
     expect(built.seed).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("says when it spends money with different histories together, and keeps what its change's is (privacy review §2.3)", async () => {
+    const t = await unlocked();
+    // The private history started before this money arrived: its first reading found none (independent review L38).
+    await t.activity.arrived("preprod", []);
+    // The tUSDM UTxO is money the wallet made private; the 25 ₳ one arrived from someone.
+    const [ada, token] = [ownedUtxos[0]!, ownedUtxos[1]!];
+    await t.activity.sent(
+      "preprod",
+      { kind: "move-in", network: "preprod", txHash: token.tx_hash, submittedAt: 1, confirmations: null },
+      { lovelace: token.value },
+    );
+    await t.balances.get("preprod");
+    // Its token sits in one UTxO whose ADA can't pay: both go, and nothing asks.
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens }]);
+    const received = { id: `received:${ada.tx_hash}`, origin: "received" };
+    expect(summary.inputs).toBe(2);
+    expect(summary.histories).toEqual(expect.arrayContaining([{ id: "public", origin: "own" }, received]));
+    expect(summary.histories).toHaveLength(2);
+    // Its change has both histories from now on.
+    const built = (await t.session.get<Stored & { origin: unknown }>(SESSION_TRANSFER))!;
+    expect(built.origin).toEqual({ id: `public+received:${ada.tx_hash}`, origin: "own" });
+
+    // With one history, there's nothing to say.
+    const own = await t.transfer.build("preprod", [{ to: MINE, lovelace: "2000000", tokens: [] }]);
+    expect(own.histories).toEqual([received]);
   });
 
   it("pays your own Seedelf, and says so", async () => {
@@ -117,8 +151,8 @@ describe("transfer", () => {
       { to: THEIRS, label: "This is a test.", toSelf: false, lovelace: "5000000" },
       { to: MINE, label: "web-wallet", toSelf: true, lovelace: "2000000" },
     ]);
-    // The contract read once for both, and Ogmios once.
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
+    // The contract read once for both, and nothing more.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
     await expect(t.transfer.build("preprod", [])).rejects.toThrow("someone to pay");
   });
 
@@ -161,7 +195,24 @@ describe("transfer", () => {
     await expect(t.transfer.submit("preprod", summary.txHash)).rejects.toThrow("doesn't match this transaction");
     expect(t.koios.submitted).toHaveLength(0);
     expect(await t.session.get(SESSION_TRANSFER)).toBeDefined(); // Send can be tried again
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
+  });
+
+  it("reads the contract in full for the next review once giveme.my refuses (launch review #53)", async () => {
+    const t = await unlocked();
+    const contract = `${SESSION_CONTRACT_PREFIX}preprod`;
+    const fullReads = () =>
+      t.koios.calls.filter(
+        (c) => c.path === "credential_utxos" && c.body._payment_credentials.includes(koiosPreprod.wallet_contract) && !c.query.includes("block_height"),
+      ).length;
+    await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    expect(fullReads()).toBe(1); // the second read only caught up
+    // giveme.my checks the chain first: a UTxO spent elsewhere, which the kept view still has, is one reason it refuses.
+    await expect(t.transfer.submit("preprod", summary.txHash)).rejects.toThrow("refused this transaction");
+    expect((await t.session.get<{ fullAt: number }>(contract))!.fullAt).toBe(0);
+    await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    expect(fullReads()).toBe(2);
   });
 
   it("submits exactly the signed transaction, then watches it", async () => {
@@ -178,10 +229,10 @@ describe("transfer", () => {
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([summary.txHash]);
     expect(pending).toEqual({ kind: "transfer", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
     expect(await t.session.get(SESSION_TRANSFER)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toEqual(pending);
+    expect(await t.session.get(pendingKey("preprod"))).toEqual(pending);
 
     t.koios.confirmations = 2;
-    expect(await t.pending.pending()).toMatchObject({ kind: "transfer", confirmations: 2 });
+    expect(await t.pending.pending("preprod")).toMatchObject({ kind: "transfer", confirmations: 2 });
   });
 
   it("refuses to send anything but the reviewed transaction", async () => {

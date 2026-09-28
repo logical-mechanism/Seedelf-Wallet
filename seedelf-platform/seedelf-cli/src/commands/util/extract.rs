@@ -115,6 +115,10 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
         }
         Err(err) => anyhow::bail!("Failed to fetch UTxOs: {err}"),
     }
+    // Spending a UTxO that holds a reference script costs Conway's
+    // reference-script fee, and the script may be deployed there on purpose:
+    // never spend one of the address's here.
+    all_utxos.retain(|utxo| utxo.reference_script.is_none());
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;
     if usable_utxos.is_empty() {
@@ -219,7 +223,15 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
         compute_fee.to_string().bright_white()
     );
 
-    let script_reference_fee: u64 = config.contract.wallet_contract_size * 15;
+    // The wallet contract, by reference, and any reference script on a spent
+    // input, at the network's price and Conway's tiers. The UTxO extracted is
+    // spent too, and anyone can put one on it.
+    let mut spent: Vec<UtxoResponse> = usable_utxos.clone();
+    spent.push(empty_datum_utxo.clone());
+    let script_reference_fee: u64 = fee::reference_script_fee(
+        &params,
+        config.contract.wallet_contract_size + utxos::reference_script_bytes(&spent)?,
+    )?;
     println!(
         "{} {}",
         "Script Reference Fee:".bright_blue(),

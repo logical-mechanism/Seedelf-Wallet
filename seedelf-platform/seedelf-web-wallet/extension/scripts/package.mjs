@@ -1,9 +1,13 @@
 // Packages a store build of dist/ for the Chrome Web Store upload:
-// checks it is a store build, adds the third-party notices, and zips it into
-// release/seedelf-wallet-<version>.zip. The zip is reproducible: sorted
-// entries and fixed timestamps, so the same dist/ always gives the same bytes.
+// checks it is a store build of the network asked for, adds the third-party
+// notices, and zips it into release/seedelf-wallet-<version>-<network>.zip.
+// The zip is reproducible: sorted entries and fixed timestamps, so the same
+// dist/ always gives the same bytes.
 //
-//   npm run package        (builds with VITE_STORE_BUILD=true first)
+//   npm run package           the store's: mainnet, with preprod in Settings
+//                             (builds with VITE_ENABLE_MAINNET=true and
+//                             VITE_STORE_BUILD=true first)
+//   npm run package:preprod   a preprod-only store build, for tests
 
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -18,10 +22,27 @@ const dist = join(extension, "dist");
 const pkg = JSON.parse(readFileSync(join(extension, "package.json"), "utf8"));
 const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
 
+/** Mainnet's Koios: in the manifest of a build with mainnet, and only there (networks.ts). */
+const MAINNET_KOIOS = "https://api.koios.rest/*";
+
+const network = process.argv[2] ?? "mainnet";
+if (network !== "mainnet" && network !== "preprod") throw new Error(`Package for mainnet or preprod, not ${network}.`);
+
 // A dev build pins its ID with a key the store refuses; its version must be this one.
 if ("key" in manifest) throw new Error("dist/ is a dev build (its manifest has a key). Run `npm run package`.");
 if (manifest.version !== pkg.version) {
   throw new Error(`dist/ is version ${manifest.version}, package.json says ${pkg.version}. Rebuild.`);
+}
+// The store's zip must be the mainnet build (launch review M2): a preprod one
+// looks the same in the dashboard, since the name no longer says the network.
+const hosts = manifest.host_permissions ?? [];
+if (network === "mainnet" && !hosts.includes(MAINNET_KOIOS)) {
+  throw new Error(
+    `dist/ is a preprod-only build: its manifest doesn't ask for ${MAINNET_KOIOS}. Build the store's with \`npm run package\`.`,
+  );
+}
+if (network === "preprod" && hosts.includes(MAINNET_KOIOS)) {
+  throw new Error(`dist/ is a mainnet build: its manifest asks for ${MAINNET_KOIOS}. Build a preprod one with \`npm run package:preprod\`.`);
 }
 
 const { text, components } = thirdParty(pkg.version);
@@ -87,12 +108,11 @@ function zip(root, paths) {
 
 const paths = files(dist);
 const archive = zip(dist, paths);
-const out = join(extension, "release", `seedelf-wallet-${pkg.version}.zip`);
+const out = join(extension, "release", `seedelf-wallet-${pkg.version}-${network}.zip`);
 mkdirSync(join(extension, "release"), { recursive: true });
 writeFileSync(out, archive);
 
-const hosts = manifest.host_permissions.join(", ");
-console.log(`${manifest.name} ${manifest.version}: ${hosts}`);
+console.log(`${manifest.name} ${manifest.version} (${network}): ${hosts.join(", ")}`);
 console.log(`Third-party notices: ${components} components (licenses/THIRD-PARTY.txt)`);
 console.log(`${relative(extension, out)}: ${paths.length} files, ${Math.round(archive.length / 1024)} KB`);
 console.log(`sha256 ${createHash("sha256").update(archive).digest("hex")}`);

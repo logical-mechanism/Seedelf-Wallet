@@ -13,9 +13,10 @@
 2. **The chain is built locally and optimistically.** Each transaction is built on the outputs of the one before it, without waiting for the chain. **Script budgets come from an evaluator running in WebAssembly.** Build for a healthy pool of boxes.
 3. **Fan-out 3 wide.** Depth is a setting from 1 to 3, **default 2**.
    - Every output of each wave is mixed again in the next wave, as Lovejoin's own `strategy/fanout.ts` does. So which leaf is yours stays hidden whoever pays.
-   - Depth 2 is 4 mixes per box, about 3.5 ₳, and 9 leaves (a 1 in 9 chance of linking).
-4. **Each box is withdrawn on its own, after its own random delay.** The range is a setting, default **1–6 hours**.
+   - Depth 2 is 4 mixes per box, about 3.5 ₳, and 9 leaves (a 1 in 9 chance of linking, at best). That assumes the leaves' ways out look alike. The wallet's go into the Seedelf contract under a register, and Lovejoin's own app writes no datum, so a box hides only among the leaves whose owners also bring them back into a Seedelf, and fewer while few do (privacy review §2.6, §5.3). The review's issue for Lovejoin's app: write a fresh register when it withdraws to a Seedelf.
+4. **Each box is withdrawn on its own, after its own random delay.** The range is a setting, default **1–6 hours**. **Kept (the owner, 2026-09-27):** the privacy review (§3.5) proposed 2–12 hours by default; the owner kept 1–6.
    - The withdraw runs at the first unlock after the delay, since the proof needs the key.
+   - **Changed (the user, 2026-09-27, the privacy review §3.1):** never the moment the wallet unlocks. A box that came due while it was locked waits a fresh draw inside the stretch the unlock keeps it open (2 minutes on, at most 2 before the auto-lock, never past 20), once; nor in a run that sent anything else, nor within 5 minutes of the wallet's own send (pushed 3 to 10 minutes, 3 times at most). A swap's step found at unlock waits the same way.
    - giveme.my's collateral, fee paid from the box, into a **fresh Seedelf register** for each box.
    - The session is never on it.
 5. **The boxes are owned by the Seedelf key.** A Lovejoin box's datum `{a, b}` with `b = x·a` has the same shape and encoding as a `Register`. So the scan the wallet already runs finds its boxes anywhere in the pool, after other people's mixes too, and after a restore.
@@ -49,7 +50,11 @@
   - Context: `blake2b_256(serialise_data(tx.outputs) ‖ serialise_data(input refs) ‖ mix_hash)`.
   - It commits to every output, so nobody can redirect it.
   - The domain tag is `lovejoin/sigmajoin/v1/`, different from Seedelf's own proof, so a proof from one can't be replayed in the other.
-- **Deployment:** preprod only. Mainnet's config hashes are still `null`. The preprod addresses are in `_reference/Lovejoin/artifacts/preprod/addresses.json`.
+- **Deployment:** preprod, and mainnet since 2026-09-26 (Lovejoin cb5a5a3). The addresses are in `_reference/Lovejoin/artifacts/preprod/addresses.json` and `artifacts/mainnet/addresses.json`.
+  - Mainnet's scripts are preprod's logic recompiled, so their hashes differ: `mix_box` `c145c10f…1fad`, `mix_logic` `0dad3046…499e`.
+  - Its three reference UTxOs (`f89c…175c#0`, the datum and NFT; `7d21…416a#0`, `mix_box`; `2452…c7b6#0`, `mix_logic`) sit at `reference_holder`, an always-false script. Each output was checked against Koios: its address, lovelace, NFT, datum and script hash, and (160 + its size) × 4,310 is what it locks.
+  - `mix_logic` is 3,161 bytes there, to preprod's 3,156. `Protocol::of` reads the size from the bundled outputs, so the fees can't be priced on preprod's: 75 lovelace short, and the node would refuse every mix and withdraw.
+  - Mainnet caps the fee a shard pays at 1 ₳ and has no fee shards. Neither touches the wallet, which never uses Lovejoin's fee pool (*Out of scope*): it pays each mix itself, 0.82 ₳ for a 3-box mix on mainnet's scripts.
 
 **Measured on preprod:**
 
@@ -126,7 +131,7 @@
 
 **Rust: `seedelf-core`**
 - **`lovejoin.rs`:**
-  - The preprod constants (bundled from `addresses.json`: the reference UTxO and its datum, the script hashes, the reference-script UTxOs and their scripts; mainnet `None`).
+  - The preprod constants (bundled from `addresses.json`: the reference UTxO and its datum, the script hashes, the reference-script UTxOs and their scripts; mainnet `None`). Mainnet's were added once Lovejoin launched there (launch review M1).
   - The builders:
     - `deposit`: a key account → k boxes plus change, key-signed.
     - `mix`: N boxes → N re-randomized boxes in a random order, plus the payer's change; the payer's collateral; reference inputs; the withdraw-zero.
@@ -155,7 +160,7 @@
   - The withdraw schedule and its sealed due times.
   - It runs from the `seedelf.sessions` alarm and at unlock, like the swap runner.
 - **`sessions.ts`:** `buildBack`, `claimBuild` and the runner's `bringBack` go through `lovejoin.ts` when the session has at least one box's spare ADA. The record gains `lovejoin?: { boxes, depth, txs }`, and the return waits for its chain.
-- **Settings:** `lovejoin.depth` (1–3, default 2) and `lovejoin.delay` (a range in hours, default 1–6).
+- **Settings:** `lovejoin.depth` (1–3, default 2) and `lovejoin.delay` (a range in hours, default 1–6, kept by the owner in the privacy review, §3.5). Since the privacy review (§4.1), `lovejoinReturns` too (on by default): off, a session comes back directly.
 
 **UI**
 - **The dApps page gets a Lovejoin tile.** Its page shows:
@@ -220,7 +225,7 @@
 - **Hard forks:** they can change the cost model faster than `uplc` releases, as protocol 11 did. The cross-check stops the chain rather than risk the collateral.
 - **The pool's size:** the design assumes a healthy pool (decided). With too few fresh boxes for a tree, the return is plain and says why.
 - **Collateral:** whether the last transaction can name the UTxO it spends as its own collateral (see *Decided in the design*).
-- **Mainnet:** Lovejoin isn't deployed there, so the tile and the return step are preprod-only until it is.
+- **Mainnet:** deployed on 2026-09-26, and `seedelf-core` and the WebAssembly build for it (launch review M1). The extension opens it there too, from `networks.ts`'s `lovejoin` entry (the owner's call, 2026-09-26): returns go through it by default, as on preprod, once the pool holds 30 boxes that aren't the wallet's (the pool floor). Its pool started empty, and every mix needs boxes that aren't the wallet's (launch review M5), so until then a return comes back directly and says why.
 
 ## Built (2026-09-25, first session)
 
@@ -394,6 +399,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 1. **Mix my boxes again**, on the Lovejoin page: every box of the wallet's in the pool, fanned out again at the Settings depth.
    - **Paid from the private balance through a fresh one-time account**, like *Mix from the private balance*: one review, then it runs by itself, and what's left merges back.
    - The user chose this over the public account, which would tie it to boxes that may trace back to private sessions.
+   - **That covers boxes from private sessions only (the privacy review §2.10, 2026-09-27).** A box a mix from the public account put in is the account's, which paid for that mix in the open: the private balance paying to mix it again would tie itself to the account. So Mix my boxes again leaves those out, *Mix again from my public account* mixes them paid by the account (no deposit, no new tie), and *Pay from my private balance anyway* takes them all after a warning.
    - A sketch:
      - core: a chain that starts from the wallet's own `PoolBox`es, with no deposit;
      - WebAssembly: a call for it;
@@ -407,7 +413,7 @@ Totals: Rust 322, WebAssembly (Node) 33, Vitest 280, Playwright 49. The module i
 **Offered, not decided (ask before building):**
 
 - Each box's due time on the Lovejoin page, and a Cardanoscan link for each mix. (Progress while a mix runs was built in the third session.)
-- Bring one back now preferring a box someone else has mixed since, which is better hidden.
+- Bring one back now preferring a box someone else has mixed since, which is better hidden. **Built (the privacy review §3.6, 2026-09-27),** for the boxes that come back by themselves too: among those that have waited the delay's least, one that isn't a leaf the wallet's own chain left goes first. A chain's leaves are kept, sealed, while their boxes sit unmoved, after its record goes.
 - Recording public mixes so they can be resumed, and finishing the mixing from where it stopped with fresh pool boxes (the design's original rebuild). (Saying when a chain was cut short was built in the third session.)
 - Home's banner for the withdraws that run by themselves.
 - A *Through Lovejoin* switch on Make private: the user said "maybe not".
@@ -508,7 +514,7 @@ Totals: Rust 327, WebAssembly (Node) 33, Vitest 295, Playwright 52. The module i
 ## Out of scope
 
 - Tokens through Lovejoin.
-- Lovejoin's fee shards: we neither pay from them nor top them up.
+- Lovejoin's fee shards: we neither pay from them nor top them up. So mainnet's 1 ₳ cap on a shard-paid fee, and its having no shards, don't apply.
 - Lovejoin's website.
 - Widths above 3.
 - Background withdraws while the wallet is locked.

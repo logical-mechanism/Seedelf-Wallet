@@ -46,6 +46,45 @@ export function tokenName(assetName: string): string {
   return shortHex(assetName);
 }
 
+/**
+ * Characters that look like a Latin letter once lower-cased: Cyrillic,
+ * Greek and IPA letters, digits, and the i, l and 1 of many fonts.
+ */
+const LOOKS_LIKE: Record<string, string> = {
+  а: "a", в: "b", г: "r", е: "e", з: "3", к: "k", м: "m", н: "h", о: "o", п: "n", р: "p", с: "c", т: "t", у: "y",
+  х: "x", ь: "b", ѕ: "s", і: "l", ј: "j", ԁ: "d", ԛ: "q", ԝ: "w", ү: "y", һ: "h", ӏ: "l",
+  α: "a", β: "b", γ: "y", ε: "e", ζ: "z", η: "n", ι: "l", κ: "k", μ: "u", ν: "v", ο: "o", ρ: "p", τ: "t", υ: "u",
+  χ: "x", ω: "w", ı: "l", ɑ: "a", ɡ: "g", ʏ: "y",
+  0: "o", 1: "l", 5: "s", i: "l", "|": "l",
+};
+
+/**
+ * A name reduced to how it looks, to tell apart names that only look the
+ * same: compatibility forms folded (NFKD: full-width, bold, ligatures),
+ * accents and invisible characters dropped, case folded, lookalike letters
+ * mapped to one Latin letter, and only letters, digits and "₳" kept. "S N E K",
+ * "Ｓnek", "ЅNЕK" and "5NEK" are all "snek"-alike; "8Ball" and "8 BALL" match.
+ */
+export function nameSkeleton(name: string): string {
+  return foldName(name).replace(/[^\p{L}\p{N}₳]/gu, "");
+}
+
+/**
+ * A name folded as `nameSkeleton` folds it, but with its spaces and
+ * punctuation still in, so its words can be told apart: "ADA bonus" is
+ * "ada bonus", and "OOO SNEK" is "ooo snek", as "000 SNEK" is.
+ */
+export function foldName(name: string): string {
+  return [...name.normalize("NFKD").replace(/[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").toLowerCase()]
+    .map((c) => LOOKS_LIKE[c] ?? c)
+    .join("");
+}
+
+/** A name as a list shows it: without the invisible characters that could hide or reorder its letters. */
+export function plainName(name: string): string {
+  return name.replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").trim();
+}
+
 /** `5eed0e1f…9ff2` */
 export function shortHex(hex: string, head = 8, tail = 4): string {
   return hex.length <= head + tail + 1 ? hex : `${hex.slice(0, head)}…${hex.slice(-tail)}`;
@@ -80,18 +119,51 @@ export function parseAda(text: string): string | undefined {
  * A typed amount of something with `decimals` places as its raw integer
  * string, or undefined if it isn't one: "1,234.5" with 6 decimals is
  * "1234500000". More decimal places than it has isn't an amount.
+ *
+ * A comma groups thousands only where it belongs ("1,234"). With no point,
+ * a single comma with fewer than three digits after it is a decimal comma:
+ * "12,5" is 12.5, never 125. Anything else with a comma isn't an amount.
  */
 export function parseQuantity(text: string, decimals: number): string | undefined {
-  const clean = text.trim().replaceAll(",", "");
-  const match = /^(\d+)(?:\.(\d*))?$/.exec(clean);
+  let clean = text.trim();
+  if (DECIMAL_COMMA.test(clean)) clean = clean.replace(",", ".");
+  const match = /^(\d+|[1-9]\d{0,2}(?:,\d{3})+)(?:\.(\d*))?$/.exec(clean);
   if (!match || (match[2] ?? "").length > decimals) return undefined;
   const scale = 10n ** BigInt(decimals);
-  return (BigInt(match[1]!) * scale + BigInt((match[2] ?? "").padEnd(decimals, "0") || "0")).toString();
+  return (BigInt(match[1]!.replaceAll(",", "")) * scale + BigInt((match[2] ?? "").padEnd(decimals, "0") || "0")).toString();
 }
 
-/** A block explorer link for a transaction. */
+/** A number written with a decimal comma: digits, one comma, and at most two digits after it ("12,5", "0,25", "12,"). */
+const DECIMAL_COMMA = /^\d+,\d{0,2}$/;
+
+/** Whole units grouped by commas only where they belong, or not at all: "1,234", "1234", never "1,23" or "0,500". */
+const WELL_GROUPED = /^(\d+|[1-9]\d{0,2}(,\d{3})+)$/;
+
+/** What an amount field says when a comma typed or pasted can't be a thousands separator. */
+export const COMMA_NOTE = "Use a point for decimals, like 12.5. A comma only groups thousands, like 1,000.";
+
+/**
+ * What an edit put into `previous` to make `typed`: where, and the text
+ * typed or pasted ("" for a deletion). What the two share at each end was
+ * already there.
+ */
+function editOf(previous: string, typed: string): { start: number; text: string } {
+  const shortest = Math.min(previous.length, typed.length);
+  let start = 0;
+  while (start < shortest && previous[start] === typed[start]) start++;
+  let end = 0;
+  while (end < shortest - start && previous[previous.length - 1 - end] === typed[typed.length - 1 - end]) end++;
+  return { start, text: typed.slice(start, typed.length - end) };
+}
+
+/** A block explorer link for a transaction. Shown through ExplorerLink, which warns on the private side. */
 export function explorerUrl(network: "preprod" | "mainnet", txHash: string): string {
   return `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/transaction/${txHash}`;
+}
+
+/** A block explorer link for an address: everything it did. */
+export function explorerAddressUrl(network: "preprod" | "mainnet", address: string): string {
+  return `https://${network === "preprod" ? "preprod." : ""}cardanoscan.io/address/${address}`;
 }
 
 /** All the ADA there will ever be: 45 billion ₳, in lovelace. */
@@ -113,8 +185,14 @@ export interface AmountRules {
 /**
  * Cleans what the user typed or pasted into an amount field.
  *
- * - The thousands are grouped with commas again, wherever they were typed or
- *   deleted: "3,000,00" is "300,000".
+ * - The thousands are grouped with commas again as digits come and go: the
+ *   field's own commas move ("3,000,000,00" after a Backspace is
+ *   "300,000,000").
+ * - A comma the user types or pastes is read for what it can only mean. With
+ *   no point, one comma with fewer than three digits after it is the decimal
+ *   point: "12,5" is 12.5, and "0,5" is 0.5, never 125 or 5. Otherwise it must
+ *   group thousands where it belongs ("12,500"), or the edit is refused
+ *   (`COMMA_NOTE`): a comma never just disappears.
  * - Decimal places past `decimals` are dropped, not rounded: the amount never
  *   grows.
  * - Anything that isn't a number, or is more than `max`, keeps the previous
@@ -125,9 +203,23 @@ export interface AmountRules {
 export function sanitizeAmount(previous: string, typed: string, rules: AmountRules): { value: string; note?: string } {
   let text = typed.trim();
   if (text === "") return { value: "" };
+  const edit = editOf(previous, text);
+  const commaTyped = edit.text.includes(",");
+  let decimalComma = false;
+  if (commaTyped && !text.includes(".")) {
+    const comma = text.lastIndexOf(",");
+    // The one comma typed, with at most two digits after it: the field's other commas are its own.
+    const only = edit.text.indexOf(",") === edit.text.lastIndexOf(",");
+    const inEdit = comma >= edit.start && comma < edit.start + edit.text.length;
+    if (only && inEdit && /^\d{0,2}$/.test(text.slice(comma + 1))) {
+      text = `${text.slice(0, comma)}.${text.slice(comma + 1)}`;
+      decimalComma = true;
+    }
+  }
   if (text.startsWith(".")) text = `0${text}`;
   const match = /^([\d,]*)(?:\.(\d*))?$/.exec(text);
-  if (!match || !/\d/.test(match[1]!)) return { value: previous, note: rules.notANumber };
+  if (!match || !/\d/.test(match[1]!)) return { value: previous, note: commaTyped ? COMMA_NOTE : rules.notANumber };
+  if (commaTyped && !decimalComma && !WELL_GROUPED.test(match[1]!)) return { value: previous, note: COMMA_NOTE };
   let fraction = match[2];
   let note: string | undefined;
   if (fraction !== undefined && fraction.length > rules.decimals) {
@@ -164,7 +256,9 @@ const significant = (text: string) => text.replace(/[^\d.]/g, "");
  * `value`: after the same digits, however the commas moved.
  */
 export function caretAfter(typed: string, caret: number, value: string): number {
-  const before = significant(typed.slice(0, caret)).length;
+  // A decimal comma that became the point counts as the point.
+  const read = !typed.includes(".") && value.includes(".") ? typed.replace(/,(?=\d{0,2}\s*$)/, ".") : typed;
+  const before = significant(read.slice(0, caret)).length;
   if (before === 0) return 0;
   let seen = 0;
   for (let i = 0; i < value.length; i++) {
@@ -247,9 +341,16 @@ export function rewardsAside(rewards?: string): string {
   return rewards ? `, with ${formatAda(rewards)} ₳ of rewards` : "";
 }
 
+/**
+ * An ID shortened so its hash shows, not only its prefix: "pool1" and
+ * CIP-129's "drep1y2" say nothing about whose it is, and a lookalike can be
+ * ground to match a few characters after them (launch review #59).
+ */
+export const shortId = (id: string) => shortHex(id, 16, 6);
+
 /** A pool by its ticker, else its name, else its shortened ID. */
 export function poolLabel(pool: PoolRef): string {
-  return pool.ticker ?? pool.name ?? shortHex(pool.id, 10, 6);
+  return pool.ticker ?? pool.name ?? shortId(pool.id);
 }
 
 /** Where the vote goes, in words: a pinned choice, the DRep's name or shortened ID, or nowhere. */
@@ -257,8 +358,27 @@ export function voteLabel(drep: string | null, name?: string): string {
   if (!drep) return "Not delegated";
   if (drep === ALWAYS_ABSTAIN) return "Always abstain";
   if (drep === ALWAYS_NO_CONFIDENCE) return "Always no confidence";
-  return name ?? shortHex(drep, 10, 6);
+  return name ?? shortId(drep);
 }
+
+/**
+ * How many of `items` share each name, as it looks (`nameSkeleton`): two
+ * DReps both called "8Ball", or pools with the same ticker. Anyone can
+ * choose any name, so a shared one is flagged and the ID shown.
+ */
+export function sharedNames<T>(items: T[], name: (item: T) => string | undefined): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const n = name(item);
+    const key = n === undefined ? "" : nameSkeleton(n);
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** How many share `name` in `counts` (sharedNames): 1 or 0 when it's its own. */
+export const sharing = (counts: Map<string, number>, name: string | undefined) =>
+  (name === undefined ? 0 : counts.get(nameSkeleton(name))) ?? 0;
 
 /** An ADA amount's value at `price`, in its currency: "$12.34", "€0.22", "¥397". */
 export function formatFiat(lovelace: string, price: AdaPrice): string {

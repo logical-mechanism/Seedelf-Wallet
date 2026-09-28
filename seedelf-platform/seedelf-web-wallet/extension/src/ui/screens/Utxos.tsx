@@ -2,16 +2,22 @@
 // last reading (no requests; Refresh reads the chain again). The lock at the
 // end of a row locks or unlocks it at once; the row opens its details, which
 // have Lock too. A locked UTxO is left out of every payment on its side, Max
-// included. The Cardano account's collateral is listed too, and reclaimed in
-// Settings; a seedelf's UTxO only ever moves when the seedelf is removed.
+// included, and a site's transaction can't spend one either. The Cardano
+// account's collateral is listed too, and reclaimed in Settings; a seedelf's
+// UTxO only ever moves when the seedelf is removed. A UTxO no transaction of
+// the wallet can take (a reference script) is marked so, never offered.
+// Each private UTxO says where its money came from, as the sealed history
+// has it, so locking one to keep a history apart is an informed choice
+// (privacy review §2.3).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { historyTags } from "../../shared/histories";
 import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyField } from "../components/CopyField";
-import { CoinsIcon, LockIcon, LockOpenIcon, SearchIcon, SproutIcon, VaultIcon } from "../components/Icons";
+import { CoinsIcon, LockIcon, LockOpenIcon, SearchIcon, SproutIcon, VaultIcon, WarnIcon } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -23,21 +29,53 @@ import { searchTokens, sortTokens, viewToken } from "../tokens";
 
 const ref = (u: UtxoInfo) => `${u.txHash}#${u.index}`;
 
-/** What a UTxO is kept for, if anything. */
-function tag(u: UtxoInfo): string | undefined {
+/** What a UTxO is kept for, if anything, or that no payment can take it. */
+export function utxoTag(u: UtxoInfo): string | undefined {
   if (u.seedelf) return "Seedelf";
   if (u.collateral) return "Collateral";
+  if (u.unspendable) return "Can't spend";
   if (u.locked) return "Locked";
   return undefined;
 }
+const tag = utxoTag;
 
-/** A seedelf's UTxO and the collateral aren't locked or unlocked by hand. */
-const lockable = (u: UtxoInfo) => !u.seedelf && !u.collateral;
+/** Where a private UTxO's money came from: Back from Lovejoin, Received, Made private, Private session N, Unknown. */
+export function historyOf(u: UtxoInfo): string | undefined {
+  return u.history ? historyTags(u.history).join(", ") : undefined;
+}
+
+/** A seedelf's UTxO, the collateral and one no payment can take aren't locked or unlocked by hand. */
+const lockable = (u: UtxoInfo) => !u.seedelf && !u.collateral && !u.unspendable;
 
 function Icon({ u }: { u: UtxoInfo }) {
   if (u.seedelf) return <SproutIcon size={16} />;
   if (u.collateral) return <VaultIcon size={16} />;
+  if (u.unspendable) return <WarnIcon size={16} />;
   return <CoinsIcon size={16} />;
+}
+
+type MixProgress = { total: number; sent: number; stopped?: string } | null;
+
+/**
+ * Says a public mix through Lovejoin is being sent: what it spends, and the
+ * change it makes, stay out of this list and the balance until it's all
+ * sent, so they don't look gone.
+ */
+export function MixHolding({ progress }: { progress: MixProgress }) {
+  if (!progress || progress.stopped || progress.sent >= progress.total) return null;
+  return (
+    <Callout tone="info" testId="utxos-mix-holding">
+      A mix through Lovejoin is being sent from this account ({progress.sent} of {progress.total} sent). The UTxOs it
+      spends, and its change, are held by the mix: they're left out here and from your balance until it's all sent.
+    </Callout>
+  );
+}
+
+/** Why the wallet can't spend a UTxO marked `unspendable`, on its side. */
+export function unspendableWhy(of: UtxoSide): string {
+  return of === "seedelf"
+    ? "It holds a reference script, which the wallet can't spend yet: no payment takes it, and it isn't counted in your private balance. It stays yours."
+    : "It holds a reference script that Koios doesn't give the wallet, so the wallet can't price spending it: no payment takes it, Max included.";
 }
 
 /** Kept ones first, so they're found among hundreds; each group largest first, as the worker sends them. */
@@ -58,6 +96,9 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
     changed.current = onChanged;
   });
 
+  // A public mix being sent holds what it spends, and its change, out of this list until it's all sent.
+  const [mix, setMix] = useState<MixProgress>(null);
+
   const read = useCallback(
     async (refresh: boolean) => {
       setRefreshing(refresh);
@@ -66,6 +107,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
         const next = await call("utxos", { refresh });
         setLists(next);
         setOrder(arrange(next[of]));
+        if (of === "cardano") setMix(await call("lovejoin-mix-public-progress", {}).catch(() => null));
         if (refresh) changed.current();
       } catch (e) {
         setError((e as Error).message);
@@ -82,6 +124,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
     return lists && order.flatMap((r) => byRef.get(r) ?? []);
   }, [lists, of, order]);
   const locked = list?.filter((u) => u.locked && !u.seedelf).length ?? 0;
+  const stuck = list?.filter((u) => u.unspendable).length ?? 0;
   const shown = list?.find((u) => ref(u) === open);
 
   async function setLocked(u: UtxoInfo, lock: boolean) {
@@ -105,7 +148,17 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
       aside={list ? `${plural(list.length, "UTxO")}${locked ? ` · ${locked} locked` : ""}` : " "}
       error={shown ? undefined : error}
     >
-      <p className="note">Lock a UTxO to keep it out of every payment from this balance, Max included.</p>
+      <p className="note" data-testid="utxos-lock-note">
+        Lock a UTxO to keep it out of every payment from this balance, Max included.
+        {of === "cardano" && " A site's transaction can't use a locked UTxO either: the wallet refuses to sign it."}
+      </p>
+      {of === "cardano" && <MixHolding progress={mix} />}
+      {stuck > 0 && (
+        <Callout tone="warn" testId="utxos-unspendable">
+          {stuck === 1 ? "One UTxO here holds" : `${stuck} UTxOs here hold`} a reference script the wallet can't spend,
+          marked Can't spend. Anyone can send one.
+        </Callout>
+      )}
       {of === "seedelf" && (
         <Callout tone="privacy">
           Only this wallet can tell these are yours. Looking one up on an explorer tells that site which UTxO you care
@@ -122,13 +175,14 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
           <ul className="list" data-testid="utxos">
             {list.map((u) => {
               const name = `${amounts.ada(u.lovelace)} ₳, ${shortHex(u.txHash)}#${u.index}`;
+              const history = historyOf(u);
               return (
                 <li key={ref(u)} className="utxo-row">
                   <button
                     type="button"
                     className="token-row"
                     onClick={() => setOpen(ref(u))}
-                    aria-label={`${amounts.ada(u.lovelace)} ₳${tag(u) ? `, ${tag(u)}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
+                    aria-label={`${amounts.ada(u.lovelace)} ₳${tag(u) ? `, ${tag(u)}` : ""}${history ? `, ${history}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
                   >
                     <span className={`avatar activity__icon${tag(u) ? " utxo__icon--kept" : ""}`}>
                       <Icon u={u} />
@@ -141,6 +195,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                     </span>
                     <span className="token-row__sub">
                       {shortHex(u.txHash, 8, 4)}#{u.index}
+                      {history && <span data-testid="utxo-history"> · {history}</span>}
                     </span>
                   </button>
                   {lockable(u) ? (
@@ -166,6 +221,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
       )}
       {shown && (
         <UtxoDetails
+          of={of}
           utxo={shown}
           busy={saving === ref(shown)}
           error={error}
@@ -180,13 +236,15 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
   );
 }
 
-function UtxoDetails({
+export function UtxoDetails({
+  of,
   utxo,
   busy,
   error,
   onLock,
   onClose,
 }: {
+  of: UtxoSide;
   utxo: UtxoInfo;
   busy: boolean;
   error?: string;
@@ -234,6 +292,10 @@ function UtxoDetails({
             Your collateral: put up by transactions that run a script, and otherwise kept. Reclaim it in Settings, under
             Collateral.
           </Callout>
+        ) : utxo.unspendable ? (
+          <Callout tone="warn" testId="utxo-unspendable">
+            {unspendableWhy(of)}
+          </Callout>
         ) : (
           <p className="note" data-testid="utxo-state">
             {utxo.locked ? "Locked: left out of every payment." : "Spent by payments as needed."}
@@ -241,6 +303,13 @@ function UtxoDetails({
         )}
         <UtxoTokens tokens={utxo.tokens} />
         <CopyField label="Transaction" value={utxo.txHash} display={shortHex(utxo.txHash, 14, 8)} testId="utxo-tx" />
+        {utxo.history && (
+          <p className="note" data-testid="utxo-history-note">
+            Came from: {historyOf(utxo)}. Payments try to keep money with different histories apart, since spending
+            them together ties them to each other, and say when they can't. Lock it to keep it out of payments
+            altogether.
+          </p>
+        )}
         <ReviewRows testId="utxo-output">
           <Row label="Output" value={String(utxo.index)} />
           {utxo.blockHeight !== undefined && <Row label="Block" value={utxo.blockHeight.toLocaleString("en-GB")} />}

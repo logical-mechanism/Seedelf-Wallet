@@ -5,6 +5,15 @@
 /** chrome.storage.local: the user's settings. */
 export const LOCAL_PREFERENCES = "seedelf.preferences";
 
+/**
+ * chrome.storage.local: the network the wallet is on, in a build that has
+ * more than one (a mainnet build: mainnet, or preprod for testing). Kept on
+ * its own, not with the settings: the worker reads it for every request,
+ * locked or not, and removing the wallet keeps it, as it keeps where the
+ * wallet opens. Anything else there, or nothing, is the build's first network.
+ */
+export const LOCAL_NETWORK = "seedelf.network";
+
 /** How long without activity before the wallet locks, in minutes: Lace's choices, less "never". */
 export const LOCK_AFTER_MINUTES = [1, 5, 15, 30, 60] as const;
 export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number];
@@ -41,6 +50,13 @@ export interface Preferences {
    * typed in the connector's window, even while the wallet is unlocked.
    */
   dappPassword: boolean;
+  /**
+   * A private session's spare ADA goes through Lovejoin on its way back.
+   * Off, it comes back directly, tied on chain to the session and its
+   * funding; a swap's approval sets its own from this, and a mix from the
+   * Lovejoin tile mixes whatever it says (privacy review §4.1).
+   */
+  lovejoinReturns: boolean;
   /** Lovejoin's fan-out for a session's return: 1, 2 or 3 waves deep, three wide. */
   lovejoinDepth: LovejoinDepth;
   /** Lovejoin: the range each box's wait is drawn from. */
@@ -54,6 +70,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   currency: "usd",
   dappConnector: false,
   dappPassword: true,
+  lovejoinReturns: true,
   lovejoinDepth: 2,
   lovejoinDelay: "1-6",
 };

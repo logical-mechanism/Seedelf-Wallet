@@ -1,7 +1,7 @@
 // The giveme.my client: the request it makes, and failures in plain words.
 import { describe, expect, it } from "vitest";
 
-import { Collateral, CollateralError } from "../src/background/collateral";
+import { Collateral, CollateralError, CollateralRefusedError } from "../src/background/collateral";
 
 const URL_ = "https://www.giveme.my/preprod/collateral/";
 
@@ -26,6 +26,8 @@ describe("giveme.my client", () => {
       "giveme.my, which lends the collateral, refused this transaction: Transaction Fails Validation.",
     );
     expect(asked).toBe(1); // never retried
+    // A refusal, which the wallet takes as a sign its view of the contract is behind.
+    await expect(refused.witness("84a4")).rejects.toBeInstanceOf(CollateralRefusedError);
 
     const down = new Collateral(URL_, async () => new Response("<html>", { status: 502 }));
     await expect(down.witness("84a4")).rejects.toThrow("refused this transaction (502)");
@@ -35,6 +37,7 @@ describe("giveme.my client", () => {
     });
     const e = await offline.witness("84a4").catch((e: unknown) => e);
     expect(e).toBeInstanceOf(CollateralError);
+    expect(e).not.toBeInstanceOf(CollateralRefusedError);
     expect((e as Error).message).toContain("Couldn't reach giveme.my, the service that lends private payments their collateral (Failed to fetch)");
 
     const garbled = new Collateral(URL_, async () => new Response("ok"));

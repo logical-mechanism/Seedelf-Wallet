@@ -2,7 +2,9 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 
 // Shared with the web wallet through seedelf-core's network-free builders.
-pub(crate) use seedelf_core::build::{collateral_output, fake_signer, linear_fee};
+pub(crate) use seedelf_core::build::{
+    collateral_output, fake_signer, linear_fee, reference_script_fee,
+};
 
 /// Sum the fee components and bump to an even lovelace count. The collateral
 /// output uses `3/2 * total_fee`; keeping `total_fee` even keeps that integer.

@@ -1,6 +1,6 @@
 //! Lovejoin's transactions (`seedelf_core::lovejoin`), each measured offline
 //! against the deployed preprod scripts: a wrong proof, context or layout
-//! fails here, not on chain.
+//! fails here, not on chain. Mainnet's are in `lovejoin_mainnet_test.rs`.
 
 use blstrs::Scalar;
 use pallas_codec::minicbor;
@@ -8,10 +8,10 @@ use pallas_primitives::conway::{PlutusData, Redeemers};
 use pallas_primitives::{Fragment, MaybeIndefArray};
 use pallas_traverse::MultiEraTx;
 use seedelf_core::eval::Resolved;
-use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol};
+use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, PoolShort, Protocol};
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
-use seedelf_koios::koios::ProtocolParameters;
+use seedelf_koios::koios::{ProtocolParameters, Ratio};
 use serde_json::{Value, json};
 
 fn fixture() -> Value {
@@ -54,6 +54,7 @@ fn params() -> ProtocolParameters {
         "key_deposit": "2000000",
         "price_mem": 0.0577,
         "price_step": 0.0000721,
+        "min_fee_ref_script_cost_per_byte": 15,
         "cost_models": { "PlutusV3": cost_model },
     }))
     .unwrap()
@@ -252,6 +253,41 @@ fn a_mix_needs_two_boxes_and_a_payer_who_can_pay() {
 }
 
 #[test]
+fn a_mix_never_pays_a_fee_over_the_limit() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    // A public account's collateral can cover far more than a mix's fee.
+    let rich = Payer {
+        fee: coin(0x11, 30_000_000),
+        collateral: coin(0x22, 50_000_000),
+        address: key_address(0x33),
+        signers: 2,
+    };
+    let wrong = ProtocolParameters {
+        min_fee_b: 12_000_000,
+        ..params()
+    };
+    let err = lovejoin::mix(&wrong, &protocol, &boxes, &rich).unwrap_err();
+    assert!(err.to_string().contains("over the wallet's limit"), "{err}");
+}
+
+#[test]
+fn a_mix_prices_its_reference_scripts_from_the_parameters() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    let today = lovejoin::mix(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    let dearer = ProtocolParameters {
+        min_fee_ref_script_cost_per_byte: Ratio::whole(45),
+        ..params()
+    };
+    let mix = lovejoin::mix(&dearer, &protocol, &boxes, &payer(20_000_000)).unwrap();
+    // mix_box's 629 bytes and mix_logic's 3,156, at 30 lovelace a byte more.
+    // A proof's scalars move the measured budget by a hair between builds.
+    let more = mix.fee - today.fee;
+    assert!(more.abs_diff(3_785 * 30) < 100, "{more}");
+}
+
+#[test]
 fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
     let protocol = Protocol::of(true).unwrap();
     let params = params();
@@ -382,8 +418,50 @@ fn the_box_datum_is_canonical_and_reads_back() {
 }
 
 #[test]
-fn lovejoin_is_not_on_mainnet() {
-    assert!(Protocol::of(false).is_err());
+fn lovejoin_is_on_preprod_and_mainnet() {
+    let preprod = Protocol::of(true).unwrap();
+    let mainnet = Protocol::of(false).unwrap();
+    assert!(preprod.network_flag && !mainnet.network_flag);
+    assert_eq!(
+        mainnet.mix_box_address().to_bech32().unwrap(),
+        "addr1w8q5tsg07j72aal45ndm8l9lmh9ykmrmpqv3kp5skyh3ltgw48lct"
+    );
+    assert_ne!(preprod.mix_logic_hash, mainnet.mix_logic_hash);
+}
+
+/// The script a bundled reference output carries, read here on its own: the
+/// bytes inside its `script_ref`.
+fn reference_script(output: &[u8]) -> Option<Vec<u8>> {
+    use pallas_primitives::conway::{ScriptRef, TransactionOutput};
+    let TransactionOutput::PostAlonzo(output) = minicbor::decode(output).unwrap() else {
+        panic!("a post-Alonzo output")
+    };
+    match output.script_ref?.0 {
+        ScriptRef::PlutusV3Script(script) => Some(script.as_ref().to_vec()),
+        _ => panic!("a Plutus V3 script"),
+    }
+}
+
+#[test]
+fn the_reference_scripts_are_priced_on_the_scripts_referenced() {
+    // mainnet's mix_logic is 5 bytes longer: preprod's size would price every
+    // mainnet mix and withdraw 75 lovelace under the ledger's minimum.
+    for (network_flag, sizes) in [(true, vec![629, 3_156]), (false, vec![629, 3_161])] {
+        let protocol = Protocol::of(network_flag).unwrap();
+        let scripts: Vec<Vec<u8>> = protocol
+            .references
+            .iter()
+            .filter_map(|r| reference_script(&r.output))
+            .collect();
+        assert_eq!(scripts.iter().map(Vec::len).collect::<Vec<_>>(), sizes);
+        // They're the scripts the protocol names: blake2b-224 of 0x03 ‖ script.
+        let hash = |script: &[u8]| -> [u8; 28] {
+            *pallas_crypto::hash::Hasher::<224>::hash(&[&[3u8][..], script].concat())
+        };
+        assert_eq!(hash(&scripts[0]), protocol.mix_box_hash);
+        assert_eq!(hash(&scripts[1]), protocol.mix_logic_hash);
+        assert_eq!(protocol.script_bytes, sizes.iter().sum::<usize>() as u64);
+    }
 }
 
 /// Every box the recorded Lovejoin transactions spent, once each.
@@ -468,6 +546,11 @@ fn a_chain_needs_enough_pool_boxes() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("pool has 3 boxes"), "{err}");
+    // Its own type, which a caller tells from a build that failed.
+    assert_eq!(
+        err.downcast_ref::<PoolShort>(),
+        Some(&PoolShort { have: 3, needed: 8 })
+    );
 }
 
 #[test]
@@ -628,6 +711,7 @@ fn mixing_again_needs_a_box_and_enough_others() {
     let err =
         lovejoin::again(&params(), &protocol, &payer(20_000_000), &ours, 1, &pool).unwrap_err();
     assert!(err.to_string().contains("pool has 1 boxes"), "{err}");
+    assert!(err.downcast_ref::<PoolShort>().is_some());
 }
 
 #[test]

@@ -9,25 +9,43 @@
 //          move-in; Send only submits.
 // seedelf  A stealth mint from the Seedelf balance (the CLI's `util mint`,
 //          `build::mint`). It only hides the payer when that balance came
-//          from other people's Seedelf payments.
+//          from other people's Seedelf payments, so it takes received money
+//          first when the sealed history says which that is (privacy review
+//          §2.3).
 //
 // Both are built by script-spend.ts's draft → Ogmios → finish, and kept in
 // session storage until Send: signed for the account, unsigned with its
 // one-time key's seed for a stealth mint, which giveme.my witnesses at Send.
 
 import type { NetworkName } from "../networks";
+import { MADE_PRIVATE, type HistoryClass } from "../shared/histories";
 import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
-import { nothingInAccount, readAccount } from "./account";
-import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
+import { nothingInAccount, readAccount, validUntil } from "./account";
+import { rememberMint } from "./minted-by";
+import { settleMaybeSent } from "./pending";
+import {
+  changeHistory,
+  keep,
+  measure,
+  measureLocally,
+  nothingToSpend,
+  readContract,
+  send,
+  spentHistories,
+  type OutRef,
+  type ScriptSpendDeps,
+} from "./script-spend";
 
 /** chrome.storage.session: the mint built last, until it's sent or replaced. */
 export const SESSION_MINT = "seedelf.mint.built";
 
-type MintResult = Omit<MintSummary, "network" | "label" | "inputs" | "from"> & {
+type MintResult = Omit<MintSummary, "network" | "label" | "inputs" | "from" | "histories"> & {
   txCbor: string;
   seed?: string;
-  inputs: unknown[];
+  inputs: OutRef[];
   collateral?: unknown;
+  /** A stealth mint's: the classes it spends together. */
+  classesMixed?: string[];
 };
 
 export type MintDeps = ScriptSpendDeps;
@@ -35,14 +53,19 @@ export type MintDeps = ScriptSpendDeps;
 export class MintService {
   constructor(private readonly deps: MintDeps) {}
 
-  build(network: NetworkName, label: string, from: MintSource): Promise<MintSummary> {
+  async build(network: NetworkName, label: string, from: MintSource): Promise<MintSummary> {
+    await settleMaybeSent(this.deps, network);
     return from === "account" ? this.buildFromAccount(network, label) : this.buildStealth(network, label);
   }
 
   private async buildFromAccount(network: NetworkName, label: string): Promise<MintSummary> {
     const { wasm } = this.deps;
-    const { params, utxos, collateral, held, withdrawal } = await readAccount(this.deps, network);
-    const request = { network, params, label, utxos, collateral, withdrawal };
+    const [{ params, utxos, collateral, held, withdrawal }, invalidHereafter] = await Promise.all([
+      readAccount(this.deps, network),
+      validUntil(this.deps.koios(network)),
+    ]);
+    // The draft Ogmios measures and the finish hold the same slot.
+    const request = { network, params, label, utxos, collateral, withdrawal, invalidHereafter };
     if (request.utxos.length === 0) {
       throw nothingInAccount(held, "Your public account is empty. Fund it first; the Seedelf is paid from there.");
     }
@@ -54,36 +77,53 @@ export class MintService {
       (keys, r) => wasm.draftAccountMint(keys.cardano, keys.seedelf, r),
       (keys, r) => wasm.finishAccountMint(keys.cardano, keys.seedelf, r),
     );
-    return this.keep(network, label, "account", finished);
+    // Its Seedelf's ADA comes back into the private balance, when it's removed there, as money the account paid.
+    return this.keep(network, label, "account", finished, MADE_PRIVATE, undefined, request.invalidHereafter);
   }
 
   private async buildStealth(network: NetworkName, label: string): Promise<MintSummary> {
     const { wasm } = this.deps;
-    const { view, utxos, params } = await readContract(this.deps, network);
-    const request = { network, params, label, utxos };
+    const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
+    const request = { network, params, label, utxos, classes };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your private balance is empty. Make some ADA private first; the Seedelf is paid from there.");
+      throw nothingToSpend(
+        this.deps,
+        view,
+        "Your private balance is empty. Make some ADA private first; the Seedelf is paid from there.",
+        returning,
+      );
     }
 
-    const finished = await measure<MintResult>(
-      this.deps,
-      network,
-      request,
-      (keys, r) => wasm.draftMint(keys.seedelf, r),
-      (keys, r) => wasm.finishMint(keys.seedelf, r),
-    );
-    return this.keep(network, label, "seedelf", finished);
+    const finished = await measureLocally<MintResult>(this.deps, request, (keys, r) => wasm.buildMint(keys.seedelf, r));
+    const histories = spentHistories(classes, finished.inputs, finished.classesMixed);
+    return this.keep(network, label, "seedelf", finished, changeHistory(classes, finished.inputs), histories);
   }
 
-  private async keep(network: NetworkName, label: string, from: MintSource, finished: MintResult): Promise<MintSummary> {
-    const { txCbor, seed, inputs, collateral: _collateral, ...rest } = finished;
-    const summary: MintSummary = { ...rest, network, label, from, inputs: inputs.length };
-    await keep(this.deps, SESSION_MINT, { ...summary, txCbor, seed });
+  /** `origin`: the history of what it leaves in the private balance; `histories`: a stealth mint's inputs'. */
+  private async keep(
+    network: NetworkName,
+    label: string,
+    from: MintSource,
+    finished: MintResult,
+    origin: HistoryClass,
+    histories?: HistoryClass[],
+    invalidHereafter?: number,
+  ): Promise<MintSummary> {
+    const { txCbor, seed, inputs, collateral: _collateral, classesMixed: _mixed, ...rest } = finished;
+    const summary: MintSummary = { ...rest, network, label, from, inputs: inputs.length, ...(histories ? { histories } : {}) };
+    await keep(this.deps, SESSION_MINT, { ...summary, txCbor, seed, invalidHereafter, origin });
     return summary;
   }
 
-  /** For a stealth mint, giveme.my first witnesses the collateral; an account-paid one was signed at review. */
-  submit(network: NetworkName, txHash: string): Promise<PendingTx> {
+  /**
+   * For a stealth mint, giveme.my first witnesses the collateral; an
+   * account-paid one was signed at review. Who paid is kept first, sealed,
+   * so removing the Seedelf defaults to that side (minted-by.ts).
+   */
+  async submit(network: NetworkName, txHash: string): Promise<PendingTx> {
+    const { wallet, session, store } = this.deps;
+    const built = await wallet.withKeys(() => session.get<MintSummary>(SESSION_MINT));
+    if (built?.txHash === txHash && built.network === network) await rememberMint(store, network, built.tokenName, built.from);
     return send(this.deps, network, txHash, SESSION_MINT, "mint", "Seedelf");
   }
 }

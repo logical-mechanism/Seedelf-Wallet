@@ -5,11 +5,11 @@
 import { describe, expect, it } from "vitest";
 
 import { ADA_HANDLE_POLICY } from "../src/background/destination";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { SESSION_SEND } from "../src/background/send";
 import { MAX_RECIPIENTS } from "../src/shared/recipients";
 import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NOT_AN_ADDRESS } from "../src/shared/seedelf-name";
-import { txIdOf } from "./fixtures/cbor";
+import { ttlOf, txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -50,6 +50,7 @@ describe("send", () => {
       "account_info",
       "credential_utxos",
       "epoch_params",
+      "tip",
     ]);
     // The account's staking rewards pay for it too (preferences.ts).
     expect(summary.withdrawal).toBe("57475311");
@@ -154,6 +155,7 @@ describe("send", () => {
       "credential_utxos",
       "credential_utxos",
       "epoch_params",
+      "tip",
     ]);
 
     // Max pays one recipient; and there's a limit to how many.
@@ -180,12 +182,19 @@ describe("send", () => {
     const t = await unlocked();
     const summary = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
     const pending = await t.send.submit("preprod", summary.txHash);
-    expect(pending).toEqual({ kind: "send", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
+    expect(pending).toEqual({
+      kind: "send",
+      network: "preprod",
+      txHash: summary.txHash,
+      submittedAt: t.clock.now,
+      confirmations: null,
+      invalidHereafter: ttlOf(t.koios.submitted[0]!),
+    });
     expect(t.koios.submitted).toHaveLength(1);
     expect(txIdOf(t.koios.submitted[0]!)).toBe(summary.txHash);
     expect(t.collateral.asked).toHaveLength(0);
     expect(await t.session.get(SESSION_SEND)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toMatchObject({ kind: "send" });
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ kind: "send" });
     expect(await t.activity.seedelf("preprod")).toEqual([]);
     await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("isn't ready to send");
   });

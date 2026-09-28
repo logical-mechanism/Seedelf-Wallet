@@ -65,6 +65,7 @@ fn send(staking: &Staking, note: Option<&Note>) -> build::AccountPayment {
         &account.base_address(true, Role::Receive, 0).unwrap(),
         staking,
         note,
+        None,
     )
     .unwrap()
 }

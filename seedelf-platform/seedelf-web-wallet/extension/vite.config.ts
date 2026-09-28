@@ -24,6 +24,25 @@ function manifest(options: ManifestOptions): Plugin {
 }
 
 /**
+ * Stops the build if a page's code imports the worker's own chunk. Importing
+ * sw.js runs all of it: the page would carry a second worker, answering the
+ * pages' requests, and a site's, and reading Koios, beside the real one.
+ */
+function workerAlone(): Plugin {
+  return {
+    name: "seedelf-worker-alone",
+    generateBundle(_, bundle) {
+      for (const chunk of Object.values(bundle)) {
+        if (chunk.type !== "chunk" || chunk.fileName === "sw.js") continue;
+        if ([...chunk.imports, ...chunk.dynamicImports].includes("sw.js")) {
+          this.error(`${chunk.fileName} imports sw.js, so a page would run the whole worker as well.`);
+        }
+      }
+    },
+  };
+}
+
+/**
  * Builds the dApp connector's content scripts (src/content/) after the rest:
  * each one file with nothing imported at run time, wrapped so nothing but
  * `window.cardano.seedelf` reaches the page. Chrome runs content scripts as
@@ -63,11 +82,13 @@ function contentScripts(mode: string): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
-  const mainnetEnabled = env.VITE_ENABLE_MAINNET === "true";
+  // Every build has both networks (mainnet first, preprod in Settings and on
+  // the welcome screen); VITE_ENABLE_MAINNET=false makes a preprod-only one.
+  const mainnetEnabled = env.VITE_ENABLE_MAINNET !== "false";
   const storeBuild = env.VITE_STORE_BUILD === "true";
 
   return {
-    plugins: [react(), manifest({ version: pkg.version, mainnetEnabled, storeBuild }), contentScripts(mode)],
+    plugins: [react(), manifest({ version: pkg.version, mainnetEnabled, storeBuild }), workerAlone(), contentScripts(mode)],
     define: {
       __MAINNET_ENABLED__: JSON.stringify(mainnetEnabled),
       __VERSION__: JSON.stringify(pkg.version),
@@ -92,6 +113,11 @@ export default defineConfig(({ mode }) => {
         output: {
           // The manifest points at sw.js, so the worker keeps a fixed name.
           entryFileNames: (chunk) => (chunk.name === "sw" ? "sw.js" : "assets/[name]-[hash].js"),
+          // What the pages and the worker share goes in a chunk of its own,
+          // and Rolldown's helpers then do too. Left to itself, Rolldown put
+          // its helpers in sw.js, and the pages imported them from there
+          // (workerAlone stops that build).
+          codeSplitting: { groups: [{ name: "shared", minShareCount: 2 }] },
         },
       },
     },

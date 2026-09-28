@@ -24,7 +24,7 @@ use seedelf_core::transaction::{
 };
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::{create_proof, prove, random_scalar};
-use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, Ratio, UtxoResponse};
 use serde_json::{Value, json};
 
 const TOKEN_POLICY: &str = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
@@ -267,8 +267,26 @@ fn ledger_minimum_fee(
 ) -> u64 {
     assert_eq!((params.min_fee_a, params.min_fee_b), (44, 155_381));
     assert_eq!((params.price_mem, params.price_step), (0.0577, 0.0000721));
+    // Flat below the first 25,600-byte tier.
+    assert_eq!(params.min_fee_ref_script_cost_per_byte, Ratio::whole(15));
     let units = (577 * mem as u128 * 1_000 + 721 * steps as u128).div_ceil(10_000_000) as u64;
     44 * size + 155_381 + units + 15 * script_bytes
+}
+
+/// The recorded Koios row's reference script: the Seedelf policy, 519 bytes.
+fn recorded_script() -> Option<seedelf_koios::koios::ReferenceScript> {
+    let rows: Vec<UtxoResponse> =
+        serde_json::from_str(include_str!("fixtures/reference_script_utxo.json")).unwrap();
+    rows[0].reference_script.clone()
+}
+
+/// The reference-script bytes on `utxos`, measured here from Koios's hex.
+fn script_bytes_of(utxos: &[UtxoResponse]) -> u64 {
+    utxos
+        .iter()
+        .filter_map(|u| u.reference_script.as_ref())
+        .map(|s| s.bytes.as_ref().unwrap().len() as u64 / 2)
+        .sum()
 }
 
 fn register_from(datum: DatumOption) -> Option<Register> {
@@ -474,14 +492,24 @@ fn mints_a_seedelf_named_after_the_smallest_input() {
         minted.lovelace,
         seedelf_minimum_lovelace(&w.chain.params).unwrap()
     );
+    let minted_name = minted.token_name.clone();
 
     let built = proven(&w, minted)
         .finalize(&Budgets::from_ogmios(&measured(2)).unwrap())
         .unwrap();
     let tx = assert_sound(&w, &spent, &built);
 
-    // The seedelf sits under exactly the register it was given.
-    let seedelf_out = &tx.outputs[0];
+    // The seedelf sits under exactly the register it was given, wherever the
+    // shuffle put it.
+    let policy = w.chain.config.contract.seedelf_policy_id.clone();
+    let seedelf_out = tx
+        .outputs
+        .iter()
+        .find(|o| {
+            o.assets
+                .contains_key(&(policy.clone(), hex::encode(&minted_name)))
+        })
+        .expect("the seedelf's output");
     assert_eq!(seedelf_out.register.as_ref(), Some(&seedelf));
     assert_eq!(
         seedelf_out.lovelace,
@@ -862,6 +890,28 @@ fn prices_bytes_as_the_ledger_does() {
 }
 
 #[test]
+fn the_reference_scripts_are_priced_from_the_parameters() {
+    let mint_at = |numerator: u64| {
+        let mut w = world();
+        w.chain.params.min_fee_ref_script_cost_per_byte = Ratio::whole(numerator);
+        let spent = [owned(&w, 0x20, 0, 25_000_000, &[])];
+        let seedelf = w.owner.clone().rerandomize().unwrap();
+        let minted =
+            build::mint_from(&w.chain, &spent, "priced", &seedelf, &w.owner, w.signer).unwrap();
+        proven(&w, minted)
+            .finalize(&Budgets::from_ogmios(&measured(1)).unwrap())
+            .unwrap()
+    };
+    // The wallet script's 629 bytes and the policy's 519, both by reference.
+    let today = mint_at(15);
+    assert_eq!(today.fee.script_reference, (629 + 519) * 15);
+    // A governance change moves the fee with it, not a constant.
+    let dearer = mint_at(20);
+    assert_eq!(dearer.fee.script_reference, (629 + 519) * 20);
+    assert_eq!(dearer.fee.total - today.fee.total, (629 + 519) * 5);
+}
+
+#[test]
 fn collateral_return_and_even_rounding() {
     assert_eq!(build::even(300_001), 300_002);
     assert_eq!(build::even(300_002), 300_002);
@@ -1065,9 +1115,12 @@ mod account {
             .collect();
         assert_eq!(returned, tokens_of(&[collateral]));
 
-        // The fee: even, at least the ledger's minimum for this many signatures.
+        // The fee: even, at least the ledger's minimum for this many
+        // signatures, with the policy's 519 bytes and any reference script on
+        // an input (never the collateral's).
         let b = tx.redeemers[0].budget;
-        let needed = ledger_minimum_fee(params, tx.size_signed, b.mem, b.steps, 519);
+        let script_bytes = 519 + script_bytes_of(mint.inputs());
+        let needed = ledger_minimum_fee(params, tx.size_signed, b.mem, b.steps, script_bytes);
         assert_eq!(tx.fee % 2, 0);
         assert!(tx.fee >= needed, "fee {} covers {needed}", tx.fee);
         assert!(tx.fee - needed < 1_000);
@@ -1091,6 +1144,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         // The largest pure-ADA UTxO pays; the 5 ADA one isn't needed, so it's put up.
@@ -1106,6 +1160,41 @@ mod account {
         let tx = assert_sound(&p, &mint, &built);
         assert_eq!(tx.outputs.len(), 2);
         assert_eq!(built.change_lovelace, 10_000_000 - 1_749_860 - tx.fee);
+    }
+
+    #[test]
+    fn an_input_with_a_reference_script_pays_for_it_and_is_spent_last() {
+        let p = payer();
+        let scripted = UtxoResponse {
+            reference_script: recorded_script(),
+            ..at(&p, 0x33, 0, 30_000_000, &[])
+        };
+        let plain = at(&p, 0x34, 1, 3_000_000, &[]);
+        let collateral = at(&p, 0x35, 2, 5_000_000, &[]);
+        let mint_from = |available: &[UtxoResponse]| {
+            build::account_mint(
+                &p.chain,
+                available,
+                Some(&collateral),
+                "account-mint",
+                &p.seedelf,
+                &p.change,
+                &Staking::none(),
+                None,
+            )
+            .unwrap()
+        };
+        // Plain ADA pays first, even the smaller.
+        let mint = mint_from(&[scripted.clone(), plain.clone()]);
+        assert_eq!(
+            outpoints(mint.inputs()),
+            outpoints(std::slice::from_ref(&plain))
+        );
+        // Spent, its 519 bytes are paid for with the policy's.
+        let mint = mint_from(std::slice::from_ref(&scripted));
+        let built = mint.finalize(&recorded()).unwrap();
+        assert_eq!(built.fee.script_reference, (519 + 519) * 15);
+        assert_sound(&p, &mint, &built);
     }
 
     #[test]
@@ -1125,6 +1214,7 @@ mod account {
                 &p.seedelf,
                 &p.change,
                 &Staking::none(),
+                None,
             )
             .unwrap();
             assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
@@ -1156,6 +1246,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..1]));
@@ -1185,6 +1276,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         assert_eq!(outpoints(mint.inputs()), outpoints(&available[..2]));
@@ -1201,6 +1293,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         assert_eq!(mint.collateral().tx_hash, single[0].tx_hash);
@@ -1220,6 +1313,7 @@ mod account {
                 &p.seedelf,
                 &p.change,
                 &Staking::none(),
+                None,
             )
             .err()
             .expect("an error")
@@ -1240,6 +1334,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .err()
         .unwrap();
@@ -1256,7 +1351,8 @@ mod account {
                 "",
                 &bad,
                 &p.change,
-                &Staking::none()
+                &Staking::none(),
+                None
             )
             .err()
             .unwrap()
@@ -1271,6 +1367,7 @@ mod account {
             &p.seedelf,
             &p.change,
             &Staking::none(),
+            None,
         )
         .unwrap();
         let no_mint = json!({"result": [{"validator": {"index": 0, "purpose": "spend"}, "budget": {"memory": 1, "cpu": 1}}]});
@@ -1413,17 +1510,11 @@ mod transfer {
             assert!(o.lovelace >= minimum, "output {i} above its minimum");
         }
 
-        // The payments come first, each a re-randomization of the register
-        // found: owned by the recipient, never the register as found.
+        // Each payment is an output, anywhere among them (they're shuffled):
+        // a re-randomization of the register found, owned by the recipient,
+        // never the register as found, holding exactly what was paid.
+        let mut rest: Vec<&Out> = tx.outputs.iter().collect();
         for (i, (owner, payment)) in paid.iter().enumerate() {
-            let o = &tx.outputs[i];
-            let register = o.register.as_ref().unwrap();
-            assert!(
-                register.is_owned(*owner).unwrap(),
-                "payment {i} reaches its Seedelf's owner"
-            );
-            assert_ne!(register, &payment.register, "payment {i} is re-randomized");
-            assert_eq!(o.lovelace, payment.lovelace);
             let sent: BTreeMap<(String, String), u64> = payment
                 .tokens
                 .items
@@ -1435,16 +1526,29 @@ mod transfer {
                     )
                 })
                 .collect();
-            assert_eq!(o.assets, sent, "payment {i} holds exactly its tokens");
+            let at = rest
+                .iter()
+                .position(|o| {
+                    o.register.as_ref().unwrap().is_owned(*owner).unwrap()
+                        && o.lovelace == payment.lovelace
+                        && o.assets == sent
+                })
+                .unwrap_or_else(|| panic!("payment {i} reaches its Seedelf's owner"));
+            let o = rest.remove(at);
+            assert_ne!(
+                o.register.as_ref().unwrap(),
+                &payment.register,
+                "payment {i} is re-randomized"
+            );
         }
         // The rest is change, owned by the payer.
-        for o in &tx.outputs[paid.len()..] {
+        for o in &rest {
             assert!(
                 o.register.as_ref().unwrap().is_owned(w.sk).unwrap(),
                 "change is owned"
             );
         }
-        assert_eq!(built.change_outputs, tx.outputs.len() - paid.len());
+        assert_eq!(built.change_outputs, rest.len());
 
         // Only the wallet script, by reference; the one-time key and giveme.my sign.
         assert_eq!(tx.signers, vec![w.signer, Hash::new(COLLATERAL_HASH)]);
@@ -1540,15 +1644,13 @@ mod transfer {
             "{}",
             built.fee.total
         );
-        // Not the sender's, and not the found register's owner by accident.
-        assert!(
-            !tx.outputs[0]
-                .register
-                .as_ref()
-                .unwrap()
-                .is_owned(w.sk)
-                .unwrap()
-        );
+        // The payment isn't the sender's, and not the found register's owner by accident.
+        let theirs = tx
+            .outputs
+            .iter()
+            .filter(|o| !o.register.as_ref().unwrap().is_owned(w.sk).unwrap())
+            .count();
+        assert_eq!(theirs, 1);
     }
 
     #[test]
@@ -1623,8 +1725,10 @@ mod transfer {
         let tx = assert_transfer(&w, &spent, &[(bob.sk, &payment)], &built);
         // The other 60 go back as change.
         assert_eq!(built.change_tokens, tokens(&[("tok", 60)]));
-        let back: u64 = tx.outputs[1..]
+        let back: u64 = tx
+            .outputs
             .iter()
+            .filter(|o| o.register.as_ref().unwrap().is_owned(w.sk).unwrap())
             .filter_map(|o| {
                 o.assets
                     .get(&(TOKEN_POLICY.to_string(), hex::encode("tok")))
@@ -1861,20 +1965,21 @@ mod withdraw {
         let lovelace_in: u64 = spent.iter().map(|u| u.value.parse::<u64>().unwrap()).sum();
         let lovelace_out: u64 = tx.outputs.iter().map(|o| o.lovelace).sum();
         assert_eq!(lovelace_in, lovelace_out + tx.fee, "lovelace conserved");
-        let mut tokens: BTreeMap<(String, String), i64> = BTreeMap::new();
+        // In i128: a token can total up to a u64 across the inputs.
+        let mut tokens: BTreeMap<(String, String), i128> = BTreeMap::new();
         for a in spent.iter().flat_map(|u| u.asset_list.iter().flatten()) {
             *tokens
                 .entry((a.policy_id.clone(), a.asset_name.clone()))
-                .or_default() += a.quantity.parse::<i64>().unwrap();
+                .or_default() += a.quantity.parse::<i128>().unwrap();
         }
         for (k, v) in &tx.mint {
-            *tokens.entry(k.clone()).or_default() += v;
+            *tokens.entry(k.clone()).or_default() += i128::from(*v);
         }
         tokens.retain(|_, v| *v != 0);
-        let mut out: BTreeMap<(String, String), i64> = BTreeMap::new();
+        let mut out: BTreeMap<(String, String), i128> = BTreeMap::new();
         for o in &tx.outputs {
             for (k, v) in &o.assets {
-                *out.entry(k.clone()).or_default() += *v as i64;
+                *out.entry(k.clone()).or_default() += i128::from(*v);
             }
         }
         assert_eq!(tokens, out, "tokens conserved");
@@ -1958,16 +2063,19 @@ mod withdraw {
         assert!(spent.iter().all(|u| u.value != "2500000"));
         let built = finish(&w, spend, &spends_only(2));
         let tx = assert_spend(&w, &spent, &built, 629);
-        assert_eq!(tx.outputs[0].address, to);
-        assert_eq!(tx.outputs[0].lovelace, 5_000_000);
-        assert_eq!(assets_of(&tx.outputs[0]), sent);
-        assert!(tx.outputs[1..].iter().all(|o| o.address == w.wallet));
+        // The payment and the change in a random order.
+        let (paid, change): (Vec<&Out>, Vec<&Out>) =
+            tx.outputs.iter().partition(|o| o.address == to);
+        assert_eq!(paid.len(), 1);
+        assert_eq!(paid[0].lovelace, 5_000_000);
+        assert_eq!(assets_of(paid[0]), sent);
+        assert!(!change.is_empty() && change.iter().all(|o| o.address == w.wallet));
         assert_eq!(built.change_tokens, tokens(&[("tok", 60)]));
         assert!(tx.mint.is_empty());
     }
 
     #[test]
-    fn pays_several_addresses_in_order_and_keeps_the_change() {
+    fn pays_several_addresses_and_keeps_the_change() {
         let w = world();
         let first = key_address(Network::Testnet);
         let second: Address = ShelleyAddress::new(
@@ -2002,14 +2110,19 @@ mod withdraw {
         );
         let built = finish(&w, spend, &spends_only(2));
         let tx = assert_spend(&w, &spent, &built, 629);
-        // Each address as asked, in order; then the change, back into the contract.
-        assert_eq!(tx.outputs[0].address, first);
-        assert_eq!(tx.outputs[0].lovelace, 5_000_000);
-        assert_eq!(assets_of(&tx.outputs[0]), tokens(&[("tok", 40)]));
-        assert_eq!(tx.outputs[1].address, second);
-        assert_eq!(tx.outputs[1].lovelace, 2_000_000);
-        assert_eq!(assets_of(&tx.outputs[1]), tokens(&[("tok", 25)]));
-        assert!(tx.outputs[2..].iter().all(|o| o.address == w.wallet));
+        // Each address as asked, and the change back into the contract, in
+        // a random order.
+        let to = |addr: &Address| {
+            let found: Vec<&Out> = tx.outputs.iter().filter(|o| &o.address == addr).collect();
+            assert_eq!(found.len(), 1);
+            (found[0].lovelace, assets_of(found[0]))
+        };
+        assert_eq!(to(&first), (5_000_000, tokens(&[("tok", 40)])));
+        assert_eq!(to(&second), (2_000_000, tokens(&[("tok", 25)])));
+        assert_eq!(
+            tx.outputs.iter().filter(|o| o.address == w.wallet).count(),
+            tx.outputs.len() - 2
+        );
         assert_eq!(built.change_tokens, tokens(&[("tok", 35)]));
 
         // Together they can't take more of a token than there is.
@@ -2025,6 +2138,115 @@ mod withdraw {
             .unwrap()
             .to_string();
         assert!(e.contains("at least one address"), "{e}");
+    }
+
+    #[test]
+    fn never_picks_a_utxo_whose_tokens_would_overflow_the_rest() {
+        let w = world();
+        let to = key_address(Network::Testnet);
+        // Three UTxOs of 2^63 − 1 of one token, paid in by a stranger: all
+        // three can't sit in one output.
+        let junk = (1u64 << 63) - 1;
+        let available = [
+            owned(&w, 0x01, 0, 4_000_000, &[]),
+            owned(&w, 0x07, 0, 3_000_000, &[("junk", junk)]),
+            owned(&w, 0x08, 0, 3_000_000, &[("junk", junk)]),
+            owned(&w, 0x09, 0, 3_000_000, &[("junk", junk)]),
+        ];
+        // More than the ADA-only UTxO holds, so selection reaches the token UTxOs.
+        let spend = build::sweep(
+            &w.chain,
+            &available,
+            &to,
+            8_000_000,
+            &Assets::new(),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let spent = spend.inputs();
+        assert_eq!(spent.len(), 3);
+        assert!(spent.iter().all(|u| u.tx_hash != hex::encode([0x09; 32])));
+        let built = finish(&w, spend, &spends_only(3));
+        assert_spend(&w, &spent, &built, 629);
+        // More than the two that fit hold: not enough, in words.
+        let err = build::sweep(
+            &w.chain,
+            &available,
+            &to,
+            10_000_000,
+            &Assets::new(),
+            &w.owner,
+            w.signer,
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            err.contains("Not enough ADA in the Seedelf balance"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn never_picks_a_utxo_the_wallets_evaluator_cant_take() {
+        let w = world();
+        let to = key_address(Network::Testnet);
+        // The largest carries a reference script, which anyone can pay a Seedelf.
+        let scripted = UtxoResponse {
+            reference_script: recorded_script(),
+            ..owned(&w, 0x01, 0, 30_000_000, &[])
+        };
+        let available = [
+            scripted,
+            owned(&w, 0x02, 0, 4_000_000, &[]),
+            owned(&w, 0x03, 0, 3_000_000, &[]),
+        ];
+        let spend = build::sweep(
+            &w.chain,
+            &available,
+            &to,
+            5_000_000,
+            &Assets::new(),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let spent = spend.inputs();
+        assert_eq!(outpoints(&spent), outpoints(&available[1..]));
+        let built = finish(&w, spend, &spends_only(2));
+        assert_spend(&w, &spent, &built, 629);
+    }
+
+    fn outpoints(utxos: &[UtxoResponse]) -> Vec<(String, u64)> {
+        let mut o: Vec<(String, u64)> = utxos
+            .iter()
+            .map(|u| (u.tx_hash.clone(), u.tx_index))
+            .collect();
+        o.sort();
+        o
+    }
+
+    #[test]
+    fn a_spent_input_with_a_reference_script_is_paid_for() {
+        let w = world();
+        let to = key_address(Network::Testnet);
+        let scripted = UtxoResponse {
+            reference_script: recorded_script(),
+            ..owned(&w, 0x01, 0, 8_000_000, &[])
+        };
+        // The CLI's sweep of exactly these, measured by Ogmios.
+        let spend = build::sweep_all(
+            &w.chain,
+            std::slice::from_ref(&scripted),
+            &to,
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let built = finish(&w, spend, &spends_only(1));
+        // The wallet script's 629 bytes and the input's 519.
+        assert_spend(&w, &[scripted], &built, 629 + 519);
     }
 
     #[test]
@@ -2189,4 +2411,355 @@ mod withdraw {
         let e = spend.finalize(&spends_only(1)).err().unwrap();
         assert!(e.to_string().contains("Seedelf policy"), "{e}");
     }
+}
+
+/// Coin selection keeping histories apart (privacy review §2.3): the cases
+/// the privacy review's probe found, and what happens when nothing else pays.
+mod apart {
+    use super::*;
+    use pallas_addresses::{
+        Network, PaymentKeyHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+    };
+    use seedelf_core::assets::Assets;
+    use seedelf_core::build::{AddressPayment, Class, Histories, Origin, Payment, Purpose};
+
+    /// About what a box back from Lovejoin brings: 10 ₳ less the withdraw's fee.
+    const BOX: u64 = 9_710_000;
+
+    fn class(id: &str, origin: Origin) -> Class {
+        Class {
+            id: id.into(),
+            origin,
+        }
+    }
+
+    /// `utxos`, each of the class given, for `purpose`.
+    fn histories(purpose: Purpose, utxos: &[(&UtxoResponse, Class)]) -> Histories {
+        utxos.iter().fold(Histories::new(purpose), |h, (u, c)| {
+            h.with(&u.tx_hash, u.tx_index, c.clone())
+        })
+    }
+
+    /// Each box its own class, as the extension gives them.
+    fn boxes(w: &World, first: u8, n: u8) -> Vec<(UtxoResponse, Class)> {
+        (0..n)
+            .map(|i| {
+                let u = owned(w, first + i, 0, BOX, &[]);
+                let c = class(&format!("box:{}#0", u.tx_hash), Origin::Lovejoin);
+                (u, c)
+            })
+            .collect()
+    }
+
+    fn key_address() -> Address {
+        ShelleyAddress::new(
+            Network::Testnet,
+            ShelleyPaymentPart::Key(PaymentKeyHash::new([7; 28])),
+            ShelleyDelegationPart::Null,
+        )
+        .into()
+    }
+
+    /// A session's funding: `lovelace` and its 5 ₳ collateral, to its one-time account.
+    fn funding(lovelace: u64) -> Vec<AddressPayment> {
+        [lovelace, 5_000_000]
+            .into_iter()
+            .map(|lovelace| AddressPayment {
+                to: key_address(),
+                lovelace,
+                tokens: Assets::new(),
+            })
+            .collect()
+    }
+
+    fn someone() -> Payment {
+        Payment {
+            register: Register::create(random_scalar())
+                .unwrap()
+                .rerandomize()
+                .unwrap(),
+            lovelace: 20_000_000,
+            tokens: Assets::new(),
+        }
+    }
+
+    fn outpoints(utxos: &[UtxoResponse]) -> Vec<String> {
+        let mut v: Vec<String> = utxos
+            .iter()
+            .map(|u| format!("{}#{}", u.tx_hash, u.tx_index))
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn one(utxo: &UtxoResponse) -> Vec<String> {
+        outpoints(std::slice::from_ref(utxo))
+    }
+
+    #[test]
+    fn two_boxes_are_never_spent_together_while_a_token_bearing_main_utxo_pays() {
+        let w = world();
+        // After a private token buy: the main UTxO holds the token, and the
+        // boxes back from Lovejoin are all ADA.
+        let main = owned(&w, 0x01, 0, 894_000_000, &[("tok", 5)]);
+        let back = boxes(&w, 0x10, 3);
+        let available: Vec<UtxoResponse> = std::iter::once(main.clone())
+            .chain(back.iter().map(|(u, _)| u.clone()))
+            .collect();
+        let pay = [someone()];
+
+        // What the wallet did: three boxes spent together.
+        let blind = build::transfer(&w.chain, &available, &pay, &w.owner, w.signer).unwrap();
+        assert_eq!(blind.inputs().len(), 3);
+        assert!(blind.inputs().iter().all(|u| u.value == BOX.to_string()));
+
+        let mut known = vec![(&main, class("session:0", Origin::Session))];
+        known.extend(back.iter().map(|(u, c)| (u, c.clone())));
+        let h = histories(Purpose::Pay, &known);
+        let spend =
+            build::transfer_apart(&w.chain, &available, &h, &pay, &w.owner, w.signer).unwrap();
+        assert_eq!(outpoints(&spend.inputs()), one(&main));
+        assert!(h.merged(&spend.inputs()).is_empty());
+
+        // A session's funding of 105 ₳ against 12 boxes: the main UTxO alone.
+        let back = boxes(&w, 0x20, 12);
+        let available: Vec<UtxoResponse> = std::iter::once(main.clone())
+            .chain(back.iter().map(|(u, _)| u.clone()))
+            .collect();
+        let mut known = vec![(&main, class("session:0", Origin::Session))];
+        known.extend(back.iter().map(|(u, c)| (u, c.clone())));
+        let h = histories(Purpose::Fund { session: None }, &known);
+        let spend = build::sweep_many_apart(
+            &w.chain,
+            &available,
+            &h,
+            &funding(100_000_000),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        assert_eq!(outpoints(&spend.inputs()), outpoints(&[main]));
+    }
+
+    #[test]
+    fn a_stealth_mint_takes_received_money_before_money_moved_in() {
+        let w = world();
+        let moved_in = owned(&w, 0x01, 0, 1_000_000_000, &[]);
+        let received = owned(&w, 0x02, 0, 20_000_000, &[]);
+        let available = [moved_in.clone(), received.clone()];
+        let seedelf = w.owner.clone().rerandomize().unwrap();
+
+        // What the wallet did: the largest, the user's own money.
+        let blind = build::mint(&w.chain, &available, "", &seedelf, &w.owner, w.signer).unwrap();
+        assert_eq!(outpoints(&blind.spend.inputs()), one(&moved_in));
+
+        let h = histories(
+            Purpose::Mint,
+            &[
+                (&moved_in, class("public", Origin::Own)),
+                (
+                    &received,
+                    class(&format!("received:{}", received.tx_hash), Origin::Received),
+                ),
+            ],
+        );
+        let minted =
+            build::mint_apart(&w.chain, &available, &h, "", &seedelf, &w.owner, w.signer).unwrap();
+        assert_eq!(outpoints(&minted.spend.inputs()), outpoints(&[received]));
+    }
+
+    #[test]
+    fn a_funding_takes_received_money_and_leaves_another_sessions_change() {
+        let w = world();
+        let moved_in = owned(&w, 0x01, 0, 1_000_000_000, &[]);
+        let change = owned(&w, 0x02, 0, 300_000_000, &[]);
+        let received = owned(&w, 0x03, 0, 120_000_000, &[]);
+        let available = [moved_in.clone(), change.clone(), received.clone()];
+        let of = [
+            (&moved_in, class("public", Origin::Own)),
+            (&change, class("public+session:1", Origin::Session)),
+            (
+                &received,
+                class(&format!("received:{}", received.tx_hash), Origin::Received),
+            ),
+        ];
+        let fund = |h: &Histories, available: &[UtxoResponse]| {
+            let spend = build::sweep_many_apart(
+                &w.chain,
+                available,
+                h,
+                &funding(100_000_000),
+                &w.owner,
+                w.signer,
+            )
+            .unwrap();
+            outpoints(&spend.inputs())
+        };
+
+        // What the wallet did: the largest, the move-in, one hop from the public account.
+        assert_eq!(fund(&Histories::default(), &available), one(&moved_in));
+        // Now the received payment, which pays alone.
+        let new_session = Purpose::Fund {
+            session: Some("session:2".into()),
+        };
+        assert_eq!(
+            fund(&histories(new_session.clone(), &of), &available),
+            one(&received)
+        );
+        // Without it: the user's own money, never session 1's change.
+        let without = [moved_in.clone(), change.clone()];
+        assert_eq!(fund(&histories(new_session, &of), &without), one(&moved_in));
+        // Session 1's own top-up takes what its funding left first: that ties nothing new.
+        let top_up = Purpose::Fund {
+            session: Some("session:1".into()),
+        };
+        assert_eq!(
+            fund(&histories(top_up, &of), &available),
+            outpoints(&[change])
+        );
+    }
+
+    #[test]
+    fn inputs_of_one_history_go_together_before_two_histories_do() {
+        let w = world();
+        let own = [
+            owned(&w, 0x01, 0, 30_000_000, &[]),
+            owned(&w, 0x02, 0, 30_000_000, &[]),
+        ];
+        let received = owned(&w, 0x03, 0, 40_000_000, &[]);
+        let available = [own[0].clone(), own[1].clone(), received.clone()];
+        let to = key_address();
+        let pay = [AddressPayment {
+            to,
+            lovelace: 50_000_000,
+            tokens: Assets::new(),
+        }];
+        // What the wallet did: the two largest, merging the two histories.
+        let blind = build::sweep_many(&w.chain, &available, &pay, &w.owner, w.signer).unwrap();
+        assert!(outpoints(&blind.inputs()).contains(&format!("{}#0", received.tx_hash)));
+
+        let h = histories(
+            Purpose::Pay,
+            &[
+                (&own[0], class("public", Origin::Own)),
+                (&own[1], class("public", Origin::Own)),
+                (&received, class("received:x", Origin::Received)),
+            ],
+        );
+        let spend =
+            build::sweep_many_apart(&w.chain, &available, &h, &pay, &w.owner, w.signer).unwrap();
+        assert_eq!(outpoints(&spend.inputs()), outpoints(&own));
+        assert!(h.merged(&spend.inputs()).is_empty());
+    }
+
+    #[test]
+    fn when_nothing_else_pays_it_merges_and_says_what() {
+        let w = world();
+        let back = boxes(&w, 0x10, 4);
+        let available: Vec<UtxoResponse> = back.iter().map(|(u, _)| u.clone()).collect();
+        let known: Vec<(&UtxoResponse, Class)> = back.iter().map(|(u, c)| (u, c.clone())).collect();
+        let h = histories(Purpose::Pay, &known);
+        // 15 ₳ from boxes alone: two of them, never refused, and no more than two.
+        let pay = [AddressPayment {
+            to: key_address(),
+            lovelace: 15_000_000,
+            tokens: Assets::new(),
+        }];
+        let spend =
+            build::sweep_many_apart(&w.chain, &available, &h, &pay, &w.owner, w.signer).unwrap();
+        assert_eq!(spend.inputs().len(), 2);
+        let merged = h.merged(&spend.inputs());
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().all(|c| c.origin == Origin::Lovejoin));
+
+        // With some money of the user's own, a box joins it: one box, not two.
+        let mine = owned(&w, 0x01, 0, 8_000_000, &[]);
+        let mut known = known.clone();
+        known.push((&mine, class("public", Origin::Own)));
+        let h = histories(Purpose::Pay, &known);
+        let available: Vec<UtxoResponse> = std::iter::once(mine.clone()).chain(available).collect();
+        let spend =
+            build::sweep_many_apart(&w.chain, &available, &h, &pay, &w.owner, w.signer).unwrap();
+        let spent = spend.inputs();
+        assert_eq!(spent.len(), 2);
+        assert!(outpoints(&spent).contains(&format!("{}#0", mine.tx_hash)));
+        assert_eq!(h.merged(&spent).len(), 2);
+
+        // More than everything can pay is still "not enough".
+        let pay = [AddressPayment {
+            to: key_address(),
+            lovelace: 100_000_000,
+            tokens: Assets::new(),
+        }];
+        let e = build::sweep_many_apart(&w.chain, &available, &h, &pay, &w.owner, w.signer)
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("Not enough ADA"), "{e}");
+    }
+
+    #[test]
+    fn with_nothing_known_it_picks_as_the_cli_always_has() {
+        let w = world();
+        let available: Vec<UtxoResponse> = (0..6u8)
+            .map(|i| owned(&w, 0x40 + i, 0, 3_000_000 + u64::from(i) * 1_000_000, &[]))
+            .collect();
+        let pay = [AddressPayment {
+            to: key_address(),
+            lovelace: 12_000_000,
+            tokens: Assets::new(),
+        }];
+        let blind = build::sweep_many(&w.chain, &available, &pay, &w.owner, w.signer).unwrap();
+        // Every UTxO Unknown, given or not: the same inputs, and the same fee.
+        let unknown = available
+            .iter()
+            .fold(Histories::new(Purpose::Fund { session: None }), |h, u| {
+                h.with(&u.tx_hash, u.tx_index, Class::default())
+            });
+        let apart =
+            build::sweep_many_apart(&w.chain, &available, &unknown, &pay, &w.owner, w.signer)
+                .unwrap();
+        assert_eq!(outpoints(&apart.inputs()), outpoints(&blind.inputs()));
+        assert_eq!(
+            apart.estimate().unwrap().fee.total,
+            blind.estimate().unwrap().fee.total
+        );
+    }
+}
+
+/// Where a Seedelf spend puts its change (privacy review §3.7).
+#[test]
+fn the_change_goes_anywhere_among_a_transfers_outputs() {
+    let w = world();
+    let payment = seedelf_core::build::Payment {
+        register: Register::create(random_scalar())
+            .unwrap()
+            .rerandomize()
+            .unwrap(),
+        lovelace: 7_000_000,
+        tokens: Default::default(),
+    };
+    let spent = [owned(&w, 0x01, 0, 50_000_000, &[])];
+    let spend = build::transfer_from(
+        &w.chain,
+        &spent,
+        std::slice::from_ref(&payment),
+        &w.owner,
+        w.signer,
+    )
+    .unwrap();
+    // Two outputs; the change is the one the payer owns. In 64 builds it
+    // comes first at least once, but for a chance of 2^-64.
+    let firsts = (0..64)
+        .filter(|_| {
+            let tx = decode(&spend.estimate().unwrap().tx);
+            assert_eq!(tx.outputs.len(), 2);
+            tx.outputs[0]
+                .register
+                .as_ref()
+                .unwrap()
+                .is_owned(w.sk)
+                .unwrap()
+        })
+        .count();
+    assert!(firsts > 0 && firsts < 64, "{firsts} of 64");
 }

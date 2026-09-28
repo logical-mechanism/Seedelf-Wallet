@@ -1,5 +1,7 @@
 // A choice between a few options, as a segmented switch of pressed buttons:
-// who pays for a seedelf, where a removed seedelf's ADA goes.
+// who pays for a seedelf, where a removed seedelf's ADA goes. With no
+// `value`, none is pressed until the user picks one (a site's connect
+// window, or Remove when the wallet can't tell who paid).
 
 export function Choice<T extends string>({
   label,
@@ -11,7 +13,7 @@ export function Choice<T extends string>({
   label: string;
   id: string;
   options: Array<{ value: T; label: string; disabled?: boolean }>;
-  value: T;
+  value?: T;
   onChange: (value: T) => void;
 }) {
   return (

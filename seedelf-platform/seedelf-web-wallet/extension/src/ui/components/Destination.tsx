@@ -8,10 +8,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import type { NetworkName } from "../../networks";
 import type { SeedelfLookup, WithdrawDestination } from "../../shared/rpc";
 import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NAME_RULE, SEEDELF_PREFIX, seedelfName } from "../../shared/seedelf-name";
 import { call } from "../background";
 import { shortHex } from "../format";
+import { useNetwork } from "../network";
 import { ContactEditor, ContactPicker, useContacts } from "./Contacts";
 
 export type DestinationRead =
@@ -20,6 +22,9 @@ export type DestinationRead =
   | { state: "read"; destination: WithdrawDestination }
   | { state: "seedelf"; seedelf: SeedelfLookup }
   | { state: "error"; message: string };
+
+/** How an address on `network` starts, for the To field's hint: a mainnet wallet never asks for a testnet one. */
+export const addressHint = (network: NetworkName) => (network === "mainnet" ? "addr1…" : "addr_test1…");
 
 /** Wait this long after the last key press before reading the destination (a handle asks Koios). */
 const SETTLE_MS = 400;
@@ -117,6 +122,7 @@ export function DestinationField({
 }) {
   const [contacts, reloadContacts] = useContacts();
   const [contactModal, setContactModal] = useState<"pick" | "save">();
+  const address = addressHint(useNetwork());
   const kind = seedelfs ? undefined : "address";
   const hasContacts = !!contacts?.some((c) => !kind || c.kind === kind);
   // What a contact holds for this destination: a seedelf's name, the $handle as typed, or the address.
@@ -157,7 +163,7 @@ export function DestinationField({
         className="seedelf-name"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={seedelfs ? "addr_test1…, $handle or 5eed0e1f…" : "addr_test1… or $handle"}
+        placeholder={seedelfs ? `${address}, $handle or 5eed0e1f…` : `${address} or $handle`}
         autoComplete="off"
         spellCheck={false}
         autoFocus

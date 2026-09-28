@@ -3,7 +3,8 @@
 // what it does to the account, as WebAssembly read it), or signing its data
 // (CIP-8). Nothing is signed until the user presses Sign, with the password
 // typed too unless Settings says otherwise; closing the window declines
-// everything. It closes itself once nothing's left.
+// everything. Once nothing's left, the worker closes it (it knows whether a
+// request just came in).
 //
 // Connecting offers the public account or a private session (chunk 15c): a
 // one-time account funded from the private balance, here, before the site
@@ -16,19 +17,31 @@ import type { Balances, DappApproval, DappToken, DappTxSummary, SessionOutSummar
 import { call, onDappChanged } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { HistoriesNote } from "../components/HistoriesNote";
+import { PaidRows } from "../components/PaidRows";
 import { Choice } from "../components/Choice";
-import { ExternalIcon, GlobeIcon, SpinnerIcon } from "../components/Icons";
-import { MiddleEllipsis } from "../components/MiddleEllipsis";
+import { ExplorerLink } from "../components/ExplorerLink";
+import { GlobeIcon, SpinnerIcon } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { explorerUrl, formatAda, formatQuantity, plural, shortHex, voteLabel } from "../format";
+import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
+import { certificateLine, paidTo, signingTies, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
+import { formatAda, formatQuantity, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
-import { tokenInfo, tokenLabel } from "../tokens";
+import { tokenDecimals, tokenText } from "../tokens";
 
 /** How long an empty list waits before the window closes: a site's next request may be on its way. */
 const CLOSE_AFTER_MS = 800;
+/**
+ * How long the buttons wait when another request takes the shown one's
+ * place, so a click meant for that one can't answer this one.
+ */
+const HOLD_MS = 1_000;
+
+/** How the request shown came to be: the next after the user's answer, or in the place of one that's gone. */
+type Change = "next" | "replaced";
 
 export function DappApprovals() {
   const [approvals, setApprovals] = useState<DappApproval[]>();
@@ -45,11 +58,19 @@ export function DappApprovals() {
     return onDappChanged(load);
   }, [load]);
 
+  // Empty: the worker closes the window, unless a request came in meanwhile,
+  // which it would otherwise decline unseen; then it's shown.
   useEffect(() => {
     clearTimeout(closing.current);
-    if (approvals?.length === 0 && !error) closing.current = setTimeout(() => window.close(), CLOSE_AFTER_MS);
+    if (approvals?.length === 0 && !error) {
+      closing.current = setTimeout(() => {
+        call("dapp-close", {}).then((closed) => {
+          if (!closed) load();
+        }, load);
+      }, CLOSE_AFTER_MS);
+    }
     return () => clearTimeout(closing.current);
-  }, [approvals, error]);
+  }, [approvals, error, load]);
 
   const current = approvals?.[0];
   const needsPassword = !!current && current.kind !== "connect" && current.password;
@@ -58,9 +79,27 @@ export function DappApprovals() {
   const currentId = current?.id;
   useEffect(() => setPassword(""), [currentId]);
 
+  // Another request in the place of the one shown (the next, or one whose
+  // page went away): it says so, and its buttons wait a moment.
+  const shown = useRef<string>(undefined);
+  const answered = useRef<string>(undefined);
+  const [change, setChange] = useState<Change>();
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!currentId) return;
+    const before = shown.current;
+    shown.current = currentId;
+    if (before === undefined || before === currentId) return;
+    setChange(before === answered.current ? "next" : "replaced");
+    setHeld(true);
+    const timer = setTimeout(() => setHeld(false), HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [currentId]);
+
   /** Answers the request shown: `extra` carries a private session's funding and the password it needs. */
   async function answer(approve: boolean, extra: { password?: string; fund?: { txHash: string } } = {}): Promise<boolean> {
-    if (!current || busy || (approve && needsPassword && !password)) return false;
+    if (!current || busy || held || (approve && needsPassword && !password)) return false;
+    answered.current = current.id;
     setBusy(true);
     setError(undefined);
     try {
@@ -103,6 +142,8 @@ export function DappApprovals() {
         approval={current}
         more={more}
         busy={busy}
+        held={held}
+        change={change}
         error={error}
         onError={setError}
         onAnswer={answer}
@@ -128,14 +169,14 @@ export function DappApprovals() {
       }
       foot={
         <div className="actions">
-          <button type="button" className="secondary" onClick={() => answer(false)} disabled={busy}>
+          <button type="button" className="secondary" onClick={() => answer(false)} disabled={busy || held}>
             Decline
           </button>
           <button
             type={needsPassword ? "submit" : "button"}
             className="primary"
             onClick={needsPassword ? undefined : () => answer(true)}
-            disabled={busy || (needsPassword && !password)}
+            disabled={busy || held || (needsPassword && !password)}
           >
             {busy ? "…" : action}
           </button>
@@ -143,9 +184,16 @@ export function DappApprovals() {
       }
     >
       <div className="stack" data-testid={`dapp-${current.kind}`}>
+        <Changed change={change} />
         <Site origin={current.origin} title={current.title} session={current.session} />
         {current.kind === "sign-tx" && (
-          <SignTx summary={current.summary} partial={current.partial} session={current.session !== undefined} />
+          <SignTx
+            summary={current.summary}
+            partial={current.partial}
+            session={current.session !== undefined}
+            collateralSpent={!!current.collateralSpent}
+            ties={current.ties}
+          />
         )}
         {current.kind === "sign-data" && (
           <SignData address={current.address} signer={current.key} payload={current.payload} text={current.text} />
@@ -157,6 +205,25 @@ export function DappApprovals() {
       </div>
     </Screen>
   );
+}
+
+/** Says the request shown isn't the one before: its buttons wait a moment meanwhile. */
+function Changed({ change }: { change?: Change }) {
+  if (change === "replaced") {
+    return (
+      <Callout tone="warn" testId="dapp-changed">
+        The request you were reading is gone, and this one took its place. Read it before you answer.
+      </Callout>
+    );
+  }
+  if (change === "next") {
+    return (
+      <p className="note" data-testid="dapp-changed">
+        The next request, in place of the one you answered.
+      </p>
+    );
+  }
+  return null;
 }
 
 /**
@@ -186,15 +253,42 @@ function Site({ origin, title, session }: { origin: string; title?: string; sess
 
 type Connection = "public" | "private";
 
+// What each connection lets a site learn (privacy review §2.12): what the
+// wallet gives it, and what it can find out anyway, on chain or from the
+// browser. Exported for their tests.
+
+/** Under "Your public account". */
+export const PUBLIC_PRIVACY =
+  "Your private balance stays out of it: the site never sees your Seedelfs or their UTxOs. It does learn your public account, as any site you pay from it does, and it can recognize this browser later, even if you connect it to a private session then.";
+
+/** Under "A private session". */
+export const PRIVATE_SESSION_PRIVACY =
+  "Your public account isn't in these transactions, but anyone, the site included, can follow the money back into your private balance, and money you made private yourself leads on to your public account. The site still sees this browser: if it has seen your public account here, it can tell the session is yours. A separate Chrome profile and a VPN keep them apart.";
+
+/** On a private session's funding, which leaves `changeLovelace` in the private balance. */
+export function fundingPrivacy(changeLovelace: string): string {
+  const change = BigInt(changeLovelace) > 0n;
+  return `This payment links the private UTxOs it spends to the one-time account, as Make public does${
+    change ? `, and so does the ${formatAda(changeLovelace)} ₳ it leaves in your private balance as change` : ""
+  }. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain${
+    change ? " and follow that change" : ""
+  }.`;
+}
+
 /**
  * A site asks to connect: to the public account, or to a private session
- * funded here first. A private session goes from its amount to its funding's
- * review (Send, with the password when it's on), then waits for the network.
+ * funded here first. Neither is chosen for the user (privacy review §3.3):
+ * each says what it costs, and Connect waits for a choice, since what a
+ * site sees of the public account can't be taken back. A private session
+ * goes from its amount to its funding's review (Send, with the password when
+ * it's on), then waits for the network. Exported for its tests.
  */
-function ConnectRequest({
+export function ConnectRequest({
   approval,
   more,
   busy,
+  held,
+  change,
   error,
   onError,
   onAnswer,
@@ -202,12 +296,15 @@ function ConnectRequest({
   approval: Extract<DappApproval, { kind: "connect" }>;
   more: string;
   busy: boolean;
+  /** Its buttons wait: it just took another request's place. */
+  held: boolean;
+  change?: Change;
   error?: string;
   onError: (error?: string) => void;
   onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string } }) => Promise<boolean>;
 }) {
   const network = useNetwork();
-  const [connection, setConnection] = useState<Connection>("public");
+  const [connection, setConnection] = useState<Connection>();
   const [seedelf, setSeedelf] = useState<Balances["seedelf"]>();
   const [amount, setAmount] = useState("");
   const [typed, setTyped] = useState<Record<string, string>>({});
@@ -240,16 +337,16 @@ function ConnectRequest({
             Waiting for the network to confirm the funding of private session {approval.funding.index + 1}. It usually
             takes about a minute; the site connects once the money is there.
           </p>
-          <a className="menu-link" href={explorerUrl(network, approval.funding.txHash)} target="_blank" rel="noreferrer">
-            The funding on Cardanoscan <ExternalIcon size={12} />
-          </a>
+          <ExplorerLink network={network} tx={approval.funding.txHash} private>
+            The funding on Cardanoscan
+          </ExplorerLink>
           <p className="note">You can close this window: the payment is sent, and closing doesn't undo it.</p>
         </div>
       </Screen>
     );
   }
 
-  const tokens = seedelf ? tokenChoices(seedelf.tokens, typed) : undefined;
+  const tokens = seedelf ? tokenChoices(network, seedelf.tokens, typed) : undefined;
   const withTokens = (tokens?.sent.length ?? 0) > 0;
   const lovelace = lovelaceToSend(amount, withTokens);
   const tooMuch = !!seedelf && !!lovelace && BigInt(lovelace) > BigInt(seedelf.lovelace);
@@ -257,7 +354,7 @@ function ConnectRequest({
 
   async function build(e: FormEvent) {
     e.preventDefault();
-    if (!canReview || building) return;
+    if (!canReview || building || held) return;
     setBuilding(true);
     onError(undefined);
     try {
@@ -279,8 +376,6 @@ function ConnectRequest({
   // The funding, built: what goes where, and Send.
   if (review) {
     const [forSite, collateral] = review.payments;
-    const carried = (p: typeof forSite) =>
-      p ? `${formatAda(p.lovelace)} ₳${p.tokens.length ? ` and ${plural(p.tokens.length, "token")}` : ""}` : "";
     return (
       <Screen
         onSubmit={send}
@@ -308,7 +403,7 @@ function ConnectRequest({
           <ReviewRows testId="dapp-funding-rows">
             <Row label="To" value={`Private session ${review.index + 1}`} strong />
             <Row label="Account" value={shortHex(review.address, 16, 8)} title={review.address} />
-            <Row label="For the site" value={carried(forSite)} strong />
+            <PaidRows label="For the site" paid={forSite} />
             <Row label="Its collateral" value={`${formatAda(collateral?.lovelace ?? "0")} ₳`} />
             <Row label="Network fee" value={`${formatAda(review.fee.total)} ₳`} />
             <Row label="Back to your private balance" value={`${formatAda(review.changeLovelace)} ₳`} />
@@ -318,9 +413,9 @@ function ConnectRequest({
             The collateral comes back with it.
           </p>
           <Callout tone="privacy" testId="dapp-funding-privacy">
-            This payment links the private UTxOs it spends to the one-time account, as Make public does. The site then sees
-            that account, never your public account or your private balance.
+            {fundingPrivacy(review.changeLovelace)}
           </Callout>
+          <HistoriesNote histories={review.histories} session={review.index} testId="dapp-funding-histories" />
           <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
           {approval.password && (
             <PasswordField id="dapp-funding-password" label="Your password, to send" value={password} onChange={setPassword} />
@@ -335,19 +430,34 @@ function ConnectRequest({
       onSubmit={connection === "private" ? build : undefined}
       title="Connect a site"
       titleId="dapp-title"
-      aside={`Nothing happens until you press ${connection === "private" ? "Review" : "Connect"}${more}`}
+      aside={
+        connection
+          ? `Nothing happens until you press ${connection === "private" ? "Review" : "Connect"}${more}`
+          : `Choose what it sees. Nothing happens until you press Connect or Review${more}`
+      }
       error={error}
       foot={
         <div className="actions">
-          <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy || building}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onAnswer(false)}
+            disabled={busy || building || held}
+          >
             Cancel
           </button>
           {connection === "private" ? (
-            <button type="submit" className="primary" disabled={!canReview || building}>
+            <button type="submit" className="primary" disabled={!canReview || building || held}>
               {building ? "Building…" : "Review"}
             </button>
           ) : (
-            <button type="button" className="primary" onClick={() => void onAnswer(true)} disabled={busy}>
+            // Only once the public account is chosen: never one press from the window opening.
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void onAnswer(true)}
+              disabled={busy || held || connection !== "public"}
+            >
               {busy ? "…" : "Connect"}
             </button>
           )}
@@ -355,6 +465,7 @@ function ConnectRequest({
       }
     >
       <div className="stack" data-testid="dapp-connect">
+        <Changed change={change} />
         {site}
         <Choice<Connection>
           label="Connect it to"
@@ -369,21 +480,35 @@ function ConnectRequest({
             { value: "private", label: "A private session" },
           ]}
         />
-        {connection === "public" ? (
+        {connection === undefined ? (
+          <ul className="dapp-points" data-testid="dapp-connect-costs">
+            <li>
+              <strong>Your public account:</strong> the site sees its addresses, its balance and its UTxOs, and keeps
+              what it saw. No fee.
+            </li>
+            <li>
+              <strong>A private session:</strong> the site sees only a new one-time account you fund from your private
+              balance. A network fee now and when its money comes back (Lovejoin's too, if it goes through it), 5 ₳ of
+              collateral that comes back, and about a minute's wait.
+            </li>
+          </ul>
+        ) : connection === "public" ? (
           <>
             <ul className="dapp-points">
               <li>It sees your public account: its addresses, its balance and its UTxOs.</li>
               <li>It can ask you to sign transactions and messages. Nothing is signed without you.</li>
             </ul>
             <Callout tone="privacy" testId="dapp-connect-privacy">
-              Your private balance stays out of it: the site never sees your Seedelfs or their UTxOs. It does learn your
-              public account, as any site you pay from it does.
+              {PUBLIC_PRIVACY}
             </Callout>
           </>
         ) : (
           <>
             <ul className="dapp-points" data-testid="dapp-private-points">
-              <li>A new one-time account, funded from your private balance with what you choose here. The site sees only it.</li>
+              <li>
+                A new one-time account, funded from your private balance with what you choose here. The wallet gives the
+                site only this account.
+              </li>
               <li>It stays this site's until you disconnect it. Top it up or bring it back from the dApps page.</li>
             </ul>
             <div className="field">
@@ -408,8 +533,7 @@ function ConnectRequest({
             {withTokens && <MinimumHint />}
             {seedelf && <TokenAmounts held={seedelf.tokens} typed={typed} onChange={setTyped} />}
             <Callout tone="privacy" testId="dapp-private-privacy">
-              Your public account never appears. Anyone can follow the money from your private balance into the one-time
-              account, though, and what the site does with it is public, as any wallet's is.
+              {PRIVATE_SESSION_PRIVACY}
             </Callout>
           </>
         )}
@@ -419,17 +543,42 @@ function ConnectRequest({
   );
 }
 
-function SignTx({ summary: s, partial, session }: { summary: DappTxSummary; partial: boolean; session: boolean }) {
+/** What a site's transaction does, as WebAssembly read it: exported for its tests. */
+export function SignTx({
+  summary: s,
+  partial,
+  session,
+  collateralSpent,
+  ties,
+}: {
+  summary: DappTxSummary;
+  partial: boolean;
+  session: boolean;
+  collateralSpent: boolean;
+  /** The wallet's other accounts it moves money with (independent review M12); undefined when unchecked. */
+  ties?: Array<"account" | number>;
+}) {
   const network = useNetwork();
   const net = BigInt(s.netLovelace);
-  const token = (t: DappToken) => {
+  // A token's amount without its sign, in its units: the rows say which way it goes.
+  const amount = (t: DappToken) => {
     const q = BigInt(t.quantity);
-    const decimals = tokenInfo(network, t)?.decimals ?? 0;
-    return `${formatQuantity((q < 0n ? -q : q).toString(), decimals)} ${tokenLabel(network, t)}`;
+    return formatQuantity((q < 0n ? -q : q).toString(), tokenDecimals(network, t));
   };
+  // Tokens named like ADA or a listed token that aren't: each is shown by its fingerprint, and said here too.
+  const lookalikes = new Map<string, string>();
+  for (const t of [...s.netTokens, ...s.paid.flatMap((p) => p.tokens), ...s.mint]) {
+    const posesAs = tokenText(network, t).posesAs;
+    if (posesAs) lookalikes.set(`${t.policyId}.${t.assetName}`, posesAs);
+  }
+  const lookalikeNames = [...new Set(lookalikes.values())].join(" and ");
   const keys = s.signs.filter((k) => k !== "stake").length;
   const stake = s.signs.includes("stake");
   const signers = [keys ? plural(keys, "payment key") : "", stake ? "your stake key" : ""].filter(Boolean).join(" and ");
+  const whose = session ? "your private session" : "your public account";
+  const staking = BigInt(s.stakingLovelace);
+  const back = stakingComesBack(s);
+  const ownKey = s.paid.filter((p) => p.ownPaymentKey).length;
 
   const notes: ReactNode[] = [];
   if (s.scripts) notes.push("It runs smart contracts.");
@@ -448,12 +597,15 @@ function SignTx({ summary: s, partial, session }: { summary: DappTxSummary; part
           strong
         />
         {s.netTokens.map((t) => (
-          <Row
+          <TokenAmountRow
             key={`${t.policyId}.${t.assetName}`}
             label={BigInt(t.quantity) < 0n ? "Sends" : "Gets"}
-            value={token(t)}
+            token={t}
+            amount={amount(t)}
           />
         ))}
+        {/* Rewards and a deposit back are the account's money too: counted above, and said so. */}
+        {staking > 0n && <Row label="From your staking" value={`${formatAda(s.stakingLovelace)} ₳ (included)`} />}
         <Row label="Network fee" value={`${formatAda(s.fee)} ₳${s.ownInputs ? " (included)" : ""}`} />
         {s.collateral && s.collateral.own > 0 && (
           <Row label="Collateral at risk" value={`${formatAda(s.collateral.atRisk)} ₳`} />
@@ -466,20 +618,17 @@ function SignTx({ summary: s, partial, session }: { summary: DappTxSummary; part
           <h2 id="dapp-paid-title">Pays</h2>
           <ul className="list" data-testid="dapp-paid">
             {s.paid.map((p, i) => (
-              <li key={i} className="list__row">
-                <span className="stack-tight">
-                  <MiddleEllipsis text={p.address} />
-                  <span className="note">
-                    {[p.seedelf ? "Seedelf Wallet's contract" : p.script ? "A contract" : "An address", p.datum ? "with data" : ""]
-                      .filter(Boolean)
-                      .join(", ")}
-                  </span>
+              // The whole address on its own line: shortened, a lookalike's could read the same.
+              <li key={i} className="list__row dapp-paid">
+                <span className="dapp-address" data-value={p.address}>
+                  {p.address}
                 </span>
+                <span className="note">{paidTo(p)}</span>
                 <span className="dapp-amount">
                   {formatAda(p.lovelace)} ₳
                   {p.tokens.map((t) => (
                     <span key={`${t.policyId}.${t.assetName}`} className="note">
-                      {token(t)}
+                      <TokenAmountText token={t} amount={amount(t)} />
                     </span>
                   ))}
                 </span>
@@ -489,6 +638,21 @@ function SignTx({ summary: s, partial, session }: { summary: DappTxSummary; part
         </section>
       )}
 
+      {lookalikes.size > 0 && (
+        <Callout tone="warn" testId="dapp-lookalike">
+          {lookalikes.size === 1
+            ? `A token here is named like ${lookalikeNames}, but it isn't ${lookalikeNames}: it's not on the wallet's list, so it's shown by its fingerprint.`
+            : `Tokens here are named like ${lookalikeNames}, but aren't: they're not on the wallet's list, so each is shown by its fingerprint.`}{" "}
+          Anyone can make a token with any name.
+        </Callout>
+      )}
+      {ownKey > 0 && (
+        <Callout tone="warn" testId="dapp-own-key">
+          It pays {plural(ownKey, "output")} to your payment key with a stake part that isn't yours. That isn't change,
+          so it isn't counted as coming back: the money can still be spent from this wallet, but it earns staking
+          rewards for someone else, or for no one.
+        </Callout>
+      )}
       {s.paid.some((p) => p.seedelf === "none") && (
         <Callout tone="warn" testId="dapp-seedelf-unsafe">
           It pays Seedelf Wallet's contract without a register: whatever goes there, anyone can take.
@@ -496,35 +660,51 @@ function SignTx({ summary: s, partial, session }: { summary: DappTxSummary; part
       )}
       {s.paid.some((p) => p.seedelf === "register") && (
         <Callout tone="privacy" testId="dapp-seedelf-payment">
-          It pays a Seedelf. Nothing on chain says whose, but it comes from your public account in the open.
+          It pays a Seedelf. Nothing on chain says whose, but it comes from{" "}
+          {session ? "this private session's one-time account" : "your public account"} in the open.
+        </Callout>
+      )}
+      {ties && ties.length > 0 && (
+        <Callout tone="warn" testId="dapp-ties">
+          {tiesLine(ties, session)}
         </Callout>
       )}
 
       {s.mint.length > 0 && (
         <ReviewRows testId="dapp-mint">
           {s.mint.map((t) => (
-            <Row key={`${t.policyId}.${t.assetName}`} label={BigInt(t.quantity) < 0n ? "Burns" : "Mints"} value={token(t)} />
+            <TokenAmountRow
+              key={`${t.policyId}.${t.assetName}`}
+              label={BigInt(t.quantity) < 0n ? "Burns" : "Mints"}
+              token={t}
+              amount={amount(t)}
+            />
           ))}
         </ReviewRows>
       )}
 
       {(s.certificates.length > 0 || s.withdrawals.length > 0) && (
-        <Callout tone={s.certificates.some((c) => c.own) ? "warn" : "info"} testId="dapp-staking">
+        <Callout
+          tone={s.certificates.some((c) => c.own) || (staking > 0n && !back) ? "warn" : "info"}
+          testId="dapp-staking"
+        >
           <ul className="dapp-points">
             {s.certificates.map((c, i) => (
-              <li key={i}>{certificate(c)}</li>
+              <li key={i}>{certificateLine(c, back, whose)}</li>
             ))}
             {s.withdrawals.map((w, i) => (
-              <li key={`w${i}`}>
-                {w.own
-                  ? `Withdraws your staking rewards: ${formatAda(w.lovelace)} ₳.`
-                  : `Withdraws ${formatAda(w.lovelace)} ₳ from a contract's reward account.`}
-              </li>
+              <li key={`w${i}`}>{withdrawalLine(w, back, whose)}</li>
             ))}
           </ul>
         </Callout>
       )}
 
+      {collateralSpent && (
+        <Callout tone="warn" testId="dapp-collateral-spent">
+          It spends this private session's collateral as an ordinary payment, so the session has none left to put up
+          for the site's contracts.
+        </Callout>
+      )}
       {s.collateral && s.collateral.own > 0 && (
         <p className="note" data-testid="dapp-collateral">
           Your collateral goes along: the network keeps up to {formatAda(s.collateral.atRisk)} ₳ of it only if a contract
@@ -556,38 +736,24 @@ function SignTx({ summary: s, partial, session }: { summary: DappTxSummary; part
       )}
       {s.unknownInputs.length > 0 && (
         <Callout tone="warn" testId="dapp-unknown">
-          It spends {plural(s.unknownInputs.length, "UTxO")} the wallet couldn't find, so what it takes from others can't
-          be shown.
+          It spends {plural(s.unknownInputs.length, "UTxO")} the wallet couldn't find, so what they hold can't be shown.
+          Only your stake key signs here, and it spends none of them.
         </Callout>
       )}
 
       <Callout tone="privacy" testId="dapp-tx-privacy">
-        {session
-          ? "Signing ties this transaction to the session's one-time account. Your public account and your private balance aren't in it."
-          : "Signing ties this transaction to your public account, as any payment from it. Your private balance isn't in it."}
+        {signingTies(
+          ties,
+          session,
+          s.paid.some((p) => p.seedelf === "register"),
+        )}
       </Callout>
     </>
   );
 }
 
-/** A certificate in a sentence: the account's own staking, or someone else's. */
-function certificate(c: DappTxSummary["certificates"][number]): string {
-  if (!c.own) {
-    if (c.kind === "pool") return "A stake pool's certificate.";
-    if (c.kind === "drep") return "A DRep's certificate.";
-    if (c.kind === "committee") return "A constitutional committee certificate.";
-    return "A certificate for a stake key that isn't yours.";
-  }
-  const parts: string[] = [];
-  if (c.kind.startsWith("register")) parts.push(`Registers your stake key${c.deposit ? ` (a ${formatAda(c.deposit)} ₳ deposit)` : ""}`);
-  if (c.kind === "unregister") parts.push(`Stops your staking${c.refund ? ` (the ${formatAda(c.refund)} ₳ deposit back)` : ""}`);
-  if (c.pool) parts.push(`stakes with ${c.pool}`);
-  if (c.drep) parts.push(`delegates your vote: ${voteLabel(c.drep)}`);
-  const sentence = parts.join(", ");
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
-}
-
-function SignData({
+/** What a site asks the account's key to sign (CIP-8): exported for its tests. */
+export function SignData({
   address,
   signer,
   payload,
@@ -603,9 +769,12 @@ function SignData({
       <ReviewRows testId="dapp-data">
         <Row label="With" value={signer === "stake" ? "Your stake key" : "Your payment key"} />
       </ReviewRows>
+      {/* The whole address on its own line, as the Pays rows show it: shortened, a lookalike's could read the same. */}
       <div className="stack-tight">
         <span className="note">For the address</span>
-        <MiddleEllipsis text={address} testId="dapp-data-address" />
+        <span className="dapp-address" data-testid="dapp-data-address" data-value={address}>
+          {address}
+        </span>
       </div>
       <div className="stack-tight">
         <span className="note">{text === undefined ? "The data (hex)" : "The message"}</span>

@@ -1,17 +1,17 @@
 // Service worker entry. Listeners are registered synchronously, before any
 // await, so the event that woke the worker is never lost.
 
-import { defaultNetwork, enabledNetworks, NETWORKS } from "../networks";
+import { enabledNetworks, NETWORKS } from "../networks";
 import { APIError, DAPP_ORIGINS, DAPP_PORT, isDappMethod, type DappAnswer, type DappCall } from "../shared/dapp";
 import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
-import { DAPP_CHANGED, isMessage, STATE_CHANGED, type Reply } from "../shared/rpc";
+import { DAPP_CHANGED, STATE_CHANGED, type Message } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
 import { CoinControlService } from "./coin-control";
 import { Collateral } from "./collateral";
 import { applyConnector } from "./connector";
 import { ContactsService } from "./contacts";
-import { DappError, DappService, type DappSession } from "./dapp";
+import { answerSite, DappError, DappService, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
 import { Koios, KOIOS_LIMIT } from "./koios";
@@ -19,8 +19,9 @@ import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
-import { PreferencesService } from "./preferences";
+import { LOCAL_NETWORK, NetworkChoice, PreferencesService } from "./preferences";
 import { PriceService } from "./prices";
+import { runNetworks, type Runner } from "./runs";
 import { PrivateStore } from "./private-store";
 import { SendService } from "./send";
 import { SessionService } from "./sessions";
@@ -29,12 +30,25 @@ import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { LovejoinService } from "./lovejoin";
 import { chromeArea } from "./storage";
-import { Wallet } from "./wallet";
-import { loadWasm } from "./wasm";
+import { guardedConnector, keepStorageFromSites } from "./storage-access";
+import { serveUi } from "./ui-port";
+import { hasEntropy, noteStart, Wallet, WASM_BROKEN } from "./wallet";
+import { freshWasm, isTrap, loadWasm } from "./wasm";
 
 const extensionOrigin = chrome.runtime.getURL("");
+
+// Storage is kept from content scripts at every start (storage-access.ts).
+// Where Chrome won't do it for local storage, the dApp connector stays off.
+const storageProtected = keepStorageFromSites(chrome.storage);
+const connector = guardedConnector(storageProtected, applyConnector);
+
+// A closed browser, or the extension's update, wiped what the wallet
+// remembered of its sends unseen: one before the worker's first start since
+// may have been as late as then (wallet.ts noteStart, independent review M10).
+void noteStart(chromeArea(chrome.storage.session), Date.now()).catch(() => undefined);
+
 const AUTO_LOCK_ALARM = "seedelf.auto-lock";
-/** Wakes a swap that runs itself (sessions.ts) every minute while one runs and the wallet is unlocked. */
+/** Wakes a swap that runs itself (sessions.ts), a chain being sent, and Lovejoin boxes waiting to come back, every minute while the wallet is unlocked. */
 const SESSIONS_ALARM = "seedelf.sessions";
 
 // Worker timers don't survive restarts, so auto-lock runs off an alarm that
@@ -47,46 +61,78 @@ const autoLock = {
 };
 
 // Chrome 116's shortest period is a minute. Asking again doesn't restart the
-// clock: an alarm that's there is left alone.
+// clock: an alarm that's there is left alone. Each start is counted, so a run
+// never stops what was started while it went on (runs.ts).
+let sessionsStarts = 0;
 const sessionsAlarm = {
   start: async () => {
+    sessionsStarts++;
     if (!(await chrome.alarms.get(SESSIONS_ALARM))) await chrome.alarms.create(SESSIONS_ALARM, { periodInMinutes: 1 });
   },
   stop: async () => {
     await chrome.alarms.clear(SESSIONS_ALARM);
   },
+  starts: () => sessionsStarts,
 };
 
 /**
- * The next step of every swap that runs itself, and Lovejoin's boxes that are
- * due back, while the wallet is unlocked; locked, the alarm stops until
- * unlock. `scan`: read Lovejoin's pool even with nothing due (at unlock).
+ * The worker's services. The network isn't one of them: each request is on
+ * the network the user has chosen as it comes in (`answerUi`), and the
+ * background runs go through every network the build has.
  */
-async function runSessions(ctx: Pick<Context, "wallet" | "sessions" | "lovejoin" | "network">, scan = false): Promise<void> {
-  if ((await ctx.wallet.state()) !== "unlocked") {
-    await sessionsAlarm.stop();
-    return;
+type Worker = Omit<Context, "network">;
+
+/** The run going on, if one is, and whether another is asked for after it (the unlock's, if any asked for one). */
+let running: Promise<void> | undefined;
+let asked: { unlock: boolean } | undefined;
+
+/**
+ * One run of runSessionsNow at a time: the alarm and an unlock can both ask
+ * while one goes on (a chain pumps for up to a block), and two at once would
+ * send two withdraws seconds apart. Asked during a run, it runs once more
+ * after it.
+ */
+function runSessions(ctx: Runner, unlock = false): Promise<void> {
+  if (running) {
+    asked = { unlock: unlock || !!asked?.unlock };
+    return running;
   }
-  await ctx.sessions.runAll(ctx.network);
-  // A public mix still being sent keeps the alarm going too.
-  if (await ctx.lovejoin.pumpPublic(ctx.network).catch(() => false)) await sessionsAlarm.start();
-  await ctx.lovejoin.withdrawDue(ctx.network, scan).catch(() => undefined);
+  running = (async () => {
+    try {
+      await runSessionsNow(ctx, unlock);
+      while (asked) {
+        const next = asked;
+        asked = undefined;
+        await runSessionsNow(ctx, next.unlock);
+      }
+    } finally {
+      running = undefined;
+    }
+  })();
+  return running;
 }
 
-let context: Promise<Context> | undefined;
+/** The next step of everything that runs itself, on every network (runs.ts); `unlock`: the run as the wallet unlocks, which sends nothing. */
+function runSessionsNow(ctx: Runner, unlock = false): Promise<void> {
+  return runNetworks(ctx, sessionsAlarm, unlock);
+}
 
-function getContext(): Promise<Context> {
+let context: Promise<Worker> | undefined;
+
+// No page open means nobody is listening; that's fine.
+const broadcast = (message: object) => void chrome.runtime.sendMessage(message).catch(() => undefined);
+
+function getContext(): Promise<Worker> {
   if (context) return context;
-  context = loadWasm().then((wasm) => {
+  context = Promise.all([loadWasm(), storageProtected]).then(([wasm, protectedStorage]) => {
     const session = chromeArea(chrome.storage.session);
     const local = chromeArea(chrome.storage.local);
     const preferences = new PreferencesService(local);
-    const network = defaultNetwork(__MAINNET_ENABLED__);
-    // No page open means nobody is listening; that's fine.
-    const broadcast = (message: object) => void chrome.runtime.sendMessage(message).catch(() => undefined);
+    const networks = enabledNetworks(__MAINNET_ENABLED__);
+    // The user's choice, read for each request and each site's call (Settings switches it).
+    const networkChoice = new NetworkChoice(local, networks);
+    let worker: Worker | undefined;
     let dapp: DappService | undefined;
-    let sessions: SessionService | undefined;
-    let lovejoin: LovejoinService | undefined;
     const wallet = new Wallet({
       wasm,
       local,
@@ -94,51 +140,54 @@ function getContext(): Promise<Context> {
       now: Date.now,
       autoLock,
       lockAfterMs: () => preferences.lockAfterMs(),
+      fresh: freshWasm,
       changed: () => {
         broadcast(STATE_CHANGED);
-        // Sites waiting for an unlock go on, and so does a swap that runs itself.
+        // Sites waiting for an unlock go on. A swap that runs itself, and
+        // Lovejoin's boxes due back, go on a few minutes in: nothing goes out
+        // the moment the wallet unlocks (runs.ts, privacy review §3.1).
         void dapp?.stateChanged();
-        if (sessions && lovejoin) void runSessions({ wallet, sessions, lovejoin, network }, true).catch(() => undefined);
+        if (worker) void runSessions(worker, true).catch(() => undefined);
       },
     });
     // Every request waits its turn under Koios's public-tier limit, whatever the network.
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios, undefined, undefined, undefined, KOIOS_LIMIT);
     const store = new PrivateStore({ wallet, local });
-    const prices = new PriceService({ local, preferences, now: Date.now });
+    const prices = new PriceService({ session, local, preferences, now: Date.now });
     const activity = new ActivityService({ wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
-    const coins = new CoinControlService({ wallet, session, store, now: Date.now });
-    const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins });
-    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences });
+    const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity });
+    const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins, store });
+    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences, store });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
-    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins, preferences };
+    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins, preferences, store };
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
     const withdraw = new WithdrawService(spends);
     const send = new SendService(spends);
     const staking = new StakingService({ ...spends, local });
-    const pending = new PendingService({ wallet, session, koios, now: Date.now });
+    const pending = new PendingService({ wallet, session, koios, now: Date.now, activity, store, alarm: sessionsAlarm });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // No box is withdrawn while a chain mixing them again may still spend it.
-    lovejoin = new LovejoinService({
+    const lovejoin: LovejoinService = new LovejoinService({
       ...spends,
       store,
       preferences,
-      mixingAgain: (n) => sessions!.mixingAgain(n),
+      mixingAgain: (n) => sessions.mixingAgain(n),
       alarm: sessionsAlarm,
     });
-    sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
+    const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
     dapp = new DappService({
       ...spends,
       preferences,
       store,
       sessions,
-      network,
+      network: () => networkChoice.get(),
       window: approvalWindow,
       changed: () => broadcast(DAPP_CHANGED),
     });
-    return {
+    worker = {
       wasm,
       wallet,
       balances,
@@ -157,11 +206,13 @@ function getContext(): Promise<Context> {
       dapp,
       sessions,
       lovejoin,
-      connector: applyConnector,
+      connector,
+      ...(protectedStorage ? {} : { connectorBlocked: "storage" as const }),
       version: __VERSION__,
-      network,
-      networks: enabledNetworks(__MAINNET_ENABLED__),
+      networks,
+      networkChoice,
     };
+    return worker;
   });
   // Don't keep a failed start (the WASM didn't load): the next request tries again.
   context.catch(() => (context = undefined));
@@ -179,16 +230,27 @@ const preferences = () => new PreferencesService(chromeArea(chrome.storage.local
 const applyKept = () => {
   void readOpenIn().then(applyOpenIn).catch(() => undefined);
   void preferences()
-    .then((p) => applyConnector(p.dappConnector))
+    .then((p) => connector(p.dappConnector))
     .catch(() => undefined);
 };
 chrome.runtime.onInstalled.addListener(applyKept);
 chrome.runtime.onStartup.addListener(applyKept);
 
+// The network changed (Settings' switch, or a test harness before the wallet
+// starts): every open page follows, and what sites were asking on the network
+// the wallet left is declined. Local storage's own event: session storage's,
+// which carries the entropy, never reaches this listener.
+chrome.storage.local.onChanged.addListener((changes) => {
+  if (!(LOCAL_NETWORK in changes)) return;
+  broadcast(STATE_CHANGED);
+  void context?.then((ctx) => ctx.dapp.networkChanged()).catch(() => undefined);
+});
+
 // The user took the wallet's access to sites away in Chrome's own settings:
-// the connector is off.
+// the connector is off, and nothing a site asked for waits on it.
 chrome.permissions.onRemoved.addListener((removed) => {
   if (!removed.origins?.some((o) => DAPP_ORIGINS.includes(o))) return;
+  void context?.then((ctx) => ctx.dapp.connectorOff()).catch(() => undefined);
   void new PreferencesService(chromeArea(chrome.storage.local))
     .set({ dappConnector: false })
     .then(() => applyConnector(false))
@@ -206,7 +268,26 @@ function dappSession(sender: chrome.runtime.MessageSender | undefined): DappSess
   return { id: crypto.randomUUID(), origin: sender.origin, title: sender.tab.title };
 }
 
+/**
+ * A request from one of the wallet's pages. WebAssembly that traps under it
+ * outside the wallet's queue locks the wallet, as a trap inside does.
+ */
+async function answerUi(message: Message): Promise<unknown> {
+  const worker = await getContext();
+  // On the network the user has chosen as it comes in: a switch needs no restart.
+  const ctx: Context = { ...worker, network: await worker.networkChoice.get() };
+  try {
+    return await handle(message, ctx);
+  } catch (e) {
+    if (!isTrap(e)) throw e;
+    await ctx.wallet.trapped();
+    throw new Error(WASM_BROKEN);
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
+  // The wallet's own pages ask on ports of their own (ui-port.ts).
+  if (serveUi(port, extensionOrigin, answerUi)) return;
   if (port.name !== DAPP_PORT) return;
   const session = dappSession(port.sender);
   if (!session) {
@@ -233,7 +314,8 @@ chrome.runtime.onConnect.addListener((port) => {
     const method = call.method;
     const args = call.args;
     getContext()
-      .then((ctx) => ctx.dapp.call(session, method, args))
+      // A trap under it locks the wallet, as one under answerUi does (dapp.ts).
+      .then((ctx) => answerSite(ctx.dapp, ctx.wallet, session, method, args))
       .then(
         (value) => answer({ id, value }),
         (e: unknown) =>
@@ -267,34 +349,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name !== AUTO_LOCK_ALARM) return;
   // Reading the state applies auto-lock once the user has been idle too long.
-  // A worker that can't start says why on the next request, not here.
-  void getContext()
-    .then(({ wallet }) => wallet.state())
-    .catch(() => undefined);
-});
-
-chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  // Only this extension's own pages may talk to the worker.
-  if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(extensionOrigin)) {
-    return false;
-  }
-  if (!isMessage(message)) {
-    // Requests carry a `type`; anything else (such as another page's state
-    // broadcast) isn't for the worker.
-    if ((message as { type?: unknown } | null)?.type === undefined) return false;
-    sendResponse({ ok: false, error: "unknown request" } satisfies Reply<"status">);
-    return false;
-  }
-
-  getContext()
-    .then((ctx) => handle(message, ctx))
-    .then(
-      (value) => sendResponse({ ok: true, value }),
-      (error: unknown) =>
-        sendResponse({
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        } satisfies Reply<typeof message.type>),
-    );
-  return true; // keep the channel open for the async reply
+  // Already locked (a browser restart keeps the alarm but not the entropy),
+  // the alarm just stops, without starting WebAssembly. A worker that can't
+  // start says why on the next request, not here.
+  void (async () => {
+    if (!(await hasEntropy(chromeArea(chrome.storage.session)))) return autoLock.stop();
+    await (await getContext()).wallet.state();
+  })().catch(() => undefined);
 });

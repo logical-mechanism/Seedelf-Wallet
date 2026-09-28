@@ -22,10 +22,71 @@ export interface KoiosUtxo {
   block_height: number | null;
   /** Unix seconds of the block that made it. */
   block_time?: number;
+  /** The datum's CBOR (hex), and its JSON, which `trimmed` drops: registers are read from the bytes. */
   inline_datum: { bytes: string; value: unknown } | null;
   /** A datum by hash (older outputs); only the dApp connector reads it. */
   datum_hash?: string | null;
   asset_list: KoiosAsset[] | null;
+  /**
+   * The reference script it carries, if any. Anyone can send one; the
+   * WebAssembly prices it, and a Seedelf spend can't take it yet.
+   */
+  reference_script?: KoiosScript | null;
+}
+
+/** A reference script as the wallet keeps it: Koios's, less its JSON `value` (`trimmed`). */
+export interface KoiosScript {
+  hash: string | null;
+  /** Bytes. */
+  size: number | null;
+  /** `plutusV1`, `plutusV2`, `plutusV3`, `timelock` or `multisig`. */
+  type: string | null;
+  /** The script's CBOR, hex. */
+  bytes: string | null;
+}
+
+const textOrNull = (v: unknown) => (typeof v === "string" ? v : null);
+
+/**
+ * A UTxO as the wallet keeps it, cut right after it's read: its datum's
+ * JSON dropped, and its reference script cut to what prices it. Anyone can
+ * pay an address an output whose datum or native script nests thousands of
+ * levels deep. V8 parses that, but JSON.stringify, structuredClone and
+ * chrome.storage overflow on it, and the WebAssembly refused a whole request
+ * over it (launch review H4). Registers come from the datum's bytes
+ * (chain.ts). A script is never cut to nothing: a UTxO holding one must
+ * still read as holding one.
+ */
+export function trimmed(row: KoiosUtxo): KoiosUtxo {
+  const datum = row.inline_datum as { bytes?: unknown } | null;
+  const script = row.reference_script as Record<string, unknown> | null | undefined;
+  return {
+    ...row,
+    inline_datum: datum ? { bytes: textOrNull(datum.bytes) ?? "", value: null } : null,
+    ...(script == null
+      ? {}
+      : {
+          reference_script: {
+            hash: textOrNull(script.hash),
+            size: typeof script.size === "number" ? script.size : null,
+            type: textOrNull(script.type),
+            bytes: textOrNull(script.bytes),
+          },
+        }),
+  };
+}
+
+/**
+ * Whether the wallet can price spending `u`: it holds no reference script,
+ * or one Koios gives the bytes of, as long as it says it is (core's
+ * `utxos::reference_script_size`). WebAssembly leaves the others out of
+ * anything it builds, for good; the UTxOs screen says so.
+ */
+export function measurable(u: KoiosUtxo): boolean {
+  const script = u.reference_script as { bytes?: unknown; size?: unknown } | null | undefined;
+  if (!script) return true;
+  const { bytes, size } = script;
+  return typeof bytes === "string" && /^([0-9a-fA-F]{2})+$/.test(bytes) && (size == null || size === bytes.length / 2);
 }
 
 /** One of an account's transactions: `account_txs`. */
@@ -57,6 +118,12 @@ export interface KoiosTxOut {
   payment_addr: { bech32: string };
   value: string;
   asset_list: Array<{ policy_id: string; asset_name: string; quantity: string }> | null;
+}
+
+/** What a transaction spent: `tx_info`'s inputs, each where it sat (`cred`: its payment key or script hash, hex). */
+export interface KoiosTxSpends {
+  tx_hash: string;
+  inputs: Array<{ payment_addr: { bech32: string; cred?: string | null } }> | null;
 }
 
 /** A stake key's standing: `account_info`. No row at all means it was never registered. */
@@ -124,6 +191,15 @@ export interface KoiosDrepName {
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * What every request to a service goes out with (Koios, giveme.my, CoinGecko,
+ * Minswap): no cookies, and no referrer. With a host permission, the
+ * worker's fetch would otherwise carry any cookie the browser holds for that
+ * host, and one of giveme.my's would tie every private payment to this
+ * browser (privacy review §2.14). No service needs one.
+ */
+export const SERVICE_FETCH = { credentials: "omit", referrerPolicy: "no-referrer" } as const satisfies RequestInit;
+
 const PAGE_SIZE = 1000;
 
 /** The columns each staking query asks for: what the wallet shows, nothing else. */
@@ -144,6 +220,9 @@ export const CREDENTIALS_PER_REQUEST = 75;
 
 /** Outpoints in one `utxo_info` request: each is about 70 bytes, under the same 5,120-byte cap. */
 export const REFS_PER_REQUEST = 60;
+
+/** Transactions in one `tx_info` request for their inputs alone, as Activity asks 20 at a time for the rest. */
+export const TXS_PER_REQUEST = 20;
 
 export class KoiosError extends Error {}
 
@@ -186,11 +265,19 @@ export class SpentInputError extends KoiosError {}
 
 /**
  * Koios didn't answer a submit (a timeout, a lost connection), asked the
- * wallet to slow down (429), or failed on its side (5xx). The transaction may
- * or may not have gone through; sending the same one again later is safe
- * (the ledger takes it once).
+ * wallet to slow down (429), or failed on its side (5xx). Sending the same
+ * transaction again later is safe (the ledger takes it once). `maybeSent`:
+ * it may or may not have gone through; not for a 429, which Koios's gateway
+ * answers before passing anything on.
  */
-export class KoiosBusyError extends KoiosError {}
+export class KoiosBusyError extends KoiosError {
+  constructor(
+    message: string,
+    readonly maybeSent = true,
+  ) {
+    super(message);
+  }
+}
 
 /**
  * Whether Chrome lets the wallet reach `url`'s host. Koios's public tier sends
@@ -263,14 +350,14 @@ export class Koios {
   /**
    * Every UTxO whose payment credential is one of `credentials` (key or
    * script hashes, hex); with `after`, only those in blocks after it. At most
-   * `CREDENTIALS_PER_REQUEST` go in a request.
+   * `CREDENTIALS_PER_REQUEST` go in a request. Each is `trimmed`.
    */
   async credentialUtxos(credentials: string[], after?: number): Promise<KoiosUtxo[]> {
     const filter = after === undefined ? "" : `block_height=gt.${after}`;
     const rows: KoiosUtxo[] = [];
     for (let i = 0; i < credentials.length; i += CREDENTIALS_PER_REQUEST) {
       const body = { _payment_credentials: credentials.slice(i, i + CREDENTIALS_PER_REQUEST), _extended: true };
-      rows.push(...(await this.paged<KoiosUtxo>("credential_utxos", body, filter)));
+      rows.push(...(await this.paged<KoiosUtxo>("credential_utxos", body, filter)).map(trimmed));
     }
     return rows;
   }
@@ -279,11 +366,13 @@ export class Koios {
    * The UTxOs asked for (`txhash#index`), spent or not, with their address
    * and value: for the dApp connector, the inputs of a dApp's transaction
    * that aren't the account's. At most `REFS_PER_REQUEST` go in a request.
+   * Each is `trimmed`.
    */
   async utxoInfo(refs: string[]): Promise<KoiosUtxo[]> {
     const rows: KoiosUtxo[] = [];
     for (let i = 0; i < refs.length; i += REFS_PER_REQUEST) {
-      rows.push(...(await this.post<KoiosUtxo>("utxo_info", { _utxo_refs: refs.slice(i, i + REFS_PER_REQUEST), _extended: true })));
+      const page = await this.post<KoiosUtxo>("utxo_info", { _utxo_refs: refs.slice(i, i + REFS_PER_REQUEST), _extended: true });
+      rows.push(...page.map(trimmed));
     }
     return rows;
   }
@@ -295,6 +384,18 @@ export class Koios {
       _empty: true,
     });
     return rows[0]?.addresses ?? [];
+  }
+
+  /**
+   * Which of `stakeAddresses` any address has ever used, empty ones included,
+   * registered or not: one request.
+   */
+  async usedStakeAddresses(stakeAddresses: string[]): Promise<Set<string>> {
+    const rows = await this.post<{ stake_address: string; addresses: string[] | null }>("account_addresses", {
+      _stake_addresses: stakeAddresses,
+      _empty: true,
+    });
+    return new Set(rows.filter((r) => r.addresses?.length).map((r) => r.stake_address));
   }
 
   /**
@@ -321,6 +422,30 @@ export class Koios {
       _scripts: false,
       _bytecode: false,
     });
+  }
+
+  /**
+   * What each transaction spent, its inputs alone (`tx_info`): nothing of
+   * their datums, scripts, tokens or metadata. At most `TXS_PER_REQUEST` go
+   * in a request. A transaction Koios doesn't know has no row.
+   */
+  async txSpends(txHashes: string[]): Promise<KoiosTxSpends[]> {
+    const rows: KoiosTxSpends[] = [];
+    for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
+      rows.push(
+        ...(await this.post<KoiosTxSpends>("tx_info", {
+          _tx_hashes: txHashes.slice(i, i + TXS_PER_REQUEST),
+          _inputs: true,
+          _metadata: false,
+          _assets: false,
+          _withdrawals: false,
+          _certs: false,
+          _scripts: false,
+          _bytecode: false,
+        })),
+      );
+    }
+    return rows;
   }
 
   /** A stake key's standing; undefined when it was never registered. */
@@ -393,7 +518,10 @@ export class Koios {
    * Submits a signed transaction; returns its hash. Retried only when Koios
    * says its node was unreachable: otherwise, if an answer were lost, a
    * second submit would fail with "inputs already spent" and hide the fact
-   * that the first one went through.
+   * that the first one went through. An answer cut off after its status (the
+   * timeout covers the body too), or one that isn't the hash it should be,
+   * may have gone through all the same: it's a KoiosBusyError, maybe sent
+   * (independent review L2).
    */
   async submitTx(txCbor: Uint8Array<ArrayBuffer>): Promise<string> {
     let response: Response;
@@ -402,6 +530,7 @@ export class Koios {
       await this.limit?.take();
       try {
         response = await this.fetchFn(`${this.base}/submittx`, {
+          ...SERVICE_FETCH,
           method: "POST",
           headers: { "content-type": "application/cbor" },
           body: txCbor,
@@ -411,8 +540,14 @@ export class Koios {
         if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED);
         throw new KoiosBusyError(unreachable(e));
       }
-      text = await response.text();
-      if (response.status === 429 || response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
+      // Koios's gateway answers a 429 before passing anything on, whatever its body.
+      if (response.status === 429) throw new KoiosBusyError(koiosTrouble(429, "submittx"), false);
+      if (response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
+      try {
+        text = await response.text();
+      } catch (e) {
+        throw new KoiosBusyError(unreachable(e));
+      }
       // Found live: a Koios backend whose own node was down answered. The
       // transaction never reached the network, so it's safe to send again,
       // and the gateway likely picks another backend.
@@ -423,16 +558,40 @@ export class Koios {
       await this.sleep(RETRY_DELAYS_MS[attempt]!);
     }
     // A UTxO it spends is already spent: Koios showed the wallet an old view
-    // of the chain (spent.ts), or this transaction already went through.
-    if (text.includes("BadInputsUTxO")) {
+    // of the chain (spent.ts), or this transaction already went through, or
+    // another that spends the same (pending.ts looks for this one first).
+    // Newer nodes say so from their mempool, before the ledger would, when
+    // every input is spent: "All inputs are spent. Transaction has probably
+    // already been included". Read as a plain refusal, it stopped a chain
+    // through Lovejoin whose resend met it (found live, 2026-09-28).
+    if (text.includes("BadInputsUTxO") || text.includes("All inputs are spent")) {
       throw new SpentInputError(
-        "The network refused it: a UTxO it spends is already spent. Koios may have shown an out-of-date view of the chain. Wait a minute, refresh, and review it again.",
+        "The network refused it: a UTxO it spends is already spent, by a payment on its way or made elsewhere, or Koios showed an out-of-date view of the chain. Wait a minute and check Activity before you review it again.",
       );
     }
     const staking = stakingRefusal(text);
     if (staking) throw new KoiosError(staking);
+    // The public account's transactions are valid for two hours from this device's clock (account.ts).
+    if (text.includes("OutsideValidityIntervalUTxO")) {
+      throw new KoiosError(
+        "The network refused it: its time to be sent had run out, or this device's clock is far off. Nothing was sent. Check the clock, then review it again.",
+      );
+    }
+    if (text.includes("FeeTooSmallUTxO")) {
+      throw new KoiosError(
+        "The network refused it: its fee is less than the network asks. Its fee settings may have changed since the review. Nothing was sent: review it again.",
+      );
+    }
     if (!response.ok) throw new KoiosError(`The network rejected the transaction: ${text.slice(0, 500)}`);
-    return JSON.parse(text) as string;
+    let id: unknown;
+    try {
+      id = JSON.parse(text);
+    } catch {
+      id = undefined;
+    }
+    // Taken, with an answer that isn't a transaction's id: it may well be on its way.
+    if (typeof id !== "string") throw new KoiosBusyError(`Koios took the transaction, and its answer couldn't be read (${text.slice(0, 100)}).`);
+    return id;
   }
 
   /**
@@ -449,6 +608,13 @@ export class Koios {
     return this.send<unknown>("POST", "ogmios", body, "", { answer400: true });
   }
 
+  /** The slot of the newest block Koios has. */
+  async tipSlot(): Promise<number> {
+    const [row] = await this.request<{ abs_slot?: unknown }>("GET", "tip", undefined);
+    if (typeof row?.abs_slot !== "number") throw new KoiosError("Koios returned no tip.");
+    return row.abs_slot;
+  }
+
   /** Confirmations for each transaction; `null` until it's on chain. */
   async txStatus(txHashes: string[]): Promise<Map<string, number | null>> {
     const rows = await this.post<{ tx_hash: string; num_confirmations: number | null }>("tx_status", {
@@ -457,17 +623,28 @@ export class Koios {
     return new Map(rows.map((r) => [r.tx_hash, r.num_confirmations]));
   }
 
-  /** All the rows, 1,000 a request; `filter` narrows them on Koios's side (PostgREST, e.g. `block_height=gt.5`). */
-  private async paged<T>(path: string, body: unknown, filter = ""): Promise<T[]> {
-    const rows: T[] = [];
-    for (let offset = 0; ; offset += PAGE_SIZE) {
-      const page = await this.post<T>(
-        path,
-        body,
-        `${filter ? `${filter}&` : ""}order=tx_hash.asc,tx_index.asc&offset=${offset}&limit=${PAGE_SIZE}`,
-      );
-      rows.push(...page);
-      if (page.length < PAGE_SIZE) return rows;
+  /**
+   * All the rows, 1,000 a request, each UTxO once; `filter` narrows them on
+   * Koios's side (PostgREST, e.g. `block_height=gt.5`). A page starts after
+   * the last row of the one before, not at an offset: the UTxOs change
+   * between requests, and one spent before an offset would shift the rest,
+   * skipping a row, as one added would repeat a row.
+   */
+  private async paged<T extends { tx_hash: string; tx_index: number }>(path: string, body: unknown, filter = ""): Promise<T[]> {
+    const rows = new Map<string, T>();
+    let last: T | undefined;
+    for (;;) {
+      const after = last && `or=(tx_hash.gt.${last.tx_hash},and(tx_hash.eq.${last.tx_hash},tx_index.gt.${last.tx_index}))`;
+      const query = [filter, after, `order=tx_hash.asc,tx_index.asc&limit=${PAGE_SIZE}`].filter(Boolean).join("&");
+      const page = await this.post<T>(path, body, query);
+      const known = rows.size;
+      for (const row of page) {
+        const outpoint = `${row.tx_hash}#${row.tx_index}`;
+        if (!rows.has(outpoint)) rows.set(outpoint, row);
+      }
+      // A short page is the last. One with nothing new can't lead anywhere either.
+      if (page.length < PAGE_SIZE || rows.size === known) return [...rows.values()];
+      last = page.at(-1);
     }
   }
 
@@ -494,6 +671,7 @@ export class Koios {
       await this.limit?.take();
       try {
         response = await this.fetchFn(url, {
+          ...SERVICE_FETCH,
           method,
           headers:
             method === "POST"

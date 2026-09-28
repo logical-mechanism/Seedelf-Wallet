@@ -2,6 +2,7 @@
 // The service worker owns every secret; the UI only ever asks it to do work.
 
 import type { NetworkName } from "../networks";
+import type { HistoryClass } from "./histories";
 import type { Currency, Preferences } from "./preferences";
 
 export type { Preferences };
@@ -11,10 +12,21 @@ export type WalletState = "no-wallet" | "locked" | "unlocked";
 export interface Status {
   state: WalletState;
   version: string;
+  /** The network the wallet is on: the user's choice, among `networks` (Settings). */
   network: NetworkName;
+  /** The networks this build has, its default first: preprod alone, or mainnet and preprod. */
   networks: NetworkName[];
   /** When locked: how long until another unlock attempt is allowed (ms). */
   retryAfterMs: number;
+  /**
+   * Set when the dApp connector can't be turned on, and why. "storage": this
+   * Chrome won't keep sites' scripts out of the wallet's local storage
+   * (`storage.local.setAccessLevel`), so the connector stays off; a newer
+   * Chrome fixes it.
+   */
+  connectorBlocked?: "storage";
+  /** When locked: why, if the wallet locked itself. "trap": its WebAssembly stopped working, so it dropped the keys. */
+  lockedBy?: "trap";
 }
 
 export type UnlockResult =
@@ -65,6 +77,12 @@ export interface ActivityEntry {
   note?: string;
   /** The Cardano account's only: what the transaction did with its stake key. */
   staking?: ActivityStaking;
+  /**
+   * The Seedelf history's only: the history of what the transaction left in
+   * the private balance, its change included, for coin selection and the
+   * UTxOs screen (shared/histories.ts). Absent, it's read from `kind`.
+   */
+  origin?: HistoryClass;
 }
 
 /** What a transaction in the Cardano account's Activity did with its stake key. Lovelace amounts are decimal strings. */
@@ -111,6 +129,11 @@ export interface SeedelfInfo {
   label?: string;
   /** ADA locked with the token (lovelace string); only `remove` gets it back. */
   lovelace: string;
+  /**
+   * Who paid for it, when the wallet knows (background/minted-by.ts):
+   * Remove sends its ADA back to that side by default, and asks otherwise.
+   */
+  paidBy?: MintSource;
 }
 
 /** What's kept out of every payment on one side: locked UTxOs, and the Cardano account's collateral. */
@@ -268,6 +291,16 @@ export interface UtxoInfo {
   collateral?: boolean;
   /** It holds one of your seedelfs: its full token name, and its tag when it reads as text. Only removing it spends the UTxO. */
   seedelf?: { name: string; label?: string };
+  /** A private one's: where its money came from, as the sealed history says (shared/histories.ts). */
+  history?: HistoryClass;
+  /**
+   * No transaction of this wallet can take it: `script`, it holds a
+   * reference script. A private one: the wallet's script evaluator can't
+   * spend one yet, so it isn't in the private balance. A public one: Koios
+   * doesn't give the script, so its fee can't be priced. (A register's datum
+   * is always flat, so an owned UTxO never has one too deep to read.)
+   */
+  unspendable?: "script";
 }
 
 /** Both sides' UTxOs, largest first. */
@@ -311,6 +344,8 @@ export interface MoveInSummary {
   changeLovelace: string;
   changeTokens: number;
   inputs: number;
+  /** Max's UTxOs it couldn't take with the rest, and why (empty for an amount). */
+  leftOut?: LeftOutUtxo[];
 }
 
 /** What pays for a new seedelf: the Cardano account (mint first, then move in), or the Seedelf balance (a stealth mint). */
@@ -336,6 +371,8 @@ export interface MintSummary {
   changeOutputs: number;
   /** How many UTxOs pay for it. */
   inputs: number;
+  /** A stealth mint's: the histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
+  histories?: HistoryClass[];
 }
 
 /** A token and an amount to send. `quantity` is the raw integer, as a decimal string. */
@@ -390,6 +427,8 @@ export interface TransferSummary {
   changeOutputs: number;
   /** How many Seedelf UTxOs pay for it. */
   inputs: number;
+  /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
+  histories?: HistoryClass[];
 }
 
 /** Where a withdrawal goes, as the wallet read it. */
@@ -417,8 +456,16 @@ export interface WithdrawSummary {
   changeOutputs: number;
   /** How many Seedelf UTxOs pay for it. */
   inputs: number;
-  /** Seedelf UTxOs Max left for another withdrawal (it takes 20 at most). */
+  /**
+   * Seedelf UTxOs Max left for another withdrawal: past the 20 it takes at
+   * most, or holding a token that would total more with the rest than an
+   * output can hold.
+   */
   left: number;
+  /** Max's: private UTxOs no payment takes (a reference script), which the private balance leaves out, or one a return through Lovejoin being sent spends. */
+  leftOut?: LeftOutUtxo[];
+  /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
+  histories?: HistoryClass[];
 }
 
 /** One recipient of a send from the Cardano account: an address (found by `$handle`, maybe), or someone's seedelf. */
@@ -445,6 +492,8 @@ export interface SendSummary {
   changeTokens: number;
   /** How many of the account's UTxOs pay for it. */
   inputs: number;
+  /** Max's UTxOs it couldn't take with the rest, and why (empty for amounts). */
+  leftOut?: LeftOutUtxo[];
 }
 
 /** Where a removed seedelf's ADA goes: the Cardano account's `0/0`, or back into the Seedelf balance. */
@@ -488,6 +537,56 @@ export interface PendingTx {
   submittedAt: number;
   /** Null until it's on chain. */
   confirmations: number | null;
+  /**
+   * Koios didn't answer its submit, so it may or may not have gone through.
+   * The wallet holds its UTxOs back, sends it again now and then (the network
+   * takes it once), and watches until the chain shows it or it can't land;
+   * until then it builds nothing new on that network. It's sealed on the
+   * device meanwhile, so a lock or a closed browser doesn't forget it.
+   */
+  maybeSent?: boolean;
+  /** The slot it can't land after: the public account's transactions carry one (account.ts). */
+  invalidHereafter?: number;
+  /**
+   * Maybe sent, and sent again, the network refused it as spending what's
+   * spent while the chain still showed every UTxO it spends, unspent: it's
+   * waiting in a mempool, and may still land. A private one isn't let go on
+   * age meanwhile, for two and a half hours at most from when it was sent
+   * (pending.ts HELD_IN_MEMPOOL_MS). False: a look found one spent, or not
+   * on chain at all.
+   */
+  inMempool?: boolean;
+  /**
+   * It never landed, and its UTxOs count in the balance again. `expired`:
+   * the chain passed its slot, so nothing was sent. `unseen`: a private
+   * payment Koios didn't answer, which the chain still hadn't shown 20
+   * minutes on; it most likely never went out. With `inMempool`, one the
+   * network said it had, held as long as it could be.
+   */
+  dropped?: "expired" | "unseen";
+}
+
+/**
+ * What removing the wallet would leave behind on one network, from what the
+ * wallet keeps (no Koios request): Remove wallet lists it first, and asks
+ * again (independent review M2, M5).
+ */
+export interface AtStake {
+  network: NetworkName;
+  /** A payment Koios didn't answer, which may still go through. */
+  maybeSent?: PendingTx;
+  /**
+   * Private sessions whose one-time accounts may hold something, which a
+   * restore doesn't find yet: each one open, or closed with something no
+   * return takes left there (`leftBehind`).
+   */
+  sessions: Array<{ index: number; kind: "swap" | "mix" | "site"; origin?: string; leftBehind?: boolean }>;
+  /** A chain through Lovejoin is still being sent. */
+  chainSending: boolean;
+  /** A mix from the public account stopped at a transaction that may have gone through, unsettled yet (final review F1). */
+  mixMaybeSent?: boolean;
+  /** What the wallet keeps for this network couldn't be read: what's open there isn't known. */
+  unreadable?: boolean;
 }
 
 /** A token in a dApp transaction's summary; `quantity` is signed where it's a change. */
@@ -501,11 +600,17 @@ export interface DappToken {
 export interface DappTxSummary {
   txHash: string;
   fee: string;
-  /** The account's change in ADA (signed) and each token that moved. */
+  /**
+   * The account's change in ADA (signed) and each token that moved: what
+   * comes back less what it puts in, its staking's included.
+   */
   netLovelace: string;
   netTokens: DappToken[];
+  /** What the account's UTxOs put in, and what its own outputs get back. */
   spentLovelace: string;
   returnedLovelace: string;
+  /** What the account puts in from its staking: its rewards withdrawn, and its stake key's deposit back. */
+  stakingLovelace: string;
   ownInputs: number;
   /** Outputs to anyone else. */
   paid: Array<{
@@ -517,6 +622,18 @@ export interface DappTxSummary {
     script: boolean;
     /** Into Seedelf Wallet's contract: under a register, or with none (anyone could take it). */
     seedelf: "register" | "none" | null;
+    /**
+     * The account's payment key under a stake part that isn't its own, or
+     * none: spendable by the account, but its stake counts for someone else,
+     * so it's paid, not change.
+     */
+    ownPaymentKey: boolean;
+    /**
+     * Another of the wallet's accounts, as the worker found it for a site's
+     * prompt (independent review M12): the public account ("account"), or a
+     * private session, by index. Paying it ties the two on chain.
+     */
+    yours?: "account" | number;
   }>;
   ownOutputs: Array<{
     txIndex: number;
@@ -533,7 +650,10 @@ export interface DappTxSummary {
   certificates: Array<{
     kind: string;
     own: boolean;
+    /** The pool it stakes with, or a stake pool's own certificate's pool (`pool1…`). */
     pool: string | null;
+    /** A stake pool's own certificate (kind "pool"): it registers the pool (or new terms), or retires it. */
+    poolAction: "register" | "retire" | null;
     drep: string | null;
     deposit: string | null;
     refund: string | null;
@@ -563,11 +683,27 @@ export interface DappTxSummary {
  * connected to that private session, not the public account. A connect's
  * `funding`: the private session it chose is funded and on its way, and the
  * site connects once Koios sees it. `password` on a connect: sending a
- * private session's funding needs it.
+ * private session's funding needs it. A session's signature's
+ * `collateralSpent`: it spends the session's collateral as an ordinary input.
  */
 export type DappAsk =
   | { kind: "connect"; password: boolean; funding?: { index: number; txHash: string } }
-  | { kind: "sign-tx"; partial: boolean; summary: DappTxSummary; password: boolean; session?: number }
+  | {
+      kind: "sign-tx";
+      partial: boolean;
+      summary: DappTxSummary;
+      password: boolean;
+      session?: number;
+      collateralSpent?: boolean;
+      /**
+       * The wallet's other accounts it pays or spends from, which signing
+       * ties on chain to the one the site sees: the public account
+       * ("account", for a session's), and private sessions by index. Empty
+       * when none; missing when they couldn't be checked (independent
+       * review M12).
+       */
+      ties?: Array<"account" | number>;
+    }
   | {
       kind: "sign-data";
       session?: number;
@@ -638,6 +774,55 @@ export interface SwapQuote {
   fund: { lovelace: string; tokens: TokenQuantity[] };
   /** Also moved: the account's own collateral, in lovelace. It comes back with the rest. */
   collateral: string;
+  /**
+   * Whether the token it gets is one the wallet swaps into: ADA, one on the
+   * wallet's own list, or one Minswap's verified list has, by its ID. Anyone
+   * can name a token like a known one: false, and the wallet won't fund it.
+   */
+  verified?: boolean;
+  /** Where Lovejoin is on, what bringing the session back through it is expected to take. */
+  lovejoin?: SwapLovejoin;
+}
+
+/**
+ * What bringing a swap's session back through Lovejoin is expected to take
+ * (Settings, Lovejoin): the 10 ₳ boxes its spare ADA pays for, the
+ * proceeds' too when they're ADA, at most (the pool may take fewer, or
+ * none); their `mixes` at `depth`, about `mixFees` all together; and about
+ * `withdrawFees` for them all to come back, each after a wait in `delay`
+ * (hours, "1-6"). Amounts in lovelace. No boxes: it all comes back at once.
+ */
+export interface SwapLovejoin {
+  boxes: number;
+  depth: number;
+  mixes: number;
+  mixFees: string;
+  withdrawFees: string;
+  delay: string;
+  /**
+   * Whether Settings brings private sessions back through Lovejoin: the
+   * approval's switch starts there, and what it approves is kept (privacy
+   * review §4.1).
+   */
+  on: boolean;
+  /**
+   * Read at Review, from Lovejoin's pool (privacy review §2.7): the boxes the
+   * spare ADA pays for, when the pool has room for fewer (`boxes`).
+   */
+  of?: number;
+  /**
+   * Read at Review: why the pool takes no box now (under its floor, or too
+   * few boxes to mix with), so the return would come back directly. It's
+   * read again when the session comes back.
+   */
+  skipped?: string;
+  /**
+   * If the swap is stopped, or Minswap refunds or cancels its order, its
+   * funding's ADA comes back instead of the proceeds: what that takes
+   * through Lovejoin, when it's more boxes than the fill's (an ADA→token
+   * swap's principal, privacy review §2.8).
+   */
+  ifStopped?: { boxes: number; mixes: number; mixFees: string; withdrawFees: string; of?: number };
 }
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
@@ -664,10 +849,38 @@ export interface SessionAuto {
   retry?: { at: number; error: string };
   /** The user pressed Stop: any order is cancelled, then everything comes back. */
   stopping: boolean;
-  /** The order was filled. */
+  /** The order was filled: `partly`, part of it (a split route), the rest refunded. */
   filled: boolean;
+  partly?: boolean;
+  /** The order was refunded, none of it filled: what it gave came back (independent review M18). */
+  refunded?: boolean;
+  /**
+   * Stopped, but an order of the swap is still open at a DEX, and Minswap
+   * doesn't list it, so it can't be cancelled yet: when the runner first
+   * found it so (ms). What's left waits at the account until that order is
+   * filled or refunded, or Minswap lists it and it's cancelled (independent
+   * review L16).
+   */
+  orderOpen?: number;
   /** The least the user approved receiving. */
   approvedMinOut: string;
+  /**
+   * The least the order placed asks for, once one is: Review it myself, or
+   * a fresh quote above the approved least, asks for other than was
+   * approved (independent review L24).
+   */
+  placedMinOut?: string;
+  /**
+   * Its next step, found as the wallet unlocked, waits until then (ms), so
+   * it doesn't go out the moment the wallet unlocks (privacy review §3.1).
+   */
+  waitsUntil?: number;
+  /**
+   * How it comes back, as the user approved it or chose at Stop (privacy
+   * review §4.1): true, directly; false, through Lovejoin. None on a swap
+   * from before: as Settings has it.
+   */
+  direct?: boolean;
 }
 
 /**
@@ -704,6 +917,41 @@ export interface SessionView {
    * directly. `stopped`: why a transaction of it couldn't be sent.
    */
   chain?: { total: number; sent: number; confirmed: number; cut: boolean; stopped?: string };
+  /**
+   * Why its latest return came back directly, leaving Lovejoin out, though
+   * its spare ADA would have paid for a box: a swap that runs itself says so
+   * here (a mix, in `mix.skipped`).
+   */
+  lovejoinSkipped?: string;
+  /**
+   * What's at its account that no return takes, as the last reading found
+   * it: it stays there, and doesn't hold the session open. `holding` leaves
+   * it out.
+   */
+  leftBehind?: LeftBehindUtxo[];
+  /**
+   * With stage `failed`: its funding was turned away when it was sent, so it
+   * never went out. Without it, a failed funding is one the chain hasn't
+   * shown in 20 minutes (Koios didn't answer its submit, or it's slow), which
+   * may still land: Try again looks for it again.
+   */
+  unsent?: boolean;
+}
+
+/**
+ * A UTxO at a session's account that no return of the wallet's takes:
+ * `script`, it holds a reference script the wallet can't measure, so it
+ * can't price spending it; `fee`, it doesn't pay for its own way back into
+ * the private balance: a stranger's tokens whose own ADA doesn't cover their
+ * deposit, or what's left there, all together, too little. A `fee` one is
+ * tried again with the rest when more arrives. Its `lovelace`, as it was
+ * found.
+ */
+export interface LeftBehindUtxo {
+  txHash: string;
+  txIndex: number;
+  reason: "script" | "fee";
+  lovelace: string;
 }
 
 /** A funding payment into a new session, built and waiting for Send. */
@@ -754,6 +1002,26 @@ export interface SessionBackSummary {
    * wallet, so the chain doesn't start, and it all comes back directly.
    */
   lovejoinSkipped?: string;
+  /** The session's UTxOs this return leaves at its account, and why. */
+  leftOut?: LeftOutUtxo[];
+}
+
+/**
+ * A UTxO a transaction that takes everything leaves where it is, and why:
+ * `tokens`, one of its tokens would total more with the rest than an output
+ * can hold, so a later transaction takes it; `script`, it holds a reference
+ * script the wallet can't measure, so it can't price spending it, and no
+ * transaction of this wallet takes it; `returning`, a return through
+ * Lovejoin that's still being sent spends it (a private one, Make public's
+ * Max). A session's return only (independent review H1, H2): `cost`, a
+ * stranger's token UTxO whose own ADA doesn't pay for the deposit its
+ * tokens need, so it stays (and is left behind); `size`, one transaction
+ * can't hold it with the rest, so the next return takes it.
+ */
+export interface LeftOutUtxo {
+  txHash: string;
+  txIndex: number;
+  reason: "tokens" | "script" | "returning" | "cost" | "size";
 }
 
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */
@@ -763,6 +1031,12 @@ export interface LovejoinFunding {
   again?: boolean;
   /** Mixing again: how many boxes the wallet has in the pool (`boxes` is how many go this time). */
   owned?: number;
+  /**
+   * Mixing again from the private balance takes the boxes a mix from the
+   * public account put in too: the user asked, knowing it ties the private
+   * balance to the account (privacy review §2.10).
+   */
+  publicToo?: boolean;
   /** What pays for the boxes, every mix, and the deposit and its change: what the mixes don't use comes back. */
   lovelace: string;
   mixes: number;
@@ -787,6 +1061,8 @@ export interface LovejoinPublicSummary {
   fees: string;
   /** What stays in the public account after the last mix. */
   change: string;
+  /** Its own boxes a mix from it put in, mixed again: no deposit (privacy review §2.10). */
+  again?: boolean;
 }
 
 /** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
@@ -795,16 +1071,69 @@ export interface LovejoinStatus {
   boxes: Array<{ txHash: string; txIndex: number }>;
   lovelace: string;
   due: number[];
+  /**
+   * Its boxes a chain of its own made and didn't finish mixing (a chain cut
+   * by a lock, a closed browser or a failed send), or, after a restore, that
+   * a deposit made, as Koios said: they never come back by themselves, since
+   * each still shows where it went in. Mix my boxes again takes them first;
+   * bringing one back takes `anyway`.
+   */
+  notMixed: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Of `notMixed`, listed last: boxes after a restore, with no record of the
+   * chain that made them, whose making Koios hasn't said of yet. Held until
+   * it does, as a deposit's are: the wallet asks again at a later pool read
+   * (independent review M14).
+   */
+  unsure?: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Of `notMixed`: boxes after a restore, with no record of the chain that
+   * made them, that Koios said a deposit made. Whose deposit it was, and why
+   * no mix followed it, the wallet can't know, so they're never said to be
+   * the user's deposit or a stopped chain's (independent review M14).
+   */
+  deposits?: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Its boxes a mix from the public account put where they are: the
+   * account's, which paid for it in the open. Mixed again, the account pays,
+   * or the private balance ties itself to it (privacy review §2.10).
+   */
+  fromPublic: Array<{ txHash: string; txIndex: number }>;
+  /** Its chains that aren't all sent: being sent (no withdraw meanwhile), or stopped partway. */
+  chains: LovejoinChainView[];
+}
+
+/** A chain through Lovejoin the wallet sent that isn't all sent. */
+export interface LovejoinChainView {
+  /** A session's return or mix (its index); none for a mix from the public account. */
+  session?: number;
+  boxes: number;
+  /** Its transactions, and how many were sent. */
+  total: number;
+  sent: number;
+  /** When it began to be sent (ms). */
+  at: number;
+  /** Why it stopped partway; none while it's being sent. */
+  stopped?: string;
+  /** It stopped at a transaction that may have gone through, not seen yet: none from the account is built meanwhile. */
+  maybeSent?: true;
 }
 
 /**
  * The boxes on their way back, as this device's schedule has them (no pool
  * read): how many, what they hold, and when the next is due (ms), for Home.
+ * `notMixed`: how many the last pool read found not mixed yet (they wait for
+ * Mix my boxes again); `unsure`: of those, how many only because Koios
+ * hasn't said yet how they went in, after a restore (independent review
+ * M14); `stopped`: how many chains stopped partway.
  */
 export interface LovejoinHeld {
   boxes: number;
   lovelace: string;
   next: number | null;
+  notMixed: number;
+  unsure?: number;
+  stopped: number;
 }
 
 /** A session's order not filled yet, from Minswap. */
@@ -870,7 +1199,14 @@ export interface Requests {
   "send-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };
-  "reset-wallet": { payload: None; result: Status };
+  /**
+   * Deletes the wallet from this browser. Unlocked, it's refused while
+   * something is still open (`reset-check`), unless `force`: the user saw
+   * the list and asked again.
+   */
+  "reset-wallet": { payload: { force?: boolean }; result: Status };
+  /** What removing the wallet would leave behind, each network with something; none, nothing. Unlocked only. */
+  "reset-check": { payload: None; result: AtStake[] };
   /** The recovery phrase's words, for Settings; the password again, even while unlocked. */
   "reveal-phrase": { payload: { password: string }; result: { words: string[] } };
   /** Whether a typed phrase is this wallet's, for Settings' check: yes or no, never which words differ. */
@@ -918,10 +1254,20 @@ export interface Requests {
   "stake-submit": { payload: { txHash: string }; result: PendingTx };
   preferences: { payload: None; result: Preferences };
   "preferences-set": { payload: Partial<Preferences>; result: Preferences };
+  /**
+   * Puts the wallet on another of the build's networks (Settings): every
+   * page follows (state-changed), and what sites were asking on the other
+   * network is declined.
+   */
+  "network-set": { payload: { network: NetworkName }; result: Status };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
   /** What sites are waiting for the user to answer, oldest first. */
   "dapp-approvals": { payload: None; result: DappApproval[] };
+  /** The sites waiting for the wallet to be unlocked, by origin: the connector's window names them on its Unlock screen. */
+  "dapp-unlocking": { payload: None; result: string[] };
+  /** The connector's window has nothing left: the worker closes it, or answers false when something came in meanwhile. */
+  "dapp-close": { payload: None; result: boolean };
   /**
    * Answers one: `error` says why an approved one couldn't be done (the site hears it too).
    * A signature that needs the password takes it here; a wrong one leaves it waiting.
@@ -948,9 +1294,17 @@ export interface Requests {
   /** Minswap's quote for a swap, with what a session for it is funded with. */
   "swap-quote": { payload: SwapAsk; result: SwapQuote };
   /** Builds the payment that funds a new session for `quote`, from the private balance, without sending it. */
-  "session-out-build": { payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide } }; result: SessionOutSummary };
-  /** Records the session, then submits its funding payment, if its hash matches. */
-  "session-out-submit": { payload: { txHash: string }; result: PendingTx };
+  "session-out-build": {
+    payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide } };
+    /** `lovejoin`: the quote's, checked against Lovejoin's pool as it is now (privacy review §2.7). */
+    result: SessionOutSummary & { lovejoin?: SwapLovejoin };
+  };
+  /**
+   * Records the session, then submits its funding payment, if its hash
+   * matches. `direct`: the approval's choice to bring it back without
+   * Lovejoin (true) or through it (false); Settings' when it's left out.
+   */
+  "session-out-submit": { payload: { txHash: string; direct?: boolean }; result: PendingTx };
   /** Has Minswap build the session's swap, freshly quoted, and reads it. */
   "session-swap-build": { payload: { index: number }; result: SessionTxReview };
   /** Signs the swap built last with the session's key and submits it. */
@@ -996,7 +1350,10 @@ export interface Requests {
    * wallet's in the pool again (as many as the pool has others for), with no
    * deposit, and runs itself once sent. Sent with lovejoin-mix-private-submit.
    */
-  "lovejoin-again-build": { payload: None; result: SessionOutSummary & { mix: LovejoinFunding } };
+  /** `anyway`: the boxes a mix from the public account put in too, paid from the private balance (privacy review §2.10). */
+  "lovejoin-again-build": { payload: { anyway?: boolean }; result: SessionOutSummary & { mix: LovejoinFunding } };
+  /** Builds the mixes of the boxes a mix from the public account put in, paid by the account: sent as a mix from it is. */
+  "lovejoin-again-public-build": { payload: None; result: LovejoinPublicSummary };
   /** Records the mix session, then sends its funding. */
   "lovejoin-mix-private-submit": { payload: { txHash: string }; result: { index: number; pending: PendingTx } };
   /** Builds `boxes` boxes from the public account straight into Lovejoin: the deposit and every mix. */
@@ -1010,14 +1367,24 @@ export interface Requests {
    */
   "lovejoin-mix-public-progress": {
     payload: { advance?: boolean };
-    result: { total: number; sent: number; stopped?: string } | null;
+    /** `maybeSent`: it stopped at a transaction that may have gone through, not seen yet (independent review L5). */
+    result: { total: number; sent: number; stopped?: string; maybeSent?: true } | null;
   };
-  /** Withdraws one of the wallet's boxes now, whatever its wait (`box`, or any). */
-  "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number } }; result: PendingTx };
+  /**
+   * Withdraws one of the wallet's boxes now, whatever its wait (`box`, or the
+   * one that has waited longest). One not mixed yet only with `anyway`.
+   */
+  "lovejoin-withdraw-now": { payload: { box?: { txHash: string; txIndex: number }; anyway?: boolean }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
   "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
-  /** Stops the swap: its order is cancelled, then everything comes back into the private balance. */
-  "session-stop": { payload: { index: number }; result: SessionView };
+  /**
+   * Stops the swap: its order is cancelled, then everything comes back into
+   * the private balance (`direct`: not through Lovejoin, whatever was approved).
+   * `ordered`: an order had gone out, or may have, when Stop took effect.
+   */
+  "session-stop": { payload: { index: number; direct?: boolean }; result: SessionView & { ordered?: boolean } };
+  /** What Stop would bring back through Lovejoin, for its dialog; null when it comes back directly. */
+  "session-stop-cost": { payload: { index: number }; result: SwapLovejoin | null };
   /** Goes on after a pause or a failure: the step is tried again now. */
   "session-resume": { payload: { index: number }; result: SessionView };
 }
@@ -1061,6 +1428,7 @@ const REQUEST_LIST = [
   "send-submit",
   "pending-tx",
   "reset-wallet",
+  "reset-check",
   "reveal-phrase",
   "check-phrase",
   "change-password",
@@ -1082,8 +1450,11 @@ const REQUEST_LIST = [
   "stake-submit",
   "preferences",
   "preferences-set",
+  "network-set",
   "price",
   "dapp-approvals",
+  "dapp-unlocking",
+  "dapp-close",
   "dapp-answer",
   "dapp-private-build",
   "dapp-disconnect-session",
@@ -1108,6 +1479,7 @@ const REQUEST_LIST = [
   "session-claim-submit",
   "session-advance",
   "session-stop",
+  "session-stop-cost",
   "session-resume",
   "lovejoin-status",
   "lovejoin-withdraw-now",
@@ -1115,6 +1487,7 @@ const REQUEST_LIST = [
   "lovejoin-funding",
   "lovejoin-mix-private-build",
   "lovejoin-again-build",
+  "lovejoin-again-public-build",
   "lovejoin-mix-private-submit",
   "lovejoin-mix-public-build",
   "lovejoin-mix-public-submit",
@@ -1132,6 +1505,12 @@ export function isMessage(value: unknown): value is Message {
   const type = (value as { type?: unknown } | null)?.type;
   return typeof type === "string" && REQUESTS.has(type);
 }
+
+/**
+ * The port each UI request travels on (ui/background.ts): only the worker
+ * listens for it, so no other page sees a password or the phrase in one.
+ */
+export const UI_PORT = "seedelf.ui";
 
 /** Broadcast by the worker to open UI pages when the wallet state changes. */
 export const STATE_CHANGED = { event: "state-changed" } as const;

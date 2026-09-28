@@ -1,22 +1,48 @@
 // Unlock with the password. The worker enforces the back-off after wrong
 // passwords; this screen only shows the countdown. In the connector's
-// window it says a site is waiting: what it asks comes after.
+// window it names the sites waiting, by origin as Chrome reported it: what
+// they ask comes after. When the wallet locked itself because its core
+// stopped working, it says so.
 
 import { useEffect, useState, type FormEvent } from "react";
 
 import type { Status } from "../../shared/rpc";
-import { call } from "../background";
+import { call, onDappChanged } from "../background";
 import { Callout } from "../components/Callout";
 import { PasswordField } from "../components/PasswordField";
 import { Screen } from "../components/Screen";
+import { plural } from "../format";
 import { connectorWindow } from "../view";
+
+/** Who the connector's window unlocks for: the sites waiting, by origin. Exported for its tests. */
+export function waitingText(origins: readonly string[]): string {
+  const [first] = origins;
+  if (!first) return "A site is waiting for Seedelf Wallet. Unlock to see what it asks.";
+  if (origins.length === 1) return `${first} is asking for Seedelf Wallet. Unlock to see what it asks.`;
+  return `${first} and ${plural(origins.length - 1, "other site")} are asking for Seedelf Wallet. Unlock to see what they ask.`;
+}
+
+/** The sites the connector's window waits to unlock for, as the worker says, kept up to date. */
+function useWaitingSites(): string[] {
+  const [origins, setOrigins] = useState<string[]>([]);
+  useEffect(() => {
+    if (!connectorWindow) return;
+    const load = () => void call("dapp-unlocking", {}).then(setOrigins, () => undefined);
+    load();
+    return onDappChanged(load);
+  }, []);
+  return origins;
+}
 
 export function Unlock({
   retryAfterMs,
+  lockedBy,
   onUnlocked,
   onForgot,
 }: {
   retryAfterMs: number;
+  /** Why the wallet locked itself, when it did (Status `lockedBy`). */
+  lockedBy?: Status["lockedBy"];
   onUnlocked: () => void;
   onForgot: () => void;
 }) {
@@ -25,6 +51,7 @@ export function Unlock({
   const [now, setNow] = useState(Date.now);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const waitingSites = useWaitingSites();
 
   const waitMs = Math.max(0, waitUntil - now);
   const waiting = waitMs > 0;
@@ -63,9 +90,14 @@ export function Unlock({
     <section className="unlock">
       <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={88} height={88} />
       <h1>Welcome back</h1>
+      {lockedBy === "trap" && (
+        <Callout tone="warn" testId="unlock-why">
+          The wallet's core stopped working, so the wallet locked itself and let go of your keys. Unlock it to carry on.
+        </Callout>
+      )}
       {connectorWindow && (
         <p className="note center" data-testid="unlock-site">
-          A site is waiting for Seedelf Wallet. Unlock to see what it asks.
+          {waitingText(waitingSites)}
         </p>
       )}
       <form className="stack unlock__form" onSubmit={submit}>
@@ -128,9 +160,12 @@ export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s
         </div>
       }
     >
-      <p className="note">
+      <p className="note" data-testid="reset-note">
         Without the password, the only way back in is your recovery phrase. This deletes the wallet from this browser,
-        then you restore it from the phrase and choose a new password.
+        then you restore it from the phrase and choose a new password. The phrase brings back your public account, your
+        private balance and your Lovejoin boxes. What private sessions' one-time accounts hold doesn't show after a
+        restore yet. If a payment may still go through, an encrypted record of it stays in this browser: restoring this
+        same phrase here watches it again, and making or restoring another wallet deletes that record.
       </p>
       <Callout tone="warn">
         If you don't have your recovery phrase, stop here. Deleting the wallet without it loses your funds for good.

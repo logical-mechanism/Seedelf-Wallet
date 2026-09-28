@@ -27,10 +27,12 @@ import {
 import { Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { HandleWarning } from "../components/HandleWarning";
+import { HistoriesNote } from "../components/HistoriesNote";
 import { TokenAmounts } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, lockedAside, shortHex, tokenKey as key } from "../format";
+import { TokenAmountRow } from "../components/TokenList";
+import { adaWithTokens, formatAda, lockedAside, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
-import { tokenLabel } from "../tokens";
+import { tokenQuantity } from "../tokens";
 
 type Found = { state: "idle" } | { state: "looking" } | { state: "found"; seedelf: SeedelfLookup } | { state: "error"; message: string };
 
@@ -50,7 +52,7 @@ export function Transfer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
-  const amounts = recipientAmounts(seedelf.tokens, list.drafts, false);
+  const amounts = recipientAmounts(network, seedelf.tokens, list.drafts, false);
   const foundOf = (id: number): Found => found[id] ?? { state: "idle" };
   // The builder decides exactly (fee, change); this catches the obvious case early.
   const tooMuch = amounts.total > BigInt(seedelf.lovelace);
@@ -104,9 +106,7 @@ export function Transfer({
           <Row label="Amount" value={`${formatAda(p.lovelace)} ₳`} strong />
           {p.tokens.map((t) => {
             const held = seedelf.tokens.find((h) => key(h) === key(t));
-            return (
-              <Row key={key(t)} label="" value={`${formatQuantity(t.quantity, held?.decimals ?? 0)} ${tokenLabel(network, t)}`} />
-            );
+            return <TokenAmountRow key={key(t)} label="" token={held ?? t} amount={tokenQuantity(network, { ...held, ...t })} />;
           })}
         </>
       );
@@ -130,6 +130,7 @@ export function Transfer({
           <Row label="Back to your private balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="Private UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
+        <HistoriesNote histories={summary.histories} testId="transfer-histories" />
         {summary.payments.map((p, i) => (
           <MinimumNote
             key={i}
@@ -222,7 +223,7 @@ export function Transfer({
             </RoundNote>
 
             <TokenAmounts
-              held={heldFor(seedelf.tokens, list.drafts, d)}
+              held={heldFor(network, seedelf.tokens, list.drafts, d)}
               typed={d.tokens}
               onChange={(tokens) => list.update(d.id, { tokens })}
             />

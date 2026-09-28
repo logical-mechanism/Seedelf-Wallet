@@ -115,8 +115,12 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     let every_utxo_at_address: Vec<UtxoResponse> =
         utxos::get_address_utxos(&args.address, network_flag).await?;
     // all non collateral utxos, assume 5 ada for collateral
-    let every_non_collatreal_utxo: Vec<UtxoResponse> =
+    let mut every_non_collatreal_utxo: Vec<UtxoResponse> =
         utxos::collect_address_utxos(every_utxo_at_address)?;
+    // Spending a UTxO that holds a reference script costs Conway's
+    // reference-script fee, and the script may be deployed there on purpose:
+    // never spend one here.
+    every_non_collatreal_utxo.retain(|utxo| utxo.reference_script.is_none());
     let usable_utxos: Vec<UtxoResponse> = utxos::select(
         &params,
         every_non_collatreal_utxo,
@@ -213,8 +217,11 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
         .len()
         .try_into()
         .unwrap();
-    // floor division means its safer to just add 1 lovelace
-    let tx_fee: u64 = fee::linear_fee(&params, tx_size) + 1;
+    // floor division means its safer to just add 1 lovelace. Any reference
+    // script on a spent input is priced too (none is spent, as above).
+    let tx_fee: u64 = fee::linear_fee(&params, tx_size)
+        + 1
+        + fee::reference_script_fee(&params, utxos::reference_script_bytes(&usable_utxos)?)?;
 
     // a max tokens per change output here
     let change_token_per_utxo: Vec<Assets> = change_tokens

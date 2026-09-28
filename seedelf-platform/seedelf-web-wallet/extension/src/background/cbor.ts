@@ -14,25 +14,54 @@ interface Head {
   indefinite: boolean;
 }
 
+// A dApp hands the worker bytes of its choosing (submitTx, signTx), so every
+// read is checked against the end: bytes that run out, or a length or count
+// longer than what's left, throw rather than read past it, where a missing
+// byte would look like a 0 and a loop would never end.
+
+const tooShort = () => new Error("the transaction's CBOR ends too soon");
+
 function head(b: Uint8Array, pos: number): Head {
+  if (pos >= b.length) throw tooShort();
   const major = b[pos]! >> 5;
   const info = b[pos]! & 0x1f;
   let p = pos + 1;
   let n = info;
-  if (info === 24) n = b[p++]!;
-  else if (info === 25) (n = (b[p]! << 8) | b[p + 1]!), (p += 2);
-  else if (info === 26) (n = new DataView(b.buffer, b.byteOffset + p, 4).getUint32(0)), (p += 4);
-  else if (info === 27) (n = Number(new DataView(b.buffer, b.byteOffset + p, 8).getBigUint64(0))), (p += 8);
+  const size = info === 24 ? 1 : info === 25 ? 2 : info === 26 ? 4 : info === 27 ? 8 : 0;
+  if (info > 27 && info < 31) throw new Error("the transaction's CBOR isn't well formed");
+  if (p + size > b.length) throw tooShort();
+  if (info === 24) n = b[p]!;
+  else if (info === 25) n = (b[p]! << 8) | b[p + 1]!;
+  else if (info === 26) n = new DataView(b.buffer, b.byteOffset + p, 4).getUint32(0);
+  else if (info === 27) n = Number(new DataView(b.buffer, b.byteOffset + p, 8).getBigUint64(0));
+  p += size;
+  // Every item takes a byte at least, and a string its length.
+  if ((major >= 2 && major <= 5 && info !== 31 && n > b.length - p)) throw tooShort();
   return { major, n, p, indefinite: info === 31 };
 }
 
-/** The end offset of the CBOR item that starts at `pos`. */
-export function skip(b: Uint8Array, pos: number): number {
+/**
+ * How deep a dApp's CBOR may nest: each list, map and tag is a level, as the
+ * WebAssembly counts them (cip30.rs refuses past 128 too). A real
+ * transaction is a few levels deep; a site's could be thousands, and reading
+ * it would run the worker's stack out.
+ */
+export const MAX_DEPTH = 128;
+
+const tooDeep = () => new Error(`the transaction's CBOR is nested more than ${MAX_DEPTH} levels deep`);
+
+/**
+ * The end offset of the CBOR item that starts at `pos`, `depth` levels in.
+ * `inside`: the CBOR a tag 24 wraps in a byte string (an inline datum, a
+ * reference script) is read too, and its levels count.
+ */
+export function skip(b: Uint8Array, pos: number, depth = 0, inside = false): number {
   const { major, n, p, indefinite } = head(b, pos);
+  if ((indefinite || major >= 4) && major !== 7 && depth >= MAX_DEPTH) throw tooDeep();
   if (indefinite) {
     // Items until the 0xff break.
     let q = p;
-    while (b[q] !== 0xff) q = skip(b, q);
+    while (b[q] !== 0xff) q = skip(b, q, depth + 1, inside);
     return q + 1;
   }
   switch (major) {
@@ -45,16 +74,37 @@ export function skip(b: Uint8Array, pos: number): number {
       return p + n;
     case 4: {
       let q = p;
-      for (let i = 0; i < n; i++) q = skip(b, q);
+      for (let i = 0; i < n; i++) q = skip(b, q, depth + 1, inside);
       return q;
     }
     case 5: {
       let q = p;
-      for (let i = 0; i < 2 * n; i++) q = skip(b, q);
+      for (let i = 0; i < 2 * n; i++) q = skip(b, q, depth + 1, inside);
       return q;
     }
-    default: // 6: a tag, then its item
-      return skip(b, p);
+    default: {
+      // 6: a tag, then its item.
+      const end = skip(b, p, depth + 1, inside);
+      const wrapped = head(b, p);
+      if (inside && n === 24 && wrapped.major === 2 && !wrapped.indefinite) {
+        const content = b.subarray(wrapped.p, end);
+        if (skip(content, 0, depth + 2, true) !== content.length) throw new Error("a tag 24 wraps more than one item");
+      }
+      return end;
+    }
+  }
+}
+
+/**
+ * Whether a whole transaction nests within `MAX_DEPTH` levels, the CBOR its
+ * tags 24 wrap included, with nothing after it: safe to hand WebAssembly's
+ * decoder, which reads nesting by recursion.
+ */
+export function nestsWithin(tx: Uint8Array): boolean {
+  try {
+    return skip(tx, 0, 0, true) === tx.length;
+  } catch {
+    return false;
   }
 }
 
@@ -67,19 +117,48 @@ export function txInputs(tx: Uint8Array): string[] {
   return inputs;
 }
 
-/** The outpoints under one key of a transaction's body (0 the inputs, 13 the collateral), or undefined. */
-export function bodyOutpoints(tx: Uint8Array, field: 0 | 13): string[] | undefined {
+/** Where the value under one key of a transaction's body starts, or undefined. */
+function bodyField(tx: Uint8Array, field: number): number | undefined {
   if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
   const body = head(tx, 1);
   if (body.major !== 5 || body.indefinite) throw new Error("the transaction body isn't a map");
   let p = body.p;
   for (let i = 0; i < body.n; i++) {
+    // The body's fields are two levels in: the transaction, then the body.
     const key = head(tx, p);
-    const value = skip(tx, p);
-    if (key.major === 0 && key.n === field) return outpoints(tx, value);
-    p = skip(tx, value);
+    const value = skip(tx, p, 2);
+    if (key.major === 0 && key.n === field) return value;
+    p = skip(tx, value, 2);
   }
   return undefined;
+}
+
+/** The outpoints under one key of a transaction's body (0 the inputs, 13 the collateral), or undefined. */
+export function bodyOutpoints(tx: Uint8Array, field: 0 | 13): string[] | undefined {
+  const value = bodyField(tx, field);
+  return value === undefined ? undefined : outpoints(tx, value);
+}
+
+/**
+ * What each of a transaction's certificates is (its body's key 4, a list or
+ * a tagged set): each one's first field, its kind as the ledger numbers them
+ * (1 is the old-style stop of a stake key's staking). None without any.
+ */
+export function certificateKinds(tx: Uint8Array): number[] {
+  const value = bodyField(tx, 4);
+  if (value === undefined) return [];
+  let set = head(tx, value);
+  if (set.major === 6) set = head(tx, set.p); // tag 258: a set
+  const kinds: number[] = [];
+  let p = set.p;
+  for (let i = 0; set.indefinite ? tx[p] !== 0xff : i < set.n; i++) {
+    const certificate = head(tx, p);
+    if (certificate.major !== 4) throw new Error("a certificate isn't a list");
+    const kind = head(tx, certificate.p);
+    if (kind.major === 0) kinds.push(kind.n);
+    p = skip(tx, p, 3);
+  }
+  return kinds;
 }
 
 function outpoints(b: Uint8Array, pos: number): string[] {
@@ -99,5 +178,5 @@ function outpoints(b: Uint8Array, pos: number): string[] {
 /** A transaction's id: the BLAKE2b-256 of its body, exactly as encoded. */
 export function txId(tx: Uint8Array): string {
   if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
-  return hex(blake2b(tx.subarray(1, skip(tx, 1)), { dkLen: 32 }));
+  return hex(blake2b(tx.subarray(1, skip(tx, 1, 1)), { dkLen: 32 }));
 }

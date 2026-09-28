@@ -12,6 +12,8 @@ import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
 import { call } from "../background";
 import { AdaInput, MinimumHint, MinimumNote, RoundNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { HistoriesNote } from "../components/HistoriesNote";
+import { LeftOutNote } from "../components/LeftOut";
 import { DestinationInput, type DestinationRead, type KnownRead } from "../components/Destination";
 import {
   AddRecipient,
@@ -27,9 +29,13 @@ import {
 import { Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, lockedAside, plural, shortHex, tokenKey as key } from "../format";
+import { TokenAmountRow } from "../components/TokenList";
+import { adaWithTokens, formatAda, lockedAside, plural, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
-import { tokenLabel } from "../tokens";
+import { tokenQuantity } from "../tokens";
+
+/** The most UTxOs Max takes in one transaction (the WebAssembly's `MAX_WITHDRAW_UTXOS`). */
+const MAX_UTXOS = 20;
 
 export function Withdraw({
   seedelf,
@@ -50,7 +56,7 @@ export function Withdraw({
 
   // Max pays a single address.
   const maxed = max && !list.several;
-  const amounts = recipientAmounts(seedelf.tokens, list.drafts, maxed);
+  const amounts = recipientAmounts(network, seedelf.tokens, list.drafts, maxed);
   // A field's read counts only for the text it read.
   const readOf = (d: Draft): DestinationRead =>
     reads[d.id]?.to === d.to.trim() ? reads[d.id]!.read : { state: "idle" };
@@ -101,9 +107,7 @@ export function Withdraw({
           <Row label={summary.max ? "Everything" : "Amount"} value={`${formatAda(p.lovelace)} ₳`} strong />
           {p.tokens.map((t) => {
             const held = seedelf.tokens.find((h) => key(h) === key(t));
-            return (
-              <Row key={key(t)} label="" value={`${formatQuantity(t.quantity, held?.decimals ?? 0)} ${tokenLabel(network, t)}`} />
-            );
+            return <TokenAmountRow key={key(t)} label="" token={held ?? t} amount={tokenQuantity(network, { ...held, ...t })} />;
           })}
         </>
       );
@@ -129,6 +133,7 @@ export function Withdraw({
           )}
           <Row label="Private UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
+        <HistoriesNote histories={summary.histories} max={summary.max} testId="withdraw-histories" />
         {summary.payments.map((p, i) => (
           <MinimumNote
             key={i}
@@ -141,9 +146,13 @@ export function Withdraw({
         ))}
         {summary.left > 0 && (
           <p className="note" data-testid="withdraw-left">
-            {plural(summary.left, "private UTxO")} stay for another payment: a transaction fits 20 at most.
+            {plural(summary.left, "private UTxO")} {summary.left === 1 ? "stays" : "stay"} for another payment:{" "}
+            {summary.inputs < MAX_UTXOS
+              ? `${summary.left === 1 ? "it holds" : "each holds"} a token that would add up to more with the rest than one output can hold.`
+              : `a transaction takes ${MAX_UTXOS} at most, and never a token adding up to more than one output can hold.`}
           </p>
         )}
+        <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
         {summary.payments.some((p) => p.own) && <OwnWarning />}
         <p className="note">
           Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the network to confirm.
@@ -230,7 +239,7 @@ export function Withdraw({
                   Round amounts, like 100 ₳, are harder to match to the payment that made them private.
                 </RoundNote>
                 <TokenAmounts
-                  held={heldFor(seedelf.tokens, list.drafts, d)}
+                  held={heldFor(network, seedelf.tokens, list.drafts, d)}
                   typed={d.tokens}
                   onChange={(tokens) => list.update(d.id, { tokens })}
                 />

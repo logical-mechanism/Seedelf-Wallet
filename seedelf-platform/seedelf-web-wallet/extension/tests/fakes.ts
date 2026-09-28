@@ -24,7 +24,7 @@ import {
   type KoiosUtxo,
 } from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
-import { PreferencesService } from "../src/background/preferences";
+import { NetworkChoice, PreferencesService } from "../src/background/preferences";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
 import { LovejoinService } from "../src/background/lovejoin";
@@ -35,6 +35,7 @@ import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
 import type { SwapAsk } from "../src/shared/rpc";
+import { NETWORKS } from "../src/networks";
 import { txIdOf } from "./fixtures/cbor";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
 
@@ -90,6 +91,14 @@ export function testWallet(shared?: { local: MemoryArea; session: MemoryArea; cl
     changed: () => void events.changed++,
   };
   return { wallet: new Wallet(deps), local, session, clock, events };
+}
+
+/** Moves the clock on by `ms` with the user busy all along, so the wallet doesn't lock itself. */
+export async function busyFor(t: { clock: { now: number }; wallet: Wallet }, ms: number): Promise<void> {
+  for (let left = ms; left > 0; left -= 10 * 60_000) {
+    t.clock.now += Math.min(left, 10 * 60_000);
+    await t.wallet.touch();
+  }
 }
 
 export const vectors = (name: string) =>
@@ -185,12 +194,28 @@ export interface FakeKoios {
   stakes: Map<string, KoiosAccountInfo>;
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
+  /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
+  txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null } }>>;
+  /** Stake addresses some address has used, as far as `account_addresses` goes: one-time accounts used before, say. */
+  usedStakes: Set<string>;
+  /** The slot of the newest block, as `tip` answers. */
+  tip: number;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
 export const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 ) as unknown[];
+
+/**
+ * Koios says a mix made each of `txs` (tx_info: one of its inputs sat at
+ * Lovejoin's mix_box): a box of the wallet's that someone else's mix moved,
+ * whose making the wallet asks of before it takes it (independent review M14).
+ */
+export function madeByMix(koios: Pick<FakeKoios, "txSpends">, ...txs: string[]): void {
+  const input = { payment_addr: { bech32: "addr_test1", cred: NETWORKS.preprod.lovejoin!.mixBox } };
+  for (const tx of txs) koios.txSpends.set(tx, [input]);
+}
 
 /** A fetch that answers from the fixtures, paging like Koios does. */
 export function fakeKoios({ owned = true } = {}): FakeKoios {
@@ -206,6 +231,9 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     addedToAccounts: [],
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     txExtras: new Map(),
+    txSpends: new Map(),
+    usedStakes: new Set(),
+    tip: 0,
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -230,6 +258,8 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         rows = holder ? [{ payment_address: holder }] : [];
       } else if (path === "epoch_params") {
         rows = epochParams;
+      } else if (path === "tip") {
+        rows = [{ abs_slot: fake.tip }];
       } else if (path === "tx_status") {
         rows = body._tx_hashes.map((tx_hash: string) => ({
           tx_hash,
@@ -252,9 +282,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         const after = body._after_block_height;
         rows = after === undefined ? all : all.filter((t) => t.block_height > after);
       } else if (path === "tx_info") {
-        rows = activityPreprod.tx_info
-          .filter((t) => body._tx_hashes.includes(t.tx_hash))
-          .map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) }));
+        rows = [
+          ...activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash)).map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) })),
+          ...[...fake.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
+        ];
       } else if (path === "utxo_info") {
         // Any UTxO the fixtures know, spent or not, as Koios answers.
         const refs: string[] = body._utxo_refs;
@@ -265,9 +296,15 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
           ...Object.values(koiosPreprod.accounts).flatMap((a) => a.account_utxos),
           ...fake.addedToAccounts,
         ];
-        rows = every.filter((u) => refs.includes(`${u.tx_hash}#${u.tx_index}`));
+        rows = every
+          .filter((u) => refs.includes(`${u.tx_hash}#${u.tx_index}`))
+          .map((u) => ({ ...u, is_spent: fake.spent.has(`${u.tx_hash}#${u.tx_index}`) }));
       } else if (path === "account_addresses") {
-        rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_addresses ?? [];
+        const asked: string[] = body._stake_addresses;
+        rows = [
+          ...(koiosPreprod.accounts[asked[0]!]?.account_addresses ?? []),
+          ...asked.filter((a) => fake.usedStakes.has(a)).map((stake_address) => ({ stake_address, addresses: [`addr_of_${stake_address}`] })),
+        ];
       } else if (path === "account_utxos") {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_utxos ?? [];
       } else if (path === "account_info") {
@@ -294,6 +331,36 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     },
   };
   return fake;
+}
+
+/**
+ * A stranger's UTxO like `template`, 3 ₳, as Koios's raw JSON: with an
+ * inline datum nested `levels` deep (a Plutus list of lists), or with
+ * `script`, the template's datum and a native reference script nested as
+ * deep. Too deep for JSON.stringify, so it's written by hand.
+ */
+export function deepRow(template: KoiosUtxo, levels: number, { script = false, txHash = "ee".repeat(32) } = {}): string {
+  const { inline_datum: _datum, reference_script: _script, ...rest } = template;
+  const plain = JSON.stringify({ ...rest, tx_hash: txHash, tx_index: 0, value: "3000000", asset_list: [] }).slice(0, -1);
+  const datum = script
+    ? JSON.stringify(template.inline_datum)
+    : `{"bytes":"${"81".repeat(levels)}00","value":${'{"list":['.repeat(levels)}{"int":0}${"]}".repeat(levels)}}`;
+  const reference = script
+    ? `{"hash":"${"ab".repeat(28)}","size":${3 * levels + 1},"type":"timelock","bytes":null,"value":${'{"type":"all","scripts":['.repeat(levels)}{"type":"sig","keyHash":"${"cd".repeat(28)}"}${"]}".repeat(levels)}}`
+    : "null";
+  return `${plain},"inline_datum":${datum},"reference_script":${reference}}`;
+}
+
+/** Koios lists `rows` (raw JSON) too, whenever it's asked about `credential`. */
+export function withRawRows(fake: FakeKoios, credential: string, rows: string[]): void {
+  const real = fake.fetch;
+  fake.fetch = async (url, init) => {
+    const answer = await real(url, init);
+    const asked = init.body ? (JSON.parse(String(init.body)) as { _payment_credentials?: string[] }) : undefined;
+    if (!url.includes("/credential_utxos") || !asked?._payment_credentials?.includes(credential)) return answer;
+    const listed = (await answer.text()).slice(1, -1);
+    return new Response(`[${[listed, ...rows].filter(Boolean).join(",")}]`);
+  };
 }
 
 export interface FakeCollateral {
@@ -359,9 +426,11 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const store = new PrivateStore({ wallet: t.wallet, local: t.local });
   let ids = 0;
   const koiosFor = () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined);
-  const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor, local: t.local });
-  const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now });
+  const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor, local: t.local, now: () => t.clock.now });
+  const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now, activity });
   const preferences = new PreferencesService(t.local);
+  // Preprod first, as the fakes answer; a test can switch to mainnet as Settings does.
+  const networkChoice = new NetworkChoice(t.local, ["preprod", "mainnet"]);
   const coingecko = fakeCoinGecko();
   const minswap = fakeMinswap();
   const dappWindow = fakeWindow();
@@ -377,6 +446,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     activity,
     coins,
     preferences,
+    store,
   };
   const sessions = new SessionService({
     ...deps,
@@ -428,26 +498,28 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coins,
     preferences,
     coingecko,
-    prices: new PriceService({ local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
+    prices: new PriceService({ session: t.session, local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
     dappWindow,
     dappChanged: () => dappChanged,
+    networkChoice,
     dapp: new DappService({
       ...deps,
       store,
       sessions,
       fundingPollMs: 1,
-      network: "preprod",
+      network: () => networkChoice.get(),
       window: dappWindow,
       changed: () => void dappChanged++,
     }),
   };
 }
 
-/** The connector's window: counts how often it's shown, and whether it's open. */
-export function fakeWindow(): ApprovalWindow & { shown: number; open: boolean } {
+/** The connector's window: counts how often it's shown and closed, and whether it's open. */
+export function fakeWindow(): ApprovalWindow & { shown: number; closed: number; open: boolean } {
   const fake = {
     shown: 0,
+    closed: 0,
     open: false,
     async show() {
       fake.shown++;
@@ -455,6 +527,10 @@ export function fakeWindow(): ApprovalWindow & { shown: number; open: boolean } 
     },
     async isOpen() {
       return fake.open;
+    },
+    async close() {
+      fake.closed++;
+      fake.open = false;
     },
   };
   return fake;

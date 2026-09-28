@@ -12,11 +12,13 @@ import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { HandleWarning } from "../components/HandleWarning";
+import { LeftOutNote } from "../components/LeftOut";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
-import { adaWithTokens, formatAda, formatQuantity, lockedAside, rewardsAside, tokenKey as key } from "../format";
+import { TokenAmountRow } from "../components/TokenList";
+import { adaWithTokens, formatAda, lockedAside, rewardsAside, tokenKey as key } from "../format";
 import { WithdrawalRow } from "./CardanoSend";
 import { useNetwork } from "../network";
-import { tokenLabel } from "../tokens";
+import { tokenQuantity } from "../tokens";
 
 export function MoveIn({
   cardano,
@@ -37,15 +39,15 @@ export function MoveIn({
   const [summary, setSummary] = useState<MoveInSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const network = useNetwork();
 
-  const tokens = tokenChoices(cardano.tokens, tokenAmounts);
+  const tokens = tokenChoices(network, cardano.tokens, tokenAmounts);
   const withTokens = tokens.sent.length > 0;
   const lovelace = max ? null : lovelaceToSend(amount, withTokens);
   const round = typeof lovelace === "string" && BigInt(lovelace) % 1_000_000n === 0n;
   // The builder decides exactly (fee, change, collateral UTxOs); this catches the obvious case early.
   const tooMuch = typeof lovelace === "string" && BigInt(lovelace) > BigInt(cardano.lovelace);
   const ready = tokens.ok && (max || (typeof lovelace === "string" && !tooMuch));
-  const network = useNetwork();
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -92,13 +94,7 @@ export function MoveIn({
           <Row label="Into your private balance" value={`${formatAda(summary.lovelace)} ₳`} strong />
           {summary.tokens.map((t) => {
             const known = cardano.tokens.find((c) => key(c) === key(t));
-            return (
-              <Row
-                key={key(t)}
-                label=""
-                value={`${formatQuantity(t.quantity, known?.decimals ?? 0)} ${tokenLabel(network, t)}`}
-              />
-            );
+            return <TokenAmountRow key={key(t)} label="" token={known ?? t} amount={tokenQuantity(network, { ...known, ...t })} />;
           })}
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
           <WithdrawalRow withdrawal={summary.withdrawal} />
@@ -106,6 +102,7 @@ export function MoveIn({
           <Row label="New private UTxOs" value={String(summary.depositOutputs)} />
         </ReviewRows>
         <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
+        <LeftOutNote leftOut={summary.leftOut} testId="move-in-left-out" />
         <p className="note">
           The new UTxOs are locked to fresh copies of your Seedelf key's register. It takes about a minute for the network
           to confirm them.

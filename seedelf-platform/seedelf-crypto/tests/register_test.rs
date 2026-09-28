@@ -43,3 +43,48 @@ fn invalid_is_owned() {
     let datum: Register = Register::create(sk1).unwrap().rerandomize().unwrap();
     assert!(!datum.is_owned(sk2).unwrap())
 }
+
+/// The compressed identity point: `c0` then 47 zero bytes.
+fn identity() -> String {
+    format!("c0{}", "00".repeat(47))
+}
+
+/// Keys to try: zero, one, a fixed one and random ones.
+fn keys() -> Vec<Scalar> {
+    let mut keys = vec![
+        Scalar::from(0u64),
+        Scalar::from(1u64),
+        Scalar::from(18446744073709551606u64),
+    ];
+    keys.extend((0..8).map(|_| random_scalar()));
+    keys
+}
+
+#[test]
+fn identity_register_is_owned_by_no_key() {
+    // identity · sk is the identity for every sk, and the validator lets
+    // anyone spend (identity, identity): a stranger's UTxO under it is nobody's
+    let datum = Register::new(identity(), identity());
+    for sk in keys() {
+        assert!(!datum.is_owned(sk).unwrap());
+    }
+}
+
+#[test]
+fn identity_public_value_is_owned_by_no_key() {
+    // (G, identity) is G^0: the zero key would own it, and anyone can prove that
+    let generator = Register::create(Scalar::from(1u64)).unwrap().generator;
+    let datum = Register::new(generator, identity());
+    for sk in keys() {
+        assert!(!datum.is_owned(sk).unwrap());
+    }
+}
+
+#[test]
+fn identity_generator_is_owned_by_no_key() {
+    for sk in keys() {
+        let public_value = Register::create(sk).unwrap().public_value;
+        let datum = Register::new(identity(), public_value);
+        assert!(!datum.is_owned(sk).unwrap());
+    }
+}

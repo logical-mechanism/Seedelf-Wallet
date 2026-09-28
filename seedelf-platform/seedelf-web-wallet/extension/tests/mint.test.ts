@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
 import { MintService, SESSION_MINT } from "../src/background/mint";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
+import { PrivateStore } from "../src/background/private-store";
 import { Wallet } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
 import { accountMintPreprod, loadTestWasm, testBalances, vectors } from "./fakes";
@@ -37,12 +38,13 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     now: () => t.clock.now,
     coins: t.coins,
+    store: t.store,
   });
   return { service, calls };
 }
 
 describe("stealth mint (paid from the Seedelf balance)", () => {
-  it("builds a Seedelf mint, measured by Ogmios, without sending anything", async () => {
+  it("builds a Seedelf mint, measured in the wallet, without sending anything", async () => {
     const t = await unlocked();
     const summary = await t.mint.build("preprod", "web-wallet", "seedelf");
     expect(summary).toMatchObject({
@@ -62,34 +64,22 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
     expect(Number(fee.total)).toBeGreaterThan(200_000);
     expect(BigInt(summary.changeLovelace)).toBe(25_000_000n - 1_749_860n - BigInt(fee.total));
 
-    // Koios was read and Ogmios measured a draft; nobody else heard of it.
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
-    const draft = t.koios.calls.find((c) => c.path === "ogmios")!.body.params.transaction.cbor as string;
+    // Koios was read, and nothing sent: the scripts were measured in the
+    // wallet, so no draft with its proofs went to Ogmios.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
     expect(t.collateral.asked).toHaveLength(0);
     expect(t.koios.submitted).toHaveLength(0);
 
-    // The unsigned transaction waits in session storage: the one summarized, not the draft.
+    // The unsigned transaction waits in session storage: the one summarized.
     const built = (await t.session.get<Stored>(SESSION_MINT))!;
     expect(built.txHash).toBe(summary.txHash);
     expect(txIdOf(bytes(built.txCbor))).toBe(summary.txHash);
-    expect(txIdOf(bytes(draft))).not.toBe(summary.txHash);
     expect(built.seed).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("explains what stops a mint", async () => {
     const t = await unlocked();
     await expect(t.mint.build("preprod", "sixteen chars!!!", "seedelf")).rejects.toThrow("at most 15");
-    t.koios.evaluation = {
-      jsonrpc: "2.0",
-      error: {
-        code: 3010,
-        message: "Some scripts of the transactions terminated with error(s).",
-        data: [{ validator: { index: 0, purpose: "spend" }, error: { code: 3012, data: { validationError: "boom\nCaused by: (error)" } } }],
-      },
-    };
-    await expect(t.mint.build("preprod", "", "seedelf")).rejects.toThrow(
-      "The Seedelf contract refused this transaction (spending input 0: Caused by: (error))",
-    );
 
     const empty = await unlocked({ owned: false });
     await expect(empty.mint.build("preprod", "", "seedelf")).rejects.toThrow("Your private balance is empty");
@@ -115,7 +105,7 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
 
     expect(t.koios.submitted).toHaveLength(0);
     expect(await t.session.get(SESSION_MINT)).toBeDefined(); // Send can be tried again
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
   });
 
   it("signs after a worker restart: the one-time key comes back from the seed", async () => {
@@ -139,6 +129,7 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       now: () => t.clock.now,
       coins: t.coins,
+      store: new PrivateStore({ wallet, local: t.local }),
     });
     t.collateral.answer = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
     // It got past the one-time key (same key re-derived) to giveme.my's signature.
@@ -158,12 +149,12 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([summary.txHash]);
     expect(pending).toEqual({ kind: "mint", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
     expect(await t.session.get(SESSION_MINT)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toEqual(pending);
+    expect(await t.session.get(pendingKey("preprod"))).toEqual(pending);
 
     // The shared watch reports it, and forgets it once confirmed.
     t.koios.confirmations = 1;
-    expect(await t.pending.pending()).toMatchObject({ kind: "mint", confirmations: 1 });
-    expect(await t.pending.pending()).toBeNull();
+    expect(await t.pending.pending("preprod")).toMatchObject({ kind: "mint", confirmations: 1 });
+    expect(await t.pending.pending("preprod")).toBeNull();
   });
 
   it("refuses to send anything but the reviewed transaction", async () => {
@@ -204,6 +195,7 @@ describe("mint paid by the Cardano account (mint first, then move in)", () => {
       "credential_utxos",
       "epoch_params",
       "ogmios",
+      "tip",
     ]);
     // The account's staking rewards pay for it too (preferences.ts).
     expect(summary.withdrawal).toBe("57475311");

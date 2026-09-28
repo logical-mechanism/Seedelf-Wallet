@@ -37,11 +37,11 @@ pub fn collect_all_wallet_utxos(
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
     for utxo in utxos {
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scalar
-            if inline_datum
-                .is_owned(sk)
-                .context("Failed To Construct Points")?
-            {
+            // utxo must be owned by this secret scalar. A register whose
+            // points don't decompress is nobody's: anyone can pay the
+            // contract under one, so it's skipped, never an error that
+            // stops the scan.
+            if inline_datum.is_owned(sk).unwrap_or(false) {
                 // its owned but lets not count the seedelf in the balance
                 if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                     all_utxos.push(utxo.clone());
@@ -119,11 +119,9 @@ pub fn collect_wallet_utxos(
     for utxo in utxos {
         // Extract bytes
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
-            // utxo must be owned by this secret scalar
-            if inline_datum
-                .is_owned(sk)
-                .context("Failed To Construct Points")?
-            {
+            // utxo must be owned by this secret scalar. A register whose
+            // points don't decompress is nobody's, and doesn't stop the scan.
+            if inline_datum.is_owned(sk).unwrap_or(false) {
                 // its owned but it can't hold a seedelf
                 if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
                     if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
@@ -345,6 +343,93 @@ pub fn assets_of(utxos: Vec<UtxoResponse>) -> Result<(u64, Assets)> {
         }
     }
     Ok((current_lovelace_sum, found_assets))
+}
+
+/// The size of a UTxO's reference script, as the ledger counts it for the
+/// reference-script fee (`build::reference_script_fee`): its bytes as Koios
+/// gives them, which must agree with Koios's `size` when it gives one. 0 when
+/// it holds none. One it holds but that can't be sized (no bytes, not hex, or
+/// a size that disagrees) is an error naming the UTxO, never 0: the fee
+/// would come out short, and the network would refuse the transaction.
+pub fn reference_script_size(utxo: &UtxoResponse) -> Result<u64> {
+    let Some(script) = &utxo.reference_script else {
+        return Ok(0);
+    };
+    let size = script
+        .bytes
+        .as_deref()
+        .and_then(|bytes| hex::decode(bytes).ok())
+        .map(|bytes| bytes.len() as u64)
+        .filter(|size| *size > 0 && script.size.is_none_or(|given| given == *size));
+    size.with_context(|| {
+        format!(
+            "UTxO {}#{} holds a reference script the wallet can't measure, so it can't price spending it",
+            utxo.tx_hash, utxo.tx_index
+        )
+    })
+}
+
+/// The reference-script bytes of `utxos` together (see [`reference_script_size`]).
+pub fn reference_script_bytes(utxos: &[UtxoResponse]) -> Result<u64> {
+    utxos.iter().try_fold(0u64, |total, utxo| {
+        Ok(total.saturating_add(reference_script_size(utxo)?))
+    })
+}
+
+/// Which of `utxos` one transaction can spend together (`taken`), and which
+/// it leaves out (`left`), each in the order given.
+///
+/// - A UTxO is left out when its tokens, added to `base`'s and to those of
+///   the UTxOs taken before it, would push a token's total past a u64. No
+///   output can hold more of one token than that, so totalling in u128
+///   wouldn't help: anyone can send three UTxOs of 2^63 − 1 of one token to
+///   an address, and nothing holding all three could be built.
+/// - The order they're taken in: ADA-only first (they never conflict), then
+///   those `first` picks (a session's own), then the most lovelace first,
+///   ties by outpoint, so the same UTxOs split the same way every time.
+/// - Every UTxO fits on its own, so spending again from `left` always takes
+///   at least one.
+pub fn fitting(
+    utxos: &[UtxoResponse],
+    base: &Assets,
+    first: impl Fn(&UtxoResponse) -> bool,
+) -> Result<(Vec<UtxoResponse>, Vec<UtxoResponse>)> {
+    let mut order: Vec<(usize, &UtxoResponse, u64, Assets)> = utxos
+        .iter()
+        .enumerate()
+        .map(|(i, utxo)| {
+            let (lovelace, tokens) = assets_of(vec![utxo.clone()])?;
+            Ok((i, utxo, lovelace, tokens))
+        })
+        .collect::<Result<_>>()?;
+    order.sort_by(
+        |(_, a, a_lovelace, a_tokens), (_, b, b_lovelace, b_tokens)| {
+            (
+                !a_tokens.is_empty(),
+                !first(a),
+                std::cmp::Reverse(*a_lovelace),
+            )
+                .cmp(&(
+                    !b_tokens.is_empty(),
+                    !first(b),
+                    std::cmp::Reverse(*b_lovelace),
+                ))
+                .then_with(|| (&a.tx_hash, a.tx_index).cmp(&(&b.tx_hash, b.tx_index)))
+        },
+    );
+    let mut total = base.clone();
+    let mut fits = vec![false; utxos.len()];
+    for (i, _, _, tokens) in order {
+        if let std::result::Result::Ok(more) = total.merge(tokens) {
+            total = more;
+            fits[i] = true;
+        }
+    }
+    let (taken, left): (Vec<_>, Vec<_>) = utxos.iter().zip(fits).partition(|(_, fits)| *fits);
+    Ok((
+        taken.into_iter().map(|(u, _)| u.clone()).collect(),
+        left.into_iter().map(|(u, _)| u.clone()).collect(),
+    ))
 }
 
 /// Find a seedelf that contains the label and print the match.

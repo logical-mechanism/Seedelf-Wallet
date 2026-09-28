@@ -1,15 +1,18 @@
-// Settings, from the gear in the top bar: contacts, the Cardano account's
+// Settings, from the gear in the top bar: in a mainnet build, which network
+// the wallet is on (mainnet, or preprod for testing); contacts, the Cardano account's
 // collateral, where the wallet opens (a full tab or the side panel), ADA's
 // value in a currency, whether sites can connect (the dApp connector: each
 // to the public account or a private session) and which have, whether payments spend the staking rewards, how long
 // it stays unlocked, the recovery phrase (the password again first, even
 // while unlocked) and a check of a written copy, a new password, removing the
 // wallet from this browser, and what this is. Nothing here asks Koios
-// anything, except setting a collateral that needs a transaction.
+// anything, except setting a collateral that needs a transaction, and
+// disconnecting a site's private session, whose account the worker reads
+// first.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
-import { NETWORKS } from "../../networks";
+import { lovejoinOn, NETWORKS, type NetworkName } from "../../networks";
 import { DAPP_ORIGINS } from "../../shared/dapp";
 import { readOpenIn, type OpenIn } from "../../shared/open-in";
 import {
@@ -22,7 +25,7 @@ import {
   type LovejoinDelay,
   type LovejoinDepth,
 } from "../../shared/preferences";
-import type { DappSite, Status } from "../../shared/rpc";
+import type { AtStake, DappSite, SessionView, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -41,13 +44,17 @@ import {
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
-import { delayText } from "../components/LovejoinReturn";
+import { delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides } from "../components/LovejoinReturn";
+import { Modal } from "../components/Modal";
+import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
+import { plural } from "../format";
 import { usePreferences } from "../preferences";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
+import { disconnectWait } from "./SiteSessions";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
@@ -73,10 +80,13 @@ export function Settings({
   status,
   onBack,
   onRemoved,
+  onNetwork,
 }: {
   status: Status;
   onBack: () => void;
   onRemoved: (status: Status) => void;
+  /** The wallet moved to another network: the app starts afresh on it. */
+  onNetwork: (status: Status) => void;
 }) {
   const [page, setPage] = useState<Page>("menu");
   const { prefs } = usePreferences();
@@ -92,6 +102,7 @@ export function Settings({
 
   return (
     <Screen title="Settings" titleId="settings-title" onBack={onBack}>
+      <NetworkSection status={status} onMoved={onNetwork} />
       <section className="section" aria-labelledby="wallet-title">
         <h2 id="wallet-title">Wallet</h2>
         <ul className="list">
@@ -100,8 +111,8 @@ export function Settings({
         </ul>
       </section>
       <PreferencesSection network={status.network} />
-      <DappConnector onSites={() => setPage("sites")} />
-      {status.network === "preprod" && <LovejoinSettings />}
+      <DappConnector blocked={status.connectorBlocked} onSites={() => setPage("sites")} />
+      {lovejoinOn(status.network) && <LovejoinSettings network={status.network} />}
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
         <h2 id="security-title">Security</h2>
@@ -126,12 +137,104 @@ export function Settings({
           Privacy policy <ExternalIcon size={12} />
         </a>
         <p className="note" data-testid="talks-to">
-          {prices
-            ? "The wallet only ever talks to Koios and giveme.my, to CoinGecko for ADA's price, and to Minswap when you swap. It has no accounts, analytics or tracking."
-            : "The wallet only ever talks to Koios and giveme.my, and to Minswap when you swap. It has no accounts, analytics or tracking."}
+          {talksTo(prices, lovejoinOn(status.network))}
         </p>
       </section>
     </Screen>
+  );
+}
+
+/**
+ * Whom the wallet talks to, and what each sees, under About (privacy review
+ * §2.4, §2.5): `prices` when it asks CoinGecko for ADA's price, `lovejoin`
+ * where Lovejoin is. giveme.my is the makers' own service, and Koios sends
+ * every transaction from the IP address that reads the public account.
+ */
+export function talksTo(prices: boolean, lovejoin: boolean): string {
+  return [
+    `The wallet only ever talks to Koios and giveme.my, ${prices ? "to CoinGecko for ADA's price, " : ""}and to Minswap when you swap. It has no accounts, analytics or tracking.`,
+    "Each of them sees your IP address. Koios sends every transaction, from the same IP address that reads your public account.",
+    "giveme.my is run by Logical Mechanism, who make Seedelf Wallet: to lend its collateral, it sees each payment from your private balance.",
+    ...(lovejoin ? [LOVEJOIN_SEEN] : []),
+  ].join(" ");
+}
+
+/** What moving to each network says first, before the wallet moves. */
+export const MOVE_TO: Record<NetworkName, string> = {
+  preprod:
+    "Preprod is Cardano's test network. ADA there is test ADA, with no value: it can't pay for anything, and real ADA sent to a preprod address is lost. " +
+    "Your wallet is the same there, with its own balances, history and connected sites, and the same keys: anyone comparing the two networks can tell they're one wallet's. " +
+    "To keep them apart, test with a recovery phrase you don't use on mainnet.",
+  mainnet: "Mainnet is Cardano's real network: ADA there is real money. Check every address and amount before you send.",
+};
+
+/**
+ * Which network the wallet is on, in a build that has both (the store's:
+ * mainnet, and preprod for testing). Moving asks first, and says plainly what
+ * the other network is. The worker takes the choice at its next request, and
+ * every page starts afresh on it; swaps, Lovejoin and payments on their way
+ * carry on, on their own network.
+ */
+export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (status: Status) => void }) {
+  const [asking, setAsking] = useState<NetworkName>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  if (status.networks.length < 2) return null;
+  const current = NETWORKS[status.network];
+
+  async function move(network: NetworkName) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      onMoved(await call("network-set", { network }));
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+      setAsking(undefined);
+    }
+  }
+
+  return (
+    <section className="section" aria-labelledby="network-title">
+      <h2 id="network-title">Network</h2>
+      <Choice<NetworkName>
+        label="Cardano network"
+        id="network-label"
+        options={status.networks.map((n) => ({ value: n, label: NETWORKS[n].label, disabled: busy }))}
+        value={asking ?? status.network}
+        onChange={(n) => {
+          setError(undefined);
+          setAsking(n === status.network ? undefined : n);
+        }}
+      />
+      {!asking && (
+        <p className="note" data-testid="network-note">
+          {NETWORK_NOTE[status.network]}
+        </p>
+      )}
+      {asking && (
+        <div className="stack" data-testid="network-confirm">
+          <Callout tone="warn">{MOVE_TO[asking]}</Callout>
+          <p className="note">
+            Anything on its way on {current.label} (a swap, Lovejoin, a payment) carries on there. A site asking something now
+            is declined.
+          </p>
+          <div className="actions">
+            <button type="button" className="secondary" onClick={() => setAsking(undefined)} disabled={busy}>
+              Stay on {current.label}
+            </button>
+            <button type="button" className="primary" onClick={() => void move(asking)} disabled={busy}>
+              {busy ? "Switching…" : `Switch to ${NETWORKS[asking].label}`}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -210,45 +313,91 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
   );
 }
 
-/** About what a box's fan-out costs, at preprod's 0.877 ₳ a mix. */
-const DEPTH_COST: Record<LovejoinDepth, string> = { 1: "1 mix, about 0.9 ₳", 2: "4 mixes, about 3.5 ₳", 3: "13 mixes, about 11.4 ₳" };
+/**
+ * About what a box's fan-out costs on `network`: its mixes (1, 4 or 13, three
+ * wide), at what a mix measured there (networks.ts: 0.877 ₳ on preprod, about
+ * 0.82 ₳ on mainnet).
+ */
+export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
+  const mixes = (3 ** depth - 1) / 2;
+  const lovelace = mixes * (NETWORKS[network].lovejoin?.mixCost ?? 0);
+  return `${mixes} ${mixes === 1 ? "mix" : "mixes"}, about ${(lovelace / 1_000_000).toFixed(1)} ₳`;
+}
 
 /**
- * Lovejoin, for a private session's return: how deep each box fans out, and
- * how long each waits before it comes back (roadmap chunk 16).
+ * Lovejoin, for a private session's return: whether it goes through Lovejoin
+ * at all (on by default; off, the section says what's lost), how deep each
+ * box fans out, and how long each waits before it comes back (roadmap chunk
+ * 16, privacy review §4.1). Shown where Lovejoin is deployed (networks.ts),
+ * as the worker uses it.
  */
-function LovejoinSettings() {
+export function LovejoinSettings({ network }: { network: NetworkName }) {
   const { prefs, loaded, set } = usePreferences();
   const [error, setError] = useState<string>();
   const fail = (err: Error) => setError(err.message);
+  const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
+  const on = prefs.lovejoinReturns;
   return (
     <section className="section" aria-labelledby="lovejoin-settings-title">
       <h2 id="lovejoin-settings-title">Lovejoin</h2>
       <p className="note">
-        When a private session comes back with ADA to spare, that ADA goes through Lovejoin first, in boxes of 10 ₳ mixed with
-        other people's, so what comes back isn't tied to the session. The session pays for the mixes.
+        When a private session comes back with ADA to spare (a token→ADA swap's proceeds count), that ADA goes through
+        Lovejoin first, in boxes of 10 ₳ mixed with other people's, so what comes back is harder to tie to the session on
+        chain. The session pays for the mixes, and about 0.3 ₳ brings each box back. Its mixes are sent only while the
+        wallet is unlocked: locking partway stops them, and what's left comes back directly. A swap or a mix brings it back
+        by itself; a site's session, or a return you sent from Bring everything back, keeps it at its account until you
+        bring it back.
+        {floor > 0 &&
+          ` The wallet mixes only once Lovejoin's pool holds ${floor} boxes that aren't yours; until then a return comes back directly, and says so.`}{" "}
+        {LOVEJOIN_SEEN}
       </p>
+      <Callout tone="warn" testId="lovejoin-unaudited">
+        {LOVEJOIN_UNAUDITED}
+      </Callout>
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="lovejoin-returns-label">Bring private sessions back through Lovejoin</span>
+          <span className="note" id="lovejoin-returns-note" data-testid="lovejoin-returns-note">
+            {on
+              ? "A swap's approval, its Stop and each return you review can still bring that one back directly."
+              : `Off, a session's ADA comes back directly: anyone can tie it on chain to the session, and through its funding to the private UTxOs that paid for it. Your public account stays out either way. It saves each box's mixes (${depthCost(network, prefs.lovejoinDepth)}), about 0.3 ₳ to bring it back, and the hours of waiting. A mix from the Lovejoin tile still mixes, and a swap comes back as its approval said.`}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={on}
+          aria-labelledby="lovejoin-returns-label"
+          aria-describedby="lovejoin-returns-note"
+          onClick={() => void set({ lovejoinReturns: !on }).catch(fail)}
+          disabled={!loaded}
+        />
+      </div>
       <div className="field">
         <label htmlFor="lovejoin-depth">Mixing, for each box</label>
         <select
           id="lovejoin-depth"
           value={prefs.lovejoinDepth}
-          disabled={!loaded}
+          disabled={!loaded || !on}
           onChange={(e) => void set({ lovejoinDepth: Number(e.target.value) as LovejoinDepth }).catch(fail)}
         >
           {LOVEJOIN_DEPTHS.map((d) => (
             <option key={d} value={d}>
-              {d} {d === 1 ? "wave" : "waves"} deep: {DEPTH_COST[d]} (1 in {3 ** d})
+              {d} {d === 1 ? "wave" : "waves"} deep: {depthCost(network, d)} (up to 1 in {3 ** d})
             </option>
           ))}
         </select>
+        <p className="note" data-testid="lovejoin-hides">
+          {lovejoinHides(prefs.lovejoinDepth)}
+        </p>
       </div>
       <div className="field">
         <label htmlFor="lovejoin-delay">Each box comes back after</label>
         <select
           id="lovejoin-delay"
           value={prefs.lovejoinDelay}
-          disabled={!loaded}
+          disabled={!loaded || !on}
           onChange={(e) => void set({ lovejoinDelay: e.target.value as LovejoinDelay }).catch(fail)}
         >
           {LOVEJOIN_DELAYS.map((d) => (
@@ -257,7 +406,10 @@ function LovejoinSettings() {
             </option>
           ))}
         </select>
-        <p className="note">A box comes back the first time the wallet is unlocked after its wait.</p>
+        <p className="note">
+          A box comes back some minutes into the first time the wallet is unlocked after its wait: never the moment you
+          unlock, nor right after the wallet sends something else.
+        </p>
       </div>
       {error && (
         <p className="error" role="alert">
@@ -300,23 +452,30 @@ function LockAfter() {
 }
 
 /**
- * Whether sites can find the wallet (CIP-30) and connect to the public
- * account. Turning it on asks Chrome to let the wallet onto sites, from the
- * click itself (Chrome asks only then); off removes the scripts but keeps
- * Chrome's access (background/connector.ts says why). Under it, whether a
- * site's signature needs the password too (on by default).
+ * Whether sites can find the wallet (CIP-30) and connect, to the public
+ * account or a private session. Turning it on asks Chrome to let the wallet
+ * onto sites, from the click itself (Chrome asks only then); off removes the
+ * scripts but keeps Chrome's access (background/connector.ts says why). Its
+ * note says what it shows every https site, connected or not (privacy review
+ * §2.20). Under it, whether a site's signature needs the password too (on by
+ * default).
+ *
+ * `blocked` (the status's `connectorBlocked`): this Chrome won't keep sites'
+ * scripts out of the wallet's local storage, where the sealed vault is, so
+ * the worker keeps the connector off (launch review #60). The switch is off
+ * and can't be turned on, and the note says why.
  */
-function DappConnector({ onSites }: { onSites: () => void }) {
+export function DappConnector({ blocked, onSites }: { blocked?: Status["connectorBlocked"]; onSites: () => void }) {
   const { prefs, loaded, set } = usePreferences();
   const [allowed, setAllowed] = useState<boolean>();
   const [error, setError] = useState<string>();
   useEffect(() => {
     chrome.permissions.contains({ origins: DAPP_ORIGINS }).then(setAllowed, () => setAllowed(false));
   }, [prefs.dappConnector]);
-  const on = loaded && prefs.dappConnector && allowed === true;
+  const on = !blocked && loaded && prefs.dappConnector && allowed === true;
 
   function toggle() {
-    if (!loaded || allowed === undefined) return;
+    if (blocked || !loaded || allowed === undefined) return;
     setError(undefined);
     if (on) {
       set({ dappConnector: false }).then(
@@ -346,9 +505,11 @@ function DappConnector({ onSites }: { onSites: () => void }) {
         <span className="stack-tight">
           <span id="dapp-connector-label">Let sites connect to Seedelf Wallet</span>
           <span className="note" id="dapp-connector-note" data-testid="dapp-connector-note">
-            {on
-              ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. When one asks, you choose what it sees: your public account, or a private session. Nothing is signed without you."
-              : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. That's all it adds."}
+            {blocked
+              ? CONNECTOR_BLOCKED
+              : on
+                ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. When one asks, you choose what it sees: your public account, or a private session. Nothing is signed without you. Every https site you open, and scripts on it, can see that you use Seedelf Wallet, even one you never connect: not your addresses or balance until you connect it."
+                : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. Then every https site you open, and scripts on it, can see that you use Seedelf Wallet, even sites you never connect (not your addresses or balance until you connect)."}
           </span>
         </span>
         <button
@@ -359,7 +520,7 @@ function DappConnector({ onSites }: { onSites: () => void }) {
           aria-labelledby="dapp-connector-label"
           aria-describedby="dapp-connector-note"
           onClick={toggle}
-          disabled={!loaded || allowed === undefined}
+          disabled={!!blocked || !loaded || allowed === undefined}
         />
       </div>
       <div className="setting-row">
@@ -397,19 +558,48 @@ function DappConnector({ onSites }: { onSites: () => void }) {
   );
 }
 
-/** The sites connected to the public account, each with Disconnect. The list is sealed on the device. */
+/** Why the connector stays off on a Chrome that won't protect the wallet's storage from sites (`connectorBlocked: "storage"`). */
+export const CONNECTOR_BLOCKED =
+  "Off, and it stays off in this version of Chrome: it can't keep websites away from the wallet's storage, where your encrypted wallet is. Update Chrome to let sites connect.";
+
+/**
+ * The sites connected on this network, each with Disconnect. A site's
+ * private session ends with it, so its Disconnect waits while anything is on
+ * its way to the session's account or from it, says why, and asks first, as
+ * the session's page on the dApps page does (launch review H7). The worker
+ * checks again, reading the account, and its refusal shows here. The list is
+ * sealed on the device; the sessions are read from the device's record, not
+ * Koios.
+ */
 function ConnectedSites({ onBack }: { onBack: () => void }) {
   const [sites, setSites] = useState<DappSite[]>();
+  const [sessions, setSessions] = useState<SessionView[]>();
+  const [asking, setAsking] = useState<DappSite>();
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const readSessions = () =>
+    call("sessions", {}).then(setSessions, (e: Error) => {
+      // The worker's own check still stands between Disconnect and a session on its way.
+      setSessions([]);
+      // A refusal from the worker, shown already, stays.
+      setError((shown) => shown ?? e.message);
+    });
   useEffect(() => {
     call("dapp-sites", {}).then(setSites, (e: Error) => setError(e.message));
+    void readSessions();
   }, []);
 
   async function forget(origin: string) {
+    setAsking(undefined);
+    setBusy(true);
+    setError(undefined);
     try {
       setSites(await call("dapp-forget", { origin }));
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      void readSessions();
     }
   }
 
@@ -420,30 +610,100 @@ function ConnectedSites({ onBack }: { onBack: () => void }) {
           No site is connected. A site asks when it wants to, and you choose.
         </p>
       )}
-      {!!sites?.length && (
-        <ul className="list section" data-testid="sites">
-          {sites.map((s) => (
-            <li key={s.origin} className="list__row">
-              <span className="stack-tight">
-                <strong>{new URL(s.origin).host}</strong>
-                <span className="note">
-                  {s.session === undefined ? "Your public account" : `Private session ${s.session + 1}`} · since{" "}
-                  {new Date(s.connectedAt).toLocaleDateString()}
-                </span>
-              </span>
-              <button type="button" className="chip" onClick={() => forget(s.origin)}>
-                Disconnect
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {!!sites?.length && <SiteRows sites={sites} sessions={sessions} busy={busy} onDisconnect={setAsking} />}
       <p className="note">
-        A disconnected site has to ask again before it sees anything. A private session is disconnected once everything in
-        it is brought back, from the dApps page.
+        A disconnected site has to ask again before it sees anything more, and it keeps what it already saw. A private
+        session is disconnected once everything in it is brought back, from the dApps page.
       </p>
+      {asking && (
+        <Modal
+          title={`Disconnect ${host(asking)}?`}
+          titleId="sites-disconnect-title"
+          onClose={() => setAsking(undefined)}
+          foot={
+            <>
+              <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
+                Keep it
+              </button>
+              <button
+                type="button"
+                className="danger"
+                onClick={() => void forget(asking.origin)}
+                data-testid="sites-disconnect-confirm"
+              >
+                Disconnect the site
+              </button>
+            </>
+          }
+        >
+          <p className="note">{disconnectText(host(asking), asking.session)}</p>
+        </Modal>
+      )}
     </Screen>
   );
+}
+
+const host = (site: DappSite) => new URL(site.origin).host;
+
+/**
+ * The connected sites' rows. A site's Disconnect is off while its private
+ * session has something on its way, or holds something (as last read), with
+ * why; and until the sessions are read.
+ */
+export function SiteRows({
+  sites,
+  sessions,
+  busy,
+  onDisconnect,
+}: {
+  sites: DappSite[];
+  /** The sessions on this network, from the device's record; undefined until read. */
+  sessions?: SessionView[];
+  busy: boolean;
+  onDisconnect: (site: DappSite) => void;
+}) {
+  return (
+    <ul className="list section" data-testid="sites">
+      {sites.map((s) => {
+        const session = s.session === undefined ? undefined : sessions?.find((x) => x.index === s.session);
+        const wait = session && disconnectWait(session, { canRefresh: false });
+        const unread = s.session !== undefined && !sessions;
+        return (
+          <li key={s.origin} className="list__row">
+            <span className="stack-tight">
+              <strong>{host(s)}</strong>
+              <span className="note">
+                {s.session === undefined ? "Your public account" : `Private session ${s.session + 1}`} · since{" "}
+                {new Date(s.connectedAt).toLocaleDateString()}
+              </span>
+              {wait && (
+                <span className="note" data-testid="site-wait">
+                  {wait}.
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              className="chip"
+              disabled={busy || unread || !!wait}
+              title={wait}
+              onClick={() => onDisconnect(s)}
+              data-testid="sites-disconnect"
+            >
+              Disconnect
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** What disconnecting a site does, said before it's done: to the public account, or ending its private session `session`. */
+export function disconnectText(site: string, session?: number): string {
+  return session === undefined
+    ? `${site} has to ask again before it sees anything more. It keeps what it already saw.`
+    : `Private session ${session + 1} ends, and ${site} has to ask again before it sees anything more. It keeps what it already saw. The wallet stops reading the session's account: anything the site pays it later, or leaves open on it, isn't looked for again.`;
 }
 
 /** Whether a payment from the Cardano account withdraws the staking rewards too. */
@@ -732,19 +992,88 @@ function ChangePassword({ onBack }: { onBack: () => void }) {
 
 const CONFIRM_TEXT = "delete wallet";
 
-function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (status: Status) => void }) {
+/** A private session as Remove wallet's list names it: by its number, from 1, and a site's by its host. */
+function sessionName(s: AtStake["sessions"][number]): string {
+  const name = `private session ${s.index + 1}`;
+  if (s.kind === "site" && s.origin) return `${name} (${new URL(s.origin).host})`;
+  return s.kind === "mix" ? `${name} (a mix)` : s.kind === "swap" ? `${name} (a swap)` : name;
+}
+
+/**
+ * What removing the wallet would leave behind, in plain words: a line for
+ * each thing on each network (independent review M2, M5). A restore finds
+ * the public account, the private balance and Lovejoin's boxes; it doesn't
+ * find what private sessions' one-time accounts hold yet, and nothing
+ * watches a payment that may still go through, or a mix from the public
+ * account that may have, until the same phrase is restored here, before any
+ * other wallet is made here: that deletes its record (pending.ts and
+ * lovejoin.ts adoptKept).
+ */
+export function atStakeLines(stake: AtStake[]): string[] {
+  return stake.flatMap((s) => {
+    const on = NETWORKS[s.network].label;
+    const lines: string[] = [];
+    if (s.unreadable) lines.push(`${on}: Seedelf Wallet couldn't read what's still open there.`);
+    if (s.maybeSent) {
+      lines.push(
+        `${on}: a payment Koios didn't answer may still go through. An encrypted record of it stays in this browser: restoring this same recovery phrase here watches it again, but making or restoring another wallet here first deletes that record. While nothing watches it, a payment made here or elsewhere could pay twice.`,
+      );
+    }
+    const open = s.sessions.filter((x) => !x.leftBehind);
+    if (open.length) {
+      lines.push(
+        `${on}: ${plural(open.length, "private session")} still open: ${open.map(sessionName).join(", ")}. What ${open.length === 1 ? "its one-time account holds" : "their one-time accounts hold"} doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page, or a running swap's Stop.`,
+      );
+    }
+    const left = s.sessions.filter((x) => x.leftBehind);
+    if (left.length) {
+      lines.push(
+        `${on}: something no return takes is left at the account of ${left.map(sessionName).join(", ")}, and it doesn't show after a restore yet.`,
+      );
+    }
+    if (s.chainSending) {
+      lines.push(`${on}: a chain through Lovejoin is still being sent. Removing the wallet stops it partway, its boxes less mixed.`);
+    }
+    if (s.mixMaybeSent) {
+      lines.push(
+        `${on}: a mix from your public account stopped at a transaction that may have gone through. An encrypted record of it stays in this browser: restoring this same recovery phrase here looks for it again before another mix from the account is built, but making or restoring another wallet here first deletes that record. While nothing looks for it, the account could pay for a mix twice.`,
+      );
+    }
+    return lines;
+  });
+}
+
+export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (status: Status) => void }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // What removing it would leave behind, as the worker reads it: undefined while it reads, null when it couldn't.
+  const [stake, setStake] = useState<AtStake[] | null>();
+  const [anyway, setAnyway] = useState(false);
   const confirmed = typed.trim().toLowerCase() === CONFIRM_TEXT;
+  const held = stake === null || !!stake?.length;
+
+  const check = () => {
+    setStake(undefined);
+    setAnyway(false);
+    call("reset-check", {}).then(setStake, (e: Error) => {
+      setStake(null);
+      setError(e.message);
+    });
+  };
+  useEffect(check, []);
 
   async function remove() {
     setBusy(true);
+    setError(undefined);
     try {
-      onRemoved(await call("reset-wallet", {}));
+      // Anything listed stays behind only when the user said so a second time; the worker checks again.
+      onRemoved(await call("reset-wallet", { force: held && anyway }));
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
+      // Something may have opened since the list was read.
+      check();
     }
   }
 
@@ -756,15 +1085,49 @@ function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (s
       backDisabled={busy}
       error={error}
       foot={
-        <button type="button" className="danger" onClick={remove} disabled={busy || !confirmed}>
-          {busy ? "Removing…" : "Remove wallet"}
+        <button
+          type="button"
+          className="danger"
+          onClick={remove}
+          disabled={busy || !confirmed || stake === undefined || (held && !anyway)}
+        >
+          {busy ? "Removing…" : stake === undefined ? "Checking…" : "Remove wallet"}
         </button>
       }
     >
-      <p className="note">
-        This deletes the wallet from this browser. Your funds stay on the chain: your recovery phrase brings them back,
-        here or in Seedelf Wallet on another device.
+      <p className="note" data-testid="remove-wallet-note">
+        This deletes the wallet from this browser. Your funds stay on the chain: your recovery phrase brings back your
+        public account, your private balance and your Lovejoin boxes, here or in Seedelf Wallet on another device. What
+        private sessions' one-time accounts hold doesn't show after a restore yet: bring it back first.
       </p>
+      {held && (
+        <Callout tone="warn" testId="remove-at-stake">
+          {stake === null
+            ? "Seedelf Wallet couldn't check what's still open, which removing it would leave behind."
+            : "Still open, which removing the wallet leaves behind:"}
+          {!!stake?.length && (
+            <ul className="dapp-points">
+              {atStakeLines(stake).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+        </Callout>
+      )}
+      {held && (
+        <div className="setting-row">
+          <span id="remove-anyway-label">Remove it anyway, leaving that behind</span>
+          <button
+            type="button"
+            role="switch"
+            className="switch"
+            aria-checked={anyway}
+            aria-labelledby="remove-anyway-label"
+            onClick={() => setAnyway(!anyway)}
+            disabled={busy}
+          />
+        </div>
+      )}
       <Callout tone="warn">
         Make sure you have your recovery phrase first (Show recovery phrase). Without it, removing the wallet loses your
         funds for good.

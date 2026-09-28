@@ -1,6 +1,10 @@
 use seedelf_core::assets::{Asset, Assets, string_to_u64};
 use seedelf_core::utxos;
-use seedelf_koios::koios::{Asset as KoiosAsset, ProtocolParameters, UtxoResponse};
+use seedelf_crypto::register::Register;
+use seedelf_crypto::schnorr::random_scalar;
+use seedelf_koios::koios::{
+    Asset as KoiosAsset, InlineDatum, ProtocolParameters, Ratio, UtxoResponse,
+};
 
 fn fixture_params() -> ProtocolParameters {
     ProtocolParameters {
@@ -11,10 +15,12 @@ fn fixture_params() -> ProtocolParameters {
         price_mem: 0.0577,
         price_step: 0.0000721,
         cost_model_v3: Vec::new(),
+        min_fee_ref_script_cost_per_byte: Ratio::whole(15),
     }
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_first_large_utxo() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
@@ -27,6 +33,7 @@ async fn find_first_large_utxo() {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_many_utxos() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
@@ -39,6 +46,7 @@ async fn find_many_utxos() {
 }
 
 #[tokio::test]
+#[ignore = "live Koios"]
 async fn find_nft_and_ada() {
     let addr: &str = "addr_test1qrwejm9pza929cedhwkcsprtgs8l2carehs8z6jkse2qp344c43tmm0md55r4ufmxknr24kq6jkvt6spq60edeuhtf4sn2scds";
     let every_utxo = utxos::get_address_utxos(addr, true).await.unwrap();
@@ -303,4 +311,253 @@ fn select_does_not_panic_when_change_min_exceeds_gathered_lovelace() {
         selected.is_empty(),
         "should bail out cleanly instead of underflowing"
     );
+}
+
+// ---------------------------------------------------------------------------
+// utxos::fitting: what one transaction can hold together
+//
+// Anyone can send an address UTxOs whose tokens add past a u64, and no output
+// can hold that much of one token: three of 2^63 − 1, or 2^64 − 1 and 1.
+// ---------------------------------------------------------------------------
+
+const JUNK: u64 = (1 << 63) - 1;
+
+fn outpoints(utxos: &[UtxoResponse]) -> Vec<String> {
+    utxos.iter().map(|u| u.tx_hash[..2].to_string()).collect()
+}
+
+#[test]
+fn fitting_leaves_out_what_would_push_a_token_past_a_u64() {
+    let rows = vec![
+        token_utxo(0x01, 1_500_000, &[(PID_EXTRA, "aa", JUNK)]),
+        ada_utxo(0x02, 20_000_000),
+        token_utxo(0x03, 1_500_000, &[(PID_EXTRA, "aa", JUNK)]),
+        token_utxo(0x04, 1_500_000, &[(PID_EXTRA, "aa", JUNK)]),
+        token_utxo(0x05, 2_000_000, &[(PID_NEEDED, "aa", 7)]),
+    ];
+    // What adding them all up does, and what the builders used to.
+    assert!(utxos::assets_of(rows.clone()).is_err());
+
+    let (taken, left) = utxos::fitting(&rows, &Assets::new(), |_| false).unwrap();
+    // Two of 2^63 − 1 fit (2^64 − 2); the third doesn't. Ties go by outpoint.
+    assert_eq!(outpoints(&taken), vec!["01", "02", "03", "05"]);
+    assert_eq!(outpoints(&left), vec!["04"]);
+    let (lovelace, tokens) = utxos::assets_of(taken).unwrap();
+    assert_eq!(lovelace, 25_000_000);
+    assert_eq!(
+        tokens
+            .quantity_of(PID_EXTRA.to_string(), "aa".to_string())
+            .unwrap(),
+        Some(2 * JUNK)
+    );
+    // What's left fits on its own: a second transaction takes it.
+    let (again, none) = utxos::fitting(&left, &Assets::new(), |_| false).unwrap();
+    assert_eq!((again.len(), none.len()), (1, 0));
+
+    // The pair that's as bad: 2^64 − 1 and 1.
+    let pair = vec![
+        token_utxo(0x06, 1_500_000, &[(PID_EXTRA, "aa", u64::MAX)]),
+        token_utxo(0x07, 1_500_000, &[(PID_EXTRA, "aa", 1)]),
+    ];
+    let (taken, left) = utxos::fitting(&pair, &Assets::new(), |_| false).unwrap();
+    assert_eq!(
+        (outpoints(&taken), outpoints(&left)),
+        (vec!["06".into()], vec!["07".into()])
+    );
+
+    // Nothing that adds up is ever left out.
+    let fine = vec![
+        ada_utxo(0x08, 5_000_000),
+        token_utxo(0x09, 2_000_000, &[(PID_EXTRA, "aa", 5)]),
+    ];
+    let (taken, left) = utxos::fitting(&fine, &Assets::new(), |_| false).unwrap();
+    assert_eq!((taken.len(), left.len()), (2, 0));
+}
+
+#[test]
+fn fitting_takes_ada_only_then_its_own_then_the_most_lovelace() {
+    let rows = vec![
+        token_utxo(0x01, 9_000_000, &[(PID_EXTRA, "aa", JUNK)]),
+        token_utxo(0x02, 1_500_000, &[(PID_EXTRA, "aa", JUNK)]),
+        token_utxo(0x03, 1_200_000, &[(PID_EXTRA, "aa", JUNK)]),
+    ];
+    // By lovelace: the smallest is left.
+    let (_, left) = utxos::fitting(&rows, &Assets::new(), |_| false).unwrap();
+    assert_eq!(outpoints(&left), vec!["03"]);
+    // Its own come first, whatever they hold.
+    let own = |u: &UtxoResponse| u.tx_hash.starts_with("03");
+    let (taken, left) = utxos::fitting(&rows, &Assets::new(), own).unwrap();
+    assert_eq!(outpoints(&taken), vec!["01", "03"], "in the order given");
+    assert_eq!(outpoints(&left), vec!["02"]);
+
+    // What's there already (a Seedelf UTxO a return merges into) counts too.
+    let base = Assets::new()
+        .add(Asset::new(PID_EXTRA.to_string(), "aa".to_string(), JUNK).unwrap())
+        .unwrap();
+    let (taken, left) = utxos::fitting(&rows, &base, |_| false).unwrap();
+    assert_eq!(
+        (outpoints(&taken), outpoints(&left).len()),
+        (vec!["01".into()], 2)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// utxos::reference_script_size: what Conway charges a spent input's script for
+// ---------------------------------------------------------------------------
+
+/// A real Koios row holding a reference script: the Seedelf policy's mainnet
+/// reference UTxO, 519 bytes, as `utxo_info` listed it on 2026-09-26.
+fn recorded_script_row() -> UtxoResponse {
+    let rows: Vec<UtxoResponse> =
+        serde_json::from_str(include_str!("fixtures/reference_script_utxo.json")).unwrap();
+    rows.into_iter().next().unwrap()
+}
+
+#[test]
+fn a_reference_script_is_measured_from_its_bytes() {
+    let row = recorded_script_row();
+    assert_eq!(utxos::reference_script_size(&row).unwrap(), 519);
+    // Koios's bytes are the script the ledger hashes, and so measures.
+    let script = row.reference_script.as_ref().unwrap();
+    let mut tagged = vec![0x03];
+    tagged.extend(hex::decode(script.bytes.as_ref().unwrap()).unwrap());
+    assert_eq!(
+        hex::encode(pallas_crypto::hash::Hasher::<224>::hash(&tagged)),
+        script.hash.clone().unwrap()
+    );
+    // A size Koios leaves out isn't needed.
+    let mut unsized_row = row.clone();
+    unsized_row.reference_script.as_mut().unwrap().size = None;
+    assert_eq!(utxos::reference_script_size(&unsized_row).unwrap(), 519);
+    // None is none.
+    assert_eq!(utxos::reference_script_size(&ada_utxo(0x01, 1)).unwrap(), 0);
+    let two = vec![row.clone(), ada_utxo(0x01, 1), row.clone()];
+    assert_eq!(utxos::reference_script_bytes(&two).unwrap(), 1_038);
+}
+
+#[test]
+fn a_reference_script_that_cant_be_measured_is_never_taken_for_none() {
+    let row = recorded_script_row();
+    let broken = |change: fn(&mut seedelf_koios::koios::ReferenceScript)| {
+        let mut row = row.clone();
+        change(row.reference_script.as_mut().unwrap());
+        utxos::reference_script_size(&row).unwrap_err().to_string()
+    };
+    for err in [
+        // No bytes: how Koios may list a native script.
+        broken(|s| s.bytes = None),
+        broken(|s| s.bytes = Some("not hex".into())),
+        broken(|s| s.bytes = Some(String::new())),
+        // Bytes and size that disagree.
+        broken(|s| s.size = Some(518)),
+        // A shape Koios never sends still counts as a script.
+        broken(|s| *s = Default::default()),
+    ] {
+        assert!(
+            err.contains(&format!("UTxO {}#1 holds a reference script", row.tx_hash)),
+            "{err}"
+        );
+        assert!(err.contains("can't price spending it"), "{err}");
+    }
+    assert!(
+        utxos::reference_script_bytes(&[row.clone(), {
+            let mut r = row;
+            r.reference_script.as_mut().unwrap().bytes = None;
+            r
+        }])
+        .is_err()
+    );
+}
+
+/// A wallet-contract row under `register`'s inline datum, as Koios returns it.
+fn register_utxo(tx_hash_byte: u8, register: &Register) -> UtxoResponse {
+    UtxoResponse {
+        tx_hash: hex::encode([tx_hash_byte; 32]),
+        value: "5000000".to_string(),
+        inline_datum: Some(InlineDatum {
+            bytes: hex::encode(register.to_vec().unwrap()),
+            value: serde_json::json!({
+                "constructor": 0,
+                "fields": [{"bytes": register.generator}, {"bytes": register.public_value}]
+            }),
+        }),
+        asset_list: Some(vec![]),
+        ..Default::default()
+    }
+}
+
+/// A compressed point on the curve but outside the prime-order subgroup:
+/// `from_compressed` refuses it, as the wallet contract does.
+fn torsion_point() -> String {
+    (1u8..=u8::MAX)
+        .find_map(|x| {
+            let mut bytes = [0u8; 48];
+            bytes[0] = 0x80;
+            bytes[47] = x;
+            let point = blstrs::G1Affine::from_compressed_unchecked(&bytes).into_option()?;
+            (!bool::from(point.is_torsion_free())).then(|| hex::encode(bytes))
+        })
+        .expect("a small x off the subgroup")
+}
+
+#[test]
+fn wallet_scans_skip_an_identity_register() {
+    // Anyone can pay the contract under (identity, identity), and anyone can
+    // spend it back. It isn't this key's, and it doesn't stop the scan.
+    let sk = random_scalar();
+    let identity = format!("c0{}", "00".repeat(47));
+    let rows = vec![
+        register_utxo(0x01, &Register::new(identity.clone(), identity)),
+        register_utxo(0x02, &Register::create(sk).unwrap().rerandomize().unwrap()),
+    ];
+    let hashes = |found: Vec<UtxoResponse>| -> Vec<String> {
+        found.into_iter().map(|u| u.tx_hash).collect()
+    };
+    let owned = vec![hex::encode([0x02; 32])];
+    let all = utxos::collect_all_wallet_utxos(sk, PID_EXTRA, rows.clone()).unwrap();
+    assert_eq!(hashes(all), owned);
+    let usable = utxos::collect_wallet_utxos(sk, PID_EXTRA, rows).unwrap();
+    assert_eq!(hashes(usable), owned);
+}
+
+#[test]
+fn wallet_scans_skip_a_register_whose_points_dont_decompress() {
+    // Anyone can pay the contract under any 48 bytes. No key owns such a
+    // register and nobody can spend it, so it mustn't stop the scan either.
+    let sk = random_scalar();
+    let zeros = "00".repeat(48);
+    let random: String = hex::encode(
+        (0u8..48)
+            .map(|i| i.wrapping_mul(97) ^ 0x5a)
+            .collect::<Vec<u8>>(),
+    );
+    let torsion = torsion_point();
+    let ours = Register::create(sk).unwrap().rerandomize().unwrap();
+    let junk = [
+        Register::new(zeros.clone(), zeros),
+        Register::new(random.clone(), random),
+        Register::new(torsion, ours.public_value.clone()),
+    ];
+    for register in &junk {
+        // Each one reaches the error, not just `false`.
+        assert!(register.is_owned(sk).is_err(), "{register:?}");
+    }
+    let owned = vec![hex::encode([0x10; 32])];
+    let hashes = |found: Vec<UtxoResponse>| -> Vec<String> {
+        found.into_iter().map(|u| u.tx_hash).collect()
+    };
+    // The junk before the owned row, and after it.
+    let before: Vec<UtxoResponse> = junk
+        .iter()
+        .enumerate()
+        .map(|(i, r)| register_utxo(i as u8 + 1, r))
+        .chain([register_utxo(0x10, &ours)])
+        .collect();
+    let after: Vec<UtxoResponse> = before.iter().cloned().rev().collect();
+    for rows in [before, after] {
+        let all = utxos::collect_all_wallet_utxos(sk, PID_EXTRA, rows.clone()).unwrap();
+        assert_eq!(hashes(all), owned);
+        let usable = utxos::collect_wallet_utxos(sk, PID_EXTRA, rows).unwrap();
+        assert_eq!(hashes(usable), owned);
+    }
 }

@@ -2,7 +2,7 @@
 // phrase) and the contacts kept in it.
 import { describe, expect, it } from "vitest";
 
-import { PRIVATE_PREFIX, PrivateStore } from "../src/background/private-store";
+import { PRIVATE_PREFIX, PrivateStore, UnreadableRecordError } from "../src/background/private-store";
 import { testBalances, testWallet, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -36,7 +36,7 @@ describe("the private store", () => {
     const other = testWallet();
     await other.wallet.create(phrase(24).phrase, PASSWORD);
     await other.local.set(`${PRIVATE_PREFIX}contacts`, sealed);
-    expect(await new PrivateStore({ wallet: other.wallet, local: other.local }).get("contacts")).toBeUndefined();
+    await expect(new PrivateStore({ wallet: other.wallet, local: other.local }).get("contacts")).rejects.toThrow(UnreadableRecordError);
 
     await t.wallet.reset();
     expect(await t.local.get(`${PRIVATE_PREFIX}contacts`)).toBeUndefined();

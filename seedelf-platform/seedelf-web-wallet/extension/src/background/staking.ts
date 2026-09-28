@@ -32,8 +32,9 @@ import {
   type StakingAction,
   type StakingSummary,
 } from "../shared/rpc";
-import { nothingInAccount, readAccount } from "./account";
+import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { Koios, KoiosAccountInfo, KoiosPoolInfo } from "./koios";
+import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
@@ -237,7 +238,11 @@ export class StakingService {
    */
   async build(network: NetworkName, action: StakingAction): Promise<StakingSummary> {
     const { wasm, wallet } = this.deps;
-    const { params, utxos, held, stake } = await readAccount(this.deps, network, { stake: true });
+    await settleMaybeSent(this.deps, network);
+    const [{ params, utxos, held, stake }, invalidHereafter] = await Promise.all([
+      readAccount(this.deps, network, { stake: true }),
+      validUntil(this.deps.koios(network)),
+    ]);
     if (utxos.length === 0) {
       throw nothingInAccount(held, "Your public account is empty. Staking needs ADA for the fee, and a 2 ₳ deposit the first time.");
     }
@@ -255,13 +260,14 @@ export class StakingService {
       utxos,
       action,
       state: { registered: state.registered, deposit: state.deposit, rewards: state.rewards, drep: state.drep },
+      invalidHereafter,
     };
     const result = await wallet.withKeys(
       (keys) => JSON.parse(wasm.buildStaking(keys.cardano, JSON.stringify(request))) as StakingSummary & { txCbor: string },
     );
     const { txCbor, ...rest } = result;
     const summary: StakingSummary = { ...rest, network };
-    await keep(this.deps, SESSION_STAKE, { ...summary, txCbor });
+    await keep(this.deps, SESSION_STAKE, { ...summary, txCbor, invalidHereafter: request.invalidHereafter });
     return summary;
   }
 

@@ -7,31 +7,76 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { koiosPreprod, loadTestWasm, ownedUtxos } from "./fakes";
 
 const base = koiosPreprod.contract_utxos[0]!;
-const withDatum = (value: unknown): KoiosUtxo => ({ ...base, inline_datum: { bytes: "", value } });
+/** A row whose datum's CBOR is `bytes`, and whose JSON says what it likes: the register is read from the bytes. */
+const withDatum = (bytes: string, value: unknown = null): KoiosUtxo => ({ ...base, inline_datum: { bytes, value } });
 
 describe("registerOf", () => {
   it("reads the register of every real preprod contract UTxO, and they're valid points", () => {
     const wasm = loadTestWasm();
     expect(koiosPreprod.contract_utxos).toHaveLength(25);
-    for (const utxo of koiosPreprod.contract_utxos) {
+    for (const utxo of [...koiosPreprod.contract_utxos, ...ownedUtxos]) {
       const hex = registerOf(utxo)!;
       expect(hex.generator).toMatch(/^[0-9a-f]{96}$/);
+      // The register Koios's JSON of the same datum shows.
+      const fields = (utxo.inline_datum!.value as { fields: Array<{ bytes: string }> }).fields.map((f) => f.bytes);
+      expect([hex.generator, hex.publicValue]).toEqual(fields);
       const register = new wasm.Register(hex.generator, hex.publicValue);
       expect(wasm.isValidRegister(register)).toBe(true);
       register.free();
     }
   });
 
+  // Constructor 0 holding two 48-byte fields, as seedelf-koios `register_of_datum` reads it.
+  const [g, u] = ["ab".repeat(48), "cd".repeat(48)];
+  const field = (hex: string) => `5830${hex}`;
+  const register = { generator: g, publicValue: u };
+
+  it("reads it from the datum's bytes, however the CBOR spells constructor 0 and its fields", () => {
+    expect(registerOf(withDatum(`d8799f${field(g)}${field(u)}ff`))).toEqual(register); // an indefinite list, as the CLI writes
+    expect(registerOf(withDatum(`d87982${field(g)}${field(u)}`))).toEqual(register); // a definite one
+    expect(registerOf(withDatum(`d866820082${field(g)}${field(u)}`))).toEqual(register); // constructor 0's general form
+    expect(registerOf(withDatum(`d9007982${field(g)}${field(u)}`))).toEqual(register); // a longer head than needed
+    const chunked = `5f5818${g.slice(0, 48)}5818${g.slice(48)}ff`;
+    expect(registerOf(withDatum(`d87982${chunked}${field(u)}`))).toEqual(register); // bytes in chunks
+    expect(registerOf(withDatum(`D87982${field(g.toUpperCase())}${field(u)}`))).toEqual(register);
+  });
+
   it("skips anything that isn't a two-point register", () => {
-    const [g, u] = [{ bytes: "ab".repeat(48) }, { bytes: "cd".repeat(48) }];
-    expect(registerOf(withDatum({ constructor: 0, fields: [g, u] }))).toBeDefined();
     expect(registerOf({ ...base, inline_datum: null })).toBeUndefined();
-    expect(registerOf(withDatum({ fields: [g, u] }))).toBeUndefined();
-    expect(registerOf(withDatum({ constructor: 1, fields: [g, u] }))).toBeUndefined();
-    expect(registerOf(withDatum({ constructor: 0, fields: [g, u, u] }))).toBeUndefined();
-    expect(registerOf(withDatum({ constructor: 0, fields: [g, { bytes: "cd".repeat(47) }] }))).toBeUndefined();
-    expect(registerOf(withDatum({ constructor: 0, fields: [g, { int: 1 }] }))).toBeUndefined();
-    expect(registerOf(withDatum({ constructor: 0, fields: [g, { bytes: "CD".repeat(48) }] }))).toBeUndefined();
+    for (const bytes of [
+      "",
+      "d879",
+      `d87a82${field(g)}${field(u)}`, // constructor 1
+      `d866820182${field(g)}${field(u)}`, // constructor 1's general form
+      `d87983${field(g)}${field(u)}${field(u)}`, // three fields
+      `d87981${field(g)}`, // one
+      `d87982${field(g)}582f${"cd".repeat(47)}`, // 47 bytes
+      `d87982${field(g)}5831${"cd".repeat(49)}`, // 49 bytes
+      `d87982${field(g)}01`, // a number
+      `d87982${field(g)}${field(u)}00`, // something after
+      `d8799f${field(g)}${field(u)}`, // no break
+      `d87982${field(g)}5f5818${u.slice(0, 48)}5819${u.slice(48)}00ff`, // chunks past 48 bytes
+      `d87982${field(g)}5f5f5818${u.slice(0, 48)}ff5818${u.slice(48)}ff`, // a chunk that isn't whole
+      `9f${field(g)}${field(u)}ff`, // no constructor
+      "zz",
+      "d8799",
+    ]) {
+      expect(registerOf(withDatum(bytes)), bytes).toBeUndefined();
+    }
+  });
+
+  it("goes by the bytes, never the datum's JSON", () => {
+    // Koios's JSON says a register, the datum itself constructor 1.
+    const json = { constructor: 0, fields: [{ bytes: g }, { bytes: u }] };
+    expect(registerOf(withDatum(`d87a82${field(g)}${field(u)}`, json))).toBeUndefined();
+  });
+
+  it("reads a datum nested a hundred thousand levels deep as no register, at once (launch review H4)", () => {
+    const started = performance.now();
+    expect(registerOf(withDatum(`${"81".repeat(100_000)}00`))).toBeUndefined();
+    expect(registerOf(withDatum(`${"d879".repeat(50_000)}80`))).toBeUndefined();
+    expect(registerOf(withDatum(`d8799f${"9f".repeat(100_000)}`))).toBeUndefined();
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });
 

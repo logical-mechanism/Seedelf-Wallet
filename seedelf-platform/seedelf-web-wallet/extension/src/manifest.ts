@@ -26,7 +26,7 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
   const origins = networkOrigins(networks);
   return {
     manifest_version: 3,
-    name: mainnetEnabled ? "Seedelf Wallet" : "Seedelf Wallet (preprod)",
+    name: mainnetEnabled ? "Seedelf Wallet" : "Seedelf Wallet",
     short_name: "Seedelf",
     // Also the Web Store's summary line: at most 132 characters.
     description: "A Cardano wallet with a private balance built in. Stake and send in public, or pay anyone privately through Seedelf.",

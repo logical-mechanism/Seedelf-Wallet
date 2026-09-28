@@ -10,29 +10,106 @@ export const GAP_LIMIT = 20;
 
 export { SEEDELF_PREFIX };
 
-const POINT_HEX = /^[0-9a-f]{96}$/;
-
 export interface RegisterHex {
   generator: string;
   publicValue: string;
 }
 
+const HEX = /^(?:[0-9a-fA-F]{2})*$/;
+/** Constructor 0's tag, and the general form's: `102([0, fields])`. */
+const CONSTR_0 = 121;
+const CONSTR_ANY = 102;
+const POINT_BYTES = 48;
+
+/** A CBOR item's head at `at`: its major type, its argument (null when indefinite), and where what follows starts. */
+function headAt(b: Uint8Array, at: number): { major: number; arg: number | null; next: number } | undefined {
+  if (at >= b.length) return undefined;
+  const major = b[at]! >> 5;
+  const info = b[at]! & 0x1f;
+  if (info < 24) return { major, arg: info, next: at + 1 };
+  if (info === 31) return { major, arg: null, next: at + 1 };
+  if (info > 27) return undefined;
+  const size = 1 << (info - 24);
+  if (at + 1 + size > b.length) return undefined;
+  // Past 2^53 it's inexact, but never one of the small numbers a register is read by.
+  let arg = 0;
+  for (let i = 1; i <= size; i++) arg = arg * 256 + b[at + i]!;
+  return { major, arg, next: at + 1 + size };
+}
+
+/** A register's field at `at`: 48 bytes, whole or in chunks. */
+function pointAt(b: Uint8Array, at: number): { hex: string; next: number } | undefined {
+  const head = headAt(b, at);
+  if (!head || head.major !== 2) return undefined;
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  let next = head.next;
+  if (head.arg !== null) {
+    if (head.arg !== POINT_BYTES || next + POINT_BYTES > b.length) return undefined;
+    chunks.push(b.subarray(next, next + POINT_BYTES));
+    length = POINT_BYTES;
+    next += POINT_BYTES;
+  } else {
+    // Definite byte strings until a break.
+    for (;;) {
+      if (b[next] === 0xff) {
+        next++;
+        break;
+      }
+      const chunk = headAt(b, next);
+      if (!chunk || chunk.major !== 2 || chunk.arg === null || chunk.next + chunk.arg > b.length) return undefined;
+      length += chunk.arg;
+      if (length > POINT_BYTES) return undefined;
+      chunks.push(b.subarray(chunk.next, chunk.next + chunk.arg));
+      next = chunk.next + chunk.arg;
+    }
+    if (length !== POINT_BYTES) return undefined;
+  }
+  const hex = chunks.map((c) => Array.from(c, (x) => x.toString(16).padStart(2, "0")).join("")).join("");
+  return { hex, next };
+}
+
 /**
- * The register in a wallet-contract UTxO's inline datum: constructor 0 with
- * two 48-byte fields, the same shape the CLI reads. Anything else (no datum,
- * another shape) isn't a spendable register, so it's skipped. Whether the
- * points are valid is left to the WebAssembly ownership check.
+ * The register in a wallet-contract UTxO's inline datum, read from its CBOR:
+ * constructor 0 holding exactly two 48-byte byte strings, with nothing after,
+ * however the CBOR spells them (a definite or indefinite list, bytes whole or
+ * in chunks, constructor 0's general form `102([0, fields])`). That's what
+ * the CLI and the WebAssembly read (seedelf-koios `register_of_datum`), never
+ * the datum's JSON, which Koios's rows lose once `trimmed`. It's read token by
+ * token, so a deeply nested datum is only "not a register". Anything else
+ * isn't a spendable register, so it's skipped. Whether the points are valid
+ * is left to the WebAssembly ownership check.
  */
 export function registerOf(utxo: KoiosUtxo): RegisterHex | undefined {
-  const value = utxo.inline_datum?.value as { constructor?: unknown; fields?: unknown } | undefined;
-  if (!value || value.constructor !== 0 || !Array.isArray(value.fields) || value.fields.length !== 2) {
+  const hex = utxo.inline_datum?.bytes;
+  if (typeof hex !== "string" || !HEX.test(hex)) return undefined;
+  const b = Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
+
+  const tag = headAt(b, 0);
+  if (!tag || tag.major !== 6) return undefined;
+  let at = tag.next;
+  if (tag.arg === CONSTR_ANY) {
+    const pair = headAt(b, at);
+    if (!pair || pair.major !== 4 || pair.arg !== 2) return undefined;
+    const index = headAt(b, pair.next);
+    if (!index || index.major !== 0 || index.arg !== 0) return undefined;
+    at = index.next;
+  } else if (tag.arg !== CONSTR_0) {
     return undefined;
   }
-  const [g, u] = value.fields.map((f: { bytes?: unknown }) => f?.bytes);
-  if (typeof g !== "string" || typeof u !== "string" || !POINT_HEX.test(g) || !POINT_HEX.test(u)) {
-    return undefined;
+
+  const fields = headAt(b, at);
+  if (!fields || fields.major !== 4 || (fields.arg !== null && fields.arg !== 2)) return undefined;
+  const generator = pointAt(b, fields.next);
+  const publicValue = generator && pointAt(b, generator.next);
+  if (!generator || !publicValue) return undefined;
+  at = publicValue.next;
+  if (fields.arg === null) {
+    // An indefinite list: a break must end it after the two fields.
+    if (b[at] !== 0xff) return undefined;
+    at++;
   }
-  return { generator: g, publicValue: u };
+  return at === b.length ? { generator: generator.hex, publicValue: publicValue.hex } : undefined;
 }
 
 /**

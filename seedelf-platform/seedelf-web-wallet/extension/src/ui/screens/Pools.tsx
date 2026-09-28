@@ -4,7 +4,9 @@
 // requests after the first. A pool opens its details, fresh (one request),
 // and Stake builds the delegation for review. Pool names come with the
 // details: the list has tickers only (Koios's pool_list), and asking for every
-// name would cost several requests a day.
+// name would cost several requests a day. Anyone can register a pool under
+// any ticker, so a ticker live pools share is flagged, and every row shows
+// enough of the pool ID to tell them apart (launch review #59).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -14,7 +16,7 @@ import { Callout } from "../components/Callout";
 import { SearchIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
 import { Screen } from "../components/Screen";
-import { formatAda, formatPercent, plural, poolLabel, shortHex } from "../format";
+import { formatAda, formatPercent, plainName, plural, poolLabel, sharedNames, sharing, shortId } from "../format";
 import { initials, tint } from "../tokens";
 import { PoolFacts } from "./Staking";
 
@@ -72,7 +74,8 @@ export function Pools({
   busy: boolean;
   error?: string;
   onBack: () => void;
-  onStake: (pool: PoolDetails) => void;
+  /** The pool, and how many live pools use its ticker. */
+  onStake: (pool: PoolDetails, shared: number) => void;
 }) {
   const [list, setList] = useState<PoolList>();
   const [reading, setReading] = useState(false);
@@ -96,11 +99,13 @@ export function Pools({
   useEffect(() => void load(false), [load]);
 
   const found = useMemo(() => sortPools(searchPools(list?.pools ?? [], query), sort), [list, query, sort]);
+  const tickers = useMemo(() => sharedNames(list?.pools ?? [], (p) => p.ticker), [list]);
 
   if (open) {
     return (
       <PoolPage
         row={open}
+        shared={sharing(tickers, open.ticker)}
         current={current}
         registered={registered}
         blocked={blocked}
@@ -150,7 +155,7 @@ export function Pools({
         (found.length ? (
           <ul className="list" data-testid="pool-results">
             {found.slice(0, limit).map((p) => (
-              <PoolListRow key={p.id} pool={p} current={p.id === current} onOpen={setOpen} />
+              <PoolListRow key={p.id} pool={p} current={p.id === current} shared={sharing(tickers, p.ticker) > 1} onOpen={setOpen} />
             ))}
           </ul>
         ) : (
@@ -166,25 +171,40 @@ export function Pools({
   );
 }
 
-function PoolListRow({ pool, current, onOpen }: { pool: PoolRow; current: boolean; onOpen: (p: PoolRow) => void }) {
-  const label = pool.ticker ?? shortHex(pool.id, 10, 6);
+/** One live pool: its ticker, flagged when other live pools use it too, its ID, and its terms. */
+export function PoolListRow({
+  pool,
+  current,
+  shared,
+  onOpen,
+}: {
+  pool: PoolRow;
+  current: boolean;
+  /** Another live pool uses this ticker, or one that looks the same. */
+  shared: boolean;
+  onOpen: (p: PoolRow) => void;
+}) {
+  const ticker = pool.ticker ? plainName(pool.ticker) : undefined;
+  const label = ticker ?? shortId(pool.id);
   return (
     <li>
       <button
         type="button"
         className="token-row"
         onClick={() => onOpen(pool)}
-        aria-label={`${label}, ${formatPercent(pool.saturation)} saturated${current ? ", your pool" : ""}`}
+        aria-label={`${label}${shared ? ", a ticker other pools use too" : ""}, ${shortId(pool.id)}, ${formatPercent(pool.saturation)} saturated${current ? ", your pool" : ""}`}
       >
         <span className={`avatar avatar--tint-${tint(pool.id)}`} aria-hidden="true">
-          {initials(pool.ticker ?? "?")}
+          {initials(ticker ?? "?")}
         </span>
         <span className="token-row__label">
           {label}
           {current && <span className="utxo-tag"> Yours</span>}
+          {shared && <span className="utxo-tag utxo-tag--warn"> Shared ticker</span>}
         </span>
         <span className="token-row__amount">{formatPercent(pool.saturation)}</span>
         <span className="token-row__sub">
+          {ticker && <span className="mono-id">{shortId(pool.id)} · </span>}
           {formatPercent(pool.margin * 100)} margin · {formatAda(pool.cost)} ₳ cost
         </span>
       </button>
@@ -195,6 +215,7 @@ function PoolListRow({ pool, current, onOpen }: { pool: PoolRow; current: boolea
 /** One pool's details, fresh, and Stake. */
 function PoolPage({
   row,
+  shared,
   current,
   registered,
   blocked,
@@ -204,13 +225,15 @@ function PoolPage({
   onStake,
 }: {
   row: PoolRow;
+  /** How many live pools use its ticker. */
+  shared: number;
   current?: string;
   registered: boolean;
   blocked?: string;
   busy: boolean;
   error?: string;
   onBack: () => void;
-  onStake: (pool: PoolDetails) => void;
+  onStake: (pool: PoolDetails, shared: number) => void;
 }) {
   const [details, setDetails] = useState<PoolDetails>();
   const [readError, setReadError] = useState<string>();
@@ -233,7 +256,7 @@ function PoolPage({
         <button
           type="button"
           className="primary"
-          onClick={() => details && onStake(details)}
+          onClick={() => details && onStake(details, shared)}
           disabled={!details || !!why || busy}
           title={why}
         >
@@ -246,9 +269,21 @@ function PoolPage({
       <p className="note mono-id" title={row.id}>
         {row.id}
       </p>
+      <SharedTicker shared={shared} />
       {!registered && !yours && (
         <p className="note">Staking the first time takes a 2 ₳ deposit, which comes back when you stop.</p>
       )}
     </Screen>
+  );
+}
+
+/** Said on a pool's page and its review when other live pools use its ticker. */
+export function SharedTicker({ shared }: { shared: number }) {
+  if (shared < 2) return null;
+  return (
+    <Callout tone="warn" testId="pool-shared-ticker">
+      {shared} live pools use this ticker, or one that looks the same. Anyone can register a pool under any ticker: only
+      the pool ID tells them apart. Check it against the one the pool publishes before you stake.
+    </Callout>
   );
 }

@@ -2,7 +2,7 @@ use pallas_crypto::hash::Hash;
 use pallas_txbuilder::Input;
 use seedelf_core::assets::Assets;
 use seedelf_core::transaction;
-use seedelf_koios::koios::ProtocolParameters;
+use seedelf_koios::koios::{ProtocolParameters, Ratio};
 
 /// A fixed parameter set so the lovelace assertions stay deterministic.
 /// `coins_per_utxo_size` matches the value baked into the chain at the time
@@ -17,6 +17,7 @@ fn fixture_params() -> ProtocolParameters {
         price_mem: 0.0577,
         price_step: 0.0000721,
         cost_model_v3: Vec::new(),
+        min_fee_ref_script_cost_per_byte: Ratio::whole(15),
     }
 }
 

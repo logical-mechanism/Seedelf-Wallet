@@ -1,6 +1,6 @@
-// Bech32 (BIP 173) encoding, for tests that need an address the wallet
-// doesn't make itself: an enterprise address, or our payment key with
-// someone else's stake key.
+// Bech32 (BIP 173), for tests that need an address the wallet doesn't make
+// itself (an enterprise address, or our payment key with someone else's
+// stake key), or an address's bytes without the WebAssembly.
 
 const CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
@@ -51,4 +51,26 @@ const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g)!, (h) => Numb
 export function preprodAddress(payment: string, stake?: string): string {
   const header = stake ? "00" : "60";
   return bech32("addr_test", hexBytes(header + payment + (stake ?? "")));
+}
+
+/** A bech32 string's bytes, its checksum checked: an address's, as `cip30Address` gives them. */
+export function bech32Bytes(text: string): Uint8Array {
+  const at = text.lastIndexOf("1");
+  const hrp = text.slice(0, at);
+  const data = [...text.slice(at + 1)].map((c) => CHARSET.indexOf(c));
+  if (at < 1 || data.length < 6 || data.includes(-1) || polymod([...hrpExpand(hrp), ...data]) !== 1) {
+    throw new Error(`not bech32: ${text}`);
+  }
+  const bytes: number[] = [];
+  let acc = 0;
+  let bits = 0;
+  for (const d of data.slice(0, -6)) {
+    acc = ((acc << 5) | d) & 0xfff;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((acc >>> bits) & 0xff);
+    }
+  }
+  return Uint8Array.from(bytes);
 }

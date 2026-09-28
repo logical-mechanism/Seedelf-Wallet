@@ -10,7 +10,15 @@
 // the addresses Koios lists under the account's stake key
 // (`account_addresses`); then every payment key in that range is asked about
 // by credential (`credential_utxos`). Two requests, one after the other, and a
-// move-in, mint or send adds `epoch_params` alongside.
+// move-in, mint or send adds `epoch_params` alongside, and the chain's `tip`
+// for its slot (`validUntil`).
+//
+// A public Lovejoin mix being sent pays each mix from the one before's change
+// at the account and puts up its collateral (lovejoin.ts). Until it's all
+// sent, that change is the chain's: it's left out here, so no payment spends
+// it from under the chain, and no site connected to the account is offered
+// it; neither is its collateral spent (spent.ts's reservations). A site that
+// names it anyway is refused when it asks for a signature (dapp.ts).
 //
 // To spend, what the user locked and the collateral are left out
 // (coin-control.ts); the collateral comes back on its own, for a mint. When
@@ -25,7 +33,7 @@ import { discoverChain } from "./chain";
 import type { CoinControlService } from "./coin-control";
 import type { Koios, KoiosAccountInfo, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
-import { readFresh, spentSet, unspent } from "./spent";
+import { outpoint, readFresh, reservedSet, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
 import type { Keys, Wallet } from "./wallet";
 
@@ -84,7 +92,9 @@ export async function readAccountUtxos(
   const koios = deps.koios(network);
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   // Network calls happen outside withKeys, so they never hold up a lock.
-  const stake = await wallet.withKeys(({ cardano }) => cardano.stakeAddress(net));
+  const [stake, reserved] = await wallet.withKeys(
+    async ({ cardano }) => [cardano.stakeAddress(net), await reservedSet(deps.session, network, { sending: true })] as const,
+  );
   const [found, rows] = await readFresh(
     spent,
     async () => {
@@ -97,7 +107,7 @@ export async function readAccountUtxos(
   );
   const utxos = unspent(rows, spent).flatMap((utxo) => {
     const path = utxo.payment_cred ? found.paths.get(utxo.payment_cred) : undefined;
-    return path ? [{ utxo, ...path }] : [];
+    return path && !reserved.inputs.has(outpoint(utxo)) ? [{ utxo, ...path }] : [];
   });
   return { account: { ...found, stake }, utxos };
 }
@@ -137,10 +147,11 @@ export async function readAccount(
 ): Promise<SpendingAccount> {
   const { wasm, wallet } = deps;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-  const [spent, stakeAddress, preferences] = await Promise.all([
+  const [spent, stakeAddress, preferences, reserved] = await Promise.all([
     wallet.withKeys(() => spentSet(deps.session)),
     wallet.withKeys(({ cardano }) => cardano.stakeAddress(net)),
     deps.preferences?.get(),
+    wallet.withKeys(() => reservedSet(deps.session, network, { sending: true })),
   ]);
   const spendRewards = preferences?.spendRewards ?? false;
   const koios = deps.koios(network);
@@ -154,10 +165,26 @@ export async function readAccount(
     spendRewards && stake?.status === "registered" && stake.delegated_drep && BigInt(stake.rewards_available) > 0n;
   return {
     params,
-    utxos: spendable,
+    // A mix being sent puts up its collateral, even one no longer the account's: it's never spent meanwhile.
+    utxos: spendable.filter((p) => !reserved.collateral.has(outpoint(p.utxo))),
     collateral,
     held: utxos.length,
     stake,
     ...(withdrawable ? { withdrawal: stake.rewards_available } : {}),
   };
+}
+
+/** How long a transaction built from the account stays valid. */
+export const VALID_FOR_MS = 2 * 60 * 60_000;
+
+/**
+ * The slot a transaction built from the account now stops being valid at,
+ * two hours on: its `invalidHereafter`. Past it, one that never landed can't
+ * land any more, so paying again can't pay twice. Two hours on by the
+ * chain's clock, from its tip (a slot a second on both networks), not this
+ * device's: one hours off would have it valid for hours more than Home says,
+ * and payments held back as long (final review money-submit-5).
+ */
+export async function validUntil(koios: Koios): Promise<number> {
+  return (await koios.tipSlot()) + VALID_FOR_MS / 1000;
 }

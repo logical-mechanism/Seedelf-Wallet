@@ -1,16 +1,18 @@
 // Tokens to bring along, after Lace's "Add assets": Add tokens opens a
 // searchable picker, and only the picked tokens get an amount box, with Max
 // for all of it and × to take it off again. A box takes the token's decimals
-// and never more than the wallet holds (sanitizeAmount, as ADA takes its 45
-// billion), with commas that regroup as it's typed. A wallet with hundreds of
-// tokens never lists them all in the form.
+// (tokenDecimals: the wallet's list's, then Koios's, as every list and review
+// reads them) and never more than the wallet holds (sanitizeAmount, as ADA
+// takes its 45 billion), with commas that regroup as it's typed. A wallet
+// with hundreds of tokens never lists them all in the form.
 
 import { useMemo, useState } from "react";
 
+import type { NetworkName } from "../../networks";
 import type { TokenAmount, TokenQuantity } from "../../shared/rpc";
 import { formatQuantity, parseQuantity, plural, sanitizeAmount, tokenKey as key, type AmountRules } from "../format";
 import { useNetwork } from "../network";
-import { searchTokens, sortTokens, tokenLabel, viewToken } from "../tokens";
+import { searchTokens, sortTokens, tokenDecimals, tokenLabel, viewToken } from "../tokens";
 import { AmountField } from "./AmountField";
 import { CheckIcon, CloseIcon, SearchIcon } from "./Icons";
 import { Modal } from "./Modal";
@@ -19,21 +21,26 @@ import { TokenAvatar } from "./TokenList";
 /** How many search results the picker shows at once. */
 const SHOWN = 100;
 
-/** A token's amount box: its decimals, and at most what the wallet holds. */
-export function tokenRules(t: TokenAmount, label: string): AmountRules {
+/** A token's amount box: its decimals (`tokenDecimals`), and at most what the wallet holds. */
+export function tokenRules(t: TokenAmount, label: string, decimals: number): AmountRules {
   return {
-    decimals: t.decimals,
+    decimals,
     max: BigInt(t.quantity),
-    notANumber: t.decimals ? "Enter an amount, like 25 or 12.5." : "Enter a whole number, like 25.",
-    tooPrecise: t.decimals
-      ? `${label} has at most ${t.decimals} decimal places, so the extra digits were dropped.`
+    notANumber: decimals ? "Enter an amount, like 25 or 12.5." : "Enter a whole number, like 25.",
+    tooPrecise: decimals
+      ? `${label} has at most ${decimals} decimal places, so the extra digits were dropped.`
       : `${label} comes in whole units, so the decimals were dropped.`,
-    tooMuch: `That's more than the ${formatQuantity(t.quantity, t.decimals)} ${label} you hold.`,
+    tooMuch: `That's more than the ${formatQuantity(t.quantity, decimals)} ${label} you hold.`,
   };
 }
 
-/** The token amounts typed so far: those to send, and what's wrong with any of them. */
+/**
+ * The token amounts typed so far: those to send, and what's wrong with any
+ * of them. Each is read with the decimals its box shows (`tokenDecimals` on
+ * `network`), so what's sent is what was typed.
+ */
 export function tokenChoices(
+  network: NetworkName,
   held: TokenAmount[],
   typed: Record<string, string>,
 ): { sent: TokenQuantity[]; problems: Record<string, string>; ok: boolean } {
@@ -42,13 +49,12 @@ export function tokenChoices(
   for (const t of held) {
     const text = (typed[key(t)] ?? "").trim();
     if (text === "") continue;
-    const quantity = parseQuantity(text, t.decimals);
+    const decimals = tokenDecimals(network, t);
+    const quantity = parseQuantity(text, decimals);
     if (quantity === undefined) {
-      problems[key(t)] = t.decimals
-        ? `Enter an amount with at most ${t.decimals} decimal places.`
-        : "Enter a whole number.";
+      problems[key(t)] = decimals ? `Enter an amount with at most ${decimals} decimal places.` : "Enter a whole number.";
     } else if (BigInt(quantity) > BigInt(t.quantity)) {
-      problems[key(t)] = `That's more than the ${formatQuantity(t.quantity, t.decimals)} you hold.`;
+      problems[key(t)] = `That's more than the ${formatQuantity(t.quantity, decimals)} you hold.`;
     } else if (quantity !== "0") {
       sent.push({ policyId: t.policyId, assetName: t.assetName, quantity });
     }
@@ -76,7 +82,7 @@ export function TokenAmounts({
   // What the last edit of each box changed or refused.
   const [notes, setNotes] = useState<Record<string, string | undefined>>({});
   if (held.length === 0) return null;
-  const { problems } = tokenChoices(held, typed);
+  const { problems } = tokenChoices(network, held, typed);
   const picked = held.filter((t) => key(t) in typed);
   const left = held.length - picked.length;
 
@@ -86,7 +92,8 @@ export function TokenAmounts({
       {picked.map((t) => {
         const problem = problems[key(t)] ?? notes[key(t)];
         const label = tokenLabel(network, t);
-        const all = formatQuantity(t.quantity, t.decimals);
+        const decimals = tokenDecimals(network, t);
+        const all = formatQuantity(t.quantity, decimals);
         const set = (value: string, note?: string) => {
           setNotes({ ...notes, [key(t)]: note });
           onChange({ ...typed, [key(t)]: value });
@@ -98,7 +105,7 @@ export function TokenAmounts({
               <AmountField
                 placeholder="0"
                 value={typed[key(t)] ?? ""}
-                clean={(previous, text) => sanitizeAmount(previous, text, tokenRules(t, label))}
+                clean={(previous, text) => sanitizeAmount(previous, text, tokenRules(t, label, decimals))}
                 onChange={set}
                 aria-invalid={problems[key(t)] ? true : undefined}
                 aria-label={`Amount of ${label}`}

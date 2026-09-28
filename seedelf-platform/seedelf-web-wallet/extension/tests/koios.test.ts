@@ -27,7 +27,7 @@ describe("Koios client", () => {
     expect(await koios.credentialUtxos(["94bc"])).toHaveLength(2);
     expect(calls).toEqual([
       {
-        url: `${BASE}/credential_utxos?order=tx_hash.asc,tx_index.asc&offset=0&limit=1000`,
+        url: `${BASE}/credential_utxos?order=tx_hash.asc,tx_index.asc&limit=1000`,
         body: { _payment_credentials: ["94bc"], _extended: true },
       },
     ]);
@@ -37,16 +37,72 @@ describe("Koios client", () => {
     const { koios, calls } = scripted([Response.json(rows(1))]);
     await koios.credentialUtxos(["94bc"], 5214886);
     expect(calls[0]!.url).toBe(
-      `${BASE}/credential_utxos?block_height=gt.5214886&order=tx_hash.asc,tx_index.asc&offset=0&limit=1000`,
+      `${BASE}/credential_utxos?block_height=gt.5214886&order=tx_hash.asc,tx_index.asc&limit=1000`,
     );
   });
 
-  it("pages 1000 rows at a time until a short page", async () => {
+  it("pages 1000 rows at a time until a short page, each after the last row of the one before", async () => {
     const { koios, calls } = scripted([Response.json(rows(1000)), Response.json(rows(1000, 1000)), Response.json(rows(7, 2000))]);
-    const all = await koios.credentialUtxos(["94bc"]);
+    const all = await koios.credentialUtxos(["94bc"], 5214886);
     expect(all).toHaveLength(2007);
-    expect(calls.map((c) => new URL(c.url).searchParams.get("offset"))).toEqual(["0", "1000", "2000"]);
+    expect(calls.map((c) => new URL(c.url).searchParams.get("or"))).toEqual([
+      null,
+      "(tx_hash.gt.999,and(tx_hash.eq.999,tx_index.gt.0))",
+      "(tx_hash.gt.1999,and(tx_hash.eq.1999,tx_index.gt.0))",
+    ]);
+    expect(calls.every((c) => new URL(c.url).searchParams.get("block_height") === "gt.5214886")).toBe(true);
+    expect(calls.some((c) => new URL(c.url).searchParams.has("offset"))).toBe(false);
     expect(calls[0]!.body).toEqual({ _payment_credentials: ["94bc"], _extended: true });
+  });
+
+  it("misses no UTxO when one before the page's end is spent between pages, and counts each once (launch review #31)", async () => {
+    // A contract of 2,500 UTxOs, answered as PostgREST does: sorted, after the keyset, 1,000 at most.
+    const hash = (i: number) => i.toString(16).padStart(64, "0");
+    const chain = Array.from({ length: 2500 }, (_, i) => ({ tx_hash: hash(i), tx_index: 0 }));
+    let pages = 0;
+    const fetchFn: FetchLike = async (url) => {
+      const query = new URL(url).searchParams;
+      const after = /^\(tx_hash\.gt\.([0-9a-f]+),and\(tx_hash\.eq\.\1,tx_index\.gt\.(\d+)\)\)$/.exec(query.get("or") ?? "");
+      const offset = Number(query.get("offset") ?? 0);
+      const page = chain
+        .filter((u) => !after || u.tx_hash > after[1]! || (u.tx_hash === after[1] && u.tx_index > Number(after[2])))
+        .slice(offset, offset + Number(query.get("limit")));
+      // Between the first and second page, the UTxO at position 10 is spent.
+      if (++pages === 1) chain.splice(10, 1);
+      // And a backend a block behind repeats the last row of a page at the top of the next.
+      return Response.json(pages === 2 ? [chain[998]!, ...page.slice(0, -1), page.at(-1)!] : page);
+    };
+    const all = await new Koios(BASE, fetchFn, async () => undefined).credentialUtxos(["94bc"]);
+    // The UTxO at position 1,000 is there (an offset of 1,000 would have skipped it), and none twice.
+    expect(all.some((u) => u.tx_hash === hash(1000))).toBe(true);
+    expect(new Set(all.map((u) => `${u.tx_hash}#${u.tx_index}`)).size).toBe(all.length);
+    expect(all).toHaveLength(2500);
+  });
+
+  it("drops a datum's JSON and cuts a reference script to what prices it, however deep they nest (launch review H4)", async () => {
+    // Anyone can pay an address an output like this: V8 parses it, but stringifying or storing it overflows the stack.
+    const levels = 100_000;
+    const datum = `{"bytes":"${"81".repeat(levels)}00","value":${'{"list":['.repeat(levels)}{"int":0}${"]}".repeat(levels)}}`;
+    const script = `{"hash":"${"ab".repeat(28)}","size":300001,"type":"timelock","bytes":null,"value":${'{"type":"all","scripts":['.repeat(levels)}{"type":"sig"}${"]}".repeat(levels)}}`;
+    const deep = `{"tx_hash":"${"ee".repeat(32)}","tx_index":0,"value":"1500000","inline_datum":${datum},"reference_script":${script},"asset_list":[]}`;
+    const plain = { tx_hash: "ff".repeat(32), tx_index: 1, value: "2000000", inline_datum: null, reference_script: null, asset_list: [] };
+    // A script in a shape Koios never sends still counts as one.
+    const odd = { ...plain, tx_index: 2, reference_script: "82008" };
+    const text = `[${deep},${JSON.stringify(plain)},${JSON.stringify(odd)}]`;
+    expect(() => JSON.stringify(JSON.parse(text))).toThrow(RangeError);
+
+    const read = await scripted([new Response(text)]).koios.credentialUtxos(["94bc"]);
+    expect(read[0]!.inline_datum).toEqual({ bytes: `${"81".repeat(levels)}00`, value: null });
+    expect(read[0]!.reference_script).toEqual({ hash: "ab".repeat(28), size: 300001, type: "timelock", bytes: null });
+    expect(read[1]!.inline_datum).toBeNull();
+    expect(read[1]!.reference_script).toBeNull();
+    expect(read[2]!.reference_script).toEqual({ hash: null, size: null, type: null, bytes: null });
+    // Everything the worker does with rows now works: requests to WebAssembly, session storage, messages.
+    expect(JSON.parse(JSON.stringify(read))).toEqual(structuredClone(read));
+
+    const info = await scripted([new Response(`[${deep}]`)]).koios.utxoInfo([`${"ee".repeat(32)}#0`]);
+    expect(info[0]!.inline_datum!.value).toBeNull();
+    expect(() => JSON.stringify(info)).not.toThrow();
   });
 
   it("asks about at most 75 credentials a request, to stay under Koios's 5,120-byte body limit", async () => {
@@ -65,6 +121,17 @@ describe("Koios client", () => {
     expect(await koios.accountAddresses("stake_test1u")).toEqual(["addr_test1a", "addr_test1b"]);
     expect(calls[0]!.body).toEqual({ _stake_addresses: ["stake_test1u"], _empty: true });
     expect(await koios.accountAddresses("stake_test1never")).toEqual([]);
+  });
+
+  it("says which of several stake addresses were ever used, in one request", async () => {
+    const { koios, calls } = scripted([
+      Response.json([
+        { stake_address: "stake_test1a", addresses: ["addr_test1a"] },
+        { stake_address: "stake_test1b", addresses: [] },
+      ]),
+    ]);
+    expect(await koios.usedStakeAddresses(["stake_test1a", "stake_test1b", "stake_test1c"])).toEqual(new Set(["stake_test1a"]));
+    expect(calls.map((c) => c.body)).toEqual([{ _stake_addresses: ["stake_test1a", "stake_test1b", "stake_test1c"], _empty: true }]);
   });
 
   it("explains a connection that fails, and a rate limit", async () => {
@@ -184,6 +251,28 @@ describe("Koios client: transactions", () => {
     await expect(refused.koios.evaluate("84a4")).rejects.toThrow("Koios refused the request (404 for ogmios)");
   });
 
+  it("says whether a submit Koios didn't answer may have gone through: not when it only asked to slow down", async () => {
+    const busy = async (answer: Response | Error): Promise<KoiosBusyError> => {
+      const koios = new Koios(BASE, async () => {
+        if (answer instanceof Error) throw answer;
+        return answer;
+      });
+      return (await koios.submitTx(new Uint8Array([0x84])).catch((e: unknown) => e)) as KoiosBusyError;
+    };
+    expect((await busy(new DOMException("signal timed out", "TimeoutError"))).maybeSent).toBe(true);
+    expect((await busy(new Response("", { status: 504 }))).maybeSent).toBe(true);
+    const limited = await busy(new Response("", { status: 429 }));
+    expect(limited).toBeInstanceOf(KoiosBusyError);
+    expect(limited.maybeSent).toBe(false);
+  });
+
+  it("reads the tip's slot", async () => {
+    const { koios, calls } = scripted([Response.json([{ hash: "ab", epoch_no: 250, abs_slot: 106_000_000, block_no: 4_000_000 }])]);
+    expect(await koios.tipSlot()).toBe(106_000_000);
+    expect(calls[0]!.url).toBe(`${BASE}/tip`);
+    await expect(scripted([Response.json([])]).koios.tipSlot()).rejects.toThrow("Koios returned no tip.");
+  });
+
   it("reads confirmations", async () => {
     const { koios, calls } = scripted([Response.json([{ tx_hash: "aa", num_confirmations: 3 }, { tx_hash: "bb", num_confirmations: null }])]);
     const status = await koios.txStatus(["aa", "bb"]);
@@ -217,6 +306,17 @@ describe("Koios client: transactions", () => {
     await expect(refused("DelegateeDRepNotRegisteredDELEG")).rejects.toThrow("DRep isn't registered any more");
     await expect(refused("StakeKeyNotRegisteredDELEG")).rejects.toThrow("staking changed since you reviewed");
     await expect(refused("SomethingElse")).rejects.toThrow("The network rejected the transaction: SomethingElse");
+  });
+
+  it("explains a transaction past its time, or a device clock far off, and a fee too small", async () => {
+    const refused = (error: string) => scripted([new Response(error, { status: 400 })]).koios.submitTx(new Uint8Array([1]));
+    const late = JSON.stringify({ contents: { contents: { contents: { error: ["ConwayUtxowFailure (UtxoFailure (OutsideValidityIntervalUTxO (ValidityInterval {invalidBefore = SNothing, invalidHereafter = SJust (SlotNo 100)}) (SlotNo 7300)))"] } } } });
+    await expect(refused(late)).rejects.toThrow(
+      "The network refused it: its time to be sent had run out, or this device's clock is far off. Nothing was sent. Check the clock, then review it again.",
+    );
+    const cheap = JSON.stringify({ contents: { contents: { contents: { error: ["ConwayUtxowFailure (UtxoFailure (FeeTooSmallUTxO (Mismatch {mismatchSupplied = Coin 170000, mismatchExpected = Coin 170075})))"] } } } });
+    await expect(refused(cheap)).rejects.toThrow("The network refused it: its fee is less than the network asks.");
+    await expect(refused(cheap)).rejects.not.toThrow("Coin 170000");
   });
 });
 

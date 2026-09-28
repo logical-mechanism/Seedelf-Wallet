@@ -9,7 +9,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, anyhow, bail};
-use pallas_addresses::{Address, Network as AddressNetwork, ShelleyPaymentPart, StakePayload};
+use pallas_addresses::byron::AddrAttrProperty;
+use pallas_addresses::{
+    Address, Network as AddressNetwork, ShelleyDelegationPart, ShelleyPaymentPart, StakePayload,
+};
 use pallas_codec::minicbor::{self, Encoder};
 use pallas_codec::utils::Nullable;
 use pallas_crypto::hash::Hash;
@@ -81,6 +84,28 @@ fn address_network(network_flag: bool) -> AddressNetwork {
     } else {
         AddressNetwork::Mainnet
     }
+}
+
+/// The network an address is for, as the ledger reads it. A Byron address
+/// says so in its attributes, which Pallas doesn't read for it: a network
+/// magic for a test network, and none for mainnet.
+fn network_of(address: &Address) -> Result<AddressNetwork> {
+    Ok(match address {
+        Address::Shelley(s) => s.network(),
+        Address::Stake(s) => s.network(),
+        Address::Byron(b) => {
+            let payload = b.decode().map_err(|e| anyhow!("{e}"))?;
+            if payload
+                .attributes
+                .iter()
+                .any(|a| matches!(a, AddrAttrProperty::NetworkTag(_)))
+            {
+                AddressNetwork::Testnet
+            } else {
+                AddressNetwork::Mainnet
+            }
+        }
+    })
 }
 
 type Enc = Encoder<Vec<u8>>;
@@ -331,15 +356,30 @@ pub fn address_hex(bech32: &str) -> Result<String> {
         .to_hex())
 }
 
+/// The most policies and tokens, all together, an amount a dApp asks for may
+/// name: far past any balance a site covers with one call, and each is a few
+/// hundred bytes here, so a site's amount can't run the module out of memory
+/// (independent review M15).
+pub const MAX_VALUE_ENTRIES: usize = 1_000;
+
 /// An amount a dApp asks for (`getUtxos(amount)`, `getCollateral`): a CIP-30
 /// `Value` in hex. Lenient about encodings: definite or indefinite lengths,
-/// and a zero quantity counts as none.
+/// and a zero quantity counts as none. One naming more than
+/// `MAX_VALUE_ENTRIES` policies and tokens is refused as it's read.
 pub fn read_value(value_hex: &str) -> Result<(u64, Vec<Token>)> {
     let bytes = hex::decode(value_hex.trim()).map_err(|_| anyhow!("the amount isn't hex"))?;
     let mut d = minicbor::Decoder::new(&bytes);
     let unreadable = |e: minicbor::decode::Error| anyhow!("the amount isn't a Cardano value: {e}");
     use minicbor::data::Type;
     let mut tokens = Vec::new();
+    let mut entries = 0usize;
+    let mut count = || -> Result<()> {
+        entries += 1;
+        if entries > MAX_VALUE_ENTRIES {
+            bail!("the amount names more than {MAX_VALUE_ENTRIES} tokens");
+        }
+        Ok(())
+    };
     let lovelace = match d.datatype().map_err(unreadable)? {
         Type::Array | Type::ArrayIndef => {
             d.array().map_err(unreadable)?;
@@ -351,6 +391,7 @@ pub fn read_value(value_hex: &str) -> Result<(u64, Vec<Token>)> {
                     d.skip().ok();
                     break;
                 }
+                count()?;
                 let policy = d.bytes().map_err(unreadable)?.to_vec();
                 let names = d.map().map_err(unreadable)?;
                 let mut j = 0;
@@ -359,6 +400,7 @@ pub fn read_value(value_hex: &str) -> Result<(u64, Vec<Token>)> {
                         d.skip().ok();
                         break;
                     }
+                    count()?;
                     let name = d.bytes().map_err(unreadable)?.to_vec();
                     let quantity = d.u64().map_err(unreadable)?;
                     if quantity > 0 {
@@ -420,6 +462,200 @@ impl Keys {
         }
         self.payment.get(hash).copied().map(Signer::Payment)
     }
+
+    /// The key path of an address that's the account's: one of its payment
+    /// keys, with its stake key as the staking part, as every address the
+    /// wallet hands out has. Its payment key under anyone else's staking
+    /// part, none or a pointer is someone else's address: the account could
+    /// spend what's there, but its stake would earn and vote for them.
+    fn own_address(&self, address: &Address) -> Option<KeyPath> {
+        let Address::Shelley(s) = address else {
+            return None;
+        };
+        match (s.payment(), s.delegation()) {
+            (ShelleyPaymentPart::Key(h), ShelleyDelegationPart::Key(stake))
+                if *stake == self.stake =>
+            {
+                self.payment.get(h).copied()
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether an address has one of the account's payment keys, whatever
+    /// its staking part.
+    fn has_payment_key(&self, address: &Address) -> bool {
+        matches!(address, Address::Shelley(s)
+            if matches!(s.payment(), ShelleyPaymentPart::Key(h) if self.payment.contains_key(h)))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A site's CBOR, before anything decodes it
+// ---------------------------------------------------------------------------
+
+/// The largest transaction a site may ask the wallet to read: four times the
+/// ledger's limit today (16 KiB), so a raise of it breaks no site. Reading
+/// checks every register datum's points, about a millisecond each, so this
+/// keeps a read well under a second.
+const MAX_TX_BYTES: usize = 64 * 1024;
+
+/// How deep a site's CBOR may nest. Pallas decodes plutus data, metadata and
+/// native scripts recursively, and a few thousand levels (a 3 KB
+/// transaction) overflow WebAssembly's stack. That leaves the instance dead:
+/// nothing works after it, not even Lock. Real transactions nest a few dozen
+/// levels at most.
+const MAX_NESTING: usize = 128;
+
+/// One open level in [`nests_within`]'s walk.
+enum Level {
+    /// An array or a map (its keys and values each an item), with the items
+    /// left to read: `None` until a break.
+    Items(Option<u64>),
+    /// A tag, before the one item it wraps.
+    Tag,
+    /// CBOR in a byte string a tag wraps, as an inline datum or a reference
+    /// script is: Pallas decodes that too. It ends at `end`, inside bytes
+    /// that end at `outer`.
+    Wrapped { end: usize, outer: usize },
+}
+
+/// A CBOR item's head at `pos`: its major type, its argument (`None` for an
+/// indefinite length), and where what follows the head starts.
+fn cbor_head(bytes: &[u8], pos: usize) -> Option<(u8, Option<u64>, usize)> {
+    let initial = *bytes.get(pos)?;
+    let wide = |n: usize| -> Option<(u64, usize)> {
+        let b = bytes.get(pos + 1..pos + 1 + n)?;
+        Some((
+            b.iter().fold(0u64, |a, x| (a << 8) | u64::from(*x)),
+            pos + 1 + n,
+        ))
+    };
+    let (argument, next) = match initial & 0x1f {
+        n @ 0..=23 => (Some(u64::from(n)), pos + 1),
+        24 => wide(1).map(|(a, p)| (Some(a), p))?,
+        25 => wide(2).map(|(a, p)| (Some(a), p))?,
+        26 => wide(4).map(|(a, p)| (Some(a), p))?,
+        27 => wide(8).map(|(a, p)| (Some(a), p))?,
+        31 => (None, pos + 1),
+        // 28–30 are reserved.
+        _ => return None,
+    };
+    Some((initial >> 5, argument, next))
+}
+
+/// Whether CBOR `bytes` stay within `max` levels: each array, map and tag is
+/// one, and so is the CBOR a tag wraps in a byte string. It walks the bytes
+/// without recursing, one head at a time.
+///
+/// What isn't well-formed ends the walk, as it ends any decoder there too.
+/// Inside a wrapped byte string it only means those bytes aren't CBOR (a big
+/// number's, say), and the walk goes on after them.
+fn nests_within(bytes: &[u8], max: usize) -> bool {
+    let mut levels = vec![Level::Items(Some(1))];
+    let mut pos = 0;
+    let mut limit = bytes.len();
+    while let Some(level) = levels.last() {
+        match *level {
+            Level::Items(Some(0)) => {
+                levels.pop();
+                continue;
+            }
+            Level::Wrapped { end, outer } => {
+                (pos, limit) = (end, outer);
+                levels.pop();
+                continue;
+            }
+            _ => {}
+        }
+        match cbor_step(bytes, pos, limit, &mut levels) {
+            Some(next) => (pos, limit) = next,
+            None => {
+                let Some(i) = levels
+                    .iter()
+                    .rposition(|l| matches!(l, Level::Wrapped { .. }))
+                else {
+                    return true;
+                };
+                let Level::Wrapped { end, outer } = levels[i] else {
+                    unreachable!("found as wrapped")
+                };
+                levels.truncate(i);
+                (pos, limit) = (end, outer);
+                continue;
+            }
+        }
+        // The first level is the whole item's, not a nesting.
+        if levels.len() > max + 1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Reads the item at `pos` for the innermost open level, opening a level
+/// for an array, a map, a tag or a wrapped byte string, whose bytes end at
+/// `limit`. Where the walk goes next and where the bytes it's in end, or
+/// `None` for bytes that aren't well-formed CBOR.
+fn cbor_step(
+    bytes: &[u8],
+    pos: usize,
+    limit: usize,
+    levels: &mut Vec<Level>,
+) -> Option<(usize, usize)> {
+    let bytes = &bytes[..limit];
+    if *bytes.get(pos)? == 0xff {
+        // A break closes an indefinite array, map or string.
+        return match levels.last() {
+            Some(Level::Items(None)) => {
+                levels.pop();
+                Some((pos + 1, limit))
+            }
+            _ => None,
+        };
+    }
+    let after_tag = matches!(levels.last(), Some(Level::Tag));
+    match levels.last_mut() {
+        Some(Level::Items(Some(n))) => *n -= 1,
+        // The tag's level stays open until its item is read.
+        Some(level @ Level::Tag) => *level = Level::Items(Some(0)),
+        _ => {}
+    }
+    let (major, argument, next) = cbor_head(bytes, pos)?;
+    let opened = match (major, argument) {
+        (0 | 1 | 7, Some(_)) => None,
+        (2 | 3, Some(length)) => {
+            let end = usize::try_from(length)
+                .ok()
+                .and_then(|l| next.checked_add(l))
+                .filter(|end| *end <= limit)?;
+            if major == 2 && after_tag {
+                levels.push(Level::Wrapped { end, outer: limit });
+                levels.push(Level::Items(Some(1)));
+                return Some((next, end));
+            }
+            return Some((end, limit));
+        }
+        // An indefinite string's chunks, until a break.
+        (2 | 3, None) => Some(Level::Items(None)),
+        (4, length) => Some(Level::Items(length)),
+        (5, length) => Some(Level::Items(length.map(|n| n.saturating_mul(2)))),
+        (6, Some(_)) => Some(Level::Tag),
+        _ => return None,
+    };
+    levels.extend(opened);
+    Some((next, limit))
+}
+
+/// Refuses a site's CBOR that nests deeper than [`MAX_NESTING`], before
+/// anything decodes it.
+fn check_nesting(bytes: &[u8]) -> Result<()> {
+    if !nests_within(bytes, MAX_NESTING) {
+        bail!(
+            "The wallet can't read this transaction: its data is nested more than {MAX_NESTING} levels deep."
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +680,31 @@ pub struct TxRequest {
     /// session `i`, whose stake key is `2/i`.
     #[serde(default)]
     pub stake_index: u32,
+    /// The deposit the stake key paid when it registered (Koios's
+    /// `account_info.deposit`), in lovelace, as a number or a string: what an
+    /// old deregistration certificate gets back, which it doesn't say.
+    /// Without it, the account's own is refused.
+    #[serde(default, deserialize_with = "lovelace_or_none")]
+    pub stake_deposit: Option<u64>,
+}
+
+/// An amount of lovelace a request may give as a JSON number or a decimal
+/// string (as Koios writes them), or leave out.
+fn lovelace_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Lovelace {
+        Number(u64),
+        Text(String),
+    }
+    match Option::<Lovelace>::deserialize(d)? {
+        None => Ok(None),
+        Some(Lovelace::Number(n)) => Ok(Some(n)),
+        Some(Lovelace::Text(text)) => text
+            .parse()
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom(format!("{text:?} isn't an amount of lovelace"))),
+    }
 }
 
 /// One output paying anyone but the account.
@@ -460,6 +721,11 @@ pub struct Paid {
     /// Into Seedelf Wallet's contract: "register" when its datum is a
     /// register someone can spend, "none" when it isn't (anyone could take it).
     pub seedelf: Option<String>,
+    /// The address has one of the account's payment keys, but someone
+    /// else's staking part, or none: the account could spend what's there,
+    /// but its stake would earn and vote for whoever holds that part. So
+    /// it's paid, not the account's.
+    pub own_payment_key: bool,
 }
 
 /// One of the account's outputs, kept by the extension until it's on chain,
@@ -487,7 +753,11 @@ pub struct Cert {
     pub kind: String,
     /// It's about the account's own stake key.
     pub own: bool,
+    /// The pool it stakes with, or a stake pool's own certificate's pool.
     pub pool: Option<String>,
+    /// A stake pool's own certificate (kind "pool"): "register" (a new pool,
+    /// or new terms for one) or "retire".
+    pub pool_action: Option<String>,
     pub drep: Option<String>,
     pub deposit: Option<String>,
     pub refund: Option<String>,
@@ -524,11 +794,19 @@ pub struct TxSummary {
     pub tx_hash: String,
     pub fee: String,
     /// The account's change: ADA (signed lovelace) and each token that moved.
+    /// Its ADA is what comes back less what the account puts in: its UTxOs
+    /// and its staking both.
     pub net_lovelace: String,
     pub net_tokens: Vec<Token>,
     /// What the account's UTxOs put in, and what comes back to it.
     pub spent_lovelace: String,
     pub returned_lovelace: String,
+    /// What the account puts in from its staking: the rewards it withdraws
+    /// and the deposit its stake key gets back. It's the account's money as
+    /// much as its UTxOs are, so it counts in the net. Any of it the
+    /// account's outputs don't hold (`returned_lovelace` beyond
+    /// `spent_lovelace`) goes to the others it pays, or to the fee.
+    pub staking_lovelace: String,
     /// How many of the account's UTxOs it spends.
     pub own_inputs: usize,
     /// Outputs to anyone else.
@@ -553,7 +831,9 @@ pub struct TxSummary {
     pub valid_until: Option<u64>,
     /// The account's keys that sign: "0/3", "1/0", "stake".
     pub signs: Vec<String>,
-    /// Inputs the wallet couldn't find anywhere (`txhash#index`).
+    /// Inputs and collateral the wallet couldn't find anywhere
+    /// (`txhash#index`). Only ever with the stake key signing alone: with
+    /// any, a payment key's signature is refused.
     pub unknown_inputs: Vec<String>,
     /// Signatures it needs from keys that aren't the account's.
     pub others_sign: usize,
@@ -683,8 +963,12 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     let network = address_network(flag);
     let network_name = if flag { "preprod" } else { "mainnet" };
     let other_name = if flag { "mainnet" } else { "a test network" };
-    let bytes =
-        hex::decode(request.tx_cbor.trim()).map_err(|_| anyhow!("The transaction isn't hex."))?;
+    let text = request.tx_cbor.trim();
+    if text.len() > 2 * MAX_TX_BYTES {
+        bail!("The wallet can't read this transaction: it's far larger than Cardano allows.");
+    }
+    let bytes = hex::decode(text).map_err(|_| anyhow!("The transaction isn't hex."))?;
+    check_nesting(&bytes)?;
     let tx = conway::Tx::decode_fragment(&bytes)
         .map_err(|e| anyhow!("The wallet can't read this transaction: {e}"))?;
     let tx_hash = build::tx_id(&bytes)?;
@@ -719,6 +1003,18 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 row.tx_index
             )
         })?;
+        // The account's keys are the same on both networks, and a signature
+        // says nothing of the network: one over a UTxO on the other network
+        // would spend it there. It's never counted, as ours or anyone's.
+        if let Address::Shelley(s) = &address
+            && s.network() != network
+        {
+            bail!(
+                "This transaction spends a UTxO on {other_name} ({}#{}), and the wallet is on {network_name}.",
+                row.tx_hash,
+                row.tx_index
+            );
+        }
         Ok(match address {
             Address::Shelley(s) => match s.payment() {
                 ShelleyPaymentPart::Key(h) => match keys.payment.get(h) {
@@ -776,8 +1072,17 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         let returned = match &body.collateral_return {
             Some(out) => {
                 let (address, amount, _, _) = output_parts(out)?;
-                let ours = matches!(Address::from_bytes(&address), Ok(Address::Shelley(s))
-                    if matches!(s.payment(), ShelleyPaymentPart::Key(h) if keys.payment.contains_key(h)));
+                if let Ok(a) = Address::from_bytes(&address)
+                    && network_of(&a).map_err(|e| {
+                        anyhow!("The collateral return has an unreadable address: {e}")
+                    })? != network
+                {
+                    bail!(
+                        "If a contract refused this transaction, its collateral would go to an address on {other_name}, and the wallet is on {network_name}."
+                    );
+                }
+                let ours =
+                    Address::from_bytes(&address).is_ok_and(|a| keys.own_address(&a).is_some());
                 if !ours && own > 0 {
                     bail!(
                         "If a contract refused this transaction, your collateral would go to someone else, so the wallet won't sign it."
@@ -827,20 +1132,16 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         let (address_bytes, amount, inline, hash) = output_parts(out)?;
         let address = Address::from_bytes(&address_bytes)
             .map_err(|e| anyhow!("Output {i} has an unreadable address: {e}"))?;
-        if address.network().is_some_and(|n| n != network) {
+        // A Byron address counts too: with no network magic, it's mainnet's.
+        if network_of(&address).map_err(|e| anyhow!("Output {i} has an unreadable address: {e}"))?
+            != network
+        {
             bail!(
                 "This transaction pays an address on {other_name}, and the wallet is on {network_name}."
             );
         }
         let bech32 = address.to_bech32().unwrap_or_else(|_| address.to_hex());
-        let own_key = match &address {
-            Address::Shelley(s) => match s.payment() {
-                ShelleyPaymentPart::Key(h) => keys.payment.get(h).copied(),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(path) = own_key {
+        if let Some(path) = keys.own_address(&address) {
             returned.add(&amount)?;
             own_outputs.push(OwnOutput {
                 tx_index: i as u64,
@@ -877,8 +1178,19 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             },
             script,
             seedelf,
+            own_payment_key: keys.has_payment_key(&address),
         });
     }
+
+    // What the account puts in from its staking: its rewards, and its stake
+    // key's deposit back. Neither is in a UTxO, and either can leave in the
+    // outputs as any of its ADA can.
+    let mut staking = 0u64;
+    let add_staking = |staking: u64, lovelace: u64| {
+        staking
+            .checked_add(lovelace)
+            .ok_or_else(|| anyhow!("an ADA amount overflows"))
+    };
 
     let mut certificates = Vec::new();
     for cert in body.certificates.iter().flat_map(|c| c.iter()) {
@@ -955,7 +1267,40 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 },
                 true,
             ),
-            C::PoolRegistration { .. } | C::PoolRetirement(..) => (None, cert_kind("pool"), true),
+            C::PoolRegistration {
+                operator,
+                pool_owners,
+                ..
+            } => {
+                // An owner's stake is the pool's pledge, and it earns an
+                // owner no rewards: the pool's reward account gets them.
+                // The stake key signing for anything else in the
+                // transaction would sign for this too.
+                if pool_owners.contains(&keys.stake) {
+                    bail!(
+                        "This transaction makes your stake key an owner of stake pool {}: your stake would count as its pledge, and the rewards it earns would go to the pool's reward account, not to you. The wallet won't sign it.",
+                        pool_id(operator)
+                    );
+                }
+                (
+                    None,
+                    Cert {
+                        pool: Some(pool_id(operator)),
+                        pool_action: Some("register".into()),
+                        ..cert_kind("pool")
+                    },
+                    true,
+                )
+            }
+            C::PoolRetirement(pool, _) => (
+                None,
+                Cert {
+                    pool: Some(pool_id(pool)),
+                    pool_action: Some("retire".into()),
+                    ..cert_kind("pool")
+                },
+                true,
+            ),
             C::AuthCommitteeHot(..) | C::ResignCommitteeCold(..) => {
                 (None, cert_kind("committee"), true)
             }
@@ -978,6 +1323,26 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             // Pools, the committee and DReps sign with keys this wallet doesn't hold.
             None => others_sign += 1,
         }
+        if c.own {
+            match cert {
+                // Its refund is the deposit the key paid when it registered,
+                // which the certificate doesn't say: the extension reads it
+                // (`stake_deposit`), and it's counted as Conway's UnReg says
+                // its own. Without it, what the account puts in can't be
+                // counted. The wallet's own staking writes Conway's.
+                C::StakeDeregistration(_) => match request.stake_deposit {
+                    Some(deposit) => {
+                        staking = add_staking(staking, deposit)?;
+                        c.refund = Some(deposit.to_string());
+                    }
+                    None => bail!(
+                        "This transaction stops your staking with an old kind of certificate that doesn't say how much deposit comes back, so the wallet can't show where it goes and won't sign it."
+                    ),
+                },
+                C::UnReg(_, refund) => staking = add_staking(staking, *refund)?,
+                _ => {}
+            }
+        }
         certificates.push(c);
     }
 
@@ -995,6 +1360,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 let own = match s.payload() {
                     StakePayload::Stake(h) if *h == keys.stake => {
                         signers.insert(Signer::Stake);
+                        staking = add_staking(staking, *amount)?;
                         true
                     }
                     StakePayload::Stake(h) => {
@@ -1051,7 +1417,28 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     // covers datums in the witness set, as a DEX order's is: nothing runs.
     let scripts = witnesses.redeemer.is_some();
 
-    let (net, net_tokens) = difference(&spent, &returned);
+    // A payment key's signature spends every UTxO under that key, one the
+    // wallet couldn't find too, whatever partialSign says: the account's own
+    // that isn't on chain yet (a Send's change, a top-up) is one. A stake
+    // key's signature spends nothing.
+    let payment_signs = signers.iter().any(|s| matches!(s, Signer::Payment(_)));
+    if let (Some(first), true) = (unknown.first(), payment_signs) {
+        bail!(match unknown.len() {
+            1 => format!(
+                "This transaction spends a UTxO the wallet can't find yet ({first}). It could be yours and not on chain yet, and signing would let it be spent, so the wallet won't sign it. Try again once it's on chain."
+            ),
+            n => format!(
+                "This transaction spends {n} UTxOs the wallet can't find yet ({first} and {} more). They could be yours and not on chain yet, and signing would let them be spent, so the wallet won't sign it. Try again once they're on chain.",
+                n - 1
+            ),
+        });
+    }
+
+    let put_in = Amount {
+        lovelace: add_staking(spent.lovelace, staking)?,
+        ..spent.clone()
+    };
+    let (net, net_tokens) = difference(&put_in, &returned);
     others_sign += foreign_keys.len();
     let complete = others_sign == 0 && unknown.is_empty();
     let summary = TxSummary {
@@ -1061,6 +1448,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         net_tokens,
         spent_lovelace: spent.lovelace.to_string(),
         returned_lovelace: returned.lovelace.to_string(),
+        staking_lovelace: staking.to_string(),
         own_inputs,
         paid,
         own_outputs,
@@ -1097,7 +1485,8 @@ fn cert_kind(kind: &str) -> Cert {
 }
 
 /// What a dApp's transaction does to the public account, for the prompt.
-/// Refuses one for the other network, or one it can't read.
+/// Refuses one for the other network, one it can't read, and one the wallet
+/// won't sign whatever the user says.
 pub fn inspect_tx(account: &CardanoAccount, request: &TxRequest) -> Result<TxSummary> {
     Ok(inspect(account, request)?.summary)
 }
@@ -1116,6 +1505,8 @@ pub struct Signed {
 /// Without `partial_sign`, refuses one that needs anyone else's signature
 /// too, or spends a UTxO the wallet couldn't find (CIP-30's
 /// `ProofGeneration`), as it does one with nothing of the account's to sign.
+/// With it too, a payment key never signs one that spends a UTxO the wallet
+/// couldn't find ([`inspect_tx`] refuses it).
 pub fn sign_tx(account: &CardanoAccount, request: &TxRequest) -> Result<Signed> {
     let Inspection {
         summary,
@@ -1183,7 +1574,9 @@ fn raw_map<'b>(d: &mut minicbor::Decoder<'b>) -> Result<Vec<(u64, &'b [u8])>> {
         .map()
         .map_err(|e| anyhow!("a witness set is a map: {e}"))?
         .ok_or_else(|| anyhow!("an indefinite-length witness set isn't supported"))?;
-    let mut out = Vec::with_capacity(entries as usize);
+    // Not sized by `entries`: whoever wrote the bytes chose it, and a huge
+    // one would abort WebAssembly. Each entry needs bytes to be read.
+    let mut out = Vec::new();
     for _ in 0..entries {
         let key = d
             .u64()
@@ -1205,7 +1598,7 @@ fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
         .array()
         .map_err(|e| anyhow!("vkey witnesses are a list: {e}"))?
         .ok_or_else(|| anyhow!("an indefinite-length witness list isn't supported"))?;
-    let mut items = Vec::with_capacity(n as usize);
+    let mut items = Vec::new();
     for _ in 0..n {
         items.push(raw_item(&mut d)?);
     }
@@ -1223,6 +1616,8 @@ fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
 pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String> {
     let tx = hex::decode(tx_cbor.trim())?;
     let added = hex::decode(witness_set.trim())?;
+    check_nesting(&tx)?;
+    check_nesting(&added)?;
 
     let mut d = minicbor::Decoder::new(&tx);
     if d.array()

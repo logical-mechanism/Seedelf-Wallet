@@ -3,7 +3,9 @@
 //! CIP-8 data signatures, checked against Pallas's own decoders and
 //! Ed25519 verification.
 
-use pallas_addresses::Address;
+use pallas_addresses::{
+    Address, Network, Pointer, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+};
 use pallas_codec::minicbor;
 use pallas_codec::utils::{Bytes, CborWrap, NonEmptyKeyValuePairs, NonEmptySet, Nullable, Set};
 use pallas_crypto::hash::Hash;
@@ -139,6 +141,7 @@ fn request(tx: String, inputs: Vec<KoiosRow>, partial_sign: bool) -> TxRequest {
         inputs,
         partial_sign,
         stake_index: 0,
+        stake_deposit: None,
     }
 }
 
@@ -357,14 +360,54 @@ fn someone_elses_input_needs_partial_signing() {
 
 #[test]
 fn an_input_the_wallet_cant_find_is_unknown() {
+    // Signed for by the stake key alone, which spends nothing.
     let (_, rows) = swap();
-    let tx = tx_hex(body(
-        vec![input(TX_A, 0), input(TX_B, 7)],
-        vec![out(&theirs(), 1_000_000, None)],
-    ));
-    let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    let mut b = body(vec![input(TX_B, 7)], vec![out(&theirs(), 1_000_000, None)]);
+    b.withdrawals =
+        NonEmptyKeyValuePairs::try_from(vec![(Bytes::from(stake_account_bytes()), 0)]).ok();
+    let tx = tx_hex(b);
+    let summary = cip30::inspect_tx(&account(), &request(tx.clone(), rows.clone(), true)).unwrap();
     assert_eq!(summary.unknown_inputs, vec![format!("{TX_B}#7")]);
     assert!(!summary.complete);
+    let signed = cip30::sign_tx(&account(), &request(tx, rows, true)).unwrap();
+    assert_eq!(signed.summary.signs, vec!["stake"]);
+}
+
+#[test]
+fn a_payment_key_never_signs_for_an_input_the_wallet_cant_find() {
+    // It may be the account's own, not on chain yet (a Send's change, a
+    // top-up): the key's signature would let the site take it once it lands.
+    let (_, rows) = swap();
+    let refused = |b: conway::TransactionBody| {
+        let tx = tx_hex(b);
+        for partial_sign in [true, false] {
+            let request = request(tx.clone(), rows.clone(), partial_sign);
+            let inspected = cip30::inspect_tx(&account(), &request).unwrap_err();
+            assert!(inspected.to_string().contains("can't find yet"));
+            assert!(cip30::sign_tx(&account(), &request).is_err());
+        }
+    };
+
+    // Beside one of the account's own inputs.
+    refused(body(
+        vec![input(TX_A, 1), input(TX_B, 7)],
+        vec![out(&ours(Role::Receive, 0), 3_800_000, None)],
+    ));
+
+    // Alone, with the account's key named as a required signer.
+    let mut b = body(vec![input(TX_B, 7)], vec![out(&theirs(), 50_000_000, None)]);
+    b.required_signers =
+        NonEmptySet::try_from(vec![account().key_hash(Role::Receive, 0).unwrap()]).ok();
+    refused(b);
+
+    // As collateral beside the account's own, returned to someone else.
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 3_800_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_B, 7)]).ok();
+    b.collateral_return = Some(out(&theirs(), 49_000_000, None));
+    refused(b);
 }
 
 #[test]
@@ -430,6 +473,319 @@ fn a_legacy_registration_needs_no_signature() {
     assert_eq!(summary.certificates[0].kind, "register");
 }
 
+/// 4 ₳ in from `0/2` and 1,000 ₳ of the account's rewards withdrawn, with
+/// `back` coming back to `0/0` and the rest paid to someone else.
+fn rewards_out(back: u64) -> String {
+    let rewards = 1_000_000_000;
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&ours(Role::Receive, 0), back, None),
+            out(&theirs(), 4_000_000 + rewards - 200_000 - back, None),
+        ],
+    );
+    b.withdrawals =
+        NonEmptyKeyValuePairs::try_from(vec![(Bytes::from(stake_account_bytes()), rewards)]).ok();
+    tx_hex(b)
+}
+
+#[test]
+fn rewards_paid_to_someone_else_are_what_the_account_sends() {
+    let (_, rows) = swap();
+    let summary = cip30::inspect_tx(
+        &account(),
+        &request(rewards_out(3_800_000), rows.clone(), false),
+    )
+    .unwrap();
+    assert_eq!(summary.net_lovelace, "-1000200000", "1,000.2 ₳ leave");
+    assert_eq!(summary.staking_lovelace, "1000000000");
+    assert_eq!(
+        summary.spent_lovelace, "4000000",
+        "still what its UTxOs put in"
+    );
+    assert_eq!(summary.signs, vec!["0/2", "stake"]);
+
+    // Withdrawn back to the account, the rewards were its own already: only the fee goes.
+    let summary = cip30::inspect_tx(
+        &account(),
+        &request(rewards_out(1_003_800_000), rows, false),
+    )
+    .unwrap();
+    assert_eq!(summary.net_lovelace, "-200000");
+    assert_eq!(summary.staking_lovelace, "1000000000");
+}
+
+#[test]
+fn a_deposit_refund_paid_to_someone_else_is_what_the_account_sends() {
+    let (_, rows) = swap();
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&ours(Role::Receive, 0), 3_800_000, None),
+            out(&theirs(), 2_000_000, None),
+        ],
+    );
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::UnReg(
+        stake_credential(),
+        2_000_000,
+    )])
+    .ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, false)).unwrap();
+    assert_eq!(summary.net_lovelace, "-2200000");
+    assert_eq!(summary.staking_lovelace, "2000000");
+    assert_eq!(summary.certificates[0].refund.as_deref(), Some("2000000"));
+}
+
+/// 4 ₳ in from `0/2`, the account's stake key deregistered with the old
+/// certificate, 3.8 ₳ back to `0/0` and 2 ₳ paid to someone else.
+fn old_deregistration(credential: StakeCredential) -> String {
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&ours(Role::Receive, 0), 3_800_000, None),
+            out(&theirs(), 2_000_000, None),
+        ],
+    );
+    b.certificates =
+        NonEmptySet::try_from(vec![conway::Certificate::StakeDeregistration(credential)]).ok();
+    tx_hex(b)
+}
+
+#[test]
+fn an_old_deregistration_with_the_keys_deposit_is_counted_as_conways() {
+    // The refund is the deposit the key paid, which the extension reads
+    // (Koios's account_info), as a string or a number.
+    let (_, rows) = swap();
+    let tx = old_deregistration(stake_credential());
+    for deposit in [serde_json::json!("2000000"), serde_json::json!(2_000_000)] {
+        let request: TxRequest = serde_json::from_value(serde_json::json!({
+            "network": "preprod",
+            "txCbor": tx,
+            "keys": keys(),
+            "inputs": [{
+                "tx_hash": TX_A,
+                "tx_index": 1,
+                "address": ours(Role::Receive, 2).to_bech32().unwrap(),
+                "value": "4000000",
+            }],
+            "stakeDeposit": deposit,
+        }))
+        .unwrap();
+        assert_eq!(request.stake_deposit, Some(2_000_000));
+        let summary = cip30::inspect_tx(&account(), &request).unwrap();
+        assert_eq!(summary.net_lovelace, "-2200000", "2 ₳ of it leave");
+        assert_eq!(summary.staking_lovelace, "2000000");
+        assert_eq!(summary.spent_lovelace, "4000000");
+        let cert = &summary.certificates[0];
+        assert!(cert.own);
+        assert_eq!(cert.kind, "unregister");
+        assert_eq!(cert.refund.as_deref(), Some("2000000"));
+        assert_eq!(summary.signs, vec!["0/2", "stake"]);
+    }
+
+    // Shown the same as Conway's, which says its refund.
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&ours(Role::Receive, 0), 3_800_000, None),
+            out(&theirs(), 2_000_000, None),
+        ],
+    );
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::UnReg(
+        stake_credential(),
+        2_000_000,
+    )])
+    .ok();
+    let conways = cip30::inspect_tx(&account(), &request(tx_hex(b), rows.clone(), false)).unwrap();
+    let old = cip30::inspect_tx(
+        &account(),
+        &TxRequest {
+            stake_deposit: Some(2_000_000),
+            ..request(tx, rows.clone(), false)
+        },
+    )
+    .unwrap();
+    assert_eq!(old.net_lovelace, conways.net_lovelace);
+    assert_eq!(old.staking_lovelace, conways.staking_lovelace);
+    assert_eq!(old.certificates[0].refund, conways.certificates[0].refund);
+
+    // Someone else's stays theirs, deposit or not.
+    let summary = cip30::inspect_tx(
+        &account(),
+        &TxRequest {
+            stake_deposit: Some(2_000_000),
+            ..request(
+                old_deregistration(StakeCredential::AddrKeyhash(Hash::new([9; 28]))),
+                rows,
+                true,
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.staking_lovelace, "0");
+    assert!(!summary.certificates[0].own);
+    assert_eq!(summary.certificates[0].refund, None);
+
+    // A deposit that isn't an amount is refused, not taken for none.
+    let bad = serde_json::from_value::<TxRequest>(serde_json::json!({
+        "network": "preprod", "txCbor": "", "keys": [], "inputs": [], "stakeDeposit": "2 ADA",
+    }));
+    assert!(bad.is_err());
+}
+
+#[test]
+fn an_old_deregistration_of_the_accounts_stake_key_is_refused_without_its_deposit() {
+    // Its refund isn't in the certificate, so what leaves can't be counted.
+    let (_, rows) = swap();
+    // Left out of the JSON, as a private session's request does.
+    let left_out: TxRequest = serde_json::from_value(serde_json::json!({
+        "network": "preprod", "txCbor": "", "keys": [], "inputs": [],
+    }))
+    .unwrap();
+    assert_eq!(left_out.stake_deposit, None);
+    let mut b = body(vec![input(TX_A, 1)], vec![out(&theirs(), 5_800_000, None)]);
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::StakeDeregistration(
+        stake_credential(),
+    )])
+    .ok();
+    let refused =
+        cip30::inspect_tx(&account(), &request(tx_hex(b.clone()), rows.clone(), true)).unwrap_err();
+    assert!(refused.to_string().contains("old kind of certificate"));
+
+    // Someone else's is theirs to count.
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::StakeDeregistration(
+        StakeCredential::AddrKeyhash(Hash::new([9; 28])),
+    )])
+    .ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert_eq!(summary.staking_lovelace, "0");
+    assert!(!summary.certificates[0].own);
+}
+
+/// The account's payment key `0/0` under another staking part.
+fn our_key_with(delegation: ShelleyDelegationPart) -> Address {
+    Address::Shelley(ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::key_hash(account().key_hash(Role::Receive, 0).unwrap()),
+        delegation,
+    ))
+}
+
+#[test]
+fn the_accounts_key_under_someone_elses_staking_is_someone_elses_address() {
+    // The ADA there is the account's to spend, but its stake earns and votes
+    // for whoever holds the staking part, so it's paid, not change.
+    let (_, rows) = swap();
+    let franken = [
+        our_key_with(ShelleyDelegationPart::Key(Hash::new([9; 28]))),
+        our_key_with(ShelleyDelegationPart::Null),
+        our_key_with(ShelleyDelegationPart::Pointer(Pointer::new(1, 2, 3))),
+    ];
+    let mut outputs: Vec<_> = franken.iter().map(|a| out(a, 1_000_000, None)).collect();
+    outputs.push(out(&ours(Role::Receive, 0), 800_000, None));
+    let tx = tx_hex(body(vec![input(TX_A, 1)], outputs));
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows.clone(), false)).unwrap();
+    assert_eq!(summary.paid.len(), 3);
+    for (paid, address) in summary.paid.iter().zip(&franken) {
+        assert_eq!(paid.address, address.to_bech32().unwrap());
+        assert!(paid.own_payment_key);
+    }
+    assert_eq!(summary.own_outputs.len(), 1);
+    assert_eq!(summary.returned_lovelace, "800000");
+    assert_eq!(summary.net_lovelace, "-3200000");
+
+    // Someone else's address is just someone else's.
+    let tx = tx_hex(body(
+        vec![input(TX_A, 1)],
+        vec![out(&theirs(), 3_800_000, None)],
+    ));
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows.clone(), false)).unwrap();
+    assert!(!summary.paid[0].own_payment_key);
+
+    // A collateral return there would hand the collateral's stake away too.
+    let mut b = body(
+        vec![input(TX_A, 0)],
+        vec![out(&ours(Role::Receive, 0), 5_000_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_A, 1)]).ok();
+    b.collateral_return = Some(out(&franken[0], 3_700_000, None));
+    let refused = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("collateral would go to someone else")
+    );
+}
+
+/// Pool `[7; 28]`'s registration, owned by `owners`.
+fn pool_registration(owners: Vec<Hash<28>>) -> conway::Certificate {
+    conway::Certificate::PoolRegistration {
+        operator: Hash::new([7; 28]),
+        vrf_keyhash: Hash::new([8; 32]),
+        pledge: 0,
+        cost: 170_000_000,
+        margin: pallas_primitives::RationalNumber {
+            numerator: 1,
+            denominator: 100,
+        },
+        reward_account: Bytes::from(
+            CardanoAccount::from_phrase(PHRASE, 1)
+                .unwrap()
+                .stake_address(true)
+                .unwrap()
+                .to_vec(),
+        ),
+        pool_owners: Set::from(owners),
+        relays: vec![],
+        pool_metadata: Nullable::Null,
+    }
+}
+
+#[test]
+fn a_pool_that_makes_the_accounts_stake_key_its_owner_is_refused() {
+    // "Delegate to us", with the pool's registration naming the stake key an
+    // owner: the one stake signature would sign for both.
+    let (_, rows) = swap();
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 3_800_000, None)],
+    );
+    let stake = account().key_hash(Role::Staking, 0).unwrap();
+    b.certificates = NonEmptySet::try_from(vec![
+        conway::Certificate::StakeDelegation(stake_credential(), Hash::new([7; 28])),
+        pool_registration(vec![Hash::new([9; 28]), stake]),
+    ])
+    .ok();
+    let refused =
+        cip30::inspect_tx(&account(), &request(tx_hex(b.clone()), rows.clone(), true)).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("makes your stake key an owner of stake pool pool1")
+    );
+
+    // Someone else's pool, registered or retired, is named, and says which.
+    b.certificates = NonEmptySet::try_from(vec![
+        pool_registration(vec![Hash::new([9; 28])]),
+        conway::Certificate::PoolRetirement(Hash::new([7; 28]), 300),
+    ])
+    .ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    let pool = summary.certificates[0].pool.clone().unwrap();
+    assert!(pool.starts_with("pool1"));
+    assert_eq!(summary.certificates[0].kind, "pool");
+    assert_eq!(
+        summary.certificates[0].pool_action.as_deref(),
+        Some("register")
+    );
+    assert_eq!(summary.certificates[1].pool.as_deref(), Some(pool.as_str()));
+    assert_eq!(
+        summary.certificates[1].pool_action.as_deref(),
+        Some("retire")
+    );
+    assert!(!summary.complete, "the pool's keys sign it too");
+}
+
 #[test]
 fn a_collateral_return_to_someone_else_is_refused() {
     let (_, rows) = swap();
@@ -476,6 +832,210 @@ fn the_other_network_is_refused() {
     assert!(cip30::inspect_tx(&account(), &request(tx_hex(b), rows, false)).is_err());
 }
 
+/// `request` for mainnet.
+fn on_mainnet(mut request: TxRequest) -> TxRequest {
+    request.network = "mainnet".into();
+    request
+}
+
+#[test]
+fn a_utxo_on_the_other_network_is_never_spent() {
+    // The account's keys are the same on both networks, and a signature
+    // doesn't say which: signed "on preprod", it would spend a mainnet UTxO
+    // on mainnet. A preprod site can find the account's mainnet address.
+    let (_, mut rows) = swap();
+    let mainnet = account().base_address(false, Role::Receive, 0).unwrap();
+    rows.push(row(TX_B, 0, &mainnet, 1_000_000_000, &[]));
+    let refused = |b: conway::TransactionBody, rows: &[KoiosRow], mainnet: bool| -> String {
+        let tx = tx_hex(b);
+        let mut words = String::new();
+        for partial_sign in [true, false] {
+            let mut request = request(tx.clone(), rows.to_vec(), partial_sign);
+            if mainnet {
+                request = on_mainnet(request);
+            }
+            words = cip30::inspect_tx(&account(), &request)
+                .unwrap_err()
+                .to_string();
+            assert!(words.contains("spends a UTxO on"), "{words}");
+            assert!(cip30::sign_tx(&account(), &request).is_err());
+        }
+        words
+    };
+
+    // Spent alone, to someone else.
+    let words = refused(
+        body(
+            vec![input(TX_B, 0)],
+            vec![out(&theirs(), 999_800_000, None)],
+        ),
+        &rows,
+        false,
+    );
+    assert!(words.contains(&format!("on mainnet ({TX_B}#0)")), "{words}");
+    assert!(words.contains("the wallet is on preprod"), "{words}");
+
+    // Beside the account's own.
+    refused(
+        body(
+            vec![input(TX_A, 1), input(TX_B, 0)],
+            vec![out(&ours(Role::Receive, 0), 1_003_800_000, None)],
+        ),
+        &rows,
+        false,
+    );
+
+    // As collateral.
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 3_800_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_B, 0)]).ok();
+    refused(b, &rows, false);
+
+    // Someone else's is no more this network's.
+    let their_mainnet = CardanoAccount::from_phrase(PHRASE, 1)
+        .unwrap()
+        .base_address(false, Role::Receive, 0)
+        .unwrap();
+    let mut theirs_too = rows.clone();
+    theirs_too.push(row(TX_B, 1, &their_mainnet, 5_000_000, &[]));
+    refused(
+        body(
+            vec![input(TX_A, 1), input(TX_B, 1)],
+            vec![out(&ours(Role::Receive, 0), 8_800_000, None)],
+        ),
+        &theirs_too,
+        false,
+    );
+
+    // And the other way: a preprod UTxO on mainnet.
+    let mainnet_rows = vec![row(TX_B, 0, &mainnet, 5_000_000, &[])];
+    let mut both = mainnet_rows.clone();
+    both.push(row(TX_A, 1, &ours(Role::Receive, 2), 4_000_000, &[]));
+    let words = refused(
+        body(
+            vec![input(TX_B, 0), input(TX_A, 1)],
+            vec![out(&mainnet, 8_800_000, None)],
+        ),
+        &both,
+        true,
+    );
+    assert!(words.contains("on a test network"), "{words}");
+
+    // On its own network it's the account's, as ever.
+    let summary = cip30::inspect_tx(
+        &account(),
+        &on_mainnet(request(
+            tx_hex(body(
+                vec![input(TX_B, 0)],
+                vec![out(&mainnet, 4_800_000, None)],
+            )),
+            mainnet_rows,
+            false,
+        )),
+    )
+    .unwrap();
+    assert_eq!(summary.signs, vec!["0/0"]);
+    assert_eq!(summary.own_inputs, 1);
+}
+
+/// A Byron address: mainnet's with no network magic, a test network's with
+/// preprod's (1).
+fn byron(magic: Option<u32>) -> Address {
+    use pallas_addresses::byron::{
+        AddrAttrProperty, AddrAttrs, AddrType, AddressPayload, ByronAddress, SpendingData,
+    };
+    use pallas_codec::minicbor::bytes::ByteVec;
+    let attributes: AddrAttrs = magic
+        .map(|m| AddrAttrProperty::NetworkTag(ByteVec::from(minicbor::to_vec(m).unwrap())))
+        .into_iter()
+        .collect::<Vec<_>>()
+        .into();
+    Address::Byron(ByronAddress::from_decoded(AddressPayload::new(
+        AddrType::PubKey,
+        SpendingData::PubKey(ByteVec::from(vec![7; 64])),
+        attributes,
+    )))
+}
+
+#[test]
+fn a_byron_address_on_the_other_network_is_refused() {
+    // Pallas gives a Byron address no network. With no network magic, the
+    // ledger reads it as mainnet's.
+    let (_, rows) = swap();
+    let pays = |to: Address, mainnet: bool| {
+        let (tx, rows) = if mainnet {
+            let ours = account().base_address(false, Role::Receive, 0).unwrap();
+            (
+                tx_hex(body(vec![input(TX_B, 0)], vec![out(&to, 4_800_000, None)])),
+                vec![row(TX_B, 0, &ours, 5_000_000, &[])],
+            )
+        } else {
+            (
+                tx_hex(body(vec![input(TX_A, 1)], vec![out(&to, 3_800_000, None)])),
+                rows.clone(),
+            )
+        };
+        let request = request(tx, rows, false);
+        cip30::inspect_tx(
+            &account(),
+            &if mainnet {
+                on_mainnet(request)
+            } else {
+                request
+            },
+        )
+    };
+
+    let refused = pays(byron(None), false).unwrap_err().to_string();
+    assert!(
+        refused.contains("pays an address on mainnet, and the wallet is on preprod"),
+        "{refused}"
+    );
+    let refused = pays(byron(Some(1)), true).unwrap_err().to_string();
+    assert!(
+        refused.contains("pays an address on a test network, and the wallet is on mainnet"),
+        "{refused}"
+    );
+
+    // Each on its own network is paid as any address is.
+    let summary = pays(byron(Some(1)), false).unwrap();
+    assert_eq!(summary.paid.len(), 1);
+    assert_eq!(summary.net_lovelace, "-4000000");
+    let summary = pays(byron(None), true).unwrap();
+    assert_eq!(summary.paid.len(), 1);
+    assert_eq!(summary.signs, vec!["0/0"]);
+
+    // The collateral's return too.
+    let mut b = body(
+        vec![input(TX_A, 0)],
+        vec![out(&ours(Role::Receive, 0), 5_000_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_A, 1)]).ok();
+    b.collateral_return = Some(out(&byron(None), 3_700_000, None));
+    let refused = cip30::inspect_tx(&account(), &request(tx_hex(b.clone()), rows.clone(), true))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("its collateral would go to an address on mainnet"),
+        "{refused}"
+    );
+    // A Shelley one on the other network, even with the account's keys.
+    b.collateral_return = Some(out(
+        &account().base_address(false, Role::Receive, 0).unwrap(),
+        3_700_000,
+        None,
+    ));
+    let refused = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("its collateral would go to an address on mainnet"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn a_payment_into_seedelf_says_whether_it_has_a_register() {
     let (_, rows) = swap();
@@ -508,6 +1068,103 @@ fn nothing_to_sign_is_refused() {
     ));
     let refused = cip30::sign_tx(&account(), &request(tx, rows, true)).unwrap_err();
     assert!(refused.to_string().contains("Nothing in this transaction"));
+}
+
+// --- A site's bytes, bounded before they're decoded -------------------------
+
+/// A transaction with nothing in its body whose witness set holds `data`,
+/// raw plutus data in hex.
+fn with_plutus_data(data: &str) -> String {
+    format!("84a3008001800200a10481{data}f5f6")
+}
+
+/// Plutus data nested `levels` lists deep, as a site could write it.
+fn nested(levels: usize) -> String {
+    format!("{}00", "81".repeat(levels))
+}
+
+fn refused_as_nested(e: anyhow::Error) -> bool {
+    e.to_string().contains("nested more than 128 levels")
+}
+
+#[test]
+fn deeply_nested_data_is_refused_before_it_is_decoded() {
+    // Nested thousands deep, Pallas's decoding overflowed WebAssembly's stack.
+    for levels in [200, 30_000] {
+        let tx = with_plutus_data(&nested(levels));
+        let refused =
+            cip30::inspect_tx(&account(), &request(tx.clone(), vec![], true)).unwrap_err();
+        assert!(refused_as_nested(refused));
+        let refused = cip30::sign_tx(&account(), &request(tx, vec![], true)).unwrap_err();
+        assert!(refused_as_nested(refused));
+    }
+    // What real transactions nest is read as before.
+    let tx = with_plutus_data(&nested(100));
+    assert!(cip30::inspect_tx(&account(), &request(tx, vec![], true)).is_ok());
+}
+
+#[test]
+fn nesting_inside_a_datums_bytes_counts_too() {
+    // An inline datum is CBOR inside a byte string (#6.24), and Pallas decodes it.
+    let (_, rows) = swap();
+    let tx = |levels: usize| {
+        tx_hex(body(
+            vec![input(TX_A, 1)],
+            vec![out(&theirs(), 2_000_000, Some(&nested(levels)))],
+        ))
+    };
+    let refused =
+        cip30::inspect_tx(&account(), &request(tx(200), rows.clone(), false)).unwrap_err();
+    assert!(refused_as_nested(refused));
+    assert!(cip30::inspect_tx(&account(), &request(tx(60), rows, false)).is_ok());
+}
+
+#[test]
+fn a_big_numbers_bytes_are_bytes_and_the_check_goes_on_after_them() {
+    // A big number is a tag and a byte string too, of bytes that aren't CBOR (0xff…).
+    let big = format!("c254{}", "ff".repeat(20));
+    let read = |second: &str| {
+        let tx = format!("84a3008001800200a10482{big}{second}f5f6");
+        cip30::inspect_tx(&account(), &request(tx, vec![], true))
+    };
+    assert!(read(&nested(50)).is_ok());
+    assert!(refused_as_nested(read(&nested(200)).unwrap_err()));
+}
+
+#[test]
+fn a_transaction_far_larger_than_cardano_allows_is_refused() {
+    let (_, rows) = swap();
+    // About 78 KB: past four times the ledger's 16 KiB.
+    let to = theirs();
+    let outputs = (0..1_200).map(|_| out(&to, 1_000_000, None)).collect();
+    let tx = tx_hex(body(vec![input(TX_A, 1)], outputs));
+    let refused = cip30::inspect_tx(&account(), &request(tx, rows, true)).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("far larger than Cardano allows")
+    );
+}
+
+#[test]
+fn putting_signatures_in_checks_the_bytes_first() {
+    let (tx, rows) = swap();
+    let signed = cip30::sign_tx(&account(), &request(tx, rows, false)).unwrap();
+    let deep = with_plutus_data(&nested(200));
+    assert!(refused_as_nested(
+        cip30::attach_witnesses(&deep, &signed.witness_set).unwrap_err()
+    ));
+}
+
+#[test]
+fn a_count_the_bytes_cant_hold_is_refused_not_made_room_for() {
+    let (tx, rows) = swap();
+    let signed = cip30::sign_tx(&account(), &request(tx, rows, false)).unwrap();
+    // 2^64 - 1 entries: reserving room for them aborted WebAssembly.
+    let huge_map = "bbffffffffffffffff";
+    assert!(cip30::attach_witnesses(&format!("84a0{huge_map}f5f6"), &signed.witness_set).is_err());
+    assert!(cip30::attach_witnesses(&with_plutus_data("00"), huge_map).is_err());
+    assert!(cip30::attach_witnesses(&with_plutus_data("00"), "a1009bffffffffffffffff").is_err());
 }
 
 // --- Signing data (CIP-8) ---------------------------------------------------

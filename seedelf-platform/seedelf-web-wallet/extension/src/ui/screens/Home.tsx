@@ -11,7 +11,10 @@
 // Balances come from the worker's last reading; it reads the chain again
 // when that is over a minute old, or on Refresh. A sent move-in, seedelf
 // mint, transfer, withdrawal or removal shows as a banner until the network
-// confirms it. The eye beside each balance hides the amounts (a setting),
+// confirms it. One Koios didn't answer (maybe sent) holds every payment
+// back until the worker settles it: it landed, or it can't any more, when
+// the balances are read again. One from the public account is watched until
+// its slot passes, about two hours on. The eye beside each balance hides the amounts (a setting),
 // and on mainnet each balance's value shows in the chosen currency, read
 // with the balances (prices.ts). An ADA Handle in the private balance gets a
 // warning: anyone paying it from another wallet pays the contract with no
@@ -65,10 +68,15 @@ import { Withdraw } from "./Withdraw";
 const STALE_MS = 60_000;
 /** How often to ask about a sent transaction. */
 const WATCH_EVERY_MS = 15_000;
+/** How long a sent transaction holds new payments back, unless it may have gone through (maybe sent). */
+const HOLD_MS = 10 * 60_000;
+/** How often to ask about one from the public account once it no longer holds anything back: it can land for about two hours. */
+const SETTLE_EVERY_MS = 60_000;
 
 type Tab = "seedelf" | "cardano";
 
 const BUSY = "Wait for the last transaction to confirm";
+const MAYBE_BUSY = "Your last payment may still go through: wait until it lands, or can't any more";
 const ALL_LOCKED = "Every UTxO here is locked: unlock one under UTxOs";
 
 export function Home() {
@@ -104,6 +112,8 @@ export function Home() {
   const [swaps, setSwaps] = useState<SessionView[]>([]);
   // Lovejoin boxes on their way back, from the device's own schedule.
   const [held, setHeld] = useState<LovejoinHeld>();
+  // A mix from the public account being sent: what it spends, and its change, are out of the balance meanwhile.
+  const [mixing, setMixing] = useState<MixProgress>(null);
 
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
@@ -123,13 +133,21 @@ export function Home() {
     }
   }, []);
 
-  // Ask about the sent transaction; once it's confirmed, read the balances again.
+  // Ask about the sent transaction; once it's confirmed, or let go (nothing
+  // was sent, and its UTxOs count again), read the balances again: what the
+  // worker marked as behind. After a private spend that's only the private
+  // side, so Koios doesn't see the public account read in the same second
+  // (privacy review §2.9).
   const watch = useCallback(async () => {
     try {
       const p = await call("pending-tx", {});
-      if (!p) return;
+      if (!p) {
+        // The worker no longer watches it: one that may have gone through holds nothing back any more.
+        setPending((was) => (was && unsettled(was) && was.maybeSent ? null : was));
+        return;
+      }
       setPending(p);
-      if (p.confirmations !== null) void load(true);
+      if (p.confirmations !== null || p.dropped) void load(false);
     } catch {
       // Koios hiccup: try again on the next tick.
     }
@@ -158,6 +176,12 @@ export function Home() {
         (h) => live && setHeld(h),
         () => undefined,
       );
+      // The device's record: no Koios request, but for a look, at most every two minutes, for a public mix's
+      // transaction that may have gone through (lovejoin.ts, PUBLIC_LOOK_MS).
+      void call("lovejoin-mix-public-progress", {}).then(
+        (m) => live && setMixing(m),
+        () => undefined,
+      );
     };
     void read();
     const timer = setInterval(() => void read(), 20_000);
@@ -170,12 +194,17 @@ export function Home() {
   // Until the first reading (or its error), a splash covers the empty balances.
   const splash = useSplash(balances !== undefined || error !== undefined);
 
-  const watching = pending !== null && pending.confirmations === null && now - pending.submittedAt < 10 * 60_000;
+  // Waiting on the sent transaction holds new payments back: for 10 minutes,
+  // or, when Koios didn't answer it, until the worker settles it.
+  const watching = pending !== null && unsettled(pending) && (!!pending.maybeSent || now - pending.submittedAt < HOLD_MS);
+  // One from the public account can land until its slot: the worker watches it that long, and so does Home, less often.
+  const settling = pending !== null && unsettled(pending) && pending.invalidHereafter !== undefined;
   useEffect(() => {
-    if (!watching) return;
-    const timer = setInterval(() => void watch(), WATCH_EVERY_MS);
+    if (!watching && !settling) return;
+    const timer = setInterval(() => void watch(), watching ? WATCH_EVERY_MS : SETTLE_EVERY_MS);
     return () => clearInterval(timer);
-  }, [watching, watch]);
+  }, [watching, settling, watch]);
+  const busy = pending?.maybeSent ? MAYBE_BUSY : BUSY;
 
   const seedelfs = balances?.seedelf.seedelfs ?? [];
   // What the forms may spend: each side less what's locked, and the account's
@@ -190,7 +219,7 @@ export function Home() {
   };
   const canSpend = !!free && free.seedelf.utxos > 0 && !watching;
   const spendTitle = watching
-    ? BUSY
+    ? busy
     : balances && balances.seedelf.utxos === 0
       ? "Make some ADA private first: these are paid from your private balance"
       : free && free.seedelf.utxos === 0
@@ -198,7 +227,7 @@ export function Home() {
         : undefined;
   const canCreate = !!free && (free.cardano.utxos > 0 || free.seedelf.utxos > 0) && !watching;
   const createTitle = watching
-    ? BUSY
+    ? busy
     : balances && !canCreate
       ? balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
         ? ALL_LOCKED
@@ -206,7 +235,7 @@ export function Home() {
       : undefined;
   // Move in and Send both spend the account.
   const canMoveIn = !!free && free.cardano.utxos > 0 && !watching;
-  const moveInTitle = watching ? BUSY : balances && free && balances.cardano.utxos > 0 && !canMoveIn ? ALL_LOCKED : undefined;
+  const moveInTitle = watching ? busy : balances && free && balances.cardano.utxos > 0 && !canMoveIn ? ALL_LOCKED : undefined;
 
   const sent = (p: PendingTx) => {
     setPending(p);
@@ -233,7 +262,7 @@ export function Home() {
         onCreate={() => setScreen("create")}
         createTitle={canCreate ? undefined : createTitle}
         onRemove={setRemoving}
-        removeTitle={watching ? BUSY : undefined}
+        removeTitle={watching ? busy : undefined}
       />
     );
   }
@@ -248,7 +277,7 @@ export function Home() {
       <Staking
         staking={balances.cardano.staking}
         spendRewards={spendRewards}
-        blocked={watching ? BUSY : undefined}
+        blocked={watching ? busy : undefined}
         start={screen === "staking-vote" ? "vote" : "overview"}
         onBack={home}
         onSent={sent}
@@ -262,7 +291,7 @@ export function Home() {
     return (
       <Dapps
         seedelf={free.seedelf}
-        blocked={watching ? BUSY : undefined}
+        blocked={watching ? busy : undefined}
         start={dappStart}
         banner={pending ? <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} /> : undefined}
         onBack={home}
@@ -403,7 +432,9 @@ export function Home() {
               <RunningSwaps swaps={swaps} onOpen={(index) => dapps({ dapp: "minswap", session: index })} />
             )}
 
-            {held && held.boxes > 0 && <InLovejoin held={held} now={now} onOpen={() => dapps({ dapp: "lovejoin" })} />}
+            {held && (held.boxes > 0 || held.notMixed > 0 || held.stopped > 0) && (
+              <InLovejoin held={held} now={now} onOpen={() => dapps({ dapp: "lovejoin" })} />
+            )}
 
             <Links
               onActivity={() => setActivityOf("seedelf")}
@@ -452,6 +483,10 @@ export function Home() {
                 />
               </div>
             </div>
+
+            {mixing && !mixing.stopped && mixing.sent < mixing.total && (
+              <PublicMixHolding progress={mixing} onOpen={() => dapps({ dapp: "lovejoin" })} />
+            )}
 
             {balances && <StakingRow staking={balances.cardano.staking} onOpen={() => setScreen("staking")} />}
             {balances && rewardsLocked(balances.cardano.staking) && (
@@ -570,13 +605,55 @@ function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index:
   );
 }
 
+/** A transaction the chain hasn't shown, and the worker hasn't let go. */
+const unsettled = (p: PendingTx) => p.confirmations === null && !p.dropped;
+
+type MixProgress = { total: number; sent: number; stopped?: string } | null;
+
+/**
+ * A mix from the public account being sent, on the public tab: the worker
+ * leaves what it spends, and the change it leaves, out of the balance until
+ * it's all sent, so the balance doesn't look as if some of it vanished.
+ */
+export function PublicMixHolding({ progress, onOpen }: { progress: NonNullable<MixProgress>; onOpen: () => void }) {
+  return (
+    <Callout tone="info" testId="home-mix-holding">
+      <div className="stack-tight">
+        <span>
+          A mix through Lovejoin is being sent from this account: {progress.sent} of {progress.total} transactions so far.
+          What it spends, and its change, are held by the mix, and left out of this balance until it's all sent.
+        </span>
+        <button type="button" className="link align-start" onClick={onOpen}>
+          Open Lovejoin
+        </button>
+      </div>
+    </Callout>
+  );
+}
+
 /**
  * Lovejoin's boxes on their way back into the private balance, each after its
- * own wait: not counted in the balance until they're here. Opens Lovejoin's page.
+ * own wait: not counted in the balance until they're here. Boxes a chain cut
+ * short didn't mix never come back by themselves, and a mix that stopped
+ * partway needs looking at: both are said under it. Opens Lovejoin's page.
+ * Every box is 10 ₳, so the counts are hidden with the balances.
  */
-function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
+export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
   const amounts = useAmounts();
-  const next = held.next === null ? "" : held.next <= now ? "Next back at the next unlock" : `Next back ${whenOf(held.next, new Date(now))}`;
+  // Due, it goes a few minutes on: never the moment the wallet unlocks, nor right after it sends something else.
+  const next = held.next === null ? "" : held.next <= now ? "Next back in a few minutes" : `Next back ${whenOf(held.next, new Date(now))}`;
+  // Boxes not mixed yet have no due time: they're the row's own when none is on its way back.
+  const boxes = held.boxes || held.notMixed;
+  const lovelace = held.boxes ? held.lovelace : (BigInt(held.notMixed) * LOVEJOIN_BOX).toString();
+  // How many aren't mixed yet is an amount too: said without the number while balances are hidden (privacy review §2.16).
+  // Those Koios hasn't said the making of yet, after a restore, may be mixed: said apart (independent review M14).
+  const unsure = Math.min(held.unsure ?? 0, held.notMixed);
+  const flags = [
+    held.notMixed > unsure ? `${amounts.hidden ? "some" : held.notMixed - unsure} not mixed yet` : "",
+    unsure ? `${amounts.hidden ? "some" : unsure} not known to be mixed yet` : "",
+    held.stopped ? (held.stopped === 1 ? "a mix stopped partway" : `${held.stopped} mixes stopped partway`) : "",
+  ].filter(Boolean);
+  const flagged = flags.join(", and ");
   return (
     <section className="section" aria-labelledby="in-lovejoin-title">
       <h2 id="in-lovejoin-title">In Lovejoin</h2>
@@ -584,13 +661,21 @@ function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; on
         <span className="avatar avatar--contact" aria-hidden="true">
           <ShieldIcon size={16} />
         </span>
-        <span className="token-row__label">{plural(held.boxes, "box", "boxes")} of 10 ₳</span>
-        <span className="token-row__amount">{amounts.ada(held.lovelace)} ₳</span>
-        <span className="token-row__sub">{next}</span>
+        <span className="token-row__label">{boxes ? `${amounts.count(boxes, "box", "boxes")} of 10 ₳` : "Your mixes"}</span>
+        <span className="token-row__amount">{boxes ? `${amounts.ada(lovelace)} ₳` : ""}</span>
+        <span className="token-row__sub">{held.boxes ? next : held.notMixed ? "Not on their way back" : ""}</span>
+        {flagged && (
+          <span className="token-row__detail" data-testid="in-lovejoin-flag">
+            {flagged.charAt(0).toUpperCase() + flagged.slice(1)}: open Lovejoin to see what to do.
+          </span>
+        )}
       </button>
     </section>
   );
 }
+
+/** What every Lovejoin box holds. */
+const LOVEJOIN_BOX = 10_000_000n;
 
 /** Opens this tab's Activity, or its UTxOs, and on the private tab the dApp browser. */
 function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtxos: () => void; onDapps?: () => void }) {

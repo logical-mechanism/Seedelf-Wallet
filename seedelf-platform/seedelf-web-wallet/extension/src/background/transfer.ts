@@ -11,8 +11,10 @@
 // build   the same lookup, fresh, for every recipient. WebAssembly checks
 //         each recipient's UTxO (in the contract, holding that seedelf, under
 //         a register), pays a new re-randomization of each register, picks
-//         the Seedelf UTxOs that pay, and drafts under a new one-time key.
-//         Paying one of your own seedelfs is allowed, and flagged.
+//         the Seedelf UTxOs that pay (keeping different histories apart
+//         where it can, script-spend.ts `Classes`), and drafts under a new
+//         one-time key. Paying one of your own seedelfs is allowed, and
+//         flagged.
 // submit  giveme.my witnesses the collateral, then Koios submits exactly the
 //         reviewed transaction.
 
@@ -23,17 +25,29 @@ import { SEEDELF_NAME_RULE, seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { keptContractView, readContractView, type ContractView } from "./contract-scan";
 import type { KoiosUtxo } from "./koios";
-import { keep, measure, nothingToSpend, readContract, send, type ScriptSpendDeps } from "./script-spend";
+import { settleMaybeSent } from "./pending";
+import {
+  changeHistory,
+  keep,
+  measureLocally,
+  nothingToSpend,
+  readContract,
+  send,
+  spentHistories,
+  type OutRef,
+  type ScriptSpendDeps,
+} from "./script-spend";
 import { outpoint } from "./spent";
 
 /** chrome.storage.session: the transfer built last, until it's sent or replaced. */
 export const SESSION_TRANSFER = "seedelf.transfer.built";
 
-type TransferResult = Omit<TransferSummary, "network" | "payments" | "inputs"> & {
+type TransferResult = Omit<TransferSummary, "network" | "payments" | "inputs" | "histories"> & {
   txCbor: string;
   seed: string;
   payments: Omit<SeedelfPaid, "label">[];
-  inputs: unknown[];
+  inputs: OutRef[];
+  classesMixed: string[];
 };
 
 export class TransferService {
@@ -57,11 +71,13 @@ export class TransferService {
     const { wasm } = this.deps;
     checkRecipients(payments.length);
     const names = payments.map((p) => seedelfNameOf(p.to));
-    const { view, utxos, params } = await readContract(this.deps, network);
+    await settleMaybeSent(this.deps, network);
+    const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
     const request = {
       network,
       params,
       utxos,
+      classes,
       payments: payments.map((p, i) => ({
         to: names[i]!,
         recipient: seedelfUtxo(view, names[i]!, network),
@@ -70,17 +86,17 @@ export class TransferService {
       })),
     };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your private balance is empty. Make some ADA private first: private payments are paid from there.");
+      throw nothingToSpend(
+        this.deps,
+        view,
+        "Your private balance is empty. Make some ADA private first: private payments are paid from there.",
+        returning,
+      );
     }
 
-    const finished = await measure<TransferResult>(
-      this.deps,
-      network,
-      request,
-      (keys, r) => wasm.draftTransfer(keys.seedelf, r),
-      (keys, r) => wasm.finishTransfer(keys.seedelf, r),
-    );
-    const { txCbor, seed, inputs, payments: paid, ...rest } = finished;
+    const finished = await measureLocally<TransferResult>(this.deps, request, (keys, r) => wasm.buildTransfer(keys.seedelf, r));
+    const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
+    const histories = spentHistories(classes, inputs, classesMixed);
     const summary: TransferSummary = {
       ...rest,
       network,
@@ -89,8 +105,9 @@ export class TransferService {
         return label ? { ...p, label } : p;
       }),
       inputs: inputs.length,
+      ...(histories ? { histories } : {}),
     };
-    await keep(this.deps, SESSION_TRANSFER, { ...summary, txCbor, seed });
+    await keep(this.deps, SESSION_TRANSFER, { ...summary, txCbor, seed, origin: changeHistory(classes, inputs) });
     return summary;
   }
 

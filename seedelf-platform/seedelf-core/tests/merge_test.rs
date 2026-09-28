@@ -36,6 +36,7 @@ fn params() -> ProtocolParameters {
     ProtocolParameters::from_koios(&json!({
         "min_fee_a": 44, "min_fee_b": 155381, "coins_per_utxo_size": "4310",
         "key_deposit": "2000000", "price_mem": 0.0577, "price_step": 0.0000721,
+        "min_fee_ref_script_cost_per_byte": 15,
         "cost_models": { "PlutusV3": seedelf["cost_model_v3"] },
     }))
     .unwrap()

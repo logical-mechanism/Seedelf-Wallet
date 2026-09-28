@@ -14,9 +14,11 @@ aiken build --trace-level verbose --trace-filter all   # keep traces for debuggi
 ./compile.sh                # full rebuild: build + apply `acabcafe` seed + emit plutus.json, contracts/, hashes/
 ```
 
-`compile.sh` requires `aiken`, `cardano-cli`, `python3`, and `cbor2`. It applies the `acabcafe` seed parameter to each validator via `aiken blueprint apply`, then runs `cardano-cli conway transaction policyid` to write the script hashes. **The emitted hashes in `hashes/` must match the constants hardcoded in the Rust `seedelf-core` crate** — any validator edit that changes a hash requires a synchronized Rust update (see parent CLAUDE.md).
+`compile.sh` requires `aiken`, `cardano-cli`, `python3`, and `cbor2`. It applies the `acabcafe` seed parameter to each validator via `aiken blueprint apply`, then runs `cardano-cli conway transaction policyid` to write the script hashes.
 
-Toolchain: Aiken `v1.1.19`, Plutus `v3`, stdlib `v3.0.0` (pinned in [aiken.toml](aiken.toml)).
+**Never copy `hashes/` into the Rust `seedelf-core` constants.** The deployed contracts are variant 1, and it's frozen: commit `5b82530`, built with Aiken `v1.1.9` and stdlib `v2.2.0` (wallet `94bca9c0…`, policy `84967d91…`, always-false `6777ba4d…`). The source here, `contracts/` and `hashes/` are a later revision that was never deployed, and [AUDIT.md](AUDIT.md) reviews that revision, not variant 1's bytecode. Any change that moves a hash (validator code, the toolchain, the seed) is a new variant with its own reference UTxOs, deployed and added beside variant 1, never an edit to variant 1. See [README.md](README.md).
+
+Toolchain: Aiken `v1.1.24`, Plutus `v3`, stdlib `v4.0.0` (pinned in [aiken.toml](aiken.toml); CI installs the same Aiken).
 
 ## Architecture
 

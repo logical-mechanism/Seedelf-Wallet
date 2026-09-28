@@ -1,12 +1,17 @@
 // Remove a seedelf: burn its token and free the ADA locked with it. That ADA
-// goes back to the Cardano account by default: a seedelf the account paid
-// for links to it anyway, so returning it there links nothing new. The
-// Seedelf balance is the choice for a seedelf minted from it (a stealth
-// mint). Nothing is sent until the user has reviewed it and pressed Send.
+// goes back by default to the side that paid for the seedelf, when the wallet
+// knows (SeedelfInfo.paidBy, background/minted-by.ts): the Cardano account for
+// one it paid for, which links to it anyway; the Seedelf balance for a
+// stealth mint, whose ADA sent to the account would tie the account to the
+// seedelf's name and the private UTxOs that paid for it (privacy review
+// §3.2). When the wallet doesn't know (a restore, another browser), nothing
+// is chosen, and Review waits for the user to pick. Each side's note says
+// what it links for this seedelf. Nothing is sent until the user has
+// reviewed it and pressed Send.
 
 import { useState, type FormEvent } from "react";
 
-import type { PendingTx, RemoveSummary, RemoveTo, SeedelfInfo } from "../../shared/rpc";
+import type { MintSource, PendingTx, RemoveSummary, RemoveTo, SeedelfInfo } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -15,6 +20,55 @@ import { Screen } from "../components/Screen";
 import { formatAda, shortHex } from "../format";
 
 const DESTINATIONS: Record<RemoveTo, string> = { account: "Public account", seedelf: "Private balance" };
+
+/** What sending the freed ADA to `to` links, for a Seedelf `paidBy` paid for; a warning where it links something new. */
+export function removeNote(to: RemoveTo | undefined, paidBy: MintSource | undefined): { tone: "privacy" | "warn"; text: string } {
+  if (to === undefined) {
+    return {
+      tone: "privacy",
+      text:
+        "Choose where the freed ADA goes. This wallet doesn't know who paid for this Seedelf, as when it was minted in " +
+        "another browser or before a restore. Send it back to the side that paid, so it links nothing new.",
+    };
+  }
+  if (to === paidBy) {
+    return {
+      tone: "privacy",
+      text:
+        to === "account"
+          ? "Back where this Seedelf's ADA came from: your public account paid for it, so this links nothing new."
+          : "Back where this Seedelf's ADA came from: your private balance paid for it, so this links nothing new.",
+    };
+  }
+  if (to === "account") {
+    return paidBy === "seedelf"
+      ? {
+          tone: "warn",
+          text:
+            "Your private balance paid for this Seedelf. Sending its ADA to your public account ties the account to the " +
+            "Seedelf's name, and through the mint to the private UTxOs that paid for it and their change.",
+        }
+      : {
+          tone: "privacy",
+          text:
+            "This links nothing new only if your public account paid for this Seedelf. If your private balance did, it ties " +
+            "the account to the Seedelf's name, and through the mint to the private UTxOs that paid for it.",
+        };
+  }
+  return paidBy === "account"
+    ? {
+        tone: "warn",
+        text:
+          "Your public account paid for this Seedelf. Sending its ADA to your private balance ties the Seedelf's name, and so " +
+          "your account, to the new UTxO, and to whatever it's later spent with.",
+      }
+    : {
+        tone: "privacy",
+        text:
+          "For a Seedelf you minted from your private balance. For one your public account paid for, this ties the " +
+          "Seedelf's name to the new UTxO, and to whatever it's later spent with.",
+      };
+}
 
 export function RemoveSeedelf({
   seedelf,
@@ -25,15 +79,17 @@ export function RemoveSeedelf({
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
-  const [to, setTo] = useState<RemoveTo>("account");
+  // The side that paid for it, when the wallet knows; nothing otherwise.
+  const [to, setTo] = useState<RemoveTo | undefined>(seedelf.paidBy);
   const [summary, setSummary] = useState<RemoveSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const name = seedelf.label ?? "a Seedelf";
+  const note = removeNote(to, seedelf.paidBy);
 
   async function review(e: FormEvent) {
     e.preventDefault();
-    if (busy) return;
+    if (busy || !to) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -95,7 +151,7 @@ export function RemoveSeedelf({
       aside={`${formatAda(seedelf.lovelace)} ₳ locked with it`}
       error={error}
       foot={
-        <button type="submit" className="primary" disabled={busy}>
+        <button type="submit" className="primary" disabled={busy || !to} title={to ? undefined : "Choose where the freed ADA goes"}>
           {busy ? "Building…" : "Review"}
         </button>
       }
@@ -115,10 +171,8 @@ export function RemoveSeedelf({
         onChange={setTo}
         options={(["account", "seedelf"] as const).map((d) => ({ value: d, label: DESTINATIONS[d] }))}
       />
-      <Callout tone="privacy" testId="remove-to-note">
-        {to === "account"
-          ? "Back where an account-paid Seedelf's ADA came from, so it links nothing new."
-          : "For a Seedelf you minted from your private balance. For one your public account paid for, this ties the Seedelf's name to the new UTxO, and to whatever it's later spent with."}
+      <Callout tone={note.tone} testId="remove-to-note">
+        {note.text}
       </Callout>
     </Screen>
   );

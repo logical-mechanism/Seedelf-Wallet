@@ -4,11 +4,11 @@
 
 import { useMemo, useState } from "react";
 
-import type { TokenAmount } from "../../shared/rpc";
+import type { TokenAmount, TokenRef } from "../../shared/rpc";
 import { tokenKey } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
-import { initials, sortTokens, tint, type TokenView, viewToken } from "../tokens";
+import { initials, sortTokens, tint, tokenMark, tokenText, type TokenView, viewToken } from "../tokens";
 import { CopyField } from "./CopyField";
 import { CheckIcon, ChevronRightIcon } from "./Icons";
 import { Modal } from "./Modal";
@@ -122,5 +122,40 @@ export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () =
         </p>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * A token amount in a review or a site's prompt, named by `tokenText`: "1.5
+ * tUSDM" for a listed token. One that isn't listed gets a second line saying
+ * so, with its fingerprint; one named like ADA or a listed token is named by
+ * its fingerprint, and the line says what it calls itself (in the warning's
+ * colour). `amount` is the quantity already in the token's units
+ * (`tokenQuantity`), with any sign.
+ */
+export function TokenAmountText({ token, amount }: { token: TokenRef & { fingerprint?: string }; amount: string }) {
+  const text = tokenText(useNetwork(), token);
+  const mark = tokenMark(text);
+  return (
+    <>
+      {`${amount} ${text.label}`}
+      {mark && (
+        <span className={text.posesAs ? "token-mark token-mark--warn" : "token-mark"} data-testid="token-mark">
+          {mark.charAt(0).toUpperCase() + mark.slice(1)}.
+        </span>
+      )}
+    </>
+  );
+}
+
+/** A review's row for a token amount (ReviewRows' Row, with TokenAmountText as its value). */
+export function TokenAmountRow({ label, token, amount }: { label: string; token: TokenRef & { fingerprint?: string }; amount: string }) {
+  return (
+    <div className="review__row">
+      <dt>{label}</dt>
+      <dd>
+        <TokenAmountText token={token} amount={amount} />
+      </dd>
+    </div>
   );
 }

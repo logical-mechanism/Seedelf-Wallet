@@ -5,9 +5,19 @@
 // page. While a call waits (the user reading a prompt), a ping every 20 s
 // keeps the worker from being stopped. If the worker restarts anyway, a call
 // that only reads is asked again once; a signing call fails, since it's
-// unknown whether it was answered.
+// unknown whether it was answered; and a send says it may have gone through,
+// since it may have (independent review M3).
 
-import { APIError, DAPP_PORT, isDappMethod, PAGE_CHANNEL, READ_METHODS, type DappAnswer, type DappCall } from "../shared/dapp";
+import {
+  APIError,
+  cutOff,
+  DAPP_PORT,
+  isDappMethod,
+  PAGE_CHANNEL,
+  READ_METHODS,
+  type DappAnswer,
+  type DappCall,
+} from "../shared/dapp";
 
 const PING_MS = 20_000;
 
@@ -38,7 +48,7 @@ function connect(): chrome.runtime.Port {
     waiting.clear();
     for (const w of lost) {
       if (READ_METHODS.has(w.call.method) && !w.retried) send(w.call, true);
-      else fail(w.call.id, "Seedelf Wallet stopped before answering, so nothing was signed. Try again.");
+      else fail(w.call.id, cutOff(w.call.method));
     }
   });
   return opened;

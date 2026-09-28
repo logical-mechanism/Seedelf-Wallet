@@ -17,8 +17,19 @@ import { passwordProblem } from "../shared/password";
 import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
 import { LOCAL_PREFERENCES } from "./preferences";
-import { PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
+import { KEPT_ON_RESET, PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
+import { lastSpentAt } from "./spent";
 import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord } from "./vault";
+
+/**
+ * What chrome.storage.local caches beside the wallet, which Remove wallet
+ * deletes too: the pool list (staking.ts LOCAL_POOLS_PREFIX), which says when
+ * staking was last browsed, and ADA's price as it was kept before it moved to
+ * session storage (prices.ts LOCAL_PRICES). Named here, not imported: those
+ * modules import this one.
+ */
+export const LOCAL_CACHES = ["seedelf.pools.preprod", "seedelf.pools.mainnet", "seedelf.prices"] as const;
+import { isTrap } from "./wasm";
 
 /** HKDF salt of the key that seals private records on the device, v1. */
 const STORE_SALT = new TextEncoder().encode("seedelf-web-wallet-private-store-v1");
@@ -27,18 +38,93 @@ const STORE_INFO = new TextEncoder().encode("records");
 /** Lock after this long without UI activity, unless the settings say otherwise (`lockAfterMs`). */
 export const AUTO_LOCK_MS = 15 * 60_000;
 
+/**
+ * How far the clock may step back after activity with the wallet staying
+ * unlocked: a time service's usual correction. A step this size only puts
+ * the lock off by as much.
+ */
+export const CLOCK_STEP_TOLERANCE_MS = 30_000;
+
 /** chrome.storage.session: the vault entropy (base64) while unlocked. */
 export const SESSION_ENTROPY = "seedelf.entropy";
 /** chrome.storage.session: when the user last did something (ms since the epoch). */
 export const SESSION_ACTIVITY = "seedelf.lastActivity";
+/**
+ * chrome.storage.session: when the wallet last unlocked, was created or
+ * restored (ms since the epoch). A restarted worker keeps it; a lock or a
+ * closed browser wipes it with the rest (`unlockedAt`).
+ */
+export const SESSION_UNLOCKED_AT = "seedelf.unlockedAt";
+/**
+ * chrome.storage.session: what the wallet knows of its own sends beyond what
+ * it spent (spent.ts), which a lock wipes (KnownSends). The one thing a lock
+ * keeps: two times, nothing of what was sent (`sends`).
+ */
+export const SESSION_SENDS = "seedelf.sends";
+/**
+ * What the wallet knows of its own sends beyond what it spent: its last send
+ * before the last lock, or the last try of a payment let go since, whose
+ * spent UTxOs were freed (`last`, noteSend); and when session storage began
+ * (`since`), the browser's start or the extension's: a closed browser wipes
+ * what it spent unseen, so a send before then may have been as late as then
+ * (noteStart).
+ */
+interface KnownSends {
+  last?: number;
+  since?: number;
+}
+
+/**
+ * Notes when session storage began, if nothing says what the wallet knows of
+ * its sends yet: at every start of the worker (sw.ts), so its first after
+ * the browser's, or the extension's, notes it before anything unlocks. A
+ * lock keeps it. A send before then is forgotten, and may have been as late
+ * as then (independent review M10).
+ */
+export async function noteStart(session: Area, now: number): Promise<void> {
+  if ((await session.get(SESSION_SENDS)) === undefined) await session.set(SESSION_SENDS, { since: now });
+}
+
+/**
+ * Notes a send at `at` that what the wallet spent no longer says: a
+ * maybe-sent payment let go as unseen frees its UTxOs, while its last try
+ * may still have reached a node (pending.ts). Lovejoin's withdraws keep away
+ * from it all the same (`sends`, final review F8). Only ever later. Call it
+ * while unlocked.
+ */
+export async function noteSend(session: Area, at: number): Promise<void> {
+  const kept = (await session.get<KnownSends>(SESSION_SENDS)) ?? {};
+  if ((kept.last ?? 0) < at) await session.set(SESSION_SENDS, { ...kept, last: at });
+}
 /**
  * chrome.storage.session: the last balance reading per network, e.g.
  * `seedelf.balances.preprod`. It says which contract UTxOs are the user's,
  * so it never goes to disk and it's wiped on lock.
  */
 export const SESSION_BALANCES_PREFIX = "seedelf.balances.";
+/**
+ * chrome.storage.session: set while only the kept reading's private side is
+ * behind, e.g. `seedelf.balancesPrivateStale.preprod`: a private spend
+ * landed. The next reading reads the contract alone and keeps the account's
+ * side (balances.ts), so Koios never sees the account read in the same
+ * second as a private transaction lands (privacy review §2.9).
+ */
+export const SESSION_PRIVATE_STALE_PREFIX = "seedelf.balancesPrivateStale.";
 /** chrome.storage.local: consecutive failed unlocks, kept across restarts. */
 export const UNLOCK_FAILURES = "seedelf.unlockFailures";
+
+/** What a request gets when WebAssembly trapped under it: the wallet locked itself (see `broken`). */
+export const WASM_BROKEN = "The wallet's core stopped working, so the wallet locked itself. Unlock it to carry on.";
+
+/**
+ * Whether session storage holds an unlocked wallet's entropy. Without it
+ * there's nothing to lock, so the auto-lock alarm stops without starting
+ * WebAssembly (sw.ts): a browser restart drops session storage but keeps
+ * the alarm.
+ */
+export async function hasEntropy(session: Area): Promise<boolean> {
+  return (await session.get<string>(SESSION_ENTROPY)) !== undefined;
+}
 
 interface UnlockFailures {
   count: number;
@@ -67,6 +153,8 @@ export interface WalletDeps {
   lockAfterMs?: () => Promise<number>;
   /** Tells open UI pages the state changed. */
   changed: () => void;
+  /** Replaces a WebAssembly instance that trapped with a fresh one (wasm.ts `freshWasm`). */
+  fresh?: () => void;
 }
 
 export interface Keys {
@@ -79,12 +167,23 @@ export interface Keys {
 export class Wallet {
   private keys: Keys | undefined;
   private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * Why the wallet last locked itself, while this worker lives: its
+   * WebAssembly trapped (`broken`). Unlocking, or a lock of the user's,
+   * clears it. The Unlock screen says so (Status `lockedBy`).
+   */
+  private lockedBy: "trap" | undefined;
 
   constructor(private readonly deps: WalletDeps) {}
 
   /** The current state. Also applies auto-lock, so the alarm just calls this. */
   state(): Promise<WalletState> {
     return this.serial(() => this.load());
+  }
+
+  /** Why the wallet locked itself, if it did: "trap", its WebAssembly stopped working. */
+  lockReason(): "trap" | undefined {
+    return this.lockedBy;
   }
 
   /** How long before the next unlock attempt is allowed, in ms. */
@@ -105,7 +204,7 @@ export class Wallet {
       }
       const entropy = this.deps.wasm.phraseToEntropy(phrase);
       try {
-        const record = await sealVault(entropy, password, this.deps.now());
+        const record = await sealVault(entropy, password);
         await this.deps.local.set(VAULT_KEY, record);
         await this.deps.local.remove(UNLOCK_FAILURES);
         await this.open(entropy);
@@ -151,7 +250,50 @@ export class Wallet {
     return this.serial(async () => {
       const wasUnlocked = (await this.load()) === "unlocked";
       await this.wipe();
-      if (wasUnlocked) this.deps.changed();
+      if (wasUnlocked) {
+        this.lockedBy = undefined;
+        this.deps.changed();
+      }
+    });
+  }
+
+  /**
+   * When the wallet last unlocked (ms): its unlock, or its create or
+   * restore. Throws if locked. Nothing goes out the moment it unlocks
+   * (privacy review §3.1): what the worker sends by itself waits a fresh
+   * draw from it, made by whichever run or page gets there first, not only
+   * the unlock's own run (independent review L10, L11, L12). One unlocked
+   * before it was kept counts from now.
+   */
+  unlockedAt(): Promise<number> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      const at = await this.deps.session.get<number>(SESSION_UNLOCKED_AT);
+      if (typeof at === "number") return at;
+      const now = this.deps.now();
+      await this.deps.session.set(SESSION_UNLOCKED_AT, now);
+      return now;
+    });
+  }
+
+  /**
+   * When the wallet last sent something, on either network (`sent`): as what
+   * it spent says (spent.ts), or the last send before a lock, which the lock
+   * keeps (SESSION_SENDS), or the last try of a payment let go as unseen
+   * (noteSend, final review F8). And until when it may have sent something it has
+   * forgotten (`forgotten`): a closed browser wipes what it spent unseen, so
+   * a send before the browser started again may have been as late as that
+   * (noteStart). 0 for none. An unlock is neither: nothing was sent then.
+   * Lovejoin's withdraws keep away from both (QUIET_AFTER_SEND_MS,
+   * independent review M10). Throws if locked.
+   */
+  sends(): Promise<{ sent: number; forgotten: number }> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      const { session, now } = this.deps;
+      const kept = (await session.get<KnownSends>(SESSION_SENDS)) ?? {};
+      const spent = (await lastSpentAt(session, now())) ?? 0;
+      return { sent: Math.max(spent, kept.last ?? 0), forgotten: kept.since ?? 0 };
     });
   }
 
@@ -234,21 +376,27 @@ export class Wallet {
       if (problem) throw new Error(problem);
       const entropy = await this.openWithPassword(current);
       try {
-        const record = (await this.deps.local.get<VaultRecord>(VAULT_KEY))!;
-        const sealed = await sealVault(entropy, next, record.createdAt);
-        await this.deps.local.set(VAULT_KEY, sealed);
+        // An older vault's creation time goes with it (vault.ts).
+        await this.deps.local.set(VAULT_KEY, await sealVault(entropy, next));
       } finally {
         entropy.fill(0);
       }
     });
   }
 
-  /** Deletes the vault. The UI asks for a typed confirmation first. */
+  /**
+   * Deletes the vault, the sealed records and the caches. Where the wallet
+   * opens and which network it's on stay (the privacy policy says so), and
+   * so does a payment that may still go through (`KEPT_ON_RESET`): the same
+   * phrase restored watches it again, so it's never paid twice (independent
+   * review M2). The UI asks for a typed confirmation first, and Remove wallet
+   * says what's still open (handlers.ts).
+   */
   reset(): Promise<void> {
     return this.serial(async () => {
       await this.wipe();
-      const records = PRIVATE_RECORDS.map((name) => PRIVATE_PREFIX + name);
-      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records);
+      const records = PRIVATE_RECORDS.filter((name) => !KEPT_ON_RESET.includes(name)).map((name) => PRIVATE_PREFIX + name);
+      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records, ...LOCAL_CACHES);
       this.deps.changed();
     });
   }
@@ -301,11 +449,50 @@ export class Wallet {
     });
   }
 
-  /** Runs `task` after every earlier one, so unlocks, locks and resets never interleave. */
+  /**
+   * A WebAssembly call outside the wallet's queue trapped (sw.ts): lock, as a
+   * trap inside it does. Its keys lived in the broken instance.
+   */
+  trapped(): Promise<void> {
+    return this.serial(() => this.broken());
+  }
+
+  /**
+   * Runs `task` after every earlier one, so unlocks, locks and resets never
+   * interleave. WebAssembly that traps under it locks the wallet.
+   */
   private serial<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(task, task);
+    const guarded = async () => {
+      try {
+        return await task();
+      } catch (e) {
+        if (!isTrap(e)) throw e;
+        await this.broken();
+        throw new Error(WASM_BROKEN);
+      }
+    };
+    const run = this.queue.then(guarded, guarded);
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * WebAssembly trapped. Lock: clear session storage first, so the entropy
+   * can't outlive it, then free what can still be freed and start a fresh
+   * instance. The key objects went with the old one, so unlocking again is
+   * the only way on.
+   */
+  private async broken(): Promise<void> {
+    this.lockedBy = "trap";
+    try {
+      await this.wipe();
+    } finally {
+      try {
+        this.deps.fresh?.();
+      } finally {
+        this.deps.changed();
+      }
+    }
   }
 
   /**
@@ -318,7 +505,11 @@ export class Wallet {
     if (stored) {
       const last = (await session.get<number>(SESSION_ACTIVITY)) ?? 0;
       const lockAfter = (await this.deps.lockAfterMs?.()) ?? AUTO_LOCK_MS;
-      if (now() - last < lockAfter) {
+      const idle = now() - last;
+      // Activity in the future means the clock moved back. A step past the
+      // tolerance counts as expired, or the wallet would stay unlocked for
+      // as long as it moved.
+      if (idle >= -CLOCK_STEP_TOLERANCE_MS && idle < lockAfter) {
         if (!this.keys) {
           const entropy = fromBase64(stored);
           try {
@@ -331,18 +522,23 @@ export class Wallet {
       }
       await this.wipe();
       this.deps.changed();
-    } else if (this.keys) {
-      // Session storage was cleared under us: treat it as a lock.
+    } else {
+      // Session storage was cleared under us (a browser restart, say): treat
+      // it as a lock, and stop the alarm, which Chrome keeps.
       this.free();
+      await this.deps.autoLock.stop();
     }
     return (await local.get(VAULT_KEY)) ? "locked" : "no-wallet";
   }
 
   private async open(entropy: Uint8Array): Promise<void> {
+    this.lockedBy = undefined;
     this.free();
     this.keys = this.derive(entropy);
+    const now = this.deps.now();
     await this.deps.session.set(SESSION_ENTROPY, toBase64(entropy));
-    await this.deps.session.set(SESSION_ACTIVITY, this.deps.now());
+    await this.deps.session.set(SESSION_ACTIVITY, now);
+    await this.deps.session.set(SESSION_UNLOCKED_AT, now);
     await this.deps.autoLock.start();
   }
 
@@ -354,29 +550,48 @@ export class Wallet {
       cardano = wasm.CardanoAccount.fromEntropy(entropy, 0);
       return { seedelf, cardano, oneTime: wasm.OneTimeAccounts.fromEntropy(entropy) };
     } catch (e) {
-      seedelf.free();
-      cardano?.free();
+      freeQuietly(seedelf, cardano);
       throw e;
     }
   }
 
   /**
-   * Lock: drop the keys from memory and clear session storage, which only
-   * ever holds unlocked state (the entropy, balances, a built or pending
-   * transaction). Stop the alarm.
+   * Lock: clear session storage, which holds unlocked state (the entropy,
+   * balances, a built or pending transaction), stop the alarm, and drop the
+   * keys from memory. Storage goes first and the keys go whatever happens,
+   * so nothing WebAssembly does (a trapped instance, say) can keep the
+   * wallet unlocked. What it knows of its own sends outlasts the lock, two
+   * times and nothing of what was sent, so a Lovejoin box never goes back
+   * minutes after a send the lock would have made it forget (SESSION_SENDS,
+   * independent review M10).
    */
   private async wipe(): Promise<void> {
-    this.free();
-    await this.deps.session.clear();
-    await this.deps.autoLock.stop();
+    try {
+      const sends = await this.lockKeeps().catch(() => undefined);
+      await this.deps.session.clear();
+      if (sends) await this.deps.session.set(SESSION_SENDS, sends).catch(() => undefined);
+      await this.deps.autoLock.stop();
+    } finally {
+      this.free();
+    }
   }
 
+  /** What a lock keeps of the wallet's sends (KnownSends): nothing when it knows of none. */
+  private async lockKeeps(): Promise<KnownSends | undefined> {
+    const { session, now } = this.deps;
+    const kept = (await session.get<KnownSends>(SESSION_SENDS)) ?? {};
+    const last = Math.max(kept.last ?? 0, (await lastSpentAt(session, now())) ?? 0);
+    const sends: KnownSends = { ...(last ? { last } : {}), ...(kept.since !== undefined ? { since: kept.since } : {}) };
+    return Object.keys(sends).length ? sends : undefined;
+  }
+
+  /** Drops the keys, freeing each one it can: never throws, and never keeps one. */
   private free(): void {
-    // free() overwrites the secrets inside WebAssembly before releasing them.
-    this.keys?.seedelf.free();
-    this.keys?.cardano.free();
-    this.keys?.oneTime.free();
+    const keys = this.keys;
+    // Dropped first: a key whose free() failed can't be freed again (its
+    // pointer is already gone), so it's never kept to try.
     this.keys = undefined;
+    if (keys) freeQuietly(keys.seedelf, keys.cardano, keys.oneTime);
   }
 
   /**
@@ -410,5 +625,20 @@ export class Wallet {
     const elapsed = this.deps.now() - lastFailureAt;
     // A clock that moved backwards never shortens the wait below zero or past the cap.
     return Math.max(0, Math.min(backoff, backoff - elapsed));
+  }
+}
+
+/**
+ * Frees each of `objects` in its own try: free() overwrites the secrets
+ * inside WebAssembly before releasing them, and an instance that trapped
+ * refuses it, for one object or for all.
+ */
+function freeQuietly(...objects: Array<{ free(): void } | undefined>): void {
+  for (const object of objects) {
+    try {
+      object?.free();
+    } catch {
+      // Its instance is broken: freshWasm drops it, memory and all.
+    }
   }
 }

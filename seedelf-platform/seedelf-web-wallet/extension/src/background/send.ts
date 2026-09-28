@@ -24,12 +24,13 @@ import type { NetworkName } from "../networks";
 import type { Paid, PaymentAsk, PendingTx, SendPaid, SendSummary, WithdrawDestination } from "../shared/rpc";
 import { checkRecipients } from "../shared/recipients";
 import { OWN_SEEDELF_FROM_ACCOUNT, seedelfName } from "../shared/seedelf-name";
-import { nothingInAccount, readAccount } from "./account";
+import { nothingInAccount, readAccount, validUntil } from "./account";
 import { seedelfLabel } from "./chain";
 import { COLLATERAL_LOVELACE } from "./coin-control";
 import { readContractView, type ContractView } from "./contract-scan";
 import { destinationResolver } from "./destination";
 import type { KoiosUtxo } from "./koios";
+import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
 import { holdsOwn, seedelfUtxo } from "./transfer";
 
@@ -97,7 +98,11 @@ export class SendService {
     note?: string,
   ): Promise<SendSummary> {
     const { wasm, wallet } = this.deps;
-    const { params, utxos, held, withdrawal } = await readAccount(this.deps, network);
+    await settleMaybeSent(this.deps, network);
+    const [{ params, utxos, held, withdrawal }, invalidHereafter] = await Promise.all([
+      readAccount(this.deps, network),
+      validUntil(this.deps.koios(network)),
+    ]);
     if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to send.");
 
     const payments = destinations.map((d, i) => ({
@@ -107,7 +112,15 @@ export class SendService {
       tokens: asked[i]!.tokens,
     }));
     // A note is CIP-20's message on the transaction, which WebAssembly checks and writes.
-    const request = { network, params, utxos, payments, withdrawal, note: note || undefined };
+    const request = {
+      network,
+      params,
+      utxos,
+      payments,
+      withdrawal,
+      note: note || undefined,
+      invalidHereafter,
+    };
     const result = await wallet.withKeys(
       (keys) => JSON.parse(wasm.buildAccountSend(keys.cardano, JSON.stringify(request))) as SendResult,
     );
@@ -120,7 +133,7 @@ export class SendService {
         return { ...shown, ...p };
       }),
     };
-    await keep(this.deps, key, { ...summary, txCbor });
+    await keep(this.deps, key, { ...summary, txCbor, invalidHereafter: request.invalidHereafter });
     return summary;
   }
 }

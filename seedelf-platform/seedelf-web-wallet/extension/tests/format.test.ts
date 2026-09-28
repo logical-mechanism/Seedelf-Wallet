@@ -69,6 +69,20 @@ describe("parseQuantity", () => {
     for (const bad of ["", "1.5", "-3", "x"]) expect(parseQuantity(bad, 0)).toBeUndefined();
     expect(parseQuantity("0.1234567", 6)).toBeUndefined();
   });
+
+  it("reads a comma as a thousands separator only where one belongs, and a decimal comma as the point", async () => {
+    const { parseQuantity } = await import("../src/ui/format");
+    expect(parseQuantity("1,234,567", 0)).toBe("1234567");
+    expect(parseQuantity("12,500", 6)).toBe("12500000000");
+    expect(parseQuantity("0,5", 6)).toBe("500000");
+    expect(parseQuantity("12,5", 6)).toBe("12500000");
+    expect(parseQuantity("12,", 6)).toBe("12000000");
+    expect(parseQuantity("12,5", 0)).toBeUndefined();
+    expect(parseQuantity("1,23", 6)).toBe("1230000");
+    for (const bad of ["0,000,5", "1,2,3,4", "12,5000", "1,234,5", "0,500", ",5", "1,5.3"]) {
+      expect(parseQuantity(bad, 6), bad).toBeUndefined();
+    }
+  });
 });
 
 describe("sanitizeAda", () => {
@@ -88,9 +102,12 @@ describe("sanitizeAda", () => {
 
   it("refuses what isn't a number and keeps the previous value", async () => {
     const { sanitizeAda } = await import("../src/ui/format");
-    for (const bad of ["12a", "-5", "1e6", "1.2.3", ",", "₳5"]) {
+    for (const bad of ["12a", "-5", "1e6", "1.2.3", "₳5"]) {
       expect(sanitizeAda("12", bad)).toEqual({ value: "12", note: "Enter an amount in ADA, like 25 or 12.5." });
     }
+    // A comma alone is a decimal comma, as a point alone is a point.
+    expect(sanitizeAda("12", ",")).toEqual({ value: "0." });
+    expect(sanitizeAda("12", ".")).toEqual({ value: "0." });
   });
 });
 
@@ -108,14 +125,60 @@ describe("sanitizeAda: supply", () => {
 });
 
 describe("sanitizeAmount: commas", () => {
-  it("groups the thousands again wherever commas were typed or deleted", async () => {
+  it("groups the thousands again as the field's own commas move", async () => {
     const { sanitizeAda } = await import("../src/ui/format");
-    expect(sanitizeAda("", "3,000,000,00")).toEqual({ value: "300,000,000" });
+    // Backspace at the end, and on a digit in the middle.
+    expect(sanitizeAda("3,000,000,000", "3,000,000,00")).toEqual({ value: "300,000,000" });
+    expect(sanitizeAda("1,234", "1,34")).toEqual({ value: "134" });
+    // A digit typed after them.
+    expect(sanitizeAda("1,000", "1,0000")).toEqual({ value: "10,000" });
     expect(sanitizeAda("", "1234567.5")).toEqual({ value: "1,234,567.5" });
-    expect(sanitizeAda("", "1,2,3,4")).toEqual({ value: "1,234" });
-    expect(sanitizeAda("", "0,000,5")).toEqual({ value: "5" });
     expect(sanitizeAda("", "1000.")).toEqual({ value: "1,000." });
     expect(sanitizeAda("", "999")).toEqual({ value: "999" });
+  });
+
+  it("takes a comma typed or pasted as a thousands separator only where one belongs", async () => {
+    const { sanitizeAda, COMMA_NOTE } = await import("../src/ui/format");
+    expect(sanitizeAda("", "1,234,567")).toEqual({ value: "1,234,567" });
+    expect(sanitizeAda("", "12,500")).toEqual({ value: "12,500" });
+    expect(sanitizeAda("", "1,234.5")).toEqual({ value: "1,234.5" });
+    // Nothing it could only mean: refused, never read as whole units.
+    for (const [before, typed] of [
+      ["", "0,000,5"],
+      ["", "1,2,3,4"],
+      ["", "3,000,000,00"],
+      ["", "12,5000"],
+      ["", "1,234,5"],
+      ["", "12,5.3"],
+      ["7", "1,2.5"],
+      ["1,000", "1,,000"],
+    ]) {
+      expect(sanitizeAda(before!, typed!), typed).toEqual({ value: before, note: COMMA_NOTE });
+    }
+  });
+
+  it("reads a decimal comma as the point: 0,5 is half an ADA, and 12,5 is 12.5 (launch review #54)", async () => {
+    const { sanitizeAda, sanitizeAmount } = await import("../src/ui/format");
+    expect(sanitizeAda("", "0,5")).toEqual({ value: "0.5" });
+    expect(sanitizeAda("", "12,5")).toEqual({ value: "12.5" });
+    expect(sanitizeAda("", "12,25")).toEqual({ value: "12.25" });
+    expect(sanitizeAda("", ",5")).toEqual({ value: "0.5" });
+    // Typed a key at a time, as a numpad's decimal key types it.
+    expect(sanitizeAda("12", "12,")).toEqual({ value: "12." });
+    expect(sanitizeAda("12.", "12.5")).toEqual({ value: "12.5" });
+    expect(sanitizeAda("1,234", "1,234,")).toEqual({ value: "1,234." });
+    // Pasted over the whole value.
+    expect(sanitizeAda("1,234", "12,5")).toEqual({ value: "12.5" });
+    // Whole units only: the decimals are dropped, and said so, never made whole units.
+    const whole = { decimals: 0, max: 1_000n, notANumber: "number", tooPrecise: "precise", tooMuch: "too much" };
+    expect(sanitizeAmount("", "12,5", whole)).toEqual({ value: "12", note: "precise" });
+  });
+
+  it("keeps the caret after the point a decimal comma became", async () => {
+    const { caretAfter } = await import("../src/ui/format");
+    expect(caretAfter("12,", 3, "12.")).toBe(3);
+    expect(caretAfter("1,234,", 6, "1,234.")).toBe(6);
+    expect(caretAfter("12,5", 4, "12.5")).toBe(4);
   });
 });
 

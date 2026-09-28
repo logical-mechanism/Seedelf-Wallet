@@ -18,22 +18,75 @@
 // dappPassword      A site's signature needs the password, typed in the
 //                   connector's window, even while unlocked (dapp.ts). On by
 //                   default.
+// lovejoinReturns   A private session's spare ADA goes through Lovejoin on
+//                   its way back (sessions.ts). On by default; off, it comes
+//                   back directly. A swap's approval records its own.
+// lovejoinDepth,    How deep each box fans out, and the range its wait is
+// lovejoinDelay     drawn from (lovejoin.ts).
 //
 // Where the toolbar button opens the wallet isn't one of these: it's the
-// browser's, not the wallet's (shared/open-in.ts).
+// browser's, not the wallet's (shared/open-in.ts). Nor is the network, which
+// has a key of its own (`NetworkChoice`, below).
 
+import { isNetworkName, NETWORKS, type NetworkName } from "../networks";
 import {
   DEFAULT_PREFERENCES,
   isCurrency,
   isLockAfter,
   isLovejoinDelay,
   isLovejoinDepth,
+  LOCAL_NETWORK,
   LOCAL_PREFERENCES,
   type Preferences,
 } from "../shared/preferences";
 import type { Area } from "./storage";
+import { VAULT_KEY } from "./vault";
 
-export { LOCAL_PREFERENCES };
+export { LOCAL_NETWORK, LOCAL_PREFERENCES };
+
+/**
+ * The network the wallet is on: the user's choice (`seedelf.network`), among
+ * the ones this build has, else the build's first (mainnet in a mainnet
+ * build). The worker reads it at every request, so a switch needs no restart,
+ * and every service takes the network it's asked about: what's kept per
+ * network stays apart (docs/architecture.md, Networks).
+ *
+ * A wallet with no choice kept predates the switch, when every build was
+ * preprod only, so it stays on preprod: an update never moves a test wallet
+ * to mainnet. A new wallet keeps the network it's made on (`keep`, before the
+ * vault is written), so it's never taken for one of those.
+ */
+export class NetworkChoice {
+  constructor(
+    private readonly local: Area,
+    /** The build's networks, the default first (networks.ts `enabledNetworks`). */
+    readonly networks: NetworkName[],
+  ) {}
+
+  async get(): Promise<NetworkName> {
+    const kept = await this.local.get<unknown>(LOCAL_NETWORK);
+    if (isNetworkName(kept) && this.networks.includes(kept)) return kept;
+    if (this.networks.includes("preprod") && (await this.local.get<unknown>(VAULT_KEY)) !== undefined) return "preprod";
+    return this.networks[0]!;
+  }
+
+  /** Keeps `network` as the choice if none is kept: a new wallet stays on the network it's made on. */
+  async keep(network: NetworkName): Promise<void> {
+    const kept = await this.local.get<unknown>(LOCAL_NETWORK);
+    if (!(isNetworkName(kept) && this.networks.includes(kept))) await this.set(network);
+  }
+
+  /** Puts the wallet on `network`; refused for a network this build doesn't have. */
+  async set(network: unknown): Promise<NetworkName> {
+    if (!isNetworkName(network) || !this.networks.includes(network)) {
+      throw new Error(
+        isNetworkName(network) ? `This build of Seedelf Wallet can't use ${NETWORKS[network].label}.` : "That isn't a network.",
+      );
+    }
+    await this.local.set(LOCAL_NETWORK, network);
+    return network;
+  }
+}
 
 export class PreferencesService {
   constructor(private readonly local: Area) {}
@@ -47,6 +100,7 @@ export class PreferencesService {
       currency: isCurrency(kept.currency) ? kept.currency : DEFAULT_PREFERENCES.currency,
       dappConnector: typeof kept.dappConnector === "boolean" ? kept.dappConnector : DEFAULT_PREFERENCES.dappConnector,
       dappPassword: typeof kept.dappPassword === "boolean" ? kept.dappPassword : DEFAULT_PREFERENCES.dappPassword,
+      lovejoinReturns: typeof kept.lovejoinReturns === "boolean" ? kept.lovejoinReturns : DEFAULT_PREFERENCES.lovejoinReturns,
       lovejoinDepth: isLovejoinDepth(kept.lovejoinDepth) ? kept.lovejoinDepth : DEFAULT_PREFERENCES.lovejoinDepth,
       lovejoinDelay: isLovejoinDelay(kept.lovejoinDelay) ? kept.lovejoinDelay : DEFAULT_PREFERENCES.lovejoinDelay,
     };
@@ -61,6 +115,7 @@ export class PreferencesService {
     if (isCurrency(change.currency)) next.currency = change.currency;
     if (typeof change.dappConnector === "boolean") next.dappConnector = change.dappConnector;
     if (typeof change.dappPassword === "boolean") next.dappPassword = change.dappPassword;
+    if (typeof change.lovejoinReturns === "boolean") next.lovejoinReturns = change.lovejoinReturns;
     if (isLovejoinDepth(change.lovejoinDepth)) next.lovejoinDepth = change.lovejoinDepth;
     if (isLovejoinDelay(change.lovejoinDelay)) next.lovejoinDelay = change.lovejoinDelay;
     await this.local.set(LOCAL_PREFERENCES, next);

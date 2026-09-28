@@ -518,6 +518,21 @@ main {
   border: 1px solid var(--accent-line);
 }
 
+/* While preprod is on, under the top bar of every screen: test ADA is never
+   taken for real (components/NetworkBadge.tsx). */
+.network-strip {
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  color: var(--warn);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .footer {
   text-align: center;
   font-size: 11.5px;
@@ -852,8 +867,32 @@ main {
 .welcome__actions {
   width: 100%;
   max-width: 340px;
-  margin-top: auto;
-  padding-top: var(--s6);
+  margin-top: var(--s5);
+}
+
+/* Which network a new wallet is on, chosen before its phrase (a build with both). */
+.network-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.network-picker select {
+  width: auto;
+  padding: 4px 8px;
+  font-size: var(--text-sm);
+}
+
+.network-picker .error {
+  flex-basis: 100%;
+}
+
+.onboarding-on-network {
+  margin: 0 0 var(--s3);
 }
 
 /* Unlock */
@@ -2560,6 +2599,14 @@ button.dapp-tile:hover {
   display: inline-flex;
 }
 
+/* What a banner's state means (maybe sent, or never landed): under the title, quieter. */
+.tx-banner__detail {
+  max-width: 34em;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .tx-banner__dismiss {
   margin-top: 2px;
   padding: 5px 16px;
@@ -2582,6 +2629,18 @@ button.dapp-tile:hover {
   gap: 4px;
   color: var(--accent);
   font: 12px var(--mono);
+}
+
+/* What opening a private transaction on Cardanoscan tells (components/ExplorerLink.tsx):
+   under a banner's link, as quiet as its detail; under a swap's timeline, after the now line. */
+.tx-banner .explorer-note {
+  max-width: 34em;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.timeline .explorer-note {
+  font-size: 12px;
 }
 
 /* Receive */
@@ -2820,6 +2879,8 @@ button.dapp-tile:hover {
   display: flex;
   flex-direction: column;
   gap: var(--s1);
+  /* A stake pool's id, whole. */
+  overflow-wrap: anywhere;
 }
 
 .dapp-message {
@@ -2836,10 +2897,29 @@ button.dapp-tile:hover {
   overflow-wrap: anywhere;
 }
 
+/* A Pays row: the whole address on a line of its own, then what it is beside
+   what it gets. The amounts' column is capped and a token's name wraps, so
+   no name can squeeze the address, or push the ADA off the window. */
+.dapp-paid {
+  grid-template-columns: minmax(0, 1fr) fit-content(55%);
+  align-items: start;
+}
+
+.dapp-address {
+  grid-column: 1 / -1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
 .dapp-amount {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
@@ -2883,6 +2963,54 @@ button.dapp-tile:hover {
   line-height: 1.45;
   color: var(--warn);
   white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* A token that isn't on the wallet's list, under its amount in a review or a
+   site's prompt: its own line, plain weight, and the warning's colour when
+   its name passes for ADA or a listed token (tokenText). */
+
+.token-mark {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.token-mark--warn {
+  color: var(--warn);
+}
+
+/* Max's UTxOs left where they are (LeftOutNote): one to a line. */
+
+.left-out {
+  margin: 6px 0;
+}
+
+.left-out code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* A name another DRep, or a ticker another pool, uses too: flagged in the
+   warning's colour beside it (Voting, Pools). */
+
+.utxo-tag--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: var(--warn-line);
+}
+
+/* A token's whole fingerprint, where a swap names one the wallet won't swap
+   into (Swaps.tsx Unverified): its own line, and it wraps. */
+
+.swap-token-id {
+  font-family: var(--mono);
+  font-size: 12px;
   overflow-wrap: anywhere;
   user-select: text;
 }

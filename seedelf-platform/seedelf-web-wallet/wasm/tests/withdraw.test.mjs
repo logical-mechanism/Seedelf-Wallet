@@ -1,7 +1,7 @@
 // Withdrawing through WebAssembly: an amount or everything to an address, and
-// removing a seedelf, on the 12-word phrase's synthetic owned UTxOs with the
-// real preprod evaluations recorded by the extension's
-// tests/fixtures/record-withdraw.mjs.
+// removing a seedelf, measured in the wallet, on the 12-word phrase's
+// synthetic owned UTxOs and the requests and fees recorded on preprod by the
+// extension's tests/fixtures/record-withdraw.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -9,10 +9,8 @@ import { readFileSync } from "node:fs";
 import {
   CardanoAccount,
   SeedelfKey,
-  draftRemove,
-  draftWithdraw,
-  finishRemove,
-  finishWithdraw,
+  buildRemove,
+  buildWithdraw,
   signScriptSpend,
 } from "./wasm.mjs";
 
@@ -33,22 +31,21 @@ function withdrawal(which, changes = {}) {
 test("withdraws an amount, or everything, to an address", () => {
   const key = SeedelfKey.fromPhrase(vector(12).phrase, 0);
   const amount = withdrawal("amount");
-  const draft = JSON.parse(draftWithdraw(key, JSON.stringify(amount)));
-  assert.deepEqual(draft.inputs, recorded.amount.draft.inputs);
-  const final = JSON.parse(
-    finishWithdraw(key, JSON.stringify({ ...amount, seed: draft.seed, evaluation: recorded.amount.evaluation })),
-  );
+  const final = JSON.parse(buildWithdraw(key, JSON.stringify(amount)));
+  assert.deepEqual(final.inputs, recorded.amount.draft.inputs);
   assert.equal(final.payments[0].to, to);
   assert.equal(final.max, false);
   assert.equal(final.payments[0].lovelace, "5000000");
-  assert.equal(final.fee.total, recorded.amount.final.fee.total);
+  // Measured on the finished transaction, within a hair of Ogmios's measure of a draft.
+  const fee = Number(final.fee.total);
+  assert.ok(Math.abs(fee - Number(recorded.amount.final.fee.total)) < fee / 100, final.fee.total);
   assert.throws(
     () => signScriptSpend(key, JSON.stringify({ txCbor: final.txCbor, seed: final.seed, collateral: recorded.collateral.answer })),
     /Transaction Fails Validation/,
   );
 
   const max = withdrawal("max");
-  const all = JSON.parse(finishWithdraw(key, JSON.stringify({ ...max, seed: "42".repeat(32), evaluation: recorded.max.evaluation })));
+  const all = JSON.parse(buildWithdraw(key, JSON.stringify(max)));
   assert.equal(all.max, true);
   assert.equal(all.payments[0].lovelace, String(28_000_000 - Number(all.fee.total)));
   assert.equal(all.changeOutputs, 0);
@@ -59,16 +56,15 @@ test("withdraws an amount, or everything, to an address", () => {
 test("removes a seedelf, and refuses what it must", () => {
   const key = SeedelfKey.fromPhrase(vector(12).phrase, 0);
   const request = { network: "preprod", params, utxo: owned[2], to };
-  const draft = JSON.parse(draftRemove(key, JSON.stringify(request)));
-  assert.match(draft.draftCbor, /^84/);
-  const final = JSON.parse(finishRemove(key, JSON.stringify({ ...request, seed: draft.seed, evaluation: recorded.remove.evaluation })));
+  const final = JSON.parse(buildRemove(key, JSON.stringify(request)));
+  assert.match(final.txCbor, /^84/);
   assert.ok(final.name.startsWith(`5eed0e1f${Buffer.from("web-wallet").toString("hex")}`));
   assert.equal(final.lovelace, String(1_500_000 - Number(final.fee.total)));
 
-  assert.throws(() => draftWithdraw(key, "{}"), /bad withdrawal request/);
-  assert.throws(() => draftWithdraw(key, JSON.stringify(withdrawal("amount", { to: "nope" }))), /isn't a Cardano address/);
-  assert.throws(() => draftRemove(key, JSON.stringify({ ...request, utxo: owned[0] })), /exactly one Seedelf/);
-  assert.throws(() => draftRemove(key, "{}"), /bad removal request/);
+  assert.throws(() => buildWithdraw(key, "{}"), /bad withdrawal request/);
+  assert.throws(() => buildWithdraw(key, JSON.stringify(withdrawal("amount", { to: "nope" }))), /isn't a Cardano address/);
+  assert.throws(() => buildRemove(key, JSON.stringify({ ...request, utxo: owned[0] })), /exactly one Seedelf/);
+  assert.throws(() => buildRemove(key, "{}"), /bad removal request/);
   key.free();
 });
 

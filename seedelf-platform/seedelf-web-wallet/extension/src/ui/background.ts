@@ -1,21 +1,37 @@
 // The UI's side of the RPC: ask the service worker to do something, and hear
 // when the wallet's state changes (for example on auto-lock).
 
-import { isDappChanged, isStateChanged, type Reply, type RequestName, type Requests } from "../shared/rpc";
+import { isDappChanged, isStateChanged, UI_PORT, type Reply, type RequestName, type Requests } from "../shared/rpc";
 
-export async function call<K extends RequestName>(
-  type: K,
-  payload: Requests[K]["payload"],
-): Promise<Requests[K]["result"]> {
-  const reply = (await chrome.runtime.sendMessage({ type, ...payload })) as Reply<K> | undefined;
-  if (!reply) throw new Error("The wallet's background service didn't answer.");
-  if (!reply.ok) throw new Error(reply.error);
-  return reply.value;
+const NO_ANSWER = "The wallet's background service didn't answer.";
+
+/**
+ * Asks the worker, on a port of its own that only the worker listens for
+ * (background/ui-port.ts). runtime.sendMessage would hand the request, and a
+ * password or the phrase in it, to every other open wallet page too.
+ */
+export function call<K extends RequestName>(type: K, payload: Requests[K]["payload"]): Promise<Requests[K]["result"]> {
+  return new Promise((resolve, reject) => {
+    const port = chrome.runtime.connect({ name: UI_PORT });
+    let answered = false;
+    port.onMessage.addListener((reply: Reply<K> | undefined) => {
+      answered = true;
+      port.disconnect();
+      if (reply?.ok) resolve(reply.value);
+      else reject(new Error(reply?.error ?? NO_ANSWER));
+    });
+    port.onDisconnect.addListener(() => {
+      // Read, so Chrome doesn't log it as unchecked: the worker couldn't be reached.
+      void chrome.runtime.lastError;
+      if (!answered) reject(new Error(NO_ANSWER));
+    });
+    port.postMessage({ type, ...payload });
+  });
 }
 
 /** Calls `listener` when the worker says the wallet state changed. Returns an unsubscribe. */
 export function onStateChanged(listener: () => void): () => void {
-  // Other pages' requests also arrive here; ignore them and never reply.
+  // Only the worker's broadcasts arrive here: requests travel on ports.
   const handler = (message: unknown) => {
     if (isStateChanged(message)) listener();
   };

@@ -19,6 +19,8 @@ use seedelf_wasm::api::{self, SessionReturnRequest};
 use seedelf_wasm::cip30::{self, DataRequest, KeyPath, KoiosRow, TxRequest};
 use serde_json::{Value, json};
 
+mod deep;
+
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const POLICY: &str = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72";
@@ -182,6 +184,7 @@ fn a_session_comes_back_whole_into_seedelf_signed_by_its_key() {
             index: 3,
             utxos: utxos.clone(),
             merge: vec![],
+            own: vec![],
         },
     )
     .unwrap();
@@ -284,6 +287,7 @@ fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
             index: 3,
             utxos: utxos.clone(),
             merge: vec![change.clone()],
+            own: vec![],
         },
     )
     .unwrap();
@@ -345,10 +349,213 @@ fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
             index: 3,
             utxos,
             merge: vec![foreign],
+            own: vec![],
         },
     )
     .unwrap_err();
     assert!(err.to_string().contains("isn't this wallet's"), "{err}");
+}
+
+/// 2^63 − 1 of one token: three of these add up past what an output can hold.
+const JUNK: u64 = (1 << 63) - 1;
+const JUNK_POLICY: &str = "abababababababababababababababababababababababababababab";
+
+#[test]
+fn a_return_leaves_out_what_would_overflow_a_token_and_brings_back_the_rest() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    // The session's own: its ADA, a token, and its collateral.
+    let mut utxos = vec![
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(2, 1, &at, 2_500_000, &[(POLICY, MIN, 906_594_100)]),
+        utxo(3, 0, &at, 5_000_000, &[]),
+    ];
+    // A stranger's three UTxOs of 2^63 − 1 of one token, about 5 ₳ in all.
+    for tx in 7..10 {
+        utxos.push(utxo(
+            tx,
+            0,
+            &at,
+            1_500_000,
+            &[(JUNK_POLICY, "6a756e6b", JUNK)],
+        ));
+    }
+    let request =
+        |utxos: &[UtxoResponse], merge: Vec<UtxoResponse>, own: Vec<String>| SessionReturnRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 3,
+            utxos: utxos.to_vec(),
+            merge,
+            own,
+        };
+    let junk_back = |result: &api::SessionReturnResult| {
+        result
+            .tokens
+            .iter()
+            .find(|t| t.policy_id == JUNK_POLICY)
+            .map(|t| t.quantity.parse::<u64>().unwrap())
+    };
+
+    // Made new: everything but one junk UTxO comes back, the session's own whole.
+    let result = api::session_return(&accounts, sk, request(&utxos, vec![], vec![])).unwrap();
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert_eq!((tx.inputs().len(), result.inputs), (5, 5));
+    assert_eq!(result.left_out.len(), 1);
+    assert_eq!(result.left_out[0].tx_hash, hex::encode([9u8; 32]));
+    assert_eq!(result.left_out[0].reason, "tokens");
+    let fee: u64 = result.fee.parse().unwrap();
+    assert_eq!(result.lovelace, (30_500_000 - fee).to_string());
+    assert!(
+        result
+            .tokens
+            .iter()
+            .any(|t| t.asset_name == MIN && t.quantity == "906594100")
+    );
+    assert_eq!(junk_back(&result), Some(2 * JUNK));
+
+    // Merged into the funding's change: the same.
+    let change = funding_change(9, 2, sk, 40_000_000);
+    let merged = api::session_return(&accounts, sk, request(&utxos, vec![change], vec![])).unwrap();
+    assert_eq!(
+        (merged.merged, merged.inputs, merged.left_out.len()),
+        (1, 5, 1)
+    );
+
+    // The session's own transaction's UTxO comes first, whatever it holds.
+    let own = vec![hex::encode([9u8; 32])];
+    let result = api::session_return(&accounts, sk, request(&utxos, vec![], own)).unwrap();
+    assert_eq!(result.left_out[0].tx_hash, hex::encode([8u8; 32]));
+
+    // Two are enough to freeze it too: 2^64 − 1 and 1.
+    let mut pair = utxos[..3].to_vec();
+    pair.push(utxo(
+        7,
+        0,
+        &at,
+        3_000_000,
+        &[(JUNK_POLICY, "6a756e6b", u64::MAX)],
+    ));
+    pair.push(utxo(8, 0, &at, 3_000_000, &[(JUNK_POLICY, "6a756e6b", 1)]));
+    let result = api::session_return(&accounts, sk, request(&pair, vec![], vec![])).unwrap();
+    assert_eq!((result.inputs, result.left_out.len()), (4, 1));
+    // What's left comes back in the next return, when it pays for its own deposit.
+    let left: Vec<UtxoResponse> = pair
+        .iter()
+        .filter(|u| u.tx_hash == result.left_out[0].tx_hash)
+        .cloned()
+        .collect();
+    let next = api::session_return(&accounts, sk, request(&left, vec![], vec![])).unwrap();
+    assert_eq!((next.inputs, next.left_out.len()), (1, 0));
+}
+
+/// The recorded Koios row's reference script: the Seedelf policy, 519 bytes.
+fn recorded_script() -> Option<seedelf_koios::koios::ReferenceScript> {
+    let rows: Vec<UtxoResponse> = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/reference_script_utxo.json"
+    ))
+    .unwrap();
+    rows[0].reference_script.clone()
+}
+
+#[test]
+fn a_return_pays_for_a_strangers_reference_script_or_leaves_one_it_cant_measure() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    // Anyone can send the session's address a UTxO carrying a reference script.
+    let scripted = UtxoResponse {
+        reference_script: recorded_script(),
+        ..utxo(8, 0, &at, 1_300_000, &[])
+    };
+    let mut unmeasured = utxo(9, 0, &at, 1_300_000, &[]);
+    unmeasured.reference_script = Some(seedelf_koios::koios::ReferenceScript {
+        kind: Some("timelock".into()),
+        ..Default::default()
+    });
+    let utxos = vec![
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(3, 0, &at, 5_000_000, &[]),
+        scripted,
+        unmeasured,
+    ];
+    let result = api::session_return(
+        &accounts,
+        sk,
+        SessionReturnRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 3,
+            utxos,
+            merge: vec![],
+            own: vec![],
+        },
+    )
+    .unwrap();
+    // Its 519 bytes are paid for, as Conway charges a spent input's script:
+    // 15 lovelace a byte on top of the size fee.
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let fee: u64 = result.fee.parse().unwrap();
+    let minimum = 44 * bytes.len() as u64 + 155_381 + 519 * 15;
+    assert!(
+        fee >= minimum && fee < minimum + 1_000,
+        "{fee} for {minimum}"
+    );
+    assert_eq!(result.inputs, 3);
+    // One whose script can't be measured can't be priced: it stays, and the
+    // return says so.
+    assert_eq!(result.left_out.len(), 1);
+    assert_eq!(result.left_out[0].tx_hash, hex::encode([9u8; 32]));
+    assert_eq!(result.left_out[0].reason, "script");
+    assert_eq!(result.lovelace, (26_300_000 - fee).to_string());
+}
+
+#[test]
+fn a_return_holding_a_reference_script_is_swept_not_merged() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    let change = funding_change(9, 2, sk, 40_000_000);
+    // A stranger's UTxO with a reference script, and one of 5 ₳ that looks
+    // like a collateral: the evaluator can take neither.
+    let scripted = |tx: u8, lovelace: u64| UtxoResponse {
+        reference_script: recorded_script(),
+        ..utxo(tx, 0, &at, lovelace, &[])
+    };
+    let utxos = vec![
+        scripted(7, 5_000_000),
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(3, 0, &at, 5_000_000, &[]),
+        scripted(8, 1_300_000),
+    ];
+    let result = api::session_return(
+        &accounts,
+        sk,
+        SessionReturnRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 3,
+            utxos,
+            merge: vec![change],
+            own: vec![],
+        },
+    )
+    .unwrap();
+    // Every UTxO comes back, into new registers, and the fee pays for both scripts.
+    assert_eq!((result.merged, result.inputs), (0, 4));
+    assert!(result.left_out.is_empty());
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert!(tx.redeemers().is_empty() && tx.collateral().is_empty());
+    let fee: u64 = result.fee.parse().unwrap();
+    let minimum = 44 * bytes.len() as u64 + 155_381 + 2 * 519 * 15;
+    assert!(
+        fee >= minimum && fee < minimum + 1_000,
+        "{fee} for {minimum}"
+    );
+    assert_eq!(result.lovelace, (31_300_000 - fee).to_string());
 }
 
 #[test]
@@ -360,6 +567,7 @@ fn a_return_takes_only_the_sessions_own_utxos() {
         index,
         utxos,
         merge: vec![],
+        own: vec![],
     };
     let sk = random_scalar();
     let err = api::session_return(
@@ -399,6 +607,84 @@ fn a_return_takes_only_the_sessions_own_utxos() {
         .is_err(),
         "the other network's address"
     );
+}
+
+#[test]
+fn a_strangers_deep_utxo_at_the_session_is_brought_back_with_the_rest() {
+    let accounts = accounts();
+    let at = session(3);
+    let rows: Vec<Value> = [
+        utxo(1, 0, &at, 20_000_000, &[]),
+        utxo(2, 1, &at, 2_500_000, &[(POLICY, MIN, 906_594_100)]),
+    ]
+    .iter()
+    .map(|u| serde_json::to_value(u).unwrap())
+    .chain([json!("stranger")])
+    .collect();
+    let stranger = deep::row(
+        9,
+        &at.to_bech32().unwrap(),
+        "",
+        1_500_000,
+        &deep::datum(200),
+        "null",
+    );
+    // What `buildSessionReturn` does with the worker's JSON.
+    let request: SessionReturnRequest = serde_json::from_str(&deep::splice(
+        &json!({ "network": "preprod", "params": params(), "index": 3, "utxos": rows }),
+        &[("stranger", &stranger)],
+    ))
+    .unwrap();
+    let result = api::session_return(&accounts, random_scalar(), request).unwrap();
+    let bytes = hex::decode(&result.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert!(
+        tx.inputs()
+            .iter()
+            .any(|i| **i.hash() == [9; 32] && i.index() == 0)
+    );
+    assert_eq!(result.inputs, 3);
+    let fee: u64 = result.fee.parse().unwrap();
+    assert_eq!(result.lovelace, (24_000_000 - fee).to_string());
+}
+
+#[test]
+fn a_return_merges_past_a_deep_datum_and_sweeps_one_too_deep_to_read() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    let change = funding_change(9, 2, sk, 40_000_000);
+    let request = |levels: usize| -> SessionReturnRequest {
+        let rows: Vec<Value> = [
+            utxo(1, 0, &at, 20_000_000, &[]),
+            utxo(3, 0, &at, 5_000_000, &[]),
+        ]
+        .iter()
+        .map(|u| serde_json::to_value(u).unwrap())
+        .chain([json!("stranger")])
+        .collect();
+        let stranger = deep::row(
+            8,
+            &at.to_bech32().unwrap(),
+            "",
+            1_500_000,
+            &deep::datum(levels),
+            "null",
+        );
+        let request = json!({
+            "network": "preprod", "params": params(), "index": 3,
+            "utxos": rows, "merge": [change],
+        });
+        serde_json::from_str(&deep::splice(&request, &[("stranger", &stranger)])).unwrap()
+    };
+    // Measured in the wallet with the stranger's datum in the script context.
+    let merged = api::session_return(&accounts, sk, request(100)).unwrap();
+    assert_eq!((merged.merged, merged.inputs), (1, 3));
+    // One the evaluator would overflow the stack on can't be measured: the
+    // return is the plain sweep, which runs no script, and takes it all.
+    let plain = api::session_return(&accounts, sk, request(100_000)).unwrap();
+    assert_eq!((plain.merged, plain.inputs), (0, 3));
+    assert!(plain.left_out.is_empty());
 }
 
 /// A swap as Minswap's aggregator builds one for a session: its UTxO pays a
@@ -487,6 +773,7 @@ fn the_connector_reads_and_signs_a_swap_for_a_session_with_its_key_alone() {
         inputs,
         partial_sign: false,
         stake_index: 5,
+        stake_deposit: None,
     };
     let summary = cip30::inspect_tx(&accounts, &request).unwrap();
     assert_eq!(summary.own_inputs, 1);
@@ -619,6 +906,7 @@ fn a_withdrawal_from_a_sessions_reward_account_is_signed_by_its_own_stake_key() 
         inputs,
         partial_sign: false,
         stake_index: index,
+        stake_deposit: None,
     };
     let summary = cip30::inspect_tx(&accounts, &request).unwrap();
     assert_eq!(summary.signs, vec!["0/5".to_string(), "stake".to_string()]);
@@ -664,6 +952,7 @@ fn a_real_aggregator_swap_is_read_signed_and_assembled_byte_for_byte() {
         inputs: vec![input],
         partial_sign: false,
         stake_index: 0,
+        stake_deposit: None,
     };
     let summary = cip30::inspect_tx(&public, &request).unwrap();
     assert!(summary.complete);

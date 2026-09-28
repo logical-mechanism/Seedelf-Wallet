@@ -19,7 +19,7 @@ use seedelf_core::transaction::calculate_min_required_utxo;
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
-use seedelf_koios::koios::{Asset, ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{Asset, ProtocolParameters, Ratio, ReferenceScript, UtxoResponse};
 
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -215,10 +215,18 @@ fn assert_paid(
 
     // The fee covers the transaction once every input's key has signed, by
     // the ledger's own formula: 44 lovelace a byte plus 155,381 (the
-    // fixture's min_fee_a and min_fee_b).
+    // fixture's min_fee_a and min_fee_b), plus Conway's fee for any reference
+    // script on a spent input, at 15 lovelace a byte.
     assert_eq!(tx.fee, built.fee);
     assert_eq!((w.params.min_fee_a, w.params.min_fee_b), (44, 155_381));
-    let ledger_minimum = 44 * tx.size_signed + 155_381;
+    assert_eq!(w.params.min_fee_ref_script_cost_per_byte, Ratio::whole(15));
+    let script_bytes: u64 = spent
+        .iter()
+        .filter_map(|u| u.reference_script.as_ref())
+        .map(|s| s.bytes.as_ref().unwrap().len() as u64 / 2)
+        .sum();
+    let ledger_minimum =
+        44 * tx.size_signed + 155_381 + ledger_reference_script_fee((15, 1), script_bytes);
     assert!(
         tx.fee >= ledger_minimum,
         "fee {} < {ledger_minimum}",
@@ -283,6 +291,7 @@ fn moves_an_amount_from_pure_ada_first() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -315,6 +324,7 @@ fn adds_inputs_until_the_change_is_valid() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -346,6 +356,7 @@ fn picked_tokens_move_in_full_and_the_rest_come_back() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -402,6 +413,7 @@ fn part_of_a_token_moves_in_and_the_rest_comes_back() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -436,6 +448,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -475,6 +488,7 @@ fn max_moves_everything_but_the_fee_and_the_change_floor() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &pure, &all);
@@ -504,6 +518,7 @@ fn many_tokens_split_twenty_to_an_output() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &built);
@@ -528,6 +543,7 @@ fn explains_what_is_wrong() {
             &w.wallet,
             &w.change,
             &Staking::none(),
+            None,
         )
         .err()
         .map(|e| e.to_string())
@@ -571,11 +587,108 @@ fn explains_what_is_wrong() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .err()
     .unwrap();
     assert!(e.to_string().contains("nothing"), "{e}");
     assert!(minimum_deposit(&w.params, &Assets::new()).unwrap() > 1_000_000);
+}
+
+#[test]
+fn a_fee_over_the_limit_is_refused_in_words() {
+    let w = world();
+    let available = vec![utxo(&w, 1, 0, 50_000_000, vec![])];
+    let move_in = |params: &ProtocolParameters| {
+        build::move_in(
+            params,
+            &available,
+            AccountAmount::Lovelace(5_000_000),
+            &[],
+            &w.owner,
+            &w.wallet,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+    };
+    // Parameters Koios would never be taken with: from_koios refuses them.
+    let wrong = ProtocolParameters {
+        min_fee_b: build::MAX_FEE,
+        ..params()
+    };
+    let err = move_in(&wrong).err().unwrap().to_string();
+    assert!(
+        err.contains("over the wallet's limit of 10.000000 ADA"),
+        "{err}"
+    );
+    let costly = ProtocolParameters {
+        min_fee_b: build::MAX_FEE - 1_000_000,
+        ..params()
+    };
+    let built = move_in(&costly).unwrap();
+    assert!(built.fee > 9_000_000 && built.fee <= build::MAX_FEE);
+}
+
+/// The ledger's `tierRefScriptFee`, as it's written: a running total in
+/// fractions, tier by tier, rounded down once at the end.
+fn ledger_reference_script_fee(price: (u128, u128), bytes: u64) -> u64 {
+    // (numerator, denominator) pairs, never reduced: small enough here.
+    let add = |(a, b): (u128, u128), (c, d): (u128, u128)| (a * d + c * b, b * d);
+    let mut total = (0u128, 1u128);
+    let mut tier_price = price;
+    let mut n = u128::from(bytes);
+    while n >= 25_600 {
+        total = add(total, (25_600 * tier_price.0, tier_price.1));
+        tier_price = (tier_price.0 * 6, tier_price.1 * 5);
+        n -= 25_600;
+    }
+    let total = add(total, (n * tier_price.0, tier_price.1));
+    (total.0 / total.1) as u64
+}
+
+#[test]
+fn reference_scripts_are_priced_in_conways_tiers() {
+    let at = |numerator, denominator| ProtocolParameters {
+        min_fee_ref_script_cost_per_byte: Ratio {
+            numerator,
+            denominator,
+        },
+        ..params()
+    };
+    let fifteen = params();
+    assert_eq!(fifteen.min_fee_ref_script_cost_per_byte, Ratio::whole(15));
+    // Flat below the first tier: the Seedelf and Lovejoin scripts cost what
+    // they always did.
+    for (bytes, fee) in [(0, 0), (629, 9_435), (629 + 519, 17_220), (3_785, 56_775)] {
+        assert_eq!(build::reference_script_fee(&fifteen, bytes).unwrap(), fee);
+    }
+    // Each tier's bytes cost 1.2 times the one before's, rounded down once.
+    for (bytes, fee) in [
+        (25_600, 384_000),
+        (25_601, 384_018),
+        (51_200, 844_800),
+        (100_000, 1_999_104),
+        (build::MAX_REFERENCE_SCRIPT_BYTES, 6_335_648),
+    ] {
+        assert_eq!(build::reference_script_fee(&fifteen, bytes).unwrap(), fee);
+    }
+    // Against the ledger's own recursion, at prices that aren't whole too.
+    for (numerator, denominator) in [(15, 1), (25, 2), (44, 3), (1, 10), (0, 1)] {
+        let params = at(numerator, denominator);
+        for bytes in (0..=build::MAX_REFERENCE_SCRIPT_BYTES).step_by(1_237) {
+            assert_eq!(
+                build::reference_script_fee(&params, bytes).unwrap(),
+                ledger_reference_script_fee((numerator.into(), denominator.into()), bytes),
+                "{bytes} bytes at {numerator}/{denominator}"
+            );
+        }
+    }
+    // Past what a transaction may use, it's refused in words, as the ledger would.
+    let err = build::reference_script_fee(&fifteen, build::MAX_REFERENCE_SCRIPT_BYTES + 1)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("over the network's limit of 204800"), "{err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +732,7 @@ fn sends_an_amount_and_part_of_a_token_to_an_address() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -659,6 +773,7 @@ fn send_max_pays_everything_but_the_fee_and_the_change_floor() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -675,6 +790,195 @@ fn send_max_pays_everything_but_the_fee_and_the_change_floor() {
     assert_eq!(built.change_tokens.items.len(), 1, "the token stays");
 }
 
+/// 2^63 − 1: three of these of one token add up past what an output can hold.
+const JUNK: u64 = (1 << 63) - 1;
+
+#[test]
+fn max_leaves_out_a_utxo_whose_tokens_would_overflow_the_rest() {
+    let w = world();
+    let to = elsewhere();
+    let mut available = vec![
+        utxo(&w, 1, 0, 20_000_000, vec![]),
+        utxo(&w, 2, 0, 3_000_000, vec![token("mine", 40)]),
+    ];
+    // A stranger's three UTxOs of 2^63 − 1 of one token each.
+    for n in 7..10 {
+        available.push(utxo(&w, n, 0, 1_500_000, vec![token("junk", JUNK)]));
+    }
+    let send = |amount| {
+        build::account_send(
+            &w.params,
+            &available,
+            amount,
+            &[],
+            &to,
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+    };
+    let built = send(AccountAmount::Max).unwrap();
+    let tx = assert_paid(&w, &available, &built, Some(&to));
+    assert_eq!(tx.inputs.len(), 4);
+    assert_eq!(built.left_out.len(), 1);
+    assert_eq!(built.left_out[0].tx_hash, hex::encode([9u8; 32]));
+    assert_eq!(
+        built.lovelace,
+        26_000_000 - built.fee - built.change_lovelace
+    );
+    // Everything that can go together went: the change keeps the tokens.
+    let junk = built
+        .change_tokens
+        .quantity_of(POLICY.to_string(), hex::encode("junk"))
+        .unwrap();
+    assert_eq!(junk, Some(2 * JUNK));
+    // An amount never needed them.
+    let some = send(AccountAmount::Lovelace(10_000_000)).unwrap();
+    assert_paid(&w, &available, &some, Some(&to));
+    assert!(some.left_out.is_empty());
+
+    // Make private's Max too.
+    let moved = build::move_in(
+        &w.params,
+        &available,
+        AccountAmount::Max,
+        &[],
+        &w.owner,
+        &w.wallet,
+        &w.change,
+        &Staking::none(),
+        None,
+    )
+    .unwrap();
+    let tx = assert_sound(&w, &available, &moved);
+    assert_eq!((tx.inputs.len(), moved.left_out.len()), (4, 1));
+}
+
+/// The recorded Koios row's reference script: the Seedelf policy, 519 bytes.
+fn recorded_script() -> Option<ReferenceScript> {
+    let rows: Vec<UtxoResponse> =
+        serde_json::from_str(include_str!("fixtures/reference_script_utxo.json")).unwrap();
+    rows[0].reference_script.clone()
+}
+
+/// An ADA-only UTxO at the account's receive address 0 that carries a
+/// reference script, as anyone can send one.
+fn with_script(w: &World, n: u8, lovelace: u64) -> UtxoResponse {
+    UtxoResponse {
+        reference_script: recorded_script(),
+        ..utxo(w, n, 0, lovelace, vec![])
+    }
+}
+
+#[test]
+fn spending_a_utxo_with_a_reference_script_pays_for_its_bytes() {
+    let w = world();
+    let to = elsewhere();
+    let send = |available: &[UtxoResponse], amount| {
+        build::account_send(
+            &w.params,
+            available,
+            amount,
+            &[],
+            &to,
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+        .unwrap()
+    };
+    // Max spends it too, and the fee pays for its 519 bytes (assert_paid
+    // holds the fee to the ledger's minimum).
+    let available = vec![
+        utxo(&w, 1, 0, 10_000_000, vec![]),
+        with_script(&w, 2, 1_300_000),
+    ];
+    let max = send(&available, AccountAmount::Max);
+    let tx = assert_paid(&w, &available, &max, Some(&to));
+    assert_eq!(tx.inputs.len(), 2);
+    assert!(max.left_out.is_empty());
+    assert!(max.fee >= 44 * tx.size_signed + 155_381 + 519 * 15);
+
+    // It costs more to spend, so an amount takes plain ADA first, however large it is.
+    let available = vec![
+        with_script(&w, 2, 30_000_000),
+        utxo(&w, 1, 0, 10_000_000, vec![]),
+    ];
+    let small = send(&available, AccountAmount::Lovelace(2_000_000));
+    let tx = assert_paid(&w, &available, &small, Some(&to));
+    assert_eq!(tx.inputs, vec![hex::encode([1u8; 32])]);
+    // When it's needed, its script is paid for.
+    let large = send(&available, AccountAmount::Lovelace(20_000_000));
+    let tx = assert_paid(&w, &available, &large, Some(&to));
+    assert_eq!(tx.inputs.len(), 2);
+
+    // Make private prices it the same way.
+    let moved = build::move_in(
+        &w.params,
+        &available,
+        AccountAmount::Max,
+        &[],
+        &w.owner,
+        &w.wallet,
+        &w.change,
+        &Staking::none(),
+        None,
+    )
+    .unwrap();
+    assert_sound(&w, &available, &moved);
+}
+
+#[test]
+fn a_reference_script_the_wallet_cant_measure_is_never_spent() {
+    let w = world();
+    let to = elsewhere();
+    // How Koios may list a native script: no bytes, no size.
+    let mut native = with_script(&w, 3, 5_000_000);
+    native.reference_script = Some(ReferenceScript {
+        kind: Some("timelock".into()),
+        ..Default::default()
+    });
+    let available = vec![utxo(&w, 1, 0, 10_000_000, vec![]), native];
+    let send = |amount| {
+        build::account_send(
+            &w.params,
+            &available,
+            amount,
+            &[],
+            &to,
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+        )
+        .unwrap()
+    };
+    // Its fee can't be priced, so Max leaves it where it is, and says so.
+    let max = send(AccountAmount::Max);
+    let tx = assert_paid(&w, &available, &max, Some(&to));
+    assert_eq!(tx.inputs, vec![hex::encode([1u8; 32])]);
+    assert_eq!(max.left_out.len(), 1);
+    assert_eq!(max.left_out[0].tx_hash, hex::encode([3u8; 32]));
+    // An amount never reaches for it.
+    let err = build::account_send(
+        &w.params,
+        &available,
+        AccountAmount::Lovelace(12_000_000),
+        &[],
+        &to,
+        true,
+        &w.change,
+        &Staking::none(),
+        None,
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(err.contains("Not enough ADA"), "{err}");
+}
+
 #[test]
 fn send_refuses_what_would_lose_money() {
     let w = world();
@@ -689,6 +993,7 @@ fn send_refuses_what_would_lose_money() {
             true,
             &w.change,
             &Staking::none(),
+            None,
         )
         .err()
         .map(|e| e.to_string())
@@ -748,6 +1053,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &sent, Some(&to));
@@ -761,6 +1067,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         true,
         &w.change,
         &Staking::none(),
+        None,
     );
     assert!(short.is_err(), "a lovelace less is refused");
 
@@ -780,6 +1087,7 @@ fn a_payment_of_exactly_the_minimum_is_valid() {
         &w.wallet,
         &w.change,
         &Staking::none(),
+        None,
     )
     .unwrap();
     let tx = assert_sound(&w, &available, &moved);
@@ -824,6 +1132,7 @@ fn funds_a_seedelf_under_a_fresh_copy_of_its_register() {
             &w.change,
             &Staking::none(),
             None,
+            None,
         )
     };
     let built = fund(AccountAmount::Lovelace(10_000_000), &picked).unwrap();
@@ -867,6 +1176,7 @@ fn paying_a_seedelf_refuses_a_register_that_would_lose_the_money() {
             true,
             &w.change,
             &Staking::none(),
+            None,
             None,
         )
         .err()
@@ -934,6 +1244,7 @@ fn pays_several_recipients_in_order_each_its_own_amount_and_tokens() {
         &w.change,
         &Staking::none(),
         None,
+        None,
     )
     .unwrap();
     let tx = assert_paid(&w, &available, &built, Some(&to));
@@ -995,6 +1306,7 @@ fn several_recipients_refuse_max_too_much_and_no_one() {
             true,
             &w.change,
             &Staking::none(),
+            None,
             None,
         )
         .err()
@@ -1085,6 +1397,7 @@ fn a_transaction_over_the_size_limit_is_refused_in_words() {
         &w.change,
         &Staking::none(),
         None,
+        None,
     )
     .err()
     .unwrap()
@@ -1099,6 +1412,7 @@ fn a_transaction_over_the_size_limit_is_refused_in_words() {
             true,
             &w.change,
             &Staking::none(),
+            None,
             None,
         )
         .is_ok()

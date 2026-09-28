@@ -5,24 +5,28 @@
 // contract gets a tile of its own.
 //
 // Under the tiles, Sites: each site connected to a private session (chunk
-// 15c, private CIP-30), which opens its page (SiteSessions.tsx). Above them,
-// when sessions hold money and nothing of theirs is on its way, Bring
-// everything back (ClaimAll.tsx): each in its own transaction.
+// 15c, private CIP-30), which opens its page (SiteSessions.tsx), and says
+// when its site talks to something else. Above them, when sessions hold
+// money and nothing of theirs is on its way, Bring everything back
+// (ClaimAll.tsx): each in its own transaction. What they hold is hidden with
+// the balances (launch review #56).
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
+import { lovejoinOn } from "../../networks";
 import type { Balances, PendingTx, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ShieldIcon, SwapIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
 import { Screen } from "../components/Screen";
-import { formatAda, plural } from "../format";
+import { plural } from "../format";
 import { useNetwork } from "../network";
+import { useAmounts } from "../preferences";
 import { ClaimAll, isClaimable } from "./ClaimAll";
 import { Lovejoin } from "./Lovejoin";
-import { isSiteSession, SiteRow, SiteSession } from "./SiteSessions";
-import { isRunningSwap, Swaps, SwapTag } from "./Swaps";
+import { attachedTo, type ConnectedSites, isSiteSession, SiteRow, SiteSession } from "./SiteSessions";
+import { fundingUnseen, isRunningSwap, Swaps, SwapTag } from "./Swaps";
 
 type DappId = "minswap" | "lovejoin";
 
@@ -65,6 +69,8 @@ export function Dapps({
   const [open, setOpen] = useState<DappId | undefined>(start?.dapp);
   const [session, setSession] = useState(start?.session);
   const [sessions, setSessions] = useState<SessionView[]>([]);
+  // The connected sites, from the device's record: which session each talks to.
+  const [connected, setConnected] = useState<ConnectedSites>();
   const [site, setSite] = useState<number>();
   const [claiming, setClaiming] = useState(false);
   const [reading, setReading] = useState(false);
@@ -77,6 +83,7 @@ export function Dapps({
     setReading(refresh);
     try {
       setSessions(await call("sessions", { refresh }));
+      setConnected(await call("dapp-sites", {}).catch(() => undefined));
       if (refresh) setUpdatedAt(Date.now());
       setError(undefined);
     } catch (e) {
@@ -134,6 +141,7 @@ export function Dapps({
     return (
       <SiteSession
         session={opened}
+        attached={attachedTo(opened, connected)}
         seedelf={seedelf}
         reading={reading}
         updatedAt={updatedAt}
@@ -149,7 +157,8 @@ export function Dapps({
   }
 
   const running = sessions.filter(isRunningSwap);
-  const waiting = running.filter((s) => s.auto?.paused).length;
+  // Paused, or a funding the chain hasn't shown yet: either waits on the user.
+  const waiting = running.filter((s) => s.auto?.paused || fundingUnseen(s)).length;
   const sites = sessions.filter(isSiteSession);
 
   return (
@@ -159,7 +168,7 @@ export function Dapps({
       )}
       {claimable.length > 0 && <ClaimCard sessions={claimable} onOpen={() => setClaiming(true)} />}
       <div className="dapp-grid" data-testid="dapps">
-        {DAPPS.filter((d) => d.id !== "lovejoin" || network === "preprod").map((d) => (
+        {DAPPS.filter((d) => d.id !== "lovejoin" || lovejoinOn(network)).map((d) => (
           <button key={d.id} type="button" className="dapp-tile" onClick={() => setOpen(d.id)}>
             <span className="dapp-tile__logo">{d.icon}</span>
             <span className="dapp-tile__name">{d.name}</span>
@@ -185,16 +194,17 @@ export function Dapps({
           <ul className="list" data-testid="dapp-sites">
             {sites.map((s) => (
               <li key={s.index}>
-                <SiteRow session={s} onOpen={() => setSite(s.index)} />
+                <SiteRow session={s} attached={attachedTo(s, connected)} onOpen={() => setSite(s.index)} />
               </li>
             ))}
           </ul>
         </section>
       )}
       <Callout tone="privacy">
-        A dApp here never sees your public account or your private balance: each use runs from a new one-time account,
-        funded from your private balance and brought back into it. Anyone can follow the money through that account,
-        though.
+        A dApp here is given only a one-time account, never your public account or your private balance: each use runs
+        from a new one, funded from your private balance and brought back into it. Anyone can follow the money through
+        that account, though, back into your private balance, and money you made private yourself leads on to your public
+        account.
       </Callout>
       {sites.length === 0 && (
         <p className="note" data-testid="dapp-sites-hint">
@@ -206,15 +216,16 @@ export function Dapps({
   );
 }
 
-/** Money waiting in private sessions, and Bring everything back. */
-function ClaimCard({ sessions, onOpen }: { sessions: SessionView[]; onOpen: () => void }) {
+/** Money waiting in private sessions, and Bring everything back. A balance: hidden while balances are. */
+export function ClaimCard({ sessions, onOpen }: { sessions: SessionView[]; onOpen: () => void }) {
+  const amounts = useAmounts();
   const lovelace = sessions.reduce((sum, s) => sum + BigInt(s.holding?.lovelace ?? "0"), 0n);
   const tokens = new Set(sessions.flatMap((s) => (s.holding?.tokens ?? []).map((t) => t.policyId + t.assetName))).size;
   return (
     <section className="section claim-card" aria-labelledby="claim-card-title" data-testid="claim-card">
       <h2 id="claim-card-title">In private sessions</h2>
       <p className="claim-card__amount">
-        {formatAda(lovelace.toString())} ₳{tokens ? ` and ${plural(tokens, "token")}` : ""}
+        {amounts.ada(lovelace.toString())} ₳{tokens ? ` and ${plural(tokens, "token")}` : ""}
       </p>
       <p className="note">
         {plural(sessions.length, "session")} {sessions.length === 1 ? "holds" : "hold"} it, with nothing of theirs on its way.

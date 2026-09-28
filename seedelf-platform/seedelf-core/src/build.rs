@@ -34,7 +34,7 @@ use crate::transaction::{
     decode_tx_hash, reference_utxo, seedelf_minimum_lovelace, seedelf_token_name,
     wallet_minimum_lovelace_with_assets,
 };
-use crate::utxos::assets_of;
+use crate::utxos::{assets_of, fitting, reference_script_bytes, reference_script_size};
 
 /// A throwaway ed25519 key, used to sign a draft so its size includes a
 /// realistic witness. The signature is discarded.
@@ -47,7 +47,68 @@ pub fn fake_signer() -> PrivateKey {
 /// `fees::PolicyParams::default()` is Byron's policy, 43.946 lovelace a byte,
 /// which falls a few dozen lovelace short on a Seedelf spend.)
 pub fn linear_fee(params: &ProtocolParameters, tx_size: u64) -> u64 {
-    params.min_fee_a * tx_size + params.min_fee_b
+    params
+        .min_fee_a
+        .saturating_mul(tx_size)
+        .saturating_add(params.min_fee_b)
+}
+
+/// The most reference-script bytes one transaction may use, over its spent
+/// and reference inputs together: the ledger's `maxRefScriptSizePerTx`,
+/// 200 KiB.
+pub const MAX_REFERENCE_SCRIPT_BYTES: u64 = 204_800;
+
+/// How many bytes of reference script each of Conway's price tiers holds.
+const REFERENCE_SCRIPT_TIER: u64 = 25_600;
+
+/// Conway's fee for `bytes` of reference scripts, which the ledger adds for
+/// every script on a spent or reference input: the first 25,600 bytes at
+/// `min_fee_ref_script_cost_per_byte`, each next 25,600 at 1.2 times the
+/// price of the ones before, and the total rounded down (the ledger's
+/// `tierRefScriptFee`, in exact fractions as it works). More than
+/// [`MAX_REFERENCE_SCRIPT_BYTES`] is refused, in words, as the ledger would.
+pub fn reference_script_fee(params: &ProtocolParameters, bytes: u64) -> Result<u64> {
+    if bytes > MAX_REFERENCE_SCRIPT_BYTES {
+        bail!(
+            "This transaction would use {bytes} bytes of reference scripts, over the network's limit of {MAX_REFERENCE_SCRIPT_BYTES}. Spend fewer UTxOs holding one at once"
+        );
+    }
+    let price = params.min_fee_ref_script_cost_per_byte;
+    if price.denominator == 0 {
+        bail!("The network's reference script price isn't a number");
+    }
+    // Tier k costs price × (6/5)^k a byte. Over the common denominator
+    // 5^tiers, each full tier adds TIER × 6^k × 5^(tiers−k), and the bytes
+    // past the last full tier add rest × 6^tiers. With at most 8 tiers, every
+    // step fits a u128.
+    let tiers = (bytes / REFERENCE_SCRIPT_TIER) as u32;
+    let rest = u128::from(bytes % REFERENCE_SCRIPT_TIER);
+    let tier = u128::from(REFERENCE_SCRIPT_TIER);
+    let scaled: u128 = (0..tiers)
+        .map(|k| tier * 6u128.pow(k) * 5u128.pow(tiers - k))
+        .sum::<u128>()
+        + rest * 6u128.pow(tiers);
+    let fee =
+        scaled * u128::from(price.numerator) / (u128::from(price.denominator) * 5u128.pow(tiers));
+    u64::try_from(fee).context("The reference scripts' fee doesn't fit a number")
+}
+
+/// The most a transaction the wallet builds may pay in fees. Real ones pay
+/// under 1 ₳, and even a 16 KiB transaction running scripts to the ledger's
+/// limit pays about 2.6 ₳. More comes from wrong protocol parameters, and the
+/// ledger would take it all.
+pub const MAX_FEE: u64 = 10_000_000;
+
+/// Refuses a fee over [`MAX_FEE`], in words.
+pub fn check_fee(fee: u64) -> Result<()> {
+    if fee > MAX_FEE {
+        bail!(
+            "This transaction's fee would be {} ADA, over the wallet's limit of {} ADA, so it wasn't built. The network's fee settings look wrong: try again later",
+            ada(fee),
+            ada(MAX_FEE)
+        );
+    }
+    Ok(())
 }
 
 /// Settles the size fee of a key-signed transaction. `build(fee)` stages the
@@ -101,7 +162,8 @@ impl<'a> Patches<'a> {
 /// [`settle_fee`] with any pricing: `price(size)` is the fee a transaction of
 /// `size` signed bytes needs. `patches` go into each draft before it's
 /// priced; `signers` doesn't count the stake key a staking patch needs.
-/// A draft over [`MAX_TX_SIZE`] is refused here, in words.
+/// A draft over [`MAX_TX_SIZE`], or a fee over [`MAX_FEE`], is refused here,
+/// in words.
 fn settle(
     signers: usize,
     patches: Patches,
@@ -118,6 +180,7 @@ fn settle(
             );
         }
         let needed = price(size);
+        check_fee(needed)?;
         if needed <= fee && fee - needed < 1_000 {
             return Ok((fee, staged));
         }
@@ -144,6 +207,17 @@ fn built_with(staged: StagingTransaction, patches: Patches) -> Result<BuiltTrans
             .build_conway_raw()
             .context("Failed To Build The Transaction")?,
     )
+}
+
+/// `tx`, valid until slot `invalid_hereafter` when one is given: the ledger
+/// refuses it from that slot on, so one that never landed can't land later.
+/// Staged, not patched, so every draft is priced with it and the staking and
+/// note patches hash a body that holds it.
+fn expiring(tx: StagingTransaction, invalid_hereafter: Option<u64>) -> StagingTransaction {
+    match invalid_hereafter {
+        Some(slot) => tx.invalid_from_slot(slot),
+        None => tx,
+    }
 }
 
 /// The transaction input for a Koios UTxO.
@@ -339,8 +413,8 @@ impl std::error::Error for TooLittle {}
 
 /// `external sweep`: every UTxO at the CLI's dApp address back into the
 /// wallet contract, under fresh re-randomizations of `owner`. `signer` is the
-/// dApp key's hash, disclosed as a required signer. Returns the unsigned
-/// transaction and its fee.
+/// dApp key's hash, disclosed as a required signer. The fee pays for any
+/// reference script they hold. Returns the unsigned transaction and its fee.
 pub fn external_sweep(
     params: &ProtocolParameters,
     utxos: &[UtxoResponse],
@@ -353,7 +427,10 @@ pub fn external_sweep(
     }
     let (total, tokens) = assets_of(utxos.to_vec())?;
     let inputs: Vec<Input> = utxos.iter().map(input_of).collect::<Result<_>>()?;
-    let (fee, staged) = settle_fee(params, 1, |fee| {
+    // Conway charges for a reference script on a spent input too.
+    let script_fee = reference_script_fee(params, reference_script_bytes(utxos)?)?;
+    let price = |size| linear_fee(params, size).saturating_add(script_fee);
+    let (fee, staged) = settle(1, Patches::staking(&Staking::none()), price, |fee| {
         let lovelace = checked_lovelace(total, &[fee])?;
         let mut tx = StagingTransaction::new();
         for input in &inputs {
@@ -463,6 +540,9 @@ pub struct AccountPayment {
     /// What goes back to the Cardano account.
     pub change_lovelace: u64,
     pub change_tokens: Assets,
+    /// What Max couldn't spend with the rest, in the order given: see
+    /// [`fitting`] and [`reference_script_size`]. Empty for an amount.
+    pub left_out: Vec<UtxoResponse>,
 }
 
 /// Move-in: the Cardano account pays into the wallet contract under fresh
@@ -477,9 +557,18 @@ pub struct AccountPayment {
 /// - Otherwise pure-ADA UTxOs are spent first, largest first, then other
 ///   token UTxOs, until the amount, the fee and valid change are covered.
 ///   Tokens that aren't picked go back with the change.
+/// - A UTxO whose tokens would push a total past what one output holds is
+///   never spent with the rest ([`fitting`]), nor is one holding a reference
+///   script that can't be measured ([`reference_script_size`]); Max says
+///   which it left out. The fee pays for every spent input's reference
+///   script, as Conway charges.
 /// - Change goes to `change_addr`. There is no change output when nothing is left.
 /// - `staking` rides along: a reward withdrawal adds to what pays
 ///   ([`Staking::withdraw`]), and it's patched into the transaction.
+/// - `invalid_hereafter` is the slot the transaction stops being valid at
+///   ([`crate::eval::slot_at`] gives one from the time): past it, one that
+///   never landed can't land any more, so a payment made again can't pay
+///   twice. `None` leaves it valid for as long as its inputs are unspent.
 #[allow(clippy::too_many_arguments)]
 pub fn move_in(
     params: &ProtocolParameters,
@@ -490,6 +579,7 @@ pub fn move_in(
     wallet_addr: &Address,
     change_addr: &Address,
     staking: &Staking,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     let payee = Payee::Seedelf { owner, wallet_addr };
     account_payment(
@@ -499,12 +589,14 @@ pub fn move_in(
         Patches::staking(staking),
         change_addr,
         MOVE_IN_SHORT,
+        invalid_hereafter,
     )
 }
 
 /// Send: the Cardano account pays `to`, a key address on this network
 /// (`network_flag`: `true` is preprod), in one output. The UTxOs are chosen,
-/// the change made, and `staking` carried, as for [`move_in`].
+/// the change made, and `staking` and `invalid_hereafter` carried, as for
+/// [`move_in`].
 #[allow(clippy::too_many_arguments)]
 pub fn account_send(
     params: &ProtocolParameters,
@@ -515,6 +607,7 @@ pub fn account_send(
     network_flag: bool,
     change_addr: &Address,
     staking: &Staking,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     let payee = Payee::Address(to);
     account_send_many(
@@ -525,6 +618,7 @@ pub fn account_send(
         change_addr,
         staking,
         None,
+        invalid_hereafter,
     )
 }
 
@@ -532,8 +626,9 @@ pub fn account_send(
 /// order given, then the change. Each is a key address on this network or a
 /// Seedelf (see [`Payee::Seedelf`]), with its own amount and tokens. Max pays a
 /// single recipient. The UTxOs are chosen, the change made, and `staking`
-/// carried, as for [`move_in`]. A `note` goes on the transaction as CIP-20's
-/// message, which anyone can read; the fee pays for its bytes.
+/// and `invalid_hereafter` carried, as for [`move_in`]. A `note` goes on the
+/// transaction as CIP-20's message, which anyone can read; the fee pays for
+/// its bytes.
 #[allow(clippy::too_many_arguments)]
 pub fn account_send_many(
     params: &ProtocolParameters,
@@ -543,6 +638,7 @@ pub fn account_send_many(
     change_addr: &Address,
     staking: &Staking,
     note: Option<&Note>,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     if recipients.is_empty() {
         bail!("A payment needs someone to pay");
@@ -561,6 +657,7 @@ pub fn account_send_many(
         Patches { staking, note },
         change_addr,
         SEND_SHORT,
+        invalid_hereafter,
     )
 }
 
@@ -579,11 +676,13 @@ fn check_register(register: &Register) -> Result<()> {
 /// deposit, and everything else comes back to `change_addr`; UTxOs are
 /// chosen as for [`move_in`], as few as pay. A withdrawal or a refund counts
 /// towards the fee, but a transaction always spends at least one UTxO.
+/// `invalid_hereafter` is as for [`move_in`].
 pub fn account_staking(
     params: &ProtocolParameters,
     available: &[UtxoResponse],
     staking: &Staking,
     change_addr: &Address,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     if staking.is_empty() {
         bail!("A staking transaction needs a certificate or a withdrawal");
@@ -599,6 +698,7 @@ pub fn account_staking(
         Patches::staking(staking),
         change_addr,
         STAKE_SHORT,
+        invalid_hereafter,
     )
 }
 
@@ -609,6 +709,7 @@ fn account_payment(
     patches: Patches,
     change_addr: &Address,
     short: NotEnough,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     let max = pays.iter().any(|p| p.amount == AccountAmount::Max);
     if max && pays.len() > 1 {
@@ -623,7 +724,6 @@ fn account_payment(
         let total = picked.entry((policy, name)).or_default();
         *total = total.saturating_add(*quantity);
     }
-    let eligible: Vec<UtxoResponse> = available.to_vec();
     let holds_picked = |u: &UtxoResponse| {
         u.asset_list.as_ref().is_some_and(|assets| {
             assets
@@ -631,6 +731,20 @@ fn account_payment(
                 .any(|a| picked.contains_key(&(a.policy_id.as_str(), a.asset_name.as_str())))
         })
     };
+    // A UTxO holding a reference script that can't be measured can't be
+    // priced, so it's never spent. Of the rest, what one transaction can hold
+    // together, the UTxOs with picked tokens first.
+    let priced: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| reference_script_size(u).is_ok())
+        .cloned()
+        .collect();
+    let (eligible, _) = fitting(&priced, &Assets::new(), holds_picked)?;
+    let left_out: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| !eligible.iter().any(|e| same_utxo(e, u)))
+        .cloned()
+        .collect();
     for ((policy, name), quantity) in &picked {
         let held: u64 = eligible
             .iter()
@@ -648,15 +762,29 @@ fn account_payment(
 
     let (mandatory, mut rest): (Vec<UtxoResponse>, Vec<UtxoResponse>) =
         eligible.into_iter().partition(|u| holds_picked(u));
-    // Pure ADA first, then token UTxOs; largest first within each.
+    // Pure ADA first, then token UTxOs; within each, those holding a
+    // reference script (which costs more to spend) after the rest, and the
+    // largest first.
     rest.sort_by_key(|u| {
         let tokens = u.asset_list.as_ref().is_some_and(|a| !a.is_empty());
         let lovelace = u.value.parse::<u64>().unwrap_or(0);
-        (tokens, std::cmp::Reverse(lovelace))
+        (
+            tokens,
+            u.reference_script.is_some(),
+            std::cmp::Reverse(lovelace),
+        )
     });
 
     let attempt = |selected: &[UtxoResponse]| {
-        build_account_payment(params, selected, pays, patches, change_addr, short)
+        build_account_payment(
+            params,
+            selected,
+            pays,
+            patches,
+            change_addr,
+            short,
+            invalid_hereafter,
+        )
     };
 
     if max {
@@ -664,7 +792,9 @@ fn account_payment(
         if all.is_empty() {
             bail!("There is nothing in the Cardano account to spend");
         }
-        return attempt(&all);
+        let mut built = attempt(&all)?;
+        built.left_out = left_out;
+        return Ok(built);
     }
 
     let mut last_error = None;
@@ -693,6 +823,7 @@ fn build_account_payment(
     patches: Patches,
     change_addr: &Address,
     short: NotEnough,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     let (inputs_total, all_tokens) = assets_of(selected.to_vec())?;
     // What pays: the inputs, plus rewards and a refund, less a deposit.
@@ -741,11 +872,13 @@ fn build_account_payment(
         .collect::<BTreeSet<_>>()
         .len();
     let change_floor = minimum_change(params, change_addr, &staying)?;
+    // Conway charges for a reference script on a spent input too.
+    let script_fee = reference_script_fee(params, reference_script_bytes(selected)?)?;
 
     let mut paid: Vec<u64> = Vec::new();
     let mut change = 0;
     let mut outputs = 0;
-    let price = |size| linear_fee(params, size);
+    let price = |size| linear_fee(params, size).saturating_add(script_fee);
     let (fee, staged) = settle(signers, patches, price, |fee| {
         (paid, change) = match pays {
             [only] if only.amount == AccountAmount::Max => {
@@ -785,7 +918,7 @@ fn build_account_payment(
         for output in change_outputs(params, change_addr, change, &staying, short)? {
             tx = tx.output(output);
         }
-        Ok(tx.fee(fee))
+        Ok(expiring(tx.fee(fee), invalid_hereafter))
     })?;
 
     Ok(AccountPayment {
@@ -798,6 +931,7 @@ fn build_account_payment(
         outputs,
         change_lovelace: change,
         change_tokens: staying,
+        left_out: Vec::new(),
     })
 }
 
@@ -854,10 +988,6 @@ pub const MINT_BUDGET_GUESS: Budget = Budget {
     mem: 100_000,
     steps: 30_000_000,
 };
-
-/// The Conway reference-script fee per byte (`min_fee_ref_script_cost_per_byte`).
-/// Both scripts are far below the first 25 KiB tier, so it's flat.
-const REFERENCE_SCRIPT_FEE_PER_BYTE: u64 = 15;
 
 /// The collateral giveme.my lends: one 5 ADA UTxO.
 pub const COLLATERAL_LOVELACE: u64 = 5_000_000;
@@ -1143,7 +1273,8 @@ pub struct ScriptFee {
     pub size: u64,
     /// Execution units, at the protocol's prices.
     pub compute: u64,
-    /// The scripts read from reference inputs.
+    /// Reference scripts: those read from reference inputs, and any on a
+    /// spent input.
     pub script_reference: u64,
     pub total: u64,
 }
@@ -1550,12 +1681,19 @@ impl ScriptSpend {
             .iter()
             .map(|b| computation_fee(&self.chain.params, b.mem, b.steps))
             .sum();
+        // The Seedelf scripts, read from reference inputs, and any reference
+        // script on a spent input, which Conway charges for too.
         let contract = &self.chain.config.contract;
         let mut script_bytes = contract.wallet_contract_size;
         if self.mint.is_some() {
             script_bytes += contract.seedelf_contract_size;
         }
-        let script_reference = script_bytes * REFERENCE_SCRIPT_FEE_PER_BYTE;
+        let mut spent = self.inputs();
+        if let Some(account) = &self.account {
+            spent.extend(account.inputs.iter().map(|(u, _)| u.clone()));
+        }
+        script_bytes += reference_script_bytes(&spent)?;
+        let script_reference = reference_script_fee(&self.chain.params, script_bytes)?;
 
         // Two signatures: the one-time key and giveme.my's collateral key, or
         // the account's key when an account puts up the collateral.
@@ -1651,7 +1789,14 @@ impl ScriptSpend {
         for (_, input) in self.account.iter().flat_map(|a| &a.inputs) {
             tx = tx.input(input.clone());
         }
-        for output in self.outputs.iter().cloned().chain(change) {
+        // The payments and the change in a random order, drawn afresh each
+        // time: in a transfer both are contract outputs under fresh
+        // registers, so a fixed order was all that said which one is the
+        // change (privacy review §3.7). No redeemer points at an output, and
+        // the order changes neither the size nor the fee.
+        let mut outputs: Vec<Output> = self.outputs.iter().cloned().chain(change).collect();
+        crate::lovejoin::shuffle(&mut outputs);
+        for output in outputs {
             tx = tx.output(output);
         }
         tx = match &self.account {
@@ -1716,26 +1861,253 @@ fn policy_hash(config: &Config) -> Result<Hash<28>> {
     Ok(Hash::new(bytes))
 }
 
-/// Picks as few of `available` as it can. First the UTxOs holding the tokens
-/// in `needed` (see [`holding`]), then pure-ADA UTxOs, largest first, then
-/// other token UTxOs, adding one at a time until `attempt` succeeds. Only
-/// "not enough" failures move on to more inputs.
+// ---------------------------------------------------------------------------
+// Keeping histories apart
+//
+// Two contract UTxOs spent in one transaction can be taken to share an owner,
+// so a spend ties together the histories of everything it spends. Two boxes
+// back from Lovejoin spent together undo much of the mixing; the change a
+// session's funding left, spent in another session's funding, ties the two
+// sessions; money made private from the public account, spent on a stealth
+// mint, ties the new Seedelf to the account (privacy review §2.3).
+//
+// The web wallet knows where each of its UTxOs came from (its sealed
+// history), and gives each a class. Selection keeps classes apart where one
+// of the choices it tries without merging them pays, and otherwise merges
+// them, never refusing what the CLI's order would pay (independent review
+// M6): the review then says what was merged. The CLI
+// knows nothing of the sort: every UTxO is Unknown, and it picks as it
+// always has.
+// ---------------------------------------------------------------------------
+
+/// Where a UTxO's money came from, as far as the wallet knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Origin {
+    /// Nothing is known: the CLI's UTxOs, a restored wallet's.
+    #[default]
+    Unknown,
+    /// Made private from the wallet's own public account, or its change.
+    Own,
+    /// Paid by someone else.
+    Received,
+    /// What a private session's funding left, or its return.
+    Session,
+    /// A box back from Lovejoin: each is a class of its own.
+    Lovejoin,
+}
+
+/// The class every UTxO with no history is in.
+pub const UNKNOWN_CLASS: &str = "unknown";
+
+/// A UTxO's history: UTxOs of one class share it, and spending them together
+/// ties nothing new. `id` names it; a class whose histories were merged
+/// before names each of them, joined by `+`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Class {
+    pub id: String,
+    pub origin: Origin,
+}
+
+impl Default for Class {
+    fn default() -> Self {
+        Class {
+            id: UNKNOWN_CLASS.to_string(),
+            origin: Origin::Unknown,
+        }
+    }
+}
+
+impl Class {
+    /// Whether this class's history includes `part`'s.
+    pub fn has(&self, part: &str) -> bool {
+        self.id.split('+').any(|p| p == part)
+    }
+}
+
+/// What a spend is for, which orders the classes it would rather take.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Purpose {
+    /// Send or Make public: own money first, a box back from Lovejoin last.
+    #[default]
+    Pay,
+    /// A stealth mint: received money first, since the new Seedelf is tied to
+    /// whatever pays for it.
+    Mint,
+    /// A private session's funding or top-up: received money, or a box that
+    /// pays alone, first; another session's money last. `session` is the
+    /// session's own class, whose money a top-up may take first.
+    Fund { session: Option<String> },
+}
+
+impl Purpose {
+    /// How much this spend would rather take money of `class`: lowest first.
+    fn rank(&self, class: &Class) -> u8 {
+        use Origin::*;
+        match self {
+            Purpose::Pay => match class.origin {
+                Own => 0,
+                Session => 1,
+                Received => 2,
+                Unknown => 3,
+                Lovejoin => 4,
+            },
+            Purpose::Mint => match class.origin {
+                Received => 0,
+                Lovejoin => 1,
+                Unknown => 2,
+                Own => 3,
+                Session => 4,
+            },
+            Purpose::Fund { session } => {
+                if session.as_deref().is_some_and(|s| class.has(s)) {
+                    return 0;
+                }
+                match class.origin {
+                    Received => 1,
+                    Lovejoin => 2,
+                    Unknown => 3,
+                    Own => 4,
+                    Session => 5,
+                }
+            }
+        }
+    }
+
+    /// When merging: 0 for what's taken first, 1 for what's taken only when
+    /// nothing else pays (another session's money, for a funding), 2 for a
+    /// box, taken last and one at a time.
+    fn tier(&self, class: &Class) -> u8 {
+        match (self, class.origin) {
+            (_, Origin::Lovejoin) => 2,
+            (Purpose::Fund { .. }, Origin::Session) if self.rank(class) > 0 => 1,
+            _ => 0,
+        }
+    }
+}
+
+/// What selection knows of the UTxOs it picks from: each one's class, by
+/// outpoint, and what the spend is for. [`Histories::default`] knows
+/// nothing, and picks as the CLI always has.
+#[derive(Debug, Clone, Default)]
+pub struct Histories {
+    classes: BTreeMap<(String, u64), Class>,
+    purpose: Purpose,
+}
+
+impl Histories {
+    /// Nothing known yet, for a spend that's for `purpose`.
+    pub fn new(purpose: Purpose) -> Self {
+        Histories {
+            classes: BTreeMap::new(),
+            purpose,
+        }
+    }
+
+    /// The UTxO `tx_hash#tx_index` is of `class`.
+    pub fn with(mut self, tx_hash: &str, tx_index: u64, class: Class) -> Self {
+        self.classes.insert((tx_hash.to_string(), tx_index), class);
+        self
+    }
+
+    /// `utxo`'s class: Unknown when none was given.
+    pub fn class_of(&self, utxo: &UtxoResponse) -> Class {
+        self.classes
+            .get(&(utxo.tx_hash.clone(), utxo.tx_index))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The classes `inputs` merge: each one once, in the order first spent,
+    /// when there's more than one; none when they share a history.
+    pub fn merged(&self, inputs: &[UtxoResponse]) -> Vec<Class> {
+        let mut classes: Vec<Class> = Vec::new();
+        for class in inputs.iter().map(|u| self.class_of(u)) {
+            if !classes.iter().any(|c| c.id == class.id) {
+                classes.push(class);
+            }
+        }
+        if classes.len() > 1 {
+            classes
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Whether nothing is known of any of `utxos`.
+    fn blind(&self, utxos: &[UtxoResponse]) -> bool {
+        utxos
+            .iter()
+            .all(|u| self.class_of(u).origin == Origin::Unknown)
+    }
+}
+
+fn lovelace_of(utxo: &UtxoResponse) -> u64 {
+    utxo.value.parse::<u64>().unwrap_or(0)
+}
+
+fn holds_tokens(utxo: &UtxoResponse) -> bool {
+    utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty())
+}
+
+/// Picks as few of `available` as it can, keeping different histories apart
+/// when it can (see the section comment above), and hands each choice to
+/// `attempt` until one succeeds. Only "not enough" failures move on. Never
+/// picked: a UTxO the wallet's evaluator can't take
+/// ([`crate::eval::refusal`]: one holding a reference script, which anyone
+/// can pay a Seedelf), and one whose tokens would push a total past what one
+/// output holds ([`fitting`]). `floor` is the lovelace the spend pays out:
+/// inputs holding no more can't pay, and aren't tried.
+///
+/// First the UTxOs holding the tokens in `needed` ([`holding`]). When nothing
+/// is known of any UTxO's history, then pure-ADA UTxOs, largest first, then
+/// other token UTxOs, adding one at a time: the CLI's way. Otherwise, in turn:
+///
+/// 1. one UTxO that pays on its own (a token-bearing one counts), by the
+///    purpose's order, the smallest first;
+/// 2. UTxOs of one class, by the purpose's order, the largest first;
+/// 3. merging classes: with tokens sent, their UTxOs and one of another
+///    class first; then by the purpose's order, its last resorts after the
+///    rest, and boxes back from Lovejoin last of all, one at a time, so two
+///    are spent together only when nothing else pays. When that runs into
+///    what a transaction can spend (too many inputs), the same without the
+///    purpose's order; then as few boxes as pay, none first, then one more
+///    at a time, each with the fewest other inputs (the largest first,
+///    tokens or not), or with UTxOs holding tokens last, for when their
+///    tokens make it too large; and at the last the CLI's own order, so
+///    nothing the CLI pays is refused.
 fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
+    floor: u64,
+    histories: &Histories,
     mut attempt: impl FnMut(&[UtxoResponse]) -> Result<T>,
 ) -> Result<T> {
+    let holds_needed = |u: &UtxoResponse| {
+        needed.items.iter().any(|want| {
+            quantity_in(
+                u,
+                &hex::encode(want.policy_id),
+                &hex::encode(&want.token_name),
+            ) > 0
+        })
+    };
+    let evaluable: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| crate::eval::refusal(u).is_none())
+        .cloned()
+        .collect();
+    let (available, _) = fitting(&evaluable, &Assets::new(), holds_needed)?;
+    let available = available.as_slice();
     let mandatory = holding(available, needed)?;
     let mut rest: Vec<UtxoResponse> = available
         .iter()
         .filter(|u| !mandatory.iter().any(|m| same_utxo(m, u)))
         .cloned()
         .collect();
-    rest.sort_by_key(|u| {
-        let tokens = u.asset_list.as_ref().is_some_and(|a| !a.is_empty());
-        let lovelace = u.value.parse::<u64>().unwrap_or(0);
-        (tokens, std::cmp::Reverse(lovelace))
-    });
+    if !histories.blind(available) {
+        return apart(mandatory, rest, floor, histories, attempt);
+    }
+    rest.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut last_error = None;
     for k in 0..=rest.len() {
         let selected: Vec<UtxoResponse> = mandatory.iter().chain(&rest[..k]).cloned().collect();
@@ -1749,6 +2121,285 @@ fn select_script_inputs<T>(
         }
     }
     Err(last_error.unwrap_or_else(|| SEEDELF_SHORT.into()))
+}
+
+/// How many UTxOs holding tokens [`apart`] tries alone. Each is a question
+/// of its own (its change must carry its tokens), and a wallet can hold
+/// hundreds; past these, the later steps still find what pays.
+const MAX_TOKEN_SINGLES: usize = 12;
+
+/// One choice [`apart`] hands to `attempt`.
+enum Tried<T> {
+    Built(T),
+    /// These inputs don't hold enough.
+    Short,
+    /// They failed otherwise (too much computation, say).
+    Failed,
+    /// Not tried: they can't pay what the spend pays out.
+    Skipped,
+}
+
+/// [`apart`] with one more UTxO: each of `candidates` in turn, by `rank`,
+/// the smallest first. One of ADA alone that was short says no smaller one
+/// of ADA alone will do, and only [`MAX_TOKEN_SINGLES`] holding tokens are
+/// tried.
+fn one_more<'a, T>(
+    mut candidates: Vec<&'a UtxoResponse>,
+    rank: impl Fn(&UtxoResponse) -> u8,
+    try_with: &mut impl FnMut(&[&'a UtxoResponse]) -> Tried<T>,
+) -> Option<T> {
+    candidates.sort_by_key(|u| (rank(u), lovelace_of(u)));
+    let mut short_at: Option<u64> = None;
+    let mut token_tries = 0;
+    for u in candidates {
+        let ada_only = !holds_tokens(u);
+        if ada_only && short_at.is_some_and(|at| lovelace_of(u) <= at) {
+            continue;
+        }
+        if !ada_only {
+            if token_tries == MAX_TOKEN_SINGLES {
+                continue;
+            }
+            token_tries += 1;
+        }
+        match try_with(&[u]) {
+            Tried::Built(built) => return Some(built),
+            Tried::Short if ada_only => short_at = short_at.max(Some(lovelace_of(u))),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// How growing one of [`apart`]'s merging orders ended.
+enum Grown<T> {
+    Built(T),
+    /// Everything in it together is short.
+    Short,
+    /// The choice of its first `.0` failed otherwise (too much computation,
+    /// say): more inputs won't mend it.
+    Failed(usize),
+}
+
+/// `order[..k]` for k = `from`, `from` + 1, … until one builds or fails
+/// otherwise.
+fn grow<'a, T>(
+    order: &[&'a UtxoResponse],
+    from: usize,
+    try_with: &mut impl FnMut(&[&'a UtxoResponse]) -> Tried<T>,
+) -> Grown<T> {
+    for k in from.max(1)..=order.len() {
+        match try_with(&order[..k]) {
+            Tried::Built(built) => return Grown::Built(built),
+            Tried::Failed => return Grown::Failed(k),
+            _ => {}
+        }
+    }
+    Grown::Short
+}
+
+/// [`select_script_inputs`] with histories known: `base` are the UTxOs
+/// holding the tokens sent, which every choice spends, and `rest` the others.
+fn apart<T>(
+    base: Vec<UtxoResponse>,
+    rest: Vec<UtxoResponse>,
+    floor: u64,
+    histories: &Histories,
+    mut attempt: impl FnMut(&[UtxoResponse]) -> Result<T>,
+) -> Result<T> {
+    let purpose = &histories.purpose;
+    let class = |u: &UtxoResponse| histories.class_of(u);
+    let base_lovelace: u64 = base.iter().map(lovelace_of).sum();
+    let base_classes: Vec<String> = base.iter().map(|u| class(u).id).collect();
+    // Money that adds no history to what the tokens sent bring.
+    let joins_base = |u: &UtxoResponse| base.is_empty() || base_classes.contains(&class(u).id);
+
+    let mut not_enough: Option<anyhow::Error> = None;
+    let mut other: Option<anyhow::Error> = None;
+    let mut try_with = |extra: &[&UtxoResponse]| -> Tried<T> {
+        let lovelace = base_lovelace + extra.iter().map(|u| lovelace_of(u)).sum::<u64>();
+        if lovelace <= floor || (base.is_empty() && extra.is_empty()) {
+            return Tried::Skipped;
+        }
+        let selected: Vec<UtxoResponse> = base
+            .iter()
+            .cloned()
+            .chain(extra.iter().map(|u| (*u).clone()))
+            .collect();
+        match attempt(&selected) {
+            Ok(built) => Tried::Built(built),
+            Err(e) if e.downcast_ref::<NotEnough>().is_some() => {
+                not_enough = Some(e);
+                Tried::Short
+            }
+            Err(e) => {
+                other = Some(e);
+                Tried::Failed
+            }
+        }
+    };
+
+    // The tokens' own UTxOs, alone.
+    if let Tried::Built(built) = try_with(&[]) {
+        return Ok(built);
+    }
+
+    // 1. One more UTxO: by the purpose's order, the smallest first.
+    let singles: Vec<&UtxoResponse> = rest.iter().filter(|u| joins_base(u)).collect();
+    if let Some(built) = one_more(singles, |u| purpose.rank(&class(u)), &mut try_with) {
+        return Ok(built);
+    }
+
+    // 2. UTxOs of one class: the classes by the purpose's order (the most
+    // money first among equals), each one's largest first, pure ADA before
+    // tokens.
+    let mut classes: Vec<(Class, Vec<&UtxoResponse>)> = Vec::new();
+    for u in rest.iter().filter(|u| joins_base(u)) {
+        let c = class(u);
+        match classes.iter_mut().find(|(k, _)| k.id == c.id) {
+            Some((_, rows)) => rows.push(u),
+            None => classes.push((c, vec![u])),
+        }
+    }
+    classes.sort_by_key(|(c, rows)| {
+        let total: u64 = rows.iter().map(|u| lovelace_of(u)).sum();
+        (purpose.rank(c), std::cmp::Reverse(total), c.id.clone())
+    });
+    for (_, rows) in &mut classes {
+        rows.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+        for k in 2..=rows.len() {
+            match try_with(&rows[..k]) {
+                Tried::Built(built) => return Ok(built),
+                // More of this class won't mend it.
+                Tried::Failed => break,
+                _ => {}
+            }
+        }
+    }
+
+    // 3. Merging. With tokens sent, first their UTxOs and one UTxO of another
+    // class, as in 1: two histories before more (independent review L39).
+    // Boxes and the purpose's last resorts wait for the merging below.
+    if !base.is_empty() {
+        let others: Vec<&UtxoResponse> = rest
+            .iter()
+            .filter(|u| !joins_base(u) && purpose.tier(&class(u)) == 0)
+            .collect();
+        if let Some(built) = one_more(others, |u| purpose.rank(&class(u)), &mut try_with) {
+            return Ok(built);
+        }
+    }
+
+    // Then orders tried in turn, each grown one UTxO at a time. One that runs
+    // into what more inputs can't mend (too much computation, too large) is
+    // left for the next; short with everything is short in any order
+    // (independent review M6).
+    //
+    // a. As the CLI would, but the purpose's last resorts after the rest,
+    //    and boxes after everything, one at a time; within each, by the
+    //    purpose's order, the largest first (independent review L39).
+    // b. The same without the purpose's order, pure ADA before tokens within
+    //    each: what merging paid before a did is paid the same way.
+    // c. As few boxes as pay: the largest j of them, then the rest without
+    //    the other boxes (the last resorts after the others), for j = 0, 1,
+    //    2, …, so no more boxes are spent together than pay. For each j, the
+    //    rest the largest first, tokens or not, for the fewest inputs; then
+    //    pure ADA before tokens, for when a UTxO's tokens make it too large.
+    //    Boxes that fail alone fail with more.
+    // d. The CLI's own order, boxes among the rest by size: never refused
+    //    what the CLI would pay.
+    let tier = |u: &UtxoResponse| purpose.tier(&class(u));
+    let mut by_history: Vec<&UtxoResponse> = rest.iter().collect();
+    by_history.sort_by_key(|u| {
+        (
+            tier(u),
+            !joins_base(u),
+            purpose.rank(&class(u)),
+            holds_tokens(u),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    let mut by_tier: Vec<&UtxoResponse> = rest.iter().collect();
+    by_tier.sort_by_key(|u| {
+        (
+            tier(u),
+            !joins_base(u),
+            holds_tokens(u),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    let is_box = |u: &UtxoResponse| tier(u) == 2 && !holds_tokens(u);
+    let mut boxes: Vec<&UtxoResponse> = rest.iter().filter(|u| is_box(u)).collect();
+    boxes.sort_by_key(|u| (!joins_base(u), std::cmp::Reverse(lovelace_of(u))));
+    let mut largest: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
+    largest.sort_by_key(|u| (tier(u), !joins_base(u), std::cmp::Reverse(lovelace_of(u))));
+    let mut tokens_last: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
+    tokens_last.sort_by_key(|u| {
+        (
+            holds_tokens(u),
+            tier(u),
+            !joins_base(u),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    let same = |a: &[&UtxoResponse], b: &[&UtxoResponse]| {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| std::ptr::eq(*x, *y))
+    };
+    let mut rests = vec![&largest];
+    if !same(&largest, &tokens_last) {
+        rests.push(&tokens_last);
+    }
+    let (boxes, rests) = (&boxes, &rests);
+    // With nothing but boxes, a grew these already.
+    let fewest_boxes = (0..=boxes.len())
+        .filter(|_| !largest.is_empty())
+        .flat_map(|j| {
+            rests
+                .iter()
+                .map(move |others| (boxes[..j].iter().chain(others.iter()).copied().collect(), j))
+        });
+    let mut blind: Vec<&UtxoResponse> = rest.iter().collect();
+    blind.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+    let mut failed = false;
+    let mut boxes_fail = false;
+    let mut grown: Vec<Vec<&UtxoResponse>> = Vec::new();
+    // Each order, and how many boxes it brings forward (none for a, b, d).
+    let orders = [(by_history, 0), (by_tier, 0)]
+        .into_iter()
+        .chain(fewest_boxes)
+        .chain([(blind, 0)]);
+    for (order, j) in orders {
+        // The same order again, or the start of one grown whole before (c's
+        // without boxes, often), would fail the same way.
+        let grown_before =
+            |g: &Vec<&UtxoResponse>| g.len() >= order.len() && same(&g[..order.len()], &order);
+        if (j > 0 && boxes_fail) || grown.iter().any(grown_before) {
+            continue;
+        }
+        let whole = order.len() == rest.len();
+        match grow(&order, j, &mut try_with) {
+            Grown::Built(built) => return Ok(built),
+            Grown::Short if whole => {
+                failed = false;
+                break;
+            }
+            // Short without the other boxes: one more may pay.
+            Grown::Short => {}
+            Grown::Failed(at) => {
+                failed = true;
+                boxes_fail |= j > 0 && at == j;
+            }
+        }
+        if whole {
+            grown.push(order);
+        }
+    }
+    Err(match (failed, other, not_enough) {
+        (true, Some(e), _) => e,
+        (_, _, Some(e)) => e,
+        (_, Some(e), None) => e,
+        _ => SEEDELF_SHORT.into(),
+    })
 }
 
 fn same_utxo(a: &UtxoResponse, b: &UtxoResponse) -> bool {
@@ -1819,7 +2470,29 @@ pub fn mint(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<SeedelfMint> {
-    select_script_inputs(available, &Assets::new(), |inputs| {
+    mint_apart(
+        chain,
+        available,
+        &Histories::default(),
+        label,
+        seedelf,
+        change_owner,
+        signer,
+    )
+}
+
+/// [`mint`], keeping the `histories` of `available` apart where it can.
+pub fn mint_apart(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    histories: &Histories,
+    label: &str,
+    seedelf: &Register,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<SeedelfMint> {
+    let floor = seedelf_minimum_lovelace(&chain.params)?;
+    select_script_inputs(available, &Assets::new(), floor, histories, |inputs| {
         let built = mint_from(chain, inputs, label, seedelf, change_owner, signer)?;
         built.spend.estimate()?;
         Ok(built)
@@ -1922,15 +2595,45 @@ pub fn transfer(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<ScriptSpend> {
+    transfer_apart(
+        chain,
+        available,
+        &Histories::default(),
+        payments,
+        change_owner,
+        signer,
+    )
+}
+
+/// [`transfer`], keeping the `histories` of `available` apart where it can.
+pub fn transfer_apart(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    histories: &Histories,
+    payments: &[Payment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
     let outputs = payment_outputs(chain, payments)?;
     let needed = payments
         .iter()
         .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
-    select_script_inputs(available, &needed, |inputs| {
-        let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
-        spend.estimate()?;
-        Ok(spend)
-    })
+    select_script_inputs(
+        available,
+        &needed,
+        paid_out(&outputs),
+        histories,
+        |inputs| {
+            let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
+            spend.estimate()?;
+            Ok(spend)
+        },
+    )
+}
+
+/// The lovelace `outputs` carry.
+fn paid_out(outputs: &[(Output, Assets)]) -> u64 {
+    outputs.iter().map(|(o, _)| o.lovelace).sum()
 }
 
 /// A transfer spending exactly `inputs`. They must hold the tokens being
@@ -2115,11 +2818,31 @@ pub struct AddressPayment {
     pub tokens: Assets,
 }
 
-/// [`sweep`] to several: pays each of `payments`, in the order given, from
-/// as few owned UTxOs as can pay them all. The change comes last.
+/// [`sweep`] to several: pays each of `payments` from as few owned UTxOs as
+/// can pay them all. The outputs, change included, go in a random order
+/// ([`ScriptSpend`]).
 pub fn sweep_many(
     chain: &Chain,
     available: &[UtxoResponse],
+    payments: &[AddressPayment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    sweep_many_apart(
+        chain,
+        available,
+        &Histories::default(),
+        payments,
+        change_owner,
+        signer,
+    )
+}
+
+/// [`sweep_many`], keeping the `histories` of `available` apart where it can.
+pub fn sweep_many_apart(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    histories: &Histories,
     payments: &[AddressPayment],
     change_owner: &Register,
     signer: Hash<28>,
@@ -2139,11 +2862,17 @@ pub fn sweep_many(
     let needed = payments
         .iter()
         .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
-    select_script_inputs(available, &needed, |inputs| {
-        let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
-        spend.estimate()?;
-        Ok(spend)
-    })
+    select_script_inputs(
+        available,
+        &needed,
+        paid_out(&outputs),
+        histories,
+        |inputs| {
+            let spend = paying(chain, inputs, &outputs, change_owner, signer)?;
+            spend.estimate()?;
+            Ok(spend)
+        },
+    )
 }
 
 /// A sweep spending exactly `inputs`. They must hold the tokens being sent.
@@ -2246,6 +2975,8 @@ pub struct AccountMint {
     change_addr: Address,
     /// A reward withdrawal riding along, patched into every draft.
     staking: Staking,
+    /// The slot it stops being valid at, staged in every draft.
+    invalid_hereafter: Option<u64>,
     /// The new token's name: prefix, label, and the smallest input.
     pub token_name: Vec<u8>,
     /// Locked with the token; only removing the seedelf gets it back.
@@ -2310,8 +3041,13 @@ impl AccountMint {
             .mint(0)
             .context("Ogmios measured no budget for the Seedelf policy")?;
         let compute = computation_fee(&self.chain.params, budget.mem, budget.steps);
-        let script_reference =
-            self.chain.config.contract.seedelf_contract_size * REFERENCE_SCRIPT_FEE_PER_BYTE;
+        // The policy, by reference, and any reference script on an input
+        // (never the collateral's: the ledger doesn't count it).
+        let script_reference = reference_script_fee(
+            &self.chain.params,
+            self.chain.config.contract.seedelf_contract_size
+                + reference_script_bytes(&self.inputs)?,
+        )?;
         let (fee, staged) = settle(
             self.signers(),
             Patches::staking(&self.staking),
@@ -2389,6 +3125,7 @@ impl AccountMint {
         for output in std::iter::once(self.seedelf.clone()).chain(change) {
             tx = tx.output(output);
         }
+        tx = expiring(tx, self.invalid_hereafter);
         Ok(tx
             .collateral_input(input_of(&self.collateral)?)
             .collateral_output(collateral_return)
@@ -2424,6 +3161,9 @@ impl AccountMint {
 ///   fresh re-randomization). Tokens in the inputs go back with the change,
 ///   to `change_addr`.
 /// - `staking` rides along, as for [`move_in`]: a withdrawal of the rewards.
+/// - `invalid_hereafter` is as for [`move_in`]; the draft Ogmios measures
+///   holds it too.
+#[allow(clippy::too_many_arguments)]
 pub fn account_mint(
     chain: &Chain,
     available: &[UtxoResponse],
@@ -2432,6 +3172,7 @@ pub fn account_mint(
     seedelf: &Register,
     change_addr: &Address,
     staking: &Staking,
+    invalid_hereafter: Option<u64>,
 ) -> Result<AccountMint> {
     if !is_payable(seedelf) {
         bail!("The Seedelf's register isn't made of valid points");
@@ -2441,15 +3182,26 @@ pub fn account_mint(
     let same =
         |a: &UtxoResponse, b: &UtxoResponse| a.tx_hash == b.tx_hash && a.tx_index == b.tx_index;
 
-    let mut spendable: Vec<UtxoResponse> = available
+    // Never one holding a reference script that can't be measured, so can't
+    // be priced.
+    let spendable: Vec<UtxoResponse> = available
         .iter()
         .filter(|u| collateral.is_none_or(|c| !same(u, c)))
+        .filter(|u| reference_script_size(u).is_ok())
         .cloned()
         .collect();
+    let (mut spendable, _) = fitting(&spendable, &Assets::new(), |_| false)?;
     if spendable.is_empty() {
         bail!("There is nothing in the Cardano account to pay for a Seedelf");
     }
-    spendable.sort_by_key(|u| (!pure_ada(u), std::cmp::Reverse(lovelace_of(u))));
+    // A reference script costs more to spend: those after the rest.
+    spendable.sort_by_key(|u| {
+        (
+            !pure_ada(u),
+            u.reference_script.is_some(),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
 
     let config = &chain.config;
     let policy = policy_hash(config)?;
@@ -2489,6 +3241,7 @@ pub fn account_mint(
             redeemer: redeemer.clone(),
             change_addr: change_addr.clone(),
             staking: staking.clone(),
+            invalid_hereafter,
             token_name,
             lovelace,
         };

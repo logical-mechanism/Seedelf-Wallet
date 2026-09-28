@@ -1,6 +1,8 @@
 use seedelf_crypto::register::Register;
 use seedelf_wasm::api;
 
+mod deep;
+
 // Same vector as seedelf-crypto's `random_register` test: sk = 18446744073709551606.
 const VECTOR_SK: &str = "000000000000000000000000000000000000000000000000fffffffffffffff6";
 const G1: &str = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
@@ -40,17 +42,57 @@ fn rerandomized_register_stays_owned_and_proves() {
     assert!(!api::verify_proof(&register, &z, &g_r, &"cd".repeat(28)).unwrap());
 }
 
+/// Whether a Seedelf spend built in the wallet declares budgets that cover
+/// what its scripts use, as the ledger checks: measured again here, against
+/// `rows` (what it spends) and the bundled references.
+fn covers(
+    tx_cbor: &str,
+    rows: &[seedelf_koios::koios::UtxoResponse],
+    params: &serde_json::Value,
+) -> bool {
+    use seedelf_core::eval;
+    let bytes = hex::decode(tx_cbor).unwrap();
+    let mut known: Vec<eval::Resolved> =
+        rows.iter().map(|r| eval::resolve_row(r).unwrap()).collect();
+    known.extend(eval::seedelf_references(true).unwrap());
+    let cost_model = seedelf_koios::koios::ProtocolParameters::from_koios(params)
+        .unwrap()
+        .cost_model_v3;
+    let answer = eval::evaluate(&bytes, &known, &cost_model, true).unwrap();
+    eval::declared_covers(&bytes, &answer).unwrap().is_ok()
+}
+
 #[test]
-fn with_phrase_rebuilds_the_vault_phrase() {
-    let entropy = [0u8; 32];
-    let words = api::with_phrase(&entropy, |p| Ok(p.split(' ').count())).unwrap();
-    assert_eq!(words, 24);
-    assert!(
-        api::with_phrase(&[0u8; 24], |_| Ok(())).is_err(),
-        "18 words"
+fn vault_entropy_gives_the_phrase_keys() {
+    // Unlock derives every key from the vault's entropy, without writing the
+    // phrase out: the keys must be the ones the phrase gives.
+    use seedelf_wasm::{
+        Network, SeedelfKey, WasmCardanoAccount as CardanoAccount,
+        WasmOneTimeAccounts as OneTimeAccounts,
+    };
+    let abandon_art = format!("{}art", "abandon ".repeat(23));
+    let entropy = vec![0u8; 32];
+
+    let seedelf = SeedelfKey::from_entropy(entropy.clone(), 0).unwrap();
+    let from_phrase = SeedelfKey::from_phrase(abandon_art.clone(), 0).unwrap();
+    assert_eq!(
+        seedelf.base_register().unwrap().public_value,
+        from_phrase.base_register().unwrap().public_value
     );
-    let failed: anyhow::Result<()> = api::with_phrase(&entropy, |_| anyhow::bail!("inner"));
-    assert_eq!(failed.unwrap_err().to_string(), "inner");
+
+    let cardano = CardanoAccount::from_entropy(entropy.clone(), 0).unwrap();
+    let from_phrase = CardanoAccount::from_phrase(abandon_art.clone(), 0).unwrap();
+    assert_eq!(
+        cardano.account_public_key(),
+        from_phrase.account_public_key()
+    );
+
+    let one_time = OneTimeAccounts::from_entropy(entropy).unwrap();
+    let from_phrase = OneTimeAccounts::from_phrase(abandon_art).unwrap();
+    assert_eq!(
+        one_time.address(Network::Preprod, 3).unwrap(),
+        from_phrase.address(Network::Preprod, 3).unwrap()
+    );
 }
 
 mod move_in {
@@ -64,7 +106,7 @@ mod move_in {
     use seedelf_wasm::api::{
         self, MoveInRequest, PathedUtxo, SendPayment, SendRequest, TokenAmount,
     };
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -125,6 +167,7 @@ mod move_in {
             lovelace: lovelace.map(String::from),
             tokens,
             withdrawal: None,
+            invalid_hereafter: None,
         }
     }
 
@@ -401,6 +444,7 @@ mod move_in {
             }],
             withdrawal: None,
             note: None,
+            invalid_hereafter: None,
         }
     }
 
@@ -691,6 +735,64 @@ mod move_in {
         .unwrap_err();
         assert!(e.to_string().contains("more than none"), "{e}");
     }
+
+    #[test]
+    fn sends_past_a_strangers_deep_utxos_at_the_account() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let home = account
+            .base_address(true, Role::Receive, 0)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let cred = hex::encode(account.key_hash(Role::Receive, 0).unwrap());
+        let deep_datum = crate::deep::row(
+            0xd1,
+            &home,
+            &cred,
+            1_500_000,
+            &crate::deep::datum(200),
+            "null",
+        );
+        let scripted = crate::deep::row(
+            0xd2,
+            &home,
+            &cred,
+            1_500_000,
+            "null",
+            &crate::deep::script(100_000),
+        );
+        // What `buildAccountSend` does with the worker's JSON.
+        let request = |lovelace: Value, strangers: &[(&str, &str)]| -> SendRequest {
+            let rows: Vec<Value> = account_utxos(&account)
+                .iter()
+                .map(|p| json!({ "utxo": p.utxo, "role": p.role, "index": p.index }))
+                .chain(
+                    strangers
+                        .iter()
+                        .map(|(name, _)| json!({ "utxo": name, "role": 0, "index": 0 })),
+                )
+                .collect();
+            let request = json!({
+                "network": "preprod",
+                "params": params(),
+                "utxos": rows,
+                "payments": [{ "to": theirs(), "lovelace": lovelace, "tokens": [] }],
+            });
+            serde_json::from_str(&crate::deep::splice(&request, strangers)).unwrap()
+        };
+
+        let both = [
+            ("datum", deep_datum.as_str()),
+            ("script", scripted.as_str()),
+        ];
+        let result = api::account_send(&account, request(json!("3000000"), &both)).unwrap();
+        assert_eq!(result.payments[0].lovelace, "3000000");
+
+        // Max spends the deep datum's UTxO with the rest.
+        let max = api::account_send(&account, request(Value::Null, &both[..1])).unwrap();
+        assert!(max.max);
+        assert_eq!(max.inputs, 7);
+    }
 }
 
 mod mint {
@@ -738,6 +840,7 @@ mod mint {
             params: params(),
             utxos,
             label: label.into(),
+            classes: Default::default(),
             seed: None,
             evaluation: None,
         }
@@ -758,6 +861,22 @@ mod mint {
             .iter()
             .map(hex::encode)
             .collect()
+    }
+
+    #[test]
+    fn builds_a_mint_measured_in_the_wallet_under_a_new_one_time_key() {
+        // No draft leaves the wallet: its own evaluator measures the scripts.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let result = api::build_mint(sk, request(spendable(), "web-wallet")).unwrap();
+        let one_time = hex::encode(signer_of(sk, &result.seed));
+        assert_eq!(
+            signers(&result.tx_cbor),
+            vec![one_time, hex::encode(COLLATERAL_HASH)]
+        );
+        assert!(crate::covers(&result.tx_cbor, &spendable(), &params()));
+        // Each build draws a new one-time key.
+        let again = api::build_mint(sk, request(spendable(), "web-wallet")).unwrap();
+        assert_ne!(again.seed, result.seed);
     }
 
     #[test]
@@ -1038,6 +1157,7 @@ mod account_mint {
             label: label.into(),
             evaluation,
             withdrawal: None,
+            invalid_hereafter: None,
         }
     }
 
@@ -1263,6 +1383,7 @@ mod transfer {
                 lovelace: r["lovelace"].as_str().unwrap().into(),
                 tokens: serde_json::from_value(r["tokens"].clone()).unwrap(),
             }],
+            classes: Default::default(),
             seed: None,
             evaluation: None,
         }
@@ -1329,6 +1450,34 @@ mod transfer {
     }
 
     #[test]
+    fn builds_a_transfer_measured_in_the_wallet_as_the_chain_did() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let result = api::build_transfer(sk, request()).unwrap();
+        // The recorded preprod transfer's fee: the wallet's evaluator costs
+        // its scripts as the network's did. The scripts see the signers sorted
+        // by hash, and the wallet script looks for the one-time key's among
+        // them: when that random hash sorts before giveme.my's, as the recorded
+        // one didn't, it's found a step sooner and costs a little less.
+        let seed: [u8; 32] = hex::decode(&result.seed).unwrap().try_into().unwrap();
+        let one_time = Hasher::<224>::hash(api::one_time_key(&sk, &seed).public_key().as_ref());
+        let fee: u64 = result.fee.total.parse().unwrap();
+        let recorded_fee: u64 = recorded()["final"]["fee"]["total"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        if *one_time > COLLATERAL_HASH {
+            assert_eq!(fee, recorded_fee);
+        } else {
+            assert!(
+                fee < recorded_fee && recorded_fee - fee < 1_000,
+                "fee {fee}"
+            );
+        }
+        assert!(crate::covers(&result.tx_cbor, &request().utxos, &params()));
+    }
+
+    #[test]
     fn drafts_and_finishes_a_transfer_to_a_real_seedelf() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let draft = api::draft_transfer(sk, request()).unwrap();
@@ -1373,15 +1522,16 @@ mod transfer {
 
         // The payment is a new copy of the recipient's register, never the one found.
         let found = register_from_utxo(&their_utxo());
+        // The two outputs go in a random order: the change is the one that's ours.
         let outs = outputs(&result.tx_cbor);
         assert_eq!(outs.len(), 2);
-        let (paid, lovelace, tokens) = &outs[0];
+        let (ours, theirs): (Vec<_>, Vec<_>) = outs.iter().partition(|o| o.0.is_owned(sk).unwrap());
+        assert_eq!((ours.len(), theirs.len()), (1, 1), "the change is ours");
+        let (paid, lovelace, tokens) = theirs[0];
         assert!(build::is_payable(paid));
         assert_ne!(paid, &found);
         assert_ne!(paid.generator, found.generator);
-        assert!(!paid.is_owned(sk).unwrap());
         assert_eq!((*lovelace, *tokens), (5_000_000, 1));
-        assert!(outs[1].0.is_owned(sk).unwrap(), "the change is ours");
         assert!(!result.tx_cbor.contains(&found.public_value));
     }
 
@@ -1399,7 +1549,11 @@ mod transfer {
                 result.payments[0].lovelace, result.payments[0].minimum,
                 "{asked} goes up to the minimum"
             );
-            assert_eq!(outputs(&result.tx_cbor)[0].1, minimum);
+            let paid = outputs(&result.tx_cbor)
+                .into_iter()
+                .find(|o| !o.0.is_owned(sk).unwrap())
+                .unwrap();
+            assert_eq!(paid.1, minimum);
         }
         // More than the minimum is paid as asked.
         let result = finish(sk, request());
@@ -1425,9 +1579,10 @@ mod transfer {
         r.payments[0].recipient = under(&Register::create(bob).unwrap().rerandomize().unwrap());
         let result = finish(sk, r);
         assert!(!result.payments[0].to_self);
-        let paid = &outputs(&result.tx_cbor)[0].0;
-        assert!(paid.is_owned(bob).unwrap());
-        assert!(!paid.is_owned(sk).unwrap());
+        let outs = outputs(&result.tx_cbor);
+        let paid: Vec<_> = outs.iter().filter(|o| o.0.is_owned(bob).unwrap()).collect();
+        assert_eq!(paid.len(), 1);
+        assert!(!paid[0].0.is_owned(sk).unwrap());
 
         // Your own seedelf: allowed, flagged, and the payment comes back.
         let mine = owned().pop().unwrap();
@@ -1436,7 +1591,11 @@ mod transfer {
         r.payments[0].recipient = mine;
         let result = finish(sk, r);
         assert!(result.payments[0].to_self);
-        assert!(outputs(&result.tx_cbor)[0].0.is_owned(sk).unwrap());
+        assert!(
+            outputs(&result.tx_cbor)
+                .iter()
+                .all(|o| o.0.is_owned(sk).unwrap())
+        );
     }
 
     #[test]
@@ -1453,14 +1612,21 @@ mod transfer {
         assert_eq!(result.payments.len(), 2);
         assert_eq!(result.payments[1].lovelace, "2000000");
         assert!(!result.payments[1].to_self);
-        // Each Seedelf as asked, in order, under a fresh copy of its register; then our change.
+        // Each Seedelf as asked, under a fresh copy of its register, and our
+        // change, in a random order.
         let outs = outputs(&result.tx_cbor);
-        assert_eq!((outs[0].1, outs[0].2), (5_000_000, 1));
-        assert_eq!((outs[1].1, outs[1].2), (2_000_000, 0));
-        assert!(outs[1].0.is_owned(bob).unwrap());
-        assert!(!outs[0].0.is_owned(bob).unwrap() && !outs[0].0.is_owned(sk).unwrap());
-        assert!(
-            outs[2..].iter().all(|o| o.0.is_owned(sk).unwrap()),
+        let first: Vec<_> = outs
+            .iter()
+            .filter(|o| !o.0.is_owned(bob).unwrap() && !o.0.is_owned(sk).unwrap())
+            .collect();
+        assert_eq!(first.len(), 1);
+        assert_eq!((first[0].1, first[0].2), (5_000_000, 1));
+        let to_bob: Vec<_> = outs.iter().filter(|o| o.0.is_owned(bob).unwrap()).collect();
+        assert_eq!(to_bob.len(), 1);
+        assert_eq!((to_bob[0].1, to_bob[0].2), (2_000_000, 0));
+        assert_eq!(
+            outs.iter().filter(|o| o.0.is_owned(sk).unwrap()).count(),
+            outs.len() - 2,
             "the change is ours"
         );
 
@@ -1645,8 +1811,12 @@ mod transfer {
 }
 
 mod withdraw {
+    use pallas_addresses::{
+        Network as AddressNetwork, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+    };
+    use pallas_crypto::hash::Hash;
     use pallas_traverse::MultiEraTx;
-    use seedelf_crypto::cardano::CardanoAccount;
+    use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::derivation::seedelf_key_v1;
     use seedelf_crypto::schnorr::random_scalar;
     use seedelf_koios::koios::UtxoResponse;
@@ -1746,6 +1916,85 @@ mod withdraw {
     }
 
     #[test]
+    fn says_which_histories_a_withdrawal_spends_together() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let [ada, token] =
+            [&owned()[0], &owned()[1]].map(|u| format!("{}#{}", u.tx_hash, u.tx_index));
+        let class = |id: &str, origin: &str| api::ClassIn {
+            id: id.into(),
+            origin: origin.into(),
+        };
+        let with = |classes: Vec<(String, api::ClassIn)>| {
+            let mut r = request("amount");
+            r.classes = classes.into_iter().collect();
+            r
+        };
+
+        // The token sent sits in one UTxO whose ADA doesn't pay: both go, and
+        // the result says whose histories they were.
+        let result = api::build_withdraw(
+            sk,
+            with(vec![
+                (ada.clone(), class("public", "own")),
+                (token.clone(), class("received:a2", "received")),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(result.inputs.len(), 2);
+        let mut mixed = result.classes_mixed.clone();
+        mixed.sort();
+        assert_eq!(mixed, vec!["public", "received:a2"]);
+
+        // One history, or none known: nothing to say.
+        let result = api::build_withdraw(
+            sk,
+            with(vec![
+                (ada.clone(), class("public", "own")),
+                (token.clone(), class("public", "own")),
+            ]),
+        )
+        .unwrap();
+        assert!(result.classes_mixed.is_empty());
+        let result = api::build_withdraw(sk, request("amount")).unwrap();
+        assert!(result.classes_mixed.is_empty());
+
+        // A funding is read too, and a UTxO given no class is Unknown.
+        let mut r = with(vec![(ada.clone(), class("session:0", "session"))]);
+        r.funding = Some(api::Funding {
+            session: Some("session:0".into()),
+        });
+        assert_eq!(api::build_withdraw(sk, r).unwrap().classes_mixed.len(), 2);
+
+        // What the wallet can't read is refused, not guessed at.
+        let e = api::build_withdraw(sk, with(vec![(ada.clone(), class("public", "nowhere"))]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("isn't where a UTxO's money came from"), "{e}");
+        let e = api::build_withdraw(sk, with(vec![("a1".into(), class("public", "own"))]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("txHash#index"), "{e}");
+    }
+
+    #[test]
+    fn builds_a_withdrawal_and_a_removal_measured_in_the_wallet() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let amount = api::build_withdraw(sk, request("amount")).unwrap();
+        assert!(!amount.max);
+        assert!(crate::covers(
+            &amount.tx_cbor,
+            &request("amount").utxos,
+            &params()
+        ));
+        let removed = api::build_remove(sk, removal(Some(theirs()))).unwrap();
+        assert!(crate::covers(
+            &removed.tx_cbor,
+            &[owned().pop().unwrap()],
+            &params()
+        ));
+    }
+
+    #[test]
     fn withdraws_an_amount_or_everything() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let rec = recorded();
@@ -1778,7 +2027,7 @@ mod withdraw {
             (1, 1, 0)
         );
         let outs = outputs(&result.tx_cbor);
-        assert_eq!(outs[0], (theirs(), 5_000_000));
+        assert!(outs.contains(&(theirs(), 5_000_000)));
 
         // Max: every UTxO and token to the address, nothing back.
         let result = api::finish_withdraw(
@@ -1821,11 +2070,13 @@ mod withdraw {
         assert!(!result.max);
         assert_eq!(result.payments.len(), 2);
         assert_eq!(result.payments[1].lovelace, "2000000");
+        // Each address as asked, and the change back in, in a random order.
         let outs = outputs(&result.tx_cbor);
-        assert_eq!(outs[0], (theirs(), 5_000_000));
-        assert_eq!(outs[1], (theirs(), 2_000_000));
-        assert!(
-            outs[2..].iter().all(|(a, _)| *a == contract()),
+        assert!(outs.contains(&(theirs(), 5_000_000)));
+        assert!(outs.contains(&(theirs(), 2_000_000)));
+        assert_eq!(
+            outs.iter().filter(|(a, _)| *a == contract()).count(),
+            outs.len() - 2,
             "the change goes back in"
         );
 
@@ -1860,7 +2111,7 @@ mod withdraw {
             );
             let minimum: u64 = minimum.parse().unwrap();
             assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
-            assert_eq!(outputs(&result.tx_cbor)[0], (theirs(), minimum));
+            assert!(outputs(&result.tx_cbor).contains(&(theirs(), minimum)));
         }
         let result = finish("5000000");
         assert_eq!(result.payments[0].lovelace, "5000000");
@@ -1902,6 +2153,68 @@ mod withdraw {
             .map(|i| format!("{:064x}", i + 1))
             .collect::<Vec<_>>();
         assert!(result.inputs.iter().all(|i| !smallest.contains(&i.tx_hash)));
+    }
+
+    #[test]
+    fn max_leaves_out_a_utxo_whose_tokens_would_overflow_the_rest() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let base = owned().into_iter().next().unwrap();
+        // Three UTxOs of 2^63 − 1 of one token, paid into the Seedelf by a stranger.
+        let junk: Vec<UtxoResponse> = (0..3u8)
+            .map(|i| UtxoResponse {
+                tx_hash: hex::encode([0x70 + i; 32]),
+                tx_index: 0,
+                value: "2000000".into(),
+                asset_list: serde_json::from_value(json!([{
+                    "policy_id": "ab".repeat(28), "asset_name": "6a756e6b",
+                    "quantity": ((1u64 << 63) - 1).to_string(), "decimals": 0, "fingerprint": "",
+                }]))
+                .unwrap(),
+                ..base.clone()
+            })
+            .collect();
+        let mut r = request("max");
+        let mine = r.utxos.len();
+        r.utxos.extend(junk);
+        let result = api::build_withdraw(sk, r).unwrap();
+        assert!(result.max);
+        assert_eq!((result.inputs.len(), result.left), (mine + 2, 1));
+        assert!(
+            result
+                .inputs
+                .iter()
+                .all(|i| i.tx_hash != hex::encode([0x72u8; 32]))
+        );
+    }
+
+    #[test]
+    fn a_utxo_with_a_reference_script_is_refused_by_name_before_anything_is_proven() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let base = owned().into_iter().next().unwrap();
+        let rows: Vec<UtxoResponse> = serde_json::from_str(include_str!(
+            "../../../seedelf-core/tests/fixtures/reference_script_utxo.json"
+        ))
+        .unwrap();
+        // Paid into the Seedelf by anyone: the wallet's evaluator can't take it.
+        let scripted = UtxoResponse {
+            tx_hash: hex::encode([0x71u8; 32]),
+            reference_script: rows[0].reference_script.clone(),
+            ..base
+        };
+        for max in [true, false] {
+            let mut r = request(if max { "max" } else { "amount" });
+            r.utxos.push(scripted.clone());
+            let err = api::build_withdraw(sk, r).err().unwrap().to_string();
+            assert!(
+                err.contains(&format!("UTxO {}#", scripted.tx_hash))
+                    && err.contains("holds a reference script")
+                    && err.contains("so a Seedelf spend can't take it"),
+                "{err}"
+            );
+        }
+        // The worker leaves it out (script-spend.ts's spendable), and Max
+        // takes the rest.
+        assert!(api::build_withdraw(sk, request("max")).is_ok());
     }
 
     #[test]
@@ -2049,12 +2362,80 @@ mod withdraw {
             .find(|v| v["account"] == 0 && v["phrase"].as_str().unwrap().split(' ').count() == 12)
             .unwrap();
         let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
-        let own = |a: &str| api::is_own_address(&account, a).unwrap();
+        let own = |a: &str| api::is_own_address(&account, a, &[]).unwrap();
         assert!(own(v12["preprod"]["receive_0"].as_str().unwrap()));
         assert!(own(v12["mainnet"]["receive_0"].as_str().unwrap()));
         assert!(!own(&theirs()));
         assert!(!own(&contract()));
         assert!(!own("nope"));
+    }
+
+    /// An address from payment and staking parts, on preprod.
+    fn shelley(payment: ShelleyPaymentPart, delegation: ShelleyDelegationPart) -> String {
+        ShelleyAddress::new(AddressNetwork::Testnet, payment, delegation)
+            .to_bech32()
+            .unwrap()
+    }
+
+    #[test]
+    fn knows_the_accounts_own_addresses_by_payment_key_too() {
+        // Privacy review §2.17: the wallet spends anything under its payment
+        // keys, whatever the staking part, so Make public warns about those too.
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let own = |a: &str, known: &[String]| api::is_own_address(&account, a, known).unwrap();
+        let key = |role, index| account.key_hash(role, index).unwrap();
+        let stake = key(Role::Staking, 0);
+        let foreign_stake = Hash::<28>::from([7; 28]);
+        let foreign_key = Hash::<28>::from([9; 28]);
+
+        // An enterprise address of receive 0, and of change 19, the last always matched.
+        let enterprise = |role, index| {
+            shelley(
+                ShelleyPaymentPart::Key(key(role, index)),
+                ShelleyDelegationPart::Null,
+            )
+        };
+        assert!(own(&enterprise(Role::Receive, 0), &[]));
+        assert!(own(
+            &enterprise(Role::Change, api::OWN_KEYS_ALWAYS - 1),
+            &[]
+        ));
+        // Receive 0's key with someone else's stake key.
+        assert!(own(
+            &shelley(
+                ShelleyPaymentPart::Key(key(Role::Receive, 0)),
+                ShelleyDelegationPart::Key(foreign_stake),
+            ),
+            &[],
+        ));
+        // Someone else's key with ours: an observer sees our stake credential.
+        assert!(own(
+            &shelley(
+                ShelleyPaymentPart::Key(foreign_key),
+                ShelleyDelegationPart::Key(stake),
+            ),
+            &[],
+        ));
+        // A key past the first 20 counts once the last reading found it.
+        let far = enterprise(Role::Receive, 25);
+        assert!(!own(&far, &[]));
+        let known = [hex::encode(key(Role::Receive, 25)).to_uppercase()];
+        assert!(own(&far, &known));
+        // Someone else's key and stake key are nobody's own.
+        assert!(!own(
+            &shelley(
+                ShelleyPaymentPart::Key(foreign_key),
+                ShelleyDelegationPart::Key(foreign_stake),
+            ),
+            &known,
+        ));
+        assert!(!own(
+            &shelley(
+                ShelleyPaymentPart::Key(foreign_key),
+                ShelleyDelegationPart::Null
+            ),
+            &[],
+        ));
     }
 }
 
@@ -2148,6 +2529,7 @@ mod staking {
             utxos: account_utxos(account),
             action,
             state,
+            invalid_hereafter: None,
         }
     }
 
@@ -2255,6 +2637,7 @@ mod staking {
             collateral: None,
             label: "rewards".into(),
             withdrawal: Some("57475311".into()),
+            invalid_hereafter: None,
             evaluation,
         };
         let draft = api::draft_account_mint(&account, sk, mint(None)).unwrap();
@@ -2431,6 +2814,7 @@ mod staking {
             }],
             withdrawal: withdrawal.map(String::from),
             note: None,
+            invalid_hereafter: None,
         };
         let plain = api::account_send(&account, send(None)).unwrap();
         assert_eq!(plain.withdrawal, "0");
@@ -2468,5 +2852,129 @@ mod staking {
             "drep_always_no_confidence"
         );
         assert!(api::drep_id(LOGIC).is_err());
+    }
+}
+
+/// The validity interval the worker asks for: `invalidHereafter` goes into
+/// the body of a move-in, a send, a staking transaction and an account-paid
+/// mint (its draft too), under the hash the keys sign. A request without one
+/// builds none.
+mod validity {
+    use pallas_primitives::{Fragment, conway};
+    use seedelf_core::build::tx_id;
+    use seedelf_crypto::cardano::{CardanoAccount, Role};
+    use seedelf_crypto::derivation::seedelf_key_v1;
+    use seedelf_wasm::api;
+    use serde::de::DeserializeOwned;
+    use serde_json::{Value, json};
+
+    use super::move_in::account_utxos;
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    /// 2026-09-27 12:00 UTC.
+    const NOW_MS: f64 = 1_790_510_400_000.0;
+    /// Two hours on, on preprod.
+    const SLOT: u64 = 134_834_400;
+
+    fn fixture(path: &str) -> Value {
+        let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn params() -> Value {
+        fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone()
+    }
+
+    /// `request` as the worker sends it: JSON, with `invalidHereafter` when
+    /// there's a slot.
+    fn asked<T: DeserializeOwned>(mut request: Value, slot: Option<u64>) -> T {
+        if let Some(slot) = slot {
+            request["invalidHereafter"] = json!(slot);
+        }
+        serde_json::from_value(request).unwrap()
+    }
+
+    /// The slot a transaction stops being valid at, after checking its hash
+    /// is its body's.
+    fn ttl(tx_cbor: &str, tx_hash: Option<&str>) -> Option<u64> {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        if let Some(hash) = tx_hash {
+            assert_eq!(hex::encode(*tx_id(&bytes).unwrap()), hash);
+        }
+        conway::Tx::decode_fragment(&bytes)
+            .unwrap()
+            .transaction_body
+            .ttl
+    }
+
+    #[test]
+    fn a_slot_is_counted_from_the_time_on_each_network() {
+        assert_eq!(
+            api::slot_at(true, NOW_MS + 2.0 * 3_600_000.0).unwrap(),
+            SLOT
+        );
+        // Mainnet's Chang hard fork, 2024-09-01 21:44:51 UTC.
+        assert_eq!(
+            api::slot_at(false, 1_725_227_091_500.0).unwrap(),
+            133_660_800
+        );
+        for time in [f64::NAN, f64::INFINITY, -1.0] {
+            assert!(api::slot_at(true, time).is_err(), "{time}");
+        }
+    }
+
+    #[test]
+    fn the_slot_asked_for_goes_in_every_account_transaction() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let utxos: Vec<Value> = account_utxos(&account)
+            .into_iter()
+            .map(|p| json!({ "utxo": p.utxo, "role": p.role, "index": p.index }))
+            .collect();
+        let to = account
+            .base_address(true, Role::Receive, 5)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let base = json!({ "network": "preprod", "params": params(), "utxos": utxos });
+        let request = |extra: Value| {
+            let mut r = base.clone();
+            r.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            r
+        };
+        let move_in = request(json!({ "lovelace": "10000000", "tokens": [] }));
+        let send =
+            request(json!({ "payments": [{ "to": to, "lovelace": "5000000", "tokens": [] }] }));
+        let stake = request(json!({
+            "action": { "kind": "withdraw" },
+            "state": { "registered": true, "deposit": "2000000", "rewards": "57475311", "drep": "drep_always_abstain" },
+        }));
+        let mint = request(json!({ "label": "until" }));
+        let evaluation = fixture("../../seedelf-core/tests/fixtures/ogmios/account_mint.json");
+
+        for slot in [None, Some(SLOT)] {
+            let r = api::move_in(&account, sk, asked(move_in.clone(), slot)).unwrap();
+            assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "move-in");
+
+            let r = api::account_send(&account, asked(send.clone(), slot)).unwrap();
+            assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "send");
+
+            let r = api::stake(&account, asked(stake.clone(), slot)).unwrap();
+            assert_eq!(r.withdrawal, "57475311");
+            assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "staking");
+
+            let draft = api::draft_account_mint(&account, sk, asked(mint.clone(), slot)).unwrap();
+            assert_eq!(
+                ttl(&draft.draft_cbor, None),
+                slot,
+                "the mint Ogmios measures"
+            );
+            let mut finish = mint.clone();
+            finish["evaluation"] = evaluation.clone();
+            let r = api::finish_account_mint(&account, sk, asked(finish, slot)).unwrap();
+            assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "mint");
+        }
     }
 }

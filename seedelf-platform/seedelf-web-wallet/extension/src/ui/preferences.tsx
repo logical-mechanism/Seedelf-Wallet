@@ -1,14 +1,16 @@
 // The user's settings, for every screen: read from the worker once the
 // wallet is unlocked, and changed through it. Hide balances is one: the
 // screens that show what the wallet holds (Home, Tokens, UTxOs, Activity,
-// Receive, Staking) write their amounts through `useAmounts`, which masks
-// them. The forms and reviews don't: what's being sent is always shown.
+// Receive, Staking, Lovejoin) write their amounts through `useAmounts`,
+// which masks them, and a count that is an amount too (Lovejoin's boxes,
+// each 10 ₳). The forms and reviews don't: what's being sent is always
+// shown.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { DEFAULT_PREFERENCES, LOCAL_PREFERENCES, type Preferences } from "../shared/preferences";
 import { call } from "./background";
-import { formatAda, formatQuantity } from "./format";
+import { formatAda, formatQuantity, plural } from "./format";
 
 interface PreferencesValue {
   prefs: Preferences;
@@ -17,7 +19,8 @@ interface PreferencesValue {
   set: (change: Partial<Preferences>) => Promise<void>;
 }
 
-const PreferencesContext = createContext<PreferencesValue>({
+/** Exported for the screens' tests, which show or hide balances with it. */
+export const PreferencesContext = createContext<PreferencesValue>({
   prefs: DEFAULT_PREFERENCES,
   loaded: false,
   set: async () => undefined,
@@ -41,13 +44,16 @@ export function PreferencesProvider({ unlocked, children }: { unlocked: boolean;
       );
     void read();
     // Another page (the side panel beside a tab) may change them: follow it.
-    const changed = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === "local" && LOCAL_PREFERENCES in changes) void read();
+    // Local storage's own event, never chrome.storage.onChanged: that one
+    // carries session storage's changes too, the vault's entropy among them
+    // at every unlock and lock, into this page.
+    const changed = (changes: Record<string, chrome.storage.StorageChange>) => {
+      if (LOCAL_PREFERENCES in changes) void read();
     };
-    chrome.storage.onChanged.addListener(changed);
+    chrome.storage.local.onChanged.addListener(changed);
     return () => {
       live = false;
-      chrome.storage.onChanged.removeListener(changed);
+      chrome.storage.local.onChanged.removeListener(changed);
     };
   }, [unlocked]);
 
@@ -76,6 +82,11 @@ export function useAmounts() {
       quantity: (quantity: string, decimals: number) => (hidden ? HIDDEN : formatQuantity(quantity, decimals)),
       /** Any amount already written out. */
       text: (text: string) => (hidden ? HIDDEN : text),
+      /**
+       * A count that is an amount too, as "3 boxes": every Lovejoin box is
+       * 10 ₳, so the count says what's in the pool (privacy review §2.16).
+       */
+      count: (n: number, one: string, many: string) => (hidden ? `${HIDDEN} ${many}` : plural(n, one, many)),
     }),
     [hidden],
   );

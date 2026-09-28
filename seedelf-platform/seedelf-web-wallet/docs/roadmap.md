@@ -44,6 +44,63 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-28: independent review and its fixes** (`web-wallet/crypto-review`). A fresh review before mainnet, and its fixes, are in [plans/independent-review.md](plans/independent-review.md) (see its *Status*).
+  - **What landed:**
+    - A stranger's junk at a session's account can no longer strand its money: a return is planned by cost.
+    - Payments are sealed as maybe sent before Koios is asked, and Remove wallet lists what's still open.
+    - A session ends only once Koios shows its funding spent.
+    - The unlock and quiet rules hold across a lock.
+    - History-aware selection never refuses what the CLI's order would pay.
+    - The connector is capped and can't be flooded, and warns when a transaction ties accounts.
+    - Swaps route only through DEXes the order check reads (SundaeSwapV3 is out on mainnet), and a refunded order says so.
+    - A final review of the merged fixes found 13 more bugs where the areas met; all are fixed.
+  - **Surprising:** most findings were bugs the earlier rounds' own fixes brought in, where two features meet. That's why the fixes were reviewed across areas after merging.
+  - **The owner's calls** (2026-09-28): a restored wallet checks on chain whether each box it can't account for was mixed, and holds the unmixed; strangers' token deliveries that can't pay their way stay behind; a stopped swap waits for an order Minswap doesn't list, and says so.
+  - **Next:** the by-hand mainnet checks in [plans/launch-review.md](plans/launch-review.md).
+
+- **2026-09-27: privacy by default** (`web-wallet/crypto-review`). The owner's rule is "the most private by default, with the ability to turn it down". A review against it, and its fixes, are in [plans/privacy-review.md](plans/privacy-review.md) (see its *Status*).
+  - **What landed:**
+    - Sites can no longer tell whether a UTxO or a recent transaction is the wallet's, or when it's locked.
+    - The connect window chooses nothing.
+    - Coin selection keeps money with different histories apart where it can (best effort, no gate), and the UTxOs screen tags each UTxO's origin.
+    - Nothing goes out at the moment of unlock.
+    - A Settings switch turns Lovejoin returns off, and each flow can come back directly.
+    - The copy and the privacy policy say what Koios, giveme.my (ours), sites and Minswap can still see.
+    - Also: every build has both networks; the welcome screen chooses one (a small dropdown); a wallet from before the switch stays on preprod.
+  - **Declined by the owner:** a longer default delay, the price lookup off, Hide balances on, a keep-apart switch, and a default account for new sites.
+  - **Next: a fresh, independent review in a new context,** before mainnet. See the PR into `seedelf-web-wallet`.
+
+- **2026-09-27: launch review and its fixes** (`web-wallet/crypto-review`). The findings, the owner's calls, what's fixed and what's still open are in [plans/launch-review.md](plans/launch-review.md) (see its *Status*).
+  - **What landed:** every finding of the launch review, and of a second review of the fixes.
+    - Lovejoin on mainnet.
+    - One build with both networks.
+    - A Send Koios didn't answer is maybe sent, never paid twice.
+    - Strangers' UTxOs (deep datums, reference scripts, huge token totals, identity registers) can't break or fool the wallet.
+    - The dApp prompt counts staking money, and refuses unfound inputs and other-network UTxOs.
+    - Lovejoin never brings back a box it didn't mix.
+    - Sessions can't be stranded by Disconnect or a lost submit.
+    - The mainnet store package.
+    - `Cargo.lock` tracked and Rust pinned.
+  - **Surprises:**
+    - The bundler had put runtime helpers in `sw.js`, so every page ran a second worker. It's fixed, and a build now fails if it happens again.
+    - seedelf-contracts' `hashes/` is a later, undeployed build: never copy it into the constants.
+  - **Next:**
+    - the privacy-by-default analysis ([plans/privacy-review.md](plans/privacy-review.md));
+    - then the by-hand mainnet checks and the store in *Still open*.
+
+- **2026-09-25: crypto review** (`web-wallet/crypto-review`, from `web-wallet/lovejoin`). The findings, what's fixed, and what's left to decide are in [plans/crypto-review.md](plans/crypto-review.md).
+  - **What landed:**
+    - A one-time session account is never reused: the chain is asked first.
+    - The entropy no longer reaches UI pages through `storage.onChanged`.
+    - Hedged Seedelf proof nonces.
+    - Lovejoin boxes due together come back one at a time, with secure delays.
+    - Private spends are measured in the wallet: no draft goes to Ogmios.
+    - Storage is closed to content scripts.
+    - A CBOR reader a site can't hang.
+    - Random dApp approval ids.
+  - **Kept, at the user's call:** the vault's KDF, which matches Lace's.
+  - **Next:** its *Not fixed: for later* list.
+
 - **2026-09-25: chunk 16, Lovejoin (third session)** (`web-wallet/lovejoin`). The plan's *Built (third session)* lists everything.
   - **What landed:** the two features the user decided at the end of the second session.
     - *Mix my boxes again* on the Lovejoin page: every box of the wallet's in the pool fanned out again, paid from the private balance through a one-time account, with no deposit. No box is withdrawn while it runs, and each waits a fresh delay after.
@@ -196,7 +253,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The privacy policy is [store/privacy-policy.md](store/privacy-policy.md), linked on the `seedelf-web-wallet` branch.
     - The Privacy practices form declares *Authentication information* and *Financial and payment information*.
     - The screenshots are the popup at 2×, framed on navy with a caption.
-    - Taken as given: version 0.1.0, the category Tools (Lace's), and the store icon from the guardian artwork (`brand/README.md`).
+    - Taken as given: version 1.0.0, the category Tools (Lace's), and the store icon from the guardian artwork (`brand/README.md`).
   - **The store's rules, checked live on 2026-09-24:**
     - The icon is 128 px: 96 px of artwork in 16 px of padding.
     - 1 to 5 screenshots, at exactly 1280×800 or 640×400.
@@ -205,7 +262,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The Privacy practices tab wants a single purpose, a justification for each permission, a remote-code answer, the data categories with three certifications, and a policy URL. Google's FAQ counts data handled only on the device.
     - Nothing specific to wallets: crypto mining is banned, and crypto extensions aren't featured. The 1 August 2026 update tightened limited use and disclosure.
   - **What landed:**
-    - `npm run package`: a store build, `licenses/THIRD-PARTY.txt`, and `release/seedelf-wallet-0.1.0.zip`.
+    - `npm run package`: a store build, `licenses/THIRD-PARTY.txt`, and `release/seedelf-wallet-1.0.0.zip`.
       - The zip is 900 KB and 18 files, SHA-256 `8bf7dd79…fd14f53`. It's reproducible: a rebuild with the same toolchain gives the same bytes.
       - It refuses a `dist/` with the dev key.
     - The notices list 109 crates, 6 npm packages and SecretBox, with 90 distinct licence texts (295 KB, 24 KB gzipped).
@@ -467,7 +524,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - A real owned contract UTxO (from a live move-in) would let chunk 8 test on-chain.
 
 - **2026-09-23: chunk 6 done** (`web-wallet/balances`).
-  - **Decided with the user:** the receive-address QR code is in (`uqr`, MIT, a port of Nayuki's generator). Balances are read when Home opens, if the last reading is over a minute old, and on Refresh; there's no background polling.
+  - **Decided with the user:** the receive-address QR code is in (`uqr`, MIT, a port of Nayuki's generator). Balances are read when Home opens, if the last reading is over a minute old, and on Refresh; there's no background polling. (Since then, while unlocked, a one-minute alarm reads what's running: swaps, Lovejoin chains and boxes due, a payment that may still go through. See [architecture.md](architecture.md#chain-data) and the privacy review's §6.)
   - **What landed:** `extension/src/background/koios.ts`, `chain.ts` and `balances.ts`, plus the new Home. See [architecture.md](architecture.md#chain-data).
     - One reading is three Koios requests: `credential_utxos` for the contract, and `account_addresses` plus `account_utxos` for the Cardano account's stake key.
     - Ownership runs in WebAssembly inside `wallet.withKeys`, which also writes the session cache, so a lock can't interleave. A reading that finishes after a lock is dropped.
@@ -567,7 +624,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - A proof takes about 10 ms.
   - **Things to know:**
     - `wasm-bindgen-cli` must match the crate version (0.2.128 today).
-    - `seedelf-platform/Cargo.lock` is gitignored (`*.lock`), so versions can float on a fresh clone. `build.sh` reports what to install.
+    - `seedelf-platform/Cargo.lock` was gitignored (`*.lock`) then, so versions could float on a fresh clone. It's tracked since the launch review (#61), and every build uses it (`--locked`).
     - The `seedelf-koios` `connect_timeout` gate moved to chunk 7, where `seedelf-core` first needs WASM.
   - **Next:** chunk 2. Implement the v1 key derivation in `seedelf-crypto`, then add `SeedelfKey.fromPhrase()`.
 - **2026-09-23: design done.** The docs in this folder hold every decision.

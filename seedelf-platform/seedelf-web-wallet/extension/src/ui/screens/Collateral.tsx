@@ -157,7 +157,9 @@ export function Collateral({ onBack }: { onBack: () => void }) {
       </p>
       {body}
       <Callout tone="privacy">
-        Payments from your private balance never put it up: giveme.my lends theirs, so nothing ties them to your account.
+        Payments from your private balance never put it up: giveme.my lends its own, so nothing on chain ties them to your
+        account. giveme.my is run by Logical Mechanism, who make Seedelf Wallet, and it sees each of those payments, with
+        your IP address.
       </Callout>
     </Screen>
   );

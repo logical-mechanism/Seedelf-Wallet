@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { PreferencesService } from "../src/background/preferences";
-import { LOCAL_PRICES, PRICE_TTL_MS, PriceService } from "../src/background/prices";
+import { LOCAL_PRICES, PRICE_TTL_MS, PriceService, SESSION_PRICES } from "../src/background/prices";
 import { ADA_HANDLE_POLICY, handleOf, handlesIn } from "../src/shared/handles";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import { fakeCoinGecko, memoryArea } from "./fakes";
@@ -22,7 +22,8 @@ describe("preferences", () => {
       dappConnector: false,
       // A site's signature needs the password until the user says otherwise.
       dappPassword: true,
-      // A session's spare ADA fans out two waves deep, and each box waits 1 to 6 hours.
+      // A session's spare ADA comes back through Lovejoin, fanned out two waves deep, and each box waits 1 to 6 hours.
+      lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
     });
@@ -34,6 +35,7 @@ describe("preferences", () => {
       currency: "eur",
       dappConnector: false,
       dappPassword: true,
+      lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
     });
@@ -57,6 +59,11 @@ describe("preferences", () => {
     expect(await prefs.get()).toMatchObject({ lovejoinDepth: 2, lovejoinDelay: "1-6" });
     await prefs.set({ lovejoinDepth: 3, lovejoinDelay: "6-24" });
     expect(await prefs.get()).toMatchObject({ lovejoinDepth: 3, lovejoinDelay: "6-24" });
+    // Returns through Lovejoin: a switch, turned off only by false (privacy review §4.1).
+    await prefs.set({ lovejoinReturns: "off" as never });
+    expect((await prefs.get()).lovejoinReturns).toBe(true);
+    await prefs.set({ lovejoinReturns: false });
+    expect((await prefs.get()).lovejoinReturns).toBe(false);
   });
 
   it("read a kept value that's no longer allowed as the default", async () => {
@@ -69,11 +76,12 @@ describe("preferences", () => {
 describe("ADA's price", () => {
   function prices(rates?: Record<string, number>) {
     const local = memoryArea();
+    const session = memoryArea();
     const preferences = new PreferencesService(local);
     const clock = { now: 1_800_000_000_000 };
     const coingecko = fakeCoinGecko(rates);
-    const service = new PriceService({ local, preferences, now: () => clock.now, fetch: coingecko.fetch });
-    return { local, preferences, clock, coingecko, service };
+    const service = new PriceService({ session, local, preferences, now: () => clock.now, fetch: coingecko.fetch });
+    return { local, session, preferences, clock, coingecko, service };
   }
 
   it("asks no one on preprod: test ADA has no price", async () => {
@@ -124,12 +132,21 @@ describe("ADA's price", () => {
     t.coingecko.state.fail = false;
     t.coingecko.state.rates = { usd: -1 };
     expect(await t.service.get("mainnet")).toBeNull();
-    expect((await t.local.get<{ rates: object }>(LOCAL_PRICES))!.rates).toEqual({
+    expect((await t.session.get<{ rates: object }>(SESSION_PRICES))!.rates).toEqual({
       usd: 0.25,
       eur: 0.22,
       gbp: 0.19,
       jpy: 39.65,
     });
+  });
+
+  it("is kept in session storage, never on the disk, and one kept there before is removed (privacy review §3.13)", async () => {
+    const t = prices();
+    await t.local.set(LOCAL_PRICES, { at: 1, rates: { usd: 0.1 } });
+    expect(await t.service.get("mainnet")).toMatchObject({ rate: 0.25 });
+    expect(await t.local.get(LOCAL_PRICES)).toBeUndefined();
+    expect([...t.local.data.keys()].filter((k) => k.includes("price"))).toEqual([]);
+    expect(await t.session.get(SESSION_PRICES)).toMatchObject({ at: t.clock.now });
   });
 });
 

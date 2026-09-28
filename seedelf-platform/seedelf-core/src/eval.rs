@@ -13,7 +13,7 @@
 //! withdraws) under both the 297- and 350-parameter V3 cost models; 1.1.21
 //! didn't, which is why it must be kept current across hard forks.
 
-use crate::references;
+use crate::{cbor, references};
 use anyhow::{Context, Result, anyhow, bail};
 use pallas_addresses::Address;
 use pallas_codec::minicbor;
@@ -46,19 +46,41 @@ impl Resolved {
     }
 }
 
-/// A Koios UTxO row as the evaluator needs it. A reference script on the row
-/// isn't carried over (the wallet's own UTxOs don't hold one), so such a row
-/// is refused rather than evaluated wrongly.
+/// Why the evaluator can't take `row`, in words, or `None` when it can. A
+/// reference script on the row isn't carried over, so such a row is refused
+/// rather than evaluated wrongly; anyone can send one, to a Seedelf too. So is
+/// a row whose datum is nested past [`cbor::MAX_DEPTH`]: the evaluator's
+/// decoder would overflow the stack on it. Nothing measured in the wallet
+/// (a Seedelf spend, a session's merged return, Lovejoin) can spend such a
+/// UTxO.
+pub fn refusal(row: &UtxoResponse) -> Option<String> {
+    if row.reference_script.is_some() {
+        return Some(format!(
+            "UTxO {}#{} holds a reference script, which the wallet can't evaluate with yet",
+            row.tx_hash, row.tx_index
+        ));
+    }
+    let too_deep = row
+        .inline_datum
+        .as_ref()
+        .and_then(|d| hex::decode(&d.bytes).ok())
+        .is_some_and(|datum| !cbor::within_depth(&datum, cbor::MAX_DEPTH));
+    too_deep.then(|| {
+        format!(
+            "UTxO {}#{} holds a datum the wallet can't read",
+            row.tx_hash, row.tx_index
+        )
+    })
+}
+
+/// A Koios UTxO row as the evaluator needs it, unless it's one the evaluator
+/// can't take ([`refusal`]).
 pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
     let tx_hash: [u8; 32] = hex::decode(&row.tx_hash)?
         .try_into()
         .map_err(|_| anyhow!("UTxO {}#{} has a malformed hash", row.tx_hash, row.tx_index))?;
-    if row.reference_script.as_ref().is_some_and(|s| !s.is_null()) {
-        bail!(
-            "UTxO {}#{} holds a reference script, which the wallet can't evaluate with yet",
-            row.tx_hash,
-            row.tx_index
-        );
+    if let Some(why) = refusal(row) {
+        bail!(why);
     }
     let address = Address::from_bech32(&row.address)
         .map_err(|e| {
@@ -182,6 +204,14 @@ fn slot_config(network_flag: bool) -> (u64, u64, u32) {
     } else {
         (1_596_059_091_000, 4_492_800, 1_000)
     }
+}
+
+/// The slot `unix_ms` (milliseconds since 1970) falls in, on preprod
+/// (`network_flag`) or mainnet: what a transaction's validity interval is
+/// counted in. A time before the Shelley era gives its first slot.
+pub fn slot_at(network_flag: bool, unix_ms: u64) -> u64 {
+    let (zero_time, zero_slot, slot_length) = slot_config(network_flag);
+    zero_slot + unix_ms.saturating_sub(zero_time) / u64::from(slot_length)
 }
 
 fn purpose(tag: &RedeemerTag) -> &'static str {

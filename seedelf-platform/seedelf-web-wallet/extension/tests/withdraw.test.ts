@@ -7,11 +7,11 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
 import { ADA_HANDLE_POLICY } from "../src/background/destination";
 import { SESSION_REMOVE, SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors, withdrawPreprod } from "./fakes";
+import { deepRow, koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors, withdrawPreprod, withRawRows } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const hex = (s: string) => Buffer.from(s).toString("hex");
@@ -44,6 +44,7 @@ function withSigner(t: Awaited<ReturnType<typeof unlocked>>, sign: (request: any
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     now: () => t.clock.now,
     coins: t.coins,
+    store: t.store,
   });
 }
 
@@ -77,7 +78,7 @@ describe("reading a destination", () => {
 });
 
 describe("withdraw", () => {
-  it("builds an amount with a token, measured by Ogmios, without sending anything", async () => {
+  it("builds an amount with a token, measured in the wallet, without sending anything", async () => {
     const t = await unlocked();
     t.koios.evaluation = withdrawPreprod.amount.evaluation;
     const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: TUSDM }]);
@@ -90,9 +91,13 @@ describe("withdraw", () => {
       inputs: 2,
       left: 0,
     });
-    expect(summary.fee.total).toBe(withdrawPreprod.amount.final.fee.total);
+    // Measured in the wallet, on the finished transaction itself, so within a
+    // hair of what Ogmios's measure of a draft priced it at; no draft went to Ogmios.
+    const recorded = Number(withdrawPreprod.amount.final.fee.total);
+    expect(Math.abs(Number(summary.fee.total) - recorded)).toBeLessThan(recorded / 100);
+    expect(Number(summary.fee.total)).toBe(Number(summary.fee.size) + Number(summary.fee.compute) + Number(summary.fee.scriptReference));
     expect(Number(summary.fee.scriptReference)).toBe(629 * 15);
-    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params", "ogmios"]);
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
     expect(t.collateral.asked).toHaveLength(0);
     const built = (await t.session.get<Stored>(SESSION_WITHDRAW))!;
     expect(txIdOf(Uint8Array.from(Buffer.from(built.txCbor, "hex")))).toBe(summary.txHash);
@@ -106,6 +111,40 @@ describe("withdraw", () => {
     expect(summary).toMatchObject({ max: true, changeLovelace: "0", changeOutputs: 0, inputs: 2, left: 0 });
     expect(BigInt(summary.payments[0]!.lovelace)).toBe(28_000_000n - BigInt(summary.fee.total));
     expect(summary.payments[0]!.tokens).toHaveLength(1);
+  });
+
+  it("leaves a UTxO carrying a reference script out of the balance and of Max", async () => {
+    const t = await unlocked();
+    // Anyone can pay the Seedelf a UTxO with a reference script; the wallet's evaluator can't spend it yet.
+    const scripted = {
+      ...ownedUtxos[0]!,
+      tx_hash: "71".repeat(32),
+      value: "30000000",
+      reference_script: { hash: "84967d91".padEnd(56, "0"), size: 3, type: "timelock", bytes: "820080" },
+    };
+    t.koios.added.push(scripted);
+    const b = await t.balances.get("preprod");
+    expect(b.seedelf).toMatchObject({ lovelace: "28000000", utxos: 2 });
+    const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(summary).toMatchObject({ max: true, inputs: 2, left: 0 });
+    expect(BigInt(summary.payments[0]!.lovelace)).toBe(28_000_000n - BigInt(summary.fee.total));
+    // Max's review says what it left out, and why; the UTxOs screen marks it (launch review #12).
+    expect(summary.leftOut).toEqual([{ txHash: scripted.tx_hash, txIndex: scripted.tx_index, reason: "script" }]);
+    const { seedelf } = await t.coins.lists("preprod");
+    expect(seedelf.filter((u) => u.unspendable)).toEqual([expect.objectContaining({ txHash: scripted.tx_hash, unspendable: "script" })]);
+  });
+
+  it("isn't stopped by a stranger's UTxO nested thousands of levels deep in the contract (launch review H4)", async () => {
+    const t = await unlocked();
+    // One pays the Seedelf's register a native reference script 5,000 levels deep; another, a datum as deep.
+    withRawRows(t.koios, koiosPreprod.wallet_contract, [
+      deepRow(ownedUtxos[0]!, 5_000, { txHash: "e3".repeat(32), script: true }),
+      deepRow(ownedUtxos[0]!, 5_000, { txHash: "e4".repeat(32) }),
+    ]);
+    const b = await t.balances.get("preprod");
+    expect(b.seedelf).toMatchObject({ lovelace: "28000000", utxos: 2 });
+    const summary = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(summary).toMatchObject({ max: true, inputs: 2, left: 0 });
   });
 
   it("pays several addresses in one withdrawal; Max is for one", async () => {
@@ -167,17 +206,19 @@ describe("withdraw", () => {
     expect(pending).toMatchObject({ kind: "withdraw", txHash: summary.txHash, confirmations: null });
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([summary.txHash]);
     expect(await t.session.get(SESSION_WITHDRAW)).toBeUndefined();
-    expect(await t.session.get(SESSION_PENDING)).toEqual(pending);
+    expect(await t.session.get(pendingKey("preprod"))).toEqual(pending);
   });
 });
 
 describe("removing a Seedelf", () => {
   it("burns it and sends its ADA to the Cardano account", async () => {
     const t = await unlocked();
-    t.koios.evaluation = withdrawPreprod.remove.evaluation;
     const summary = await t.withdraw.buildRemove("preprod", MINE, "account");
     expect(summary).toMatchObject({ network: "preprod", name: MINE, label: "web-wallet", to: "account" });
-    expect(summary.fee.total).toBe(withdrawPreprod.remove.final.fee.total);
+    // Measured in the wallet: within a hair of the recorded fee (a random
+    // one-time key's hash may sort before giveme.my's among the signers).
+    const recorded = Number(withdrawPreprod.remove.final.fee.total);
+    expect(Math.abs(Number(summary.fee.total) - recorded)).toBeLessThan(recorded / 100);
     expect(BigInt(summary.lovelace)).toBe(1_500_000n - BigInt(summary.fee.total));
     // Both scripts run: the wallet's spend and the seedelf policy's burn.
     expect(Number(summary.fee.scriptReference)).toBe((629 + 519) * 15);

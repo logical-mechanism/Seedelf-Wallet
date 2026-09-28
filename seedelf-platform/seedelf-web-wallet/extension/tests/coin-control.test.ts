@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
+import { forgetContractView } from "../src/background/contract-scan";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { SESSION_MINT } from "../src/background/mint";
 import { SESSION_COLLATERAL } from "../src/background/send";
@@ -67,8 +68,8 @@ describe("the collateral", () => {
     const chosen = at(fives[2]!);
     expect(await t.coins.use("preprod", chosen)).toMatchObject({ state: "set", by: "you", utxo: { txHash: fives[2]!.tx_hash } });
     await expect(t.coins.use("preprod", at(ours.find((u) => u.asset_list?.length)!))).rejects.toThrow("exactly 5 ₳");
-    // The Max above read the account and its stake key again; reclaiming and choosing didn't.
-    expect(t.koios.calls.length - calls).toBe(4);
+    // The Max above read the account, its stake key and the chain's tip again; reclaiming and choosing didn't.
+    expect(t.koios.calls.length - calls).toBe(5);
   });
 
   it("is made by 5 ₳ paid to the account's own 0/0, waited for, then put up by an account-paid mint", async () => {
@@ -156,18 +157,89 @@ describe("locked UTxOs", () => {
     await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).rejects.toThrow("Every UTxO in your private balance is locked");
   });
 
-  it("refuse the collateral and UTxOs not in the last reading, and forget spent ones", async () => {
+  it("say where each private UTxO's money came from, read from the sealed history alone (privacy review §2.3)", async () => {
+    const t = await unlocked(12);
+    // The private history started before this money arrived: its first reading found none (independent review L38).
+    await t.activity.arrived("preprod", []);
+    // Money the wallet made private itself; the reading notes the rest as received.
+    const moved = ownedUtxos[0]!;
+    await t.activity.sent(
+      "preprod",
+      { kind: "move-in", network: "preprod", txHash: moved.tx_hash, submittedAt: 1, confirmations: null },
+      { lovelace: moved.value },
+    );
+    await t.balances.get("preprod");
+    const asked = t.koios.calls.length;
+    const { seedelf, cardano } = await t.coins.lists("preprod");
+    expect(t.koios.calls).toHaveLength(asked);
+    const of = (u: KoiosUtxo) => seedelf.find((x) => x.txHash === u.tx_hash)!;
+    expect(of(moved).history).toEqual({ id: "public", origin: "own" });
+    expect(of(ownedUtxos[1]!).history).toEqual({ id: `received:${ownedUtxos[1]!.tx_hash}`, origin: "received" });
+    // A Seedelf's own UTxO is never spent by a payment, and the public side has no such history.
+    expect(of(ownedUtxos[2]!)).not.toHaveProperty("history");
+    expect(cardano.some((u) => u.history)).toBe(false);
+  });
+
+  it("aren't offered for a UTxO no payment can take: one holding a reference script Koios doesn't give (launch review #12)", async () => {
+    const t = await unlocked(12);
+    const template = koiosPreprod.accounts[phrase(12).preprod.stake]!.account_utxos[0]!;
+    const script = { hash: "cd".repeat(28), size: 900, type: "plutusV3", bytes: null };
+    const measured = { hash: "ab".repeat(28), size: 3, type: "timelock", bytes: "820080" };
+    t.koios.addedToAccounts.push(
+      { ...template, tx_hash: "d1".repeat(32), tx_index: 0, value: "3000000", asset_list: [], reference_script: script },
+      { ...template, tx_hash: "d2".repeat(32), tx_index: 0, value: "3000000", asset_list: [], reference_script: measured },
+    );
+    await t.balances.get("preprod");
+    const { cardano } = await t.coins.lists("preprod");
+    expect(cardano.filter((u) => u.unspendable).map(at)).toEqual([`${"d1".repeat(32)}#0`]);
+    // One whose script the wallet can measure is spent, and priced, as any other.
+    expect(cardano.find((u) => u.txHash === "d2".repeat(32))).not.toHaveProperty("unspendable");
+    // Max says what it left out, and why (launch review H6, #12).
+    const max = await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(max.leftOut).toEqual([{ txHash: "d1".repeat(32), txIndex: 0, reason: "script" }]);
+    const moveIn = await t.moveIn.build("preprod", null, []);
+    expect(moveIn.leftOut).toEqual([{ txHash: "d1".repeat(32), txIndex: 0, reason: "script" }]);
+  });
+
+  it("refuse the collateral and UTxOs not in the last reading", async () => {
     const t = await unlocked(24);
     await t.balances.get("preprod");
     const { fives } = account24();
     await expect(t.coins.setLocked("preprod", "cardano", at(fives[0]!), true)).rejects.toThrow("Reclaim it in Settings");
     await expect(t.coins.setLocked("preprod", "cardano", `${"00".repeat(32)}#0`, true)).rejects.toThrow("last reading");
+  });
 
+  it("hold when a reading leaves their UTxO out and another lock changes: a backend behind, say", async () => {
+    const t = await unlocked(24);
+    await t.balances.get("preprod");
+    const { fives } = account24();
     await t.coins.setLocked("preprod", "cardano", at(fives[1]!), true);
+    // A lagging backend's reading doesn't list it; the user then locks and unlocks another.
     t.koios.spent.add(at(fives[1]!));
     await t.balances.get("preprod", true);
     await t.coins.setLocked("preprod", "cardano", at(fives[2]!), true);
-    expect((await t.coins.choices("preprod")).cardano).toEqual([at(fives[2]!)]);
+    await t.coins.setLocked("preprod", "cardano", at(fives[2]!), false);
+    expect((await t.coins.choices("preprod")).cardano).toEqual([at(fives[1]!)]);
+
+    // Listed again, it's still locked, and Max leaves it out.
+    t.koios.spent.delete(at(fives[1]!));
+    await t.balances.get("preprod", true);
+    expect((await t.coins.lists("preprod")).cardano.find((u) => at(u) === at(fives[1]!))).toMatchObject({ locked: true });
+    await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    const built = await t.session.get<{ txCbor: string }>("seedelf.send.built");
+    expect(bodyOutpoints(hexBytes(built!.txCbor), 0)).not.toContain(at(fives[1]!));
+  });
+
+  it("hold on the private side too, when a full read of the contract leaves their UTxO out", async () => {
+    const t = await unlocked(12);
+    await t.balances.get("preprod");
+    const [p, q] = (await t.coins.lists("preprod")).seedelf.filter((u) => !u.seedelf);
+    await t.coins.setLocked("preprod", "seedelf", at(p!), true);
+    t.koios.spent.add(at(p!));
+    await forgetContractView(t.deps, "preprod");
+    await t.balances.get("preprod", true);
+    await t.coins.setLocked("preprod", "seedelf", at(q!), true);
+    expect((await t.coins.choices("preprod")).seedelf.sort()).toEqual([at(p!), at(q!)].sort());
   });
 
   it("are sealed on the device, unreadable while locked, and ask Koios nothing", async () => {

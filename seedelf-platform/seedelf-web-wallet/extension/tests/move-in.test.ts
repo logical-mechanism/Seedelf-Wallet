@@ -3,11 +3,13 @@
 // then watch it.
 import { describe, expect, it } from "vitest";
 
+import { txInputs } from "../src/background/cbor";
 import { SESSION_BUILT } from "../src/background/move-in";
-import { SESSION_PENDING } from "../src/background/pending";
+import { pendingKey } from "../src/background/pending";
+import { spentSet } from "../src/background/spent";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
-import { txIdOf } from "./fixtures/cbor";
-import { testBalances, vectors } from "./fakes";
+import { ttlOf, txIdOf } from "./fixtures/cbor";
+import { busyFor, deepRow, koiosPreprod, testBalances, vectors, withRawRows } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const TUSDM = { policyId: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9", assetName: "0014df10745553444d" };
@@ -36,6 +38,7 @@ describe("move-in", () => {
       "account_info",
       "credential_utxos",
       "epoch_params",
+      "tip",
     ]);
     // The account's staking rewards go in too (preferences.ts).
     expect(summary.withdrawal).toBe("57475311");
@@ -69,31 +72,63 @@ describe("move-in", () => {
     const t = await unlocked();
     const summary = await t.moveIn.build("preprod", "5000000", []);
     const pending = await t.moveIn.submit("preprod", summary.txHash);
-    expect(pending).toEqual({ kind: "move-in", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
+    expect(pending).toEqual({
+      kind: "move-in",
+      network: "preprod",
+      txHash: summary.txHash,
+      submittedAt: t.clock.now,
+      confirmations: null,
+      // The slot it stops being valid at, which it's watched until.
+      invalidHereafter: ttlOf(t.koios.submitted[0]!),
+    });
     expect(t.koios.submitted).toHaveLength(1);
     expect(txIdOf(t.koios.submitted[0]!)).toBe(summary.txHash);
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
 
     // Not on chain yet: still watching.
-    expect(await t.pending.pending()).toMatchObject({ txHash: summary.txHash, confirmations: null });
-    expect(await t.session.get(SESSION_PENDING)).toBeDefined();
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: null });
+    expect(await t.session.get(pendingKey("preprod"))).toBeDefined();
 
     // Confirmed: stop watching and drop the stale balances.
     await t.session.set(`${SESSION_BALANCES_PREFIX}preprod`, { stale: true });
     t.koios.confirmations = 1;
-    expect(await t.pending.pending()).toMatchObject({ confirmations: 1 });
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: 1 });
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
     expect(await t.session.get(`${SESSION_BALANCES_PREFIX}preprod`)).toBeUndefined();
-    expect(await t.pending.pending()).toBeNull();
+    expect(await t.pending.pending("preprod")).toBeNull();
   });
 
-  it("stops watching after 10 minutes", async () => {
+  it("watches until the chain passes its slot, then says it expired and frees its UTxOs", async () => {
     const t = await unlocked();
     const summary = await t.moveIn.build("preprod", "5000000", []);
-    await t.moveIn.submit("preprod", summary.txHash);
+    const { invalidHereafter } = await t.moveIn.submit("preprod", summary.txHash);
+    const inputs = txInputs(t.koios.submitted[0]!);
+    const tips = () => t.koios.calls.filter((c) => c.path === "tip").length;
+    const built = tips();
+    await busyFor(t, 11 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
+    expect(tips()).toBe(built); // the device's clock says it can't have expired
+
+    // Two hours on, the chain is past its slot, but not by enough to trust a Koios backend's tx_status.
+    await busyFor(t, 2 * 60 * 60_000);
+    t.koios.tip = invalidHereafter! + 60;
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
+    expect(await spentSet(t.session)).toEqual(new Set(inputs));
+    t.koios.tip = invalidHereafter! + 31 * 60;
+    await t.session.set(`${SESSION_BALANCES_PREFIX}preprod`, { stale: true });
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: null, dropped: "expired" });
+    expect(await spentSet(t.session)).toEqual(new Set());
+    expect(await t.session.get(`${SESSION_BALANCES_PREFIX}preprod`)).toBeUndefined();
+    expect(await t.pending.pending("preprod")).toBeNull();
+  });
+
+  it("stops watching a private payment, which has no slot, after 10 minutes", async () => {
+    const t = await unlocked();
+    await t.session.set(pendingKey("preprod"), { kind: "withdraw", network: "preprod", txHash: "ab".repeat(32), submittedAt: t.clock.now, confirmations: null });
     t.clock.now += 11 * 60_000;
-    expect(await t.pending.pending()).toMatchObject({ confirmations: null });
-    expect(await t.pending.pending()).toBeNull();
+    expect(await t.pending.pending("preprod")).toMatchObject({ confirmations: null });
+    expect(await t.pending.pending("preprod")).toBeNull();
   });
 
   it("refuses to send anything but the reviewed transaction", async () => {
@@ -112,7 +147,30 @@ describe("move-in", () => {
     t.koios.rejectSubmit = "ValueNotConservedUTxO";
     await expect(t.moveIn.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction: ValueNotConservedUTxO");
     expect(await t.session.get(SESSION_BUILT)).toBeDefined();
-    expect(await t.session.get(SESSION_PENDING)).toBeUndefined();
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
+  });
+
+  it("isn't stopped by a stranger's UTxO nested thousands of levels deep in the account (launch review H4)", async () => {
+    const t = await unlocked();
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    const [ours] = koiosPreprod.accounts[v.preprod.stake as string]!.account_utxos;
+    // Paid to the account's own address: one with a deep datum, one with a deep native reference script.
+    withRawRows(t.koios, ours!.payment_cred!, [
+      deepRow(ours!, 5_000, { txHash: "e1".repeat(32) }),
+      deepRow(ours!, 5_000, { txHash: "e2".repeat(32), script: true }),
+    ]);
+    const before = testBalances();
+    await before.wallet.create(v.phrase, PASSWORD);
+    const plain = await before.balances.get("preprod");
+
+    const b = await t.balances.get("preprod");
+    expect(BigInt(b.cardano.lovelace)).toBe(BigInt(plain.cardano.lovelace) + 6_000_000n);
+    // Max spends the one with the datum; the one with a script it can't measure stays, and says why.
+    const max = await t.moveIn.build("preprod", null, []);
+    expect(max.inputs).toBe(7);
+    expect((max as { leftOut?: unknown }).leftOut).toEqual([{ txHash: "e2".repeat(32), txIndex: 0, reason: "script" }]);
+    const built = await t.session.get<{ txCbor: string }>(SESSION_BUILT);
+    expect(txInputs(Uint8Array.from(Buffer.from(built!.txCbor, "hex")))).toContain(`${"e1".repeat(32)}#0`);
   });
 
   it("raises a short amount to the least the deposit needs", async () => {
@@ -135,6 +193,6 @@ describe("move-in", () => {
     await t.wallet.lock();
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
     await expect(t.moveIn.build("preprod", "5000000", [])).rejects.toThrow("locked");
-    await expect(t.pending.pending()).rejects.toThrow("locked");
+    await expect(t.pending.pending("preprod")).rejects.toThrow("locked");
   });
 });

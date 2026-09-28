@@ -16,15 +16,22 @@
 // The choices say which UTxOs are the user's (a Seedelf UTxO's outpoint is
 // exactly what the contract hides), so they're sealed in the private store,
 // per network. Nothing here asks Koios anything: the lists come from the
-// last balance reading and the contract scan, in session storage.
+// last balance reading and the contract scan, in session storage. A reading
+// too large for session storage to keep (balances.ts) sums what's locked from
+// its own UTxOs, and the lists then say why they can't be shown.
+//
+// Each private UTxO is listed with where its money came from, read from the
+// sealed Seedelf history (activity.ts `classes`), so a lock that keeps one
+// history apart is an informed choice (privacy review §2.3).
 
 import type { NetworkName } from "../networks";
 import type { Balances, CollateralStatus, Locked, UtxoInfo, UtxoLists, UtxoSide } from "../shared/rpc";
 import type { PathedUtxo } from "./account";
+import type { ActivityService } from "./activity";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { keptContractView } from "./contract-scan";
-import type { KoiosUtxo } from "./koios";
+import { measurable, type KoiosUtxo } from "./koios";
 import type { PrivateStore } from "./private-store";
 import { outpoint, spentSet } from "./spent";
 import type { Area } from "./storage";
@@ -32,6 +39,27 @@ import { SESSION_BALANCES_PREFIX, type Wallet } from "./wallet";
 
 /** chrome.storage.session, per network: the account's UTxOs at the last balance reading, with their paths. */
 export const SESSION_ACCOUNT_UTXOS_PREFIX = "seedelf.accountUtxos.";
+
+/**
+ * chrome.storage.session, per network: when the last balance reading was
+ * made, set when it was too large to keep. Its UTxOs weren't kept, so the
+ * lists say so rather than come back empty.
+ */
+export const SESSION_TOO_LARGE_PREFIX = "seedelf.readingTooLarge.";
+
+/** What the lists say for a reading too large to keep. */
+export const TOO_LARGE =
+  "You hold too many tokens or UTxOs for the wallet to keep its last reading, so it can't list them here. Payments still leave out what you locked, and your collateral.";
+
+/** A balance reading's own UTxOs, for one too large to keep: what's locked is summed from these. */
+export interface ReadingUtxos {
+  /** This wallet's contract UTxOs. */
+  owned: KoiosUtxo[];
+  /** The account's. */
+  account: PathedUtxo[];
+  /** When the reading was made (ms since the epoch). */
+  updatedAt: number;
+}
 
 /** What a collateral holds: 5 ₳, as Lace and the CLI use. */
 export const COLLATERAL_LOVELACE = 5_000_000n;
@@ -83,6 +111,8 @@ export interface CoinControlDeps {
   store: PrivateStore;
   now: () => number;
   contract?: ContractConfig;
+  /** Where each private UTxO came from, for the lists. */
+  activity?: Pick<ActivityService, "classes">;
 }
 
 export class CoinControlService {
@@ -114,9 +144,9 @@ export class CoinControlService {
     return utxos.filter((u) => !locked.has(outpoint(u)));
   }
 
-  /** What's kept out of payments on each side, from the last reading. */
-  async locked(network: NetworkName): Promise<{ seedelf: Locked; cardano: Locked }> {
-    const lists = await this.lists(network);
+  /** What's kept out of payments on each side, from the last reading, or `from` one too large to keep. */
+  async locked(network: NetworkName, from?: ReadingUtxos): Promise<{ seedelf: Locked; cardano: Locked }> {
+    const lists = await this.lists(network, from, false);
     const sum = (list: UtxoInfo[]): Locked => {
       const kept = list.filter((u) => u.locked && !u.seedelf);
       const { lovelace, tokens } = sumValue(kept.map(asKoios));
@@ -125,31 +155,42 @@ export class CoinControlService {
     return { seedelf: sum(lists.seedelf), cardano: sum(lists.cardano) };
   }
 
-  /** Both sides' UTxOs, from the last reading: largest first. */
-  async lists(network: NetworkName): Promise<UtxoLists> {
+  /**
+   * Both sides' UTxOs, from the last reading, or `from` one too large to
+   * keep: largest first. Throws when the last reading was too large to keep.
+   * `histories`: each private UTxO's too, for the UTxOs screen.
+   */
+  async lists(network: NetworkName, from?: ReadingUtxos, histories = true): Promise<UtxoLists> {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
-    const [view, account, spent, reading] = await wallet.withKeys(
-      async () =>
-        [
-          await keptContractView(session, network),
-          (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [],
-          await spentSet(session),
-          await session.get<Balances>(SESSION_BALANCES_PREFIX + network),
-        ] as const,
-    );
+    const [owned, account, spent, updatedAt] = await wallet.withKeys(async () => {
+      if (from) return [from.owned, from.account, await spentSet(session), from.updatedAt] as const;
+      if ((await session.get(SESSION_TOO_LARGE_PREFIX + network)) !== undefined) throw new Error(TOO_LARGE);
+      return [
+        (await keptContractView(session, network, contract))?.owned ?? [],
+        (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [],
+        await spentSet(session),
+        (await session.get<Balances>(SESSION_BALANCES_PREFIX + network))?.updatedAt,
+      ] as const;
+    });
     const choices = await this.choices(network);
     const lockedSeedelf = new Set(choices.seedelf);
     const lockedCardano = new Set(choices.cardano);
     const fresh = account.filter((p) => !spent.has(outpoint(p.utxo)));
     const collateral = collateralOf(choices, fresh)?.utxo;
 
-    const seedelf = (view?.owned ?? []).map((u): UtxoInfo => {
+    // A Seedelf spend can't take a UTxO holding a reference script yet (script-spend.ts `spendable`),
+    // and the account can't price one whose script Koios doesn't give (`measurable`).
+    const script = { unspendable: "script" } as const;
+    const classes = histories ? await this.deps.activity?.classes(network, owned).catch(() => undefined) : undefined;
+    const seedelf = owned.map((u): UtxoInfo => {
       const name = seedelfTokenOf(u, contract.seedelfPolicyId);
-      if (!name) return { ...info(u), locked: lockedSeedelf.has(outpoint(u)) };
+      const unspendable = u.reference_script ? script : {};
+      const history = classes?.get(outpoint(u));
+      if (!name) return { ...info(u), locked: lockedSeedelf.has(outpoint(u)), ...unspendable, ...(history ? { history } : {}) };
       // The seedelf is named, not counted among the tokens.
       const tokens = info(u).tokens.filter((t) => !(t.policyId === contract.seedelfPolicyId && t.assetName === name));
       const label = seedelfLabel(name);
-      return { ...info(u), tokens, locked: false, seedelf: { name, ...(label ? { label } : {}) } };
+      return { ...info(u), tokens, locked: false, seedelf: { name, ...(label ? { label } : {}) }, ...unspendable };
     });
     const cardano = fresh.map(
       (p): UtxoInfo => ({
@@ -157,12 +198,13 @@ export class CoinControlService {
         address: p.utxo.address,
         locked: p === collateral || lockedCardano.has(outpoint(p.utxo)),
         ...(p === collateral ? { collateral: true } : {}),
+        ...(measurable(p.utxo) ? {} : script),
       }),
     );
     return {
       seedelf: seedelf.sort(largestFirst),
       cardano: cardano.sort(largestFirst),
-      ...(reading ? { updatedAt: reading.updatedAt } : {}),
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
     };
   }
 
@@ -175,9 +217,11 @@ export class CoinControlService {
       if (found.seedelf) throw new Error("A Seedelf's UTxO is never spent by a payment: only removing it does.");
       if (found.collateral) throw new Error("That's your collateral. Reclaim it in Settings, under Collateral.");
       const choices = await this.choices(network);
-      // Only what's still there is kept, so the record doesn't grow with spent UTxOs.
-      const present = new Set(lists[side].map((u) => `${u.txHash}#${u.index}`));
-      const next = new Set(choices[side].filter((o) => present.has(o)));
+      // The others stay as they are, listed in this reading or not: a
+      // backend that's behind, or a page read twice, can leave out a UTxO
+      // that's still there, and its lock must hold when it shows up again.
+      // One that's spent matches nothing; the list grows only by clicks.
+      const next = new Set(choices[side]);
       if (locked) next.add(utxo);
       else next.delete(utxo);
       await this.save(network, { ...choices, [side]: [...next] });
@@ -188,7 +232,7 @@ export class CoinControlService {
   /** The collateral, from the last reading. */
   async collateral(network: NetworkName): Promise<CollateralStatus> {
     const choices = await this.choices(network);
-    const lists = await this.lists(network);
+    const lists = await this.lists(network, undefined, false);
     const set = lists.cardano.find((u) => u.collateral);
     if (set) {
       const by = choices.collateral === `${set.txHash}#${set.index}` ? "you" : "wallet";
@@ -204,7 +248,7 @@ export class CoinControlService {
   /** Makes a pure 5 ₳ UTxO the account already holds its collateral: no transaction. */
   use(network: NetworkName, utxo: string): Promise<CollateralStatus> {
     return this.serial(async () => {
-      const found = (await this.lists(network)).cardano.find((u) => `${u.txHash}#${u.index}` === utxo);
+      const found = (await this.lists(network, undefined, false)).cardano.find((u) => `${u.txHash}#${u.index}` === utxo);
       if (!found || !isCollateralShaped(asKoios(found))) {
         throw new Error("Only a UTxO of exactly 5 ₳ and nothing else can be the collateral.");
       }

@@ -2,7 +2,7 @@
 // (`status`) on open and refreshes it whenever the worker says it changed.
 // Navigation is plain state switching, no router.
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 import { enabledNetworks, NETWORKS, serviceHosts } from "../networks";
 import type { Status } from "../shared/rpc";
@@ -10,6 +10,7 @@ import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
 import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
 import { LockCountdown } from "./components/LockCountdown";
+import { NetworkBadge, TestNetworkStrip } from "./components/NetworkBadge";
 import { DappApprovals } from "./screens/DappApprovals";
 import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
@@ -22,6 +23,8 @@ import { connectorWindow, openInTab, startFromHash, view } from "./view";
 export function App() {
   const [status, setStatus] = useState<Status>();
   const [error, setError] = useState<string>();
+  // A Lock that failed: said over the screen, which stays as it is.
+  const [lockError, setLockError] = useState<string>();
   const [resetting, setResetting] = useState(false);
   const [start, setStart] = useState(startFromHash);
   const [settings, setSettings] = useState(false);
@@ -44,6 +47,10 @@ export function App() {
 
   // While unlocked, user input pushes auto-lock back.
   const unlocked = status?.state === "unlocked";
+  // Once it's locked, however that came about, a Lock that failed before is past.
+  useEffect(() => {
+    if (!unlocked) setLockError(undefined);
+  }, [unlocked]);
   useEffect(() => {
     if (!unlocked) return;
     reportActivity();
@@ -56,7 +63,13 @@ export function App() {
 
   async function lock() {
     setSettings(false);
-    setStatus(await call("lock", {}));
+    setLockError(undefined);
+    try {
+      setStatus(await call("lock", {}));
+    } catch (e) {
+      // Said over the screen as it is, never as "couldn't start": if the wallet did lock, the worker says so.
+      setLockError((e as Error).message);
+    }
   }
 
   const network = status ? NETWORKS[status.network] : undefined;
@@ -67,7 +80,7 @@ export function App() {
   } else if (!status) {
     screen = null;
   } else if (status.state === "no-wallet") {
-    screen = <Onboarding key={start ?? "welcome"} start={start} onDone={setStatus} />;
+    screen = <Onboarding key={start ?? "welcome"} status={status} start={start} onDone={setStatus} onNetwork={setStatus} />;
   } else if (status.state === "locked" && resetting) {
     screen = (
       <Reset
@@ -81,7 +94,14 @@ export function App() {
       />
     );
   } else if (status.state === "locked") {
-    screen = <Unlock retryAfterMs={status.retryAfterMs} onUnlocked={refresh} onForgot={() => setResetting(true)} />;
+    screen = (
+      <Unlock
+        retryAfterMs={status.retryAfterMs}
+        lockedBy={status.lockedBy}
+        onUnlocked={refresh}
+        onForgot={() => setResetting(true)}
+      />
+    );
   } else if (connectorWindow) {
     screen = <DappApprovals />;
   } else if (settings) {
@@ -93,6 +113,7 @@ export function App() {
           setSettings(false);
           setStatus(s);
         }}
+        onNetwork={setStatus}
       />
     );
   } else {
@@ -104,11 +125,7 @@ export function App() {
       <header className="topbar">
         <img className="topbar__mark" src="/icons/icon-48.png" alt="" width={28} height={28} />
         <span className="wordmark">Seedelf</span>
-        {network && (
-          <span className={`badge badge--${network.name}`} data-testid="network">
-            {network.label.toUpperCase()}
-          </span>
-        )}
+        {network && <NetworkBadge network={network.name} />}
         <span className="topbar__spacer" />
         {unlocked && !connectorWindow && (
           <button
@@ -132,12 +149,17 @@ export function App() {
           </button>
         )}
       </header>
+      {network && <TestNetworkStrip network={network.name} />}
 
       <main>
         {unlocked && <LockCountdown />}
+        {lockError && unlocked && <LockFailed message={lockError} onRetry={lock} />}
         {reachable === false && <ServiceAccess />}
         <NetworkContext.Provider value={status?.network ?? "preprod"}>
-          <PreferencesProvider unlocked={unlocked}>{screen}</PreferencesProvider>
+          {/* A switch in Settings starts every screen afresh on the new network: nothing read or reviewed on the other stays. */}
+          <PreferencesProvider unlocked={unlocked}>
+            <Fragment key={status?.network}>{screen}</Fragment>
+          </PreferencesProvider>
         </NetworkContext.Provider>
       </main>
 
@@ -199,6 +221,21 @@ function ServiceAccess() {
         Ask Chrome again
       </button>
       {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+/** Lock didn't finish: say why, and how to be sure the wallet locks. */
+export function LockFailed({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="stack service-access" role="alert" data-testid="lock-error">
+      <Callout tone="warn">
+        The wallet couldn't lock: {message} Try again. Closing the browser always locks it: it forgets your keys when it
+        closes.
+      </Callout>
+      <button className="primary" onClick={onRetry}>
+        Lock
+      </button>
     </div>
   );
 }

@@ -4,11 +4,17 @@
 // key's signature. WebAssembly checks that signature before adding it, so
 // this client only carries the request and explains failures.
 
-import type { FetchLike } from "./koios";
+import { SERVICE_FETCH, type FetchLike } from "./koios";
 
 const TIMEOUT_MS = 20_000;
 
 export class CollateralError extends Error {}
+
+/**
+ * giveme.my answered, and refused. It checks a transaction against the chain
+ * first, so one reason is an input spent since the review.
+ */
+export class CollateralRefusedError extends CollateralError {}
 
 export class Collateral {
   constructor(
@@ -21,6 +27,7 @@ export class Collateral {
     let response: Response;
     try {
       response = await this.fetchFn(this.url, {
+        ...SERVICE_FETCH,
         method: "POST",
         headers: { accept: "application/json", "content-type": "application/json" },
         body: JSON.stringify({ tx: txCborHex }),
@@ -43,7 +50,7 @@ export class Collateral {
     if (!response.ok) {
       const detail = (answer as { detail?: unknown } | undefined)?.detail;
       const why = typeof detail === "string" ? `: ${detail}` : ` (${response.status})`;
-      throw new CollateralError(
+      throw new CollateralRefusedError(
         `giveme.my, which lends the collateral, refused this transaction${why}. ` +
           "Its UTxOs may have been spent since the review: refresh, then review it again.",
       );

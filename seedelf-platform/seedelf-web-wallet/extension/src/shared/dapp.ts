@@ -4,8 +4,9 @@
 // two content scripts are registered for them. One puts
 // `window.cardano.seedelf` on the page (the page's own world); the other
 // relays its calls to the worker over a port (an isolated world). The
-// worker answers with the public account only: nothing about the private
-// balance ever reaches a site.
+// worker answers with the public account, or with a private session's
+// one-time account the user funded for the site: never the private balance
+// itself, though a session's funding is on chain for anyone to follow.
 
 /** The port the bridge opens to the worker. */
 export const DAPP_PORT = "seedelf.cip30";
@@ -57,6 +58,17 @@ export const READ_METHODS: ReadonlySet<DappMethod> = new Set<DappMethod>([
   "getChangeAddress",
   "getRewardAddresses",
 ]);
+
+/**
+ * What a call the worker stopped under hears from the bridge. A send may
+ * have gone out already, and a site that sent it again blindly, or built it
+ * again from other UTxOs, could pay twice (independent review M3).
+ */
+export function cutOff(method: DappMethod): string {
+  return method === "submitTx"
+    ? "Seedelf Wallet stopped before answering, and the transaction may have gone through. Check for it on chain before you send it again."
+    : "Seedelf Wallet stopped before answering, so nothing was signed. Try again.";
+}
 
 export const isDappMethod = (m: unknown): m is DappMethod => (DAPP_METHODS as readonly unknown[]).includes(m);
 

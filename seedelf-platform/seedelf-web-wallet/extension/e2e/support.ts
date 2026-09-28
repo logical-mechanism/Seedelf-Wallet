@@ -8,10 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base, chromium, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { test as base, chromium, expect, type BrowserContext, type Locator, type Page, type Request } from "@playwright/test";
 
+import { NETWORKS, type NetworkName } from "../src/networks";
 import { DAPP_ORIGINS } from "../src/shared/dapp";
+import { LOCAL_NETWORK } from "../src/shared/preferences";
+import { UI_PORT } from "../src/shared/rpc";
 import { txIdOf } from "../tests/fixtures/cbor";
+import { swapTx } from "../tests/fixtures/swap-tx";
 
 export { expect };
 
@@ -44,6 +48,17 @@ export async function launch(
   return context;
 }
 
+/**
+ * Puts the wallet in `context` on `network`, as Settings' switch does: the
+ * worker reads `seedelf.network` at every request. Set before a page opens,
+ * the wallet starts there. A preprod-only build has preprod alone, whatever
+ * is set; a mainnet build (the store's) starts on mainnet unless told.
+ */
+export async function chooseNetwork(context: BrowserContext, network: NetworkName): Promise<void> {
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  await worker.evaluate(([key, value]) => chrome.storage.local.set({ [key]: value }), [LOCAL_NETWORK, network] as const);
+}
+
 const ids = new WeakMap<BrowserContext, Promise<string>>();
 
 /** The extension's ID in `context`, from its service worker's URL. */
@@ -74,7 +89,7 @@ export const withdrawPreprod = fixture("withdraw-preprod.json");
 export const activityPreprod = fixture("activity-preprod.json");
 export const stakingPreprod = fixture("staking-preprod.json");
 export const minswapEstimate = fixture("minswap-estimate-preprod.json");
-/** Session 0 of the 12-word phrase, its UTxO, and a swap from it (wasm/tests/session_test.rs). */
+/** Session 0 of the 12-word phrase and its UTxO (wasm/tests/session_test.rs). */
 export const sessionSwap = fixture("session-swap.json");
 /** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
 export const lovejoinPool = fixture("lovejoin-pool-preprod.json").pool;
@@ -99,6 +114,16 @@ export function ownedLovejoinBox(phrase: string, tx: string): { payment_cred: st
   });
   return { ...lovejoinPool[0], tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: datum, value: {} } };
 }
+/**
+ * Koios says a mix made each of `txs` (tx_info: one of its inputs sat at
+ * Lovejoin's mix_box): a box the wallet finds with no record of its own, whose
+ * making it asks of before it takes it (independent review M14).
+ */
+export function madeByMix(koios: Pick<KoiosFake, "txSpends">, ...txs: string[]): void {
+  const input = { payment_addr: { bech32: "addr_test1", cred: NETWORKS.preprod.lovejoin!.mixBox } };
+  for (const tx of txs) koios.txSpends.set(tx, [input]);
+}
+
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -109,10 +134,16 @@ export interface KoiosFake {
   failWith?: number;
   /** When set, every answer waits this long (ms), as a slow Koios would. */
   delayMs?: number;
-  /** Transactions submitted, by id. */
+  /** Transactions submitted, by id: each that reached the network. */
   submitted: string[];
-  /** What tx_status reports. */
-  confirmations: number | null;
+  /**
+   * How submittx answers the nth transaction sent (from 1), when not as
+   * usual: `timeout` takes it and never answers, as a gateway that timed out
+   * (it may have gone through); a status refuses it with `body`.
+   */
+  submitAnswer?: (n: number) => "timeout" | { status: number; body: string } | undefined;
+  /** What tx_status reports: for every transaction, or for each by its id. */
+  confirmations: number | null | ((txHash: string) => number | null);
   /** giveme.my's answer; by default its recorded refusal of a transaction it can't validate. */
   collateral: { status: number; body: unknown };
   /** Transactions giveme.my was asked to witness. */
@@ -125,6 +156,18 @@ export interface KoiosFake {
   stakes: Map<string, Record<string, unknown>>;
   /** UTxOs under other payment keys, as credential_utxos finds them: a private session's, say. */
   addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
+  /** Outpoints (`txhash#index`) the chain has spent, as utxo_info marks them: an order a batcher filled, say. */
+  spent: Set<string>;
+  /**
+   * Every output the fixtures don't list is spent, as utxo_info answers once
+   * a session's return landed: its funding's outputs among them (a session
+   * ends only once Koios shows those spent, independent review M4).
+   */
+  unlistedSpent: boolean;
+  /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
+  txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null } }>>;
+  /** Requests a page made instead of the worker (`byWorker`): there must be none. */
+  strays: string[];
 }
 
 /** Minswap's aggregator, for swaps in private sessions. */
@@ -137,22 +180,50 @@ export interface MinswapFake {
   orders: unknown[];
   /** While set, quotes and builds answer 429, as Minswap's rate limit does. */
   limited?: boolean;
+  /** Requests a page made instead of the worker (`byWorker`): there must be none. */
+  strays: string[];
+}
+
+/**
+ * Who asked: the worker, or a page. Only the worker talks to Koios, giveme.my
+ * and Minswap. A page that does is running the worker's code itself (a page
+ * chunk that imports sw.js runs all of it), a second worker beside the real
+ * one; `strays` keeps its requests, and the test fails.
+ */
+function byWorker(request: Request, strays: string[]): boolean {
+  if (request.serviceWorker()) return true;
+  strays.push(request.url());
+  return false;
 }
 
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
-  await context.route("https://preprod.koios.rest/**", async (route) => {
+  let submits = 0;
+  // Mainnet's Koios answers from the same recordings: a phrase's keys are the same on both networks, so a test
+  // that switches to mainnet sees the recorded account there too.
+  await context.route(/^https:\/\/(preprod|api)\.koios\.rest\//, async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").pop()!;
-    koios.calls.push(path);
+    if (byWorker(request, koios.strays)) koios.calls.push(path);
     if (koios.delayMs) await new Promise((resolve) => setTimeout(resolve, koios.delayMs));
     if (koios.failWith) return route.fulfill({ status: koios.failWith, body: "" });
     if (path === "submittx") {
       const id = txIdOf(new Uint8Array(request.postDataBuffer()!));
+      const answer = koios.submitAnswer?.(++submits);
+      if (answer !== undefined && answer !== "timeout") {
+        return route.fulfill({ status: answer.status, contentType: "text/plain", body: answer.body });
+      }
       koios.submitted.push(id);
+      if (answer === "timeout") return route.abort("timedout");
       return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(id) });
     }
     if (path === "epoch_params") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(epochParams) });
+    }
+    if (path === "tip") {
+      // The chain's slot now: a second each since preprod's start, or mainnet's Shelley start.
+      const since = new URL(request.url()).host.startsWith("preprod.") ? 1_655_683_200 : 1_591_566_291;
+      const rows = [{ abs_slot: Math.floor(Date.now() / 1000) - since }];
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     if (path === "pool_list" || path === "totals") {
       const rows = path === "pool_list" ? stakingPreprod.pool_list : stakingPreprod.totals;
@@ -172,9 +243,12 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const body = request.postDataJSON();
     if (path === "account_txs" || path === "tx_info") {
       const query = new URL(request.url()).searchParams;
-      const all: Array<{ tx_hash: string; block_height: number }> =
+      const all: Array<{ tx_hash: string; block_height?: number }> =
         path === "tx_info"
-          ? activityPreprod.tx_info.filter((t: { tx_hash: string }) => body._tx_hashes.includes(t.tx_hash))
+          ? [
+              ...activityPreprod.tx_info.filter((t: { tx_hash: string }) => body._tx_hashes.includes(t.tx_hash)),
+              ...[...koios.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
+            ]
           : body._stake_address === activityPreprod.stake
             ? activityPreprod.account_txs.filter(
                 (t: { block_height: number }) =>
@@ -186,7 +260,8 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     if (path === "tx_status") {
-      const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: koios.confirmations }));
+      const confirmations = (tx: string) => (typeof koios.confirmations === "function" ? koios.confirmations(tx) : koios.confirmations);
+      const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: confirmations(tx_hash) }));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const staking: Record<string, (b: any) => unknown[]> = {
@@ -197,6 +272,23 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     };
     if (staking[path]) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(staking[path]!(body)) });
+    }
+    if (path === "utxo_info") {
+      // Any UTxO the fixtures know, spent or not, as Koios answers; one known only as spent, by its outpoint alone.
+      const refs: string[] = body._utxo_refs;
+      const ref = (u: { tx_hash: string; tx_index: number }) => `${u.tx_hash}#${u.tx_index}`;
+      const known = [
+        ...koiosPreprod.contract_utxos,
+        ...ownedUtxos,
+        ...Object.values(koiosPreprod.accounts as Record<string, { account_utxos: unknown[] }>).flatMap((a) => a.account_utxos),
+        ...koios.addedToAccounts,
+      ] as Array<{ tx_hash: string; tx_index: number }>;
+      const spent = (r: string) => koios.spent.has(r) || (koios.unlistedSpent && !known.some((u) => ref(u) === r));
+      const found = known.filter((u) => refs.includes(ref(u))).map((u) => ({ ...u, is_spent: spent(ref(u)) }));
+      const gone = refs
+        .filter((r) => spent(r) && !found.some((u) => ref(u) === r))
+        .map((r) => ({ tx_hash: r.split("#")[0], tx_index: Number(r.split("#")[1]), is_spent: true }));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([...found, ...gone]) });
     }
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
     // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
@@ -221,7 +313,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
   });
   await context.route("https://www.giveme.my/preprod/collateral/", async (route) => {
-    koios.collateralAsked++;
+    if (byWorker(route.request(), koios.strays)) koios.collateralAsked++;
     return route.fulfill({
       status: koios.collateral.status,
       contentType: "application/json",
@@ -230,7 +322,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
   });
   // Nothing else leaves the browser.
   await context.route(
-    /^https?:\/\/(?!preprod\.koios\.rest|www\.giveme\.my\/preprod\/collateral\/$|aggr\.monorepo-testnet-preprod\.minswap\.org)/,
+    /^https?:\/\/(?!(preprod|api)\.koios\.rest\/|www\.giveme\.my\/preprod\/collateral\/$|aggr\.monorepo-testnet-preprod\.minswap\.org)/,
     (route) => route.abort(),
   );
 }
@@ -240,7 +332,7 @@ async function fakeMinswap(context: BrowserContext, swaps: MinswapFake) {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").pop()!;
     const body = request.method() === "POST" ? request.postDataJSON() : null;
-    swaps.calls.push({ path, body });
+    if (byWorker(request, swaps.strays)) swaps.calls.push({ path, body });
     const answer = (value: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
     if (path === "tokens") {
       const q = String(body.query).toLowerCase();
@@ -273,6 +365,7 @@ function withSiteAccess(extension: string, into: string): string {
 export const test = base.extend<{
   scale: number;
   siteAccess: boolean;
+  network: NetworkName;
   userDataDir: string;
   koios: KoiosFake;
   swaps: MinswapFake;
@@ -282,6 +375,12 @@ export const test = base.extend<{
   scale: [1, { option: true }],
   /** Chrome's access to sites granted from install, for the dApp connector's tests. */
   siteAccess: [false, { option: true }],
+  /**
+   * The network the wallet starts on, set before any page opens. Preprod, as
+   * the fakes answer: the suite runs on a dev build and on the store's
+   * mainnet build alike.
+   */
+  network: ["preprod", { option: true }],
   userDataDir: async ({}, use) => {
     const dir = mkdtempSync(join(tmpdir(), "seedelf-e2e-"));
     await use(dir);
@@ -299,6 +398,10 @@ export const test = base.extend<{
       nfts: new Map(),
       stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
       addedToAccounts: [],
+      spent: new Set(),
+      unlistedSpent: false,
+      txSpends: new Map(),
+      strays: [],
     });
   },
   swaps: async ({}, use) => {
@@ -316,18 +419,22 @@ export const test = base.extend<{
         },
       ],
       estimate: minswapEstimate.estimate,
-      swapCbor: sessionSwap.swapCbor,
+      // Its order carries the datum it names by hash, as Minswap's do: the runner won't sign one that doesn't.
+      swapCbor: swapTx(),
       orders: [],
+      strays: [],
     });
   },
-  context: async ({ scale, siteAccess, userDataDir, koios, swaps }, use) => {
+  context: async ({ scale, siteAccess, network, userDataDir, koios, swaps }, use) => {
     const extension = siteAccess ? withSiteAccess(dist, `${userDataDir}-extension`) : dist;
     const context = await launch(userDataDir, { scale, extension });
+    await chooseNetwork(context, network);
     await fakeKoios(context, koios);
     await fakeMinswap(context, swaps);
     await use(context);
     await context.close();
     if (siteAccess) rmSync(extension, { recursive: true, force: true });
+    expect([...koios.strays, ...swaps.strays], "only the worker asks Koios, giveme.my and Minswap").toEqual([]);
   },
 });
 
@@ -408,4 +515,25 @@ export async function setPassword(page: Page, submit: string) {
   await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByLabel("Confirm password").fill(PASSWORD);
   await page.getByRole("button", { name: submit }).click();
+}
+
+/**
+ * Asks the worker from a wallet page as the UI does, on a port of its own
+ * (ui/background.ts): its reply, and how long it took in the page (ms).
+ */
+export function askWorker(page: Page, message: { type: string } & Record<string, unknown>): Promise<{ reply: any; ms: number }> {
+  return page.evaluate(
+    ([m, name]) =>
+      new Promise<{ reply: any; ms: number }>((resolve, reject) => {
+        const started = performance.now();
+        const port = chrome.runtime.connect({ name });
+        port.onMessage.addListener((reply) => {
+          port.disconnect();
+          resolve({ reply, ms: performance.now() - started });
+        });
+        port.onDisconnect.addListener(() => reject(new Error("The worker didn't answer.")));
+        port.postMessage(m);
+      }),
+    [message, UI_PORT] as const,
+  );
 }

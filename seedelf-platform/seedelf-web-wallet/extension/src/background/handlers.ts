@@ -4,7 +4,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { Message, Requests, Status } from "../shared/rpc";
+import type { AtStake, Message, Requests, Status } from "../shared/rpc";
 import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
 import type { CoinControlService } from "./coin-control";
@@ -13,7 +13,7 @@ import type { DappService } from "./dapp";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { PendingService } from "./pending";
-import type { PreferencesService } from "./preferences";
+import type { NetworkChoice, PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
 import type { SendService } from "./send";
 import type { LovejoinService } from "./lovejoin";
@@ -46,9 +46,15 @@ export interface Context {
   lovejoin: LovejoinService;
   /** Registers or removes the dApp connector's content scripts (connector.ts). */
   connector: (on: boolean) => Promise<boolean>;
+  /** Why the connector can't be turned on, when it can't (storage-access.ts). */
+  connectorBlocked?: Status["connectorBlocked"];
   version: string;
+  /** The network this request is on: the user's choice as the request came in (sw.ts reads it for each one). */
   network: NetworkName;
+  /** The build's networks, its default first. */
   networks: NetworkName[];
+  /** The user's choice of network, which `network-set` changes. */
+  networkChoice: NetworkChoice;
 }
 
 export async function handle(message: Message, ctx: Context): Promise<Requests[Message["type"]]["result"]> {
@@ -63,7 +69,14 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return null;
     case "create-wallet":
     case "restore-wallet":
+      // The network it's made on (the welcome screen's choice) is kept first,
+      // so the new wallet is never taken for one from before the switch.
+      await ctx.networkChoice.keep(ctx.network);
       await wallet.create(message.phrase, message.password);
+      // What Remove wallet kept of a payment that may still go through: this phrase's is watched again, another's goes.
+      await ctx.pending.adoptKept(ctx.networks).catch(() => undefined);
+      // So does a mix from the public account that may have gone through (final review F1).
+      await ctx.lovejoin.adoptKept(ctx.networks).catch(() => undefined);
       return status(ctx);
     case "unlock":
       return wallet.unlock(message.password);
@@ -110,12 +123,28 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "send-submit":
       return ctx.send.submit(ctx.network, message.txHash);
     case "pending-tx":
-      return ctx.pending.pending();
+      return ctx.pending.pending(ctx.network);
+    case "reset-check":
+      return atStake(ctx);
     case "reset-wallet":
+      // Unlocked (Remove wallet), what's still open is listed first, and
+      // removing it anyway takes a second yes. Locked (Forgot password),
+      // nothing can be read: a payment that may still go through is kept all
+      // the same (wallet.ts reset, independent review M2, M5).
+      if (message.force !== true && (await wallet.state()) === "unlocked" && (await atStake(ctx)).length) {
+        throw new Error(RESET_AT_STAKE);
+      }
+      // A wallet from before the switch has no network kept, only worked out
+      // from its vault: kept now, it outlives the vault, so the next restore
+      // is on that network, never mainnet first (independent review L42).
+      await ctx.networkChoice.keep(await ctx.networkChoice.get());
+      // A mix from the public account that may have gone through is kept, sealed, as that payment is (final review F1).
+      if ((await wallet.state()) === "unlocked") await ctx.lovejoin.keepOnReset(ctx.networks).catch(() => undefined);
       await wallet.reset();
       // The settings went with it: sites can't connect to a wallet that isn't there.
       await ctx.connector(false).catch(() => false);
-      return status(ctx);
+      // Said as it now stands, not as the request came in.
+      return status({ ...ctx, network: await ctx.networkChoice.get() });
     case "reveal-phrase":
       return { words: await wallet.revealPhrase(message.password) };
     case "check-phrase":
@@ -173,16 +202,30 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       const { type: _type, ...change } = message;
       const prefs = await ctx.preferences.set(change);
       if (typeof change.dappConnector === "boolean") {
+        // Off: nothing a site asked for waits on (independent review L33).
+        if (!prefs.dappConnector) ctx.dapp.connectorOff();
         // Turned on without Chrome's access to sites (the switch asks first), it stays off.
         const working = await ctx.connector(prefs.dappConnector);
         if (prefs.dappConnector && !working) return ctx.preferences.set({ dappConnector: false });
       }
       return prefs;
     }
+    case "network-set": {
+      // What's kept for Send stays tied to the network it was built on
+      // (every submit checks it), so nothing built here goes out there.
+      const network = await ctx.networkChoice.set(message.network);
+      // Sites asking on the network the wallet left hear no.
+      await ctx.dapp.networkChanged();
+      return status({ ...ctx, network });
+    }
     case "price":
       return ctx.prices.get(ctx.network);
     case "dapp-approvals":
       return ctx.dapp.approvals();
+    case "dapp-unlocking":
+      return ctx.dapp.unlockingSites();
+    case "dapp-close":
+      return ctx.dapp.closeWindow();
     case "dapp-answer":
       return ctx.dapp.answer(message.id, message.approve, message.password, message.fund);
     case "dapp-private-build":
@@ -208,7 +251,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "session-out-build":
       return ctx.sessions.outBuild(ctx.network, message.quote, message.display);
     case "session-out-submit":
-      return ctx.sessions.outSubmit(ctx.network, message.txHash);
+      return ctx.sessions.outSubmit(ctx.network, message.txHash, message.direct);
     case "session-swap-build":
       return ctx.sessions.swapBuild(ctx.network, message.index);
     case "session-swap-submit":
@@ -236,7 +279,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "session-advance":
       return ctx.sessions.advance(ctx.network, message.index, message.now ?? false);
     case "session-stop":
-      return ctx.sessions.stop(ctx.network, message.index);
+      return ctx.sessions.stop(ctx.network, message.index, message.direct ?? false);
+    case "session-stop-cost":
+      return ctx.sessions.stopCost(ctx.network, message.index);
     case "session-resume":
       return ctx.sessions.resume(ctx.network, message.index);
     case "lovejoin-status":
@@ -248,7 +293,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-mix-private-build":
       return ctx.sessions.mixOutBuild(ctx.network, message.boxes);
     case "lovejoin-again-build":
-      return ctx.sessions.againBuild(ctx.network);
+      return ctx.sessions.againBuild(ctx.network, message.anyway ?? false);
+    case "lovejoin-again-public-build":
+      return ctx.lovejoin.publicAgainBuild(ctx.network);
     case "lovejoin-mix-private-submit":
       return ctx.sessions.mixOutSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-build":
@@ -258,12 +305,45 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-mix-public-progress":
       return ctx.lovejoin.progress(ctx.network, message.advance ?? false);
     case "lovejoin-withdraw-now":
-      return ctx.lovejoin.withdrawNow(ctx.network, message.box);
+      return ctx.lovejoin.withdrawNow(ctx.network, message.box, message.anyway ?? false);
   }
 }
 
-async function status({ wallet, version, network, networks }: Context): Promise<Status> {
+/** Remove wallet's refusal, when something opened since its list was read. */
+export const RESET_AT_STAKE =
+  "Something is still open that removing the wallet would leave behind. Look at the list again before you remove it.";
+
+/**
+ * What removing the wallet would leave behind, each of the build's networks
+ * with something (independent review M2, M5), from what the wallet keeps,
+ * with no Koios request: a payment that may still go through, private
+ * sessions whose accounts a restore doesn't find yet, a chain through
+ * Lovejoin being sent, a mix from the public account that may have gone
+ * through (final review F1). A network whose records won't read says so.
+ * Throws if locked.
+ */
+async function atStake(ctx: Context): Promise<AtStake[]> {
+  if ((await ctx.wallet.state()) !== "unlocked") throw new Error("The wallet is locked.");
+  const found: AtStake[] = [];
+  for (const network of ctx.networks) {
+    try {
+      const maybeSent = await ctx.pending.maybeSentOn(network);
+      const sessions = await ctx.sessions.atStake(network);
+      const chainSending = await ctx.lovejoin.chainsSending(network);
+      const mixMaybeSent = await ctx.lovejoin.publicMaybe(network);
+      if (maybeSent || sessions.length || chainSending || mixMaybeSent) {
+        found.push({ network, ...(maybeSent ? { maybeSent } : {}), sessions, chainSending, ...(mixMaybeSent ? { mixMaybeSent } : {}) });
+      }
+    } catch {
+      found.push({ network, sessions: [], chainSending: false, unreadable: true });
+    }
+  }
+  return found;
+}
+
+async function status({ wallet, version, network, networks, connectorBlocked }: Context): Promise<Status> {
   const state = await wallet.state();
   const retryAfterMs = state === "locked" ? await wallet.retryAfterMs() : 0;
-  return { state, version, network, networks, retryAfterMs };
+  const lockedBy = state === "locked" ? wallet.lockReason() : undefined;
+  return { state, version, network, networks, retryAfterMs, ...(connectorBlocked ? { connectorBlocked } : {}), ...(lockedBy ? { lockedBy } : {}) };
 }

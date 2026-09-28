@@ -10,7 +10,7 @@
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_core::utxos;
-use seedelf_koios::koios::{Asset as KoiosAsset, ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{Asset as KoiosAsset, ProtocolParameters, Ratio, UtxoResponse};
 
 const PID: &str = "11111111111111111111111111111111111111111111111111111111";
 
@@ -23,6 +23,7 @@ fn fixture_params() -> ProtocolParameters {
         price_mem: 0.0577,
         price_step: 0.0000721,
         cost_model_v3: Vec::new(),
+        min_fee_ref_script_cost_per_byte: Ratio::whole(15),
     }
 }
 

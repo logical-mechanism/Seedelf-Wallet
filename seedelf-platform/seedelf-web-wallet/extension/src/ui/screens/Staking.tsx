@@ -14,15 +14,19 @@ import { Callout } from "../components/Callout";
 import { ChevronRightIcon, TrashIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { adaWithTokens, formatAda, formatPercent, poolLabel, rewardsLocked, voteLabel } from "../format";
+import { adaWithTokens, formatAda, formatPercent, poolLabel, rewardsLocked, shortId, voteLabel } from "../format";
 import { useAmounts } from "../preferences";
-import { Pools } from "./Pools";
-import { Voting } from "./Voting";
+import { Pools, SharedTicker } from "./Pools";
+import { sharedDrepName, Voting } from "./Voting";
 
-/** What a review shows besides the summary: the pool's or DRep's name. */
+/** What a review shows besides the summary: the pool's or DRep's name, and how many others share it. */
 interface Chosen {
   pool?: PoolRef;
   drepName?: string;
+  /** Live pools using the pool's ticker, or DReps using the DRep's name (Voting.tsx `drepSharing`). */
+  shared?: number;
+  /** The list has the DRep under that name; when it doesn't, `shared` counts it too. */
+  drepListed?: boolean;
 }
 
 type Page = "overview" | "pools" | "vote";
@@ -113,7 +117,7 @@ export function Staking({
         busy={busy}
         error={error}
         onBack={back("overview")}
-        onStake={(p) => void build({ kind: "delegate", pool: p.id }, { pool: p })}
+        onStake={(p, shared) => void build({ kind: "delegate", pool: p.id }, { pool: p, shared })}
       />
     );
   }
@@ -126,7 +130,9 @@ export function Staking({
         busy={busy}
         error={error}
         onBack={back("overview")}
-        onVote={(drep, drepName) => void build({ kind: "vote", drep }, { drepName })}
+        onVote={(drep, drepName, shared) =>
+          void build({ kind: "vote", drep }, { drepName, shared: shared?.shared, drepListed: shared?.listed })
+        }
       />
     );
   }
@@ -249,6 +255,13 @@ export function PoolFacts({
         <p className="pool-name">
           <strong>{poolLabel(pool)}</strong>
           {pool.ticker && pool.name && <span className="note"> · {pool.name}</span>}
+          {/* A ticker is the pool's own to choose: its ID is what it is. */}
+          {(pool.ticker || pool.name) && (
+            <span className="note mono-id" title={pool.id}>
+              {" "}
+              · {shortId(pool.id)}
+            </span>
+          )}
         </p>
       )}
       {details ? (
@@ -293,10 +306,12 @@ const TITLES: Record<StakingAction["kind"], string> = {
   stop: "Review stopping",
 };
 
-function StakingReview({
+export function StakingReview({
   summary,
   pool,
   drepName,
+  shared = 0,
+  drepListed = true,
   busy,
   error,
   onBack,
@@ -334,6 +349,15 @@ function StakingReview({
         <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
         <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
       </ReviewRows>
+      {/* The whole ID: a name or ticker is anyone's to choose (launch review #59). */}
+      {action.kind === "delegate" && <ReviewId label="Pool ID" id={summary.pool ?? action.pool} />}
+      {action.kind === "delegate" && <SharedTicker shared={shared} />}
+      {action.kind === "vote" && summary.drep?.startsWith("drep1") && <ReviewId label="DRep ID" id={summary.drep} />}
+      {action.kind === "vote" && shared > 1 && (
+        <Callout tone="warn" testId="drep-shared-name">
+          {sharedDrepName({ shared, listed: drepListed })}: only the ID above tells them apart.
+        </Callout>
+      )}
       {nonzero(summary.deposit) && (
         <p className="note">Registering your account to stake takes the deposit. Stopping staking gives it back.</p>
       )}
@@ -349,5 +373,15 @@ function StakingReview({
       <Callout tone="privacy">This is public: it names your public account.</Callout>
       <p className="note">It takes about a minute for the network to confirm.</p>
     </Screen>
+  );
+}
+
+/** A pool's or DRep's whole ID, in a review. */
+function ReviewId({ label, id }: { label: string; id: string }) {
+  return (
+    <div className="stack-tight" data-testid="staking-review-id">
+      <span className="note">{label}</span>
+      <p className="note mono-id">{id}</p>
+    </div>
   );
 }

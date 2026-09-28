@@ -1,7 +1,7 @@
-// Creating a seedelf through WebAssembly: draftMint → (Ogmios) → finishMint
+// Creating a seedelf through WebAssembly: buildMint (measured in the wallet)
 // → (giveme.my) → signScriptSpend, on the 12-word phrase's synthetic owned
-// UTxOs and the real preprod evaluation recorded by the extension's
-// tests/fixtures/record-mint.mjs.
+// UTxOs; and the account-paid mint, draftAccountMint → (Ogmios) →
+// finishAccountMint, with a recorded Ogmios evaluation.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -10,10 +10,9 @@ import {
   CardanoAccount,
   Network,
   SeedelfKey,
+  buildMint,
   draftAccountMint,
-  draftMint,
   finishAccountMint,
-  finishMint,
   signScriptSpend,
 } from "./wasm.mjs";
 
@@ -25,18 +24,12 @@ const params = json("../../../seedelf-core/tests/fixtures/epoch_params.json")[0]
 const recorded = json("../../extension/tests/fixtures/mint-preprod.json");
 const utxos = json("../../extension/tests/fixtures/owned-utxos.json").owned_utxos.slice(0, 2);
 
-test("drafts, finishes and prepares a mint for signing", () => {
+test("builds a mint, measured in the wallet, and prepares it for signing", () => {
   const key = SeedelfKey.fromPhrase(phrase, 0);
   const request = { network: "preprod", params, utxos, label: "web-wallet" };
-  const draft = JSON.parse(draftMint(key, JSON.stringify(request)));
-  assert.match(draft.seed, /^[0-9a-f]{64}$/);
-  assert.match(draft.draftCbor, /^84/);
-  assert.deepEqual(draft.inputs, [{ txHash: "a1".repeat(32), txIndex: 0 }]);
-
-  const final = JSON.parse(
-    finishMint(key, JSON.stringify({ ...request, seed: draft.seed, evaluation: recorded.evaluation })),
-  );
-  assert.equal(final.seed, draft.seed);
+  const final = JSON.parse(buildMint(key, JSON.stringify(request)));
+  assert.match(final.seed, /^[0-9a-f]{64}$/);
+  assert.deepEqual(final.inputs, [{ txHash: "a1".repeat(32), txIndex: 0 }]);
   assert.match(final.txHash, /^[0-9a-f]{64}$/);
   assert.equal(final.tokenName, `5eed0e1f${Buffer.from("web-wallet").toString("hex")}00${"a1".repeat(32)}`.slice(0, 64));
   assert.ok(Number(final.fee.total) > 200_000 && Number(final.fee.total) < 400_000, final.fee.total);
@@ -59,10 +52,9 @@ test("drafts, finishes and prepares a mint for signing", () => {
 
 test("explains a bad mint", () => {
   const key = SeedelfKey.fromPhrase(phrase, 0);
-  assert.throws(() => draftMint(key, "{}"), /bad mint request/);
-  assert.throws(() => draftMint(key, JSON.stringify({ network: "preprod", params, utxos, label: "sixteen chars!!!" })), /at most 15/);
-  assert.throws(() => draftMint(key, JSON.stringify({ network: "preprod", params, utxos: [], label: "" })), /Not enough ADA/);
-  assert.throws(() => finishMint(key, JSON.stringify({ network: "preprod", params, utxos, label: "" })), /seed/);
+  assert.throws(() => buildMint(key, "{}"), /bad mint request/);
+  assert.throws(() => buildMint(key, JSON.stringify({ network: "preprod", params, utxos, label: "sixteen chars!!!" })), /at most 15/);
+  assert.throws(() => buildMint(key, JSON.stringify({ network: "preprod", params, utxos: [], label: "" })), /Not enough ADA/);
   assert.throws(() => signScriptSpend(key, "{}"), /bad signing request/);
   key.free();
 });

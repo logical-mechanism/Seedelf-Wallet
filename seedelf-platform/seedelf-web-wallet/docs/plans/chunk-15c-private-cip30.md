@@ -7,7 +7,7 @@ Step 4 of [chunk 15](chunk-15-dapp-connector.md#the-steps): a site connects to a
 ## Decided (the user, 2026-09-25)
 
 1. **The choice is in the connect window,** public account or private session, remembered per site. *Connected sites* shows which one each site has.
-2. **One session per site,** reused on every visit until it ends. Listings, orders and loans at the site stay reachable, and the site sees the same unlinked account each time, like a pen name.
+2. **One session per site,** reused on every visit until it ends. Listings, orders and loans at the site stay reachable, and the site sees the same account each time, not linked on chain to the public account, like a pen name. (Its funding is public, though, and leads back through the private balance, and the site sees the browser: privacy review §2.12.)
 3. **It's funded in the connect window, before the site gets the account.** You enter an amount (ADA, and tokens if you want). The wallet adds 5 ₳ of collateral, sends it, and waits until Koios sees it. Only then does `enable()` answer, so a site that reads the balance straight away sees the money.
 4. **It's managed in a *Sites* part of the dApps page,** one row per private session, with Top up, Bring it back and Disconnect. A session holding a position on a site stays open until the position is closed there.
 
