@@ -26,11 +26,10 @@ How the fixes were made:
 **Checked on the branch** (2026-09-28, at the last commit):
 - Rust: `cargo test --workspace --locked`, 456 passed (the 8 live Koios tests are `#[ignore]`d); clippy and fmt clean.
 - WebAssembly: the Node tests, 37 passed.
-- Vitest: 1015 passed on the default build (both networks) and on a preprod-only build.
+- Vitest: 1070 passed on the default build (both networks) and on a preprod-only build.
 - Playwright: 60 passed on the dev build, and 60 on the packaged mainnet store build.
 
 **Not fixed:**
-- **M14** is the owner's call (see *For the owner*).
 - **L6:** a site's transaction that never lands hides its inputs for up to 2 h. A lock clears it.
 - **L13 part A** is the designed "once" rule: a box drawn at an unlock that didn't go before the next lock goes a minute into the unlock after.
 - **L34:** Disconnect waits while a site's session holds anything. That's the documented flow, and each payment that keeps it open is money the user gets back.
@@ -38,18 +37,24 @@ How the fixes were made:
 - **D1** is the documented order. L39 fixes its note's wording.
 - **D2** only its cheap part is done: a swap never closes while Minswap lists an order for its account.
 
-**For the owner:**
-1. **M14, a restore's Lovejoin boxes.**
-   - A restored wallet has no chain records, so it can't tell a box that a cut chain never mixed from one that was mixed. It schedules them all.
-   - The private-by-default option is to hold every unrecorded box after a restore until the user picks Mix again or Bring back. That changes what a restore does, so it's your call.
-   - It follows from the known "chain records live only on this device".
-2. **H1's rule for a stranger's tokens.**
+**The owner's calls** (2026-09-28):
+1. **M14, a restore's Lovejoin boxes: check them on chain** (option C, "worth it" despite the Koios requests).
+   - A restored wallet has no chain records, so it looks up, once, the transaction that made each box its records can't account for.
+   - **A mix made it:** it was mixed, and comes back on its schedule.
+   - **A deposit made it:** it was never mixed, and it's held as not mixed yet, for Mix my boxes again, as on the device that sent it. The public account's own deposit counts as the public account's.
+   - Koios not answering holds the box until it does.
+   - The same check runs wherever a box is taken, so no path takes a box whose origin isn't known. That's in any wallet, not only after a restore: a box someone else's mix moved has no record either, so taking one asks Koios about it first. Koios can then tell, at those moments, which boxes are this wallet's (privacy.md, *What Koios learns*).
+   - It took five review rounds: the first design decided when to look by counting boxes against due times, and each fix of that count left another window. Done: see M14's row.
+2. **H1's rule for a stranger's tokens: kept as it is** (option A).
    - A return now takes a stranger's token UTxO only when that UTxO's own ADA pays what its tokens add to the return. A single token, or a DEX's fill, easily does.
    - A delivery of many tokens with little ADA stays at the one-time account, recorded as left behind.
    - A site's own transactions, signed for its session, count as the session's own (F4): their outputs come back whatever they hold.
-   - Letting the session's spare ADA pay a stranger's shortfall, shown in the review, would be a further change.
-3. **L16's wait.** A cancel whose return waits on an order Minswap never lists holds the session's money at its account, so that order's cancel can still be paid for. A timed escape (bring the rest back after a long wait) was left for a decision.
-4. **M16 and M17, swap routing.**
+   - Leaving someone else's tokens behind is also the private default: a token only this wallet holds would mark its private UTxOs on chain, a "dusting" tracer.
+3. **L16's wait: kept, and said** (option A).
+   - A cancel whose return waits on an order Minswap never lists holds the session's money at its account, so that order's cancel can still be paid for.
+   - The swap's page now says so plainly.
+   - A timed partial return may follow, once a live check shows Minswap can cancel from a small reserve.
+4. **M16 and M17, swap routing** (for the owner's information).
    - SundaeSwapV3 is out of mainnet routing. Its orders sit under a fixed staking part, with the owner's stake key, so the order check can't pass them and a cancel would need the session's stake key.
    - Every protocol Minswap offers that isn't in `MAINNET_PROTOCOLS` is now excluded, and the fresh estimate's route is checked before an order.
    - Minswap's build-tx still routes on its side: that stays trusted, with the minimum and receiver fields (settled).
@@ -125,7 +130,7 @@ They were fixed in three more worktrees (pending and connector, sessions, Lovejo
 | M11 | **A withdraw Koios refused with a 429 was kept as maybe sent**, and its resend skipped every timing rule. | Only a submit that may have reached a node is maybe sent. A resend waits for the same gates as a new withdraw: never in the unlock run, or in a run that sent anything else, and pushed within 5 minutes of a send. | 08e6a46 |
 | M12 | **A private session's signing prompt always said the public account wasn't in the transaction.** | The worker checks each paid address and each found input against the public account and the other sessions, and the prompt names a match and warns. The assurance shows only when nothing matched. | e2a82d0, e66aaf3 |
 | M13 | **`freshIndex` saw only landed transactions**, so two profiles on one phrase, or a reset, could put two sessions on one key. | Each funding asks Koios about its index once more just before it's sent. | 64b1b76, f3a133e |
-| M14 | **A restore brings a cut chain's unmixed boxes back by themselves**, which ties them to the deposit's payer. | **Not fixed**: the owner's call (see *For the owner*). | |
+| M14 | **A restore brought a cut chain's unmixed boxes back by themselves**, which ties them to the deposit's payer. | The owner's call (option C): the wallet looks up, once, the transaction that made each box its records can't account for, after a restore and wherever a box is taken (Mix my boxes again, a chain's build, Bring one back now, a box coming back by itself). A deposit's box is held as not mixed yet, the public account's deposit keeps it the account's, a mix's comes back on its schedule, and one Koios can't say of is never taken. | 4498f93, 56883cc, 6985f3e, dc6658d, d4412e6, 569b563, ac7224e, f0c1449, 4805da3, f820c40 |
 | M15 | **A site's `getUtxos`/`getCollateral` amount had no size cap**, and one call ran WebAssembly out of memory; signData's address wasn't capped either. | Both are capped, `read_value` stops at 1,000 entries, and a trap is handled as one. | 4d317ab, 7aac138 |
 | M16 | **Every mainnet swap through SundaeSwapV3 paused after funding:** its orders carry a fixed staking part, which `checkOrder` refuses. | SundaeSwapV3 is out of mainnet routing (see *For the owner*). | fd08346 |
 | M17 | **`MAINNET_PROTOCOLS` was enforced only on the quote**, not on the order signed. | Every other protocol Minswap offers is excluded on mainnet, and the fresh estimate's route is checked before an order and in Review it myself. | e41250b, 0ab5074 |
@@ -150,7 +155,7 @@ They were fixed in three more worktrees (pending and connector, sessions, Lovejo
 | L13 | A box due in the first minute after an unlock went at the first alarm run. | Part B fixed: such a time is redrawn. Part A (the "once" rule) **not fixed**, by design. | 61db043 |
 | L14 | A public mix kept resubmitting for minutes after a lock. | Each retry checks the chain is still its own and the wallet unlocked. | b65c034 |
 | L15 | A swap copy tx_status didn't show counted as never placed, so Stop could close while its order sat at the DEX, or a second order go out. | Its recorded orders are looked up first; a swap never closes while an order is open. | d9abced, 8caec06, 2366ae7 |
-| L16 | After a cancel, the return didn't check every order of the swap was spent. | It waits for them, as the fill path does. | e6eeb6e |
+| L16 | After a cancel, the return didn't check every order of the swap was spent. | It waits for them, as the fill path does, and the swap's page says what it's waiting for (the owner's call). | e6eeb6e, 5ee00ee |
 | L17 | After one chain of a session stopped partway, every later return skipped Lovejoin silently. | Only the current chain counts. | 6b65c3c, c421bd2 |
 | L18 | A spend reviewed before a return's chain started could take what the chain's return merges into. | Send refuses it, and the chain refuses a return whose inputs went elsewhere since review. | 324b56e, 1fcebcc, d570d7e |
 | L19 | A stale left-behind entry kept a disconnected site's record, origin included. | Disconnect keeps only entries still at the account. | 71b0c16 |

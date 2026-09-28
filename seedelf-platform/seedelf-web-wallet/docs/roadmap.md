@@ -55,7 +55,8 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - Swaps route only through DEXes the order check reads (SundaeSwapV3 is out on mainnet), and a refunded order says so.
     - A final review of the merged fixes found 13 more bugs where the areas met; all are fixed.
   - **Surprising:** most findings were bugs the earlier rounds' own fixes brought in, where two features meet. That's why the fixes were reviewed across areas after merging.
-  - **Next:** the owner's calls in the review's *For the owner* (a restore's unrecorded Lovejoin boxes, strangers' token deliveries, the wait on an unlisted order), then the by-hand mainnet checks in [plans/launch-review.md](plans/launch-review.md).
+  - **The owner's calls** (2026-09-28): a restored wallet checks on chain whether each box it can't account for was mixed, and holds the unmixed; strangers' token deliveries that can't pay their way stay behind; a stopped swap waits for an order Minswap doesn't list, and says so.
+  - **Next:** the by-hand mainnet checks in [plans/launch-review.md](plans/launch-review.md).
 
 - **2026-09-27: privacy by default** (`web-wallet/crypto-review`). The owner's rule is "the most private by default, with the ability to turn it down". A review against it, and its fixes, are in [plans/privacy-review.md](plans/privacy-review.md) (see its *Status*).
   - **What landed:**
