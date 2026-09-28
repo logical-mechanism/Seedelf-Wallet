@@ -2572,7 +2572,20 @@ export class SessionService {
       submittedAt: this.deps.now(),
       confirmations: null,
     };
-    await this.deps.activity?.sent(network, last, pending.summary).catch(() => undefined);
+    const written = await (this.deps.activity?.sent(network, last, pending.summary) ?? Promise.resolve()).then(
+      () => true,
+      () => false,
+    );
+    // Written: nothing is left to write once it lands. Otherwise its summary stays with it, and it's written
+    // once the chain shows it (noteLanded, final review F3), as a direct return's is.
+    if (written) {
+      await this.update(network, index, (s) => {
+        const t = s.txs.find((x) => x.txHash === last.txHash);
+        if (t) delete t.summary;
+      }).catch(() => undefined);
+    } else {
+      await this.deps.alarm?.start();
+    }
   }
 
   /**
@@ -2587,10 +2600,18 @@ export class SessionService {
     const bytes = hexBytes(step.txCbor);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const tries = { busy: 0, spent: 0, maybeSent };
+    // The return, the chain's last, carries its summary, as a direct return does: a lock, a closed browser or
+    // retries that ran out may stop the chain before pump writes its history, and it may land all the same.
+    // It's written once the chain shows it (noteLanded, final review F3).
+    const back = i === pending.txs.length - 1 ? pending.summary : undefined;
+    const summary = back && { index: back.index, lovelace: back.lovelace, tokens: back.tokens, fee: back.fee };
     for (;;) {
       try {
         // What was kept for Send is the chain, under its return's hash.
-        await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept, { keptHash: pending.txs.at(-1)!.txHash });
+        await this.sendRecorded(network, pending.index, step.kind, step.txHash, bytes, pending.kept, {
+          keptHash: pending.txs.at(-1)!.txHash,
+          summary,
+        });
         break;
       } catch (e) {
         // Refused while Koios couldn't say whether it's on chain, and it may be: looked for again (final review lovejoin-6).
