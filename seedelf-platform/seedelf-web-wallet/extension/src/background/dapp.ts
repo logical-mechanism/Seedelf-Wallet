@@ -637,7 +637,11 @@ export class DappService {
    */
   async disconnectSession(index: number): Promise<void> {
     const network = await this.deps.network();
-    const origins = (await this.sitesOn(network)).filter((s) => s.session === index).map((s) => s.origin);
+    // Read first, so what its site waits for can be declined once it's gone (independent review L33).
+    const origins = await this.sitesOn(network).then(
+      (all) => all.filter((s) => s.session === index).map((s) => s.origin),
+      (): string[] => [],
+    );
     await this.deps.sessions.disconnect(network, index);
     await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === network)));
     this.decline((w) => origins.includes(w.session.origin) && w.network === network, DISCONNECTED);
