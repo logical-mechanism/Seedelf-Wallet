@@ -84,12 +84,28 @@ const DROPPED: Record<NonNullable<PendingTx["dropped"]>, { title: (what: string)
   },
 };
 
+/** What the banner says of one the network said it had (`inMempool`), let go when it was held as long as it could be. */
+const HELD_TOO_LONG = {
+  title: DROPPED.unseen.title,
+  detail:
+    "Koios didn't answer when it was sent. Sent again, the network said it had it already, yet two and a half hours on the chain still hasn't shown it, " +
+    "so the wallet stopped waiting for it. Its UTxOs count in your balance again: check Activity before you send it again.",
+};
+
 /**
  * How long a payment from the public account stays valid once it's built
  * (background/account.ts VALID_FOR_MS): the slot it carries, that long past
  * the chain's tip.
  */
 const VALID_FOR_MS = 2 * 60 * 60_000;
+
+/**
+ * How long a private payment the network said it had (`inMempool`) holds new
+ * ones back at most, from when it was sent (background/pending.ts
+ * HELD_IN_MEMPOOL_MS): as long as one from the public account, and the half
+ * hour the wallet waits past that.
+ */
+const HELD_IN_MEMPOOL_MS = VALID_FOR_MS + 30 * 60_000;
 
 /**
  * About when a payment from the public account stops being able to land
@@ -107,10 +123,11 @@ export function validUntil(pending: PendingTx): string | undefined {
 function maybeSentDetail(pending: PendingTx): string {
   const until = validUntil(pending);
   if (pending.inMempool) {
+    const held = new Date(pending.submittedAt + HELD_IN_MEMPOOL_MS).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
     return (
       "Koios didn't answer when it was sent. Sent again, the network says it has it already, and what it spends isn't spent on chain yet: " +
       "it's waiting to go into a block, and may still land. New payments wait until it lands, or until it can't any more" +
-      (until ? `: it can land until about ${until}.` : ".")
+      (until ? `: it can land until about ${until}.` : `: the wallet waits for it until about ${held} at most.`)
     );
   }
   return (
@@ -140,7 +157,7 @@ export function PendingBanner({ pending, watching, onDismiss }: { pending: Pendi
     return <TxBanner {...shared} state="done" title={CONFIRMED[pending.kind]} onDismiss={watching ? undefined : onDismiss} />;
   }
   if (pending.dropped) {
-    const dropped = DROPPED[pending.dropped];
+    const dropped = pending.dropped === "unseen" && pending.inMempool ? HELD_TOO_LONG : DROPPED[pending.dropped];
     return <TxBanner {...shared} state="stale" title={dropped.title(what)} detail={dropped.detail} onDismiss={onDismiss} />;
   }
   if (pending.maybeSent) {

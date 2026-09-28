@@ -1,16 +1,16 @@
 // A private payment Koios didn't answer, whose every resend is refused as
-// spending what's spent while the chain still shows what it spends unspent,
-// is waiting in a mempool: it may still land, so it's never let go as
-// unseen on age. Once something it spends shows spent on chain, and
-// tx_status doesn't know it, the 20 minutes apply again (independent review
-// L1).
+// spending what's spent while the chain still shows every UTxO it spends,
+// unspent, is waiting in a mempool: it may still land, so it isn't let go as
+// unseen on age, for two and a half hours at most. Once something it spends
+// shows spent on chain, or isn't on chain at all, and tx_status doesn't know
+// it, the 20 minutes apply again (independent review L1).
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
-import { MAYBE_SENT_WAIT, pendingKey, UNSEEN_AFTER_MS } from "../src/background/pending";
+import { HELD_IN_MEMPOOL_MS, MAYBE_SENT_WAIT, pendingKey, UNSEEN_AFTER_MS } from "../src/background/pending";
 import { spentSet } from "../src/background/spent";
 import { WithdrawService } from "../src/background/withdraw";
 import type { PendingTx } from "../src/shared/rpc";
@@ -93,7 +93,7 @@ describe("a maybe-sent private payment the network says it has", () => {
     // Another transaction spent it: the next resend finds it so.
     for (const o of inputs) t.koios.spent.add(o);
     await busyFor(t, 2 * 60_000);
-    expect(await t.pending.pending("preprod")).not.toHaveProperty("inMempool");
+    expect(await t.pending.pending("preprod")).toMatchObject({ inMempool: false });
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "unseen" });
     expect(await spentSet(t.session)).toEqual(new Set());
   });
@@ -124,24 +124,102 @@ describe("a maybe-sent private payment the network says it has", () => {
   });
 });
 
+describe("a maybe-sent private payment the network says it has, but not for good", () => {
+  it("isn't held when the chain has no UTxO it spends: it's let go after its 20 minutes, and new payments go ahead", async () => {
+    const t = await unlocked();
+    const { withdraw, summary } = await inAMempool(t);
+    // Koios has no row for what it spends: its own transaction was rolled back, say.
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => (url.endsWith("/utxo_info") ? Response.json([]) : real(url, init));
+    await busyFor(t, 2 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true, inMempool: false });
+    await busyFor(t, UNSEEN_AFTER_MS - 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "unseen" });
+    expect(await spentSet(t.session)).toEqual(new Set());
+    await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).resolves.toBeDefined();
+  });
+
+  it("kept through Remove wallet and put back by the same phrase, isn't held for good either", async () => {
+    const t = await unlocked();
+    const { summary } = await inAMempool(t);
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => (url.endsWith("/utxo_info") ? Response.json([]) : real(url, init));
+    await busyFor(t, 2 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true, inMempool: false });
+    await t.wallet.reset();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    await t.pending.adoptKept(["preprod", "mainnet"]);
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await busyFor(t, UNSEEN_AFTER_MS);
+    // Put back within its 20 minutes, it goes again first, refused as spent again; then it's let go.
+    const sent = t.koios.submitted.length;
+    expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true, inMempool: false });
+    expect(t.koios.submitted).toHaveLength(sent + 1);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "unseen" });
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).resolves.toBeDefined();
+  });
+
+  it("isn't held again by a Koios error once a look found what it spends spent", async () => {
+    const t = await unlocked();
+    const { summary, inputs } = await inAMempool(t);
+    for (const o of inputs) t.koios.spent.add(o);
+    await busyFor(t, 2 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ inMempool: false });
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => (url.endsWith("/utxo_info") ? new Response("", { status: 503 }) : real(url, init));
+    await busyFor(t, 2 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ inMempool: false });
+    await busyFor(t, UNSEEN_AFTER_MS);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "unseen" });
+  });
+
+  it("is let go two and a half hours after it was sent, across a lock too, and the banner says it was held as long as it could be", async () => {
+    const t = await unlocked();
+    const { withdraw, summary } = await inAMempool(t);
+    await busyFor(t, 2 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ inMempool: true });
+    await busyFor(t, HELD_IN_MEMPOOL_MS - 10 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true, inMempool: true });
+    await t.wallet.lock();
+    t.clock.now += 10 * 60_000;
+    await t.wallet.unlock(PASSWORD);
+    // The unlock's run looks, and lets it go: nothing is sent.
+    const sent = t.koios.submitted.length;
+    expect(await t.pending.watch("preprod", true)).toBe(false);
+    expect(t.koios.submitted).toHaveLength(sent);
+    expect(t.local.data.has("seedelf.private.maybeSent.preprod")).toBe(false);
+    expect(await spentSet(t.session)).toEqual(new Set());
+    await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).resolves.toBeDefined();
+
+    const text = banner({ ...pendingOf(summary.txHash), dropped: "unseen", inMempool: true });
+    expect(text).toContain("two and a half hours on the chain still hasn't shown it");
+    expect(text).not.toContain("most likely never went out");
+  });
+});
+
 describe("Home's banner for one waiting in a mempool", () => {
+  it("says until when a private one holds new payments back", () => {
+    const pending = { ...pendingOf("ab".repeat(32)), submittedAt: new Date(2026, 8, 27, 14, 0).getTime(), inMempool: true };
+    expect(banner(pending)).toContain("the wallet waits for it until about 16:30 at most");
+  });
+
   it("says it may still land, and never that it will be let go at 20 minutes", () => {
-    const pending: PendingTx = {
-      kind: "withdraw",
-      network: "preprod",
-      txHash: "ab".repeat(32),
-      submittedAt: 0,
-      confirmations: null,
-      maybeSent: true,
-      inMempool: true,
-    };
-    const text = renderToStaticMarkup(createElement(PendingBanner, { pending, watching: true, onDismiss: () => undefined }))
-      .replace(/<[^>]+>/g, " ")
-      .replaceAll("&#x27;", "'")
-      .replace(/\s+/g, " ");
+    const text = banner({ ...pendingOf("ab".repeat(32)), inMempool: true });
     expect(text).toContain("may have gone through");
     expect(text).toContain("it's waiting to go into a block, and may still land");
     expect(text).not.toContain("20 minutes");
     expect(text).not.toContain("Dismiss");
   });
 });
+
+function pendingOf(txHash: string): PendingTx {
+  return { kind: "withdraw", network: "preprod", txHash, submittedAt: 0, confirmations: null, maybeSent: true };
+}
+
+/** Home's banner for `pending`, as text. */
+function banner(pending: PendingTx): string {
+  return renderToStaticMarkup(createElement(PendingBanner, { pending, watching: true, onDismiss: () => undefined }))
+    .replace(/<[^>]+>/g, " ")
+    .replaceAll("&#x27;", "'")
+    .replace(/\s+/g, " ");
+}

@@ -19,10 +19,11 @@
 // it's settled. The Seedelf history is written once it's seen. One that
 // never shows is let go, its UTxOs freed: from the public account when the
 // chain passes its slot, and a private one, which has no slot yet, after 20
-// minutes unseen, unless a resend found it waiting in a mempool (independent
-// review L1). Every submit is watched as maybe sent before it goes to Koios
-// (`writeAhead`, independent review M1), so one is maybe sent from the start
-// until Koios answers, and a second waits for it.
+// minutes unseen, unless a resend found it waiting in a mempool: then two and
+// a half hours on at most (independent review L1). Every submit is watched as
+// maybe sent before it goes to Koios (`writeAhead`, independent review M1),
+// so one is maybe sent from the start until Koios answers, and a second
+// waits for it.
 //
 // Every write of the watch goes through `take`: nothing replaces a
 // transaction that may still go through with another, not a Send checked
@@ -44,7 +45,7 @@ import { txInputs } from "./cbor";
 import { forgetContractView } from "./contract-scan";
 import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
-import { forgetSpent, rememberSpent } from "./spent";
+import { forgetSpent, outpoint, rememberSpent } from "./spent";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
 
@@ -68,6 +69,14 @@ export const UNSEEN_AFTER_MS = 20 * 60_000;
  * lagging one's tx_status could miss one that landed just in time.
  */
 export const EXPIRED_AFTER_SLOTS = 30 * 60;
+/**
+ * The longest a private one waiting in a mempool (`inMempool`) is held, from
+ * when it was sent: as long as one from the public account can land, and the
+ * half hour the wallet waits past that. Then it's let go as unseen after
+ * all, so a watch Koios keeps answering the same way never holds new
+ * payments back for good (independent review L1).
+ */
+export const HELD_IN_MEMPOOL_MS = VALID_FOR_MS + EXPIRED_AFTER_SLOTS * 1000;
 
 /** Refused while a payment may still go through. */
 export const MAYBE_SENT_WAIT =
@@ -588,10 +597,11 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
   // Past its slot by the chain's clock, not this device's, which set the slot.
   const expired =
     w.invalidHereafter !== undefined && age > VALID_FOR_MS && (await koios.tipSlot()) > w.invalidHereafter + EXPIRED_AFTER_SLOTS;
-  // Not while it waits in a mempool: it may still land (independent review L1). Nor
-  // put back within its 20 minutes and not sent again since (independent review L9).
+  // Not while it waits in a mempool, up to HELD_IN_MEMPOOL_MS: it may still land (independent
+  // review L1). Nor put back within its 20 minutes and not sent again since (independent review L9).
+  const waiting = !!w.inMempool && age <= HELD_IN_MEMPOOL_MS;
   const unseen =
-    !expired && w.maybeSent && w.invalidHereafter === undefined && age > UNSEEN_AFTER_MS && !w.inMempool && !w.restored;
+    !expired && w.maybeSent && w.invalidHereafter === undefined && age > UNSEEN_AFTER_MS && !waiting && !w.restored;
   if (expired || unseen) {
     const held = await turn(async () => {
       const held = await wallet.withKeys(async () => {
@@ -622,7 +632,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
     try {
       if ((await koios.submitTx(hexBytes(w.txCbor))) === w.txHash) {
         // Taken: an ordinary sent transaction from here on.
-        const { maybeSent: _maybeSent, txCbor: _txCbor, summary, kept: _kept, ...sent } = current;
+        const { maybeSent: _maybeSent, txCbor: _txCbor, summary, kept: _kept, inMempool: _inMempool, ...sent } = current;
         current = { ...sent, submittedAt: now() };
         taken = true;
         await wallet.withKeys(() => dropKept(session, w));
@@ -649,8 +659,9 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         return current;
       });
       if (taken) await unseal(deps, w);
-      // Sealed as it now waits, so a lock never lets one go on age that may still land.
-      else if (after === current && !!current.inMempool !== !!w.inMempool) await seal(deps, current);
+      // Sealed as it now waits, so a lock never lets one go on age that may still land, nor
+      // forgets a look that found what it spends spent.
+      else if (after === current && current.inMempool !== w.inMempool) await seal(deps, current);
       return after;
     });
   }
@@ -669,17 +680,25 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
 /**
  * `w`, sent again and refused as spending what's spent: whether it waits in
  * a mempool (independent review L1). The node answers so for a transaction
- * it has already. While the chain doesn't show anything it spends as spent
- * (utxo_info, of what Koios already saw in the submit), it may still land:
- * it's held back, and a private one isn't let go on age. Once something it
- * spends shows spent, and tx_status doesn't know it, another spent it: the
- * 20 minutes unseen apply again. Koios not answering counts as not shown.
+ * it has already. While the chain shows every UTxO it spends, and none of
+ * them spent (utxo_info), it may still land: it's held back, and a private
+ * one isn't let go on age, up to HELD_IN_MEMPOOL_MS. Once one shows spent,
+ * and tx_status doesn't know it, another spent it; one the chain doesn't
+ * have at all (its own transaction rolled back, say) can't be spent: either
+ * way, the 20 minutes unseen apply again. Koios not answering says nothing
+ * new: what an earlier look found stands, and with none, it's held, as the
+ * refusal most likely means it's on its way.
  */
 async function mempool(koios: Koios, w: Watched): Promise<Watched> {
-  const rows = (await koios.utxoInfo(w.inputs ?? []).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
-  if (!rows?.some((u) => u.is_spent)) return { ...w, inMempool: true };
-  const { inMempool: _inMempool, ...rest } = w;
-  return rest;
+  const inputs = w.inputs ?? [];
+  let rows: Array<KoiosUtxo & { is_spent?: boolean }>;
+  try {
+    rows = await koios.utxoInfo(inputs);
+  } catch {
+    return { ...w, inMempool: w.inMempool ?? inputs.length > 0 };
+  }
+  const unspent = new Set(rows.filter((u) => u.is_spent === false).map(outpoint));
+  return { ...w, inMempool: inputs.length > 0 && inputs.every((o) => unspent.has(o)) };
 }
 
 /** Clears where Send keeps `w`, if it still holds it. Call it while unlocked. */

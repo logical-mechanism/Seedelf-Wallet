@@ -549,16 +549,19 @@ export interface PendingTx {
   invalidHereafter?: number;
   /**
    * Maybe sent, and sent again, the network refused it as spending what's
-   * spent while the chain still showed what it spends unspent: it's waiting
-   * in a mempool, and may still land. A private one isn't let go on age
-   * meanwhile (pending.ts).
+   * spent while the chain still showed every UTxO it spends, unspent: it's
+   * waiting in a mempool, and may still land. A private one isn't let go on
+   * age meanwhile, for two and a half hours at most from when it was sent
+   * (pending.ts HELD_IN_MEMPOOL_MS). False: a look found one spent, or not
+   * on chain at all.
    */
   inMempool?: boolean;
   /**
    * It never landed, and its UTxOs count in the balance again. `expired`:
    * the chain passed its slot, so nothing was sent. `unseen`: a private
    * payment Koios didn't answer, which the chain still hadn't shown 20
-   * minutes on; it most likely never went out.
+   * minutes on; it most likely never went out. With `inMempool`, one the
+   * network said it had, held as long as it could be.
    */
   dropped?: "expired" | "unseen";
 }
