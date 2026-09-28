@@ -58,6 +58,12 @@ export const PAGE = 20;
 /** The most entries and noted UTxOs the Seedelf history keeps: entries whose money is still held are kept on top. */
 const KEEP_ENTRIES = 500;
 const KEEP_SEEN = 2_000;
+/**
+ * How long after this device starts a history its first reading still takes
+ * what it finds for money from before: the device's clock and the chain's
+ * may differ by that much.
+ */
+const STARTED_MARGIN_MS = 60 * 60_000;
 
 interface History {
   entries: ActivityEntry[];
@@ -71,6 +77,12 @@ interface History {
    * payment received. A brand-new wallet's first reading finds nothing.
    */
   first?: true;
+  /**
+   * When this device started it, by its clock. What that first reading finds
+   * made well after this (a payment while earlier readings failed) came after
+   * the history began: it's received, as any later arrival is.
+   */
+  startedAt?: number;
 }
 
 export interface AccountAddresses {
@@ -134,6 +146,8 @@ export interface ActivityDeps {
   contract?: ContractConfig;
   /** chrome.storage.local, where the pool list is kept: a staking entry's ticker is looked up there. */
   local?: Area;
+  /** The clock a new history's start is read from: `Date.now` unless given. */
+  now?: () => number;
 }
 
 /** Each token's quantity, signed by `sign`, from anything listing tokens. */
@@ -283,6 +297,10 @@ export class ActivityService {
       const fresh = owned.filter((u) => !seen.has(outpoint(u)));
       // The first reading is written even when it finds nothing: what comes after it arrived.
       if (!fresh.length && !h.first) return undefined;
+      // What the first reading finds was there before the history began, unless its block came well after
+      // that: then it arrived since, while earlier readings failed (independent review L38).
+      const before = (u: KoiosUtxo) =>
+        h.startedAt === undefined || u.block_time === undefined || u.block_time * 1000 < h.startedAt + STARTED_MARGIN_MS;
       const byTx = new Map<string, ActivityEntry>();
       for (const u of fresh) {
         if (ours.has(u.tx_hash) || seedelfTokenOf(u, contract.seedelfPolicyId)) continue;
@@ -293,7 +311,7 @@ export class ActivityService {
           direction: "in" as const,
           lovelace: "0",
           tokens: 0,
-          ...(h.first ? { origin: UNKNOWN } : {}),
+          ...(h.first && before(u) ? { origin: UNKNOWN } : {}),
         };
         entry.lovelace = (BigInt(entry.lovelace) + BigInt(u.value)).toString();
         const came = (u.asset_list ?? []).map((a) => ({ policyId: a.policy_id, assetName: a.asset_name, quantity: a.quantity }));
@@ -381,7 +399,12 @@ export class ActivityService {
     const run = this.queue.then(async () => {
       const name = `history.${network}` as const;
       // One this device starts now: its first reading notes what was there before it.
-      const history = (await this.deps.store.get<History>(name)) ?? { entries: [], seen: [], first: true };
+      const history = (await this.deps.store.get<History>(name)) ?? {
+        entries: [],
+        seen: [],
+        first: true,
+        startedAt: (this.deps.now ?? Date.now)(),
+      };
       const next = change(history);
       if (next) await this.deps.store.set(name, next);
     });

@@ -411,7 +411,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const store = new PrivateStore({ wallet: t.wallet, local: t.local });
   let ids = 0;
   const koiosFor = () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined);
-  const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor, local: t.local });
+  const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor, local: t.local, now: () => t.clock.now });
   const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now, activity });
   const preferences = new PreferencesService(t.local);
   // Preprod first, as the fakes answer; a test can switch to mainnet as Settings does.

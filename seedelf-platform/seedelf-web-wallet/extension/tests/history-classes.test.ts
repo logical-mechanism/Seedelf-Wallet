@@ -12,7 +12,7 @@ import { SESSION_OUT } from "../src/background/sessions";
 import { boxFrom, historiesNote, historyTags, unknownIn, type HistoryClass } from "../src/shared/histories";
 import type { PendingTx } from "../src/shared/rpc";
 import { activityTitle } from "../src/ui/activity";
-import { minswapEstimate, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { busyFor, minswapEstimate, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 
@@ -78,6 +78,30 @@ describe("a private history this device starts (independent review L38)", () => 
     const classes = await t.activity.classes("preprod", [a1, a2]);
     expect(classes.get(`${a2.tx_hash}#0`)).toEqual({ id: "public", origin: "own" });
     expect(classes.get(`${a1.tx_hash}#0`)?.origin).toBe("unknown");
+  });
+
+  it("takes what the first reading finds made well after the history began for a payment received", async () => {
+    // A brand-new wallet whose readings failed until after its first transaction, a stealth mint, started the
+    // history; then someone paid the new Seedelf.
+    const t = await unlocked({ owned: false });
+    const minted: PendingTx = { kind: "mint", network: "preprod", txHash: "7b".repeat(32), submittedAt: t.clock.now, confirmations: null };
+    await t.activity.sent("preprod", minted, { label: "new" });
+    const began = t.clock.now / 1000;
+    // A minute after, within what the clocks may differ by, and two hours after.
+    const soon = { ...at("7c"), block_time: began + 60 };
+    const later = { ...at("7d"), block_time: began + 2 * 3600 };
+    t.koios.added.push(soon, later);
+    await busyFor(t, 3 * 3600_000);
+    await t.balances.get("preprod");
+    const entries = await t.activity.seedelf("preprod");
+    const paid = entries.find((e) => e.txHash === later.tx_hash)!;
+    expect(paid).toMatchObject({ kind: "received" });
+    expect(paid.origin).toBeUndefined();
+    expect(activityTitle(paid)).toBe("Received");
+    // The safe side: it may have been there before.
+    expect(entries.find((e) => e.txHash === soon.tx_hash)?.origin?.origin).toBe("unknown");
+    const classes = await t.activity.classes("preprod", [later]);
+    expect([...classes.values()]).toEqual([{ id: `received:${later.tx_hash}`, origin: "received" }]);
   });
 
   it("leaves a history kept from before as it was: what arrives is received", async () => {
