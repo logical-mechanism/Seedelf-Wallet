@@ -2160,7 +2160,7 @@ export class LovejoinService {
     // A chain being sent is still putting boxes in and mixing them: none comes back meanwhile.
     if (await this.chainsSending(network)) return [];
     // Nor while the last withdraw may still be on its way: two a minute apart say they're one owner's.
-    if (await this.settleWithdrawing(network, { unlock, since })) return [];
+    if (await this.settleWithdrawing(network, { unlock, since, unlocked })) return [];
     const now = this.deps.now();
     const before = await this.read(network);
     // Only a network with something of the wallet's open in Lovejoin reads its pool at unlock (privacy review §2.18).
@@ -2524,24 +2524,29 @@ export class LovejoinService {
    * run that sent anything else, nor within QUIET_AFTER_SEND_MS of the
    * wallet's own send (resends). The user's ask (withdrawNow) sends it again
    * at once, once a wait already drawn is over. Each resend is the wallet's
-   * send too, which what comes after keeps away from (L8).
+   * send too, which what comes after keeps away from (L8). `run.unlocked`:
+   * the unlock the run checked it under (unlockDraws); the wallet locked and
+   * unlocked again since, while Koios answered, it isn't sent then, and
+   * waits the new unlock's draw, as a new withdraw does (L11, final review
+   * F6).
    */
-  private async settleWithdrawing(network: NetworkName, run?: { unlock: boolean; since?: number }): Promise<boolean> {
+  private async settleWithdrawing(network: NetworkName, run?: { unlock: boolean; since?: number; unlocked?: number }): Promise<boolean> {
     // One that never went isn't looked for, nor sent again (final review F5).
     await this.dropRefused(network);
     const { withdrawing: w } = await this.read(network);
     if (!w) return false;
     const { wallet, session } = this.deps;
     const koios = this.deps.koios(network);
-    const now = this.deps.now();
     const bytes = hexBytes(w.txCbor);
     // A lock or a closed browser wiped what the wallet spent: its box is held again, as when it was sent.
     await wallet.withKeys(async () => {
-      const spent = await spentSet(session, now);
+      const spent = await spentSet(session, this.deps.now());
       if (txInputs(bytes).some((o) => !spent.has(o))) await rememberSpent(session, network, bytes, w.sentAt);
     });
     const drop = () => this.dropWithdrawing(network, w.txHash);
     const seen = (await koios.txStatus([w.txHash]).catch(() => undefined))?.get(w.txHash);
+    // Taken once Koios answered, which can take a minute (final review F6).
+    const now = this.deps.now();
     if (seen != null) {
       const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: w.txHash, submittedAt: w.at, confirmations: seen };
       await this.deps.activity?.sent(network, pending, { lovelace: w.lovelace, fee: w.fee }).catch(() => undefined);
@@ -2557,6 +2562,8 @@ export class LovejoinService {
       return false;
     }
     if (now - w.sentAt >= CHAIN_RESEND_MS && (w.waitUntil ?? 0) <= now && (await this.resends(network, w, now, run))) {
+      // Never at the moment of an unlock that came while Koios answered: the next run draws its wait into it.
+      if (run?.unlocked !== undefined && (await wallet.unlockedAt().catch(() => undefined)) !== run.unlocked) return true;
       // Refused as spent, it's in the mempool already, or its box moved: either way it's looked for again.
       await koios.submitTx(bytes).catch(() => undefined);
       await wallet.withKeys(() => rememberSpent(session, network, bytes, now));
