@@ -1895,12 +1895,15 @@ export class LovejoinService {
     try {
       submitted = await koios.submitTx(bytes);
     } catch (e) {
-      // Koios didn't answer, or failed after passing it on: it may be in, and it's looked for.
-      if (e instanceof KoiosBusyError && e.maybeSent) throw new WithdrawMaybeSent();
-      // Refused, or never passed on (a 429, which Koios's gateway answers
-      // first): nothing went. It isn't looked for, its box is free, and its
-      // due time stays for a later run, under the same rules (independent
-      // review M11). A lock meanwhile leaves it looked for, which finds that.
+      // Refused (Koios said why), or never passed on (a 429, which Koios's
+      // gateway answers first): nothing went. Anything else (Koios didn't
+      // answer, failed after passing it on, or its answer broke off) and it
+      // may be in, and it's looked for.
+      const refused = e instanceof KoiosError && !(e instanceof KoiosBusyError && e.maybeSent);
+      if (!refused) throw new WithdrawMaybeSent();
+      // It isn't looked for, its box is free, and its due time stays for a
+      // later run, under the same rules (independent review M11). A lock
+      // meanwhile leaves it looked for, which finds that.
       await this.dropWithdrawing(network, built.txHash).catch(() => undefined);
       await wallet.withKeys(() => forgetSpent(session, txInputs(bytes))).catch(() => undefined);
       throw e;

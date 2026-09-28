@@ -127,6 +127,27 @@ describe("a withdraw kept before it's sent (independent review M1)", SLOW, () =>
     });
   }
 
+  it("keeps it looked for when Koios's answer breaks off after it took it: that isn't a refusal", async () => {
+    const { t, lovejoin, box } = await due();
+    // Koios passes it on, and its answer's body times out as it's read.
+    const undo = submitting(
+      t,
+      () =>
+        new Response(
+          new ReadableStream({
+            start: (c) => c.error(new DOMException("The operation timed out.", "TimeoutError")),
+          }),
+          { status: 202 },
+        ),
+    );
+    expect(await lovejoin.withdrawDue("preprod", false, t.clock.now)).toEqual([]);
+    undo();
+    const sent = txIdOf(t.koios.submitted.at(-1)!);
+    expect((await kept(t)).withdrawing?.txHash).toBe(sent);
+    expect((await kept(t)).due).toEqual([]);
+    expect(await t.wallet.withKeys(() => spentSet(t.session, t.clock.now))).toContain(box);
+  });
+
   it("forgets it when the network refuses it: nothing went, its box is free, and its due time stays", async () => {
     const { t, lovejoin, box } = await due();
     t.koios.rejectSubmit = "ScriptFailures";
