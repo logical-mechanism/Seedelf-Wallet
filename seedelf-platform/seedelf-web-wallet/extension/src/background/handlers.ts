@@ -121,10 +121,15 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "pending-tx":
       return ctx.pending.pending(ctx.network);
     case "reset-wallet":
+      // A wallet from before the switch has no network kept, only worked out
+      // from its vault: kept now, it outlives the vault, so the next restore
+      // is on that network, never mainnet first (independent review L42).
+      await ctx.networkChoice.keep(await ctx.networkChoice.get());
       await wallet.reset();
       // The settings went with it: sites can't connect to a wallet that isn't there.
       await ctx.connector(false).catch(() => false);
-      return status(ctx);
+      // Said as it now stands, not as the request came in.
+      return status({ ...ctx, network: await ctx.networkChoice.get() });
     case "reveal-phrase":
       return { words: await wallet.revealPhrase(message.password) };
     case "check-phrase":
