@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { test as base, chromium, expect, type BrowserContext, type Locator, type Page, type Request } from "@playwright/test";
 
-import type { NetworkName } from "../src/networks";
+import { NETWORKS, type NetworkName } from "../src/networks";
 import { DAPP_ORIGINS } from "../src/shared/dapp";
 import { LOCAL_NETWORK } from "../src/shared/preferences";
 import { UI_PORT } from "../src/shared/rpc";
@@ -114,6 +114,16 @@ export function ownedLovejoinBox(phrase: string, tx: string): { payment_cred: st
   });
   return { ...lovejoinPool[0], tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: datum, value: {} } };
 }
+/**
+ * Koios says a mix made each of `txs` (tx_info: one of its inputs sat at
+ * Lovejoin's mix_box): a box the wallet finds with no record of its own, whose
+ * making it asks of before it takes it (independent review M14).
+ */
+export function madeByMix(koios: Pick<KoiosFake, "txSpends">, ...txs: string[]): void {
+  const input = { payment_addr: { bech32: "addr_test1", cred: NETWORKS.preprod.lovejoin!.mixBox } };
+  for (const tx of txs) koios.txSpends.set(tx, [input]);
+}
+
 const epochParams = JSON.parse(
   readFileSync(new URL("../../../seedelf-core/tests/fixtures/epoch_params.json", import.meta.url), "utf8"),
 );
@@ -154,6 +164,8 @@ export interface KoiosFake {
    * ends only once Koios shows those spent, independent review M4).
    */
   unlistedSpent: boolean;
+  /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
+  txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null } }>>;
   /** Requests a page made instead of the worker (`byWorker`): there must be none. */
   strays: string[];
 }
@@ -231,9 +243,12 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const body = request.postDataJSON();
     if (path === "account_txs" || path === "tx_info") {
       const query = new URL(request.url()).searchParams;
-      const all: Array<{ tx_hash: string; block_height: number }> =
+      const all: Array<{ tx_hash: string; block_height?: number }> =
         path === "tx_info"
-          ? activityPreprod.tx_info.filter((t: { tx_hash: string }) => body._tx_hashes.includes(t.tx_hash))
+          ? [
+              ...activityPreprod.tx_info.filter((t: { tx_hash: string }) => body._tx_hashes.includes(t.tx_hash)),
+              ...[...koios.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
+            ]
           : body._stake_address === activityPreprod.stake
             ? activityPreprod.account_txs.filter(
                 (t: { block_height: number }) =>
@@ -385,6 +400,7 @@ export const test = base.extend<{
       addedToAccounts: [],
       spent: new Set(),
       unlistedSpent: false,
+      txSpends: new Map(),
       strays: [],
     });
   },

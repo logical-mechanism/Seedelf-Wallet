@@ -17,6 +17,7 @@ import {
   type KoiosFake,
   launch,
   lovejoinPool,
+  madeByMix,
   ownedLovejoinBox,
   openApp,
   openDapp,
@@ -1631,6 +1632,8 @@ test("Lovejoin: mix my boxes again, paid from the private balance: the review sa
 }) => {
   const phrase = vector(12).phrase;
   koios.addedToAccounts.push(...lovejoinPool, ownedLovejoinBox(phrase, "d6"), ownedLovejoinBox(phrase, "d7"), ownedLovejoinBox(phrase, "d8"));
+  // A restored wallet has no record of them: Koios says mixes made them (independent review M14).
+  madeByMix(koios, "d6".repeat(32), "d7".repeat(32), "d8".repeat(32));
   koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
   const page = await openApp(context);
   await restore(page, phrase);
