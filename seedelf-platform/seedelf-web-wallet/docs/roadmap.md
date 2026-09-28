@@ -44,6 +44,19 @@ The wallet is built in **chunks**, each about one working session.
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
 
+- **2026-09-28: independent review and its fixes** (`web-wallet/crypto-review`). A fresh review before mainnet, and its fixes, are in [plans/independent-review.md](plans/independent-review.md) (see its *Status*).
+  - **What landed:**
+    - A stranger's junk at a session's account can no longer strand its money: a return is planned by cost.
+    - Payments are sealed as maybe sent before Koios is asked, and Remove wallet lists what's still open.
+    - A session ends only once Koios shows its funding spent.
+    - The unlock and quiet rules hold across a lock.
+    - History-aware selection never refuses what the CLI's order would pay.
+    - The connector is capped and can't be flooded, and warns when a transaction ties accounts.
+    - Swaps route only through DEXes the order check reads (SundaeSwapV3 is out on mainnet), and a refunded order says so.
+    - A final review of the merged fixes found 13 more bugs where the areas met; all are fixed.
+  - **Surprising:** most findings were bugs the earlier rounds' own fixes brought in, where two features meet. That's why the fixes were reviewed across areas after merging.
+  - **Next:** the owner's calls in the review's *For the owner* (a restore's unrecorded Lovejoin boxes, strangers' token deliveries, the wait on an unlisted order), then the by-hand mainnet checks in [plans/launch-review.md](plans/launch-review.md).
+
 - **2026-09-27: privacy by default** (`web-wallet/crypto-review`). The owner's rule is "the most private by default, with the ability to turn it down". A review against it, and its fixes, are in [plans/privacy-review.md](plans/privacy-review.md) (see its *Status*).
   - **What landed:**
     - Sites can no longer tell whether a UTxO or a recent transaction is the wallet's, or when it's locked.

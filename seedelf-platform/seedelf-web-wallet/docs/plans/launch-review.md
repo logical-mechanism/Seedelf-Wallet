@@ -26,6 +26,8 @@ A review of the whole web wallet before mainnet, after the [crypto review](crypt
 
 ## Status (2026-09-27)
 
+**Since:** an independent review found more, and fixed it on the same branch: see [independent-review.md](independent-review.md).
+
 **Every item below is fixed on `web-wallet/crypto-review`**, except what *Still open* lists. That's M1–M6, H1–H9 and #10–#62.
 
 A second adversarial review, of the fixes themselves, found 30 more issues, all now fixed. The worst five:

@@ -13,6 +13,8 @@ A verifier re-traced every finding against the committed code. The settled decis
 
 ## Status (2026-09-27)
 
+**Since:** an independent review found more, and fixed it on the same branch: see [independent-review.md](independent-review.md). Its M8 finished §2.9 for the paths this round missed.
+
 **Everything in §2 is done, and so is most of §3 and §4.1**, as the owner decided below. The owner declined §3.5, §3.8, §3.9, §4.2 and §4.3. §3.10 and §4.4–§4.9 are still open, with the smaller items under *Still open*. §5's limits are said plainly in [privacy.md](../privacy.md) and the [privacy policy](../store/privacy-policy.md), and §6's docs are corrected.
 
 Two parts were built in parallel worktrees, marked *(connector)* and *(small items)* below, and are merged into `web-wallet/crypto-review` (the hashes below are the merged commits).
