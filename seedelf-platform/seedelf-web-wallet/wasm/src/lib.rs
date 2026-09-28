@@ -577,14 +577,23 @@ pub mod api {
     }
 
     impl ReturnPlan {
-        /// The same plan without the strangers' token UTxOs it took, left
-        /// out for `reason`: a return with them couldn't be built after
-        /// all. None when it took none.
+        /// The same plan with fewer of the strangers' token UTxOs it took,
+        /// those it drops left out for `reason`: a return with them couldn't
+        /// be built after all. All of them when it takes the session's own
+        /// or ADA-only UTxOs too; when strangers' are all it takes, only the
+        /// last (the smallest), so it never becomes a return of nothing while
+        /// one of them may still come back (independent review H2). None
+        /// when it took none, or only that one.
         fn without_strangers(&self, reason: &str) -> Option<ReturnPlan> {
-            if self.strangers == 0 {
+            let core = self.taken.len() - self.strangers;
+            let keep = if core > 0 {
+                core
+            } else {
+                self.strangers.saturating_sub(1)
+            };
+            if self.strangers == 0 || keep == 0 {
                 return None;
             }
-            let keep = self.taken.len() - self.strangers;
             let mut left_out = self.left_out.clone();
             left_out.extend(self.taken[keep..].iter().map(|u| LeftOut {
                 tx_hash: u.tx_hash.clone(),
@@ -595,7 +604,7 @@ pub mod api {
                 taken: self.taken[..keep].to_vec(),
                 left_out,
                 merged: self.merged,
-                strangers: 0,
+                strangers: keep - core,
             })
         }
     }
@@ -867,25 +876,33 @@ pub mod api {
     /// `build(plan)`, and when that fails for a plan that took strangers'
     /// token UTxOs, `build` of it without them (left out for `size` when the
     /// return was too big, `cost` otherwise): the plan's measure is an
-    /// estimate, and the session's own never waits on a stranger's. The
-    /// plan built, with the result.
+    /// estimate, and the session's own never waits on a stranger's. When
+    /// strangers' are all it takes, they go one at a time, the smallest
+    /// first, and none that builds is left behind with the rest
+    /// ([`ReturnPlan::without_strangers`]); when none of them builds,
+    /// nothing pays for its own way back ([`NOTHING_PAYS`]). The plan built,
+    /// with the result.
     pub(crate) fn built_or_without_strangers<T>(
         plan: ReturnPlan,
         mut build: impl FnMut(&ReturnPlan) -> Result<T>,
     ) -> Result<(T, ReturnPlan)> {
-        match build(&plan) {
-            Ok(built) => Ok((built, plan)),
-            Err(e) => {
-                let reason = if e.to_string().contains("over the network's limit") {
-                    "size"
-                } else {
-                    "cost"
-                };
-                let Some(own) = plan.without_strangers(reason) else {
-                    return Err(e);
-                };
-                let built = build(&own)?;
-                Ok((built, own))
+        let mut plan = plan;
+        loop {
+            let e = match build(&plan) {
+                Ok(built) => return Ok((built, plan)),
+                Err(e) => e,
+            };
+            let reason = if e.to_string().contains("over the network's limit") {
+                "size"
+            } else {
+                "cost"
+            };
+            match plan.without_strangers(reason) {
+                Some(fewer) => plan = fewer,
+                None if plan.strangers > 0 && plan.strangers == plan.taken.len() => {
+                    bail!(NOTHING_PAYS)
+                }
+                None => return Err(e),
             }
         }
     }
@@ -2573,6 +2590,98 @@ pub mod api {
             g_r_hex,
             vkh_hex,
         )
+    }
+
+    /// [`built_or_without_strangers`] with a stand-in for the build: a
+    /// return's plan is an estimate, and what happens when the build
+    /// disagrees (independent review H2). `ReturnPlan` is the crate's own,
+    /// so its tests are here.
+    #[cfg(test)]
+    mod return_plan_tests {
+        use super::*;
+
+        fn row(tx: u8) -> UtxoResponse {
+            UtxoResponse {
+                tx_hash: format!("{tx:02x}").repeat(32),
+                value: "2000000".to_string(),
+                ..Default::default()
+            }
+        }
+
+        /// A plan taking `core` (the session's own, ADA-only), then `strangers`.
+        fn plan(core: &[u8], strangers: &[u8]) -> ReturnPlan {
+            ReturnPlan {
+                taken: core.iter().chain(strangers).map(|&tx| row(tx)).collect(),
+                left_out: vec![],
+                merged: false,
+                strangers: strangers.len(),
+            }
+        }
+
+        fn taken(plan: &ReturnPlan) -> Vec<&str> {
+            plan.taken.iter().map(|u| &u.tx_hash[..2]).collect()
+        }
+
+        fn left(plan: &ReturnPlan) -> Vec<(&str, &str)> {
+            plan.left_out
+                .iter()
+                .map(|l| (&l.tx_hash[..2], l.reason.as_str()))
+                .collect()
+        }
+
+        #[test]
+        fn strangers_alone_go_one_at_a_time_never_all_of_them() {
+            // One transaction holds only one of them after all.
+            let (built, fewer) = built_or_without_strangers(plan(&[], &[1, 2, 3]), |p| {
+                if p.taken.len() > 1 {
+                    bail!("the transaction is over the network's limit")
+                }
+                Ok(p.taken.len())
+            })
+            .unwrap();
+            assert_eq!(built, 1);
+            assert_eq!(taken(&fewer), ["01"]);
+            assert_eq!(fewer.strangers, 1);
+            assert_eq!(left(&fewer), [("03", "size"), ("02", "size")]);
+        }
+
+        #[test]
+        fn strangers_alone_none_of_which_builds_are_nothing_that_pays() {
+            for strangers in [&[1][..], &[1, 2]] {
+                let mut tries = 0;
+                let e = built_or_without_strangers(plan(&[], strangers), |_| -> Result<()> {
+                    tries += 1;
+                    bail!("Not Enough Lovelace/Tokens")
+                })
+                .err()
+                .unwrap();
+                assert_eq!(e.to_string(), NOTHING_PAYS);
+                assert_eq!(tries, strangers.len());
+            }
+        }
+
+        #[test]
+        fn with_the_sessions_own_every_stranger_goes_at_once() {
+            let mut tried = vec![];
+            let (_, own) = built_or_without_strangers(plan(&[1], &[2, 3]), |p| {
+                tried.push(p.taken.len());
+                if p.strangers > 0 {
+                    bail!("Not Enough Lovelace/Tokens")
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(tried, [3, 1]);
+            assert_eq!(taken(&own), ["01"]);
+            assert_eq!(left(&own), [("02", "cost"), ("03", "cost")]);
+            // The session's own failing says why, as it did.
+            let e = built_or_without_strangers(plan(&[1], &[2]), |_| -> Result<()> {
+                bail!("the session's own failed")
+            })
+            .err()
+            .unwrap();
+            assert_eq!(e.to_string(), "the session's own failed");
+        }
     }
 }
 

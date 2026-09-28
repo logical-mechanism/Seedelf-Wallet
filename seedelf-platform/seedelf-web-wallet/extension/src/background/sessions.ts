@@ -273,9 +273,10 @@ interface SessionRecord {
   leftBehind?: LeftBehindUtxo[];
   /**
    * When a return last found nothing at its account that pays for its own
-   * way back (all of it left behind): a mix of the boxes again then has no
-   * chain to send, so Lovejoin may bring them back meanwhile (independent
-   * review H1). Cleared once a return is built again.
+   * way back (all of it left behind), the session's own money among it: a
+   * mix of the boxes again then has no chain to send, so Lovejoin may bring
+   * them back meanwhile (independent review H1). Cleared once a return is
+   * built again.
    */
   nothingBack?: number;
   closedAt?: number;
@@ -1862,9 +1863,7 @@ export class SessionService {
     if (unpriced.length) await this.leaveBehind(network, index, unpriced, "script");
     const rows = held.filter(measurable);
     if (!rows.length) {
-      await this.update(network, index, (r) => {
-        r.nothingBack ??= now();
-      });
+      await this.nothingBack(network, index, held);
       throw new NothingComesBack(
         "What's at the session's account holds a reference script the wallet can't price, so no return can take it. It stays there.",
       );
@@ -1984,9 +1983,7 @@ export class SessionService {
       // Even the session's own doesn't pay its way back (WebAssembly takes a stranger's token only when it pays
       // its own): it stays, rather than be tried for ever, and is tried again once more arrives (act, a top-up).
       await this.leaveBehind(network, index, rows, "fee");
-      await this.update(network, index, (r) => {
-        r.nothingBack ??= now();
-      });
+      await this.nothingBack(network, index, rows);
       throw new NothingComesBack("What's left at the session's account is too little to pay for its own way back, so it stays there.");
     }
     await this.leftBy(network, index, rows, result.leftOut);
@@ -2006,6 +2003,22 @@ export class SessionService {
     return (await this.deps.preferences?.get())?.lovejoinReturns ?? DEFAULT_PREFERENCES.lovejoinReturns;
   }
 
+  /**
+   * Records that nothing of `rows` at session `index`'s account pays for its
+   * own way back (`nothingBack`), when the session's own money is among them.
+   * Only a stranger's there says nothing of the session's own: Koios may not
+   * list its funding yet, and a mix of the boxes again keeps holding them for
+   * the chain that goes once it does (independent review H1).
+   */
+  private async nothingBack(network: NetworkName, index: number, rows: KoiosUtxo[]): Promise<void> {
+    const record = (await this.book(network)).sessions.find((r) => r.index === index);
+    const own = new Set(record?.txs.map((t) => t.txHash));
+    if (!rows.some((u) => own.has(u.tx_hash))) return;
+    await this.update(network, index, (r) => {
+      r.nothingBack ??= this.deps.now();
+    });
+  }
+
   /** Records `rows` at session `index`'s account as left behind, for `reason`: no return takes them. */
   private async leaveBehind(network: NetworkName, index: number, rows: KoiosUtxo[], reason: LeftBehindUtxo["reason"]): Promise<void> {
     const found = new Set(rows.map(outpoint));
@@ -2021,14 +2034,17 @@ export class SessionService {
    * After a return of `rows` is built (independent review H1, H2): only
    * what WebAssembly left out because it doesn't pay its own way back
    * (`cost`, a stranger's tokens) is left behind, never the rest; what was
-   * left behind for its fee and comes back now isn't anymore; and a return
-   * is found again (`nothingBack`).
+   * left behind for its fee and comes back now, or waits for the next return
+   * (`size`, `tokens`), isn't anymore; and a return is found again
+   * (`nothingBack`).
    */
   private async leftBy(network: NetworkName, index: number, rows: KoiosUtxo[], leftOut: LeftOutUtxo[] = []): Promise<void> {
     const key = (u: { txHash: string; txIndex: number }) => `${u.txHash}#${u.txIndex}`;
-    const left = new Set(leftOut.map(key));
-    const stays = rows.filter((u) => leftOut.some((l) => l.reason === "cost" && key(l) === outpoint(u)));
-    const back = new Set(rows.map(outpoint).filter((o) => !left.has(o)));
+    const cost = new Set(leftOut.filter((l) => l.reason === "cost").map(key));
+    const stays = rows.filter((u) => cost.has(outpoint(u)));
+    // Left behind for its fee before, and now taken or only waiting for room: a later return takes it, so it
+    // holds the session open again, rather than be left at the account when the session closes.
+    const back = new Set(rows.map(outpoint).filter((o) => !cost.has(o)));
     const record = (await this.book(network)).sessions.find((r) => r.index === index);
     const cleared = (record?.leftBehind ?? []).some((b) => b.reason === "fee" && back.has(key(b)));
     if (!stays.length && !cleared && record?.nothingBack === undefined) return;

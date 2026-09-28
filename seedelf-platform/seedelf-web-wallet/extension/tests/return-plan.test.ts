@@ -215,15 +215,60 @@ describe("a mix of the boxes again (independent review H1)", () => {
     expect(await t.sessions.mixingAgain("preprod")).toBe(false);
   });
 
-  it("doesn't hold the boxes while nothing at its account can come back", async () => {
+  it("doesn't hold the boxes while even its own money at its account can't come back", async () => {
     const t = await unlocked();
     await mixingAgain(t);
-    // Only a stranger's token on too little ADA: nothing pays for its own way back.
-    t.koios.addedToAccounts.push(atSession(STRANGER, 0, "1200000", [[MIN, "5"]]));
+    // Its funding's, a token on too little ADA: nothing pays for its own way back.
+    t.koios.addedToAccounts.push(atSession(OUT, 0, "1100000", [[MIN, "5"]]));
     expect(await t.sessions.mixingAgain("preprod")).toBe(true);
     const view = await t.sessions.advance("preprod", 0, true);
     expect(t.koios.submitted).toHaveLength(0);
-    expect(view.leftBehind).toEqual([{ txHash: STRANGER, txIndex: 0, reason: "fee", lovelace: "1200000" }]);
+    expect(view.leftBehind).toEqual([{ txHash: OUT, txIndex: 0, reason: "fee", lovelace: "1100000" }]);
     expect(await t.sessions.mixingAgain("preprod")).toBe(false);
+  });
+
+  it("keeps holding the boxes while Koios lists only a stranger's there, not its funding yet", async () => {
+    const t = await unlocked();
+    await mixingAgain(t);
+    // Only a stranger's token on too little ADA: its funding, on chain, isn't listed yet.
+    t.koios.addedToAccounts.push(atSession(STRANGER, 0, "1200000", [[MIN, "5"]]));
+    let view = await t.sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(view.leftBehind).toEqual([{ txHash: STRANGER, txIndex: 0, reason: "fee", lovelace: "1200000" }]);
+    expect((await book(t)).sessions[0]!.nothingBack).toBeUndefined();
+    expect(await t.sessions.mixingAgain("preprod")).toBe(true);
+
+    // Its funding shows: its return goes, and only then are the boxes let go.
+    t.koios.addedToAccounts.push(atSession(OUT, 0, "10000000"), atSession(OUT, 1, "5000000"));
+    t.clock.now += 60_000;
+    view = await t.sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(1);
+    expect(await t.sessions.mixingAgain("preprod")).toBe(false);
+  });
+});
+
+describe("what a return left behind for its fee (independent review H1)", () => {
+  it("isn't anymore once a later return only waits for room to take it, so it holds the session open", async () => {
+    const t = await unlocked();
+    await siteSession(t);
+    // Two of the session's own UTxOs whose tokens together are more than an output holds, left behind for their
+    // fee by an earlier return that found too little; then more money arrives.
+    const most = "10000000000000000000";
+    const fresh = "04".repeat(32);
+    const b = await book(t);
+    b.sessions[0]!.leftBehind = [
+      { txHash: OUT, txIndex: 0, reason: "fee", lovelace: "3000000" },
+      { txHash: TOP_UP, txIndex: 0, reason: "fee", lovelace: "3000000" },
+    ];
+    await t.store.set("sessions.preprod", b);
+    t.koios.addedToAccounts.push(
+      atSession(OUT, 0, "3000000", [[MIN, most]]),
+      atSession(TOP_UP, 0, "3000000", [[MIN, most]]),
+      atSession(fresh, 0, "40000000"),
+    );
+    const review = await t.sessions.backBuild("preprod", 0, true);
+    // One of them waits for the next return: none is left behind anymore.
+    expect(review.leftOut).toEqual([{ txHash: TOP_UP, txIndex: 0, reason: "tokens" }]);
+    expect((await book(t)).sessions[0]!.leftBehind ?? []).toEqual([]);
   });
 });
