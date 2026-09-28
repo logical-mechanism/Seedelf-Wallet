@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
+import { CHAIN_CUT } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { sessionSwap, testBalances, vectors } from "./fakes";
@@ -98,6 +99,8 @@ async function cutThenRest(t: T, sessions: SessionService) {
   undo();
   const rest = await sessions.backBuild("preprod", 0);
   expect(rest.lovejoin).toBeUndefined();
+  // The chain's own page says it stopped: the rest's review needs no other word why.
+  expect(rest.lovejoinSkipped).toBeUndefined();
   await sessions.backSubmit("preprod", rest.txHash);
   return rest.txHash;
 }
@@ -111,9 +114,13 @@ describe("a site's session paid again after its chain stopped partway (independe
   it("goes through Lovejoin again once that chain's rest is back", CHAINS, async () => {
     const { t, sessions } = await withSession();
     await cutThenRest(t, sessions);
-    // While the rest is on its way, a return still comes back directly.
+    // While the rest is on its way, a return still comes back directly, and says why (independent review L17).
     paidAgain(t, "d");
-    expect((await sessions.backBuild("preprod", 0)).lovejoin).toBeUndefined();
+    const meanwhile = await sessions.backBuild("preprod", 0);
+    expect(meanwhile.lovejoin).toBeUndefined();
+    expect(meanwhile.lovejoinSkipped).toBe("the return of what its last chain through Lovejoin left wasn't on chain yet");
+    // Asked for directly, it says nothing: the user left Lovejoin out.
+    expect((await sessions.backBuild("preprod", 0, true)).lovejoinSkipped).toBeUndefined();
 
     // The rest lands: the chain is dealt with, and the next return goes through Lovejoin, as the default says.
     t.koios.confirmations = 1;
@@ -142,5 +149,34 @@ describe("a site's session paid again after its chain stopped partway (independe
     const third = await sessions.backBuild("preprod", 0);
     expect(third.lovejoinSkipped).toBeUndefined();
     expect(third.lovejoin).toMatchObject({ depth: 1 });
+  });
+});
+
+describe("a mix whose chain stopped partway and whose rest came back (independent review L17)", () => {
+  it("brings what reaches its account after back directly, never in another chain", CHAINS, async () => {
+    const { t, sessions } = await withSession();
+    const at = t.clock.now;
+    const done = (kind: string, txHash: string) => ({ kind, txHash, at, confirmed: true });
+    const last = "ae".repeat(32);
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: at,
+          txs: [done("out", "ab".repeat(32)), done("deposit", "ac".repeat(32)), done("back", "ad".repeat(32))],
+          mix: { boxes: 1 },
+          auto: { approved: { minAmountOut: "0", fund: { lovelace: "15000000", tokens: [] } } },
+          chain: { total: 4, last, at, stopped: CHAIN_CUT },
+        },
+      ],
+    });
+    // The 40 ₳ and 5 ₳ at its account reached it since: a chain would pay for another mix with them.
+    await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(1);
+    const book = await t.store.get<{ sessions: Array<{ chain: { last: string }; txs: Array<{ kind: string }> }> }>("sessions.preprod");
+    expect(book!.sessions[0]!.chain.last).toBe(last);
+    expect(book!.sessions[0]!.txs.map((x) => x.kind)).toEqual(["out", "deposit", "back", "back"]);
   });
 });

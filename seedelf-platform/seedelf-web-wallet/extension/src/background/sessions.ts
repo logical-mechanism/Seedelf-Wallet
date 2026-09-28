@@ -391,6 +391,9 @@ const PENDING_KIND = {
 /** Why a return leaves Lovejoin out when its account's collateral is gone (privacy review §2.15). */
 const NO_COLLATERAL = "its 5 ₳ collateral isn't at its account anymore, and the mixes need it";
 
+/** Why a return leaves Lovejoin out while its last chain's rest, sent back directly, isn't on chain (independent review L17). */
+const REST_NOT_BACK = "the return of what its last chain through Lovejoin left wasn't on chain yet";
+
 /** The most funding changes one return merges into (WebAssembly's MAX_MERGE). */
 const MAX_MERGE = 4;
 
@@ -1878,9 +1881,11 @@ export class SessionService {
     // counts them all, as it did.
     const chain = record?.chain;
     const sent = (record?.txs ?? []).filter((t) => !t.unsent && (!chain || t.at >= chain.at));
+    // Not a mix's whose rest came back directly: another chain would mix the wallet's boxes again, which nothing
+    // holds for it anymore (mixingAgain), so what reaches its account after comes back directly too.
     const finished =
       !!chain &&
-      sent.some((t) => t.txHash === chain.last || (t.kind === "back" && t.confirmed && !t.replaced));
+      sent.some((t) => t.txHash === chain.last || (!record?.mix && t.kind === "back" && t.confirmed && !t.replaced));
     const started = !finished && sent.some((t) => t.kind === "deposit" || t.kind === "mix");
     if (started && record?.chain && !record.chain.stopped) {
       // Nothing is sending the rest: the wallet locked, or the browser closed, partway.
@@ -1892,6 +1897,10 @@ export class SessionService {
     const own = record?.txs.map((t) => t.txHash) ?? [];
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
+    // What that chain left was sent back directly, and isn't on chain yet: this return comes back directly too,
+    // and says why when it would have gone through Lovejoin (independent review L17).
+    const restOnItsWay = started && sent.some((t) => t.kind === "back" && !t.confirmed && !t.replaced);
+    if (!direct && restOnItsWay && lovejoin?.available(network) && (await this.throughLovejoin(record))) skipped = REST_NOT_BACK;
     if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
       // §2.15). Never a stranger's 5 ₳ carrying a reference script or a datum: the mixes can't put it up.
