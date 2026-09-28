@@ -182,6 +182,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       const { type: _type, ...change } = message;
       const prefs = await ctx.preferences.set(change);
       if (typeof change.dappConnector === "boolean") {
+        // Off: nothing a site asked for waits on (independent review L33).
+        if (!prefs.dappConnector) ctx.dapp.connectorOff();
         // Turned on without Chrome's access to sites (the switch asks first), it stays off.
         const working = await ctx.connector(prefs.dappConnector);
         if (prefs.dappConnector && !working) return ctx.preferences.set({ dappConnector: false });

@@ -83,7 +83,11 @@
 //
 // What sites wait for is kept in memory: a restarted worker has dropped the
 // sites' ports too, so there's nothing to answer. The bridge's pings keep the
-// worker running while the user reads a prompt.
+// worker running while the user reads a prompt. Disconnecting a site
+// declines what it waits for, and turning the connector off, or removing the
+// wallet, declines everything; an approval checks again that the site is
+// still connected to the account it asked of, and what Lovejoin and the
+// user's locks keep apart (independent review L33).
 
 import type { NetworkName } from "../networks";
 import {
@@ -292,6 +296,10 @@ const ALREADY_CONNECTED =
   "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session: it keeps what it already saw.";
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
 const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable() first.";
+/** What a site hears while the connector is off, and what it was waiting for hears once it's turned off. */
+const OFF = "Connecting sites is off in Seedelf Wallet's settings.";
+/** What a site's request hears once the site is disconnected, or connected to another account, while it waited. */
+const DISCONNECTED = "This site was disconnected from Seedelf Wallet, so the request was declined.";
 /** What a site hears when the user says no, or closed the window on it. */
 const DECLINED = "The user declined.";
 /** What a site's call ends with once its page is gone: nobody hears it. */
@@ -345,7 +353,7 @@ export class DappService {
     const on = (await this.deps.preferences.get()).dappConnector;
     const { origin } = session;
     if (method === "isEnabled" && !on) return false;
-    if (!on) throw refused("Connecting sites is off in Seedelf Wallet's settings.");
+    if (!on) throw refused(OFF);
     if (method === "isEnabled") return this.isEnabled(origin);
     if ((await this.deps.wallet.state()) !== "unlocked") {
       // Which sites are connected is sealed while locked: a read is refused
@@ -410,6 +418,11 @@ export class DappService {
   ): Promise<{ error?: string }> {
     const asked = this.waiting.find((w) => w.approval.id === id);
     if (!asked) return { error: "The site stopped waiting for this." };
+    // Turned off while it waited: nothing is connected, funded or signed (independent review L33).
+    if (approve && !(await this.deps.preferences.get()).dappConnector) {
+      this.connectorOff();
+      return { error: OFF };
+    }
     const { approval } = asked;
     if (approval.kind === "connect" && approval.funding) return { error: "Its private session is funded already." };
     // Asked on the network the wallet has left: never signed or connected on the one it's on.
@@ -452,7 +465,11 @@ export class DappService {
   /** The wallet's state changed: an unlock lets the waiting calls on. A removed wallet's sites are forgotten. */
   async stateChanged(): Promise<void> {
     const state = await this.deps.wallet.state();
-    if (state === "no-wallet") this.lastSites.clear();
+    if (state === "no-wallet") {
+      this.lastSites.clear();
+      // The wallet was removed, and the connector with it: nothing waits on it (independent review L33).
+      this.connectorOff();
+    }
     if (!this.unlocking.length || state !== "unlocked") return;
     for (const u of this.unlocking.splice(0)) u.resolve();
     this.deps.changed();
@@ -532,6 +549,28 @@ export class DappService {
   }
 
   /**
+   * The connector was turned off (Settings, Chrome's access to sites taken
+   * away, or the wallet removed): everything sites wait for is declined, a
+   * private session's funding waiting for the chain too, whose money stays
+   * on the dApps page (independent review L33).
+   */
+  connectorOff(): void {
+    const unlocking = this.unlocking.splice(0);
+    for (const u of unlocking) u.reject(refused(OFF));
+    if (!this.decline(() => true, OFF) && unlocking.length) this.deps.changed();
+  }
+
+  /** Declines what `which` picks of what's waiting, with `info`, as the user saying no would; whether any was. */
+  private decline(which: (w: Waiting) => boolean, info: string): boolean {
+    const out = this.waiting.filter(which);
+    if (!out.length) return false;
+    remove(this.waiting, (w) => out.includes(w));
+    for (const w of out) w.reject(new DappError({ ...w.declined, info }));
+    this.deps.changed();
+    return true;
+  }
+
+  /**
    * A site's page went away: nothing it asked for waits any more. Each is
    * settled, though nobody hears it, so its call ends and gives back its
    * share of the site's calls (`MAX_SITE_CALLS`): left waiting forever, 32
@@ -577,6 +616,8 @@ export class DappService {
     const site = await this.site(network, origin);
     if (site?.session !== undefined) await this.deps.sessions.disconnect(network, site.session);
     await this.changeSites((all) => all.filter((s) => !(s.origin === origin && s.network === network)));
+    // What it asked for and the user hasn't answered goes with it (independent review L33).
+    this.decline((w) => w.session.origin === origin && w.network === network, DISCONNECTED);
     return this.sitesOn(network);
   }
 
@@ -587,8 +628,10 @@ export class DappService {
    */
   async disconnectSession(index: number): Promise<void> {
     const network = await this.deps.network();
+    const origins = (await this.sitesOn(network)).filter((s) => s.session === index).map((s) => s.origin);
     await this.deps.sessions.disconnect(network, index);
     await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === network)));
+    this.decline((w) => origins.includes(w.session.origin) && w.network === network, DISCONNECTED);
   }
 
   /**
@@ -710,6 +753,12 @@ export class DappService {
     } catch {
       throw refused("This site's private session is over. Disconnect it in Seedelf Wallet's settings, then connect it again.");
     }
+  }
+
+  /** Refuses unless `origin` is still connected on `network`, to `holder`: what a request was read for (independent review L33). */
+  private async stillConnected(network: NetworkName, origin: string, holder: Holder): Promise<void> {
+    const site = await this.site(network, origin);
+    if (!site || site.session !== holder?.index) throw refused(DISCONNECTED);
   }
 
   /**
@@ -1244,7 +1293,7 @@ export class DappService {
     inputs: string[],
     collateral: string[],
     partialSign: boolean,
-  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean }> {
+  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean; view: View }> {
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
       throw refused("This site asks too often for signatures Seedelf Wallet can't give. Try again in a minute.");
@@ -1301,7 +1350,7 @@ export class DappService {
         info: "This transaction registers or delegates this private session's stake key, which stays unregistered: its deposit and any rewards would be left behind when the session ends, so the wallet won't sign it. Stake, or delegate your vote, from your public account instead.",
       });
     }
-    return { request, summary, collateralSpent };
+    return { request, summary, collateralSpent, view };
   }
 
   private async signTx(
@@ -1322,7 +1371,7 @@ export class DappService {
       throw invalid("The wallet can't read this transaction.");
     }
     await this.heldForLovejoin(network, holder, inputs, collateral);
-    const { request, summary, collateralSpent } = await this.readInTurn(session.origin, () =>
+    const { request, summary, collateralSpent, view } = await this.readInTurn(session.origin, () =>
       this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign),
     );
     const { wasm, wallet } = this.deps;
@@ -1335,6 +1384,13 @@ export class DappService {
       ...(collateralSpent ? { collateralSpent } : {}),
     };
     return this.ask(session, network, ask, TxSignError.UserDeclined, async () => {
+      // Checked again as it's approved (independent review L33): while it
+      // waited, the site may have been disconnected or moved to another
+      // account, a Lovejoin chain started that needs what it uses, or the
+      // user locked a UTxO it spends.
+      await this.stillConnected(network, session.origin, holder);
+      await this.heldForLovejoin(network, holder, inputs, collateral);
+      await this.keptApart(network, holder, view, inputs, collateral);
       const signed = await wallet.withKeys(
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx,
@@ -1436,11 +1492,14 @@ export class DappService {
         ...sessionOf(holder),
       },
       DataSignError.UserDeclined,
-      () =>
-        wallet.withKeys(
+      async () => {
+        // Still connected, to the same account, as it's approved (independent review L33).
+        await this.stillConnected(network, session.origin, holder);
+        return wallet.withKeys(
           ({ cardano, oneTime }) =>
             JSON.parse(holder ? wasm.signSessionData(oneTime, request) : wasm.signDappData(cardano, request)) as unknown,
-        ),
+        );
+      },
     );
   }
 

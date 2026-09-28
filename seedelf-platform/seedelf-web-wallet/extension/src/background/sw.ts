@@ -242,9 +242,10 @@ chrome.storage.local.onChanged.addListener((changes) => {
 });
 
 // The user took the wallet's access to sites away in Chrome's own settings:
-// the connector is off.
+// the connector is off, and nothing a site asked for waits on it.
 chrome.permissions.onRemoved.addListener((removed) => {
   if (!removed.origins?.some((o) => DAPP_ORIGINS.includes(o))) return;
+  void context?.then((ctx) => ctx.dapp.connectorOff()).catch(() => undefined);
   void new PreferencesService(chromeArea(chrome.storage.local))
     .set({ dappConnector: false })
     .then(() => applyConnector(false))
