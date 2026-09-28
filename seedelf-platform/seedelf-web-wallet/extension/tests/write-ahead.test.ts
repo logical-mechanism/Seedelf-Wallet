@@ -93,7 +93,7 @@ describe("a payment, before it goes to Koios", () => {
     // Taken: an ordinary sent payment, nothing sealed any more.
     expect(pending).not.toHaveProperty("maybeSent");
     expect(await t.session.get(pendingKey("preprod"))).not.toHaveProperty("maybeSent");
-    expect(await t.store.get("maybeSent.preprod")).toBeFalsy();
+    expect(t.local.data.has(SEALED)).toBe(false);
     expect(await t.session.get(SESSION_SEND)).toBeUndefined();
   });
 
@@ -127,7 +127,7 @@ describe("a payment, before it goes to Koios", () => {
     t.koios.confirmations = 1;
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: 1 });
     expect(await t.activity.seedelf("preprod")).toMatchObject([{ kind: "withdraw", txHash: summary.txHash }]);
-    expect(await t.store.get("maybeSent.preprod")).toBeFalsy();
+    expect(t.local.data.has(SEALED)).toBe(false);
   });
 
   it("is still watched after the browser closed while Koios was asked", async () => {
@@ -169,7 +169,7 @@ describe("a payment refused", () => {
     whileAsked(t, async () => undefined, "refused");
     await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction");
     expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
-    expect(await t.store.get("maybeSent.preprod")).toBeFalsy();
+    expect(t.local.data.has(SEALED)).toBe(false);
     expect(await spentSet(t.session)).toEqual(new Set());
     expect(await t.session.get(SESSION_SEND)).toMatchObject({ txHash: summary.txHash });
     expect(await t.session.get(SESSION_SEND)).not.toHaveProperty("sentCbor");
@@ -193,7 +193,7 @@ describe("a payment refused", () => {
     const real = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("", { status: 429 }) : real(url, init));
     await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("Koios is limiting requests");
-    expect(await t.store.get("maybeSent.preprod")).toBeFalsy();
+    expect(t.local.data.has(SEALED)).toBe(false);
     expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
     t.koios.fetch = real;
     // Sent again, it goes: the same review, not a new one.

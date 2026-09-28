@@ -228,10 +228,15 @@ async function seal(deps: PendingDeps, w: Watched): Promise<void> {
   await deps.store.set(sealedName(w.network), w).catch(() => undefined);
 }
 
-/** Drops the sealed copy of `w`, settled, if that's what's sealed. Call it in the network's turn. */
+/**
+ * Drops the sealed copy of `w`, settled, if that's what's sealed: the record
+ * goes, so one is there only while a payment may still go through, and
+ * Remove wallet keeps only that (private-store.ts KEPT_ON_RESET). Call it in
+ * the network's turn.
+ */
 async function unseal(deps: PendingDeps, w: Watched): Promise<void> {
   const was = await sealed(deps, w.network).catch(() => undefined);
-  if (was?.txHash === w.txHash) await deps.store.set(sealedName(w.network), null).catch(() => undefined);
+  if (was?.txHash === w.txHash) await deps.store.remove(sealedName(w.network)).catch(() => undefined);
 }
 
 /**
@@ -692,6 +697,37 @@ export async function settleMaybeSent(deps: PendingDeps, network: NetworkName): 
 export class PendingService {
   constructor(private readonly deps: PendingDeps) {
     if (deps.alarm) alarms.set(deps.session, deps.alarm);
+  }
+
+  /**
+   * The payment on `network` that may still go through, if there's one, as
+   * the watch has it (no Koios request): Remove wallet says so first
+   * (independent review M2).
+   */
+  async maybeSentOn(network: NetworkName): Promise<PendingTx | undefined> {
+    const w = await watchedOn(this.deps, network);
+    return unsettled(w) ? shown(w) : undefined;
+  }
+
+  /**
+   * After a wallet is made or restored: what Remove wallet kept of a payment
+   * that may still go through (private-store.ts KEPT_ON_RESET) stays if this
+   * phrase opens it and it may, and is put back at the next look. One this
+   * phrase can't open was another wallet's, and goes, as does one settled
+   * (independent review M2).
+   */
+  async adoptKept(networks: NetworkName[]): Promise<void> {
+    for (const network of networks) {
+      await inTurn(this.deps, network, async () => {
+        let w: Watched | undefined;
+        try {
+          w = (await this.deps.store.get<Watched | null>(sealedName(network))) ?? undefined;
+        } catch (e) {
+          if (!(e instanceof UnreadableRecordError)) throw e;
+        }
+        if (!unsettled(w) || w.network !== network) await this.deps.store.remove(sealedName(network));
+      }).catch(() => undefined);
+    }
   }
 
   /** The watched transaction on `network` as it now stands, or null. Clears it once it's settled. */

@@ -454,7 +454,7 @@ describe("a payment that may still go through, across a lock (final review money
     await t.wallet.lock();
     await t.wallet.unlock(PASSWORD);
     expect(await t.pending.pending("preprod")).toBeNull();
-    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+    expect(await t.store.get("maybeSent.preprod")).toBeUndefined();
   });
 
   it("is only looked for at unlock, and sent again by the worker's run two minutes on, the network shown or not (independent review L9)", async () => {
@@ -474,7 +474,7 @@ describe("a payment that may still go through, across a lock (final review money
     expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
     // Taken: an ordinary sent payment, which a lock may forget.
     expect(await t.session.get(pendingKey("preprod"))).not.toHaveProperty("maybeSent");
-    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+    expect(await t.store.get("maybeSent.preprod")).toBeUndefined();
   });
 
   it("goes into the Seedelf history when a private one lands after the lock", async () => {
@@ -501,7 +501,7 @@ describe("a payment that may still go through, across a lock (final review money
     await t.wallet.unlock(PASSWORD);
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "expired" });
     expect(await spentSet(t.session)).toEqual(new Set());
-    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+    expect(await t.store.get("maybeSent.preprod")).toBeUndefined();
 
     const withdraw = privately(t);
     const privateOne = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
@@ -518,14 +518,14 @@ describe("a payment that may still go through, across a lock (final review money
     await expect(again(t)).resolves.toBeDefined();
   });
 
-  it("is deleted with the wallet", async () => {
+  it("is kept through Remove wallet, for the same phrase restored here to watch again (independent review M2)", async () => {
     const t = await unlocked();
     const summary = await again(t);
     unanswered(t);
     await t.send.submit("preprod", summary.txHash);
     expect(t.local.data.has(SEALED)).toBe(true);
     await t.wallet.reset();
-    expect(t.local.data.has(SEALED)).toBe(false);
+    expect(t.local.data.has(SEALED)).toBe(true);
   });
 });
 

@@ -116,6 +116,6 @@ describe("a maybe-sent payment, as the wallet unlocks", () => {
     };
     await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("The network rejected the transaction");
     expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
-    expect(await t.store.get("maybeSent.preprod")).toBeFalsy();
+    expect(t.local.data.has("seedelf.private.maybeSent.preprod")).toBe(false);
   });
 });

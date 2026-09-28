@@ -563,6 +563,27 @@ export interface PendingTx {
   dropped?: "expired" | "unseen";
 }
 
+/**
+ * What removing the wallet would leave behind on one network, from what the
+ * wallet keeps (no Koios request): Remove wallet lists it first, and asks
+ * again (independent review M2, M5).
+ */
+export interface AtStake {
+  network: NetworkName;
+  /** A payment Koios didn't answer, which may still go through. */
+  maybeSent?: PendingTx;
+  /**
+   * Private sessions whose one-time accounts may hold something, which a
+   * restore doesn't find yet: each one open, or closed with something no
+   * return takes left there (`leftBehind`).
+   */
+  sessions: Array<{ index: number; kind: "swap" | "mix" | "site"; origin?: string; leftBehind?: boolean }>;
+  /** A chain through Lovejoin is still being sent. */
+  chainSending: boolean;
+  /** What the wallet keeps for this network couldn't be read: what's open there isn't known. */
+  unreadable?: boolean;
+}
+
 /** A token in a dApp transaction's summary; `quantity` is signed where it's a change. */
 export interface DappToken {
   policyId: string;
@@ -1117,7 +1138,14 @@ export interface Requests {
   "send-submit": { payload: { txHash: string }; result: PendingTx };
   /** The submitted transaction being watched, with fresh confirmations; null when there's none. */
   "pending-tx": { payload: None; result: PendingTx | null };
-  "reset-wallet": { payload: None; result: Status };
+  /**
+   * Deletes the wallet from this browser. Unlocked, it's refused while
+   * something is still open (`reset-check`), unless `force`: the user saw
+   * the list and asked again.
+   */
+  "reset-wallet": { payload: { force?: boolean }; result: Status };
+  /** What removing the wallet would leave behind, each network with something; none, nothing. Unlocked only. */
+  "reset-check": { payload: None; result: AtStake[] };
   /** The recovery phrase's words, for Settings; the password again, even while unlocked. */
   "reveal-phrase": { payload: { password: string }; result: { words: string[] } };
   /** Whether a typed phrase is this wallet's, for Settings' check: yes or no, never which words differ. */
@@ -1337,6 +1365,7 @@ const REQUEST_LIST = [
   "send-submit",
   "pending-tx",
   "reset-wallet",
+  "reset-check",
   "reveal-phrase",
   "check-phrase",
   "change-password",

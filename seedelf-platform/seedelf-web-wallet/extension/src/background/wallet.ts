@@ -17,7 +17,7 @@ import { passwordProblem } from "../shared/password";
 import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
 import { LOCAL_PREFERENCES } from "./preferences";
-import { PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
+import { KEPT_ON_RESET, PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
 import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord } from "./vault";
 
 /**
@@ -298,13 +298,16 @@ export class Wallet {
 
   /**
    * Deletes the vault, the sealed records and the caches. Where the wallet
-   * opens and which network it's on stay (the privacy policy says so). The
-   * UI asks for a typed confirmation first.
+   * opens and which network it's on stay (the privacy policy says so), and
+   * so does a payment that may still go through (`KEPT_ON_RESET`): the same
+   * phrase restored watches it again, so it's never paid twice (independent
+   * review M2). The UI asks for a typed confirmation first, and Remove wallet
+   * says what's still open (handlers.ts).
    */
   reset(): Promise<void> {
     return this.serial(async () => {
       await this.wipe();
-      const records = PRIVATE_RECORDS.map((name) => PRIVATE_PREFIX + name);
+      const records = PRIVATE_RECORDS.filter((name) => !KEPT_ON_RESET.includes(name)).map((name) => PRIVATE_PREFIX + name);
       await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records, ...LOCAL_CACHES);
       this.deps.changed();
     });

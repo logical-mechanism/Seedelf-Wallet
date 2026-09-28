@@ -4,7 +4,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { Message, Requests, Status } from "../shared/rpc";
+import type { AtStake, Message, Requests, Status } from "../shared/rpc";
 import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
 import type { CoinControlService } from "./coin-control";
@@ -73,6 +73,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // so the new wallet is never taken for one from before the switch.
       await ctx.networkChoice.keep(ctx.network);
       await wallet.create(message.phrase, message.password);
+      // What Remove wallet kept of a payment that may still go through: this phrase's is watched again, another's goes.
+      await ctx.pending.adoptKept(ctx.networks).catch(() => undefined);
       return status(ctx);
     case "unlock":
       return wallet.unlock(message.password);
@@ -120,7 +122,16 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.send.submit(ctx.network, message.txHash);
     case "pending-tx":
       return ctx.pending.pending(ctx.network);
+    case "reset-check":
+      return atStake(ctx);
     case "reset-wallet":
+      // Unlocked (Remove wallet), what's still open is listed first, and
+      // removing it anyway takes a second yes. Locked (Forgot password),
+      // nothing can be read: a payment that may still go through is kept all
+      // the same (wallet.ts reset, independent review M2, M5).
+      if (message.force !== true && (await wallet.state()) === "unlocked" && (await atStake(ctx)).length) {
+        throw new Error(RESET_AT_STAKE);
+      }
       // A wallet from before the switch has no network kept, only worked out
       // from its vault: kept now, it outlives the vault, so the next restore
       // is on that network, never mainnet first (independent review L42).
@@ -290,6 +301,34 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-withdraw-now":
       return ctx.lovejoin.withdrawNow(ctx.network, message.box, message.anyway ?? false);
   }
+}
+
+/** Remove wallet's refusal, when something opened since its list was read. */
+export const RESET_AT_STAKE =
+  "Something is still open that removing the wallet would leave behind. Look at the list again before you remove it.";
+
+/**
+ * What removing the wallet would leave behind, each of the build's networks
+ * with something (independent review M2, M5), from what the wallet keeps,
+ * with no Koios request: a payment that may still go through, private
+ * sessions whose accounts a restore doesn't find yet, a chain through
+ * Lovejoin being sent. A network whose records won't read says so. Throws
+ * if locked.
+ */
+async function atStake(ctx: Context): Promise<AtStake[]> {
+  if ((await ctx.wallet.state()) !== "unlocked") throw new Error("The wallet is locked.");
+  const found: AtStake[] = [];
+  for (const network of ctx.networks) {
+    try {
+      const maybeSent = await ctx.pending.maybeSentOn(network);
+      const sessions = await ctx.sessions.atStake(network);
+      const chainSending = await ctx.lovejoin.chainsSending(network);
+      if (maybeSent || sessions.length || chainSending) found.push({ network, ...(maybeSent ? { maybeSent } : {}), sessions, chainSending });
+    } catch {
+      found.push({ network, sessions: [], chainSending: false, unreadable: true });
+    }
+  }
+  return found;
 }
 
 async function status({ wallet, version, network, networks, connectorBlocked }: Context): Promise<Status> {
