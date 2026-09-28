@@ -159,8 +159,15 @@ describe("a private session's signing prompt", () => {
     const { dapp } = privately(t);
     const s = await connectedPrivately(t, dapp);
     const { wasm } = t.deps;
-    // Session 1 was used on this device too.
-    const book = (await t.store.get<{ next: number }>("sessions.preprod"))!;
+    // Session 1 was used on this device too: written once the funding the connector saw land is recorded
+    // (final review F13), which it does in turn with the sessions' other writes.
+    type Book = { next: number; sessions: Array<{ txs: Array<{ confirmed?: boolean }> }> };
+    let book = (await t.store.get<Book>("sessions.preprod"))!;
+    for (let i = 0; i < 200 && !book.sessions[0]!.txs[0]!.confirmed; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      book = (await t.store.get<Book>("sessions.preprod"))!;
+    }
+    expect(book.sessions[0]!.txs[0]!.confirmed).toBe(true);
     await t.store.set("sessions.preprod", { ...book, next: 2 });
     const other = await t.wallet.withKeys((k) => k.oneTime.address(wasm.Network.Preprod, 1));
     const approval = await prompt(dapp, s, paying([SESSION_INPUT], [wasm.cip30Address(other), wasm.cip30Address(THEIRS)]));

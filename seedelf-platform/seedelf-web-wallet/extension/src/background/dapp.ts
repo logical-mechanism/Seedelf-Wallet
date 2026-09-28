@@ -871,7 +871,11 @@ export class DappService {
       // The site went away meanwhile: it finds itself connected next time.
       while (this.waiting.includes(w)) {
         const rows = await sessions.accountUtxos(network, keyHash).catch(() => []);
-        if (rows.length) return done(() => w.resolve(true));
+        if (rows.length) {
+          // Seen landed, and recorded so: no read behind it later takes it for one never sent (final review F13).
+          void sessions.fundingSeen(network, index, rows).catch(() => undefined);
+          return done(() => w.resolve(true));
+        }
         if (now() - started > FUNDING_WAIT_MS) {
           return done(() => w.reject(refused("The private session's funding never reached the chain.")));
         }

@@ -552,19 +552,22 @@ function ownOuts(s: SessionRecord): string[] {
  * return takes, left behind). An empty read of the account proves nothing
  * alone: Koios's gateway balances several backends, and one behind the
  * session's funding lists the account empty (spent.ts). An output Koios
- * doesn't know is fine only when the chain never showed its transaction:
- * it never landed. A session from before outputs were recorded has none.
+ * doesn't know is fine only when the chain never showed its transaction,
+ * and no longer may (awaitsLanding, `now`): it never landed. Until then, a
+ * backend behind it, or a transaction that waits long in a mempool, reads
+ * the same as one never sent, and nothing read since may have seen it land
+ * (final review F13). A session from before outputs were recorded has none.
  * What its site's signed transactions pay it (`siteOuts`) counts the same
  * once Koios knows it; one it doesn't is fine, since the site may never
  * have sent it: a backend that shows the money it spent gone knows it.
  */
-function ownGone(s: SessionRecord, known: ReadonlyMap<string, boolean>, listed: ReadonlySet<string>): boolean {
+function ownGone(s: SessionRecord, known: ReadonlyMap<string, boolean>, listed: ReadonlySet<string>, now: number): boolean {
   const gone = (o: string, unknown: boolean) => {
     const spent = known.get(o);
     return spent === undefined ? unknown : spent || listed.has(o);
   };
   return (
-    s.txs.every((t) => t.unsent || !t.outs || t.outs.every((o) => gone(o, !t.confirmed))) &&
+    s.txs.every((t) => t.unsent || !t.outs || t.outs.every((o) => gone(o, !t.confirmed && !awaitsLanding(t, now)))) &&
     (s.siteOuts ?? []).every((o) => gone(o, true))
   );
 }
@@ -572,6 +575,10 @@ function ownGone(s: SessionRecord, known: ReadonlyMap<string, boolean>, listed: 
 /** Why a session doesn't end on a read of its empty account that Koios doesn't back up (ownGone). */
 const NOT_CAUGHT_UP =
   "Koios hasn't caught up with this session yet, so the wallet can't be sure its account is empty. Try again in a minute.";
+
+/** Why a site's session doesn't end while a funding or a top-up Koios knows nothing of may still land (ownGone, final review F13). */
+const FUNDING_UNSEEN =
+  "The chain hasn't shown this session's funding, or its top-up, and it may still land: Koios can be behind by several minutes, and a payment can wait longer than that to go in. The wallet can't be sure the session's account is empty until two hours after it was sent. Try again then.";
 
 /**
  * WebAssembly couldn't build a return because what it takes doesn't pay for
@@ -693,6 +700,27 @@ function mayStillLand(s: SessionRecord, now: number): boolean {
  */
 function awaitsHistory(t: RecordedTx, now: number): boolean {
   return !!t.summary && !t.confirmed && !t.unsent && now - t.at < REPLACED_WATCH_MS;
+}
+
+/**
+ * A funding or a top-up the chain hasn't shown yet, and that may still land:
+ * looked for as long as a copy built again is (REPLACED_WATCH_MS), since
+ * Koios may have taken it late. Once seen, it's confirmed, and only Koios
+ * showing what it paid spent ends its session, never a read that's behind
+ * it (ownGone, final review F13).
+ */
+function awaitsLanding(t: RecordedTx, now: number): boolean {
+  return t.kind === "out" && !t.confirmed && !t.unsent && now - t.at < REPLACED_WATCH_MS;
+}
+
+/**
+ * Session `s`'s fundings and top-ups the chain hasn't shown yet of which
+ * Koios lists an output at its account (`listed`): they landed, whatever
+ * tx_status says (final review F13).
+ */
+function fundingsListed(s: SessionRecord, listed: KoiosUtxo[]): Set<string> {
+  const there = new Set(listed.map((u) => u.tx_hash));
+  return new Set(s.txs.filter((t) => t.kind === "out" && !t.confirmed && there.has(t.txHash)).map((t) => t.txHash));
 }
 
 export class SessionService {
@@ -937,6 +965,8 @@ export class SessionService {
         site: { origin },
       };
       await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
+      // The runs look for it until it lands, whether or not a page is open (runAll, final review F13).
+      await this.deps.alarm?.start().catch(() => undefined);
       try {
         return { index: built.index, pending: await send(this.deps, network, txHash, SESSION_SITE_OUT, "session-out", "payment") };
       } catch (e) {
@@ -1079,6 +1109,8 @@ export class SessionService {
       await this.update(network, built.index, (s) => {
         s.txs.push(out);
       });
+      // Looked for until it lands, as a funding is (runAll, final review F13).
+      await this.deps.alarm?.start().catch(() => undefined);
       try {
         return await send(this.deps, network, txHash, SESSION_TOP_UP, "session-out", "top-up");
       } catch (e) {
@@ -1131,13 +1163,22 @@ export class SessionService {
       const { keyHash } = (await this.accounts(network, [s])).get(index)!;
       const spent = await wallet.withKeys(() => spentSet(session));
       const rows = await readFresh(spent, () => koios.credentialUtxos([keyHash]), (r) => r, this.deps.sleep);
+      // A funding or a top-up this read shows at the account landed: kept so, for every read after this one,
+      // however far behind it (final review F13).
+      const seen = fundingsListed(s, rows);
+      if (seen.size) s = await this.update(network, index, (r) => void settle(r, seen));
       if (returnable(s, rows).length) {
         throw new Error("The session's account still holds something. Bring it back first, then disconnect.");
       }
       // An empty read proves nothing alone: a Koios backend behind the funding, a top-up or the site's own
       // transaction reads the account empty. What they paid it must show spent (independent review M4).
       const listed = new Set(rows.map(outpoint));
-      if (!ownGone(s, await this.spentStates(network, ownOuts(s)), listed)) throw new Error(NOT_CAUGHT_UP);
+      const known = await this.spentStates(network, ownOuts(s));
+      if (!ownGone(s, known, listed, now())) {
+        // A funding or a top-up Koios knows nothing of, that may still land, waits its time out (final review F13).
+        const unseen = s.txs.some((t) => awaitsLanding(t, now()) && t.outs?.some((o) => !known.has(o)));
+        throw new Error(unseen ? FUNDING_UNSEEN : NOT_CAUGHT_UP);
+      }
       // What's left behind, as far as the account still has it (independent review L19): one a transaction
       // took since (the site's, or a later return) points to nothing, and keeps no record, nor the site's
       // origin. A read that's behind may miss one still there: the session's own were checked with Koios
@@ -1228,6 +1269,22 @@ export class SessionService {
       await this.update(network, index, (r) => {
         r.siteOuts = [...new Set([...(r.siteOuts ?? []), ...outs])].slice(-SITE_OUTS_KEPT);
       });
+    });
+  }
+
+  /**
+   * What the connector read at a site's private session's account while it
+   * waited for the funding (dapp.ts watchFunding): a funding or a top-up
+   * with an output there landed, and is marked so, whatever tx_status says.
+   * From then on only Koios showing what it paid spent ends the session,
+   * never a read that's behind it (ownGone, final review F13).
+   */
+  fundingSeen(network: NetworkName, index: number, rows: KoiosUtxo[]): Promise<void> {
+    return this.serial(async () => {
+      const s = (await this.book(network)).sessions.find((r) => r.index === index);
+      if (!s || s.closedAt) return;
+      const seen = fundingsListed(s, rows);
+      if (seen.size) await this.update(network, index, (r) => void settle(r, seen));
     });
   }
 
@@ -1627,13 +1684,18 @@ export class SessionService {
       if (await this.pendingChain(network, s.index)) await this.serial(() => this.pump(network, s.index)).catch(() => undefined);
     }
     // A return whose history isn't written yet, of a session nothing steps (a site's, a hand-run swap, a paused
-    // one): looked for, and written once on chain, as act does for a running one (independent review M7).
-    for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt && r.txs.some((t) => t.summary))) {
+    // one): looked for, and written once on chain, as act does for a running one (independent review M7). And a
+    // funding or a top-up of one that doesn't run itself (a site's), which nothing else looks for when no page
+    // is open: marked once it lands, so no read behind it takes it for one never sent (final review F13).
+    const at = this.deps.now();
+    const waits = (r: SessionRecord) => r.txs.some((t) => t.summary || (!r.auto && awaitsLanding(t, at)));
+    for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt && waits(r))) {
       await this.serial(() => this.settleReturns(network, s.index)).catch(() => undefined);
     }
     const now = this.deps.now();
     const after = await this.book(network);
-    let still = after.sessions.some((r) => running(r) || (!r.closedAt && r.txs.some((t) => awaitsHistory(t, now))));
+    const looked = (r: SessionRecord, t: RecordedTx) => awaitsHistory(t, now) || (!r.auto && awaitsLanding(t, now));
+    let still = after.sessions.some((r) => running(r) || (!r.closedAt && r.txs.some((t) => looked(r, t))));
     for (const s of book.sessions.filter((r) => !r.closedAt)) still ||= !!(await this.pendingChain(network, s.index));
     return still;
   }
@@ -1642,14 +1704,18 @@ export class SessionService {
    * Session `index`'s returns whose history isn't written yet, when nothing
    * steps it: looked for on chain (settled) while they may still land, and
    * written once there (noteLanded), so a balance reading doesn't note what
-   * came back as money received (independent review M7). Reads only.
+   * came back as money received (independent review M7). A site's funding
+   * or top-up too, while it may still land: marked once on chain, so a read
+   * behind it never ends the session over its money (final review F13).
+   * Reads only.
    */
   private async settleReturns(network: NetworkName, index: number): Promise<void> {
     const { wallet, session, now } = this.deps;
     let s = (await this.book(network)).sessions.find((r) => r.index === index);
     if (!s || s.closedAt || running(s)) return;
     let returned = false;
-    if (s.txs.some((t) => awaitsHistory(t, now()))) {
+    const auto = !!s.auto;
+    if (s.txs.some((t) => awaitsHistory(t, now()) || (!auto && awaitsLanding(t, now())))) {
       const waiting = s.txs.filter((t) => !t.confirmed && !t.unsent);
       const statuses = await this.deps.koios(network).txStatus(waiting.map((t) => t.txHash));
       const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
@@ -1809,7 +1875,7 @@ export class SessionService {
     // Koios shows its funding spent: a backend behind it reads the account
     // empty too (independent review M4). The next run looks again.
     if (taken.at(-1)!.kind === "back" && !returnable(s, listed).length && !mayStillLand(s, now())) {
-      if (!ownGone(s, await this.spentStates(network, ownOuts(s)), new Set(listed.map(outpoint)))) return;
+      if (!ownGone(s, await this.spentStates(network, ownOuts(s)), new Set(listed.map(outpoint)), now())) return;
       // Nor while an order of its swap may still pay the account (independent review L15, D2).
       if (await this.ordersOpen(network, s, address)) return;
       await this.update(network, s.index, (r) => {
@@ -2807,12 +2873,11 @@ export class SessionService {
         }
       }
       for (const s of live) {
-        const held = holdings.get(s.index)!;
         const out = s.txs[0]!;
-        // What the funding paid is at the account, whatever tx_status knows: it landed.
-        if (!out.confirmed && held.some((u) => u.tx_hash === out.txHash)) {
-          changed = settle(s, new Set([out.txHash])) || changed;
-        }
+        // What the funding, or a top-up, paid is at the account, whatever tx_status knows: it landed. As Koios
+        // lists it, what this wallet has spent since included (final review F13).
+        const seen = fundingsListed(s, of(listed, s.index));
+        if (seen.size) changed = settle(s, seen) || changed;
         // A swap or a mix that was found never funded, whose funding is here after all, runs again.
         if (s.auto?.failed && out.confirmed) {
           delete s.auto.failed;
@@ -2833,7 +2898,7 @@ export class SessionService {
           !returnable(s, of(listed, s.index)).length &&
           !mayStillLand(s, now()) &&
           (await this.spentStates(network, ownOuts(s)).then(
-            (known) => ownGone(s, known, new Set(of(listed, s.index).map(outpoint))),
+            (known) => ownGone(s, known, new Set(of(listed, s.index).map(outpoint)), now()),
             () => false,
           )) &&
           !(await this.ordersOpen(network, s, keys.get(s.index)!.address).catch(() => true))
