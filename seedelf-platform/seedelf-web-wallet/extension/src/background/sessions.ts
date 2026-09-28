@@ -475,6 +475,18 @@ function returnable(s: SessionRecord, rows: KoiosUtxo[]): KoiosUtxo[] {
  */
 const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace|Not Enough Lovelace|pays for its own way back/i;
 
+/**
+ * A UTxO at a session's account its return's chain can put up as collateral
+ * (privacy review §2.15): exactly 5 ₳ of ADA alone, as its funding pays one,
+ * and nothing WebAssembly's evaluator refuses (eval::refusal): no reference
+ * script, and no datum, inline or by hash, which the session's own never
+ * has. A stranger's 5 ₳ with a datum too deep to read would stop the chain
+ * (independent review L20).
+ */
+function collateralFits(u: KoiosUtxo): boolean {
+  return BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash;
+}
+
 /** A swap that runs itself and has something left to do without the user. */
 function running(s: SessionRecord): boolean {
   return !!s.auto && !s.closedAt && !s.auto.paused && !s.auto.failed;
@@ -1818,10 +1830,9 @@ export class SessionService {
     let skipped: string | undefined;
     if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
-      // §2.15). Never a stranger's 5 ₳ carrying a reference script: the mixes can't put it up.
-      const fits = (u: KoiosUtxo) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script;
+      // §2.15). Never a stranger's 5 ₳ carrying a reference script or a datum: the mixes can't put it up.
       const funding = record?.txs[0]?.txHash;
-      const collateral = rows.find((u) => fits(u) && u.tx_hash === funding) ?? rows.find(fits);
+      const collateral = rows.find((u) => collateralFits(u) && u.tx_hash === funding) ?? rows.find(collateralFits);
       let chain: LovejoinChain | undefined;
       if (!collateral) {
         // Something the account signed spent it (a site's transaction, say): no mix can go, so it comes back
