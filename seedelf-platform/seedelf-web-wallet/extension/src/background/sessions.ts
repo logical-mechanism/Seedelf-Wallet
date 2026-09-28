@@ -186,6 +186,12 @@ type RecordedTx = SessionTx & {
   inputs?: string[];
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`), recorded before it's sent. */
   orders?: string[];
+  /**
+   * What a funding or a top-up pays the session's account (`txhash#index`),
+   * recorded before it's sent: the session ends only once Koios shows each
+   * spent (ownGone, independent review M4). None on one from before.
+   */
+  outs?: string[];
 };
 
 /** The steps whose transaction is built again when it goes unseen (a chain's own are sent again as they are). */
@@ -454,6 +460,55 @@ function returnable(s: SessionRecord, rows: KoiosUtxo[]): KoiosUtxo[] {
   return behind.size ? rows.filter((u) => !behind.has(outpoint(u))) : rows;
 }
 
+/**
+ * The outputs of transaction `txCbor` (hex) that pay the account of payment
+ * key `keyHash` (`txhash#index`), whatever their staking part. Undefined when
+ * the wallet can't read it: then none are recorded, as before.
+ */
+function paysAccount(txCbor: string, txHash: string, keyHash: string): string[] | undefined {
+  try {
+    return builtOutputs(hexBytes(txCbor)).flatMap((o, i) => {
+      // The header's high four bits: 0 to 7 are Shelley addresses, an even one paid to a key, whose hash follows.
+      const type = Number.parseInt(o.address.charAt(0), 16);
+      return type <= 7 && type % 2 === 0 && o.address.slice(2, 58) === keyHash ? [`${txHash}#${i}`] : [];
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/** What session `s`'s own transactions paid its account (`outs`), of those that may have gone out. */
+function ownOuts(s: SessionRecord): string[] {
+  return [...new Set(s.txs.flatMap((t) => (t.unsent ? [] : (t.outs ?? []))))];
+}
+
+/**
+ * Whether Koios shows what session `s`'s own transactions paid its account
+ * gone from it (independent review M4): each output recorded with them
+ * (`outs`) known to Koios and spent (`known`: whether each is, by outpoint,
+ * from `utxo_info`), or still at the account as read (`listed`: what no
+ * return takes, left behind). An empty read of the account proves nothing
+ * alone: Koios's gateway balances several backends, and one behind the
+ * session's funding lists the account empty (spent.ts). An output Koios
+ * doesn't know is fine only when the chain never showed its transaction:
+ * it never landed. A session from before outputs were recorded has none.
+ */
+function ownGone(s: SessionRecord, known: ReadonlyMap<string, boolean>, listed: ReadonlySet<string>): boolean {
+  return s.txs.every(
+    (t) =>
+      t.unsent ||
+      !t.outs ||
+      t.outs.every((o) => {
+        const spent = known.get(o);
+        return spent === undefined ? !t.confirmed : spent || listed.has(o);
+      }),
+  );
+}
+
+/** Why a session doesn't end on a read of its empty account that Koios doesn't back up (ownGone). */
+const NOT_CAUGHT_UP =
+  "Koios hasn't caught up with this session yet, so the wallet can't be sure its account is empty. Try again in a minute.";
+
 /** WebAssembly couldn't build a return because what it takes doesn't pay for its own deposit and fee. */
 const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace|Not Enough Lovelace/i;
 
@@ -577,9 +632,23 @@ export class SessionService {
       if (!view) throw new Error("There's no such session.");
       if (view.stage !== "failed") throw new Error("Only a session whose funding never reached the chain can be forgotten.");
       const book = await this.book(network);
+      const record = book.sessions.find((s) => s.index === index)!;
       // One the wallet is still sending may land yet, into a session no one reads (final review sessions-6).
-      if (await this.stillWatched(network, book.sessions.find((s) => s.index === index)!)) {
+      if (await this.stillWatched(network, record)) {
         throw new Error("Its funding may still reach the chain: the wallet is still sending it. Wait for it, then forget the session.");
+      }
+      // One Koios knows an output of landed, whatever tx_status and the account's read said: a backend behind
+      // them doesn't show it (independent review M4). It's the session's money, so the session stays, and goes
+      // on as the list does when the funding shows up after all.
+      const known = await this.spentStates(network, ownOuts(record));
+      if (known.size) {
+        const landed = new Set([...known.keys()].map((o) => o.split("#")[0]!));
+        await this.update(network, index, (r) => {
+          settle(r, landed);
+          delete r.auto?.failed;
+        });
+        if (record.auto) await this.deps.alarm?.start();
+        throw new Error("Its funding reached the chain after all, so the session isn't forgotten. Refresh to see what it holds.");
       }
       await this.save(network, { ...book, sessions: book.sessions.filter((s) => s.index !== index) });
       return this.listNow(network);
@@ -763,7 +832,7 @@ export class SessionService {
         index: built.index,
         ownStake: true,
         createdAt: now(),
-        txs: [{ kind: "out", txHash, at: now() }],
+        txs: [await this.outRecord(network, built.index, txHash, built.txCbor)],
         site: { origin },
       };
       await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
@@ -847,7 +916,7 @@ export class SessionService {
         index: built.index,
         ownStake: true,
         createdAt: now(),
-        txs: [{ kind: "out", txHash, at: now() }],
+        txs: [await this.outRecord(network, built.index, txHash, built.txCbor)],
         mix: { boxes: built.mix.boxes, ...(built.mix.again ? { again: true } : {}), ...(built.mix.publicToo ? { publicToo: true } : {}) },
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
       };
@@ -893,8 +962,9 @@ export class SessionService {
         throw new Error("That top-up was built more than 10 minutes ago. Review it again.");
       }
       await this.live(network, built.index);
+      const out = await this.outRecord(network, built.index, txHash, built.txCbor);
       await this.update(network, built.index, (s) => {
-        s.txs.push({ kind: "out", txHash, at: now() });
+        s.txs.push(out);
       });
       try {
         return await send(this.deps, network, txHash, SESSION_TOP_UP, "session-out", "top-up");
@@ -916,9 +986,11 @@ export class SessionService {
    * the cutoff counts from then (final review sessions-6). The account is
    * read as Koios lists it, what this wallet spent included: a return that
    * never lands leaves its inputs there. What no return takes doesn't count.
-   * This is the check that matters: Settings disconnects a site with no
-   * other. Its index isn't used again, and its record, with the site's
-   * origin, goes (unless something is left behind at its account).
+   * An empty read isn't enough alone: Koios must show what the session's
+   * fundings and top-ups paid the account spent (ownGone, independent
+   * review M4). This is the check that matters: Settings disconnects a site
+   * with no other. Its index isn't used again, and its record, with the
+   * site's origin, goes (unless something is left behind at its account).
    */
   disconnect(network: NetworkName, index: number): Promise<void> {
     return this.serial(async () => {
@@ -945,6 +1017,10 @@ export class SessionService {
       if (returnable(s, rows).length) {
         throw new Error("The session's account still holds something. Bring it back first, then disconnect.");
       }
+      // An empty read proves nothing alone: a Koios backend behind the funding, or a top-up, reads the account
+      // empty. What the session's own transactions paid it must show spent (independent review M4).
+      const listed = new Set(rows.map(outpoint));
+      if (!ownGone(s, await this.spentStates(network, ownOuts(s)), listed)) throw new Error(NOT_CAUGHT_UP);
       // Closed, nothing shows a site's session again (the dApps page and
       // Bring everything back take open ones), and which site had one says
       // something about the user: its record goes, `next` keeping its index
@@ -1097,7 +1173,7 @@ export class SessionService {
         index: built.index,
         ownStake: true,
         createdAt: now(),
-        txs: [{ kind: "out", txHash, at: now() }],
+        txs: [await this.outRecord(network, built.index, txHash, built.txCbor)],
         swap: built.swap,
         auto: { approved: built.approved, ...back },
       };
@@ -1495,8 +1571,11 @@ export class SessionService {
     // Brought back, and nothing has arrived since: it's over. The account as
     // Koios lists it, what this wallet spent included: a step that never
     // lands leaves its inputs there. And not while a copy of a step built
-    // again may still land (final review sessions-1, sessions-2).
+    // again may still land (final review sessions-1, sessions-2), nor before
+    // Koios shows its funding spent: a backend behind it reads the account
+    // empty too (independent review M4). The next run looks again.
     if (taken.at(-1)!.kind === "back" && !returnable(s, listed).length && !mayStillLand(s, now())) {
+      if (!ownGone(s, await this.spentStates(network, ownOuts(s)), new Set(listed.map(outpoint)))) return;
       await this.update(network, s.index, (r) => {
         r.closedAt = now();
       });
@@ -2220,14 +2299,20 @@ export class SessionService {
         const last = s.txs.filter((t) => !t.replaced).at(-1)!;
         // Brought back, and nothing has arrived since: the session is over. A
         // site's goes on until it's disconnected: the site may pay it later.
-        // As act closes it: the account as Koios lists it, and no copy of a
-        // step that may still land (final review sessions-1).
+        // As act closes it: the account as Koios lists it, no copy of a step
+        // that may still land (final review sessions-1), and Koios shows its
+        // funding spent (independent review M4). A reading that fails leaves
+        // it to the next.
         if (
           !s.site &&
           last.kind === "back" &&
           last.confirmed &&
           !returnable(s, of(listed, s.index)).length &&
-          !mayStillLand(s, now())
+          !mayStillLand(s, now()) &&
+          (await this.spentStates(network, ownOuts(s)).then(
+            (known) => ownGone(s, known, new Set(of(listed, s.index).map(outpoint))),
+            () => false,
+          ))
         ) {
           s.closedAt = now();
           changed = true;
@@ -2274,7 +2359,9 @@ export class SessionService {
       address,
       createdAt: s.createdAt,
       stage,
-      txs: txs.map(({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, ...t }) => t),
+      txs: txs.map(
+        ({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, outs: _outs, ...t }) => t,
+      ),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(returnable(s, utxos)) : null,
       ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
@@ -2319,6 +2406,26 @@ export class SessionService {
     const spent = await wallet.withKeys(() => spentSet(session));
     const listed = await readFresh(spent, () => koios.credentialUtxos([keyHash]), (r) => r, this.deps.sleep);
     return { listed, rows: unspent(listed, spent) };
+  }
+
+  /**
+   * Which of `refs` (`txhash#index`) Koios knows, and whether each is spent
+   * (`utxo_info`, which lists spent UTxOs too). No request when there are none.
+   */
+  private async spentStates(network: NetworkName, refs: string[]): Promise<Map<string, boolean>> {
+    if (!refs.length) return new Map();
+    const rows = (await this.deps.koios(network).utxoInfo(refs)) as Array<KoiosUtxo & { is_spent?: boolean }>;
+    return new Map(rows.map((r) => [outpoint(r), !!r.is_spent]));
+  }
+
+  /**
+   * A new session's funding, or a top-up, as its record has it before it's
+   * sent: with what it pays account `index` (`outs`, independent review M4).
+   */
+  private async outRecord(network: NetworkName, index: number, txHash: string, txCbor: string): Promise<RecordedTx> {
+    const { keyHash } = (await this.accounts(network, [{ index }])).get(index)!;
+    const outs = paysAccount(txCbor, txHash, keyHash);
+    return { kind: "out", txHash, at: this.deps.now(), ...(outs ? { outs } : {}) };
   }
 
   /**
