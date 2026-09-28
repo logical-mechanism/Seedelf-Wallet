@@ -80,7 +80,11 @@
 // five minutes (room, §2.7); a withdraw is giveme.my plus one submit. After
 // a restore, one tx_info with a pool read, for the transactions that made
 // the boxes no record accounts for, each asked of once, or again at each
-// read until Koios answers for it (found).
+// read until Koios answers for it (found). And in any wallet, where a box is
+// taken (Mix my boxes again, a chain's build, Bring one back now, a box
+// coming back by itself), one tx_info for the boxes it may take whose making
+// isn't known yet: a box someone else's mix moved has no record (made,
+// independent review M14).
 
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
 import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
