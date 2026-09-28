@@ -7,12 +7,16 @@
 import { describe, expect, it } from "vitest";
 
 import { answerSite, DappService, SITE_TRAPPED, type DappSession } from "../src/background/dapp";
+import { SESSION_SEND } from "../src/background/send";
+import { WASM_BROKEN } from "../src/background/wallet";
 import { APIError } from "../src/shared/dapp";
 import { koiosPreprod, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
 const OWN = account.preprod.receive_0 as string;
+const THEIRS = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod
+  .receive_0 as string;
 
 let pages = 0;
 const site = (origin = "https://app.example.com"): DappSession => ({ id: `caps${++pages}`, origin, title: "Example" });
@@ -138,5 +142,39 @@ describe("a trap under a site's call", () => {
     const bad = await answerSite(dapp, t.wallet, s, "getUtxos", ["zz"]).catch((e: { failure: unknown }) => e.failure);
     expect(bad).toMatchObject({ code: APIError.InvalidRequest });
     expect(await t.wallet.state()).toBe("unlocked");
+  });
+});
+
+describe("a trap as the user approves a site's request", () => {
+  it("locks the wallet too, and the site hears only that its request wasn't answered", async () => {
+    const t = await on();
+    const wasm = t.deps.wasm;
+    let trap = false;
+    const dapp = new DappService({
+      ...t.deps,
+      wasm: {
+        ...wasm,
+        // Reading what the signed transaction pays, outside the wallet's queue.
+        ogmiosUtxos: (tx: string) => {
+          if (trap) throw new WebAssembly.RuntimeError("unreachable");
+          return wasm.ogmiosUtxos(tx);
+        },
+      } as typeof wasm,
+      store: t.store,
+      sessions: t.sessions,
+      network: () => "preprod",
+      window: t.dappWindow,
+      changed: () => undefined,
+    });
+    const s = await connected(dapp);
+    await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
+    const tx = (await t.session.get<{ txCbor: string }>(SESSION_SEND))!.txCbor;
+    const signing = dapp.call(s, "signTx", [tx, false]).catch((e: { failure: unknown }) => e.failure);
+    await until(() => dapp.approvals().length === 1);
+    trap = true;
+    expect(await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD)).toEqual({ error: WASM_BROKEN });
+    expect(await signing).toEqual({ code: APIError.InternalError, info: SITE_TRAPPED });
+    expect(await t.wallet.state()).toBe("locked");
+    expect(dapp.approvals()).toEqual([]);
   });
 });

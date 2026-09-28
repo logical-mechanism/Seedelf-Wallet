@@ -74,8 +74,9 @@
 //             user is never asked about, and none while the window's queue is
 //             full: WebAssembly's reading takes up to half a second, in the
 //             wallet's one queue, which the user's own requests and Lock wait on.
-//             WebAssembly that traps under a site's call locks the wallet
-//             (`answerSite`), as under the wallet's own pages.
+//             WebAssembly that traps under a site's call, or as the user
+//             approves it, locks the wallet (`answerSite`, `answer`), as
+//             under the wallet's own pages.
 // Private     A site can connect to a private session instead (chunk 15c,
 //             private CIP-30): a one-time account funded from the private
 //             balance (sessions.ts), chosen in the window. The funding is
@@ -115,7 +116,7 @@ import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
 import { outpoint, rememberSiteSpent, reservedSet, SPENT_KEEP_MS, spentSet, wait } from "./spent";
-import { SESSION_BALANCES_PREFIX } from "./wallet";
+import { SESSION_BALANCES_PREFIX, WASM_BROKEN } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session, per network: the account as the connector last read it. */
@@ -485,6 +486,15 @@ export class DappService {
       w!.resolve(await w!.approve());
       return {};
     } catch (e) {
+      // WebAssembly that trapped under it outside the wallet's queue (reading
+      // what a signed transaction pays, say) is broken, not refusing: the
+      // wallet locks, as under a site's call (`answerSite`), and the site
+      // hears only that it wasn't answered (independent review M15).
+      if (isTrap(e)) {
+        w!.reject(new DappError({ code: APIError.InternalError, info: SITE_TRAPPED }));
+        await this.deps.wallet.trapped();
+        return { error: WASM_BROKEN };
+      }
       const error = e instanceof DappError ? e : failed(w!.approval, e);
       w!.reject(error);
       return { error: error.message };
