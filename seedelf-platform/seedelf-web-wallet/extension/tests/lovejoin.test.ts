@@ -747,6 +747,8 @@ describe("the pool the chains draw from", CHAINS, () => {
     // One wave deep, the spare ADA would pay for 150 boxes, and the pool has others enough for 200.
     const others = Array.from({ length: 400 }, (_, i) => ({ txHash: i.toString(16).padStart(64, "0"), txIndex: 0 }));
     const mine = Array.from({ length: 150 }, (_, i) => ({ txHash: i.toString(16).padStart(64, "a"), txIndex: 1 }));
+    // Mixed again from the private balance, each box's making is asked of first (independent review M14).
+    mixMade(t, ...mine.map((b) => b.txHash));
     const asked: number[] = [];
     const lovejoin = new LovejoinService({
       ...t.deps,
@@ -1051,6 +1053,8 @@ describe("a chain's resend while tx_status is down", CHAINS, () => {
 async function ownedBox(t: ReturnType<typeof testBalances>, tx: string, txIndex = 0, blockTime?: number): Promise<KoiosUtxo> {
   const wasm = loadTestWasm();
   const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+  // No record of it (someone else's mix moved it): Koios says a mix made it, as the wallet asks before it takes it (M14).
+  mixMade(t, tx);
   return {
     ...POOL[0]!,
     tx_hash: tx.length === 64 ? tx : tx.repeat(32),

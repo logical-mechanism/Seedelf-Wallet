@@ -19,7 +19,7 @@ import { noteStart, SESSION_SENDS, SESSION_UNLOCKED_AT } from "../src/background
 import type { NetworkName } from "../src/networks";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
-import { busyFor, loadTestWasm, minswapEstimate, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { busyFor, loadTestWasm, madeByMix, minswapEstimate, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -38,6 +38,8 @@ type T = ReturnType<typeof testBalances>;
 async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
   const wasm = loadTestWasm();
   const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+  // Someone else's mix moved it: Koios says so, as the wallet asks before it takes a box no record accounts for (M14).
+  madeByMix(t.koios, tx.repeat(32));
   return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
 }
 

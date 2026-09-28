@@ -17,7 +17,7 @@ import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { spentSet } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
-import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
+import { busyFor, loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -38,6 +38,8 @@ const kept = async (t: T) => (await t.store.get<Kept>("lovejoin.preprod"))!;
 async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
   const wasm = loadTestWasm();
   const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+  // Someone else's mix moved it: Koios says so, as the wallet asks before it takes a box no record accounts for (M14).
+  madeByMix(t.koios, tx.repeat(32));
   return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
 }
 
