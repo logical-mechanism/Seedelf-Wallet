@@ -1484,8 +1484,8 @@ export class LovejoinService {
         await ours();
         await session.set(key, sending);
       });
-    // The next transaction, when a send of it gave up while it may have gone in all the same: a try Koios
-    // didn't answer, and none that says it's in (independent review L5). Cleared once a send of it goes.
+    // The next transaction, when a send of it gave up while it may have gone in all the same: a try that may have
+    // reached a node, and none that says it's in (independent review L5). Cleared once a send of it goes.
     let unsure: number | undefined;
     // Whether its first transaction's record says it may have gone (chainMarked), and the next transaction, when
     // a send of it gave up on an answer that says it didn't go.
@@ -1521,11 +1521,18 @@ export class LovejoinService {
               } catch (e) {
                 // Refused while Koios couldn't say whether it's on chain, and it may be: looked for again (final review lovejoin-6).
                 if (mayBeIn(tries, e)) break;
-                if (e instanceof KoiosBusyError && e.maybeSent) reached = true;
+                // Koios didn't answer, or answered what isn't Koios's or the network's word (another id, a body it
+                // couldn't read): it may have reached a node.
+                if ((e instanceof KoiosBusyError && e.maybeSent) || !(e instanceof KoiosError)) reached = true;
                 const wait = chainRetryMs(i, tries, e);
                 if (wait === undefined) {
-                  if (reached && i === sending.next && (e instanceof KoiosBusyError || e instanceof SpentInputError)) unsure = i;
-                  else if (i === sending.next) refused = i;
+                  // Once a try may have put it in, a later answer says nothing of that one: Koios's node down, a
+                  // gateway's page, even a refusal. Only answers to every try that say it didn't go let it go
+                  // (independent review L5).
+                  if (i === sending.next) {
+                    if (reached) unsure = i;
+                    else refused = i;
+                  }
                   throw e;
                 }
                 await sleep(wait);
