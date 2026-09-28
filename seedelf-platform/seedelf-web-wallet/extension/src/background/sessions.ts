@@ -229,6 +229,14 @@ interface AutoRecord {
   /** When the runner found the funding never reached the chain. */
   failed?: number;
   /**
+   * When the runner first found it stopped and waiting on an order of the
+   * swap that isn't spent and that Minswap doesn't list, so nothing can
+   * cancel it yet: what's left waits at the account (independent review
+   * L16). Only the page reads it. Cleared once that's over: the order is
+   * spent, or Minswap lists it and it's cancelled.
+   */
+  orderOpen?: number;
+  /**
    * Its next step, found as the wallet unlocked, waits until then (ms): a
    * fresh draw inside the stretch the unlock keeps the wallet open, so it
    * doesn't go out the moment the wallet unlocks (privacy review §3.1). Kept
@@ -1912,6 +1920,8 @@ export class SessionService {
 
     const orders = await this.deps.minswap(network).pendingOrders(address);
     if (orders.length) {
+      // Minswap lists it now: an order the swap waited on can be cancelled (independent review L16).
+      s = await this.noteOrderOpen(network, s, false);
       // Waiting for a batcher to fill it, unless the user stopped it.
       if (auto.stopping) await go(() => this.cancel(network, s, address, rows, orders));
       return;
@@ -1924,8 +1934,12 @@ export class SessionService {
       // Nothing's here yet: one of them is behind.
       if (!arrived.length) return;
       // Anyone can pay the account, and Minswap may not list a new order yet: what
-      // arrived is the fill only once the order itself is spent.
-      if (!(await this.ordersSpent(network, s))) return;
+      // arrived is the fill only once the order itself is spent. Stopped, one Minswap
+      // doesn't list can't be cancelled: the page says what it waits on (independent review L16).
+      if (!(await this.ordersSpent(network, s))) {
+        if (auto.stopping) await this.noteOrderOpen(network, s, true);
+        return;
+      }
       if (!auto.filled && !auto.refunded) {
         // A fill or a refund, told apart by what arrived (independent review M18), read again now that every
         // order is known spent: a split route's legs are paid in different blocks, and one may have come since
@@ -1943,10 +1957,27 @@ export class SessionService {
     } else if (!(await this.ordersSpent(network, s))) {
       // Cancelled: every order of the swap is spent too, as a fill's are. One Minswap didn't list isn't
       // cancelled, and still pays the account; meanwhile what's there stays, so a cancel of it can still
-      // be paid for once Minswap lists it (independent review L16).
+      // be paid for once Minswap lists it (independent review L16). The page says so plainly.
+      await this.noteOrderOpen(network, s, true);
       return;
     }
+    // Every order of the swap is spent: nothing is open any more.
+    s = await this.noteOrderOpen(network, s, false);
     await go(() => this.bringBack(network, s.index, rows));
+  }
+
+  /**
+   * Records that the stopped swap waits on an order Minswap doesn't list
+   * (`open`), from the first time the runner finds it so, or that it no
+   * longer does. It writes only when that changes, and nothing but the page
+   * reads it (independent review L16).
+   */
+  private async noteOrderOpen(network: NetworkName, s: SessionRecord, open: boolean): Promise<SessionRecord> {
+    if ((s.auto?.orderOpen !== undefined) === open) return s;
+    return this.update(network, s.index, (r) => {
+      if (open) r.auto!.orderOpen ??= this.deps.now();
+      else delete r.auto!.orderOpen;
+    });
   }
 
   /**
@@ -3263,6 +3294,8 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     filled: !!auto.filled,
     ...(auto.partly ? { partly: true } : {}),
     ...(auto.refunded ? { refunded: true } : {}),
+    // Only while it's still stopping: never on a return, or once it's over (independent review L16).
+    ...(auto.orderOpen !== undefined && step === "cancelling" ? { orderOpen: auto.orderOpen } : {}),
     approvedMinOut: auto.approved.minAmountOut,
     ...(placedMinOut ? { placedMinOut } : {}),
     ...(auto.paused ? { paused: auto.paused } : {}),

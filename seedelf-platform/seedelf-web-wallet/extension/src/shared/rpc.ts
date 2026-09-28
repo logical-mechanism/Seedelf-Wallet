@@ -854,6 +854,14 @@ export interface SessionAuto {
   partly?: boolean;
   /** The order was refunded, none of it filled: what it gave came back (independent review M18). */
   refunded?: boolean;
+  /**
+   * Stopped, but an order of the swap is still open at a DEX, and Minswap
+   * doesn't list it, so it can't be cancelled yet: when the runner first
+   * found it so (ms). What's left waits at the account until that order is
+   * filled or refunded, or Minswap lists it and it's cancelled (independent
+   * review L16).
+   */
+  orderOpen?: number;
   /** The least the user approved receiving. */
   approvedMinOut: string;
   /**

@@ -214,6 +214,8 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
   }
   if (a.paused) return { tone: "wait", label: "Needs you" };
   if (a.retry) return { tone: "wait", label: "Retrying" };
+  // Stopped, and waiting on an order it can't cancel yet: neither done nor an error (independent review L16).
+  if (a.orderOpen !== undefined) return { tone: "off", label: "Order open" };
   return { tone: "live", label: a.stopping ? "Stopping" : "Running" };
 }
 
@@ -228,6 +230,7 @@ function subOf(s: SessionView, now: number): string {
   if (!s.auto) return s.stage === "open" ? "Its next step is yours" : STAGE[s.stage];
   if (fundingUnseen(s)) return "Its funding hasn't shown up yet";
   if (s.auto.paused) return PAUSED[s.auto.paused.why];
+  if (s.auto.orderOpen !== undefined) return "An order is still open at a DEX";
   // Stopped before its order: it comes back rather than place one.
   return STEP[s.auto.stopping && s.auto.step === "ordering" ? "returning" : s.auto.step];
 }
@@ -2041,6 +2044,8 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const failed = s.stage === "failed";
   // Stopped before any order: the order and its fill never happen.
   const unordered = auto.stopping && !tx("swap");
+  // Stopped, but an order Minswap doesn't list is still open: not cancelled (independent review L16).
+  const open = auto.orderOpen !== undefined;
   const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded);
   const state = (i: number): StepState => {
     if (failed) return i === 0 ? "failed" : "skipped";
@@ -2070,24 +2075,28 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     {
       title: unordered
         ? "Nothing to fill"
-        : cancelled
-          ? "Cancelled"
-          : auto.refunded
-            ? "Refunded"
-            : auto.partly
-              ? "Partly filled"
-              : "Filled",
+        : open
+          ? "Waiting on an order"
+          : cancelled
+            ? "Cancelled"
+            : auto.refunded
+              ? "Refunded"
+              : auto.partly
+                ? "Partly filled"
+                : "Filled",
       sub: unordered
         ? "Nothing was ordered"
-        : cancelled
-          ? "The order's funds back at the account"
-          : auto.refunded
-            ? "Not filled: the DEX gave the order's funds back to the account"
-            : auto.partly
-              ? "Part of it filled; the DEX gave the rest back. Both are at the account"
-              : auto.filled
-                ? "The proceeds are at the account"
-                : "By a DEX's batcher, usually within a few blocks",
+        : open
+          ? "One is still open at a DEX, and Minswap doesn't list it"
+          : cancelled
+            ? "The order's funds back at the account"
+            : auto.refunded
+              ? "Not filled: the DEX gave the order's funds back to the account"
+              : auto.partly
+                ? "Part of it filled; the DEX gave the rest back. Both are at the account"
+                : auto.filled
+                  ? "The proceeds are at the account"
+                  : "By a DEX's batcher, usually within a few blocks",
       tx: tx("cancel"),
     },
     {
@@ -2160,6 +2169,12 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   );
 }
 
+/** A stopped swap waiting on an order Minswap doesn't list (independent review L16). */
+const ORDER_OPEN =
+  "Stopped, but one of this swap's orders is still open at a DEX, and Minswap doesn't list it, so it can't be cancelled yet. " +
+  "What's left waits at the swap's account: it comes back once that order is filled or refunded, or cancelled once Minswap " +
+  "lists it. Nothing is lost meanwhile.";
+
 /** What's happening now, in plain words. */
 export function nowLine(s: SessionView): string {
   const a = s.auto!;
@@ -2181,6 +2196,8 @@ export function nowLine(s: SessionView): string {
     case "filling":
       return "The order waits for a DEX's batcher to fill it, usually within a few blocks. It all comes back by itself once it's filled; Stop cancels it.";
     case "cancelling":
+      // An order Minswap doesn't list can't be cancelled: what the swap waits on, plainly (independent review L16).
+      if (a.orderOpen !== undefined) return ORDER_OPEN;
       return "Cancelling the order. Once that's confirmed, it all comes back.";
     case "returning":
       if (s.chain) {
