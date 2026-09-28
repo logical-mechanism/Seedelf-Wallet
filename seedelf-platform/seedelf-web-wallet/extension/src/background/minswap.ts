@@ -158,9 +158,12 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
 const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SundaeSwapV3"];
 
 /**
- * Every DEX Minswap's aggregator routes through, as its API's `Protocol`
- * schema names them (checked 2026-09-27). Its `exclude_protocols` takes
- * these names only: any other, and it refuses the whole request.
+ * Every DEX Minswap's aggregator routes through, by the names its
+ * `exclude_protocols` takes: any other, and it refuses the whole request.
+ * Checked against the live API, not only its published list: an unknown
+ * name's 400 answer names one allowed constant per DEX, 19 on 2026-09-27,
+ * and each of these is taken (independent review M17). A DEX Minswap adds
+ * after that isn't here, and routing can go through it (excludedProtocols).
  */
 export const MINSWAP_PROTOCOLS: readonly string[] = [
   "MinswapV2",
@@ -176,6 +179,7 @@ export const MINSWAP_PROTOCOLS: readonly string[] = [
   "WingRidersV2",
   "WingRiders",
   "WingRidersStableV2",
+  "WingRidersStableV1",
   "Spectrum",
   "SplashStable",
   "ChakraBondingCurve",

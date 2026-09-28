@@ -44,10 +44,19 @@ describe("a mainnet swap's route (independent review M17)", () => {
     const left = excludedProtocols("mainnet");
     // Every one Minswap offers is either checked or left out.
     for (const p of MINSWAP_PROTOCOLS) expect(MAINNET_PROTOCOLS.includes(p) !== left.includes(p)).toBe(true);
-    expect(left).toEqual(expect.arrayContaining(["CswapV1", "SundaeSwapStable", "VyFinance", "MuesliSwap", ...DIRECT_PROTOCOLS]));
+    expect(left).toEqual(
+      expect.arrayContaining(["CswapV1", "SundaeSwapStable", "WingRidersStableV1", "VyFinance", "MuesliSwap", ...DIRECT_PROTOCOLS]),
+    );
     // Minswap refuses a request naming a DEX it doesn't know: the list holds only its own names.
     for (const p of left) expect(MINSWAP_PROTOCOLS).toContain(p);
     expect(new Set(left).size).toBe(left.length);
+  });
+
+  it("knows every DEX Minswap's live API named on 2026-09-27, WingRidersStableV1 included", () => {
+    // Its 400 answer to an unknown name allowed 19 constants. WingRidersStableV1, left off at first, stayed routable.
+    expect(MINSWAP_PROTOCOLS).toContain("WingRidersStableV1");
+    expect(new Set(MINSWAP_PROTOCOLS).size).toBe(19);
+    expect(MAINNET_PROTOCOLS).not.toContain("WingRidersStableV1");
   });
 
   it("pauses a funded swap whose fresh route goes through a DEX the wallet can't check, and places it once the route is back", async () => {
