@@ -1563,6 +1563,11 @@ export class SessionService {
           r.auto!.filled = now();
         });
       }
+    } else if (!(await this.ordersSpent(network, s))) {
+      // Cancelled: every order of the swap is spent too, as a fill's are. One Minswap didn't list isn't
+      // cancelled, and still pays the account; meanwhile what's there stays, so a cancel of it can still
+      // be paid for once Minswap lists it (independent review L16).
+      return;
     }
     await go(() => this.bringBack(network, s.index, rows));
   }
@@ -1654,7 +1659,9 @@ export class SessionService {
     // Routed afresh: never through a DEX whose orders the wallet can't check, whatever the quote went
     // through. It pauses, as the quote would have refused it (independent review M17).
     const unchecked = uncheckedProtocols(network, est);
-    if (unchecked.length) throw new Refused(`Minswap now routes it through ${unchecked.join(" and ")}, whose orders the wallet can't check yet.`);
+    if (unchecked.length) {
+      throw new Refused(`Minswap now routes it through ${unchecked.join(" and ")}, whose orders the wallet can't check yet.`);
+    }
     const least = BigInt(approved.minAmountOut);
     if (BigInt(est.amount_out) < least) throw new PriceMoved(est.amount_out);
     // At least what the user approved, or more when the price has moved their way.

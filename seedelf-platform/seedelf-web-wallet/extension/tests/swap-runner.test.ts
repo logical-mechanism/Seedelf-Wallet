@@ -164,3 +164,44 @@ describe("a swap's close (independent review L15, D2)", () => {
     expect(t.minswap.calls.map((c) => c.path)).toEqual(["estimate"]);
   });
 });
+
+describe("a swap's return after Stop's cancel (independent review L16)", () => {
+  it("waits for every order of the swap to be spent, not only those Minswap listed and cancelled", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const now = t.clock.now;
+    const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+    const CANCEL = "06".repeat(32);
+    // A split route: Minswap listed only the first order, and the cancel of it landed. The second is still at the DEX.
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [done("out", "01".repeat(32)), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`, `${SWAP_TX}#2`] }), done("cancel", CANCEL)],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } }, stopping: now },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(
+      atContract(SWAP_TX, 0),
+      atContract(SWAP_TX, 2),
+      atSession(CANCEL, 0, "9000000"),
+      atSession("0c".repeat(32), 1, "5000000"),
+    );
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    let view = await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+
+    // The second fills: everything comes back, its proceeds too.
+    t.koios.spent.add(`${SWAP_TX}#2`);
+    t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "400000000"]]));
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel", "back"]);
+    expect(t.koios.submitted).toHaveLength(1);
+  });
+});
