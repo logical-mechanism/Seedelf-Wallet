@@ -1049,6 +1049,8 @@ export interface LovejoinFunding {
 
 /** A mix from the public account, built and signed, waiting for Send. Amounts in lovelace. */
 export interface LovejoinPublicSummary {
+  /** A seed: the deposit alone, no mixes, so it hides nothing of its own. */
+  seed?: boolean;
   network: NetworkName;
   /** The last mix's: Send names it, and Home's banner watches it. */
   txHash: string;
@@ -1357,7 +1359,12 @@ export interface Requests {
   /** Records the mix session, then sends its funding. */
   "lovejoin-mix-private-submit": { payload: { txHash: string }; result: { index: number; pending: PendingTx } };
   /** Builds `boxes` boxes from the public account straight into Lovejoin: the deposit and every mix. */
-  "lovejoin-mix-public-build": { payload: { boxes: number }; result: LovejoinPublicSummary };
+  /**
+   * `seed`: put boxes in with no mixes at all (depth 0), which needs no
+   * other boxes and so is the only thing an empty pool takes. It hides
+   * nothing of its own; it gives other people boxes to mix with.
+   */
+  "lovejoin-mix-public-build": { payload: { boxes: number; seed?: boolean }; result: LovejoinPublicSummary };
   /** Sends the public mix built last, in order. */
   "lovejoin-mix-public-submit": { payload: { txHash: string }; result: PendingTx };
   /**
@@ -1511,6 +1518,25 @@ export function isMessage(value: unknown): value is Message {
  * listens for it, so no other page sees a password or the phrase in one.
  */
 export const UI_PORT = "seedelf.ui";
+
+/**
+ * What a build is doing, sent along its own request's port as it goes
+ * (ui-port.ts), so the wallet says more than "Building…". The order below is
+ * the order they happen in; a build skips the ones it doesn't need.
+ */
+export type BuildStage = "checking" | "reading" | "building" | "measuring" | "collateral";
+
+/** One stage, on the request's own port: it arrives before that request's reply. */
+export interface BuildProgress {
+  stage: BuildStage;
+}
+
+export function isBuildProgress(value: unknown): value is BuildProgress {
+  const stage = (value as { stage?: unknown } | null)?.stage;
+  return (
+    typeof stage === "string" && ["checking", "reading", "building", "measuring", "collateral"].includes(stage)
+  );
+}
 
 /** Broadcast by the worker to open UI pages when the wallet state changes. */
 export const STATE_CHANGED = { event: "state-changed" } as const;

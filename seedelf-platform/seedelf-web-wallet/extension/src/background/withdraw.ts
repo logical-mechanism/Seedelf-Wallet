@@ -22,8 +22,7 @@ import type {
   RemoveSummary,
   RemoveTo,
   WithdrawDestination,
-  WithdrawSummary,
-} from "../shared/rpc";
+  WithdrawSummary, BuildStage } from "../shared/rpc";
 import { checkRecipients } from "../shared/recipients";
 import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
@@ -73,13 +72,15 @@ export class WithdrawService {
   }
 
   /** Pays each of `payments`, addresses or handles, in one transaction; `lovelace` null is Max, to a single one. */
-  async build(network: NetworkName, payments: PaymentAsk[]): Promise<WithdrawSummary> {
+  async build(network: NetworkName, payments: PaymentAsk[], progress?: (stage: BuildStage) => void): Promise<WithdrawSummary> {
     const { wasm } = this.deps;
     checkRecipients(payments.length);
     const resolve = destinationResolver(this.deps, network);
     const destinations: WithdrawDestination[] = [];
     for (const p of payments) destinations.push(await resolve(p.to));
+    progress?.("checking");
     await settleMaybeSent(this.deps, network);
+    progress?.("reading");
     const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
     const request = {
       network,
@@ -91,6 +92,7 @@ export class WithdrawService {
     if (request.utxos.length === 0) {
       throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to make public.", returning);
     }
+    progress?.("measuring");
     const finished = await measureLocally<WithdrawResult>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r));
     const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
     const histories = spentHistories(classes, inputs, classesMixed);
@@ -119,12 +121,19 @@ export class WithdrawService {
   }
 
   /** Builds the removal of the seedelf `name`; its ADA goes `to` the account's 0/0 or the Seedelf balance. */
-  async buildRemove(network: NetworkName, name: string, to: RemoveTo): Promise<RemoveSummary> {
+  async buildRemove(
+    network: NetworkName,
+    name: string,
+    to: RemoveTo,
+    progress?: (stage: BuildStage) => void,
+  ): Promise<RemoveSummary> {
     const { wasm, wallet } = this.deps;
     const seedelf = seedelfName(name);
     if (!seedelf) throw new Error("That isn't a Seedelf's name.");
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    progress?.("checking");
     await settleMaybeSent(this.deps, network);
+    progress?.("reading");
     const { view, params } = await readContract(this.deps, network);
     // Any seedelf is found; WebAssembly refuses one that isn't this wallet's.
     const utxo = view.seedelfs[seedelf];
@@ -135,6 +144,7 @@ export class WithdrawService {
       utxo,
       to: to === "account" ? keys.cardano.receiveAddress(net, 0) : null,
     }));
+    progress?.("measuring");
     const finished = await measureLocally<RemoveResult>(this.deps, request, (keys, r) => wasm.buildRemove(keys.seedelf, r));
     const { txCbor, seed, inputs: _inputs, to: _to, ...rest } = finished;
     const summary: RemoveSummary = { ...rest, network, label: seedelfLabel(seedelf), to };

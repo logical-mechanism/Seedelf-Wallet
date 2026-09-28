@@ -203,8 +203,7 @@ export function Dapps({
       <Callout tone="privacy">
         A dApp here is given only a one-time account, never your public account or your private balance: each use runs
         from a new one, funded from your private balance and brought back into it. Anyone can follow the money through
-        that account, though, back into your private balance, and money you made private yourself leads on to your public
-        account.
+        that account, and money you made private yourself leads on to your public account.
       </Callout>
       {sites.length === 0 && (
         <p className="note" data-testid="dapp-sites-hint">

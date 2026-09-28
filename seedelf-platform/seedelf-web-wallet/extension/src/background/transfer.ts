@@ -19,7 +19,7 @@
 //         reviewed transaction.
 
 import type { NetworkName } from "../networks";
-import type { PaymentAsk, PendingTx, SeedelfLookup, SeedelfPaid, TransferSummary } from "../shared/rpc";
+import type { PaymentAsk, PendingTx, SeedelfLookup, SeedelfPaid, TransferSummary, BuildStage } from "../shared/rpc";
 import { checkRecipients } from "../shared/recipients";
 import { SEEDELF_NAME_RULE, seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
@@ -67,11 +67,17 @@ export class TransferService {
   }
 
   /** Pays each of `payments`, seedelfs by their full names, in one transaction. */
-  async build(network: NetworkName, payments: PaymentAsk<string>[]): Promise<TransferSummary> {
+  async build(
+    network: NetworkName,
+    payments: PaymentAsk<string>[],
+    progress?: (stage: BuildStage) => void,
+  ): Promise<TransferSummary> {
     const { wasm } = this.deps;
     checkRecipients(payments.length);
     const names = payments.map((p) => seedelfNameOf(p.to));
+    progress?.("checking");
     await settleMaybeSent(this.deps, network);
+    progress?.("reading");
     const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
     const request = {
       network,
@@ -94,6 +100,7 @@ export class TransferService {
       );
     }
 
+    progress?.("measuring");
     const finished = await measureLocally<TransferResult>(this.deps, request, (keys, r) => wasm.buildTransfer(keys.seedelf, r));
     const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
     const histories = spentHistories(classes, inputs, classesMixed);

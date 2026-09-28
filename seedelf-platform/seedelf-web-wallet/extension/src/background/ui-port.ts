@@ -5,14 +5,18 @@
 // listening to runtime.onConnect, and no page does. The worker's broadcasts
 // (state-changed, dapp-changed) carry nothing, so they stay messages.
 
-import { isMessage, UI_PORT, type Message, type Reply, type RequestName } from "../shared/rpc";
+import { isMessage, UI_PORT, type BuildStage, type Message, type Reply, type RequestName } from "../shared/rpc";
 
 /**
  * Serves one UI port: one request, one reply. Only this extension's own
  * pages may ask, as for any message before: a content script's port, or
  * another extension's, is closed unanswered. `answer` runs the request.
  */
-export function serveUi(port: chrome.runtime.Port, extensionOrigin: string, answer: (message: Message) => Promise<unknown>): boolean {
+export function serveUi(
+  port: chrome.runtime.Port,
+  extensionOrigin: string,
+  answer: (message: Message, report: (stage: BuildStage) => void) => Promise<unknown>,
+): boolean {
   if (port.name !== UI_PORT) return false;
   const sender = port.sender;
   if (sender?.id !== chrome.runtime.id || !sender.url?.startsWith(extensionOrigin)) {
@@ -34,7 +38,17 @@ export function serveUi(port: chrome.runtime.Port, extensionOrigin: string, answ
       reply({ ok: false, error: "unknown request" });
       return;
     }
-    answer(message).then(
+    // Stages travel on this same port, ahead of the reply: the page that asked
+    // hears them, and no other page does.
+    const report = (stage: BuildStage) => {
+      if (!open) return;
+      try {
+        port.postMessage({ stage });
+      } catch {
+        // The page went away mid-build.
+      }
+    };
+    answer(message, report).then(
       (value) => reply({ ok: true, value } as Reply<RequestName>),
       (error: unknown) => reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
     );

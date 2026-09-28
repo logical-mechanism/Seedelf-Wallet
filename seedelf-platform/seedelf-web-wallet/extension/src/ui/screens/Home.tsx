@@ -79,7 +79,12 @@ const BUSY = "Wait for the last transaction to confirm";
 const MAYBE_BUSY = "Your last payment may still go through: wait until it lands, or can't any more";
 const ALL_LOCKED = "Every UTxO here is locked: unlock one under UTxOs";
 
-export function Home() {
+/**
+ * `goHome` counts the times the top bar's Seedelf mark was pressed: each one
+ * puts the wallet back on Home, from however deep a flow, so nothing needs
+ * Back pressed several times.
+ */
+export function Home({ goHome = 0 }: { goHome?: number }) {
   const [account, setAccount] = useState<Account>();
   const [balances, setBalances] = useState<Balances>();
   const [reading, setReading] = useState(false);
@@ -243,6 +248,17 @@ export function Home() {
     setRemoving(undefined);
   };
   const home = () => setScreen("home");
+  // The top bar's mark: leave every flow and overlay, keeping the tab chosen.
+  useEffect(() => {
+    if (!goHome) return;
+    setScreen("home");
+    setRemoving(undefined);
+    setTokensOf(undefined);
+    setActivityOf(undefined);
+    setUtxosOf(undefined);
+    setDappStart(undefined);
+  }, [goHome]);
+
   const dapps = (start?: DappStart) => {
     setDappStart(start);
     setScreen("dapps");
@@ -505,7 +521,12 @@ export function Home() {
 
             {balances && seedelfs.length === 0 && (
               <Callout tone="privacy" testId="mint-first">
-                Create your Seedelf before making money private: then what you make private isn't tied to it.
+                <div className="stack">
+                  <span>Create your Seedelf before making money private: then what you make private isn't tied to it.</span>
+                  <button type="button" className="link align-start" onClick={() => setScreen("create")}>
+                    Create a Seedelf
+                  </button>
+                </div>
               </Callout>
             )}
 

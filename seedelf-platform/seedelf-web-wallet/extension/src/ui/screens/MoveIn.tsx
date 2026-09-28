@@ -7,7 +7,8 @@ import { useState, type FormEvent } from "react";
 
 import type { Balances, MoveInSummary, PendingTx } from "../../shared/rpc";
 import { call } from "../background";
-import { AdaInput, lovelaceToSend, MinimumHint, MinimumNote, RoundNote } from "../components/AdaInput";
+import { BuildStage } from "../components/BuildStage";
+import { AdaInput, lovelaceToSend, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
@@ -44,7 +45,6 @@ export function MoveIn({
   const tokens = tokenChoices(network, cardano.tokens, tokenAmounts);
   const withTokens = tokens.sent.length > 0;
   const lovelace = max ? null : lovelaceToSend(amount, withTokens);
-  const round = typeof lovelace === "string" && BigInt(lovelace) % 1_000_000n === 0n;
   // The builder decides exactly (fee, change, collateral UTxOs); this catches the obvious case early.
   const tooMuch = typeof lovelace === "string" && BigInt(lovelace) > BigInt(cardano.lovelace);
   const ready = tokens.ok && (max || (typeof lovelace === "string" && !tooMuch));
@@ -120,9 +120,12 @@ export function MoveIn({
       aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
       foot={
-        <button type="submit" className="primary" disabled={!ready || busy}>
-          {busy ? "Building…" : "Review"}
-        </button>
+        <>
+          <button type="submit" className="primary" disabled={!ready || busy}>
+            {busy ? "Building…" : "Review"}
+          </button>
+          <BuildStage busy={busy} />
+        </>
       }
     >
       <p className="note">Move ADA, and any amount of your tokens, from your public account into your private balance.</p>
@@ -155,9 +158,6 @@ export function MoveIn({
       ) : (
         <>
           {withTokens && <MinimumHint />}
-          <RoundNote warn={!!lovelace && lovelace !== "0" && !round}>
-            Round amounts, like 100 ₳, are harder to match to a later payment out.
-          </RoundNote>
         </>
       )}
 

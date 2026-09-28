@@ -640,10 +640,12 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(page.getByTestId("move-in-too-much")).toContainText("That's more than the 10,408.014036 ₳");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
 
-  // A non-round amount gets the privacy nudge; a round one doesn't.
+  // An amount within 6 decimals is taken as typed, with nothing said about it:
+  // the nudge towards round amounts was dropped (the owner, 2026-09-28) since
+  // it was advice on hiding, which belongs in the docs, not in the form.
   await page.getByLabel("Amount", { exact: true }).fill("25.5");
   await expect(page.getByTestId("move-in-amount-note")).toHaveCount(0);
-  await expect(page.getByTestId("round-warning")).toContainText("Round amounts");
+  await expect(page.getByTestId("round-warning")).toHaveCount(0);
   await page.getByLabel("Amount", { exact: true }).fill("25");
   await expect(page.getByTestId("round-warning")).toHaveCount(0);
   // Tokens come from a picker: search, select what's found, and take one off again.

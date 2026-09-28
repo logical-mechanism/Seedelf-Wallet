@@ -49,6 +49,7 @@ import type {
   SessionOutSummary,
   SessionView,
 } from "../../shared/rpc";
+import { POOL_SEEDABLE } from "../../networks";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HistoriesNote } from "../components/HistoriesNote";
@@ -434,6 +435,11 @@ export function Lovejoin({
       setMixes((was) => was.map((m) => (m.index === index ? moved : m)));
     });
 
+  const reviewTitle = (r: Review) => {
+    if (r.source === "public" && r.summary.seed) return "Review the seed";
+    return (r.source === "private" ? r.summary.mix.again : r.summary.again) ? "Review mixing again" : "Review the mix";
+  };
+
   const build = () =>
     act(async () => {
       setReview(
@@ -441,6 +447,17 @@ export function Lovejoin({
           ? { source, summary: await call("lovejoin-mix-private-build", { boxes }) }
           : { source, summary: await call("lovejoin-mix-public-build", { boxes }) },
       );
+    });
+
+  /**
+   * Puts boxes in with no mixes, from the public account. A mix needs two
+   * other people's boxes for each of its own, and the wallet's own never
+   * count towards the floor, so an empty pool can only be started by someone
+   * depositing into it for nothing.
+   */
+  const seed = () =>
+    act(async () => {
+      setReview({ source: "public", summary: await call("lovejoin-mix-public-build", { boxes, seed: true }) });
     });
 
   const send = () =>
@@ -460,7 +477,7 @@ export function Lovejoin({
   if (review) {
     return (
       <Screen
-        title={(review.source === "private" ? review.summary.mix.again : review.summary.again) ? "Review mixing again" : "Review the mix"}
+        title={reviewTitle(review)}
         titleId="lovejoin-review-title"
         onBack={() => setReview(undefined)}
         backDisabled={busy}
@@ -499,6 +516,24 @@ export function Lovejoin({
   return (
     <Screen title="Lovejoin" titleId="lovejoin-title" onBack={onBack} backDisabled={busy} aside="A mixer for ADA, in 10 ₳ boxes" error={error}>
       {banner}
+      {error?.includes(POOL_SEEDABLE) && (
+        <div className="stack" data-testid="lovejoin-seed-offer">
+          <Callout tone="privacy">
+            Seeding hides nothing of yours: the boxes go back to you and the chain shows it. It gives other people boxes
+            to mix with, which is the only way a pool can start. Yours stay in the pool, with no wait set, until you bring
+            one back.
+          </Callout>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={() => void seed()}
+            data-testid="lovejoin-seed"
+          >
+            Seed the pool with {plural(boxes, "box", "boxes")}
+          </button>
+        </div>
+      )}
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load()} />
       {status && !status.available && <p className="note">Lovejoin isn't on this network yet.</p>}
       {status?.available && (
@@ -864,6 +899,7 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
 /** A mix from the public account: the deposit and every mix, sent now. */
 export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
   if (summary.again) return <PublicAgainReview summary={summary} />;
+  if (summary.seed) return <PublicSeedReview summary={summary} />;
   return (
     <>
       <ReviewRows testId="lovejoin-public-review">
@@ -882,6 +918,34 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
       <Callout tone="privacy">
         The deposit comes from your public account, so the boxes going in are tied to it, and anyone can see your account
         paid for these mixes. {PUBLIC_MIX_WAY_BACK}
+      </Callout>
+    </>
+  );
+}
+
+/**
+ * Seed the pool: the deposit alone, no mixes. It buys the seeder nothing, so
+ * the review says that plainly rather than borrowing the mix's words.
+ */
+function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
+  return (
+    <>
+      <ReviewRows testId="lovejoin-seed-review">
+        <Row label="Into Lovejoin" value={`${plural(summary.boxes, "box", "boxes")} of 10 ₳`} strong />
+        <Row label="Mixed" value="Not at all: this is a seed" />
+        <Row label="Network fees" value={`${formatAda(summary.fees)} ₳`} />
+        <Row label="Transactions" value={String(summary.txs)} />
+        <Row label="Stays in your public account" value={`${formatAda(summary.change)} ₳`} />
+        <Row label="Back later" value="Only when you bring one back" />
+      </ReviewRows>
+      <p className="note">
+        Send sends the deposit. Your public account pays it, and the boxes wait in the pool with no time set: bring one
+        back whenever you want it.
+      </p>
+      <Callout tone="warn" testId="lovejoin-seed-warning">
+        This hides nothing of yours. The boxes go in from your public account and come back to it unmixed, and anyone
+        reading the chain can follow both. It gives other people boxes to mix with, which is the only way a pool can
+        start, and the wallet mixes for you only once the pool holds enough boxes that aren't yours.
       </Callout>
     </>
   );

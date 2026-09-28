@@ -413,10 +413,9 @@ export function Swaps({
         </div>
       )}
       <Callout tone="privacy">
-        A swap runs from a new one-time account: it's funded from your private balance, Minswap swaps from it, and
-        everything comes back into your private balance. Your public account isn't in its transactions, but anyone can
-        follow the money through the one-time account, back into your private balance, and money you made private
-        yourself leads on to your public account. The amounts and times tie its two ends together too.
+        Each swap runs from a new one-time account, funded from your private balance, so your public account isn't in its
+        transactions. Anyone can follow the money through the one-time account back into your private balance, and money
+        you made private yourself leads on to your public account; the amounts and times tie the two ends together.
       </Callout>
     </Screen>
   );
@@ -959,9 +958,8 @@ export function NewSwap({
         </Callout>
       )}
       <Callout tone="privacy" testId="swap-quote-privacy">
-        Quotes come from Minswap as you type: it sees the pair, the amount and your IP address, never your public account.
-        Half and Max are worked out from what your private balance holds, so they tell Minswap roughly how much that is:
-        they round down to a whole unit, never to the last digit.
+        Minswap sees the pair, the amount and your IP address as you type, never your public account. Half and Max round
+        down to a whole unit, but still tell it roughly what your private balance holds.
       </Callout>
       {picking && (
         <TokenSelect
@@ -1042,16 +1040,14 @@ export function SwapApproval({
       <h2>Then it runs by itself</h2>
       <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={any && through && !l!.skipped && l!.boxes > 0} adaOut={adaOut} />
       <p className="note" data-testid="swap-approves">
-        Send approves all of it: the wallet asks Minswap for an order of at least {amountOf(quote.minAmountOut, get)},
-        Minswap builds it, and the wallet places it and brings everything back without asking again. Before it signs, it
-        checks that what Minswap built pays only this session, an order for it and Minswap's fee; the order's minimum it
-        can't read, so that's Minswap's to build as asked. If the price moves before the order is placed, so that it
-        couldn't give that much, it pauses and asks you. An order a DEX refunds comes back with the rest, and the swap's
-        page says it was refunded. Stop is there until it's done.
+        Send approves the whole run: the order is for at least {amountOf(quote.minAmountOut, get)}, and the wallet places
+        it and brings everything back without asking again. It checks that what Minswap built pays only this session, its
+        order and Minswap's fee; the order's own minimum it can't read. If the price moves too far first, it pauses and
+        asks. A refunded order comes back with the rest, and the page says so. Stop is there until it's done.
       </p>
       <p className="note">
-        What the swap doesn't use, the collateral and the order's deposit come back with the proceeds. Three transactions,
-        each with its network fee: that's the cost of keeping your public account out of the swap's own transactions.
+        The collateral, the order's deposit and whatever the swap doesn't use come back with the proceeds. Three
+        transactions, three network fees: the cost of keeping your public account out.
       </p>
       {any && (
         <LovejoinChoice
@@ -1213,12 +1209,10 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
       </ReviewRows>
       <p className="note" data-testid="swap-lovejoin">
         On the way back, {adaOut ? "the proceeds and ADA to spare go" : "ADA to spare goes"} through Lovejoin first:{" "}
-        {boxesText(l)}, mixed with other people's in {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳ in
-        fees, which the session pays. {lovejoinHides(l.depth)} Each box comes back on its own after {delayText(l.delay)}, a
-        few minutes into the first time the wallet is unlocked after that, for about {formatAda(l.withdrawFees)} ₳ in fees
-        all together. Less than a box's worth, and any tokens, come back at once. This swap keeps this depth and this wait:
-        Settings, Lovejoin changes the swaps you start after it, and turning Lovejoin off there doesn't change this one.
-        Stop can bring it back directly.
+        {boxesText(l)}, mixed with other people's in {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳,
+        which the session pays. {lovejoinHides(l.depth)} Each box comes back on its own after {delayText(l.delay)}, at the
+        first unlock after that, for about {formatAda(l.withdrawFees)} ₳ in all; less than a box's worth, and any tokens,
+        come back at once. Settings changes later swaps, not this one. Stop brings it back directly.
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED}

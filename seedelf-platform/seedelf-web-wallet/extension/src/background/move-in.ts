@@ -12,7 +12,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { MoveInSummary, PendingTx, TokenQuantity } from "../shared/rpc";
+import type { MoveInSummary, PendingTx, TokenQuantity, BuildStage } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { ActivityService } from "./activity";
 import type { CoinControlService } from "./coin-control";
@@ -64,15 +64,23 @@ export class MoveInService {
    * the account. `lovelace` below what the deposit needs is raised to it, so
    * "0" moves only that.
    */
-  async build(network: NetworkName, lovelace: string | null, tokens: TokenQuantity[]): Promise<MoveInSummary> {
+  async build(
+    network: NetworkName,
+    lovelace: string | null,
+    tokens: TokenQuantity[],
+    progress?: (stage: BuildStage) => void,
+  ): Promise<MoveInSummary> {
     const { wasm, wallet, session, now } = this.deps;
+    progress?.("checking");
     await settleMaybeSent(this.deps, network);
+    progress?.("reading");
     const [{ params, utxos, held, withdrawal }, invalidHereafter] = await Promise.all([
       readAccount(this.deps, network),
       validUntil(this.deps.koios(network)),
     ]);
     if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to make private.");
 
+    progress?.("building");
     return wallet.withKeys(async (keys) => {
       const request = { network, params, utxos, lovelace, tokens, withdrawal, invalidHereafter };
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));

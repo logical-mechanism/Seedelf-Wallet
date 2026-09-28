@@ -13,6 +13,7 @@ import { useState, type FormEvent } from "react";
 
 import type { MintSource, PendingTx, RemoveSummary, RemoveTo, SeedelfInfo } from "../../shared/rpc";
 import { call } from "../background";
+import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -151,9 +152,12 @@ export function RemoveSeedelf({
       aside={`${formatAda(seedelf.lovelace)} ₳ locked with it`}
       error={error}
       foot={
-        <button type="submit" className="primary" disabled={busy || !to} title={to ? undefined : "Choose where the freed ADA goes"}>
-          {busy ? "Building…" : "Review"}
-        </button>
+        <>
+          <button type="submit" className="primary" disabled={busy || !to} title={to ? undefined : "Choose where the freed ADA goes"}>
+            {busy ? "Building…" : "Review"}
+          </button>
+          <BuildStage busy={busy} />
+        </>
       }
     >
       <p className="note">

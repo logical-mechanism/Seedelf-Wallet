@@ -67,10 +67,11 @@ A second adversarial review, of the fixes themselves, found 30 more issues, all 
    - **Lovejoin:** seed the pool from identities unrelated to any Seedelf key, then run one box at depth 1.
    - **Seedelf:** every flow.
 2. **A validity interval on private spends:** they still have no expiry, until a live check shows giveme.my accepts one.
-3. **The store:**
-   - a new listing, or an update of the unlisted preprod item;
-   - screenshots from mainnet-shaped fixtures (today's show the preprod strip);
-   - a version bump, and the new zip's SHA-256 in the roadmap.
+3. **The store** (`web-wallet/release-prep`):
+   - a new listing, or an update of the unlisted preprod item: the owner's call, with the trade-off written out in [store/README.md](../store/README.md);
+   - ~~screenshots from mainnet-shaped fixtures~~ **done:** the five show mainnet, with no test-network strip;
+   - the *Location* and *Web history* data-usage answers: both recommended checked, reasoning in [store/README.md](../store/README.md);
+   - no version bump (1.0.0 is unreleased), then the zip's SHA-256 in the roadmap once the owner packages it.
 4. **Upstream:** Lovejoin's config and SDK swap Seedelf's preprod and mainnet reference UTxOs.
 5. **Smaller items, left for later:**
    - A certificate carries no network, so a site can still ask for a stake-key-only signature over the other network's transaction.

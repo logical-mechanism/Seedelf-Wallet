@@ -14,6 +14,7 @@ import { NETWORKS, type NetworkName } from "../src/networks";
 import { DAPP_ORIGINS } from "../src/shared/dapp";
 import { LOCAL_NETWORK } from "../src/shared/preferences";
 import { UI_PORT } from "../src/shared/rpc";
+import { bech32, bech32Bytes } from "../tests/fixtures/bech32";
 import { txIdOf } from "../tests/fixtures/cbor";
 import { swapTx } from "../tests/fixtures/swap-tx";
 
@@ -27,7 +28,12 @@ export const PASSWORD = "correct horse battery";
 
 const cardanoVectors = JSON.parse(
   readFileSync(new URL("../../../seedelf-crypto/tests/vectors/cardano_account.json", import.meta.url), "utf8"),
-).vectors as Array<{ phrase: string; account: number; preprod: { receive_0: string; stake: string } }>;
+).vectors as Array<{
+  phrase: string;
+  account: number;
+  preprod: { receive_0: string; stake: string };
+  mainnet: { receive_0: string; stake: string };
+}>;
 export const vector = (words: number) =>
   cardanoVectors.find((v) => v.account === 0 && v.phrase.split(" ").length === words)!;
 
@@ -166,6 +172,12 @@ export interface KoiosFake {
   unlistedSpent: boolean;
   /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
   txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null } }>>;
+  /**
+   * What mainnet's Koios lists in place of a recorded token, by its preprod
+   * unit (`policy.name`): the store images show mainnet's tokens. Tokens not
+   * named keep their preprod units.
+   */
+  mainnetTokens: Map<string, { policy_id: string; asset_name: string; fingerprint: string; decimals?: number }>;
   /** Requests a page made instead of the worker (`byWorker`): there must be none. */
   strays: string[];
 }
@@ -196,51 +208,90 @@ function byWorker(request: Request, strays: string[]): boolean {
   return false;
 }
 
+/**
+ * `text` as `to` writes it, when it's a Shelley address or a stake address:
+ * the same keys, with the other network's prefix and network tag
+ * (`addr_test1…` is `addr1…`, `stake_test1…` is `stake1…`). Anything else
+ * comes back as it is.
+ */
+function retag(text: string, to: NetworkName): string {
+  const prefixes: Record<string, string> =
+    to === "mainnet" ? { addr_test: "addr", stake_test: "stake" } : { addr: "addr_test", stake: "stake_test" };
+  const prefix = prefixes[text.slice(0, text.lastIndexOf("1"))];
+  if (!prefix) return text;
+  let bytes: Uint8Array;
+  try {
+    bytes = bech32Bytes(text);
+  } catch {
+    return text;
+  }
+  bytes[0] = (bytes[0]! & 0xf0) | (to === "mainnet" ? 1 : 0);
+  return bech32(prefix, bytes);
+}
+
+/** `value` with every address in it retagged for `to`, and each token `tokens` names swapped for its stand-in. */
+function onNetwork(value: unknown, to: NetworkName, tokens?: KoiosFake["mainnetTokens"]): unknown {
+  if (typeof value === "string") return retag(value, to);
+  if (Array.isArray(value)) return value.map((v) => onNetwork(v, to, tokens));
+  if (!value || typeof value !== "object") return value;
+  const row = Object.fromEntries(Object.entries(value).map(([k, v]) => [k, onNetwork(v, to, tokens)]));
+  const token = tokens?.get(`${row.policy_id}.${row.asset_name}`);
+  return token ? { ...row, ...token } : row;
+}
+
 async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
   let submits = 0;
   // Mainnet's Koios answers from the same recordings: a phrase's keys are the same on both networks, so a test
-  // that switches to mainnet sees the recorded account there too.
+  // that switches to mainnet sees the recorded account there too. Its requests' addresses are read as preprod's,
+  // and its answers' written as mainnet's (onNetwork).
   await context.route(/^https:\/\/(preprod|api)\.koios\.rest\//, async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.split("/").pop()!;
+    const mainnet = new URL(request.url()).host === "api.koios.rest";
+    const fulfill = (answer: { status: number; contentType?: string; body: string }) =>
+      route.fulfill(
+        mainnet && answer.contentType === "application/json"
+          ? { ...answer, body: JSON.stringify(onNetwork(JSON.parse(answer.body), "mainnet", koios.mainnetTokens)) }
+          : answer,
+      );
     if (byWorker(request, koios.strays)) koios.calls.push(path);
     if (koios.delayMs) await new Promise((resolve) => setTimeout(resolve, koios.delayMs));
-    if (koios.failWith) return route.fulfill({ status: koios.failWith, body: "" });
+    if (koios.failWith) return fulfill({ status: koios.failWith, body: "" });
     if (path === "submittx") {
       const id = txIdOf(new Uint8Array(request.postDataBuffer()!));
       const answer = koios.submitAnswer?.(++submits);
       if (answer !== undefined && answer !== "timeout") {
-        return route.fulfill({ status: answer.status, contentType: "text/plain", body: answer.body });
+        return fulfill({ status: answer.status, contentType: "text/plain", body: answer.body });
       }
       koios.submitted.push(id);
       if (answer === "timeout") return route.abort("timedout");
-      return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(id) });
+      return fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(id) });
     }
     if (path === "epoch_params") {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(epochParams) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(epochParams) });
     }
     if (path === "tip") {
       // The chain's slot now: a second each since preprod's start, or mainnet's Shelley start.
       const since = new URL(request.url()).host.startsWith("preprod.") ? 1_655_683_200 : 1_591_566_291;
       const rows = [{ abs_slot: Math.floor(Date.now() / 1000) - since }];
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     if (path === "pool_list" || path === "totals") {
       const rows = path === "pool_list" ? stakingPreprod.pool_list : stakingPreprod.totals;
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     if (path === "ogmios") {
       const answer =
         typeof koios.evaluation === "function" ? (koios.evaluation as (body: any) => unknown)(request.postDataJSON()) : koios.evaluation;
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) });
     }
     if (path === "asset_nft_address") {
       const query = new URL(request.url()).searchParams;
       const holder = koios.nfts.get(`${query.get("_asset_policy")}.${query.get("_asset_name")}`);
       const rows = holder ? [{ payment_address: holder }] : [];
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
-    const body = request.postDataJSON();
+    const body = mainnet ? (onNetwork(request.postDataJSON(), "preprod") as any) : request.postDataJSON();
     if (path === "account_txs" || path === "tx_info") {
       const query = new URL(request.url()).searchParams;
       const all: Array<{ tx_hash: string; block_height?: number }> =
@@ -257,12 +308,12 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
             : [];
       const offset = Number(query.get("offset") ?? 0);
       const rows = path === "tx_info" ? all : all.slice(offset, offset + Number(query.get("limit") ?? 1000));
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     if (path === "tx_status") {
       const confirmations = (tx: string) => (typeof koios.confirmations === "function" ? koios.confirmations(tx) : koios.confirmations);
       const rows = body._tx_hashes.map((tx_hash: string) => ({ tx_hash, num_confirmations: confirmations(tx_hash) }));
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const staking: Record<string, (b: any) => unknown[]> = {
       account_info: (b) => b._stake_addresses.flatMap((s: string) => koios.stakes.get(s) ?? []),
@@ -271,7 +322,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       drep_metadata: (b) => stakingPreprod.drep_metadata.filter((d: any) => b._drep_ids.includes(d.drep_id)),
     };
     if (staking[path]) {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(staking[path]!(body)) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(staking[path]!(body)) });
     }
     if (path === "utxo_info") {
       // Any UTxO the fixtures know, spent or not, as Koios answers; one known only as spent, by its outpoint alone.
@@ -288,7 +339,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       const gone = refs
         .filter((r) => spent(r) && !found.some((u) => ref(u) === r))
         .map((r) => ({ tx_hash: r.split("#")[0], tx_index: Number(r.split("#")[1]), is_spent: true }));
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([...found, ...gone]) });
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([...found, ...gone]) });
     }
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
     // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
@@ -309,8 +360,8 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
         : path === "account_addresses"
           ? (account?.account_addresses ?? [])
           : null;
-    if (!rows) return route.fulfill({ status: 404, body: "" });
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    if (!rows) return fulfill({ status: 404, body: "" });
+    return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
   });
   await context.route("https://www.giveme.my/preprod/collateral/", async (route) => {
     if (byWorker(route.request(), koios.strays)) koios.collateralAsked++;
@@ -401,6 +452,7 @@ export const test = base.extend<{
       spent: new Set(),
       unlistedSpent: false,
       txSpends: new Map(),
+      mainnetTokens: new Map(),
       strays: [],
     });
   },
@@ -528,6 +580,10 @@ export function askWorker(page: Page, message: { type: string } & Record<string,
         const started = performance.now();
         const port = chrome.runtime.connect({ name });
         port.onMessage.addListener((reply) => {
+          // A build says what it's doing on this same port before it answers
+          // (background/ui-port.ts). Those aren't the reply: waiting for the
+          // reply is the whole point, and disconnecting here would drop it.
+          if (reply && typeof reply === "object" && "stage" in reply && !("ok" in reply)) return;
           port.disconnect();
           resolve({ reply, ms: performance.now() - started });
         });

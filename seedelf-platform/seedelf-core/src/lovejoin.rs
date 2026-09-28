@@ -1076,8 +1076,12 @@ impl std::error::Error for PoolShort {}
 /// random order, `ours` left out: two for every mix, never one twice. Too
 /// few is a [`PoolShort`].
 fn fresh_for(trees: usize, depth: u32, pool: &[PoolBox], ours: &[PoolBox]) -> Result<Vec<PoolBox>> {
-    if !(1..=3).contains(&depth) {
-        bail!("The fan-out is 1 to 3 waves deep");
+    // Depth 0 is a seed: the deposit alone, with no mixes, so it needs no
+    // other boxes and works on an empty pool. It hides nothing of its own;
+    // it puts boxes in for other people to mix with, which is the only way a
+    // pool can start (the wallet's own boxes never count towards its floor).
+    if !(0..=3).contains(&depth) {
+        bail!("The fan-out is 0 to 3 waves deep");
     }
     let mut fresh: Vec<PoolBox> = pool
         .iter()

@@ -488,6 +488,30 @@ main {
   display: block;
 }
 
+/* The mark and wordmark as one button back to Home: it must look exactly as they did. */
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+
+.topbar__brand:hover .wordmark {
+  color: var(--accent);
+}
+
+.topbar__brand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .topbar__spacer {
   flex: 1;
 }
@@ -3013,4 +3037,10 @@ button.dapp-tile:hover {
   font-size: 12px;
   overflow-wrap: anywhere;
   user-select: text;
+}
+
+/* What a build is doing, under the button that started it (components/BuildStage.tsx). */
+.build-stage {
+  margin-top: var(--s2);
+  margin-bottom: 0;
 }

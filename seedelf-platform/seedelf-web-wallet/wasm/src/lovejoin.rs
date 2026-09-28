@@ -460,11 +460,23 @@ pub struct FundingResult {
 }
 
 fn check_mix(boxes: usize, depth: u32) -> Result<()> {
+    check_depth(boxes, depth, 1)
+}
+
+/// A chain that deposits may also be a seed (depth 0): the deposit alone,
+/// with no mixes. It needs no other boxes, so it's the only thing that works
+/// on an empty pool, and it hides nothing of its own. Mixing boxes already in
+/// the pool has no deposit, so it still needs a wave at least.
+fn check_deposit(boxes: usize, depth: u32) -> Result<()> {
+    check_depth(boxes, depth, 0)
+}
+
+fn check_depth(boxes: usize, depth: u32, least: u32) -> Result<()> {
     if boxes == 0 {
         bail!("Mix at least one box");
     }
-    if !(1..=3).contains(&depth) {
-        bail!("The fan-out is 1 to 3 waves deep");
+    if !(least..=3).contains(&depth) {
+        bail!("The fan-out is {least} to 3 waves deep");
     }
     Ok(())
 }
@@ -474,7 +486,11 @@ fn check_mix(boxes: usize, depth: u32) -> Result<()> {
 /// `again`, every mix alone. What the mixes don't use comes back.
 pub fn funding(request: FundingRequest) -> Result<FundingResult> {
     let protocol = Protocol::of(network_flag(&request.network)?)?;
-    check_mix(request.boxes, request.depth)?;
+    if request.again {
+        check_mix(request.boxes, request.depth)?;
+    } else {
+        check_deposit(request.boxes, request.depth)?;
+    }
     let mixes = request.boxes * lovejoin::mixes_per_box(request.depth);
     let lovelace = if request.again {
         lovejoin::again_funding(request.boxes, request.depth)
@@ -521,7 +537,7 @@ pub fn chain_from_account(
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = Protocol::of(network_flag)?;
-    check_mix(request.boxes, request.depth)?;
+    check_deposit(request.boxes, request.depth)?;
     let mut every = request.utxos.clone();
     every.push(request.collateral.clone());
     let paths = api::check_paths(account, network_flag, &every)?;

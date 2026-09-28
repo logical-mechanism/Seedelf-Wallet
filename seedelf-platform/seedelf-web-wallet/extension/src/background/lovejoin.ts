@@ -87,7 +87,7 @@
 // independent review M14).
 
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
-import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
+import { lovejoinOn, NETWORKS, POOL_SEEDABLE, type NetworkName } from "../networks";
 import type {
   LeftOutUtxo,
   LovejoinFunding,
@@ -624,6 +624,13 @@ interface ChainRecord {
   boxes: number;
   /** The wallet's boxes mixed again, with no deposit. */
   again?: boolean;
+  /**
+   * A seed: a deposit with no mixes (publicBuild's `seed`). Its boxes sit in
+   * the pool with no due time, for other people to mix with, until the user
+   * brings one back: `sortOut` holds deposits back, and no due times are
+   * drawn for it when it lands.
+   */
+  seed?: boolean;
   total: number;
   sent: number;
   at: number;
@@ -1255,7 +1262,10 @@ export class LovejoinService {
    */
   async fits(network: NetworkName, boxes: number): Promise<void> {
     const { others, reserved } = await this.split(network);
-    this.floor(network, others.length);
+    // The tile's own mix (mixOutBuild) is the one place this is asked, so a
+    // short pool here can say the public account could seed it instead. A
+    // session's return never comes through here: it falls back to direct.
+    this.floor(network, others.length, true);
     await this.enough(free(others, reserved).length, boxes);
   }
 
@@ -1332,10 +1342,14 @@ export class LovejoinService {
     return `Lovejoin's pool holds ${others} ${others === 1 ? "box" : "boxes"} that aren't yours, and the wallet mixes only once it holds ${floor}, so there's enough to mix with`;
   }
 
-  /** Throws why, when the pool is below its floor (floorShort). */
-  private floor(network: NetworkName, others: number): void {
+  /**
+   * Throws why, when the pool is below its floor (floorShort). `seedable`:
+   * the public account could put boxes in instead, which needs no others, so
+   * the refusal says so rather than only "try again later".
+   */
+  private floor(network: NetworkName, others: number, seedable = false): void {
     const short = this.floorShort(network, others);
-    if (short) throw new Error(`${short}. Try again later.`);
+    if (short) throw new Error(`${short}. ${seedable ? POOL_SEEDABLE : "Try again later."}`);
   }
 
   /** Whether `others` boxes in the pool mix `boxes` boxes at the set depth, or why not. */
@@ -1625,8 +1639,17 @@ export class LovejoinService {
    * Builds `boxes` boxes from the public account straight into Lovejoin: the
    * deposit and every mix, signed by the account's keys and checked against
    * the network, kept for Send. Its collateral backs every mix.
+   *
+   * `seed` puts them in with no mixes (depth 0). A mix takes two other
+   * people's boxes for each of its own, so an empty pool can't be mixed in,
+   * and the wallet's own boxes never count towards the floor: without a
+   * deposit that needs nothing, no pool could ever start. A seed is honest
+   * about what it buys, which is nothing for the seeder: the box goes back
+   * to the same owner and the chain shows it, so it only gives other people
+   * boxes to mix with. Its boxes stay in the pool with no due time (they're
+   * deposits, which `sortOut` holds back), until Bring one back.
    */
-  async publicBuild(network: NetworkName, boxes: number): Promise<LovejoinPublicSummary> {
+  async publicBuild(network: NetworkName, boxes: number, seed = false): Promise<LovejoinPublicSummary> {
     if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
     checkBoxes(boxes);
     await this.publicReady(network);
@@ -1638,10 +1661,13 @@ export class LovejoinService {
       throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
     }
     if (!utxos.length) throw nothingInAccount(held, "Your public account is empty, so there's nothing to mix.");
-    const { depth, delay } = await this.settings();
+    const { depth: chosen, delay } = await this.settings();
+    // A seed makes no mixes, so it draws nothing from the pool and the floor
+    // doesn't apply: that's the point of it.
+    const depth = seed ? 0 : chosen;
     const chain = await this.unstale(async (avoid) => {
       const split = await this.split(network, chainOwner(), avoid);
-      this.floor(network, split.others.length);
+      if (!seed) this.floor(network, split.others.length, true);
       const request = { network, params, utxos, collateral, pool: this.real(split), depth, boxes };
       const built = await wallet.withKeys(
         (keys) => JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
@@ -1651,6 +1677,7 @@ export class LovejoinService {
     const last = chain.txs.at(-1)!;
     const summary: LovejoinPublicSummary = {
       network,
+      ...(seed ? { seed: true } : {}),
       txHash: last.txHash,
       boxes: chain.boxes,
       depth: chain.depth,
@@ -1810,7 +1837,7 @@ export class LovejoinService {
     // Recorded, sealed, before its progress is where anything can send it from (independent review L28). Its own
     // boxes mixed again: they wait afresh once its first mix is in (chainSent).
     const chain = { progress: SESSION_LOVEJOIN_SENDING + network, txs: built.chain, leaves: built.leaves ?? [], boxes: built.boxes };
-    await this.recordChain(network, { ...chain, ...(built.again ? { again: true } : {}) }, async () => {
+    await this.recordChain(network, { ...chain, ...(built.again ? { again: true } : {}), ...(built.seed ? { seed: true } : {}) }, async () => {
       // Being sent: its change to come and its collateral are the chain's too, as long as what its review
       // reserved is still its own.
       await this.reserve(network, chainOwner(), built.chain, undefined, true);
@@ -2079,6 +2106,7 @@ export class LovejoinService {
       leaves: OutRef[];
       boxes: number;
       again?: boolean;
+      seed?: boolean;
       delay?: LovejoinDelay;
     },
     start?: () => Promise<void>,
@@ -2093,6 +2121,7 @@ export class LovejoinService {
       leaves: chain.leaves,
       boxes: chain.boxes,
       ...(chain.again ? { again: true } : {}),
+      ...(chain.seed ? { seed: true } : {}),
       ...(chain.delay ? { delay: chain.delay } : {}),
       total: txs.length,
       sent: 0,
@@ -2124,7 +2153,9 @@ export class LovejoinService {
   async chainSent(network: NetworkName, id: string, i: number): Promise<void> {
     const record = (await this.read(network)).chains.find((c) => c.id === id);
     if (!record) return;
-    const due = i === 0 && !record.scheduled ? await this.draw(record.boxes, record.delay) : [];
+    // A seed's boxes get no due time: they stay in the pool for other people
+    // to mix with until the user brings one back by hand.
+    const due = i === 0 && !record.scheduled && !record.seed ? await this.draw(record.boxes, record.delay) : [];
     await this.update(network, (s) => {
       const c = s.chains.find((r) => r.id === id);
       if (!c) return;

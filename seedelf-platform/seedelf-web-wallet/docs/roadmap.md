@@ -36,6 +36,7 @@ The wallet is built in **chunks**, each about one working session.
 
 ## After v1
 
+- **A detailed transaction view, on its own branch** (the owner, 2026-09-28, from the mainnet test). Today a site's transaction is shown as what it does to the account, and the wallet's own as a review's rows, but there's nowhere to open the transaction itself: its inputs, outputs, datums, scripts, certificates and metadata, decoded from the CBOR that is about to be signed. Until then someone who wants to check the bytes themselves can't. It wants its own chunk: a decoder in WebAssembly, a screen, and a way in from every review and from the connector's window.
 - Contract round trip: one-time accounts, CIP-30, auto-return ([flows.md](flows.md#contract-round-trip)). Started in chunk 15: its plan has the steps, the user's two designs, and what Minswap allows.
 - Turn on the mainnet build flag ([architecture.md](architecture.md#networks)).
 - Merge `seedelf-web-wallet` into `main`.
@@ -43,6 +44,13 @@ The wallet is built in **chunks**, each about one working session.
 ## Handoff notes
 
 Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+
+- **2026-09-28: release prep and the owner's mainnet test** (`web-wallet/release-prep`, from `seedelf-web-wallet`).
+  - **Store:** the five screenshots are made on mainnet now (the fake Koios retags the recordings' addresses and stands real tokens in), and [store/README.md](store/README.md) has the two data-usage calls written out (*Location* and *Web history*, both recommended checked) and the new-listing-or-update trade-off.
+  - **From the owner's mainnet test:** the welcome screen's privacy claim and the round-amount advice are gone (docs' job, not the wallet's); Home's "create a Seedelf first" tip links to Create; the top bar's mark goes Home from any depth; a build says what it's doing (`BuildStage`, stages on the request's own port) instead of only greying its button; the swap and Lovejoin prose is shorter, minus nothing the privacy review requires.
+  - **Koios's limit, hit on mainnet:** the shared limit is 40 every 10 s (a restarted worker starts with an empty window, so two must fit the tier's 100), and a 429 now holds *every* request back for as long as `Retry-After` asks, kept in session storage across a worker restart.
+  - **Lovejoin could never start:** mainnet's pool was empty and the floor of 30 gated the deposit too, so nothing could go in — and the wallet's own boxes never count towards the floor. A **seed** (depth 0: the deposit alone, no mixes) now works on an empty pool, offered only when a mix was refused for want of boxes. It hides nothing of the seeder's and says so; its boxes wait with no due time. The floor stays 30 for mixing (the owner's call).
+  - **Next:** the owner seeds mainnet's pool from a second wallet, then checks mixing from the test wallet. A detailed transaction view is recorded under *After v1* for its own branch.
 
 - **2026-09-28: independent review and its fixes** (`web-wallet/crypto-review`). A fresh review before mainnet, and its fixes, are in [plans/independent-review.md](plans/independent-review.md) (see its *Status*).
   - **What landed:**

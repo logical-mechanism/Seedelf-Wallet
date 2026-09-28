@@ -1,7 +1,17 @@
 // The Koios client: request shape, paging and retries, with a fake fetch.
 import { describe, expect, it } from "vitest";
 
-import { Koios, KOIOS_NOT_ALLOWED, KoiosBusyError, KoiosError, RateLimit, type FetchLike } from "../src/background/koios";
+import {
+  BACK_OFF_MS,
+  Koios,
+  KOIOS_NOT_ALLOWED,
+  KoiosBusyError,
+  KoiosError,
+  MAX_BACK_OFF_MS,
+  RateLimit,
+  retryAfterMs,
+  type FetchLike,
+} from "../src/background/koios";
 
 const BASE = "https://preprod.koios.rest/api/v1";
 
@@ -354,8 +364,35 @@ describe("Koios's public-tier limit", () => {
     expect(c.slept).toEqual([1_000]);
   });
 
-  it("is 60 requests every 10 seconds in the wallet, well under the tier's 100", () => {
+  it("is 40 requests every 10 seconds, so two workers either side of a restart still fit the tier's 100", () => {
     const limit = new RateLimit();
-    expect([limit.max, limit.windowMs]).toEqual([60, 10_000]);
+    expect([limit.max, limit.windowMs]).toEqual([40, 10_000]);
+  });
+
+  it("holds every request back once Koios answers 429, for as long as Retry-After asks", async () => {
+    const { c, limit } = clock();
+    const answers = [new Response("", { status: 429, headers: { "retry-after": "2" } }), Response.json([{ epoch_no: 1 }])];
+    const koios = new Koios(BASE, async () => answers.shift()!, async () => undefined, async () => true, limit);
+    await koios.epochParams();
+    // The retry waited out the cooldown rather than the fixed back-off.
+    expect(c.slept).toEqual([2_000]);
+    expect(limit.holding()).toBe(0);
+  });
+
+  it("caps a Retry-After that asks for longer than a minute", () => {
+    const { c, limit } = clock();
+    limit.hold(10 * 60_000);
+    expect(limit.holding()).toBe(MAX_BACK_OFF_MS);
+    c.now += MAX_BACK_OFF_MS;
+    expect(limit.holding()).toBe(0);
+  });
+
+  it("reads Retry-After as seconds, as an HTTP date, and falls back when it's missing", () => {
+    const at = 1_000_000;
+    const withHeader = (v: string) => retryAfterMs(new Response("", { status: 429, headers: { "retry-after": v } }), at);
+    expect(withHeader("5")).toBe(5_000);
+    expect(withHeader(new Date(at + 7_000).toUTCString())).toBe(7_000);
+    expect(withHeader("soon")).toBe(BACK_OFF_MS);
+    expect(retryAfterMs(new Response("", { status: 429 }), at)).toBe(BACK_OFF_MS);
   });
 });

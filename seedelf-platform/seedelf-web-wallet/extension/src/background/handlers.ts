@@ -4,7 +4,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { AtStake, Message, Requests, Status } from "../shared/rpc";
+import type { AtStake, BuildStage, Message, Requests, Status } from "../shared/rpc";
 import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
 import type { CoinControlService } from "./coin-control";
@@ -55,6 +55,12 @@ export interface Context {
   networks: NetworkName[];
   /** The user's choice of network, which `network-set` changes. */
   networkChoice: NetworkChoice;
+  /**
+   * Says what a build is doing, on this request's own port (ui-port.ts): the
+   * screen shows it instead of only greying out its button. Undefined outside
+   * the worker, in tests.
+   */
+  progress?: (stage: BuildStage) => void;
 }
 
 export async function handle(message: Message, ctx: Context): Promise<Requests[Message["type"]]["result"]> {
@@ -95,31 +101,31 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "wordlist":
       return wasm.bip39Wordlist();
     case "move-in-build":
-      return ctx.moveIn.build(ctx.network, message.lovelace, message.tokens);
+      return ctx.moveIn.build(ctx.network, message.lovelace, message.tokens, ctx.progress);
     case "move-in-submit":
       return ctx.moveIn.submit(ctx.network, message.txHash);
     case "mint-build":
-      return ctx.mint.build(ctx.network, message.label, message.from);
+      return ctx.mint.build(ctx.network, message.label, message.from, ctx.progress);
     case "mint-submit":
       return ctx.mint.submit(ctx.network, message.txHash);
     case "seedelf-lookup":
       return ctx.transfer.lookup(ctx.network, message.to);
     case "transfer-build":
-      return ctx.transfer.build(ctx.network, message.payments);
+      return ctx.transfer.build(ctx.network, message.payments, ctx.progress);
     case "transfer-submit":
       return ctx.transfer.submit(ctx.network, message.txHash);
     case "resolve-destination":
       return ctx.withdraw.resolve(ctx.network, message.to);
     case "withdraw-build":
-      return ctx.withdraw.build(ctx.network, message.payments);
+      return ctx.withdraw.build(ctx.network, message.payments, ctx.progress);
     case "withdraw-submit":
       return ctx.withdraw.submit(ctx.network, message.txHash);
     case "remove-build":
-      return ctx.withdraw.buildRemove(ctx.network, message.name, message.to);
+      return ctx.withdraw.buildRemove(ctx.network, message.name, message.to, ctx.progress);
     case "remove-submit":
       return ctx.withdraw.submitRemove(ctx.network, message.txHash);
     case "send-build":
-      return ctx.send.build(ctx.network, message.payments, message.note);
+      return ctx.send.build(ctx.network, message.payments, message.note, ctx.progress);
     case "send-submit":
       return ctx.send.submit(ctx.network, message.txHash);
     case "pending-tx":
@@ -299,7 +305,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-mix-private-submit":
       return ctx.sessions.mixOutSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-build":
-      return ctx.lovejoin.publicBuild(ctx.network, message.boxes);
+      return ctx.lovejoin.publicBuild(ctx.network, message.boxes, message.seed ?? false);
     case "lovejoin-mix-public-submit":
       return ctx.lovejoin.publicSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-progress":

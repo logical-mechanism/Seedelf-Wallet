@@ -21,7 +21,7 @@
 // change) is the collateral from Send on.
 
 import type { NetworkName } from "../networks";
-import type { Paid, PaymentAsk, PendingTx, SendPaid, SendSummary, WithdrawDestination } from "../shared/rpc";
+import type { Paid, PaymentAsk, PendingTx, SendPaid, SendSummary, WithdrawDestination, BuildStage } from "../shared/rpc";
 import { checkRecipients } from "../shared/recipients";
 import { OWN_SEEDELF_FROM_ACCOUNT, seedelfName } from "../shared/seedelf-name";
 import { nothingInAccount, readAccount, validUntil } from "./account";
@@ -55,7 +55,12 @@ export class SendService {
    * payment needs, it's raised to that, so "0" sends only the ADA the tokens
    * need.
    */
-  async build(network: NetworkName, payments: PaymentAsk[], note?: string): Promise<SendSummary> {
+  async build(
+    network: NetworkName,
+    payments: PaymentAsk[],
+    note?: string,
+    progress?: (stage: BuildStage) => void,
+  ): Promise<SendSummary> {
     checkRecipients(payments.length);
     const names = payments.map((p) => seedelfName(p.to));
     // Every seedelf among them is found in one reading of the contract.
@@ -66,7 +71,7 @@ export class SendService {
       const name = names[i];
       destinations.push(name ? seedelf(view!, network, name) : await resolve(p.to));
     }
-    return this.pay(network, destinations, payments, SESSION_SEND, note);
+    return this.pay(network, destinations, payments, SESSION_SEND, note, progress);
   }
 
   /** Signed at review: Send only submits it. */
@@ -96,9 +101,12 @@ export class SendService {
     asked: PaymentAsk[],
     key: string,
     note?: string,
+    progress?: (stage: BuildStage) => void,
   ): Promise<SendSummary> {
     const { wasm, wallet } = this.deps;
+    progress?.("checking");
     await settleMaybeSent(this.deps, network);
+    progress?.("reading");
     const [{ params, utxos, held, withdrawal }, invalidHereafter] = await Promise.all([
       readAccount(this.deps, network),
       validUntil(this.deps.koios(network)),
