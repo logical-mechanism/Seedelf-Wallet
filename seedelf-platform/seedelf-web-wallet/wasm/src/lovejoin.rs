@@ -360,35 +360,41 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
     rows.push(held.collateral.clone());
     rows.extend(unused);
     rows.extend(held.kept.iter().cloned());
-    // Token UTxOs that can't be held with the rest wait for a later return.
-    let plan = api::plan_return(&rows, &request.merge, &request.own)?;
-    let rows = plan.taken;
-    let (total, tokens) = seedelf_core::utxos::assets_of(rows.clone())?;
-    let (back, back_fee) = if !plan.merged {
-        let key = accounts.key_hash(Role::Receive, request.index)?;
-        let config = get_config(VARIANT, network_flag)?;
-        let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
-        let base = Register::create(sk)?;
-        let (tx, fee) = build::external_sweep(&params, &rows, &base, &wallet, key)?;
-        (sign(tx, accounts, request.index)?, fee)
-    } else {
-        let chain = build::Chain {
-            params: params.clone(),
-            network_flag,
-            config: get_config(VARIANT, network_flag)?,
-        };
-        let (signed, spend) = api::merged_return(
-            accounts,
-            sk,
-            &chain,
-            request.index,
-            &rows,
-            &held.collateral,
-            &request.merge,
-            std::slice::from_ref(&built.change.utxo),
-        )?;
-        (signed, spend.fee.total)
-    };
+    // What the return takes by cost (independent review H1, H2): the chain's
+    // change and the session's own and ADA-only UTxOs first, a stranger's
+    // token UTxO only when it pays its own way. The rest waits for a later
+    // return, or stays.
+    let mut own = request.own.clone();
+    own.push(rows[0].tx_hash.clone());
+    let plan = api::plan_return(&params, &rows, &request.merge, &own)?;
+    let ((back, back_fee), plan) = api::built_or_without_strangers(plan, |plan| {
+        if !plan.merged {
+            let key = accounts.key_hash(Role::Receive, request.index)?;
+            let config = get_config(VARIANT, network_flag)?;
+            let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
+            let base = Register::create(sk)?;
+            let (tx, fee) = build::external_sweep(&params, &plan.taken, &base, &wallet, key)?;
+            Ok((sign(tx, accounts, request.index)?, fee))
+        } else {
+            let chain = build::Chain {
+                params: params.clone(),
+                network_flag,
+                config: get_config(VARIANT, network_flag)?,
+            };
+            let (signed, spend) = api::merged_return(
+                accounts,
+                sk,
+                &chain,
+                request.index,
+                &plan.taken,
+                &held.collateral,
+                &request.merge,
+                std::slice::from_ref(&built.change.utxo),
+            )?;
+            Ok((signed, spend.fee.total))
+        }
+    })?;
+    let (total, tokens) = seedelf_core::utxos::assets_of(plan.taken.clone())?;
     let returned: u64 = total - back_fee;
 
     let mut txs = Vec::with_capacity(built.txs.len() + 1);

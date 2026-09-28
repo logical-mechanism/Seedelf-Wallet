@@ -25,6 +25,7 @@ import type { NetworkName } from "../networks";
 import { merged, UNKNOWN, type HistoryClass } from "../shared/histories";
 import type { PendingTx } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
+import { txInputs } from "./cbor";
 import { seedelfTokenOf } from "./chain";
 import type { ActivityService } from "./activity";
 import type { CoinControlService } from "./coin-control";
@@ -289,6 +290,10 @@ export async function send(
     if (signed.txHash !== txHash) throw new Error("Signing changed the transaction, so it wasn't sent.");
     txCbor = signed.txCbor;
   }
+  // Reviewed before a return through Lovejoin started being sent, it may take what that chain spends: the
+  // funding change its last transaction merges into. Only one of the two could land, so this one waits for a
+  // review that leaves it out (independent review L18). Checked last, just before it goes.
+  if (!again) await refuseReserved(deps, network, built.txCbor, what);
   const { txCbor: _txCbor, seed: _seed, sentCbor: _sentCbor, builtAt: _builtAt, ...summary } = built;
   return submitWatched(deps, {
     network,
@@ -303,4 +308,19 @@ export async function send(
     invalidHereafter: built.invalidHereafter,
     again,
   });
+}
+
+/**
+ * Refuses a kept transaction that spends what a chain through Lovejoin being
+ * sent will spend (spent.ts reservations: a session's return, whose last
+ * transaction merges into its funding's change, or a mix from the public
+ * account): readContract leaves those out, but only of what's built after
+ * the chain started.
+ */
+async function refuseReserved(deps: ScriptSpendDeps, network: NetworkName, txCbor: string, what: string): Promise<void> {
+  const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
+  const reserved = await deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true, now: deps.now() }));
+  if (inputs.some((o) => reserved.inputs.has(o))) {
+    throw new Error(`That ${what} spends a UTxO a chain through Lovejoin, sent since you reviewed it, spends too. Review it again.`);
+  }
 }

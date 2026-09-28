@@ -98,9 +98,9 @@ export function subOf(s: SessionView, now: number): string {
   if (s.stage === "failed") return unseen(s) ? "The chain hasn't shown its funding yet" : "Its funding didn't go through";
   if (s.stage === "funding") return "Its one-time account is being funded";
   if (s.mix?.skipped) return "Came back without going into Lovejoin";
-  if (s.chain?.cut || s.chain?.stopped) return chainText(s.chain);
+  if (s.chain?.cut || s.chain?.stopped) return chainText(s.chain, !s.auto);
   if (s.stage === "closed") return `In Lovejoin since ${whenOf(s.createdAt, new Date(now))}`;
-  if (s.chain) return chainText(s.chain);
+  if (s.chain) return chainText(s.chain, !s.auto);
   if (s.auto?.stopping) return "Stopping: it all comes back directly";
   if (s.auto?.retry) return "Something went wrong: it tries again by itself";
   // Found as the wallet unlocked, its next step waits a few minutes (privacy review §3.1).

@@ -1,10 +1,11 @@
 // What a private session leaves at its one-time account, and why (launch
 // review H6), on every session's page and return: UTxOs no return of the
 // wallet's takes (`leftBehind`: a reference script it can't price, or too
-// little to pay its own way back), which stay there and don't hold the
-// session open; and what one return leaves for the next (`leftOut`: a token
-// that would add up to more with the rest than an output can hold). Without
-// this, "everything came back" wouldn't quite be true.
+// little to pay its own way back, a stranger's tokens say), which stay there
+// and don't hold the session open; and what one return leaves for the next
+// (`leftOut`: a token that would add up to more with the rest than an output
+// can hold, or more than one transaction holds). Without this, "everything
+// came back" wouldn't quite be true.
 
 import type { LeftBehindUtxo, LeftOutUtxo } from "../../shared/rpc";
 import { plural, shortHex } from "../format";
@@ -20,7 +21,10 @@ export function leftBehindReason(reason: LeftBehindUtxo["reason"]): string {
 
 /** Why a return leaves a UTxO at the session's account, after its outpoint. */
 export function returnLeftOutReason(reason: LeftOutUtxo["reason"]): string {
-  return reason === "tokens" ? "comes back with the next return" : "holds a reference script the wallet can't spend, so it stays there";
+  if (reason === "tokens" || reason === "size") return "comes back with the next return";
+  // Someone else's tokens: the session's own ADA never pays for their deposit (independent review H1, H2).
+  if (reason === "cost") return "holds tokens its own ADA doesn't pay the deposit for, so it stays there";
+  return "holds a reference script the wallet can't spend, so it stays there";
 }
 
 const outpoint = (u: { txHash: string; txIndex: number }) => (
@@ -62,6 +66,7 @@ export function LeftBehindNote({ leftBehind, name }: { leftBehind?: LeftBehindUt
 export function ReturnLeftOut({ leftOut, name }: { leftOut?: LeftOutUtxo[]; name?: string }) {
   if (!leftOut?.length) return null;
   const tokens = leftOut.some((u) => u.reason === "tokens");
+  const size = !tokens && leftOut.some((u) => u.reason === "size");
   return (
     <Callout tone="info" testId="return-left-out">
       {name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}'s return` : "This return"} leaves{" "}
@@ -75,6 +80,7 @@ export function ReturnLeftOut({ leftOut, name }: { leftOut?: LeftOutUtxo[]; name
       </ul>
       {tokens &&
         "A token it holds would add up to more with the rest than one output can hold. Once this return lands, bring the session back again for the rest."}
+      {size && "One transaction can't hold everything at once. Once this return lands, bring the session back again for the rest."}
     </Callout>
   );
 }

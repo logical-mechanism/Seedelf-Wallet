@@ -877,9 +877,11 @@ export interface SessionView {
 /**
  * A UTxO at a session's account that no return of the wallet's takes:
  * `script`, it holds a reference script the wallet can't measure, so it
- * can't price spending it; `fee`, what's left there is too little, all
- * together, to pay for its own way back into the private balance. Its
- * `lovelace`, as it was found.
+ * can't price spending it; `fee`, it doesn't pay for its own way back into
+ * the private balance: a stranger's tokens whose own ADA doesn't cover their
+ * deposit, or what's left there, all together, too little. A `fee` one is
+ * tried again with the rest when more arrives. Its `lovelace`, as it was
+ * found.
  */
 export interface LeftBehindUtxo {
   txHash: string;
@@ -947,12 +949,15 @@ export interface SessionBackSummary {
  * script the wallet can't measure, so it can't price spending it, and no
  * transaction of this wallet takes it; `returning`, a return through
  * Lovejoin that's still being sent spends it (a private one, Make public's
- * Max).
+ * Max). A session's return only (independent review H1, H2): `cost`, a
+ * stranger's token UTxO whose own ADA doesn't pay for the deposit its
+ * tokens need, so it stays (and is left behind); `size`, one transaction
+ * can't hold it with the rest, so the next return takes it.
  */
 export interface LeftOutUtxo {
   txHash: string;
   txIndex: number;
-  reason: "tokens" | "script" | "returning";
+  reason: "tokens" | "script" | "returning" | "cost" | "size";
 }
 
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */

@@ -158,7 +158,11 @@ pub mod api {
         ///   for the next transaction, which can take it;
         /// - `script`: it holds a reference script the wallet can't measure
         ///   (`seedelf_core::utxos::reference_script_size`), so it can't price
-        ///   spending it, and no transaction of this wallet takes it.
+        ///   spending it, and no transaction of this wallet takes it;
+        /// - a session's return only (`api::plan_return`): `cost`, a
+        ///   stranger's token UTxO whose own ADA doesn't pay for the deposit
+        ///   and bytes its tokens add, so it stays; `size`, one transaction
+        ///   can't hold it with the rest, so it waits for the next return.
         pub reason: String,
     }
 
@@ -559,20 +563,172 @@ pub mod api {
     }
 
     /// What a session's return takes of its account's UTxOs ([`plan_return`]).
+    #[derive(Clone)]
     pub(crate) struct ReturnPlan {
+        /// The session's own and ADA-only UTxOs first, then the strangers'
+        /// token UTxOs it takes (the last `strangers` of them).
         pub taken: Vec<UtxoResponse>,
         /// The rest, which stays at the account.
         pub left_out: Vec<LeftOut>,
         /// Whether the return merges into `merge` (see [`merged_return`]).
         pub merged: bool,
+        /// How many of `taken`, at its end, are strangers' token UTxOs.
+        pub strangers: usize,
+    }
+
+    impl ReturnPlan {
+        /// The same plan with fewer of the strangers' token UTxOs it took,
+        /// those it drops left out for `reason`: a return with them couldn't
+        /// be built after all. All of them when it takes the session's own
+        /// or ADA-only UTxOs too; when strangers' are all it takes, only the
+        /// last (the smallest), so it never becomes a return of nothing while
+        /// one of them may still come back (independent review H2). None
+        /// when it took none, or only that one.
+        fn without_strangers(&self, reason: &str) -> Option<ReturnPlan> {
+            let core = self.taken.len() - self.strangers;
+            let keep = if core > 0 {
+                core
+            } else {
+                self.strangers.saturating_sub(1)
+            };
+            if self.strangers == 0 || keep == 0 {
+                return None;
+            }
+            let mut left_out = self.left_out.clone();
+            left_out.extend(self.taken[keep..].iter().map(|u| LeftOut {
+                tx_hash: u.tx_hash.clone(),
+                tx_index: u.tx_index,
+                reason: reason.to_string(),
+            }));
+            Some(ReturnPlan {
+                taken: self.taken[..keep].to_vec(),
+                left_out,
+                merged: self.merged,
+                strangers: keep - core,
+            })
+        }
+    }
+
+    /// What `session_return` says when nothing at the account pays for its
+    /// own way back (the worker's TOO_LITTLE reads it).
+    pub const NOTHING_PAYS: &str = "Nothing at the session's account pays for its own way back: its ADA is too little for the deposit and fee";
+
+    /// About the most a plain return's transaction takes besides its inputs
+    /// and its deposit outputs: the body, its fee and required signer, and
+    /// the session key's witness. One measured 160 bytes of it.
+    const SWEEP_OVERHEAD_BYTES: u64 = 500;
+    /// The same for a merged one, which also holds the Seedelf spend of up to
+    /// [`MAX_MERGE`] of the funding's UTxOs, their proofs, the collateral and
+    /// the script data. One merged into four measured under 1,000 bytes.
+    const MERGED_OVERHEAD_BYTES: u64 = 2_000;
+    /// What one more input adds to a transaction, at most: `[tx hash, index]`.
+    const INPUT_BYTES: u64 = 40;
+    /// Room each deposit output's measure leaves for the amount it really
+    /// carries: up to 9 bytes, against the stand-in's 5.
+    const AMOUNT_SLACK: u64 = 4;
+    /// What a stranger's token UTxO brings besides the deposit and the bytes
+    /// it adds, at least: a merged return's scripts read every input and
+    /// output, so each one more costs a little to run.
+    const STRANGER_MARGIN: u64 = 50_000;
+
+    /// The deposit outputs `tokens` need in a return (`build::deposit_outputs`,
+    /// `MAXIMUM_TOKENS_PER_UTXO` to an output, each with a register): the least
+    /// lovelace they carry, and about their bytes, measured on the same
+    /// stand-in outputs the minimum is.
+    fn deposit_measure(params: &ProtocolParameters, tokens: &Assets) -> Result<(u64, u64)> {
+        use seedelf_core::constants::{MAXIMUM_TOKENS_PER_UTXO, OVERHEAD_COST};
+        let chunks = if tokens.is_empty() {
+            vec![Assets::new()]
+        } else {
+            tokens.split(MAXIMUM_TOKENS_PER_UTXO as usize)
+        };
+        let per_byte = params.coins_per_utxo_size.max(1);
+        chunks
+            .into_iter()
+            .try_fold((0u64, 0u64), |(lovelace, bytes), chunk| {
+                let minimum =
+                    seedelf_core::transaction::wallet_minimum_lovelace_with_assets(params, chunk)?;
+                let size = (minimum / per_byte).saturating_sub(OVERHEAD_COST) + AMOUNT_SLACK;
+                Ok((lovelace.saturating_add(minimum), bytes.saturating_add(size)))
+            })
+    }
+
+    /// A return being planned: how many UTxOs it takes, their tokens (with
+    /// the funding change's it merges into) and their reference scripts'
+    /// bytes.
+    #[derive(Clone)]
+    struct Draft {
+        /// What its transaction takes besides its inputs and outputs.
+        overhead: u64,
+        inputs: u64,
+        tokens: Assets,
+        script_bytes: u64,
+    }
+
+    impl Draft {
+        /// With `row` too; None when one of its tokens would total more with
+        /// the rest than an output can hold (`seedelf_core::utxos::fitting`).
+        fn with(&self, row: &UtxoResponse) -> Result<Option<Draft>> {
+            let (_, tokens) = utxo_assets(vec![row.clone()])?;
+            let Ok(tokens) = self.tokens.merge(tokens) else {
+                return Ok(None);
+            };
+            Ok(Some(Draft {
+                overhead: self.overhead,
+                inputs: self.inputs + 1,
+                tokens,
+                script_bytes: self
+                    .script_bytes
+                    .saturating_add(seedelf_core::utxos::reference_script_size(row)?),
+            }))
+        }
+
+        /// About its signed size, at most.
+        fn bytes(&self, params: &ProtocolParameters) -> Result<u64> {
+            let (_, outputs) = deposit_measure(params, &self.tokens)?;
+            Ok(self.overhead + INPUT_BYTES * self.inputs + outputs)
+        }
+
+        /// Whether one transaction holds it, safely: under the network's size
+        /// and its reference scripts' limits.
+        fn fits(&self, params: &ProtocolParameters) -> Result<bool> {
+            Ok(self.script_bytes <= build::MAX_REFERENCE_SCRIPT_BYTES
+                && self.bytes(params)? <= build::MAX_TX_SIZE)
+        }
+
+        /// The lovelace a return of it needs, at most: its deposit and its fee.
+        /// Nothing when it takes nothing.
+        fn needs(&self, params: &ProtocolParameters) -> Result<u64> {
+            if self.inputs == 0 {
+                return Ok(0);
+            }
+            let (minimum, _) = deposit_measure(params, &self.tokens)?;
+            let fee = build::linear_fee(params, self.bytes(params)?)
+                .saturating_add(build::reference_script_fee(params, self.script_bytes)?);
+            Ok(minimum.saturating_add(fee))
+        }
     }
 
     /// What a session's return takes of its account's `rows`, and whether it
-    /// can merge into `merge`: the funding's change, when it holds tokens,
-    /// counts towards every token's total ([`seedelf_core::utxos::fitting`]).
-    /// The rest waits for a later return. `own` are the session's own
-    /// transactions: what they left comes first. A UTxO holding a reference
-    /// script that can't be measured is never taken: its fee can't be priced.
+    /// can merge into `merge`: the funding's change, whose tokens count in
+    /// the return's. A UTxO holding a reference script that can't be measured
+    /// is never taken: its fee can't be priced (`script`).
+    ///
+    /// Anyone can pay the session's address, so what's there is taken by cost
+    /// (independent review H1, H2), never all of it blindly:
+    /// - the session's own UTxOs (`own`: what its transactions left) and the
+    ///   ADA-only ones first, own first, then the largest, while one
+    ///   transaction holds them (`size`: the rest waits for the next return);
+    /// - then each stranger's token UTxO, the largest first, only when its
+    ///   own ADA pays for the deposit outputs its tokens add (20 tokens to an
+    ///   output, each with a register) and the bytes it adds, and one
+    ///   transaction still holds it. One that doesn't pay its own way stays
+    ///   (`cost`): the session's ADA never pays for a stranger's tokens. One
+    ///   that pays but doesn't fit with the rest waits for a return of its
+    ///   own (`size`), unless even that couldn't hold it (`cost`: it stays).
+    ///
+    /// A token that would total more with the rest than an output can hold
+    /// waits for the next return (`tokens`).
     ///
     /// A merged return is measured in the wallet, and its evaluator can't take
     /// a reference script, or a datum too deep to read
@@ -580,44 +736,175 @@ pub mod api {
     /// address. With one, the return is the plain sweep instead, which runs no
     /// script and pays for the reference script's bytes.
     pub(crate) fn plan_return(
+        params: &ProtocolParameters,
         rows: &[UtxoResponse],
         merge: &[UtxoResponse],
         own: &[String],
     ) -> Result<ReturnPlan> {
-        let priced: Vec<UtxoResponse> = rows
+        let priced: Vec<&UtxoResponse> = rows
             .iter()
             .filter(|u| seedelf_core::utxos::reference_script_size(u).is_ok())
-            .cloned()
             .collect();
         let evaluable = priced
             .iter()
+            .copied()
             .chain(merge)
             .all(|u| seedelf_core::eval::refusal(u).is_none());
-        let base = if merge.is_empty() || !evaluable || session_collateral(&priced).is_none() {
+        let measured: Vec<UtxoResponse> = priced.iter().map(|u| (*u).clone()).collect();
+        let base = if merge.is_empty() || !evaluable || session_collateral(&measured).is_none() {
             None
         } else {
             // The funding's change is this wallet's own; if even it can't be
             // added up, the return makes new UTxOs instead.
             utxo_assets(merge.to_vec()).ok().map(|(_, tokens)| tokens)
         };
-        let (taken, _) =
-            seedelf_core::utxos::fitting(&priced, base.as_ref().unwrap_or(&Assets::new()), |u| {
-                own.contains(&u.tx_hash)
-            })?;
-        let left: Vec<UtxoResponse> = rows
+        let lovelace = |u: &UtxoResponse| -> Result<u64> {
+            u.value
+                .parse::<u64>()
+                .map_err(|_| anyhow!("UTxO {}#{} has an unreadable value", u.tx_hash, u.tx_index))
+        };
+        let is_own = |u: &UtxoResponse| own.contains(&u.tx_hash);
+        let has_tokens = |u: &UtxoResponse| u.asset_list.as_ref().is_some_and(|a| !a.is_empty());
+        let key = |u: &UtxoResponse| -> Result<(bool, std::cmp::Reverse<u64>, String, u64)> {
+            Ok((
+                !is_own(u),
+                std::cmp::Reverse(lovelace(u)?),
+                u.tx_hash.clone(),
+                u.tx_index,
+            ))
+        };
+        let (core, strangers): (Vec<&UtxoResponse>, Vec<&UtxoResponse>) = priced
+            .into_iter()
+            .partition(|u| is_own(u) || !has_tokens(u));
+        let mut core = core
+            .into_iter()
+            .map(|u| Ok((key(u)?, u)))
+            .collect::<Result<Vec<_>>>()?;
+        core.sort_by(|(a, _), (b, _)| a.cmp(b));
+        // Strangers' only: all the same `!is_own`, so the largest first.
+        let mut strangers = strangers
+            .into_iter()
+            .map(|u| Ok((key(u)?, u)))
+            .collect::<Result<Vec<_>>>()?;
+        strangers.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        let mut draft = Draft {
+            overhead: if base.is_some() {
+                MERGED_OVERHEAD_BYTES
+            } else {
+                SWEEP_OVERHEAD_BYTES
+            },
+            inputs: 0,
+            tokens: base.clone().unwrap_or_default(),
+            script_bytes: 0,
+        };
+        let mut taken: Vec<UtxoResponse> = Vec::new();
+        let mut why: HashMap<(String, u64), &'static str> = HashMap::new();
+        let mut leave = |u: &UtxoResponse, reason: &'static str| {
+            why.insert((u.tx_hash.clone(), u.tx_index), reason);
+        };
+        for (_, row) in core {
+            match draft.with(row)? {
+                None => leave(row, "tokens"),
+                // The first is always taken: a return that takes nothing never comes.
+                Some(more) if !taken.is_empty() && !more.fits(params)? => leave(row, "size"),
+                Some(more) => {
+                    draft = more;
+                    taken.push(row.clone());
+                }
+            }
+        }
+        let own_taken = taken.len();
+        for (_, row) in strangers {
+            let Some(more) = draft.with(row)? else {
+                leave(row, "tokens");
+                continue;
+            };
+            if !more.fits(params)? {
+                // It waits for a return of its own, unless even that couldn't
+                // hold it, or it couldn't pay for one: then it stays.
+                let alone = Draft {
+                    overhead: SWEEP_OVERHEAD_BYTES,
+                    inputs: 0,
+                    tokens: Assets::new(),
+                    script_bytes: 0,
+                }
+                .with(row)?;
+                let stays = match alone {
+                    Some(alone) => {
+                        !alone.fits(params)?
+                            || lovelace(row)? < alone.needs(params)?.saturating_add(STRANGER_MARGIN)
+                    }
+                    None => true,
+                };
+                leave(row, if stays { "cost" } else { "size" });
+                continue;
+            }
+            let adds = more.needs(params)?.saturating_sub(draft.needs(params)?);
+            if lovelace(row)? < adds.saturating_add(STRANGER_MARGIN) {
+                leave(row, "cost");
+                continue;
+            }
+            draft = more;
+            taken.push(row.clone());
+        }
+        let left_out = rows
             .iter()
             .filter(|u| {
                 !taken
                     .iter()
                     .any(|t| t.tx_hash == u.tx_hash && t.tx_index == u.tx_index)
             })
-            .cloned()
+            .map(|u| match why.get(&(u.tx_hash.clone(), u.tx_index)) {
+                Some(reason) => LeftOut {
+                    tx_hash: u.tx_hash.clone(),
+                    tx_index: u.tx_index,
+                    reason: reason.to_string(),
+                },
+                // Not priced: its reference script can't be measured.
+                None => left_out(std::slice::from_ref(u)).remove(0),
+            })
             .collect();
         Ok(ReturnPlan {
             merged: base.is_some(),
+            strangers: taken.len() - own_taken,
             taken,
-            left_out: left_out(&left),
+            left_out,
         })
+    }
+
+    /// `build(plan)`, and when that fails for a plan that took strangers'
+    /// token UTxOs, `build` of it without them (left out for `size` when the
+    /// return was too big, `cost` otherwise): the plan's measure is an
+    /// estimate, and the session's own never waits on a stranger's. When
+    /// strangers' are all it takes, they go one at a time, the smallest
+    /// first, and none that builds is left behind with the rest
+    /// ([`ReturnPlan::without_strangers`]); when none of them builds,
+    /// nothing pays for its own way back ([`NOTHING_PAYS`]). The plan built,
+    /// with the result.
+    pub(crate) fn built_or_without_strangers<T>(
+        plan: ReturnPlan,
+        mut build: impl FnMut(&ReturnPlan) -> Result<T>,
+    ) -> Result<(T, ReturnPlan)> {
+        let mut plan = plan;
+        loop {
+            let e = match build(&plan) {
+                Ok(built) => return Ok((built, plan)),
+                Err(e) => e,
+            };
+            let reason = if e.to_string().contains("over the network's limit") {
+                "size"
+            } else {
+                "cost"
+            };
+            match plan.without_strangers(reason) {
+                Some(fewer) => plan = fewer,
+                None if plan.strangers > 0 && plan.strangers == plan.taken.len() => {
+                    bail!(NOTHING_PAYS)
+                }
+                None => return Err(e),
+            }
+        }
     }
 
     /// The return of `rows`, UTxOs under session `index`'s key, merged into
@@ -662,17 +949,16 @@ pub mod api {
         Ok((signed, built))
     }
 
-    /// Builds and signs a session's return: every UTxO at its one-time
-    /// account into the wallet contract, under fresh re-randomizations of
-    /// `sk`'s base register. With `merge`, one Seedelf spend takes the
-    /// funding's change too, so what comes back joins the UTxO already
-    /// linked to the session instead of making another ([`merged_return`]),
-    /// with the session's own collateral. Without, or when a UTxO there is
-    /// one the merge can't measure, it's the CLI's `external sweep`
-    /// (`build::external_sweep`): no script runs, and no collateral. What
-    /// one transaction can't take stays, and the result says so
-    /// ([`plan_return`]). Each UTxO must be under the session's payment key;
-    /// it signs inside this module.
+    /// Builds and signs a session's return: what's at its one-time account
+    /// into the wallet contract, under fresh re-randomizations of `sk`'s base
+    /// register. With `merge`, one Seedelf spend takes the funding's change
+    /// too, so what comes back joins the UTxO already linked to the session
+    /// instead of making another ([`merged_return`]), with the session's own
+    /// collateral. Without, or when a UTxO there is one the merge can't
+    /// measure, it's the CLI's `external sweep` (`build::external_sweep`): no
+    /// script runs, and no collateral. What it doesn't take stays, and the
+    /// result says why ([`plan_return`]). Each UTxO must be under the
+    /// session's payment key; it signs inside this module.
     pub fn session_return(
         accounts: &CardanoAccount,
         sk: Scalar,
@@ -694,7 +980,26 @@ pub mod api {
                 );
             }
         }
-        let plan = plan_return(&request.utxos, &request.merge, &request.own)?;
+        let plan = plan_return(&params, &request.utxos, &request.merge, &request.own)?;
+        if plan.taken.is_empty() {
+            bail!(NOTHING_PAYS);
+        }
+        let (result, _) = built_or_without_strangers(plan, |plan| {
+            planned_return(accounts, sk, &request, &params, plan)
+        })?;
+        Ok(result)
+    }
+
+    /// Session `request.index`'s return of what `plan` takes.
+    fn planned_return(
+        accounts: &CardanoAccount,
+        sk: Scalar,
+        request: &SessionReturnRequest,
+        params: &ProtocolParameters,
+        plan: &ReturnPlan,
+    ) -> Result<SessionReturnResult> {
+        let network_flag = network_flag(&request.network)?;
+        let key = accounts.key_hash(Role::Receive, request.index)?;
         let (total, tokens) = utxo_assets(plan.taken.clone())?;
         if let (true, Some(collateral)) = (plan.merged, session_collateral(&plan.taken)) {
             let chain = chain_of(&request.network, &request.params)?;
@@ -717,13 +1022,13 @@ pub mod api {
                 deposit_outputs: built.change_outputs,
                 inputs: plan.taken.len(),
                 merged: request.merge.len(),
-                left_out: plan.left_out,
+                left_out: plan.left_out.clone(),
             });
         }
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
         let owner = Register::create(sk)?;
-        let (tx, fee) = build::external_sweep(&params, &plan.taken, &owner, &wallet, key)?;
+        let (tx, fee) = build::external_sweep(params, &plan.taken, &owner, &wallet, key)?;
         let signed = tx
             .sign(
                 accounts
@@ -747,7 +1052,7 @@ pub mod api {
             deposit_outputs,
             inputs: plan.taken.len(),
             merged: 0,
-            left_out: plan.left_out,
+            left_out: plan.left_out.clone(),
         })
     }
 
@@ -2285,6 +2590,98 @@ pub mod api {
             g_r_hex,
             vkh_hex,
         )
+    }
+
+    /// [`built_or_without_strangers`] with a stand-in for the build: a
+    /// return's plan is an estimate, and what happens when the build
+    /// disagrees (independent review H2). `ReturnPlan` is the crate's own,
+    /// so its tests are here.
+    #[cfg(test)]
+    mod return_plan_tests {
+        use super::*;
+
+        fn row(tx: u8) -> UtxoResponse {
+            UtxoResponse {
+                tx_hash: format!("{tx:02x}").repeat(32),
+                value: "2000000".to_string(),
+                ..Default::default()
+            }
+        }
+
+        /// A plan taking `core` (the session's own, ADA-only), then `strangers`.
+        fn plan(core: &[u8], strangers: &[u8]) -> ReturnPlan {
+            ReturnPlan {
+                taken: core.iter().chain(strangers).map(|&tx| row(tx)).collect(),
+                left_out: vec![],
+                merged: false,
+                strangers: strangers.len(),
+            }
+        }
+
+        fn taken(plan: &ReturnPlan) -> Vec<&str> {
+            plan.taken.iter().map(|u| &u.tx_hash[..2]).collect()
+        }
+
+        fn left(plan: &ReturnPlan) -> Vec<(&str, &str)> {
+            plan.left_out
+                .iter()
+                .map(|l| (&l.tx_hash[..2], l.reason.as_str()))
+                .collect()
+        }
+
+        #[test]
+        fn strangers_alone_go_one_at_a_time_never_all_of_them() {
+            // One transaction holds only one of them after all.
+            let (built, fewer) = built_or_without_strangers(plan(&[], &[1, 2, 3]), |p| {
+                if p.taken.len() > 1 {
+                    bail!("the transaction is over the network's limit")
+                }
+                Ok(p.taken.len())
+            })
+            .unwrap();
+            assert_eq!(built, 1);
+            assert_eq!(taken(&fewer), ["01"]);
+            assert_eq!(fewer.strangers, 1);
+            assert_eq!(left(&fewer), [("03", "size"), ("02", "size")]);
+        }
+
+        #[test]
+        fn strangers_alone_none_of_which_builds_are_nothing_that_pays() {
+            for strangers in [&[1][..], &[1, 2]] {
+                let mut tries = 0;
+                let e = built_or_without_strangers(plan(&[], strangers), |_| -> Result<()> {
+                    tries += 1;
+                    bail!("Not Enough Lovelace/Tokens")
+                })
+                .err()
+                .unwrap();
+                assert_eq!(e.to_string(), NOTHING_PAYS);
+                assert_eq!(tries, strangers.len());
+            }
+        }
+
+        #[test]
+        fn with_the_sessions_own_every_stranger_goes_at_once() {
+            let mut tried = vec![];
+            let (_, own) = built_or_without_strangers(plan(&[1], &[2, 3]), |p| {
+                tried.push(p.taken.len());
+                if p.strangers > 0 {
+                    bail!("Not Enough Lovelace/Tokens")
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(tried, [3, 1]);
+            assert_eq!(taken(&own), ["01"]);
+            assert_eq!(left(&own), [("02", "cost"), ("03", "cost")]);
+            // The session's own failing says why, as it did.
+            let e = built_or_without_strangers(plan(&[1], &[2]), |_| -> Result<()> {
+                bail!("the session's own failed")
+            })
+            .err()
+            .unwrap();
+            assert_eq!(e.to_string(), "the session's own failed");
+        }
     }
 }
 

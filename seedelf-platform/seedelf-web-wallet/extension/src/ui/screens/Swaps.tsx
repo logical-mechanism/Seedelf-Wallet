@@ -2141,7 +2141,7 @@ export function nowLine(s: SessionView): string {
       return "Cancelling the order. Once that's confirmed, it all comes back.";
     case "returning":
       if (s.chain) {
-        const how = chainText(s.chain);
+        const how = chainText(s.chain, !s.auto);
         return `Coming back through Lovejoin: ${how.charAt(0).toLowerCase()}${how.slice(1)}.`;
       }
       return "Coming back into your private balance: waiting for the network to confirm it.";

@@ -53,6 +53,7 @@ import { NETWORKS, type NetworkName } from "../networks";
 import type {
   DappTxSummary,
   LeftBehindUtxo,
+  LeftOutUtxo,
   LovejoinFunding,
   Paid,
   PendingTx,
@@ -187,6 +188,14 @@ type RecordedTx = SessionTx & {
   inputs?: string[];
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`), recorded before it's sent. */
   orders?: string[];
+  /**
+   * A return whose private history isn't written yet: what its review said,
+   * recorded with it before it's sent, and gone once its history is. One
+   * Koios didn't answer, or that a lock or a restart cut off, is written
+   * once the chain shows it (noteLanded), as the wallet's watch does for its
+   * own (independent review M7).
+   */
+  summary?: Pick<SessionBackSummary, "index" | "lovelace" | "tokens" | "fee">;
 };
 
 /** The steps whose transaction is built again when it goes unseen (a chain's own are sent again as they are). */
@@ -263,6 +272,14 @@ interface SessionRecord {
   lovejoinSkipped?: string;
   /** What's at its account that no return takes (SessionView's). It doesn't hold the session open. */
   leftBehind?: LeftBehindUtxo[];
+  /**
+   * When a return last found nothing at its account that pays for its own
+   * way back (all of it left behind), the session's own money among it: a
+   * mix of the boxes again then has no chain to send, so Lovejoin may bring
+   * them back meanwhile (independent review H1). Cleared once a return is
+   * built again.
+   */
+  nothingBack?: number;
   closedAt?: number;
 }
 
@@ -375,6 +392,9 @@ const PENDING_KIND = {
 /** Why a return leaves Lovejoin out when its account's collateral is gone (privacy review §2.15). */
 const NO_COLLATERAL = "its 5 ₳ collateral isn't at its account anymore, and the mixes need it";
 
+/** Why a return leaves Lovejoin out while its last chain's rest, sent back directly, isn't on chain (independent review L17). */
+const REST_NOT_BACK = "the return of what its last chain through Lovejoin left wasn't on chain yet";
+
 /** The most funding changes one return merges into (WebAssembly's MAX_MERGE). */
 const MAX_MERGE = 4;
 
@@ -455,8 +475,24 @@ function returnable(s: SessionRecord, rows: KoiosUtxo[]): KoiosUtxo[] {
   return behind.size ? rows.filter((u) => !behind.has(outpoint(u))) : rows;
 }
 
-/** WebAssembly couldn't build a return because what it takes doesn't pay for its own deposit and fee. */
-const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace|Not Enough Lovelace/i;
+/**
+ * WebAssembly couldn't build a return because what it takes doesn't pay for
+ * its own deposit and fee: the session's own too little, or nothing but a
+ * stranger's tokens that don't pay their way (api::NOTHING_PAYS).
+ */
+const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace|Not Enough Lovelace|pays for its own way back/i;
+
+/**
+ * A UTxO at a session's account its return's chain can put up as collateral
+ * (privacy review §2.15): exactly 5 ₳ of ADA alone, as its funding pays one,
+ * and nothing WebAssembly's evaluator refuses (eval::refusal): no reference
+ * script, and no datum, inline or by hash, which the session's own never
+ * has. A stranger's 5 ₳ with a datum too deep to read would stop the chain
+ * (independent review L20).
+ */
+function collateralFits(u: KoiosUtxo): boolean {
+  return BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash;
+}
 
 /** A swap that runs itself and has something left to do without the user. */
 function running(s: SessionRecord): boolean {
@@ -465,13 +501,16 @@ function running(s: SessionRecord): boolean {
 
 /**
  * A mix of the wallet's boxes again whose chain may still spend them: from
- * its funding on (unless that never went) until its return is sent.
+ * its funding on (unless that never went) until its return is sent, and not
+ * while nothing at its account can come back (`nothingBack`): no chain goes
+ * then, so its boxes aren't held for one (independent review H1).
  */
 function mixingAgain(s: SessionRecord): boolean {
   return (
     !!s.mix?.again &&
     !s.closedAt &&
     !s.auto?.failed &&
+    s.nothingBack === undefined &&
     !s.txs[0]?.unsent &&
     !s.txs.some((t) => t.kind === "back" && !t.unsent)
   );
@@ -546,6 +585,16 @@ function landed(copies: RecordedTx[], gone: Set<string>): boolean {
  */
 function mayStillLand(s: SessionRecord, now: number): boolean {
   return s.txs.some((t) => t.replaced && !t.confirmed && now - t.at < REPLACED_WATCH_MS);
+}
+
+/**
+ * A return whose history isn't written yet (`summary`), that Koios may have
+ * taken and the chain hasn't shown: looked for as long as a copy built
+ * again is (REPLACED_WATCH_MS), since a lagging Koios may show it late
+ * (independent review M7).
+ */
+function awaitsHistory(t: RecordedTx, now: number): boolean {
+  return !!t.summary && !t.confirmed && !t.unsent && now - t.at < REPLACED_WATCH_MS;
 }
 
 export class SessionService {
@@ -865,16 +914,27 @@ export class SessionService {
     });
   }
 
-  /** Builds another payment into a site's private session: `lovelace` and `tokens`, from the private balance. */
+  /**
+   * Builds another payment into a site's private session: `lovelace` and
+   * `tokens`, from the private balance, and a new 5 ₳ collateral when the
+   * account holds none it can put up (independent review M9). A return takes
+   * everything at the account, its collateral too, and a site's transaction
+   * may spend it: without one the site has none for its contracts, and the
+   * next return can't go through Lovejoin. One a return's chain being sent
+   * will spend doesn't count.
+   */
   async topUpBuild(network: NetworkName, index: number, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
     const s = await this.live(network, index);
     if (!s.site) throw new Error("Only a site's private session takes a top-up.");
-    const { address } = (await this.accounts(network, [s])).get(index)!;
+    const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
+    const held = await this.accountUtxos(network, keyHash);
+    const payments = [{ to: address, lovelace, tokens }];
+    if (!held.some(collateralFits)) payments.push({ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] });
     const { summary, txCbor, seed } = await this.buildFunding(
       network,
       index,
       address,
-      [{ to: address, lovelace, tokens }],
+      payments,
       "Your private balance is empty, so there's nothing to top up with.",
     );
     const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
@@ -934,12 +994,15 @@ export class SessionService {
       if (waiting.length) {
         const statuses = await koios.txStatus(waiting.map((t) => t.txHash));
         const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
-        if (on.size) s = await this.update(network, index, (r) => void settle(r, on));
+        if (on.size) s = await this.noteLanded(network, await this.update(network, index, (r) => void settle(r, on)));
         const recent = s.txs.some((t) => !t.confirmed && !t.unsent && now() - t.at <= FAILED_AFTER_MS);
         if (recent || (await this.stillWatched(network, s))) {
           throw new Error("Its last transaction hasn't reached the chain yet. Wait for it, then disconnect.");
         }
       }
+      // A return seen on chain earlier, whose history's write failed then: written now, before its record goes
+      // and takes the summary with it (independent review M7).
+      s = await this.noteLanded(network, s);
       const { keyHash } = (await this.accounts(network, [s])).get(index)!;
       const spent = await wallet.withKeys(() => spentSet(session));
       const rows = await readFresh(spent, () => koios.credentialUtxos([keyHash]), (r) => r, this.deps.sleep);
@@ -1371,9 +1434,41 @@ export class SessionService {
     for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt)) {
       if (await this.pendingChain(network, s.index)) await this.serial(() => this.pump(network, s.index)).catch(() => undefined);
     }
-    let still = (await this.book(network)).sessions.some(running);
+    // A return whose history isn't written yet, of a session nothing steps (a site's, a hand-run swap, a paused
+    // one): looked for, and written once on chain, as act does for a running one (independent review M7).
+    for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt && r.txs.some((t) => t.summary))) {
+      await this.serial(() => this.settleReturns(network, s.index)).catch(() => undefined);
+    }
+    const now = this.deps.now();
+    const after = await this.book(network);
+    let still = after.sessions.some((r) => running(r) || (!r.closedAt && r.txs.some((t) => awaitsHistory(t, now))));
     for (const s of book.sessions.filter((r) => !r.closedAt)) still ||= !!(await this.pendingChain(network, s.index));
     return still;
+  }
+
+  /**
+   * Session `index`'s returns whose history isn't written yet, when nothing
+   * steps it: looked for on chain (settled) while they may still land, and
+   * written once there (noteLanded), so a balance reading doesn't note what
+   * came back as money received (independent review M7). Reads only.
+   */
+  private async settleReturns(network: NetworkName, index: number): Promise<void> {
+    const { wallet, session, now } = this.deps;
+    let s = (await this.book(network)).sessions.find((r) => r.index === index);
+    if (!s || s.closedAt || running(s)) return;
+    let returned = false;
+    if (s.txs.some((t) => awaitsHistory(t, now()))) {
+      const waiting = s.txs.filter((t) => !t.confirmed && !t.unsent);
+      const statuses = await this.deps.koios(network).txStatus(waiting.map((t) => t.txHash));
+      const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
+      if (on.size) {
+        returned = waiting.some((t) => t.kind === "back" && on.has(t.txHash));
+        s = await this.update(network, index, (r) => void settle(r, on));
+      }
+    }
+    await this.noteLanded(network, s);
+    // The private balance has new UTxOs: the next reading should see them.
+    if (returned) await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
   }
 
   /**
@@ -1484,8 +1579,10 @@ export class SessionService {
           await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
         }
       }
-      if (s.txs.some((t) => !t.confirmed && !t.replaced)) return;
     }
+    // A return Koios didn't answer, on chain now: its history (independent review M7).
+    s = await this.noteLanded(network, s);
+    if (s.txs.some((t) => !t.confirmed && !t.replaced)) return;
 
     const { address, keyHash } = (await this.accounts(network, [s])).get(s.index)!;
     const { listed, rows } = await this.listing(network, keyHash);
@@ -1772,6 +1869,7 @@ export class SessionService {
     if (unpriced.length) await this.leaveBehind(network, index, unpriced, "script");
     const rows = held.filter(measurable);
     if (!rows.length) {
+      await this.nothingBack(network, index, held);
       throw new NothingComesBack(
         "What's at the session's account holds a reference script the wallet can't price, so no return can take it. It stays there.",
       );
@@ -1780,9 +1878,18 @@ export class SessionService {
     const merge = await this.fundingChange(network, index);
     const record = (await this.book(network)).sessions.find((r) => r.index === index);
     // A chain that went in partly already: what's left comes back directly, rather than go in again.
-    // One that finished (its return sent) doesn't hold a later return back (a site's session is paid again).
-    const finished = !!record?.chain && record.txs.some((t) => t.txHash === record.chain!.last && !t.unsent);
-    const started = !finished && record?.txs.some((t) => (t.kind === "deposit" || t.kind === "mix") && !t.unsent);
+    // One that finished (its return sent), or whose rest came back directly (that return on chain), doesn't
+    // hold a later return back (a site's session is paid again). Only the latest chain's own transactions
+    // count, never an earlier one's (independent review L17); a session from before chains were recorded
+    // counts them all, as it did.
+    const chain = record?.chain;
+    const sent = (record?.txs ?? []).filter((t) => !t.unsent && (!chain || t.at >= chain.at));
+    // Not a mix's whose rest came back directly: another chain would mix the wallet's boxes again, which nothing
+    // holds for it anymore (mixingAgain), so what reaches its account after comes back directly too.
+    const finished =
+      !!chain &&
+      sent.some((t) => t.txHash === chain.last || (!record?.mix && t.kind === "back" && t.confirmed && !t.replaced));
+    const started = !finished && sent.some((t) => t.kind === "deposit" || t.kind === "mix");
     if (started && record?.chain && !record.chain.stopped) {
       // Nothing is sending the rest: the wallet locked, or the browser closed, partway.
       await this.update(network, index, (r) => {
@@ -1793,16 +1900,20 @@ export class SessionService {
     const own = record?.txs.map((t) => t.txHash) ?? [];
     const lovejoin = this.deps.lovejoin;
     let skipped: string | undefined;
+    // What that chain left was sent back directly, and isn't on chain yet: this return comes back directly too,
+    // and says why when it would have gone through Lovejoin (independent review L17).
+    const restOnItsWay = started && sent.some((t) => t.kind === "back" && !t.confirmed && !t.replaced);
+    if (!direct && restOnItsWay && lovejoin?.available(network) && (await this.throughLovejoin(record))) skipped = REST_NOT_BACK;
     if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
-      // §2.15). Never a stranger's 5 ₳ carrying a reference script: the mixes can't put it up.
-      const fits = (u: KoiosUtxo) => BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script;
+      // §2.15). Never a stranger's 5 ₳ carrying a reference script or a datum: the mixes can't put it up.
       const funding = record?.txs[0]?.txHash;
-      const collateral = rows.find((u) => fits(u) && u.tx_hash === funding) ?? rows.find(fits);
+      const collateral = rows.find((u) => collateralFits(u) && u.tx_hash === funding) ?? rows.find(collateralFits);
       let chain: LovejoinChain | undefined;
       if (!collateral) {
-        // Something the account signed spent it (a site's transaction, say): no mix can go, so it comes back
-        // directly, and says so when its spare ADA would have paid for a box.
+        // Something the account signed spent it (a site's transaction, or a return before this one, which takes
+        // it; a top-up puts one back): no mix can go, so it comes back directly, and says so when its spare ADA
+        // would have paid for a box.
         if (record?.mix || spareOf(rows) >= BigInt((await lovejoin.funding(network, 1)).lovelace)) skipped = NO_COLLATERAL;
       } else {
         try {
@@ -1830,6 +1941,7 @@ export class SessionService {
         });
       }
       if (chain) {
+        await this.leftBy(network, index, rows, chain.leftOut);
         const back = chain.txs[chain.txs.length - 1]!;
         const { delay } = await lovejoin.settings();
         return {
@@ -1880,10 +1992,13 @@ export class SessionService {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (/locked/i.test(message) || !TOO_LITTLE.test(message)) throw e;
-      // What's left (a stranger's token on a little ADA, say) doesn't pay its own way back: it stays, rather than be tried for ever.
+      // Even the session's own doesn't pay its way back (WebAssembly takes a stranger's token only when it pays
+      // its own): it stays, rather than be tried for ever, and is tried again once more arrives (act, a top-up).
       await this.leaveBehind(network, index, rows, "fee");
+      await this.nothingBack(network, index, rows);
       throw new NothingComesBack("What's left at the session's account is too little to pay for its own way back, so it stays there.");
     }
+    await this.leftBy(network, index, rows, result.leftOut);
     return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
   }
 
@@ -1900,6 +2015,22 @@ export class SessionService {
     return (await this.deps.preferences?.get())?.lovejoinReturns ?? DEFAULT_PREFERENCES.lovejoinReturns;
   }
 
+  /**
+   * Records that nothing of `rows` at session `index`'s account pays for its
+   * own way back (`nothingBack`), when the session's own money is among them.
+   * Only a stranger's there says nothing of the session's own: Koios may not
+   * list its funding yet, and a mix of the boxes again keeps holding them for
+   * the chain that goes once it does (independent review H1).
+   */
+  private async nothingBack(network: NetworkName, index: number, rows: KoiosUtxo[]): Promise<void> {
+    const record = (await this.book(network)).sessions.find((r) => r.index === index);
+    const own = new Set(record?.txs.map((t) => t.txHash));
+    if (!rows.some((u) => own.has(u.tx_hash))) return;
+    await this.update(network, index, (r) => {
+      r.nothingBack ??= this.deps.now();
+    });
+  }
+
   /** Records `rows` at session `index`'s account as left behind, for `reason`: no return takes them. */
   private async leaveBehind(network: NetworkName, index: number, rows: KoiosUtxo[], reason: LeftBehindUtxo["reason"]): Promise<void> {
     const found = new Set(rows.map(outpoint));
@@ -1909,6 +2040,31 @@ export class SessionService {
         ...rows.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason, lovelace: u.value })),
       ];
     });
+  }
+
+  /**
+   * After a return of `rows` is built (independent review H1, H2): only
+   * what WebAssembly left out because it doesn't pay its own way back
+   * (`cost`, a stranger's tokens) is left behind, never the rest; what was
+   * left behind for its fee and comes back now, or waits for the next return
+   * (`size`, `tokens`), isn't anymore; and a return is found again
+   * (`nothingBack`).
+   */
+  private async leftBy(network: NetworkName, index: number, rows: KoiosUtxo[], leftOut: LeftOutUtxo[] = []): Promise<void> {
+    const key = (u: { txHash: string; txIndex: number }) => `${u.txHash}#${u.txIndex}`;
+    const cost = new Set(leftOut.filter((l) => l.reason === "cost").map(key));
+    const stays = rows.filter((u) => cost.has(outpoint(u)));
+    // Left behind for its fee before, and now taken or only waiting for room: a later return takes it, so it
+    // holds the session open again, rather than be left at the account when the session closes.
+    const back = new Set(rows.map(outpoint).filter((o) => !cost.has(o)));
+    const record = (await this.book(network)).sessions.find((r) => r.index === index);
+    const cleared = (record?.leftBehind ?? []).some((b) => b.reason === "fee" && back.has(key(b)));
+    if (!stays.length && !cleared && record?.nothingBack === undefined) return;
+    await this.update(network, index, (r) => {
+      r.leftBehind = (r.leftBehind ?? []).filter((b) => !(b.reason === "fee" && back.has(key(b))));
+      delete r.nothingBack;
+    });
+    if (stays.length) await this.leaveBehind(network, index, stays, "fee");
   }
 
   /**
@@ -1948,9 +2104,51 @@ export class SessionService {
       after: (s) => {
         if (skipped && !s.mix) s.lovejoinSkipped = skipped;
       },
+      summary: { index: built.index, lovelace: built.lovelace, tokens: built.tokens, fee: built.fee },
     });
-    await this.deps.activity?.sent(network, pending, built).catch(() => undefined);
+    const written = await (this.deps.activity?.sent(network, pending, built) ?? Promise.resolve()).then(
+      () => true,
+      () => false,
+    );
+    if (written) {
+      // Its history is written: nothing is left to write once it lands (RecordedTx `summary`).
+      await this.update(network, built.index, (s) => {
+        const t = s.txs.find((x) => x.txHash === built.txHash);
+        if (t) delete t.summary;
+      }).catch(() => undefined);
+    } else {
+      // Written once it's seen on chain (noteLanded), which the runs look for (independent review M7).
+      await this.deps.alarm?.start();
+    }
     return pending;
+  }
+
+  /**
+   * Writes the private history of each of `s`'s returns whose history isn't
+   * written yet (Koios didn't answer, or a lock or a restart cut the send
+   * off), once the chain has it (settled: confirmed), or a copy of it built
+   * again, from the summary kept with it (independent review M7). Without
+   * it, what it brought back would read as money received, which a funding
+   * or a mint takes first, tying the sessions together. Written before the
+   * summary goes: a second write only writes it again. Returns the record as
+   * saved.
+   */
+  private async noteLanded(network: NetworkName, s: SessionRecord): Promise<SessionRecord> {
+    const written = new Set<string>();
+    for (const t of s.txs) {
+      if (!t.confirmed || !t.summary) continue;
+      const pending: PendingTx = { kind: "session-back", network, txHash: t.txHash, submittedAt: t.at, confirmations: null };
+      try {
+        await this.deps.activity?.sent(network, pending, t.summary);
+        written.add(t.txHash);
+      } catch {
+        // Tried again at the next reading.
+      }
+    }
+    if (!written.size) return s;
+    return this.update(network, s.index, (r) => {
+      for (const t of r.txs) if (written.has(t.txHash)) delete t.summary;
+    });
   }
 
   /**
@@ -1969,6 +2167,13 @@ export class SessionService {
     // of a chain on its way: its progress, its reservation and its record stay as they are (final review lovejoin-4).
     if (await this.pendingChain(network, built.index)) {
       throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish.");
+    }
+    // Something it spends went out in another of the wallet's transactions since it was reviewed (a private
+    // spend sent meanwhile took the funding change its last transaction merges into): it would stop at that one,
+    // after the rest went in, so nothing of it goes, and a new review leaves that out (independent review L18).
+    const spent = await this.deps.wallet.withKeys(() => spentSet(this.deps.session));
+    if (txs!.some((t) => txInputs(hexBytes(t.txCbor)).some((o) => spent.has(o)))) {
+      throw new Error("Something this return spends went out in another transaction since you reviewed it. Review it again.");
     }
     await this.update(network, built.index, (s) => {
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
@@ -2109,7 +2314,8 @@ export class SessionService {
    * `kept`: where it was kept for Send, cleared once it's sent if that still
    * holds `keptHash` (this transaction, or the chain it's part of). `orders`:
    * a swap's, recorded with it. `after`: what else the record gains once
-   * it's sent.
+   * it's sent. `summary`: a return's, recorded with it until its history is
+   * written (RecordedTx `summary`).
    */
   private async sendRecorded(
     network: NetworkName,
@@ -2118,7 +2324,12 @@ export class SessionService {
     txHash: string,
     bytes: Uint8Array<ArrayBuffer>,
     kept: string,
-    { after, keptHash = txHash, orders }: { after?: (s: SessionRecord) => void; keptHash?: string; orders?: string[] } = {},
+    {
+      after,
+      keptHash = txHash,
+      orders,
+      summary,
+    }: { after?: (s: SessionRecord) => void; keptHash?: string; orders?: string[]; summary?: RecordedTx["summary"] } = {},
   ): Promise<PendingTx> {
     const { wallet, session, now } = this.deps;
     const mine = (s: SessionRecord) => s.txs.find((t) => t.txHash === txHash);
@@ -2129,8 +2340,11 @@ export class SessionService {
         sentBefore = !again.unsent;
         delete again.unsent;
         again.sending = true;
+        if (summary) again.summary = summary;
       } else {
-        s.txs.push({ kind, txHash, at: now(), sending: true, ...(orders ? { orders } : {}) });
+        // A return's summary goes with it before it's sent: a lock or a restart may cut the send off, and it may
+        // land all the same (independent review M7).
+        s.txs.push({ kind, txHash, at: now(), sending: true, ...(orders ? { orders } : {}), ...(summary ? { summary } : {}) });
       }
     });
     try {
@@ -2149,6 +2363,9 @@ export class SessionService {
         else if (!unread) t.unsent = true;
       });
       if (maybe || unread) await wallet.withKeys(() => rememberSpent(session, network, bytes));
+      // It may land: its history is written once it's seen (noteLanded), which the runs look for, a site's
+      // session's too (runAll).
+      if ((maybe || unread) && summary) await this.deps.alarm?.start();
       // A return merged into the funding's change, which was spent elsewhere: the kept view of the contract is behind, so read it in full next time.
       if (kind === "back" && e instanceof SpentInputError) await forgetContractView(this.deps, network).catch(() => undefined);
       throw e;
@@ -2237,6 +2454,7 @@ export class SessionService {
         }
       }
       if (changed) await this.save(network, book);
+      for (const s of live) if (s.txs.some((t) => t.confirmed && t.summary)) await this.noteLanded(network, s);
       if (returned) await wallet.withKeys(() => session.remove(SESSION_BALANCES_PREFIX + network));
       if (resumed) await this.deps.alarm?.start();
     }
@@ -2277,7 +2495,9 @@ export class SessionService {
       address,
       createdAt: s.createdAt,
       stage,
-      txs: txs.map(({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, ...t }) => t),
+      txs: txs.map(
+        ({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, summary: _summary, ...t }) => t,
+      ),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(returnable(s, utxos)) : null,
       ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
